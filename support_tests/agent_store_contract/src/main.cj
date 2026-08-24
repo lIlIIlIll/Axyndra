@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 16, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 17, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -92,11 +92,11 @@ main(): Int64 {
             "SQLite integrity check passes")
         let recovered = SqliteThreadCommitSink(reopened).loadThread(ThreadId("durable-thread"))
         expect(recovered.thread.revision == 5 && recovered.items.size == 4 &&
-            recovered.turns[0].state == TurnState.Completed && recovered.activeRunId.isNone() &&
+            recovered.turns[0].state == TurnState.Failed && recovered.activeRunId.isNone() &&
             reopened.query(
                 "SELECT outcome FROM operation_receipts WHERE id='durable-receipt'"
             )[0].required(0) == "completed",
-            "process reopen reconstructs canonical Thread and preserves the operation Receipt")
+            "process reopen reconstructs recovery terminal and preserves operation Receipts")
     } finally {
         reopened.close()
     }
@@ -209,8 +209,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 16,
-            "v6 database migrates through schema v7 to v16")
+        expect(migrated.scalarInt("PRAGMA user_version") == 17,
+            "v6 database migrates through schema v7 to v17")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -245,8 +245,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 16,
-            "v7 database migrates through schema v8 to v16")
+        expect(migrated.scalarInt("PRAGMA user_version") == 17,
+            "v7 database migrates through schema v8 to v17")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1304,12 +1304,19 @@ func durableThreadCoordinatorContract(database: SqliteDatabase): Unit {
         recovered.nextResultSequence == 4 && recovered.activeRunId.getOrThrow().value == "durable-run",
         "durable Thread replay restores active Run correlation and next result sequence")
     let replayed = ThreadCoordinator(recovered, sink)
-    let completed = replayed.completeTurn(
+    let refusedCompletion = replayed.completeTurn(
+        SemanticTurnId("durable-turn"), RunId("durable-run"), recovered.activeEpoch
+    )
+    expect(refusedCompletion.isError() &&
+        database.query("SELECT state FROM runs WHERE id='durable-run'")[0].required(0) == "running",
+        "successful terminal publication rejects unresolved Operation WorkDebt")
+    let quarantined = replayed.requireRecoveryTurn(
         SemanticTurnId("durable-turn"), RunId("durable-run"), recovered.activeEpoch
     ).value().getOrThrow()
-    expect(completed.thread.revision == 5 && completed.thread.activeTurnId.isNone() &&
-        database.query("SELECT state FROM runs WHERE id='durable-run'")[0].required(0) == "completed",
-        "recovered coordinator settles Turn and Run through one SQLite transition")
+    expect(quarantined.thread.revision == 5 && quarantined.thread.activeTurnId.isNone() &&
+        database.query("SELECT state FROM runs WHERE id='durable-run'")[0].required(0) ==
+            "recovery_required",
+        "unresolved outcome settles only through the explicit recovery terminal")
 }
 
 func isStoreCommitted(decision: SemanticCommitDecision): Bool {
@@ -1749,14 +1756,40 @@ func compositionGraphContract(database: SqliteDatabase): Unit {
 
     let scope = EffectScope(component)
     let resource = ContractDisposable()
-    expect(scope.ownResource(resource).isOk(), "EffectScope accepts owned resources")
+    let task = ContractDisposable()
+    let process = ContractDisposable()
+    let disposedEffects = ArrayList<String>()
+    let scopedRegistry = ServiceRegistry<String>(ServiceKey<String>(
+        "ScopedService", 1u32, RealmKind.Run
+    ))
+    expect(scope.ownResource(resource).isOk() &&
+        scope.ownTask(task).isOk() && scope.ownProcess(process).isOk() &&
+        scope.provideService(scopedRegistry, ContractStringProvider(releases)).isOk() &&
+        scope.registerTool(EffectRegistration(
+            "tool", { => disposedEffects.add("tool") }
+        )).isOk() && scope.registerHook(EffectRegistration(
+            "hook", { => disposedEffects.add("hook") }
+        )).isOk() && scope.registerSkill(EffectRegistration(
+            "skill", { => disposedEffects.add("skill") }
+        )).isOk() && scope.deferDispose({ => disposedEffects.add("deferred") }).isOk() &&
+        scope.registerPrompt(PromptContribution(
+            "filesystem-generation-7", "run", "after", PromptArtifact("prompt").hash,
+            PromptVisibility.Model
+        )).isOk() && scopedRegistry.acquire(run).isOk(),
+        "EffectScope owns Service, Tool, Hook, Skill, Task, Process and Prompt effects")
     scope.stopAdmitting()
     expect(scope.registerPrompt(PromptContribution(
         "filesystem-generation-7", "run", "after", PromptArtifact("prompt").hash,
         PromptVisibility.Model
     )).isError(), "stopped EffectScope rejects new contributions")
     scope.dispose()
-    expect(resource.disposed, "EffectScope disposes owned resources")
+    expect(resource.disposed && task.disposed && process.disposed &&
+        disposedEffects.size == 4 && scopedRegistry.acquire(run).isError() &&
+        scope.promptContributions().isEmpty() &&
+        scope.toolContributions().isEmpty() &&
+        scope.hookContributions().isEmpty() &&
+        scope.skillContributions().isEmpty(),
+        "EffectScope revokes every owned effect and scoped Service on dispose")
 }
 
 func laneTreeContract(database: SqliteDatabase): Unit {
@@ -1800,6 +1833,59 @@ func laneTreeContract(database: SqliteDatabase): Unit {
             "SELECT lane_id FROM run_lane_bindings WHERE run_id='inbox-run'"
         )[0].required(0) == "main",
         "main history is an automatic parent chain and child projection shares only its fork prefix")
+
+    database.transaction { transaction =>
+        transaction.execute(
+            "INSERT INTO threads(id,revision,workspace_id,status,next_item_ordinal,active_turn_id) " +
+                "VALUES ('fork-source',2,'workspace','open',3,NULL)"
+        )
+        transaction.execute(
+            "INSERT INTO turns(id,thread_id,ordinal,state,user_item_id,active_run_id) " +
+                "VALUES ('fork-source-turn','fork-source',1,'completed','fork-source-user',NULL)"
+        )
+        transaction.execute(
+            "INSERT INTO items(id,thread_id,turn_id,ordinal,kind,payload,provenance," +
+                "created_at_millis) VALUES ('fork-source-user','fork-source'," +
+                "'fork-source-turn',1,'user_message',?,?,20)",
+            [
+                SqlParameter.Text(encodeStoredThreadContent(
+                    ThreadItemContent.UserMessage(textMessageParts("fork me"))
+                )),
+                SqlParameter.Text(encodeStoredProvenance(ItemProvenance("user")))
+            ]
+        )
+        transaction.execute(
+            "INSERT INTO items(id,thread_id,turn_id,ordinal,kind,payload,provenance," +
+                "created_at_millis) VALUES ('fork-source-answer','fork-source'," +
+                "'fork-source-turn',2,'assistant_message',?,?,21)",
+            [
+                SqlParameter.Text(encodeStoredThreadContent(
+                    ThreadItemContent.AssistantMessage(textMessageParts("isolated history"))
+                )),
+                SqlParameter.Text(encodeStoredProvenance(ItemProvenance(
+                    "model", runId: Some(RunId("source-run"))
+                )))
+            ]
+        )
+    }
+    let forked = store.forkThread(
+        ThreadId("fork-source"), LaneId("main"), ItemId("fork-source-answer"),
+        ThreadId("fork-target"), "isolated-workspace", 22
+    ).value().getOrThrow()
+    let repeated = store.forkThread(
+        ThreadId("fork-source"), LaneId("main"), ItemId("fork-source-answer"),
+        ThreadId("fork-target"), "isolated-workspace", 22
+    ).value().getOrThrow()
+    expect(forked.size == 2 && repeated.size == 2 &&
+        store.branchItemIds(ThreadId("fork-target"), LaneId("main"))
+            .value().getOrThrow().size == 2 &&
+        database.scalarInt(
+            "SELECT COUNT(*) FROM audit_events WHERE thread_id='fork-target' " +
+                "AND kind='thread.forked'"
+        ) == 1 && SqliteThreadCommitSink(database).loadThread(
+            ThreadId("fork-target")
+        ).activeRunId.isNone(),
+        "ForkThread atomically creates one isolated idle Thread and preserves its source fact")
 }
 
 func contextManifestContract(database: SqliteDatabase): Unit {

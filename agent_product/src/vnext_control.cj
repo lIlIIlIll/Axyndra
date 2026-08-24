@@ -1,12 +1,15 @@
 package agent_product
 
 import std.collection.*
+import std.sync.*
 import agent_domain.*
 import agent_extension_runtime.*
+import agent_ports.*
 import agent_runtime.*
 import agent_store.*
 import agent_skills.*
 import tool_runtime.*
+import model_adapters.*
 
 // Explicit product-facing control surface for vNext facilities that are not
 // implicit in a normal AgentCore request. These APIs keep persistence and
@@ -20,6 +23,7 @@ public class ProductVnextControl {
     private let threadRuntimes: ThreadRuntimeRegistry
     private let workspaceRoot: String
     public let storageService: ServiceRegistry<String>
+    public let isolatedPlugins: ProductIsolatedPluginHost
 
     init(
         database: SqliteDatabase,
@@ -27,7 +31,8 @@ public class ProductVnextControl {
         pipeline: ToolPipeline,
         ids: ProductIds,
         threadRuntimes: ThreadRuntimeRegistry,
-        workspaceRoot: String
+        workspaceRoot: String,
+        processes: ProcessPort
     ) {
         this.database = database
         this.catalog = catalog
@@ -35,6 +40,9 @@ public class ProductVnextControl {
         this.ids = ids
         this.threadRuntimes = threadRuntimes
         this.workspaceRoot = workspaceRoot
+        isolatedPlugins = ProductIsolatedPluginHost(
+            processes, workspaceRoot
+        )
         storageService = ServiceRegistry<String>(ServiceKey<String>(
             "SemanticStore", 1u32, RealmKind.Host
         ))
@@ -56,6 +64,48 @@ public class ProductVnextControl {
 
     public func laneBranch(threadId: ThreadId, laneId: LaneId): Result<Array<ItemId>> {
         SqliteLaneTreeStore(database).branchItemIds(threadId, laneId)
+    }
+
+    public func readyLanes(
+        threadId: ThreadId,
+        afterLaneId!: String = "",
+        limit!: Int64 = 64
+    ): Result<Array<LaneId>> {
+        SqliteLaneTreeStore(database).readyLaneIds(
+            threadId, afterLaneId: afterLaneId, limit: limit
+        )
+    }
+
+    public func enqueueLaneInput(entry: DurableInboxEntry): Result<Unit> {
+        match (threadRuntimes.acquire(entry.threadId, workspaceRoot)) {
+            case Result.Ok(_) => SqliteInboxStepStore(database).enqueue(entry)
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    public func rejectLaneInput(entryId: InboxEntryId): Result<Unit> {
+        SqliteInboxStepStore(database).rejectQueued(entryId)
+    }
+
+    public func pendingLaneInputs(
+        threadId: ThreadId,
+        laneId!: LaneId = LaneId("main")
+    ): Result<Array<DurableInboxEntry>> {
+        SqliteInboxStepStore(database).pendingQueued(threadId, laneId)
+    }
+
+    public func forkThread(
+        sourceThreadId: ThreadId,
+        sourceLaneId: LaneId,
+        forkItemId: ItemId,
+        targetThreadId: ThreadId,
+        targetWorkspaceId: String,
+        createdAtMillis: Int64
+    ): Result<Array<ItemId>> {
+        SqliteLaneTreeStore(database).forkThread(
+            sourceThreadId, sourceLaneId, forkItemId,
+            targetThreadId, targetWorkspaceId, createdAtMillis
+        )
     }
 
     public func createTeam(team: TeamRecord): Result<Unit> {
@@ -202,7 +252,77 @@ public class ProductVnextControl {
         request: RemoteExecutionRequest,
         nowMillis: Int64
     ): Result<AgentValue> {
-        router.route(envelope, request, nowMillis)
+        if (request.operationId.value.trimAscii() == "" ||
+            envelope.runId.value.trimAscii() == "") {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "remote.operation_identity_invalid",
+                "remote dispatch requires a durable Operation identity"
+            ))
+        }
+        let source = database.query(
+            "SELECT runs.thread_id,operations.tool_call_item_id,items.payload," +
+                "effect.reserved_result_item_id,effect.reserved_receipt_id " +
+                "FROM operations JOIN runs ON runs.id=operations.run_id " +
+                "JOIN items ON items.id=operations.tool_call_item_id " +
+                "JOIN operation_effect_records effect ON effect.operation_id=operations.id " +
+                "WHERE operations.id=? AND operations.run_id=? AND operations.state='prepared'",
+            [
+                SqlParameter.Text(request.operationId.value),
+                SqlParameter.Text(envelope.runId.value)
+            ]
+        )
+        if (source.size != 1) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "remote.operation_not_prepared",
+                "remote dispatch requires one prepared durable Operation"
+            ))
+        }
+        let callId = match (decodeStoredThreadContent(source[0].required(2))) {
+            case ThreadItemContent.ToolCall(value, _, _) => value
+            case _ => return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "remote.operation_source_invalid",
+                "remote Operation source is not a canonical ToolCall"
+            ))
+        }
+        let operations = DurableOperationStore(database)
+        let plan = match (operations.loadPlan(request.operationId, envelope.runId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (operations.markExecuting(
+            request.operationId, envelope.runId, plan, nowMillis, false
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let threadId = ThreadId(source[0].required(0))
+        match (operations.markExecutionHandoff(
+            request.operationId, envelope.runId, threadId, nowMillis
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let dispatch = router.route(envelope, request, nowMillis)
+        let invocation: Result<ToolInvocationResult> = match (dispatch) {
+            case Result.Ok(value) => Result.Ok(ToolInvocationResult.Completed(ToolResult(
+                callId.value, value, receiptId: source[0].required(4)
+            )))
+            case Result.Err(error) => Result.Err(error)
+        }
+        let runtime = match (threadRuntimes.acquire(threadId, workspaceRoot)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (runtime.resolveOperation(
+            ItemId(source[0].required(3)), request.operationId, callId, plan,
+            OperationAttemptStage.Executing, invocation, source[0].required(4), nowMillis
+        )) {
+            case Result.Ok(_) => dispatch
+            case Result.Err(error) => Result.Err(error)
+        }
     }
 
     public func validateIsolatedExtension(
@@ -217,6 +337,25 @@ public class ProductVnextControl {
         )
     }
 
+    public func invokeIsolatedExtension(
+        extensionId: String,
+        invocation: IsolatedPluginInvocation
+    ): Result<AgentValue> {
+        isolatedPlugins.invoke(extensionId, invocation)
+    }
+
+    public func mountIsolatedExtension(
+        launch: IsolatedPluginLaunchRequest
+    ): Result<Unit> {
+        isolatedPlugins.mountInitial(launch)
+    }
+
+    public func reloadIsolatedExtension(
+        launch: IsolatedPluginLaunchRequest
+    ): Result<Unit> {
+        isolatedPlugins.reload(launch)
+    }
+
     public func createEffectScope(owner: ComponentInstanceRef): EffectScope {
         EffectScope(owner)
     }
@@ -226,6 +365,253 @@ public class ProductVnextControl {
     ): SafeExtensionLifecycleRuntime {
         SafeExtensionLifecycleRuntime(CompiledExtensionLifecycleAdapter(host))
     }
+}
+
+// Both third-party execution kinds cross the same fail-closed ProcessPort.
+// Process plugins execute their packaged binary directly; WASM components use
+// a fixed host runtime and pass the packaged module as the first argument.
+// Neither path inherits ambient environment or host filesystem authority.
+public class ProductIsolatedPluginHost {
+    private let processes: ProcessPort
+    private let workspaceRoot: String
+    private let wasmRuntime: String
+    private let lock = Mutex()
+    private let generations = ArrayList<ProductIsolatedPluginGeneration>()
+
+    public init(
+        processes: ProcessPort,
+        workspaceRoot: String,
+        wasmRuntime!: String = "wasmtime"
+    ) {
+        if (workspaceRoot.trimAscii() == "" || wasmRuntime.trimAscii() == "") {
+            throw IllegalArgumentException("isolated plugin host configuration is invalid")
+        }
+        this.processes = processes
+        this.workspaceRoot = workspaceRoot.trimAscii()
+        this.wasmRuntime = wasmRuntime.trimAscii()
+    }
+
+    public func mountInitial(launch: IsolatedPluginLaunchRequest): Result<Unit> {
+        lock.lock()
+        try {
+            if (currentLocked(launch.manifest.id).isSome()) {
+                return isolatedPluginError<Unit>(
+                    "extension.already_mounted", "isolated extension already has an active generation"
+                )
+            }
+            generations.add(ProductIsolatedPluginGeneration(launch))
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    public func reload(launch: IsolatedPluginLaunchRequest): Result<Unit> {
+        lock.lock()
+        try {
+            let old = match (currentLocked(launch.manifest.id)) {
+                case Some(value) => value
+                case None => return isolatedPluginError<Unit>(
+                    "extension.not_mounted", "isolated extension has no active generation"
+                )
+            }
+            if (launch.generation <= old.launch.generation) {
+                return isolatedPluginError<Unit>(
+                    "extension.generation_stale", "isolated extension generation must increase"
+                )
+            }
+            // New admission becomes available before the old generation is
+            // fenced, matching the no-gap generation reload contract.
+            generations.add(ProductIsolatedPluginGeneration(launch))
+            old.accepting = false
+            old.state = ExtensionLifecycleState.Draining
+            if (old.inFlight == 0u64) { old.state = ExtensionLifecycleState.Inactive }
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    public func invoke(
+        extensionId: String,
+        invocation: IsolatedPluginInvocation
+    ): Result<AgentValue> {
+        var selected: ?ProductIsolatedPluginGeneration = None
+        lock.lock()
+        try {
+            let current = match (currentLocked(extensionId.trimAscii())) {
+                case Some(value) => value
+                case None => return isolatedPluginError<AgentValue>(
+                    "extension.not_active", "isolated extension has no admitting generation"
+                )
+            }
+            current.inFlight += 1u64
+            selected = Some(current)
+        } finally { lock.unlock() }
+        let generation = selected.getOrThrow()
+        try {
+            execute(generation.launch, invocation)
+        } finally {
+            lock.lock()
+            try {
+                if (generation.inFlight > 0u64) { generation.inFlight -= 1u64 }
+                if (generation.inFlight == 0u64 &&
+                    generation.state == ExtensionLifecycleState.Draining) {
+                    generation.state = ExtensionLifecycleState.Inactive
+                }
+            } finally { lock.unlock() }
+        }
+    }
+
+    public func finishDrain(extensionId: String, generation: UInt64): Result<Unit> {
+        lock.lock()
+        try {
+            let record = match (findLocked(extensionId.trimAscii(), generation)) {
+                case Some(value) => value
+                case None => return isolatedPluginError<Unit>(
+                    "extension.generation_missing", "isolated extension generation is not mounted"
+                )
+            }
+            if (record.state != ExtensionLifecycleState.Draining) {
+                return isolatedPluginError<Unit>(
+                    "extension.not_draining", "isolated extension generation is not draining"
+                )
+            }
+            if (record.inFlight > 0u64) {
+                record.state = ExtensionLifecycleState.Quarantined
+                return isolatedPluginError<Unit>(
+                    "extension.drain_timeout", "isolated extension still owns active invocations"
+                )
+            }
+            record.state = ExtensionLifecycleState.Inactive
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    public func diagnostics(): Array<ExtensionGenerationDiagnostic> {
+        lock.lock()
+        try {
+            let output = ArrayList<ExtensionGenerationDiagnostic>()
+            for (record in generations) {
+                output.add(ExtensionGenerationDiagnostic(
+                    record.launch.manifest.id, record.launch.generation,
+                    record.state, record.inFlight, record.accepting
+                ))
+            }
+            output.toArray()
+        } finally { lock.unlock() }
+    }
+
+    private func execute(
+        launch: IsolatedPluginLaunchRequest,
+        invocation: IsolatedPluginInvocation
+    ): Result<AgentValue> {
+        if (launch.ambientAuthority) {
+            return isolatedPluginError<AgentValue>(
+                "extension.ambient_authority", "isolated plugin requested ambient authority"
+            )
+        }
+        let requestValue = objectValue([
+            ValueField("protocol", textValue("axyndra-extension-v1")),
+            ValueField("extension_id", textValue(launch.manifest.id)),
+            ValueField("extension_version", textValue(launch.manifest.version)),
+            ValueField("generation", integerValue(Int64(launch.generation))),
+            ValueField("invocation_id", textValue(invocation.id)),
+            ValueField("method", textValue(invocation.method)),
+            ValueField("payload", invocation.payload)
+        ])
+        let packagedEntrypoint = workspaceRoot + "/" + launch.manifest.entrypoint
+        let executable: String
+        let arguments: Array<String>
+        match (launch.executionKind) {
+            case ExtensionExecutionKind.ProcessPlugin =>
+                executable = packagedEntrypoint
+                arguments = ["--axyndra-plugin-call", encodeAgentValue(requestValue)]
+            case ExtensionExecutionKind.WasmComponent =>
+                executable = wasmRuntime
+                arguments = [
+                    packagedEntrypoint, "--invoke", "axyndra_handle",
+                    encodeAgentValue(requestValue)
+                ]
+            case _ => return isolatedPluginError<AgentValue>(
+                "extension.execution_kind",
+                "only process and WASM plugins use the isolated plugin host"
+            )
+        }
+        let execution = processes.execute(ProcessRequest(
+            executable,
+            operationId: OperationId(
+                "extension-" + launch.manifest.id + "-" + invocation.id
+            ),
+            arguments: arguments,
+            workingDirectory: workspaceRoot,
+            timeoutMillis: invocation.timeoutMillis,
+            sandboxMode: if (launch.grantedCapabilities.contains("workspace.write")) {
+                ProcessSandboxMode.WorkspaceReadWrite
+            } else {
+                ProcessSandboxMode.WorkspaceReadOnly
+            },
+            networkAccess: launch.grantedCapabilities.contains("network.access")
+        ))
+        let result = match (execution) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (result.timedOut) {
+            return isolatedPluginError<AgentValue>(
+                "extension.timeout", "isolated plugin invocation timed out"
+            )
+        }
+        if (result.truncated) {
+            return isolatedPluginError<AgentValue>(
+                "extension.output_truncated", "isolated plugin output exceeded its bound"
+            )
+        }
+        if (result.exitCode != 0) {
+            return isolatedPluginError<AgentValue>(
+                "extension.exit_failure",
+                "isolated plugin exited with code " + result.exitCode.toString()
+            )
+        }
+        match (decodeAgentValue(result.stdout.trimAscii())) {
+            case Result.Ok(value) => Result.Ok(value)
+            case Result.Err(_) => isolatedPluginError<AgentValue>(
+                "extension.protocol_invalid",
+                "isolated plugin returned an invalid protocol document"
+            )
+        }
+    }
+
+    private func currentLocked(extensionId: String): ?ProductIsolatedPluginGeneration {
+        var selected: ?ProductIsolatedPluginGeneration = None
+        for (record in generations where record.launch.manifest.id == extensionId &&
+            record.accepting && record.state == ExtensionLifecycleState.Active) {
+            match (selected) {
+                case None => selected = Some(record)
+                case Some(value) => if (
+                    record.launch.generation > value.launch.generation
+                ) { selected = Some(record) }
+            }
+        }
+        selected
+    }
+
+    private func findLocked(
+        extensionId: String,
+        generation: UInt64
+    ): ?ProductIsolatedPluginGeneration {
+        for (record in generations where record.launch.manifest.id == extensionId &&
+            record.launch.generation == generation) { return Some(record) }
+        None
+    }
+}
+
+class ProductIsolatedPluginGeneration {
+    let launch: IsolatedPluginLaunchRequest
+    var state: ExtensionLifecycleState = ExtensionLifecycleState.Active
+    var accepting: Bool = true
+    var inFlight: UInt64 = 0u64
+    init(launch: IsolatedPluginLaunchRequest) { this.launch = launch }
+}
+
+func isolatedPluginError<T>(code: String, message: String): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.Protocol, code, message))
 }
 
 class ProductProgramSubOperationExecutor <: ProgramSubOperationExecutor {

@@ -188,7 +188,27 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         let _ = product.pauseRestoredGoal(this.sessionId)
         restoreWorkMode(this.sessionId)
+        restoreQueuedInteractions()
         restorePendingContinuation()
+    }
+
+    private func restoreQueuedInteractions(): Unit {
+        match (product.vnext.pendingLaneInputs(ThreadId(sessionId.value))) {
+            case Result.Ok(entries) =>
+                for (entry in entries) {
+                    let correlation = applicationInboxText(
+                        entry.payload, "correlation_id"
+                    )
+                    let kind = applicationInboxText(entry.payload, "kind")
+                    let text = applicationInboxText(entry.payload, "text")
+                    if (correlation != "" && kind != "" && text != "") {
+                        queuedInteractions.add(QueuedInteraction(
+                            correlation, kind, text
+                        ))
+                    }
+                }
+            case Result.Err(_) => ()
+        }
     }
 
     private func restorePendingContinuation(): Unit {
@@ -1046,22 +1066,40 @@ public class ApplicationSession <: AgentInteractionSource {
                 )
             )
         }
+        let effectiveCorrelation = if (correlationId == "") {
+            "queued-" + product.ids.nextOperationId().value
+        } else {
+            correlationId
+        }
         lock.lock()
         try {
-            if (correlationId != "") {
-                for (queued in queuedInteractions where queued.correlationId == correlationId) {
-                    return Result.Err(
-                        AgentError(
-                            AgentErrorKind.Conflict,
-                            "application.duplicate_queue_correlation_id",
-                            "queued input correlation id must be unique"
-                        )
+            for (queued in queuedInteractions where
+                queued.correlationId == effectiveCorrelation) {
+                return Result.Err(
+                    AgentError(
+                        AgentErrorKind.Conflict,
+                        "application.duplicate_queue_correlation_id",
+                        "queued input correlation id must be unique"
                     )
-                }
+                )
+            }
+            match (product.vnext.enqueueLaneInput(DurableInboxEntry(
+                InboxEntryId("interaction-" + effectiveCorrelation),
+                ThreadId(sessionId.value), LaneId("main"),
+                applicationInboxKind(kind),
+                objectValue([
+                    ValueField("correlation_id", textValue(effectiveCorrelation)),
+                    ValueField("kind", textValue(kind)),
+                    ValueField("text", textValue(prompt))
+                ]),
+                createdAtMillis: agentUtcMillis()
+            ))) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
             }
             queuedInteractions.add(
                 QueuedInteraction(
-                    correlationId,
+                    effectiveCorrelation,
                     kind,
                     prompt
                 )
@@ -1087,8 +1125,15 @@ public class ApplicationSession <: AgentInteractionSource {
             for (index in 0..queuedInteractions.size) {
                 let queued = queuedInteractions[index]
                 if (queued.correlationId == correlationId) {
-                    queuedInteractions.remove(at: index)
-                    return Result.Ok(QueuedWithdrawal.Withdrawn(queued))
+                    match (product.vnext.rejectLaneInput(
+                        InboxEntryId("interaction-" + correlationId)
+                    )) {
+                        case Result.Ok(_) =>
+                            queuedInteractions.remove(at: index)
+                            return Result.Ok(QueuedWithdrawal.Withdrawn(queued))
+                        case Result.Err(_) =>
+                            return Result.Ok(QueuedWithdrawal.AlreadyDelivered)
+                    }
                 }
             }
             Result.Ok(QueuedWithdrawal.AlreadyDelivered)
@@ -3160,6 +3205,21 @@ public class ApplicationSession <: AgentInteractionSource {
                 lock.unlock()
             }
         }
+    }
+}
+
+func applicationInboxKind(kind: String): InboxEntryKind {
+    match (kind) {
+        case "steer" => InboxEntryKind.Steering
+        case "cancel" => InboxEntryKind.Cancel
+        case _ => InboxEntryKind.UserPrompt
+    }
+}
+
+func applicationInboxText(value: AgentValue, name: String): String {
+    match (value.field(name)) {
+        case Some(field) => if (field.kind == ValueKind.Text) { field.text } else { "" }
+        case None => ""
     }
 }
 

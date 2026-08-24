@@ -467,6 +467,9 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
     ): Unit {
         let turnId = transition.before.thread.activeTurnId.getOrThrow()
         let runId = transition.before.activeRunId.getOrThrow()
+        if (runState == "completed") {
+            requireCompletedRunHasNoWorkDebt(transaction, runId)
+        }
         transaction.execute(
             "UPDATE turns SET state=" + sqliteText(turnState) + ",active_run_id=NULL WHERE id=" +
                 sqliteText(turnId.value) + " AND thread_id=" +
@@ -489,19 +492,19 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 sqliteText(turnId.value)
         )
         requireStoreChanged(transaction, "Run settlement lost its owner")
-        let stepId = "step-" + runId.value + "-0"
         transaction.execute(
             "UPDATE step_records SET status=" + sqliteText(stepStatusForRun(runState)) +
                 ",settled_at_millis=COALESCE(settled_at_millis," +
                 match (transition.finishedAtMillis) {
                     case Some(value) => value.toString()
                     case None => "opened_at_millis"
-                } + "),revision=revision+1 WHERE id=" + sqliteText(stepId) +
+                } + "),revision=revision+1 WHERE run_id=" + sqliteText(runId.value) +
                 " AND status='open'"
         )
         transaction.execute(
             "UPDATE lane_inbox_entries SET status='applied',revision=revision+1 " +
-                "WHERE claimed_step_id=" + sqliteText(stepId) + " AND status='claimed'"
+                "WHERE claimed_step_id IN (SELECT id FROM step_records WHERE run_id=" +
+                sqliteText(runId.value) + ") AND status='claimed'"
         )
         updateThreadRecord(transaction, transition.before, transition.after)
     }
@@ -749,6 +752,49 @@ func stepStatusForRun(runState: String): String {
         case "cancelled" => "cancelled"
         case "recovery_required" => "quarantined"
         case _ => "failed"
+    }
+}
+
+// The continuation is the authoritative inventory of non-table work (child
+// Runs, owned tasks, approvals and deferred context). Operation rows remain an
+// independent durable invariant because their Receipt cardinality is enforced
+// by the database and must converge before a successful Run can publish.
+func requireCompletedRunHasNoWorkDebt(
+    transaction: SqliteTransaction,
+    runId: RunId
+): Unit {
+    let continuationRows = transaction.query(
+        "SELECT payload,digest FROM run_continuations WHERE run_id=?",
+        [SqlParameter.Text(runId.value)]
+    )
+    if (continuationRows.size > 1) {
+        throw IllegalStateException("Run has ambiguous durable continuation")
+    }
+    if (continuationRows.size == 1) {
+        let continuation = decodeDurableRunContinuation(
+            continuationRows[0].required(0)
+        )
+        if (!continuation.isSealed() ||
+            continuation.digest != continuationRows[0].required(1) ||
+            !continuation.workDebt.isEmpty() ||
+            continuation.pendingOperationId.isSome() ||
+            continuation.pendingApprovalId.isSome() ||
+            continuation.waitingExternal.isSome()) {
+            throw IllegalStateException(
+                "completed Run still owns durable WorkDebt"
+            )
+        }
+    }
+    let unsettledOperations = transaction.query(
+        "SELECT operations.id FROM operations LEFT JOIN operation_receipts receipt " +
+            "ON receipt.operation_id=operations.id WHERE operations.run_id=? " +
+            "AND (operations.state!='committed' OR receipt.id IS NULL)",
+        [SqlParameter.Text(runId.value)]
+    )
+    if (!unsettledOperations.isEmpty()) {
+        throw IllegalStateException(
+            "completed Run still owns an unsettled Operation"
+        )
     }
 }
 

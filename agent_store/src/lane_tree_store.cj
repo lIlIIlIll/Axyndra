@@ -117,6 +117,219 @@ public class SqliteLaneTreeStore {
             laneRecovery<Array<ItemId>>("lane.branch_read_failed", error.message)
         }
     }
+
+    public func readyLaneIds(
+        threadId: ThreadId,
+        afterLaneId!: String = "",
+        limit!: Int64 = 64
+    ): Result<Array<LaneId>> {
+        if (limit < 1 || limit > 256) {
+            return laneConflict<Array<LaneId>>("ready Lane query limit is invalid")
+        }
+        try {
+            database.readTransaction { transaction =>
+                let rows = transaction.query(
+                    "SELECT inbox.lane_id FROM lane_inbox_entries inbox JOIN lanes " +
+                        "ON lanes.thread_id=inbox.thread_id AND lanes.lane_id=inbox.lane_id " +
+                        "WHERE inbox.thread_id=? AND inbox.status='queued' AND lanes.status='open' " +
+                        "GROUP BY inbox.lane_id ORDER BY CASE WHEN inbox.lane_id>? THEN 0 ELSE 1 END," +
+                        "inbox.lane_id LIMIT ?",
+                    [
+                        SqlParameter.Text(threadId.value),
+                        SqlParameter.Text(afterLaneId.trimAscii()),
+                        SqlParameter.Int64Value(limit)
+                    ]
+                )
+                let output = ArrayList<LaneId>()
+                for (row in rows) { output.add(LaneId(row.required(0))) }
+                Result.Ok(output.toArray())
+            }
+        } catch (error: Exception) {
+            laneRecovery<Array<LaneId>>("lane.ready_query_failed", error.message)
+        }
+    }
+
+    // Forking is an isolation boundary, not another cursor in the source
+    // Thread. The selected branch prefix is copied into a new idle Thread in
+    // one transaction and its source anchor is retained as an append-only
+    // audit fact. No Run, approval, capability grant, or mutable register is
+    // inherited.
+    public func forkThread(
+        sourceThreadId: ThreadId,
+        sourceLaneId: LaneId,
+        forkItemId: ItemId,
+        targetThreadId: ThreadId,
+        targetWorkspaceId: String,
+        createdAtMillis: Int64
+    ): Result<Array<ItemId>> {
+        if (sourceThreadId.value == targetThreadId.value ||
+            targetWorkspaceId.trimAscii() == "" || createdAtMillis < 0) {
+            return laneConflict<Array<ItemId>>("isolated Thread fork request is invalid")
+        }
+        let forkFact = encodeStoredValue(objectValue([
+            ValueField("source_thread_id", textValue(sourceThreadId.value)),
+            ValueField("source_lane_id", textValue(sourceLaneId.value)),
+            ValueField("source_item_id", textValue(forkItemId.value)),
+            ValueField("target_thread_id", textValue(targetThreadId.value)),
+            ValueField("target_workspace_id", textValue(targetWorkspaceId.trimAscii()))
+        ]))
+        try {
+            database.transaction { transaction =>
+                let existing = transaction.query(
+                    "SELECT workspace_id FROM threads WHERE id=?",
+                    [SqlParameter.Text(targetThreadId.value)]
+                )
+                if (!existing.isEmpty()) {
+                    let facts = transaction.query(
+                        "SELECT payload FROM audit_events WHERE thread_id=? AND kind='thread.forked'",
+                        [SqlParameter.Text(targetThreadId.value)]
+                    )
+                    if (existing.size == 1 &&
+                        existing[0].required(0) == targetWorkspaceId.trimAscii() &&
+                        facts.size == 1 && facts[0].required(0) == forkFact) {
+                        return Result.Ok(loadBranchLocked(
+                            transaction, targetThreadId, LaneId("main"), 0
+                        ))
+                    }
+                    return laneConflict<Array<ItemId>>(
+                        "target Thread already owns a different fork"
+                    )
+                }
+
+                let sourceBranch = loadBranchLocked(
+                    transaction, sourceThreadId, sourceLaneId, 0
+                )
+                let selected = ArrayList<ItemId>()
+                var found = false
+                for (item in sourceBranch) {
+                    selected.add(item)
+                    if (item.value == forkItemId.value) {
+                        found = true
+                        break
+                    }
+                }
+                if (!found || selected.isEmpty()) {
+                    return laneConflict<Array<ItemId>>(
+                        "fork Item is outside the selected Lane branch"
+                    )
+                }
+
+                let sourceTurns = ArrayList<String>()
+                let targetTurns = ArrayList<String>()
+                let sourceUserItems = ArrayList<String>()
+                let targetUserItems = ArrayList<String>()
+                for (item in selected) {
+                    let rows = transaction.query(
+                        "SELECT items.turn_id,turns.state,turns.user_item_id FROM items " +
+                            "JOIN turns ON turns.id=items.turn_id WHERE items.id=? " +
+                            "AND items.thread_id=?",
+                        [SqlParameter.Text(item.value), SqlParameter.Text(sourceThreadId.value)]
+                    )
+                    if (rows.size != 1 || rows[0].required(1) == "active") {
+                        return laneConflict<Array<ItemId>>(
+                            "Thread fork requires a stable, terminal source Turn"
+                        )
+                    }
+                    let sourceTurn = rows[0].required(0)
+                    if (!sourceTurns.contains(sourceTurn)) {
+                        sourceTurns.add(sourceTurn)
+                        targetTurns.add(
+                            "fork-turn-" + targetThreadId.value + "-" +
+                                sourceTurns.size.toString()
+                        )
+                        sourceUserItems.add(rows[0].required(2))
+                    }
+                }
+                for (sourceUser in sourceUserItems) {
+                    var targetUser = ""
+                    for (index in 0..selected.size where
+                        selected[index].value == sourceUser) {
+                        targetUser = forkedItemId(targetThreadId, index)
+                    }
+                    if (targetUser == "") {
+                        return laneConflict<Array<ItemId>>(
+                            "fork prefix does not contain its Turn user Item"
+                        )
+                    }
+                    targetUserItems.add(targetUser)
+                }
+
+                transaction.execute(
+                    "INSERT INTO threads(id,revision,workspace_id,status,next_item_ordinal," +
+                        "active_turn_id) VALUES (?,?,?,'open',?,NULL)",
+                    [
+                        SqlParameter.Text(targetThreadId.value),
+                        SqlParameter.Int64Value(selected.size),
+                        SqlParameter.Text(targetWorkspaceId.trimAscii()),
+                        SqlParameter.Int64Value(selected.size + 1)
+                    ]
+                )
+                for (index in 0..sourceTurns.size) {
+                    let source = transaction.query(
+                        "SELECT state FROM turns WHERE id=? AND thread_id=?",
+                        [SqlParameter.Text(sourceTurns[index]),
+                            SqlParameter.Text(sourceThreadId.value)]
+                    )
+                    transaction.execute(
+                        "INSERT INTO turns(id,thread_id,ordinal,state,user_item_id,active_run_id) " +
+                            "VALUES (?,?,?,?,?,NULL)",
+                        [
+                            SqlParameter.Text(targetTurns[index]),
+                            SqlParameter.Text(targetThreadId.value),
+                            SqlParameter.Int64Value(index + 1),
+                            SqlParameter.Text(source[0].required(0)),
+                            SqlParameter.Text(targetUserItems[index])
+                        ]
+                    )
+                }
+
+                let copied = ArrayList<ItemId>()
+                for (index in 0..selected.size) {
+                    let source = transaction.query(
+                        "SELECT turn_id,kind,payload,provenance,created_at_millis FROM items " +
+                            "WHERE id=? AND thread_id=?",
+                        [SqlParameter.Text(selected[index].value),
+                            SqlParameter.Text(sourceThreadId.value)]
+                    )
+                    var targetTurn = ""
+                    for (turnIndex in 0..sourceTurns.size where
+                        sourceTurns[turnIndex] == source[0].required(0)) {
+                        targetTurn = targetTurns[turnIndex]
+                    }
+                    let targetItem = ItemId(forkedItemId(targetThreadId, index))
+                    copied.add(targetItem)
+                    transaction.execute(
+                        "INSERT INTO items(id,thread_id,turn_id,ordinal,kind,payload,provenance," +
+                            "created_at_millis) VALUES (?,?,?,?,?,?,?,?)",
+                        [
+                            SqlParameter.Text(targetItem.value),
+                            SqlParameter.Text(targetThreadId.value),
+                            SqlParameter.Text(targetTurn),
+                            SqlParameter.Int64Value(index + 1),
+                            SqlParameter.Text(source[0].required(1)),
+                            SqlParameter.Text(source[0].required(2)),
+                            SqlParameter.Text(source[0].required(3)),
+                            SqlParameter.Int64Value(laneDepth(source[0].required(4)))
+                        ]
+                    )
+                }
+                transaction.execute(
+                    "INSERT INTO audit_events(thread_id,run_id,operation_id,kind,payload," +
+                        "created_at_millis,commit_sequence) VALUES (?,NULL,NULL,'thread.forked',?,?,0)",
+                    [SqlParameter.Text(targetThreadId.value),
+                        SqlParameter.Text(forkFact),
+                        SqlParameter.Int64Value(createdAtMillis)]
+                )
+                Result.Ok(copied.toArray())
+            }
+        } catch (error: Exception) {
+            laneRecovery<Array<ItemId>>("lane.fork_thread_failed", error.message)
+        }
+    }
+}
+
+func forkedItemId(threadId: ThreadId, zeroBasedOrdinal: Int64): String {
+    "fork-item-" + threadId.value + "-" + (zeroBasedOrdinal + 1).toString()
 }
 
 func loadBranchLocked(

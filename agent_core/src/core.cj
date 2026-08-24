@@ -368,6 +368,7 @@ public interface ModelContextManifestRuntimePort {
         requestId: RequestId,
         turnId: SemanticTurnId,
         stepId: StepId,
+        stepOrdinal: Int64,
         projection: ModelContextProjection,
         lane: ModelLane,
         renderedRequest: AgentValue,
@@ -383,6 +384,7 @@ class InMemoryModelContextManifestRuntimePort <: ModelContextManifestRuntimePort
         requestId: RequestId,
         turnId: SemanticTurnId,
         stepId: StepId,
+        stepOrdinal: Int64,
         projection: ModelContextProjection,
         lane: ModelLane,
         renderedRequest: AgentValue,
@@ -393,6 +395,7 @@ class InMemoryModelContextManifestRuntimePort <: ModelContextManifestRuntimePort
         let _ = requestId
         let _ = turnId
         let _ = stepId
+        let _ = stepOrdinal
         let _ = projection
         let _ = lane
         let _ = renderedRequest
@@ -1935,7 +1938,11 @@ public class AgentCore <: AgentRunner {
                 request,
                 preparedModelRequest.requestId,
                 active.turnId,
-                StepId("step-" + request.runId.value + "-0"),
+                StepId(
+                    "step-" + request.runId.value + "-" +
+                        (counter.turns - 1).toString()
+                ),
+                counter.turns - 1,
                 projection,
                 active.lane,
                 modelRequestCheckpointValue(preparedModelRequest.request),
@@ -3303,10 +3310,12 @@ public class AgentCore <: AgentRunner {
         for (value in values) {
             let thread = control.runtime.threadSnapshot()
             match (control.runtime.appendUserInput(
-                ItemId(
+                ItemId(if (value.correlationId != "") {
+                    "interaction-" + value.correlationId
+                } else {
                     "interaction-" + context.runId.value + "-" +
                         thread.nextResultSequence.toString()
-                ),
+                }),
                 ThreadItemContent.UserMessage(textMessageParts(value.text)),
                 ItemProvenance("interaction", runId: Some(context.runId)),
                 agentUtcMillis()

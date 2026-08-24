@@ -1,8 +1,11 @@
 package product_thread_runtime_contract
 
 import std.fs.*
+import std.collection.*
 import agent_app_protocol.*
 import agent_domain.*
+import agent_extension_runtime.*
+import agent_ports.*
 import agent_product.*
 import agent_runtime.*
 import agent_skills.*
@@ -121,6 +124,52 @@ main(): Int64 {
             ])]
         ).isError(), "Product rejects invalid offline transcript ownership")
 
+        let queuedApplication = product.applicationSession(sessionId: Some(sessionId))
+        expect(queuedApplication.enqueue(
+            "persisted-steering", "steer", "inspect the durable boundary"
+        ).isOk() && match (queuedApplication.withdrawQueued("persisted-steering")) {
+            case Result.Ok(QueuedWithdrawal.Withdrawn(_)) => true
+            case _ => false
+        } && queuedApplication.enqueue(
+            "persisted-follow-up", "follow_up", "continue after recovery"
+        ).isOk(),
+            "Product Application writes queued interactions through the durable Lane Inbox")
+        let deliveredSession = SessionId("durable-delivered-interaction")
+        let deliveredApplication = product.applicationSession(
+            sessionId: Some(deliveredSession)
+        )
+        expect(deliveredApplication.enqueue(
+            "delivered-follow-up", "follow_up", "second durable intent"
+        ).isOk() && deliveredApplication.submit("first durable intent").isOk(),
+            "queued follow-up is consumed inside a live Product Run")
+
+        isolatedPluginHostContract(workspace)
+
+        let remoteTransport = ProductRecordingRemoteTransport()
+        let remoteRealm = RemoteExecutionRealm(
+            "product-worker", "https://worker.invalid/rpc", "product-worker-key",
+            "product-worker-fs", "product-worker-process"
+        )
+        let remoteEnvelope = sealRemoteCapabilityEnvelope(
+            SignedRemoteCapabilityEnvelope(
+                "product-envelope", RunId("missing-remote-run"), LaneId("main"),
+                remoteRealm.id, CapabilitySet(), 10, 30, "nonce"
+            ),
+            "signature"
+        )
+        expect(product.vnext.routeRemote(
+            RemoteExecutionRouter(
+                remoteRealm, CapabilitySet(), ProductRemoteVerifier(), remoteTransport
+            ),
+            remoteEnvelope,
+            RemoteExecutionRequest(
+                OperationId("missing-remote-operation"), RemoteServiceKind.Process,
+                objectValue([]), "lane:main"
+            ),
+            20
+        ).isError() && remoteTransport.dispatches == 0,
+            "Product remote effects cannot bypass durable Operation admission")
+
         let mainBranch = product.vnext.laneBranch(
             ThreadId(sessionId.value), LaneId("main")
         ).value().getOrThrow()
@@ -137,6 +186,17 @@ main(): Int64 {
                 ThreadId(sessionId.value), LaneId("review")
             ).value().getOrThrow().size == 1,
             "Product exposes durable shared-history Lane creation and branch projection")
+        let isolatedFork = product.vnext.forkThread(
+            ThreadId(sessionId.value), LaneId("main"),
+            mainBranch[mainBranch.size - 1], ThreadId("product-isolated-child"),
+            "isolated-workspace", 20
+        )
+        expect(isolatedFork.isOk() &&
+            isolatedFork.value().getOrThrow().size == mainBranch.size &&
+            product.vnext.laneBranch(
+                ThreadId("product-isolated-child"), LaneId("main")
+            ).value().getOrThrow().size == mainBranch.size,
+            "Product ForkThread freezes a Lane prefix into an isolated durable Thread")
         let team = TeamRecord(
             TeamId("product-team"), ThreadId(sessionId.value), LaneId("main"),
             "Product review", createdAtMillis: 21
@@ -276,6 +336,45 @@ main(): Int64 {
                     "boundary; runs=${programRuns} operations=${programOperations} " +
                     "receipts=${programReceipts} steps=${programSteps}")
             expect(database.scalarInt(
+                "SELECT COUNT(*) FROM step_records step JOIN runs ON runs.id=step.run_id " +
+                    "WHERE runs.thread_id='" + toolSessionId.value + "'"
+            ) >= 2 && database.scalarInt(
+                "SELECT COUNT(DISTINCT manifest.step_id) FROM context_manifests manifest " +
+                    "WHERE manifest.thread_id='" + toolSessionId.value + "'"
+            ) >= 2,
+                "each Product model request owns a distinct durable Step and Context Manifest")
+            expect(database.query(
+                "SELECT status FROM lane_inbox_entries WHERE id='interaction-persisted-steering'"
+            )[0].required(0) == "rejected" && database.query(
+                "SELECT status FROM lane_inbox_entries WHERE id='interaction-persisted-follow-up'"
+            )[0].required(0) == "queued",
+                "withdrawal is durable and undelivered interaction survives process close")
+            let deliveredStatus = database.query(
+                "SELECT status FROM lane_inbox_entries " +
+                    "WHERE id='interaction-delivered-follow-up'"
+            )[0].required(0)
+            let deliveredSteps = database.scalarInt(
+                "SELECT COUNT(*) FROM step_records WHERE thread_id='" +
+                    deliveredSession.value + "'"
+            )
+            let deliveredEnclosures = database.scalarInt(
+                "SELECT COUNT(*) FROM step_records WHERE input_entry_id=" +
+                    "'interaction-delivered-follow-up' AND accepted_item_id=" +
+                    "'interaction-delivered-follow-up'"
+            )
+            expect(deliveredStatus == "applied" && deliveredSteps >= 2 &&
+                deliveredEnclosures == 1,
+                "delivered interaction is atomically enclosed by its next model Step; " +
+                    "status=${deliveredStatus} steps=${deliveredSteps} " +
+                    "enclosures=${deliveredEnclosures}")
+            expect(database.scalarInt(
+                "SELECT COUNT(*) FROM audit_events WHERE thread_id='product-isolated-child' " +
+                    "AND kind='thread.forked'"
+            ) == 1 && SqliteThreadCommitSink(database).loadThread(
+                ThreadId("product-isolated-child")
+            ).activeRunId.isNone(),
+                "isolated Product fork reopens without inheriting active Run authority")
+            expect(database.scalarInt(
                 "SELECT COUNT(*) FROM items WHERE thread_id='" + seededSession.value + "'"
             ) == 2 && database.scalarInt(
                 "SELECT COUNT(*) FROM items WHERE thread_id='" + forkedSession.value + "'"
@@ -287,10 +386,172 @@ main(): Int64 {
         } finally {
             database.close()
         }
+        let reopened = openProduct(config: ProductConfig(
+            settingsRoot: root + "/settings",
+            stateRoot: stateRoot,
+            workspaceRoot: workspace,
+            fixture: true,
+            asyncEnabled: false
+        )).value().getOrThrow()
+        let restoredInputs = reopened.applicationSession(
+            sessionId: Some(sessionId)
+        ).takeFollowUps()
+        expect(restoredInputs.size == 1 &&
+            restoredInputs[0].correlationId == "persisted-follow-up" &&
+            restoredInputs[0].text == "continue after recovery",
+            "Application restores undelivered durable Inbox input after process reopen")
+        reopened.close().value().getOrThrow()
         println("product Thread Runtime contract passed")
         0
     } finally {
         let _ = removeIfExists(root, recursive: true)
+    }
+}
+
+func isolatedPluginHostContract(workspace: String): Unit {
+    let processManifest = SignedExtensionPackageManifest(
+        "review.process", "1.0.0", ">=1.0.0 <2.0.0", "1",
+        "plugins/reviewer", ["review"], [], ["workspace.read"],
+        1u32, "compatible", "sha256:process", "signature-process"
+    )
+    let processLaunch = match (validateIsolatedPluginPackage(
+        processManifest, ExtensionExecutionKind.ProcessPlugin, 7u64,
+        ["workspace.read"], FixedPluginSignatureVerifier(true)
+    )) {
+        case SafeLifecycleResult.Ok(value) => value
+        case SafeLifecycleResult.Err(error) => throw IllegalStateException(error)
+    }
+    let processPort = RecordingPluginProcessPort("{\"accepted\":true}")
+    let host = ProductIsolatedPluginHost(processPort, workspace)
+    expect(host.mountInitial(processLaunch).isOk(),
+        "isolated Process generation mounts before admission")
+    let processResult = host.invoke(
+        "review.process",
+        IsolatedPluginInvocation("call-1", "review", objectValue([
+            ValueField("path", textValue("input.txt"))
+        ]))
+    )
+    expect(processResult.isOk() && processPort.requests.size == 1 &&
+        processPort.requests[0].executable == workspace + "/plugins/reviewer" &&
+        processPort.requests[0].sandboxMode == ProcessSandboxMode.WorkspaceReadOnly &&
+        !processPort.requests[0].networkAccess &&
+        processPort.requests[0].environmentAllowlist.isEmpty() &&
+        processPort.requests[0].arguments.size == 2 &&
+        processPort.requests[0].arguments[1].contains("axyndra-extension-v1"),
+        "Process plugin executes only through the bounded read-only sandbox protocol")
+    let processReload = match (validateIsolatedPluginPackage(
+        processManifest, ExtensionExecutionKind.ProcessPlugin, 8u64,
+        ["workspace.read"], FixedPluginSignatureVerifier(true)
+    )) {
+        case SafeLifecycleResult.Ok(value) => value
+        case SafeLifecycleResult.Err(error) => throw IllegalStateException(error)
+    }
+    expect(host.reload(processReload).isOk() && host.invoke(
+        "review.process",
+        IsolatedPluginInvocation("call-1b", "review", objectValue([]))
+    ).isOk() && host.diagnostics().size == 2 &&
+        host.diagnostics()[0].state == ExtensionLifecycleState.Inactive &&
+        !host.diagnostics()[0].accepting &&
+        host.diagnostics()[1].state == ExtensionLifecycleState.Active &&
+        host.diagnostics()[1].generation == 8u64,
+        "isolated plugin reload fences the old generation before subsequent admission")
+
+    let wasmManifest = SignedExtensionPackageManifest(
+        "review.wasm", "1.0.0", ">=1.0.0 <2.0.0", "1",
+        "plugins/reviewer.wasm", ["review"], [],
+        ["workspace.write", "network.access"], 1u32, "compatible",
+        "sha256:wasm", "signature-wasm"
+    )
+    let wasmLaunch = match (validateIsolatedPluginPackage(
+        wasmManifest, ExtensionExecutionKind.WasmComponent, 8u64,
+        ["workspace.write", "network.access"], FixedPluginSignatureVerifier(true)
+    )) {
+        case SafeLifecycleResult.Ok(value) => value
+        case SafeLifecycleResult.Err(error) => throw IllegalStateException(error)
+    }
+    let wasmPort = RecordingPluginProcessPort("{\"accepted\":true}")
+    let wasmHost = ProductIsolatedPluginHost(
+        wasmPort, workspace, wasmRuntime: "wasmtime-fixture"
+    )
+    expect(wasmHost.mountInitial(wasmLaunch).isOk() && wasmHost.invoke(
+        "review.wasm",
+        IsolatedPluginInvocation("call-2", "review", objectValue([]))
+    ).isOk() && wasmPort.requests.size == 1 &&
+        wasmPort.requests[0].executable == "wasmtime-fixture" &&
+        wasmPort.requests[0].arguments[0] == workspace + "/plugins/reviewer.wasm" &&
+        wasmPort.requests[0].sandboxMode == ProcessSandboxMode.WorkspaceReadWrite &&
+        wasmPort.requests[0].networkAccess,
+        "WASM plugin uses the fixed runtime and only its explicitly granted authorities")
+
+    let truncated = RecordingPluginProcessPort("{}", truncated: true)
+    let truncatedHost = ProductIsolatedPluginHost(truncated, workspace)
+    expect(truncatedHost.mountInitial(processLaunch).isOk() && truncatedHost.invoke(
+        "review.process",
+        IsolatedPluginInvocation("call-3", "review", objectValue([]))
+    ).isError(), "truncated isolated plugin output fails closed")
+    expect(validateIsolatedPluginPackage(
+        SignedExtensionPackageManifest(
+            "escape", "1", "1", "1", "../escape", [], [], [], 1u32,
+            "none", "sha256:escape", "signature"
+        ),
+        ExtensionExecutionKind.ProcessPlugin, 1u64, [],
+        FixedPluginSignatureVerifier(true)
+    ).isOk() == false, "isolated plugin entrypoint cannot escape its package")
+}
+
+class FixedPluginSignatureVerifier <: ExtensionPackageSignatureVerifier {
+    private let valid: Bool
+    init(valid: Bool) { this.valid = valid }
+    public func verify(_manifest: SignedExtensionPackageManifest): Bool {
+        let _ = _manifest
+        valid
+    }
+}
+
+class ProductRemoteVerifier <: RemoteCapabilitySignatureVerifier {
+    public func verify(
+        _envelope: SignedRemoteCapabilityEnvelope,
+        transportIdentity: String
+    ): Bool {
+        let _ = _envelope.id
+        transportIdentity == "product-worker-key"
+    }
+}
+
+class ProductRecordingRemoteTransport <: RemoteWorkerTransport {
+    var dispatches: Int64 = 0
+
+    public func dispatch(
+        realm: RemoteExecutionRealm,
+        envelope: SignedRemoteCapabilityEnvelope,
+        request: RemoteExecutionRequest
+    ): Result<AgentValue> {
+        let _ = realm.id
+        let _ = envelope.id
+        let _ = request.routeKey
+        dispatches += 1
+        Result.Ok(objectValue([]))
+    }
+}
+
+class RecordingPluginProcessPort <: ProcessPort {
+    public let requests = ArrayList<ProcessRequest>()
+    private let output: String
+    private let truncated: Bool
+
+    init(output: String, truncated!: Bool = false) {
+        this.output = output
+        this.truncated = truncated
+    }
+
+    public func execute(request: ProcessRequest): Result<ProcessResult> {
+        requests.add(request)
+        Result.Ok(ProcessResult(0, stdout: output, truncated: truncated))
+    }
+
+    public func cancel(_operationId: OperationId): Result<Unit> {
+        let _ = _operationId
+        Result.Ok(())
     }
 }
 
