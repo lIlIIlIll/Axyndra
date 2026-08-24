@@ -36,3 +36,7 @@ jobs:
           scripts/pinned_cangjie cjpm check
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
           scripts/pinned_cangjie cjpm test
+      - name: vNext focused contracts
+        run: >-
+          python3 scripts/vnext_contract_gate.py
+          --sdk-root /home/elliot/cangjie_sdk/daily

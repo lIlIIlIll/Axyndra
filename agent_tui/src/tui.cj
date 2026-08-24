@@ -6380,10 +6380,15 @@ class AgentScreen {
         if (initialPrompt == "") {
             return true
         }
+        var matches: Int64 = 0
         for (item in ui.cards where item.body.contains(initialPrompt)) {
-            return initialSubmitted
+            matches++
         }
-        false
+        initialSubmitted && matches == 1
+    }
+
+    func hasInitialPrompt(): Bool {
+        initialPrompt != ""
     }
 
     func themeAwareUserMessageObserved(): Bool {
