@@ -373,7 +373,8 @@ public class ConfiguredExtension {
 
 @Derive[Equatable]
 public enum ExtensionLifecycleState {
-    Discovered | Validated | Registered | Active | Inactive | Failed
+    Discovered | Validated | Mounted | Active | StopAdmitting | Draining |
+    Disposing | Inactive | Quarantined | Failed
 }
 
 public class ExtensionDiagnostic {
