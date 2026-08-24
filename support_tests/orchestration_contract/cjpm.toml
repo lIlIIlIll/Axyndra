@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "orchestration_contract"
+  organization = ""
+  description = "Executable task lifecycle and concurrency contracts"
+  version = "1.0.0"
+  output-type = "executable"
+  src-dir = "src"
+  target-dir = "target"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "task_runtime" = { path = "../../task_runtime", output-type = "static" }

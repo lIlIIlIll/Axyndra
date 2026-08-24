@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_extensions"
+  organization = ""
+  description = "Type-safe extension contributions"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
+  "agent_mcp" = { path = "../agent_mcp", output-type = "static" }
+  "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

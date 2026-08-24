@@ -1,0 +1,14 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_core"
+  organization = ""
+  description = "Protocol-neutral agent orchestration core"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
+  "agent_skills" = { path = "../agent_skills", output-type = "static" }
+  "agent_ports" = { path = "../agent_ports", output-type = "static" }
+  "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

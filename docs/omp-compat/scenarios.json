@@ -1,0 +1,423 @@
+[
+  {
+    "id": "cli-help",
+    "args": ["--help"],
+    "projection": "help_surface",
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-version",
+    "args": ["--version"],
+    "projection": "version_surface",
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-unknown-flag",
+    "args": ["--definitely-invalid"],
+    "projection": "unknown_flag",
+    "flag": "--definitely-invalid",
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-empty-print",
+    "args": ["--print"],
+    "projection": "empty_output",
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-empty-json",
+    "args": ["--mode", "json"],
+    "projection": "json_session",
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-worktree-help",
+    "args": ["worktree", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "list",
+      "clear",
+      "--all",
+      "--dry-run",
+      "--json"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-worktree-empty-list",
+    "args": ["worktree", "list", "--json"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-worktree-empty-clear",
+    "args": ["worktree", "clear", "--json"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-worktree-invalid-action",
+    "args": ["worktree", "unknown"],
+    "projection": "command_usage_error",
+    "tokens": ["list", "clear", "unknown"],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-search-help",
+    "args": ["search", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "--provider",
+      "--recency",
+      "--limit",
+      "--compact"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-search-alias-help",
+    "args": ["q", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "--provider",
+      "--recency",
+      "--limit",
+      "--compact"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-search-missing-query",
+    "args": ["search"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-search-invalid-provider",
+    "args": [
+      "search",
+      "--provider",
+      "definitely-invalid",
+      "query"
+    ],
+    "projection": "command_usage_error",
+    "tokens": [
+      "--provider",
+      "auto",
+      "perplexity",
+      "public",
+      "definitely-invalid"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-gc-help",
+    "args": ["gc", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "--apply",
+      "--json",
+      "--agent-dir",
+      "--blobs",
+      "--archive",
+      "--wal",
+      "--cold-archive-after-days",
+      "--retain-newest-global",
+      "--retain-newest-per-cwd"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-gc-empty-default",
+    "args": ["gc", "--json"],
+    "projection": "gc_empty",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-gc-empty-blobs",
+    "args": ["gc", "--json", "--blobs"],
+    "projection": "gc_empty",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-gc-invalid-flag",
+    "args": ["gc", "--definitely-invalid"],
+    "projection": "command_usage_error",
+    "tokens": ["--definitely-invalid"],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-usage-help",
+    "args": ["usage", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "invalidate",
+      "--json",
+      "--provider",
+      "--redact",
+      "--history",
+      "--days"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-usage-empty-json",
+    "args": ["usage", "--json"],
+    "projection": "usage_empty",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-usage-empty-history",
+    "args": ["usage", "--history", "--json"],
+    "projection": "usage_empty",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-usage-empty-text",
+    "args": ["usage"],
+    "projection": "usage_no_credentials",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-usage-invalidate",
+    "args": ["usage", "invalidate"],
+    "projection": "command_help_surface",
+    "tokens": ["invalidated", "all providers"],
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-stats-help",
+    "args": ["stats", "--help"],
+    "projection": "command_help_surface",
+    "tokens": ["--port", "--json", "--summary"],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-stats-empty-json",
+    "args": ["stats", "--json"],
+    "projection": "stats_exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-stats-empty-summary",
+    "args": ["stats", "--summary"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-ssh-help",
+    "args": ["ssh", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "add",
+      "remove",
+      "list",
+      "--json",
+      "--host",
+      "--user",
+      "--port",
+      "--key",
+      "--desc",
+      "--compat",
+      "--scope"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-ssh-empty-json",
+    "steps": [
+      {"args": ["ssh", "list", "--json"]}
+    ],
+    "projection": "ssh_lifecycle",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-ssh-user-lifecycle",
+    "steps": [
+      {
+        "args": [
+          "ssh", "add", "alpha",
+          "--host", "example.com",
+          "--user", "elliot",
+          "--port", "2222",
+          "--key", "/tmp/key",
+          "--desc", "demo",
+          "--compat",
+          "--scope", "user"
+        ]
+      },
+      {"args": ["ssh", "list", "--json"]},
+      {
+        "args": [
+          "ssh", "add", "alpha",
+          "--host", "duplicate.example",
+          "--scope", "user"
+        ]
+      },
+      {"args": ["ssh", "remove", "alpha", "--scope", "user"]},
+      {"args": ["ssh", "list", "--json"]}
+    ],
+    "projection": "ssh_lifecycle",
+    "isolatedHome": true,
+    "timeoutSeconds": 10
+  },
+  {
+    "id": "cli-ssh-invalid-port",
+    "args": ["ssh", "add", "alpha", "--host", "x", "--port", "70000"],
+    "projection": "command_usage_error",
+    "tokens": ["integer", "1", "65535"],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-grievances-help",
+    "args": ["grievances", "--help"],
+    "projection": "command_help_surface",
+    "tokens": [
+      "list",
+      "clean",
+      "push",
+      "--limit",
+      "--tool",
+      "--json",
+      "--id",
+      "--all"
+    ],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-grievances-empty-json",
+    "args": ["grievances", "--json"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-grievances-clean-empty-json",
+    "args": ["grievances", "clean", "--all", "--json"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-grievances-push-empty-json",
+    "args": ["grievances", "push", "--json"],
+    "projection": "exact",
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "cli-grievances-clean-selector-required",
+    "args": ["grievances", "clean"],
+    "projection": "command_usage_error",
+    "tokens": ["exactly one", "--id", "--tool", "--all"],
+    "isolatedHome": true,
+    "timeoutSeconds": 5
+  },
+  {
+    "id": "rpc-ready-and-state",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"state-1\",\"type\":\"get_state\"}"
+    ],
+    "projection": "rpc_state",
+    "requestId": "state-1",
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-local-help",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"help-1\",\"type\":\"prompt\",\"message\":\"/help\"}"
+    ],
+    "projection": "rpc_ack",
+    "requestId": "help-1",
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-local-ssh-help",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"ssh-help\",\"type\":\"prompt\",\"message\":\"/ssh help\"}"
+    ],
+    "projection": "rpc_local_command",
+    "requestId": "ssh-help",
+    "isolatedHome": true,
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-local-changelog",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"changelog-1\",\"type\":\"prompt\",\"message\":\"/changelog\"}"
+    ],
+    "projection": "rpc_local_semantics",
+    "requestId": "changelog-1",
+    "isolatedHome": true,
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-local-context",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"context-1\",\"type\":\"prompt\",\"message\":\"/context\"}"
+    ],
+    "projection": "rpc_local_semantics",
+    "requestId": "context-1",
+    "isolatedHome": true,
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-protocol-v2",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"protocol-2\",\"type\":\"negotiate_protocol\",\"protocolVersion\":2}"
+    ],
+    "projection": "rpc_ack",
+    "requestId": "protocol-2",
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-available-models",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"models-1\",\"type\":\"get_available_models\"}"
+    ],
+    "projection": "rpc_ack",
+    "requestId": "models-1",
+    "timeoutSeconds": 15
+  },
+  {
+    "id": "rpc-message-page",
+    "args": ["--mode", "rpc"],
+    "stdin": [
+      "{\"id\":\"page-1\",\"type\":\"get_messages_page\",\"limit\":1}"
+    ],
+    "projection": "rpc_ack",
+    "requestId": "page-1",
+    "timeoutSeconds": 15
+  }
+]

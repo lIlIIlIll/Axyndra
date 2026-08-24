@@ -1,0 +1,19 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "mcp_extension_contract"
+  organization = ""
+  description = "MCP to Tool Runtime bridge contract"
+  version = "1.0.0"
+  output-type = "executable"
+  src-dir = "src"
+  target-dir = "target"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_extensions" = { path = "../../agent_extensions", output-type = "static" }
+  "agent_mcp" = { path = "../../agent_mcp", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

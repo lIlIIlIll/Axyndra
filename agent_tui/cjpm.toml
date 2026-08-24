@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_tui"
+  organization = ""
+  description = "cjtui frontend over the stable AgentClient boundary"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_cli" = { path = "../agent_cli", output-type = "static" }
+  "core" = { path = "../../cj_tui/packages/core", output-type = "static" }
+  "markdown" = { path = "../../cj_tui/packages/markdown", output-type = "static" }

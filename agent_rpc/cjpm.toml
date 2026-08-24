@@ -1,0 +1,18 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_rpc"
+  organization = ""
+  description = "JSONL RPC server and process transport for AgentClient"
+  version = "1.0.0"
+  output-type = "static"
+  # The aggregate unittest executable links agent_product/agent_store, while
+  # static dependency link options are not propagated by cjpm.
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_cli" = { path = "../agent_cli", output-type = "static" }
+  "agent_core" = { path = "../agent_core", output-type = "static" }
+  "agent_product" = { path = "../agent_product", output-type = "static" }
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "model_adapters" = { path = "../model_adapters", output-type = "static" }
+  "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

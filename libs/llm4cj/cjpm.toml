@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "llm4cj"
+  organization = ""
+  description = "Provider-neutral LLM HTTP, SSE, retry and wire transport primitives"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "json4cj" = { path = "../json4cj", output-type = "static" }
+  "process4cj" = { path = "../process4cj", output-type = "static" }

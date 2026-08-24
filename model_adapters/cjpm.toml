@@ -1,0 +1,18 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "model_adapters"
+  organization = ""
+  description = "Native provider protocol and transport adapters for Agent ModelPort"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_ports" = { path = "../agent_ports", output-type = "static" }
+  "json4cj" = { path = "../libs/json4cj", output-type = "static" }
+  "llm4cj" = { path = "../libs/llm4cj", output-type = "static" }
+  "process4cj" = { path = "../libs/process4cj", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

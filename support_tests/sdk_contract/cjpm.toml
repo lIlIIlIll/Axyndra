@@ -1,0 +1,14 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "sdk_contract"
+  organization = ""
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_ports" = { path = "../../agent_ports", output-type = "static" }
+  "agent_core" = { path = "../../agent_core", output-type = "static" }
+  "agent_skills" = { path = "../../agent_skills", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "agent_embed" = { path = "../../agent_embed", output-type = "static" }

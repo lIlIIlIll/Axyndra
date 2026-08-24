@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "testkit_consumer"
+  organization = ""
+  description = "Independent external-style omp-agent-testkit consumer"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
+  "json4cj" = { path = "../../libs/json4cj", output-type = "static" }
+  "omp_agent_testkit" = { path = "../../omp_agent_testkit", output-type = "static" }

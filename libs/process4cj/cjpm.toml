@@ -1,0 +1,14 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "process4cj"
+  organization = ""
+  description = "Bounded process, channel, framing, deadline, and cancellation primitives"
+  version = "0.1.0"
+  output-type = "static"
+
+[ffi.c]
+  process4cj_native = { path = "native" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["native"]

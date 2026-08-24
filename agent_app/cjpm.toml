@@ -1,0 +1,23 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_app"
+  organization = ""
+  description = "Runnable Agent CLI, RPC, and TUI host"
+  version = "1.0.0"
+  output-type = "executable"
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_cli" = { path = "../agent_cli", output-type = "static" }
+  "agent_app_protocol" = { path = "../agent_app_protocol", output-type = "static" }
+  "agent_client" = { path = "../agent_client", output-type = "static" }
+  "agent_core" = { path = "../agent_core", output-type = "static" }
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_mcp" = { path = "../agent_mcp", output-type = "static" }
+  "agent_product" = { path = "../agent_product", output-type = "static" }
+  "agent_rpc" = { path = "../agent_rpc", output-type = "static" }
+  "agent_embed" = { path = "../agent_embed", output-type = "static" }
+  "agent_tui" = { path = "../agent_tui", output-type = "static" }
+  "core" = { path = "../../cj_tui/packages/core", output-type = "static" }
+  "model_adapters" = { path = "../model_adapters", output-type = "static" }
+  "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

@@ -1,0 +1,10 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_ports"
+  organization = ""
+  description = "Replaceable product ports for Agent core"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }

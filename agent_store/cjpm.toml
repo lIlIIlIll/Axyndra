@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_store"
+  organization = ""
+  description = "SQLite WAL durable metadata store for vNext"
+  version = "1.0.0"
+  output-type = "static"
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
+  "agent_skills" = { path = "../agent_skills", output-type = "static" }

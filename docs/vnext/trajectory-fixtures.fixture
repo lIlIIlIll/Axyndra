@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "item_kinds": [
+    "UserMessage",
+    "AssistantMessage",
+    "ToolCall",
+    "ToolResult",
+    "ReasoningReference",
+    "ProviderOpaqueItem",
+    "ArtifactReference",
+    "SystemNote"
+  ],
+  "scenarios": [
+    {
+      "id": "basic_final",
+      "test_ids": ["T001"],
+      "stimuli": ["start_turn", "model_final"],
+      "expect": {
+        "run_state": "Completed",
+        "item_kinds": ["UserMessage", "AssistantMessage"],
+        "operation_count": 0,
+        "receipt_count": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "tool_success",
+      "test_ids": ["T002"],
+      "stimuli": ["start_turn", "model_tool_call", "tool_completed", "model_final"],
+      "expect": {
+        "run_state": "Completed",
+        "item_kinds": ["UserMessage", "ToolCall", "ToolResult", "AssistantMessage"],
+        "operation_count": 1,
+        "receipt_count": 1,
+        "tool_result_count": 1,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "tool_known_failure",
+      "test_ids": ["T002"],
+      "stimuli": ["start_turn", "model_tool_call", "tool_known_failure", "model_final"],
+      "expect": {
+        "run_state": "Completed",
+        "item_kinds": ["UserMessage", "ToolCall", "ToolResult", "AssistantMessage"],
+        "operation_count": 1,
+        "receipt_count": 1,
+        "tool_result_count": 1,
+        "tool_result_error_count": 1,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "approval_approved",
+      "test_ids": ["T003"],
+      "stimuli": ["start_turn", "model_tool_call", "approval_requested", "approve", "tool_completed"],
+      "expect": {
+        "run_state": "Running",
+        "operation_count": 1,
+        "receipt_count": 1,
+        "executor_calls": 1,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "approval_denied",
+      "test_ids": ["T003"],
+      "stimuli": ["start_turn", "model_tool_call", "approval_requested", "deny"],
+      "expect": {
+        "run_state": "Running",
+        "operation_count": 1,
+        "receipt_count": 0,
+        "executor_calls": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "parallel_conflict_waves",
+      "test_ids": ["T007"],
+      "stimuli": ["start_turn", "model_parallel_tool_calls", "execute_conflict_waves"],
+      "expect": {
+        "run_state": "Running",
+        "operation_count": 3,
+        "receipt_count": 3,
+        "tool_result_count": 3,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "late_model_after_cancel",
+      "test_ids": ["T004", "T013"],
+      "stimuli": ["start_run_a", "cancel_run_a", "start_run_b", "deliver_model_result_a"],
+      "expect": {
+        "run_state": "Cancelled",
+        "operation_count": 0,
+        "receipt_count": 0,
+        "late_semantic_commits": 0,
+        "trace_contains": ["stale_result_discarded"]
+      }
+    },
+    {
+      "id": "late_tool_after_cancel",
+      "test_ids": ["T004", "T013"],
+      "stimuli": ["start_run_a", "start_tool_a", "cancel_run_a", "start_run_b", "deliver_tool_result_a"],
+      "expect": {
+        "run_state": "Cancelled",
+        "operation_count": 1,
+        "receipt_count": 1,
+        "tool_result_count": 0,
+        "late_semantic_commits": 0,
+        "trace_contains": ["stale_result_discarded"]
+      }
+    },
+    {
+      "id": "safe_compaction",
+      "test_ids": ["T005", "T015"],
+      "stimuli": ["append_long_history", "compact", "replay_projection"],
+      "expect": {
+        "run_state": "Completed",
+        "canonical_item_delta": 0,
+        "tool_protocol_complete": true,
+        "checkpoint_count": 1,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "mcp_untrusted_readonly_hint",
+      "test_ids": ["T006"],
+      "stimuli": ["discover_untrusted_readonly_hint", "plan_operation"],
+      "expect": {
+        "run_state": "WaitingApproval",
+        "effect_class": "ExternalMutation",
+        "approval_required": true,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c1_tool_call_only",
+      "test_ids": ["T009", "T014"],
+      "stimuli": ["commit_tool_call", "crash", "recover"],
+      "expect": {
+        "run_state": "Running",
+        "recovery_action": "create_or_reconcile_operation",
+        "duplicate_operation_count": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c2_prepared_without_approval",
+      "test_ids": ["T009", "T014"],
+      "stimuli": ["commit_prepared", "crash", "recover"],
+      "expect": {
+        "run_state": "WaitingApproval",
+        "recovery_action": "request_approval_once",
+        "executor_calls": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c3_executing_before_effect",
+      "test_ids": ["T009", "T014"],
+      "stimuli": ["commit_executing", "prove_effect_not_started", "crash", "recover"],
+      "expect": {
+        "run_state": "Running",
+        "recovery_action": "execute_by_retry_policy",
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c4_effect_without_receipt",
+      "test_ids": ["T010", "T014"],
+      "stimuli": ["commit_executing", "perform_external_effect", "crash", "recover"],
+      "expect": {
+        "run_state": "RecoveryRequired",
+        "operation_outcome": "Unknown",
+        "automatic_retries": 0,
+        "receipt_count": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c5_receipt_before_operation_commit",
+      "test_ids": ["T011", "T014"],
+      "stimuli": ["commit_receipt", "crash", "recover"],
+      "expect": {
+        "run_state": "Running",
+        "recovery_action": "finalize_from_receipt",
+        "executor_calls_after_recovery": 0,
+        "receipt_count": 1,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c6_operation_before_tool_result",
+      "test_ids": ["T011", "T014"],
+      "stimuli": ["commit_operation", "crash", "recover"],
+      "expect": {
+        "run_state": "Running",
+        "recovery_action": "append_tool_result_once",
+        "tool_result_count": 1,
+        "executor_calls_after_recovery": 0,
+        "late_semantic_commits": 0
+      }
+    },
+    {
+      "id": "crash_c7_tool_result_before_run_advance",
+      "test_ids": ["T011", "T014"],
+      "stimuli": ["commit_tool_result", "crash", "recover"],
+      "expect": {
+        "run_state": "Running",
+        "recovery_action": "advance_run_without_duplicate",
+        "tool_result_count": 1,
+        "duplicate_item_count": 0,
+        "late_semantic_commits": 0
+      }
+    }
+  ]
+}
