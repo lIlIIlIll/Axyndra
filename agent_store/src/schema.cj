@@ -41,6 +41,9 @@ func v1Schema(): Array<String> {
         "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT NOT NULL UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT NOT NULL UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
         "CREATE TABLE prompt_contribution_artifacts (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE context_manifests (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, step_id TEXT NOT NULL REFERENCES step_records(id) ON DELETE CASCADE, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
+        "CREATE TABLE lanes (thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, parent_lane_id TEXT, fork_item_id TEXT REFERENCES items(id), config TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,parent_lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE item_tree_edges (item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, parent_item_id TEXT REFERENCES items(id), depth INTEGER NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE run_lane_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE INDEX turns_thread_ordinal ON turns(thread_id, ordinal)",
         "CREATE INDEX items_thread_ordinal ON items(thread_id, ordinal)",
         "CREATE INDEX runs_thread_turn ON runs(thread_id, turn_id)",
@@ -60,6 +63,9 @@ func v1Schema(): Array<String> {
         "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)",
         "CREATE INDEX lane_inbox_queue ON lane_inbox_entries(thread_id,lane_id,status,created_at_millis,id)",
         "CREATE INDEX step_records_run ON step_records(run_id,ordinal)"
+        ,"CREATE TRIGGER threads_create_main_lane AFTER INSERT ON threads BEGIN INSERT INTO lanes(thread_id,lane_id,kind,parent_lane_id,fork_item_id,config,status,created_at_millis) VALUES (NEW.id,'main','main',NULL,NULL,'o1:0','open',0); END"
+        ,"CREATE TRIGGER items_create_main_edge AFTER INSERT ON items BEGIN INSERT INTO item_tree_edges(item_id,thread_id,lane_id,parent_item_id,depth) VALUES (NEW.id,NEW.thread_id,'main',(SELECT id FROM items WHERE thread_id=NEW.thread_id AND ordinal<NEW.ordinal ORDER BY ordinal DESC LIMIT 1),COALESCE((SELECT edge.depth+1 FROM item_tree_edges edge JOIN items prior ON prior.id=edge.item_id WHERE prior.thread_id=NEW.thread_id AND prior.ordinal<NEW.ordinal ORDER BY prior.ordinal DESC LIMIT 1),0)); END"
+        ,"CREATE TRIGGER runs_bind_main_lane AFTER INSERT ON runs BEGIN INSERT INTO run_lane_bindings(run_id,thread_id,lane_id) VALUES (NEW.id,NEW.thread_id,'main'); END"
     ]
 }
 
@@ -175,5 +181,19 @@ func v13Migration(): Array<String> {
     [
         "CREATE TABLE prompt_contribution_artifacts (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE context_manifests (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, step_id TEXT NOT NULL REFERENCES step_records(id) ON DELETE CASCADE, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)"
+    ]
+}
+
+func v14Migration(): Array<String> {
+    [
+        "CREATE TABLE lanes (thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, parent_lane_id TEXT, fork_item_id TEXT REFERENCES items(id), config TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,parent_lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE item_tree_edges (item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, parent_item_id TEXT REFERENCES items(id), depth INTEGER NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE run_lane_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "INSERT INTO lanes(thread_id,lane_id,kind,parent_lane_id,fork_item_id,config,status,created_at_millis) SELECT id,'main','main',NULL,NULL,'o1:0','open',0 FROM threads",
+        "INSERT INTO item_tree_edges(item_id,thread_id,lane_id,parent_item_id,depth) SELECT item.id,item.thread_id,'main',(SELECT prior.id FROM items prior WHERE prior.thread_id=item.thread_id AND prior.ordinal<item.ordinal ORDER BY prior.ordinal DESC LIMIT 1),item.ordinal-1 FROM items item",
+        "INSERT INTO run_lane_bindings(run_id,thread_id,lane_id) SELECT id,thread_id,'main' FROM runs",
+        "CREATE TRIGGER threads_create_main_lane AFTER INSERT ON threads BEGIN INSERT INTO lanes(thread_id,lane_id,kind,parent_lane_id,fork_item_id,config,status,created_at_millis) VALUES (NEW.id,'main','main',NULL,NULL,'o1:0','open',0); END",
+        "CREATE TRIGGER items_create_main_edge AFTER INSERT ON items BEGIN INSERT INTO item_tree_edges(item_id,thread_id,lane_id,parent_item_id,depth) VALUES (NEW.id,NEW.thread_id,'main',(SELECT id FROM items WHERE thread_id=NEW.thread_id AND ordinal<NEW.ordinal ORDER BY ordinal DESC LIMIT 1),COALESCE((SELECT edge.depth+1 FROM item_tree_edges edge JOIN items prior ON prior.id=edge.item_id WHERE prior.thread_id=NEW.thread_id AND prior.ordinal<NEW.ordinal ORDER BY prior.ordinal DESC LIMIT 1),0)); END",
+        "CREATE TRIGGER runs_bind_main_lane AFTER INSERT ON runs BEGIN INSERT INTO run_lane_bindings(run_id,thread_id,lane_id) VALUES (NEW.id,NEW.thread_id,'main'); END"
     ]
 }
