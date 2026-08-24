@@ -4,6 +4,7 @@ import std.collection.*
 import std.convert.*
 import agent_domain.*
 import agent_ports.*
+import agent_runtime.*
 
 public class SqliteSemanticStore <: SemanticStore {
     private let database: SqliteDatabase
@@ -159,6 +160,11 @@ public class SqliteSemanticStore <: SemanticStore {
                 try { let _ = encodeDurableRunContinuation(value) } catch (_: Exception) {
                     return semanticConflict<CommitReceipt>(
                         "durable continuation must have a valid sealed digest"
+                    )
+                }
+                if (interpretRunContinuation(value).isError()) {
+                    return semanticConflict<CommitReceipt>(
+                        "durable continuation phase is not recoverable from its own payload"
                     )
                 }
             case None => ()
