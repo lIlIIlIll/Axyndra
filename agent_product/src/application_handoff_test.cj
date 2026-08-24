@@ -9,6 +9,17 @@ import tool_runtime.*
 @Test
 class ApplicationHandoffRequestTests {
     @TestCase
+    func planModeRaisesDefaultThinkingByTwoWithHighFloor(): Unit {
+        @Expect(planModeThinking(ThinkingLevel.Off) == ThinkingLevel.High)
+        @Expect(planModeThinking(ThinkingLevel.Minimal) == ThinkingLevel.High)
+        @Expect(planModeThinking(ThinkingLevel.Low) == ThinkingLevel.High)
+        @Expect(planModeThinking(ThinkingLevel.Medium) == ThinkingLevel.XHigh)
+        @Expect(planModeThinking(ThinkingLevel.High) == ThinkingLevel.Max)
+        @Expect(planModeThinking(ThinkingLevel.XHigh) == ThinkingLevel.Max)
+        @Expect(planModeThinking(ThinkingLevel.Max) == ThinkingLevel.Max)
+    }
+
+    @TestCase
     func handoffPreservesProviderAndRuntimeProtocol(): Unit {
         let interactions = HandoffTestInteractions()
         let base = AgentRunRequest(

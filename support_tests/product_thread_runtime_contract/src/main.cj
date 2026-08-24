@@ -27,9 +27,16 @@ main(): Int64 {
         let sessionId = SessionId("durable-product-thread")
         let result = product.applicationSession(sessionId: Some(sessionId))
             .submit("persist the canonical owner")
+        let firstRunState = match (result) {
+            case Result.Ok(response) => match (response.snapshot) {
+                case Some(snapshot) => runStateName(snapshot.status)
+                case None => "missing_snapshot"
+            }
+            case Result.Err(error) => "error:" + error.code + ":" + error.message
+        }
         expect(result.isOk() && result.value().getOrThrow().snapshot.isSome() &&
             result.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
-            "fixture product completes its Run")
+            "fixture product completes its Run; actual=" + firstRunState)
         let toolSessionId = SessionId("durable-product-tool-thread")
         let toolResult = product.applicationSession(sessionId: Some(toolSessionId))
             .submit("fixture vnext read")

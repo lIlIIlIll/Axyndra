@@ -28,7 +28,7 @@ public enum UiCardKind {
 }
 
 // Keep the external/card-id vocabulary independent from the enum's derived
-// representation.  These values intentionally match the legacy string kinds.
+// representation. These values intentionally preserve the stable string kinds.
 public func uiCardKindName(kind: UiCardKind): String {
     match (kind) {
         case UiCardKind.User => "user"

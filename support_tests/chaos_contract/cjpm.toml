@@ -12,5 +12,5 @@
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
   "agent_embed" = { path = "../../agent_embed", output-type = "static" }
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
-  "omp_agent_testkit" = { path = "../../omp_agent_testkit", output-type = "static" }
+  "axyndra_agent_testkit" = { path = "../../axyndra_agent_testkit", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }

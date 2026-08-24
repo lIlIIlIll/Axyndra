@@ -1,0 +1,17 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "markdown"
+  organization = ""
+  description = "Markdown document adapter for cjtui"
+  version = "0.1.0"
+  target-dir = ""
+  script-dir = ""
+  output-type = "static"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  package-configuration = {}
+
+[dependencies]
+  "core" = { path = "../core", output-type = "static" }
+  "cj_markdown" = { path = "../cj_markdown", output-type = "static" }

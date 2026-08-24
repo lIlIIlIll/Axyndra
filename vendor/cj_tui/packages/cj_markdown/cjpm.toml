@@ -1,0 +1,15 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "cj_markdown"
+  organization = ""
+  description = "Markdown parser for Cangjie with source ranges"
+  version = "0.1.0"
+  target-dir = ""
+  script-dir = ""
+  output-type = "static"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  package-configuration = {}
+
+[dependencies]

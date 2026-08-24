@@ -28,17 +28,17 @@ public class SessionImportReport {
     }
 }
 
-public func importOmpConversation(
+public func importConversationArchive(
     sourcePath: String,
     target: SessionId,
     seedStore: SqliteThreadSeedStore,
     workspaceId: String
 ): Result<SessionImportReport> {
     if (sourcePath.trimAscii() == "") {
-        return importError("OMP session path must not be empty")
+        return importError("session archive path must not be empty")
     }
     if (!exists(Path(sourcePath))) {
-        return importError("OMP session file does not exist")
+        return importError("session archive file does not exist")
     }
     let source = try {
         String.fromUtf8(File.readFrom(sourcePath))
@@ -93,7 +93,7 @@ public func importOmpConversation(
         }
     }
     if (messages.isEmpty()) {
-        return importError("OMP session contains no importable messages")
+        return importError("session archive contains no importable messages")
     }
     let snapshot = try {
         completedThreadSeedSnapshot(

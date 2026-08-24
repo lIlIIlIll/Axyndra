@@ -200,7 +200,7 @@ approval:
 | `agent_sdk` | 第三方协作式 Extension 的最小 metadata/schema/intent/output 公共契约 |
 | `agent_extension_runtime` | 内部 manifest 校验、兼容性与 Extension 生命周期控制面 |
 | `extensions/*` | 仅依赖 `agent_sdk`/通用库的 first-party cooperative extensions；当前包括 workspace search/write、AST 与 Web Search |
-| `omp_agent_testkit` | 第三方安全的 SDK extension contract、确定性时钟/ID/取消与实验性 fault plan |
+| `axyndra_agent_testkit` | 第三方安全的 SDK extension contract、确定性时钟/ID/取消与实验性 fault plan |
 | `agent_testkit` | omp 内部 Agent/ToolPipeline/recovery doubles 与 benchmark 聚合 |
 | `agent_product` | composition root、本地安全工具和磁盘基础设施 |
 | `agent_rpc` | JSONL RPC server 与进程隔离 transport |
@@ -249,7 +249,7 @@ work mode 和 capability 过滤后的工具，但不是历史 provider wire requ
 
 `/theme` 会打开主题选择器，也可用 `/theme <name>` 直接切换。内置主题和
 `$AXYNDRA_HOME/themes/*.json` 中的自定义主题使用同一个注册表；
-配置格式见 [主题说明](docs/omp-compat/themes.md)。
+配置格式见 [主题说明](docs/themes.md)。
 
 完整产品门禁：
 

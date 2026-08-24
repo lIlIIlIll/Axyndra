@@ -11,7 +11,7 @@ generic = [
 ]
 ecosystem = [
   "agent_sdk",
-  "omp_agent_testkit",
+  "axyndra_agent_testkit",
 ]
 
 [hold]
@@ -61,7 +61,7 @@ llm4cj = ["process executable for transport adapters"]
 lsp4cj = ["language server executable supplied by host"]
 dap4cj = ["debug adapter executable supplied by host"]
 agent_sdk = []
-omp_agent_testkit = []
+axyndra_agent_testkit = []
 
 [stability]
 json4cj = "pre-1.0 public generic"
@@ -73,4 +73,4 @@ llm4cj = "stable public generic"
 lsp4cj = "stable public generic"
 dap4cj = "stable public generic"
 agent_sdk = "stable core with documented experimental symbols"
-omp_agent_testkit = "stable public test seams with documented experimental helpers"
+axyndra_agent_testkit = "stable public test seams with documented experimental helpers"

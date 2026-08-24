@@ -20,7 +20,8 @@ public class SqliteThreadPageStore {
         }
         database.readTransaction { transaction =>
             let threadRows = transaction.query(
-                "SELECT revision,next_item_ordinal FROM threads WHERE id=" + sqliteText(threadId.value)
+                "SELECT revision,next_item_ordinal FROM threads WHERE id=?",
+                [SqlParameter.Text(threadId.value)]
             )
             if (threadRows.size != 1) { throw IllegalStateException("durable Thread does not exist") }
             let revision = parseStoreInt(threadRows[0].required(0), "Thread revision")
@@ -31,8 +32,12 @@ public class SqliteThreadPageStore {
             }
             let rows = transaction.query(
                 "SELECT id,turn_id,ordinal,kind,payload,provenance,created_at_millis FROM items " +
-                    "WHERE thread_id=" + sqliteText(threadId.value) + " AND ordinal<" +
-                    end.toString() + " ORDER BY ordinal DESC LIMIT " + (limit + 1).toString()
+                    "WHERE thread_id=? AND ordinal<? ORDER BY ordinal DESC LIMIT ?",
+                [
+                    SqlParameter.Text(threadId.value),
+                    SqlParameter.Int64Value(end),
+                    SqlParameter.Int64Value(limit + 1)
+                ]
             )
             let hasMore = rows.size > limit
             let count = min(rows.size, limit)

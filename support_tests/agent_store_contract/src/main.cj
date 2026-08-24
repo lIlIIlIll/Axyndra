@@ -65,6 +65,7 @@ main(): Int64 {
             "successful transaction commits atomically")
         expect(database.query("SELECT " + sqliteText("a'b"))[0].required(0) == "a'b",
             "SQLite text literals are escaped")
+        typedParameterContract(database)
         operationCommitContract(database)
         durableThreadCoordinatorContract(database)
         recoveryPlannerContract(database)
@@ -99,6 +100,35 @@ main(): Int64 {
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
+}
+
+func typedParameterContract(database: SqliteDatabase): Unit {
+    database.execute(
+        "CREATE TABLE parameter_contract(" +
+            "text_value TEXT NOT NULL, int_value INTEGER NOT NULL, " +
+            "blob_value BLOB NOT NULL, null_value TEXT)"
+    )
+    let hostile = "quote ' and SQL ); DROP TABLE threads; --"
+    database.execute(
+        "INSERT INTO parameter_contract VALUES (?,?,?,?)",
+        [
+            SqlParameter.Text(hostile),
+            SqlParameter.Int64Value(9223372036854775807),
+            SqlParameter.Blob([0x00, 0x27, 0xFF]),
+            SqlParameter.Null
+        ]
+    )
+    let row = database.query(
+        "SELECT text_value,int_value,hex(blob_value),null_value " +
+            "FROM parameter_contract WHERE text_value=?",
+        [SqlParameter.Text(hostile)]
+    )[0]
+    expect(row.required(0) == hostile, "bound text is not interpreted as SQL")
+    expect(row.required(1) == "9223372036854775807", "bound Int64 preserves range")
+    expect(row.required(2) == "0027FF", "bound Blob preserves exact bytes")
+    expect(row[3].isNone(), "bound Null remains SQL null")
+    expect(database.scalarInt("SELECT COUNT(*) FROM threads") == 1,
+        "bound hostile text cannot mutate schema or prior rows")
 }
 
 func sqliteAppendRestoreBenchmark(): Unit {

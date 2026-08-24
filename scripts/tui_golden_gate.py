@@ -103,7 +103,7 @@ def main() -> int:
     parser.add_argument("--diagnostics", type=pathlib.Path)
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[1]
-    golden_root = root / "docs" / "omp-compat" / "tui-goldens"
+    golden_root = root / "docs" / "tui-goldens"
     for size in ("120x36", "80x24", "60x18"):
         text = (golden_root / f"{size}.txt").read_text()
         if f"size={size}" not in text or "priority=approval,composer,latest-message" not in text:

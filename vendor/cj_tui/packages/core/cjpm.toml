@@ -1,0 +1,15 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "core"
+  organization = ""
+  description = "Immediate-mode terminal UI toolkit for Cangjie"
+  version = "0.1.0"
+  target-dir = ""
+  script-dir = ""
+  output-type = "static"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  package-configuration = {}
+
+[dependencies]

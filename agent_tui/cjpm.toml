@@ -8,5 +8,5 @@
 
 [dependencies]
   "agent_cli" = { path = "../agent_cli", output-type = "static" }
-  "core" = { path = "../../cj_tui/packages/core", output-type = "static" }
-  "markdown" = { path = "../../cj_tui/packages/markdown", output-type = "static" }
+  "core" = { path = "../vendor/cj_tui/packages/core", output-type = "static" }
+  "markdown" = { path = "../vendor/cj_tui/packages/markdown", output-type = "static" }

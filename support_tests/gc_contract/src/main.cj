@@ -3,7 +3,6 @@ package gc_contract
 import agent_domain.*
 import agent_product.*
 import agent_store.*
-import model_adapters.*
 import std.fs.*
 import std.process.*
 import tool_runtime.*

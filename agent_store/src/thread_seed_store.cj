@@ -25,47 +25,70 @@ public class SqliteThreadSeedStore {
             validateCompletedSeedProtocol(snapshot)
             database.transaction { transaction =>
                 if (!transaction.query(
-                    "SELECT id FROM threads WHERE id=" + sqliteText(snapshot.thread.id.value)
+                    "SELECT id FROM threads WHERE id=?",
+                    [SqlParameter.Text(snapshot.thread.id.value)]
                 ).isEmpty()) {
                     throw IllegalStateException("canonical Thread already exists")
                 }
                 transaction.execute(
-                    "INSERT INTO threads (id,revision,workspace_id,status,next_item_ordinal,active_turn_id) VALUES (" +
-                        sqliteText(snapshot.thread.id.value) + "," +
-                        snapshot.thread.revision.toString() + "," +
-                        sqliteText(snapshot.thread.workspaceId) + ",'open'," +
-                        snapshot.thread.nextItemOrdinal.toString() + ",NULL)"
+                    "INSERT INTO threads " +
+                        "(id,revision,workspace_id,status,next_item_ordinal,active_turn_id) " +
+                        "VALUES (?,?,?,'open',?,NULL)",
+                    [
+                        SqlParameter.Text(snapshot.thread.id.value),
+                        SqlParameter.Int64Value(snapshot.thread.revision),
+                        SqlParameter.Text(snapshot.thread.workspaceId),
+                        SqlParameter.Int64Value(snapshot.thread.nextItemOrdinal)
+                    ]
                 )
                 let empty = encodeStoredValue(objectValue([]))
                 for (turn in snapshot.turns) {
                     let user = seedUserItem(snapshot.items, turn)
                     let runId = user.provenance.runId.getOrThrow()
                     transaction.execute(
-                        "INSERT INTO turns (id,thread_id,ordinal,state,user_item_id,active_run_id) VALUES (" +
-                            sqliteText(turn.id.value) + "," + sqliteText(turn.threadId.value) + "," +
-                            turn.ordinal.toString() + ",'completed'," +
-                            sqliteText(turn.userItemId.value) + ",NULL)"
+                        "INSERT INTO turns " +
+                            "(id,thread_id,ordinal,state,user_item_id,active_run_id) " +
+                            "VALUES (?,?,?,'completed',?,NULL)",
+                        [
+                            SqlParameter.Text(turn.id.value),
+                            SqlParameter.Text(turn.threadId.value),
+                            SqlParameter.Int64Value(turn.ordinal),
+                            SqlParameter.Text(turn.userItemId.value)
+                        ]
                     )
                     transaction.execute(
                         "INSERT INTO runs (id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
-                            "started_at_millis,finished_at_millis,cancellation_reason) VALUES (" +
-                            sqliteText(runId.value) + "," + sqliteText(turn.threadId.value) + "," +
-                            sqliteText(turn.id.value) + "," + turn.ordinal.toString() +
-                            ",'completed'," + sqliteText(empty) + "," + sqliteText(empty) + "," +
-                            sqliteText(empty) + "," + sqliteText(empty) + "," +
-                            user.createdAtMillis.toString() + "," +
-                            seedTurnFinishedAt(snapshot.items, turn).toString() + ",NULL)"
+                            "started_at_millis,finished_at_millis,cancellation_reason) " +
+                            "VALUES (?,?,?,?,'completed',?,?,?,?,?,?,NULL)",
+                        [
+                            SqlParameter.Text(runId.value),
+                            SqlParameter.Text(turn.threadId.value),
+                            SqlParameter.Text(turn.id.value),
+                            SqlParameter.Int64Value(turn.ordinal),
+                            SqlParameter.Text(empty),
+                            SqlParameter.Text(empty),
+                            SqlParameter.Text(empty),
+                            SqlParameter.Text(empty),
+                            SqlParameter.Int64Value(user.createdAtMillis),
+                            SqlParameter.Int64Value(seedTurnFinishedAt(snapshot.items, turn))
+                        ]
                     )
                 }
                 for (item in snapshot.items) {
                     transaction.execute(
-                        "INSERT INTO items (id,thread_id,turn_id,ordinal,kind,payload,provenance,created_at_millis) VALUES (" +
-                            sqliteText(item.id.value) + "," + sqliteText(item.threadId.value) + "," +
-                            sqliteText(item.turnId.value) + "," + item.ordinal.toString() + "," +
-                            sqliteText(seedItemKind(item.kind)) + "," +
-                            sqliteText(encodeStoredThreadContent(item.content)) + "," +
-                            sqliteText(encodeStoredProvenance(item.provenance)) + "," +
-                            item.createdAtMillis.toString() + ")"
+                        "INSERT INTO items " +
+                            "(id,thread_id,turn_id,ordinal,kind,payload,provenance,created_at_millis) " +
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                        [
+                            SqlParameter.Text(item.id.value),
+                            SqlParameter.Text(item.threadId.value),
+                            SqlParameter.Text(item.turnId.value),
+                            SqlParameter.Int64Value(item.ordinal),
+                            SqlParameter.Text(seedItemKind(item.kind)),
+                            SqlParameter.Text(encodeStoredThreadContent(item.content)),
+                            SqlParameter.Text(encodeStoredProvenance(item.provenance)),
+                            SqlParameter.Int64Value(item.createdAtMillis)
+                        ]
                     )
                 }
             }

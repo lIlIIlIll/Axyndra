@@ -27,23 +27,38 @@ if [[ ! "$contract_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
   printf 'AXYNDRA_CONTRACT_TIMEOUT_SECONDS must be a positive integer\n' >&2
   exit 2
 fi
+for contract in "${contracts[@]}"; do
+  if [[ ! -f "$root/support_tests/$contract/cjpm.toml" ||
+        ! -d "$root/support_tests/$contract/src" ]]; then
+    printf 'release contract source closure is missing: %s\n' "$contract" >&2
+    exit 2
+  fi
+done
 
 cd "$root"
+python3 scripts/tracked_artifact_gate.py
+python3 scripts/docs_gate.py
 sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
 source "$root/scripts/sdk_paths.sh"
 stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
 export CANGJIE_STDX_PATH="$stdx_root"
 export LD_LIBRARY_PATH="$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
-candidate=$(AXYNDRA_SDK_ROOT="$sdk_root" "$root/scripts/package_candidate.sh")
+package_root=$(mktemp -d -t axyndra-candidate.XXXXXX)
+candidate=$(
+  AXYNDRA_SDK_ROOT="$sdk_root" \
+  AXYNDRA_PACKAGE_ROOT="$package_root" \
+    "$root/scripts/package_candidate.sh"
+)
 "$root/scripts/pinned_cangjie" cjc -v \
-  > "$root/dist/axyndra/diagnostics/cjc-version.txt" 2>&1
+  > "$package_root/diagnostics/cjc-version.txt" 2>&1
 "$root/scripts/pinned_cangjie" cjpm --version \
-  > "$root/dist/axyndra/diagnostics/cjpm-version.txt" 2>&1
+  > "$package_root/diagnostics/cjpm-version.txt" 2>&1
 bash scripts/architecture_gate.sh
 python3 scripts/tui_visual_showcase_test.py
 
 for contract in "${contracts[@]}"; do
+  printf 'release contract: %s\n' "$contract"
   contract_root="$root/support_tests/$contract"
   (
     cd "$contract_root"
@@ -79,8 +94,10 @@ fi
 
 python3 scripts/cold_start_gate.py \
   --candidate "$candidate" \
-  --diagnostics "$root/dist/axyndra/diagnostics"
+  --diagnostics "$package_root/diagnostics"
 
+tui_fixture_home=$(mktemp -d -t axyndra-tui-fixture.XXXXXX)
+export AXYNDRA_HOME="$tui_fixture_home"
 AGENT_TUI_HEADLESS=1 \
 AGENT_TUI_HEADLESS_CARDS=1 \
   "$candidate" --fixture
@@ -103,6 +120,8 @@ AGENT_TUI_HEADLESS_DOCUMENT_PERF=1 \
 AGENT_TUI_HEADLESS=1 \
 AGENT_TUI_HEADLESS_COMPOSER_PERF=1 \
   "$candidate" --fixture
+rm -rf -- "$tui_fixture_home"
+unset AXYNDRA_HOME
 
 tui_setup_home=$(mktemp -d -t axyndra-tui-setup.XXXXXX)
 trap 'rm -rf -- "$tui_setup_home"' EXIT

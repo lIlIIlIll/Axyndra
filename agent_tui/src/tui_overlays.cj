@@ -584,7 +584,7 @@ func themeNames(
 ): Array<String> {
     let values = ArrayList<String>()
     values.add(current + " (current)")
-    for (name in ["omp", "dark", "light", "mono"] where name != current) {
+    for (name in ["axyndra", "dark", "light", "mono"] where name != current) {
         values.add(name)
     }
     for (theme in custom where theme.name != current) {

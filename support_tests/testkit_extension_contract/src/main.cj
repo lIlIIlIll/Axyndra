@@ -3,7 +3,7 @@ package testkit_extension_contract
 import agent_sdk.*
 import ast_extension.*
 import json4cj.*
-import omp_agent_testkit.*
+import axyndra_agent_testkit.*
 import web_search_extension.*
 import workspace_search_extension.*
 import workspace_write_extension.*

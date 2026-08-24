@@ -527,7 +527,7 @@ def materialize_consumers(stage_root: Path, destination: Path) -> None:
 
     frozen = {
         "agent_sdk": (ROOT / "support_tests" / "sdk_fixture_extension", ["agent_sdk", "json4cj"]),
-        "omp_agent_testkit": (ROOT / "support_tests" / "testkit_consumer", ["agent_sdk", "json4cj", "omp_agent_testkit"]),
+        "axyndra_agent_testkit": (ROOT / "support_tests" / "testkit_consumer", ["agent_sdk", "json4cj", "axyndra_agent_testkit"]),
     }
     for name, (source_root, dependencies) in frozen.items():
         root = destination / name
@@ -541,20 +541,20 @@ def materialize_consumers(stage_root: Path, destination: Path) -> None:
                 encoding="utf-8",
             )
         else:
-            manifest = manifest.replace('name = "omp_agent_testkit_consumer"', 'name = "testkit_consumer"')
+            manifest = manifest.replace('name = "axyndra_agent_testkit_consumer"', 'name = "testkit_consumer"')
             (root / "src" / "runner.cj").write_text(
                 '''package testkit_consumer
 
 import agent_sdk.*
 import json4cj.*
-import omp_agent_testkit.*
+import axyndra_agent_testkit.*
 
 main(): Int64 {
     let harness = ExtensionContractHarness(ConsumerExtension())
     let input = JsonValue.objectValue([JsonField("text", JsonValue.stringValue("package"))])
     let prepared = requireSdkOk(harness.prepare("consumer_echo", input, callId: "package-run"))
     assertCapabilityRequested(prepared.definition, "workspace.read")
-    println("omp_agent_testkit external consumer passed")
+    println("axyndra_agent_testkit external consumer passed")
     0
 }
 ''', encoding="utf-8")

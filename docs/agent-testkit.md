@@ -1,8 +1,8 @@
-# omp-agent-testkit architecture
+# axyndra-agent-testkit architecture
 
 ## Purpose
 
-`omp_agent_testkit` is the public testing companion for `agent_sdk`. It provides
+`axyndra_agent_testkit` is the public testing companion for `agent_sdk`. It provides
 small deterministic controls and a pure extension contract harness. It is not a
 production host, an Agent embedding facade, or a way to acquire execution
 authority.
@@ -18,7 +18,7 @@ access to internal authority ports.
 
 ```text
 json4cj ─┐
-         ├─> agent_sdk ─> omp_agent_testkit ─> external extension tests
+         ├─> agent_sdk ─> axyndra_agent_testkit ─> external extension tests
          └────────────────────────────────────────────────────────────
 
 agent_domain / agent_ports / tool_runtime ─> agent_testkit ─> omp contracts

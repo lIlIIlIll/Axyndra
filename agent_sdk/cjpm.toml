@@ -1,0 +1,10 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_sdk"
+  organization = ""
+  description = "Stable capability-oriented extension contract for Axyndra"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "json4cj" = { path = "../libs/json4cj", output-type = "static" }
