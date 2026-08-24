@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_protocol"
+  organization = ""
+  description = "Protocol-neutral JSON-RPC 2.0 types and codec for Agent transports"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "jsonrpc4cj" = { path = "../libs/jsonrpc4cj", output-type = "static" }

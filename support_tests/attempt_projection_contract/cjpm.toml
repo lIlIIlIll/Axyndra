@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "attempt_projection_contract"
+  organization = ""
+  description = "Attempt-scoped provisional UI projection contract"
+  version = "1.0.0"
+  output-type = "executable"
+  src-dir = "src"
+  target-dir = "target"
+
+[dependencies]
+  "agent_tui" = { path = "../../agent_tui", output-type = "static" }

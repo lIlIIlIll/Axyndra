@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_client"
+  organization = ""
+  description = "Stable client boundary for CLI, RPC, CI, and future cjtui"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_core" = { path = "../agent_core", output-type = "static" }
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "run_control" = { path = "../run_control", output-type = "static" }

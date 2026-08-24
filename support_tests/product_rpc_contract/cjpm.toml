@@ -1,0 +1,17 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "product_rpc_contract"
+  organization = ""
+  description = "Product JSONL RPC executable contract"
+  version = "1.0.0"
+  output-type = "executable"
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_cli" = { path = "../../agent_cli", output-type = "static" }
+  "agent_core" = { path = "../../agent_core", output-type = "static" }
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_product" = { path = "../../agent_product", output-type = "static" }
+  "agent_rpc" = { path = "../../agent_rpc", output-type = "static" }
+  "model_adapters" = { path = "../../model_adapters", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }

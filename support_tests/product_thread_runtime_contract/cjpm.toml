@@ -1,0 +1,15 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "product_thread_runtime_contract"
+  organization = ""
+  description = "Product composition contract for the durable vNext Thread owner"
+  version = "1.0.0"
+  output-type = "executable"
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_app_protocol" = { path = "../../agent_app_protocol", output-type = "static" }
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_product" = { path = "../../agent_product", output-type = "static" }
+  "agent_skills" = { path = "../../agent_skills", output-type = "static" }
+  "agent_store" = { path = "../../agent_store", output-type = "static" }

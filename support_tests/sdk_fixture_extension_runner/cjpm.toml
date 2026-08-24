@@ -1,0 +1,10 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "sdk_fixture_extension_runner"
+  organization = ""
+  description = "Independent agent_sdk consumer runner"
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "sdk_fixture_extension" = { path = "../sdk_fixture_extension", output-type = "static" }

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
+source "$root/scripts/sdk_paths.sh"
+stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
+export CANGJIE_SDK_ROOT="$sdk_root"
+export AXYNDRA_SDK_ROOT="$sdk_root"
+export AXYNDRA_STDX_ROOT="$stdx_root"
+export AXYNDRA_NATIVE_ROOT="$root/libs/process4cj/native"
+export DISABLE_ZOXIDE=1
+export CANGJIE_HOME="$sdk_root"
+export CANGJIE_ROOT="$sdk_root"
+export CANGJIE_PATH="$sdk_root"
+export CANGJIE_STDX_PATH="$stdx_root"
+export PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH"
+export LD_LIBRARY_PATH="$AXYNDRA_NATIVE_ROOT:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
+
+"$root/scripts/prepare_native_deps.sh"
+
+command=("$@")
+if [[ -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then
+  workdir_key=$(printf '%s' "$(pwd -P)" | sha256sum | cut -c1-16)
+  target_dir="$AXYNDRA_CANONICAL_TARGET_ROOT/$workdir_key"
+  mkdir -p -- "$target_dir"
+  command+=(--target-dir "$target_dir")
+fi
+
+exec "${command[@]}"

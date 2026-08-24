@@ -1,0 +1,22 @@
+The workspace only has a README and an empty `src/` directory. The README confirms the package name is `clamp_fixture`. I'll create the missing file now.Done. Created `src/clamp.cj` with the required API:
+
+```cangjie
+package clamp_fixture
+
+public func clamp(value: Int64, minimum: Int64, maximum: Int64): Int64 {
+    if (value < minimum) {
+        return minimum
+    }
+    if (value > maximum) {
+        return maximum
+    }
+    return value
+}
+```
+
+**Behavior verification:**
+- `value < minimum` → returns `minimum` (clamped to lower bound)
+- `value > maximum` → returns `maximum` (clamped to upper bound)
+- `minimum <= value <= maximum` → returns `value` unchanged
+
+Since inputs always satisfy `minimum <= maximum`, the checks cover all cases correctly. No build products were added — the only file created is `src/clamp.cj`, and the package declaration (`clamp_fixture`) matches the README.

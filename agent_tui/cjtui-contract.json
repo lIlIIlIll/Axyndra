@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "repository": "cj_tui",
+  "baseline_commit": "848ef9fc7b181b5c2210def9eeb88ca67e7f5d35",
+  "api_contract": "docs/api-contract-v1.txt",
+  "api_contract_sha256": "ac19052c705ca0460d7f39e8f48e876a146014c6e0bd5e91a4a01812d5630494",
+  "packages": {
+    "core": "0.1.0",
+    "markdown": "0.1.0"
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_mcp"
+  organization = ""
+  description = "MCP 2026-07-28 client, server, transport contracts, and tool mapping"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_protocol" = { path = "../agent_protocol", output-type = "static" }
+  "process4cj" = { path = "../libs/process4cj", output-type = "static" }
+  "mcp4cj" = { path = "../libs/mcp4cj", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

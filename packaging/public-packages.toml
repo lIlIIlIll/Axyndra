@@ -1,0 +1,76 @@
+[public]
+generic = [
+  "libs/json4cj",
+  "libs/jsonrpc4cj",
+  "libs/process4cj",
+  "libs/mcp4cj",
+  "libs/sandbox4cj",
+  "libs/llm4cj",
+  "libs/lsp4cj",
+  "libs/dap4cj",
+]
+ecosystem = [
+  "agent_sdk",
+  "omp_agent_testkit",
+]
+
+[hold]
+experimental = [
+  "libs/skill_runtime",
+]
+
+[internal]
+packages = [
+  "agent_domain",
+  "agent_app_protocol",
+  "agent_skills",
+  "agent_runtime",
+  "agent_store",
+  "agent_protocol",
+  "agent_ports",
+  "agent_core",
+  "tool_runtime",
+  "persistence_runtime",
+  "run_control",
+  "task_runtime",
+  "agent_client",
+  "agent_cli",
+  "agent_extensions",
+  "agent_mcp",
+  "model_adapters",
+  "agent_embed",
+  "agent_extension_runtime",
+  "extensions/workspace_search_extension",
+  "extensions/workspace_write_extension",
+  "extensions/ast_extension",
+  "extensions/web_search_extension",
+  "agent_testkit",
+  "agent_product",
+  "agent_rpc",
+  "agent_tui",
+  "agent_app",
+]
+
+[runtime_requirements]
+json4cj = []
+jsonrpc4cj = []
+process4cj = ["linux-x86_64", "glibc"]
+mcp4cj = ["Cangjie stdx", "process executable for stdio transport"]
+sandbox4cj = ["Linux", "bubblewrap for enforcement", "timeout/prlimit when configured"]
+llm4cj = ["process executable for transport adapters"]
+lsp4cj = ["language server executable supplied by host"]
+dap4cj = ["debug adapter executable supplied by host"]
+agent_sdk = []
+omp_agent_testkit = []
+
+[stability]
+json4cj = "pre-1.0 public generic"
+jsonrpc4cj = "pre-1.0 public generic"
+process4cj = "pre-1.0 public generic; Linux x86_64 implementation"
+mcp4cj = "pre-1.0 public generic"
+sandbox4cj = "stable public generic; Linux implementation"
+llm4cj = "stable public generic"
+lsp4cj = "stable public generic"
+dap4cj = "stable public generic"
+agent_sdk = "stable core with documented experimental symbols"
+omp_agent_testkit = "stable public test seams with documented experimental helpers"

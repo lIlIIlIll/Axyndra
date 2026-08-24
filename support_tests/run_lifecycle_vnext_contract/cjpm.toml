@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "run_lifecycle_vnext_contract"
+  organization = ""
+  description = "vNext run lifecycle and structured cancellation contract"
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
+

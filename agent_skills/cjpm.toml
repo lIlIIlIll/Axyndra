@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_skills"
+  organization = ""
+  description = "Progressively disclosed per-Run skill runtime"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "skill_runtime" = { path = "../libs/skill_runtime", output-type = "static" }

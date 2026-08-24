@@ -1,0 +1,41 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "agent_product"
+  organization = ""
+  description = "Production composition root and local infrastructure for the Agent"
+  version = "1.0.0"
+  output-type = "static"
+  # cjpm does not propagate native link options from static dependencies to
+  # this package's unittest executable. agent_product transitively uses the
+  # SQLite FFI owned by agent_store, so its test link must name SQLite.
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_cli" = { path = "../agent_cli", output-type = "static" }
+  "agent_app_protocol" = { path = "../agent_app_protocol", output-type = "static" }
+  "agent_client" = { path = "../agent_client", output-type = "static" }
+  "agent_core" = { path = "../agent_core", output-type = "static" }
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
+  "agent_extensions" = { path = "../agent_extensions", output-type = "static" }
+  "agent_mcp" = { path = "../agent_mcp", output-type = "static" }
+  "agent_protocol" = { path = "../agent_protocol", output-type = "static" }
+  "agent_ports" = { path = "../agent_ports", output-type = "static" }
+  "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
+  "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
+  "agent_extension_runtime" = { path = "../agent_extension_runtime", output-type = "static" }
+  "agent_skills" = { path = "../agent_skills", output-type = "static" }
+  "agent_store" = { path = "../agent_store", output-type = "static" }
+  "json4cj" = { path = "../libs/json4cj", output-type = "static" }
+  "lsp4cj" = { path = "../libs/lsp4cj", output-type = "static" }
+  "dap4cj" = { path = "../libs/dap4cj", output-type = "static" }
+  "model_adapters" = { path = "../model_adapters", output-type = "static" }
+  "persistence_runtime" = { path = "../persistence_runtime", output-type = "static" }
+  "process4cj" = { path = "../libs/process4cj", output-type = "static" }
+  "run_control" = { path = "../run_control", output-type = "static" }
+  "sandbox4cj" = { path = "../libs/sandbox4cj", output-type = "static" }
+  "task_runtime" = { path = "../task_runtime", output-type = "static" }
+  "tool_runtime" = { path = "../tool_runtime", output-type = "static" }
+  "workspace_search_extension" = { path = "../extensions/workspace_search_extension", output-type = "static" }
+  "workspace_write_extension" = { path = "../extensions/workspace_write_extension", output-type = "static" }
+  "ast_extension" = { path = "../extensions/ast_extension", output-type = "static" }
+  "web_search_extension" = { path = "../extensions/web_search_extension", output-type = "static" }

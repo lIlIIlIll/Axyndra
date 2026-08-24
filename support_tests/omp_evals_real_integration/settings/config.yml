@@ -1,0 +1,4 @@
+default_model: deepseek-openai/deepseek-v4-flash
+approval:
+  mode: trusted
+  allow_workspace_writes: true

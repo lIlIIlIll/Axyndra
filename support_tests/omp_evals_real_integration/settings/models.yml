@@ -1,0 +1,3 @@
+models:
+  - id: deepseek-v4-flash
+    provider: deepseek-openai

@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "lsp4cj"
+  organization = ""
+  description = "Agent-independent LSP codec, framing and request correlation"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "json4cj" = { path = "../json4cj", output-type = "static" }
+  "jsonrpc4cj" = { path = "../jsonrpc4cj", output-type = "static" }
+  "process4cj" = { path = "../process4cj", output-type = "static" }

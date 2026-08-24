@@ -1,0 +1,16 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "testkit_extension_contract"
+  organization = ""
+  description = "Public omp-agent-testkit dogfood across first-party extension authority patterns"
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
+  "json4cj" = { path = "../../libs/json4cj", output-type = "static" }
+  "omp_agent_testkit" = { path = "../../omp_agent_testkit", output-type = "static" }
+  "workspace_search_extension" = { path = "../../extensions/workspace_search_extension", output-type = "static" }
+  "workspace_write_extension" = { path = "../../extensions/workspace_write_extension", output-type = "static" }
+  "ast_extension" = { path = "../../extensions/ast_extension", output-type = "static" }
+  "web_search_extension" = { path = "../../extensions/web_search_extension", output-type = "static" }
