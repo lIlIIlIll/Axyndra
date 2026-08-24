@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 15, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 16, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -84,6 +84,10 @@ main(): Int64 {
     try {
         expect(reopened.scalarInt("SELECT COUNT(*) FROM capability_grants") == 1,
             "committed metadata survives reopen")
+        expect(reopened.scalarInt("SELECT COUNT(*) FROM teams") == 1 &&
+            reopened.scalarInt("SELECT COUNT(*) FROM team_members") == 2 &&
+            reopened.scalarInt("SELECT COUNT(*) FROM team_messages") == 1,
+            "Team roster, board and mailbox survive process reopen")
         expect(reopened.query("PRAGMA integrity_check")[0].required(0) == "ok",
             "SQLite integrity check passes")
         let recovered = SqliteThreadCommitSink(reopened).loadThread(ThreadId("durable-thread"))
@@ -99,8 +103,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV15MigrationContract()
-    v7ToV15MigrationContract()
+    v6ToV16MigrationContract()
+    v7ToV16MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -177,7 +181,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV15MigrationContract(): Unit {
+func v6ToV16MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -205,8 +209,8 @@ func v6ToV15MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 15,
-            "v6 database migrates through schema v7 to v15")
+        expect(migrated.scalarInt("PRAGMA user_version") == 16,
+            "v6 database migrates through schema v7 to v16")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -217,7 +221,7 @@ func v6ToV15MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV15MigrationContract(): Unit {
+func v7ToV16MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -241,8 +245,8 @@ func v7ToV15MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 15,
-            "v7 database migrates through schema v8 to v15")
+        expect(migrated.scalarInt("PRAGMA user_version") == 16,
+            "v7 database migrates through schema v8 to v16")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1634,6 +1638,52 @@ func inboxStepContract(database: SqliteDatabase): Unit {
     contextManifestContract(database)
     laneTreeContract(database)
     compositionGraphContract(database)
+    teamStoreContract(database)
+}
+
+func teamStoreContract(database: SqliteDatabase): Unit {
+    let store = SqliteTeamStore(database)
+    let teamId = TeamId("review-team")
+    let team = TeamRecord(teamId, ThreadId("inbox-thread"), LaneId("main"), "Review team", createdAtMillis: 10)
+    expect(store.createTeam(team).isOk() && store.createTeam(team).isOk(),
+        "Team creation is durable and idempotent on the coordinator Lane")
+    let coordinator = TeamMemberRecord(
+        TeamMemberId("coordinator"), teamId, ThreadId("inbox-thread"), LaneId("main"),
+        "coordinator", joinedAtMillis: 11
+    )
+    let reviewer = TeamMemberRecord(
+        TeamMemberId("reviewer"), teamId, ThreadId("inbox-thread"), LaneId("review"),
+        "reviewer", joinedAtMillis: 12
+    )
+    expect(store.addMember(coordinator).isOk() && store.addMember(reviewer).isOk() &&
+        store.roster(teamId).value().getOrThrow().size == 2,
+        "Team roster binds members to durable Lanes")
+    let taskId = TeamTaskId("review-task")
+    expect(store.addTask(TeamTaskRecord(
+        taskId, teamId, "Review change", objectValue([ValueField("scope", textValue("phase-9"))]),
+        itemReference: Some(ItemId("review-item")), createdAtMillis: 13, updatedAtMillis: 13
+    )).isOk(), "Task board stores payload and Item reference")
+    let claimed = store.claimTask(taskId, reviewer.id, 0, 14).value().getOrThrow()
+    expect(claimed.status == TeamTaskStatus.Claimed && claimed.revision == 1 &&
+        store.claimTask(taskId, coordinator.id, 0, 14).isError(),
+        "Task claim uses revision fencing and cannot be stolen")
+    expect(store.settleTask(taskId, 1, TeamTaskStatus.Blocked, "", 15).isError() &&
+        store.settleTask(taskId, 1, TeamTaskStatus.Blocked, "debt-external-review", 15).isOk(),
+        "blocked Team work requires explicit WorkDebt classification")
+    let message = TeamMessageRecord(
+        TeamMessageId("review-message"), teamId, coordinator.id, reviewer.id,
+        objectValue([ValueField("request", textValue("inspect review item"))]),
+        itemReference: Some(ItemId("review-item")), createdAtMillis: 16
+    )
+    expect(store.send(message).isOk() && store.send(message).isOk(),
+        "Team mailbox send is idempotent")
+    let mailbox = store.mailbox(teamId, reviewer.id).value().getOrThrow()
+    expect(mailbox.size == 1 && mailbox[0].itemReference.getOrThrow().value == "review-item" &&
+        store.acknowledge(message.id, reviewer.id, 0).isOk() &&
+        store.acknowledge(message.id, reviewer.id, 0).isOk(),
+        "members exchange durable messages and Item references without touching continuations")
+    expect(store.taskBoard(teamId).value().getOrThrow()[0].workDebtId == "debt-external-review",
+        "Task board reconstructs classified durable debt")
 }
 
 class ContractStringProvider <: ServiceProvider<String> {
@@ -1809,6 +1859,10 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE team_messages")
+    database.execute("DROP TABLE team_tasks")
+    database.execute("DROP TABLE team_members")
+    database.execute("DROP TABLE teams")
     database.execute("DROP TABLE run_composition_bindings")
     database.execute("DROP TABLE composition_snapshots")
     database.execute("DROP TRIGGER runs_bind_main_lane")
