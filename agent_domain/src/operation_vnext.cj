@@ -13,6 +13,86 @@ public enum OperationRetryDisposition {
     Safe | ByIdempotencyKey | VerifyThenRetry | Never
 }
 
+public class RecoveryProbeId {
+    public let value: String
+    public init(value: String) { this.value = operationEffectId("recovery probe", value) }
+}
+
+public class CompensationPlanId {
+    public let value: String
+    public init(value: String) { this.value = operationEffectId("compensation plan", value) }
+}
+
+public enum ReplayDisposition {
+    Pure
+    | SafeReplay
+    | Idempotent(String)
+    | RecoverByProbe(RecoveryProbeId)
+    | Compensatable(CompensationPlanId)
+    | AtMostOnce
+    | NeverReplay
+}
+
+public class ToolImplementationIdentity {
+    public let toolId: String
+    public let toolVersion: String
+    public let implementationFingerprint: String
+    public let schemaDigest: String
+    public let effectiveArgumentsDigest: String
+    public let replayContractVersion: UInt32
+
+    public init(
+        toolId: String,
+        toolVersion: String,
+        implementationFingerprint: String,
+        schemaDigest: String,
+        effectiveArgumentsDigest: String,
+        replayContractVersion!: UInt32 = 1u32
+    ) {
+        if (toolId.trimAscii() == "" || toolVersion.trimAscii() == "" ||
+            implementationFingerprint.trimAscii() == "" || schemaDigest.trimAscii() == "" ||
+            effectiveArgumentsDigest.trimAscii() == "" || replayContractVersion == 0u32) {
+            throw IllegalArgumentException("tool implementation identity is incomplete")
+        }
+        this.toolId = toolId.trimAscii()
+        this.toolVersion = toolVersion.trimAscii()
+        this.implementationFingerprint = implementationFingerprint.trimAscii()
+        this.schemaDigest = schemaDigest.trimAscii()
+        this.effectiveArgumentsDigest = effectiveArgumentsDigest.trimAscii()
+        this.replayContractVersion = replayContractVersion
+    }
+}
+
+public enum ReplayRecoveryAction {
+    Recompute | Replay | ReplayWithIdempotencyKey(String) | Probe(RecoveryProbeId)
+    | Compensate(CompensationPlanId) | Interrupt | RequireRecovery
+}
+
+public func replayRecoveryAction(
+    disposition: ReplayDisposition,
+    frozen: ToolImplementationIdentity,
+    current: ToolImplementationIdentity
+): ReplayRecoveryAction {
+    let sameImplementation = frozen.toolId == current.toolId &&
+        frozen.toolVersion == current.toolVersion &&
+        frozen.implementationFingerprint == current.implementationFingerprint &&
+        frozen.schemaDigest == current.schemaDigest &&
+        frozen.replayContractVersion == current.replayContractVersion
+    match (disposition) {
+        case ReplayDisposition.Pure => ReplayRecoveryAction.Recompute
+        case ReplayDisposition.SafeReplay => if (sameImplementation) {
+            ReplayRecoveryAction.Replay
+        } else { ReplayRecoveryAction.RequireRecovery }
+        case ReplayDisposition.Idempotent(key) => if (sameImplementation) {
+            ReplayRecoveryAction.ReplayWithIdempotencyKey(key)
+        } else { ReplayRecoveryAction.RequireRecovery }
+        case ReplayDisposition.RecoverByProbe(probe) => ReplayRecoveryAction.Probe(probe)
+        case ReplayDisposition.Compensatable(plan) => ReplayRecoveryAction.Compensate(plan)
+        case ReplayDisposition.AtMostOnce => ReplayRecoveryAction.Interrupt
+        case ReplayDisposition.NeverReplay => ReplayRecoveryAction.RequireRecovery
+    }
+}
+
 @Derive[Equatable]
 public enum OperationOutcome {
     Completed | Rejected | Cancelled | TimedOut | Failed | Unknown
@@ -63,6 +143,8 @@ public class NormalizedOperationPlan {
     public let retryDisposition: OperationRetryDisposition
     public let idempotencyKey: String
     public let bindingDigest: String
+    public let replayDisposition: ReplayDisposition
+    public let implementation: ToolImplementationIdentity
 
     public init(
         toolName: String,
@@ -75,7 +157,13 @@ public class NormalizedOperationPlan {
         resolvedHosts!: Array<String> = [],
         cwd!: String = "",
         relevantEnvironment!: Array<ValueField> = [],
-        idempotencyKey!: String = ""
+        idempotencyKey!: String = "",
+        replayDisposition!: ?ReplayDisposition = None,
+        toolVersion!: String = "legacy-v1",
+        implementationFingerprint!: String = "",
+        schemaDigest!: String = "",
+        effectiveArgumentsDigest!: String = "",
+        replayContractVersion!: UInt32 = 1u32
     ) {
         if (toolName.trimAscii() == "" || bindingDigest.trimAscii() == "" ||
             canonicalArguments.kind != ValueKind.Object ||
@@ -101,7 +189,56 @@ public class NormalizedOperationPlan {
         this.retryDisposition = retryDisposition
         this.idempotencyKey = idempotencyKey.trimAscii()
         this.bindingDigest = bindingDigest.trimAscii()
+        let resolvedReplay = match (replayDisposition) {
+            case Some(value) => value
+            case None => legacyReplayDisposition(retryDisposition, idempotencyKey, bindingDigest)
+        }
+        requireReplayDisposition(resolvedReplay)
+        this.replayDisposition = resolvedReplay
+        this.implementation = ToolImplementationIdentity(
+            this.toolName,
+            toolVersion,
+            if (implementationFingerprint.trimAscii() == "") {
+                bindingDigest
+            } else { implementationFingerprint },
+            if (schemaDigest.trimAscii() == "") { bindingDigest } else { schemaDigest },
+            if (effectiveArgumentsDigest.trimAscii() == "") {
+                bindingDigest
+            } else { effectiveArgumentsDigest },
+            replayContractVersion: replayContractVersion
+        )
     }
+}
+
+func legacyReplayDisposition(
+    retry: OperationRetryDisposition,
+    idempotencyKey: String,
+    bindingDigest: String
+): ReplayDisposition {
+    match (retry) {
+        case OperationRetryDisposition.Safe => ReplayDisposition.SafeReplay
+        case OperationRetryDisposition.ByIdempotencyKey => ReplayDisposition.Idempotent(idempotencyKey)
+        case OperationRetryDisposition.VerifyThenRetry => ReplayDisposition.RecoverByProbe(
+            RecoveryProbeId("legacy-probe-" + bindingDigest)
+        )
+        case OperationRetryDisposition.Never => ReplayDisposition.NeverReplay
+    }
+}
+
+func requireReplayDisposition(value: ReplayDisposition): Unit {
+    match (value) {
+        case ReplayDisposition.Idempotent(key) => if (key.trimAscii() == "") {
+            throw IllegalArgumentException("idempotent replay requires a frozen key")
+        }
+        case _ => ()
+    }
+}
+
+func operationEffectId(kind: String, value: String): String {
+    if (value.trimAscii() == "") {
+        throw IllegalArgumentException(kind + " id must not be empty")
+    }
+    value.trimAscii()
 }
 
 public class VNextOperationReceipt {

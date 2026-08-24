@@ -121,6 +121,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                         " AND state='executing'"
                 )
                 requireStoreChanged(transaction, "Operation receipt lost its executing owner")
+                mirrorOperationState(transaction, receipt.operationId, state)
             }
             Result.Ok(())
         } catch (error: Exception) {
@@ -423,6 +424,15 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 sqliteText(observedState)
         )
         requireStoreChanged(transaction, "Operation commit lost its owner")
+        mirrorOperationState(
+            transaction,
+            receipt.operationId,
+            if (receipt.outcome == OperationOutcome.Unknown) {
+                "recovery_required"
+            } else {
+                "committed"
+            }
+        )
         insertThreadItem(transaction, item)
         transaction.execute(
             "UPDATE runs SET state=" + sqliteText(transition.nextRunState) +
