@@ -1624,7 +1624,7 @@ func inboxStepContract(database: SqliteDatabase): Unit {
     expect(failed.isError() && database.query(
         "SELECT status FROM lane_inbox_entries WHERE id='inbox-entry-2'"
     )[0].required(0) == "queued" &&
-        database.scalarInt("SELECT COUNT(*) FROM step_records") == 1 &&
+        database.scalarInt("SELECT COUNT(*) FROM step_records WHERE run_id='inbox-run'") == 1 &&
         database.scalarInt("SELECT COUNT(*) FROM run_continuation_facts WHERE run_id='inbox-run'") == 1,
         "failed claim rolls back Inbox, Step, Item and continuation together")
     expect(store.settle(

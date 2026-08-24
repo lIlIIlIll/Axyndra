@@ -388,6 +388,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 sqliteText(encodeStoredValue(transition.runBudgetSnapshot)) + "," +
                 sqliteText(empty) + "," + item.createdAtMillis.toString() + ",NULL,NULL)"
         )
+        commitVnextRunAdmission(transaction, transition, turn, item, runId)
         updateThreadRecord(transaction, transition.before, transition.after)
     }
 
@@ -488,6 +489,20 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 sqliteText(turnId.value)
         )
         requireStoreChanged(transaction, "Run settlement lost its owner")
+        let stepId = "step-" + runId.value + "-0"
+        transaction.execute(
+            "UPDATE step_records SET status=" + sqliteText(stepStatusForRun(runState)) +
+                ",settled_at_millis=COALESCE(settled_at_millis," +
+                match (transition.finishedAtMillis) {
+                    case Some(value) => value.toString()
+                    case None => "opened_at_millis"
+                } + "),revision=revision+1 WHERE id=" + sqliteText(stepId) +
+                " AND status='open'"
+        )
+        transaction.execute(
+            "UPDATE lane_inbox_entries SET status='applied',revision=revision+1 " +
+                "WHERE claimed_step_id=" + sqliteText(stepId) + " AND status='claimed'"
+        )
         updateThreadRecord(transaction, transition.before, transition.after)
     }
 
@@ -640,6 +655,100 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
             ))
         }
         records.toArray()
+    }
+}
+
+func commitVnextRunAdmission(
+    transaction: SqliteTransaction,
+    transition: ThreadTransition,
+    turn: TurnRecord,
+    item: ThreadItem,
+    runId: RunId
+): Unit {
+    let threadId = turn.threadId
+    let laneId = LaneId("main")
+    let stepId = StepId("step-" + runId.value + "-0")
+    let entryId = InboxEntryId("inbox-" + runId.value)
+    let compositionId = CompositionSnapshotId("composition-" + runId.value)
+    let laneSnapshotId = ModelLaneSnapshotId("model-lane-" + runId.value)
+
+    // The accepted user Item is both the canonical Thread input and the Step
+    // enclosure. This avoids a second shadow Item while retaining durable
+    // claim ownership and replay identity.
+    transaction.execute(
+        "INSERT INTO lane_inbox_entries(" +
+            "id,thread_id,lane_id,kind,payload,status,created_at_millis,claimed_step_id,revision" +
+            ") VALUES (?,?,?,?,?,'claimed',?,?,2)",
+        [
+            SqlParameter.Text(entryId.value), SqlParameter.Text(threadId.value),
+            SqlParameter.Text(laneId.value), SqlParameter.Text("user_prompt"),
+            SqlParameter.Text(encodeStoredValue(objectValue([
+                ValueField("accepted_item_id", textValue(item.id.value))
+            ]))),
+            SqlParameter.Int64Value(item.createdAtMillis), SqlParameter.Text(stepId.value)
+        ]
+    )
+    transaction.execute(
+        "INSERT INTO step_records(id,thread_id,lane_id,turn_id,run_id,ordinal," +
+            "input_entry_id,accepted_item_id,status,opened_at_millis,settled_at_millis,revision) " +
+            "VALUES (?,?,?,?,?,0,?,?,'open',?,NULL,1)",
+        [
+            SqlParameter.Text(stepId.value), SqlParameter.Text(threadId.value),
+            SqlParameter.Text(laneId.value), SqlParameter.Text(turn.id.value),
+            SqlParameter.Text(runId.value), SqlParameter.Text(entryId.value),
+            SqlParameter.Text(item.id.value), SqlParameter.Int64Value(item.createdAtMillis)
+        ]
+    )
+
+    let profile = AgentProfile(
+        "agent-product", "1", [], [],
+        objectValue([ValueField("main", transition.runLaneSnapshot)]),
+        objectValue([ValueField("catalog", transition.runLaneSnapshot)]),
+        CapabilitySet(),
+        objectValue([ValueField("compiler", textValue("agent-product-context-v1"))]),
+        objectValue([ValueField("policy", textValue("durable-run-kind-v1"))]),
+        []
+    )
+    let composition = CompositionResolver().resolve(
+        compositionId,
+        profile,
+        modelPolicySha256Text(encodeStoredValue(transition.runLaneSnapshot)),
+        modelPolicySha256Text(encodeStoredValue(transition.runSkillSnapshot))
+    )
+    transaction.execute(
+        "INSERT INTO composition_snapshots(id,digest,payload,created_at_millis) VALUES (?,?,?,?)",
+        [
+            SqlParameter.Text(composition.id.value), SqlParameter.Text(composition.digest),
+            SqlParameter.Text(encodeCompositionSnapshot(composition)),
+            SqlParameter.Int64Value(item.createdAtMillis)
+        ]
+    )
+    transaction.execute(
+        "INSERT INTO run_composition_bindings(run_id,snapshot_id) VALUES (?,?)",
+        [SqlParameter.Text(runId.value), SqlParameter.Text(composition.id.value)]
+    )
+
+    let accepted = sealDurableRunContinuation(DurableRunContinuationV1(
+        runId,
+        laneId,
+        turn.id,
+        0,
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([
+            ValueField("inbox_entry_id", textValue(entryId.value)),
+            ValueField("accepted_item_id", textValue(item.id.value))
+        ]))),
+        compositionId,
+        laneSnapshotId
+    ))
+    putClaimContinuation(transaction, threadId, accepted, 0, item.createdAtMillis)
+}
+
+func stepStatusForRun(runState: String): String {
+    match (runState) {
+        case "completed" => "completed"
+        case "cancelled" => "cancelled"
+        case "recovery_required" => "quarantined"
+        case _ => "failed"
     }
 }
 
