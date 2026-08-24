@@ -56,6 +56,10 @@ def write_provider(home: Path, spec: Provider, timeout_millis: int) -> None:
     key.chmod(0o600)
     (home / "config.yml").write_text(
         f"default_model: {spec.profile}/{spec.model}\n"
+        "approval:\n"
+        "  mode: manual\n"
+        "  policy:\n"
+        "    allow_workspace_writes: false\n"
     )
     (home / "providers.yml").write_text(
         "providers:\n"
@@ -182,7 +186,13 @@ def rpc_approval_continue(
     environment = os.environ.copy()
     environment["AXYNDRA_HOME"] = str(home)
     process = subprocess.Popen(
-        [str(BINARY), "--mode", "rpc"],
+        [
+            str(BINARY),
+            "--mode",
+            "rpc",
+            "--approval-mode",
+            "manual",
+        ],
         cwd=workspace,
         env=environment,
         text=True,
@@ -194,9 +204,14 @@ def rpc_approval_continue(
     assert process.stdin is not None
     assert process.stdout is not None
     frames: list[dict[str, object]] = []
-    outside = workspace.parent / "outside"
-    outside.mkdir()
-    approval_path = outside / "approval-proof.txt"
+    if spec.base_url.startswith("http://127.0.0.1:"):
+        outside = workspace.parent / "outside"
+        outside.mkdir()
+        approval_path = outside / "approval-proof.txt"
+        requested_path = "../outside/approval-proof.txt"
+    else:
+        approval_path = workspace / "approval-proof.txt"
+        requested_path = "approval-proof.txt"
 
     def wait_for(
         predicate: Callable[[dict[str, object]], bool],
@@ -251,9 +266,10 @@ def rpc_approval_continue(
                     "type": "prompt",
                     "message": (
                         "Immediately make exactly one tool call: write. "
-                        "Set path to ../outside/approval-proof.txt and content "
-                        "to the "
+                        f"Set path to {requested_path} and content to the "
                         "literal eight-character ASCII string \"approved\". "
+                        "This is an isolated release-smoke workspace and the "
+                        "write is expected to pause for manual approval. "
                         "Do not inspect the workspace, do not explain, and "
                         "do not call any other tool."
                     ),

@@ -42,7 +42,7 @@ sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
 source "$root/scripts/sdk_paths.sh"
 stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
 export CANGJIE_STDX_PATH="$stdx_root"
-export LD_LIBRARY_PATH="$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
+export LD_LIBRARY_PATH="$root/libs/process4cj/native:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 package_root=$(mktemp -d -t axyndra-candidate.XXXXXX)
 candidate=$(
