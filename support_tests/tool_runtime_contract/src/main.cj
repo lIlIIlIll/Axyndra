@@ -181,8 +181,109 @@ main(): Int64 {
     runConcurrencyContracts()
     runPreparedPipelineContracts()
     runToolOutputSinkContract()
+    runToolProgramContracts()
     println("tool_runtime contract passed")
     0
+}
+
+func runToolProgramContracts(): Unit {
+    let catalog = ToolCatalog()
+    register(catalog, "read", CapabilityKind.WorkspaceRead, false)
+    register(catalog, "write", CapabilityKind.WorkspaceWrite, true)
+    let operations = MemoryOperations()
+    let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds())
+    let runtime = ToolProgramRuntime(PipelineProgramSubOperationExecutor(catalog, pipeline))
+    let context = ToolInvocationContext(
+        RunId("program-run"), SessionId("program-session"),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite)])
+    )
+    let literalArguments = ToolProgramExpression.Literal(objectValue([]))
+    let program = ToolProgramIR(
+        "program-1",
+        "const first = await tools.read({});\nconst batch = await parallel([tools.read({}), tools.read({})]);\nreturn batch.map(x => x.tool);",
+        [
+            ToolProgramStatement.Let("first", ToolProgramExpression.Tool(ProgramToolInvocation("read", literalArguments))),
+            ToolProgramStatement.Let("batch", ToolProgramExpression.Parallel([
+                ProgramToolInvocation("read", literalArguments), ProgramToolInvocation("read", literalArguments)
+            ])),
+            ToolProgramStatement.Let("selected", ToolProgramExpression.FilterTruthyField("batch", "tool")),
+            ToolProgramStatement.Let("names", ToolProgramExpression.MapField("selected", "tool")),
+            ToolProgramStatement.Let("count", ToolProgramExpression.ReduceCount("names")),
+            ToolProgramStatement.IfTruthy("count", [
+                ToolProgramStatement.ForEach("name", "names", 2u64, [
+                    ToolProgramStatement.Let("last", ToolProgramExpression.Variable("name"))
+                ])
+            ], []),
+            ToolProgramStatement.TryCatch([
+                ToolProgramStatement.Let("missing", ToolProgramExpression.Field("first", "absent"))
+            ], [
+                ToolProgramStatement.Let("recovered", ToolProgramExpression.Literal(boolValue(true)))
+            ]),
+            ToolProgramStatement.Return(ToolProgramExpression.Variable("names"))
+        ]
+    )
+    let completed = runtime.execute(program, context)
+    expect(completed.status == ToolProgramStatus.Completed && completed.value.kind == ValueKind.List &&
+        completed.value.items.size == 2 && completed.value.items[0].text == "read" &&
+        completed.subOperations.size == 3 && operations.executions == 3,
+        "restricted program executes let/if/bounded-for/map/filter/reduce/parallel/try-catch/return")
+    for (trace in completed.subOperations) {
+        expect(match (trace.outcome) {
+            case ToolInvocationResult.Completed(result) =>
+                result.receiptId != "" && result.callId == "program-1-sub-${trace.index}"
+            case _ => false
+        }, "each program sub-call has its own pipeline operation and receipt")
+    }
+
+    let compiled = mustProgram(compileRestrictedToolProgram(
+        "program-compiled", "const item = await tools.read({}); return item;"
+    ))
+    let compiledResult = runtime.execute(compiled, context)
+    expect(compiledResult.status == ToolProgramStatus.Completed &&
+        compiledResult.subOperations.size == 1 &&
+        compiledResult.value.field("tool").isSome(),
+        "restricted TS-like source compiles to the closed IR before interpretation")
+    expect(compileRestrictedToolProgram(
+        "program-dynamic", "return await tools[name]({});"
+    ).isError(), "source compiler rejects dynamic tool bindings")
+
+    let deniedMutation = runtime.execute(ToolProgramIR(
+        "program-write", "return await tools.write({});", [
+            ToolProgramStatement.Return(ToolProgramExpression.Tool(
+                ProgramToolInvocation("write", ToolProgramExpression.Literal(objectValue([])))
+            ))
+        ]
+    ), context)
+    expect(deniedMutation.status == ToolProgramStatus.Failed &&
+        deniedMutation.errorCode == "tool_program.side_effect_denied" &&
+        deniedMutation.subOperations.isEmpty(),
+        "read-only program rejects mutation before creating a child operation")
+
+    let bounded = runtime.execute(ToolProgramIR(
+        "program-bounded", "return await parallel([]);", [
+            ToolProgramStatement.Return(ToolProgramExpression.Parallel([
+                ProgramToolInvocation("read", literalArguments), ProgramToolInvocation("read", literalArguments)
+            ]))
+        ]
+    ), context, limits: ToolProgramLimits(maxParallelCalls: 1u64))
+    expect(bounded.status == ToolProgramStatus.Failed && bounded.errorCode == "tool_program.parallel_limit",
+        "bounded scheduler rejects parallel groups over the declared limit")
+
+    let forbidden = runtime.execute(ToolProgramIR(
+        "program-forbidden", "import fs from 'fs'; return fs;", [
+            ToolProgramStatement.Return(ToolProgramExpression.Literal(nullValue()))
+        ]
+    ), context)
+    expect(forbidden.status == ToolProgramStatus.Failed &&
+        forbidden.errorCode == "tool_program.forbidden_syntax",
+        "TS-like source validation rejects ambient imports before interpretation")
+}
+
+func mustProgram(result: Result<ToolProgramIR>): ToolProgramIR {
+    match (result) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
 }
 
 func runSchemaValidationContracts(): Unit {
