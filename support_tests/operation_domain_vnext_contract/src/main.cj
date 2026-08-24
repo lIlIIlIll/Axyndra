@@ -42,9 +42,55 @@ main(): Int64 {
         )
     } catch (_: Exception) { rejected = true }
     expect(rejected, "idempotency retry requires a key")
+    replayDispositionContract()
     operationResolutionContract(writePlan)
     println("vNext operation domain contract passed")
     0
+}
+
+func replayDispositionContract(): Unit {
+    let frozen = ToolImplementationIdentity(
+        "write", "2.0.0", "implementation-a", "schema-a", "arguments-a"
+    )
+    let same = ToolImplementationIdentity(
+        "write", "2.0.0", "implementation-a", "schema-a", "arguments-a"
+    )
+    let changed = ToolImplementationIdentity(
+        "write", "2.0.1", "implementation-b", "schema-a", "arguments-a"
+    )
+    expect(match (replayRecoveryAction(ReplayDisposition.Pure, frozen, changed)) {
+        case ReplayRecoveryAction.Recompute => true; case _ => false
+    }, "pure effects may be recomputed independently of implementation generation")
+    expect(match (replayRecoveryAction(ReplayDisposition.SafeReplay, frozen, same)) {
+        case ReplayRecoveryAction.Replay => true; case _ => false
+    }, "safe replay requires the frozen implementation identity")
+    expect(match (replayRecoveryAction(ReplayDisposition.SafeReplay, frozen, changed)) {
+        case ReplayRecoveryAction.RequireRecovery => true; case _ => false
+    }, "implementation drift forbids blind safe replay")
+    expect(match (replayRecoveryAction(
+        ReplayDisposition.Idempotent("stable-key"), frozen, same
+    )) {
+        case ReplayRecoveryAction.ReplayWithIdempotencyKey(key) => key == "stable-key"
+        case _ => false
+    }, "idempotent replay retains its frozen key")
+    expect(match (replayRecoveryAction(
+        ReplayDisposition.RecoverByProbe(RecoveryProbeId("probe")), frozen, changed
+    )) {
+        case ReplayRecoveryAction.Probe(value) => value.value == "probe"
+        case _ => false
+    }, "probe recovery does not invoke a changed implementation")
+    expect(match (replayRecoveryAction(
+        ReplayDisposition.Compensatable(CompensationPlanId("compensate")), frozen, changed
+    )) {
+        case ReplayRecoveryAction.Compensate(value) => value.value == "compensate"
+        case _ => false
+    }, "compensatable effects retain their frozen compensation plan")
+    expect(match (replayRecoveryAction(ReplayDisposition.AtMostOnce, frozen, same)) {
+        case ReplayRecoveryAction.Interrupt => true; case _ => false
+    }, "at-most-once effects become interrupted after uncertainty")
+    expect(match (replayRecoveryAction(ReplayDisposition.NeverReplay, frozen, same)) {
+        case ReplayRecoveryAction.RequireRecovery => true; case _ => false
+    }, "never-replay effects require explicit recovery")
 }
 
 func operationResolutionContract(writePlan: NormalizedOperationPlan): Unit {

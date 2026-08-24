@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 10, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 11, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -98,8 +98,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV10MigrationContract()
-    v7ToV10MigrationContract()
+    v6ToV11MigrationContract()
+    v7ToV11MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -176,7 +176,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV10MigrationContract(): Unit {
+func v6ToV11MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -204,8 +204,8 @@ func v6ToV10MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 10,
-            "v6 database migrates through schema v7 to v10")
+        expect(migrated.scalarInt("PRAGMA user_version") == 11,
+            "v6 database migrates through schema v7 to v11")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -216,7 +216,7 @@ func v6ToV10MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV10MigrationContract(): Unit {
+func v7ToV11MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -240,8 +240,8 @@ func v7ToV10MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 10,
-            "v7 database migrates through schema v8 to v10")
+        expect(migrated.scalarInt("PRAGMA user_version") == 11,
+            "v7 database migrates through schema v8 to v11")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -413,6 +413,29 @@ func modelDecisionDurabilityContract(): Unit {
         ).isOk() && database.scalarInt(
             "SELECT COUNT(*) FROM decision_operations WHERE decision_id='decision-1'"
         ) == 1, "committed ToolCall prepares exactly one source-bound Operation")
+        let immutablePlan = database.query(
+            "SELECT normalized_plan,implementation_fingerprint,replay_disposition," +
+                "reserved_receipt_id,reserved_result_item_id FROM operation_effect_records " +
+                "WHERE operation_id='decision-operation-1'"
+        )[0]
+        expect(immutablePlan.required(1) == "decision-operation-binding" &&
+            immutablePlan.required(3) == "receipt-decision-operation-1" &&
+            immutablePlan.required(4) == "result-decision-operation-1" &&
+            database.query(
+                "SELECT state,revision FROM operation_state_registers " +
+                    "WHERE operation_id='decision-operation-1'"
+            )[0].required(0) == "prepared",
+            "Operation effect record freezes implementation and reserved result identities")
+        expect(operation.waitForApproval(
+            operationId, RunId("decision-run")
+        ).isOk() && database.query(
+            "SELECT state FROM operation_state_registers " +
+                "WHERE operation_id='decision-operation-1'"
+        )[0].required(0) == "waiting_approval" && database.query(
+            "SELECT normalized_plan FROM operation_effect_records " +
+                "WHERE operation_id='decision-operation-1'"
+        )[0].required(0) == immutablePlan.required(0),
+            "Operation state advances in a separate register without mutating its fact")
 
         let abandoned = DurableModelAttempt(
             ModelAttemptId("attempt-abandoned"), SemanticModelRequestId("request-abandoned"),
@@ -1535,6 +1558,8 @@ func semanticContinuation(phase: RunExecutionPhase): DurableRunContinuationV1 {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE operation_state_registers")
+    database.execute("DROP TABLE operation_effect_records")
     database.execute("DROP TABLE app_event_outbox")
     database.execute("DROP TABLE run_continuation_facts")
     database.execute("DROP TABLE run_continuations")

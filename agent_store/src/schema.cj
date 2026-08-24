@@ -35,6 +35,8 @@ func v1Schema(): Array<String> {
         "CREATE TABLE run_continuations (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, updated_commit_sequence INTEGER NOT NULL)",
         "CREATE TABLE run_continuation_facts (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, revision INTEGER NOT NULL, commit_sequence INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(run_id,revision), UNIQUE(thread_id,commit_sequence))",
         "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
+        "CREATE TABLE operation_effect_records (operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, tool_call_item_id TEXT NOT NULL REFERENCES items(id), normalized_plan TEXT NOT NULL, tool_id TEXT NOT NULL, tool_version TEXT NOT NULL, implementation_fingerprint TEXT NOT NULL, schema_digest TEXT NOT NULL, effective_arguments_digest TEXT NOT NULL, replay_contract_version INTEGER NOT NULL, replay_disposition TEXT NOT NULL, reserved_receipt_id TEXT NOT NULL UNIQUE, reserved_result_item_id TEXT NOT NULL UNIQUE, created_at_millis INTEGER NOT NULL)",
+        "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
         "CREATE INDEX turns_thread_ordinal ON turns(thread_id, ordinal)",
         "CREATE INDEX items_thread_ordinal ON items(thread_id, ordinal)",
         "CREATE INDEX runs_thread_turn ON runs(thread_id, turn_id)",
@@ -142,5 +144,14 @@ func v10Migration(): Array<String> {
         "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
         "CREATE INDEX run_continuation_facts_thread ON run_continuation_facts(thread_id,commit_sequence)",
         "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)"
+    ]
+}
+
+func v11Migration(): Array<String> {
+    [
+        "CREATE TABLE operation_effect_records (operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, tool_call_item_id TEXT NOT NULL REFERENCES items(id), normalized_plan TEXT NOT NULL, tool_id TEXT NOT NULL, tool_version TEXT NOT NULL, implementation_fingerprint TEXT NOT NULL, schema_digest TEXT NOT NULL, effective_arguments_digest TEXT NOT NULL, replay_contract_version INTEGER NOT NULL, replay_disposition TEXT NOT NULL, reserved_receipt_id TEXT NOT NULL UNIQUE, reserved_result_item_id TEXT NOT NULL UNIQUE, created_at_millis INTEGER NOT NULL)",
+        "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
+        "INSERT INTO operation_effect_records(operation_id,run_id,tool_call_item_id,normalized_plan,tool_id,tool_version,implementation_fingerprint,schema_digest,effective_arguments_digest,replay_contract_version,replay_disposition,reserved_receipt_id,reserved_result_item_id,created_at_millis) SELECT id,run_id,tool_call_item_id,normalized_plan,'legacy','legacy-v1',normalized_plan,normalized_plan,normalized_plan,1,CASE retry_disposition WHEN 'safe' THEN 'safe_replay' WHEN 'by_idempotency_key' THEN 'idempotent' WHEN 'verify_then_retry' THEN 'recover_by_probe' ELSE 'never_replay' END,'legacy-receipt-'||id,'legacy-result-'||id,0 FROM operations",
+        "INSERT INTO operation_state_registers(operation_id,state,revision) SELECT id,state,revision FROM operations"
     ]
 }
