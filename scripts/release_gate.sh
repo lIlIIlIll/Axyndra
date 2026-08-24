@@ -56,6 +56,7 @@ candidate=$(
   > "$package_root/diagnostics/cjpm-version.txt" 2>&1
 bash scripts/architecture_gate.sh
 python3 scripts/tui_visual_showcase_test.py
+python3 scripts/vnext_contract_gate.py --sdk-root "$sdk_root"
 
 for contract in "${contracts[@]}"; do
   printf 'release contract: %s\n' "$contract"
@@ -96,22 +97,13 @@ python3 scripts/cold_start_gate.py \
   --candidate "$candidate" \
   --diagnostics "$package_root/diagnostics"
 
-tui_fixture_home=$(mktemp -d -t axyndra-tui-fixture.XXXXXX)
-export AXYNDRA_HOME="$tui_fixture_home"
-AGENT_TUI_HEADLESS=1 \
-AGENT_TUI_HEADLESS_CARDS=1 \
-  "$candidate" --fixture
-AGENT_TUI_HEADLESS=1 \
-  "$candidate" --fixture \
-  "headless initial prompt"
-AGENT_TUI_HEADLESS=1 \
-AGENT_TUI_HEADLESS_TODO=1 \
-  "$candidate" --fixture
-AGENT_TUI_HEADLESS=1 \
-AGENT_TUI_HEADLESS_ASK=1 \
-  "$candidate" --fixture "fixture ask"
 python3 scripts/tui_golden_gate.py \
-  --candidate "$candidate --fixture"
+  --candidate "$candidate --fixture" \
+  --scenario cards \
+  --scenario default \
+  --scenario initial-prompt \
+  --scenario todo \
+  --scenario ask
 python3 scripts/tui_performance_gate.py \
   --candidate "$candidate --fixture"
 AGENT_TUI_HEADLESS=1 \
@@ -120,9 +112,6 @@ AGENT_TUI_HEADLESS_DOCUMENT_PERF=1 \
 AGENT_TUI_HEADLESS=1 \
 AGENT_TUI_HEADLESS_COMPOSER_PERF=1 \
   "$candidate" --fixture
-rm -rf -- "$tui_fixture_home"
-unset AXYNDRA_HOME
-
 tui_setup_home=$(mktemp -d -t axyndra-tui-setup.XXXXXX)
 trap 'rm -rf -- "$tui_setup_home"' EXIT
 tui_setup_output=$(

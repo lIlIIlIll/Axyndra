@@ -27,6 +27,10 @@ SCENARIOS = {
         ["fixture ask"],
     ),
     "default": ({"AGENT_TUI_HEADLESS": "1"}, []),
+    "initial-prompt": (
+        {"AGENT_TUI_HEADLESS": "1"},
+        ["headless initial prompt"],
+    ),
 }
 
 
