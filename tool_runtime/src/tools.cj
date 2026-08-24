@@ -324,6 +324,13 @@ public class ToolCatalog {
         }
     }
 
+    public func isReadOnly(call: ToolCall): Bool {
+        match (resolvedDescriptor(call)) {
+            case Some(value) => !value.sideEffecting
+            case None => false
+        }
+    }
+
     public func definitions(): Array<ModelToolDefinition> {
         lock.lock()
         try {
