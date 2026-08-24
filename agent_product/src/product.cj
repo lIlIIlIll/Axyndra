@@ -196,6 +196,7 @@ public class ProductRuntime {
     // Fixture-mode model probe: contracts observe the actual request
     // parameters (e.g. plan mode forces High thinking).
     public let fixtureProbe: ?FixtureModelPort
+    public let vnext: ProductVnextControl
     private let extensions: ExtensionInstaller
     private let extensionRuntime: ExtensionRuntime
     private let mcpRuntime: ProductMcpRuntime
@@ -238,6 +239,7 @@ public class ProductRuntime {
         mcpRuntime: ProductMcpRuntime,
         vnextDatabase: SqliteDatabase,
         threadRuntimes: ThreadRuntimeRegistry,
+        vnext: ProductVnextControl,
         fixtureProbe!: ?FixtureModelPort = None
     ) {
         this.client = client
@@ -275,6 +277,7 @@ public class ProductRuntime {
         this.mcpRuntime = mcpRuntime
         this.vnextDatabase = vnextDatabase
         this.threadRuntimes = threadRuntimes
+        this.vnext = vnext
         this.fixtureProbe = fixtureProbe
     }
 
@@ -3543,6 +3546,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         threadRuntimes: Some(threadRuntimes),
         operationRuntime: Some(DurableOperationStore(vnextDatabase)),
         modelDecisionRuntime: Some(SqliteModelDecisionStore(vnextDatabase)),
+        contextManifestRuntime: Some(ProductContextManifestRuntime(vnextDatabase)),
         modelAttemptRecovery: config.modelAttemptRecovery
     )
     let service = CoreRunService(core, runs)
@@ -3602,6 +3606,10 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         mcpRuntime,
         vnextDatabase,
         threadRuntimes,
+        ProductVnextControl(
+            vnextDatabase, catalog, pipeline, ids, threadRuntimes,
+            workspace.rootPath()
+        ),
         fixtureProbe: fixtureProbe
     )
     taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase))

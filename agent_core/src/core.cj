@@ -349,10 +349,56 @@ class DurableModelResult {
 class PreparedModelRequest {
     let requestId: RequestId
     let request: ModelRequest
+    let estimatedInputTokens: Int64
 
-    init(requestId: RequestId, request: ModelRequest) {
+    init(requestId: RequestId, request: ModelRequest, estimatedInputTokens: Int64) {
         this.requestId = requestId
         this.request = request
+        this.estimatedInputTokens = estimatedInputTokens
+    }
+}
+
+// The provider request is not allowed to cross the effect boundary until its
+// exact, provider-neutral inputs have been durably described. Production
+// supplies a SQLite-backed implementation; the in-memory default preserves
+// embedders that do not opt into durable execution.
+public interface ModelContextManifestRuntimePort {
+    func recordBeforeModelEffect(
+        request: AgentRunRequest,
+        requestId: RequestId,
+        turnId: SemanticTurnId,
+        stepId: StepId,
+        projection: ModelContextProjection,
+        lane: ModelLane,
+        renderedRequest: AgentValue,
+        estimatedInputTokens: Int64,
+        observedAtMillis: Int64
+    ): Result<Unit>
+}
+
+class InMemoryModelContextManifestRuntimePort <: ModelContextManifestRuntimePort {
+    public init() {}
+    public func recordBeforeModelEffect(
+        request: AgentRunRequest,
+        requestId: RequestId,
+        turnId: SemanticTurnId,
+        stepId: StepId,
+        projection: ModelContextProjection,
+        lane: ModelLane,
+        renderedRequest: AgentValue,
+        estimatedInputTokens: Int64,
+        observedAtMillis: Int64
+    ): Result<Unit> {
+        let _ = request
+        let _ = requestId
+        let _ = turnId
+        let _ = stepId
+        let _ = projection
+        let _ = lane
+        let _ = renderedRequest
+        let _ = estimatedInputTokens
+        let _ = observedAtMillis
+        Result.Ok(())
     }
 }
 
@@ -369,6 +415,7 @@ public class AgentCore <: AgentRunner {
     private let threadRuntimes: ThreadRuntimeRegistry
     private let operationRuntime: OperationRuntimePort
     private let modelDecisionRuntime: ModelDecisionRuntimePort
+    private let contextManifestRuntime: ModelContextManifestRuntimePort
     private let modelAttemptRecovery: ModelAttemptRecoveryPolicy
     private let attemptClock: AttemptMonotonicClock
     private let controls = CoreRunControlRegistry()
@@ -381,6 +428,7 @@ public class AgentCore <: AgentRunner {
         threadRuntimes!: ?ThreadRuntimeRegistry = None,
         operationRuntime!: ?OperationRuntimePort = None,
         modelDecisionRuntime!: ?ModelDecisionRuntimePort = None,
+        contextManifestRuntime!: ?ModelContextManifestRuntimePort = None,
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
         attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock()
     ) {
@@ -405,6 +453,10 @@ public class AgentCore <: AgentRunner {
             case Some(value) => value
             case None => InMemoryModelDecisionRuntimePort()
         }
+        this.contextManifestRuntime = match (contextManifestRuntime) {
+            case Some(value) => value
+            case None => InMemoryModelContextManifestRuntimePort()
+        }
     }
 
     public init(
@@ -415,6 +467,7 @@ public class AgentCore <: AgentRunner {
         threadRuntimes!: ?ThreadRuntimeRegistry = None,
         operationRuntime!: ?OperationRuntimePort = None,
         modelDecisionRuntime!: ?ModelDecisionRuntimePort = None,
+        contextManifestRuntime!: ?ModelContextManifestRuntimePort = None,
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
         attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock()
     ) {
@@ -438,6 +491,10 @@ public class AgentCore <: AgentRunner {
         this.modelDecisionRuntime = match (modelDecisionRuntime) {
             case Some(value) => value
             case None => InMemoryModelDecisionRuntimePort()
+        }
+        this.contextManifestRuntime = match (contextManifestRuntime) {
+            case Some(value) => value
+            case None => InMemoryModelContextManifestRuntimePort()
         }
     }
 
@@ -1493,7 +1550,7 @@ public class AgentCore <: AgentRunner {
             cachePolicy: request.cachePolicy,
             structuredOutput: request.structuredOutput,
             cacheKey: request.cacheKey
-        )))
+        ), contextWindow.estimatedTokens))
     }
 
     private func accountModelReply(
@@ -1849,8 +1906,8 @@ public class AgentCore <: AgentRunner {
                 )
             }
             counter.turns += 1
-            let history = match (control.runtime.projectContext()) {
-                case Result.Ok(value) => modelMessagesFromProjection(value)
+            let projection = match (control.runtime.projectContext()) {
+                case Result.Ok(value) => value
                 case Result.Err(error) => return fail(
                     request,
                     context,
@@ -1858,6 +1915,7 @@ public class AgentCore <: AgentRunner {
                     sink
                 )
             }
+            let history = modelMessagesFromProjection(projection)
             let preparedModelRequest = match (buildBoundedModelRequest(
                 request,
                 history,
@@ -1867,6 +1925,28 @@ public class AgentCore <: AgentRunner {
                 case Result.Err(error) => return fail(
                     request,
                     context,
+                    error,
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            let active = control.runtime.activeRun().getOrThrow()
+            match (contextManifestRuntime.recordBeforeModelEffect(
+                request,
+                preparedModelRequest.requestId,
+                active.turnId,
+                StepId("step-" + request.runId.value + "-0"),
+                projection,
+                active.lane,
+                modelRequestCheckpointValue(preparedModelRequest.request),
+                preparedModelRequest.estimatedInputTokens,
+                agentUtcMillis()
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return fail(
+                    request,
+                    context,
+                    control,
                     error,
                     sink,
                     counter: Some(counter)

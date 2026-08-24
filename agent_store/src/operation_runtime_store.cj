@@ -12,6 +12,59 @@ public class DurableOperationStore <: OperationRuntimePort {
 
     public init(database: SqliteDatabase) { this.database = database }
 
+    // Programmatic Runs produce their own canonical ToolCall Items rather
+    // than Model Decision blocks. They still use the same immutable effect
+    // record, state register, handoff and Receipt tables.
+    public func prepareProgramSubOperation(
+        operationId: OperationId,
+        runId: RunId,
+        toolCallItemId: ItemId,
+        plan: NormalizedOperationPlan
+    ): Result<Unit> {
+        let encodedPlan = encodeOperationPlan(plan)
+        try {
+            database.transaction { transaction =>
+                requireStoreRow(
+                    transaction,
+                    "SELECT runs.id FROM runs JOIN items ON items.id=" +
+                        sqliteText(toolCallItemId.value) +
+                        " AND items.thread_id=runs.thread_id AND items.turn_id=runs.turn_id " +
+                        "JOIN threads ON threads.id=runs.thread_id WHERE runs.id=" +
+                        sqliteText(runId.value) +
+                        " AND items.kind='tool_call' AND runs.state='running' " +
+                        "AND threads.active_turn_id=runs.turn_id",
+                    [runId.value],
+                    "Program Operation does not own a canonical ToolCall"
+                )
+                transaction.execute(
+                    "INSERT INTO operations " +
+                        "(id,run_id,tool_call_item_id,normalized_plan,capability_requirement," +
+                        "resource_scope,effect_class,retry_disposition,idempotency_key,state,revision) " +
+                        "VALUES (?,?,?,?,?,?,?,?,?,'prepared',1)",
+                    [
+                        SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value),
+                        SqlParameter.Text(toolCallItemId.value), SqlParameter.Text(encodedPlan),
+                        SqlParameter.Text(encodeCapabilities(plan.requiredCapabilities)),
+                        SqlParameter.Text(encodeResourceScope(plan)),
+                        SqlParameter.Text(storeEffectName(plan.effectClass)),
+                        SqlParameter.Text(storeRetryName(plan.retryDisposition)),
+                        if (plan.idempotencyKey == "") {
+                            SqlParameter.Null
+                        } else {
+                            SqlParameter.Text(plan.idempotencyKey)
+                        }
+                    ]
+                )
+                insertOperationEffectRecord(
+                    transaction, operationId, runId, toolCallItemId, plan, encodedPlan
+                )
+            }
+            Result.Ok(())
+        } catch (error: Exception) {
+            operationStoreError("operation.program_prepare_failed", operationId, error)
+        }
+    }
+
     public func prepare(
         operationId: OperationId,
         runId: RunId,
