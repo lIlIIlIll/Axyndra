@@ -2896,6 +2896,10 @@ func runKindName(kind: RunKind): String {
     match (kind) {
         case RunKind.Agent => "agent"
         case RunKind.Maintenance => "maintenance"
+        case RunKind.Chat => "chat"
+        case RunKind.Compaction => "compaction"
+        case RunKind.NavigationSummary => "navigation_summary"
+        case RunKind.Verification => "verification"
     }
 }
 
@@ -2903,6 +2907,10 @@ func runKindFrom(value: String): ?RunKind {
     match (value) {
         case "agent" => Some(RunKind.Agent)
         case "maintenance" => Some(RunKind.Maintenance)
+        case "chat" => Some(RunKind.Chat)
+        case "compaction" => Some(RunKind.Compaction)
+        case "navigation_summary" => Some(RunKind.NavigationSummary)
+        case "verification" => Some(RunKind.Verification)
         case _ => None
     }
 }
