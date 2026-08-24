@@ -114,6 +114,9 @@ public class AgentStore {
                     sqliteText(commit.operationId) + " AND state='executing'"
             )
             requireChanged(transaction, "operation state transition lost its owner")
+            mirrorOperationState(
+                transaction, OperationId(commit.operationId), "committed"
+            )
             transaction.execute(
                 "INSERT INTO items " +
                     "(id,thread_id,turn_id,ordinal,kind,payload,provenance,created_at_millis) VALUES (" +

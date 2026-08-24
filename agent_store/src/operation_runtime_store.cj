@@ -56,6 +56,10 @@ public class DurableOperationStore <: OperationRuntimePort {
                             sqliteText(storeRetryName(plan.retryDisposition)) + "," +
                             optionalSqliteText(plan.idempotencyKey) + ",'prepared',1)"
                     )
+                    insertOperationEffectRecord(
+                        transaction, operationId, runId,
+                        toolCall.canonicalItemId, plan, encodedPlan
+                    )
                     transaction.execute(
                         "INSERT INTO decision_operations " +
                             "(decision_id,scoped_tool_call_id,operation_id) VALUES (" +
@@ -75,6 +79,13 @@ public class DurableOperationStore <: OperationRuntimePort {
                             sqliteText(toolCall.scopedToolCallId.value),
                         [operationId.value],
                         "Operation source binding drift"
+                    )
+                    requireStoreRow(
+                        transaction,
+                        "SELECT normalized_plan FROM operation_effect_records WHERE operation_id=" +
+                            sqliteText(operationId.value),
+                        [encodedPlan],
+                        "immutable Operation effect record drift"
                     )
                 }
             }
@@ -174,6 +185,10 @@ public class DurableOperationStore <: OperationRuntimePort {
                             " AND state='waiting_approval'"
                     )
                     requireStoreChanged(transaction, "approval lost its Operation owner")
+                    mirrorOperationState(
+                        transaction, operationId,
+                        if (approved) { "prepared" } else { "rejected" }
+                    )
                 } else {
                     let expected = [
                         approvalId.trimAscii(), operationId.value,
@@ -242,6 +257,7 @@ public class DurableOperationStore <: OperationRuntimePort {
                         sqliteText(operationId.value) + " AND state='prepared'"
                 )
                 requireStoreChanged(transaction, "Operation execution lost its owner")
+                mirrorOperationState(transaction, operationId, "executing")
             }
             Result.Ok(())
         } catch (error: Exception) {
@@ -331,12 +347,83 @@ public class DurableOperationStore <: OperationRuntimePort {
                         " AND run_id=" + sqliteText(runId.value) + " AND state=" + sqliteText(from)
                 )
                 requireStoreChanged(transaction, "Operation transition lost its owner")
+                mirrorOperationState(transaction, operationId, to)
             }
             Result.Ok(())
         } catch (error: Exception) {
             operationStoreError("operation.transition_failed", operationId, error)
         }
     }
+}
+
+func insertOperationEffectRecord(
+    transaction: SqliteTransaction,
+    operationId: OperationId,
+    runId: RunId,
+    toolCallItemId: ItemId,
+    plan: NormalizedOperationPlan,
+    encodedPlan: String
+): Unit {
+    transaction.execute(
+        "INSERT INTO operation_effect_records(" +
+            "operation_id,run_id,tool_call_item_id,normalized_plan,tool_id,tool_version," +
+            "implementation_fingerprint,schema_digest,effective_arguments_digest," +
+            "replay_contract_version,replay_disposition,reserved_receipt_id," +
+            "reserved_result_item_id,created_at_millis) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
+        [
+            SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value),
+            SqlParameter.Text(toolCallItemId.value), SqlParameter.Text(encodedPlan),
+            SqlParameter.Text(plan.implementation.toolId),
+            SqlParameter.Text(plan.implementation.toolVersion),
+            SqlParameter.Text(plan.implementation.implementationFingerprint),
+            SqlParameter.Text(plan.implementation.schemaDigest),
+            SqlParameter.Text(plan.implementation.effectiveArgumentsDigest),
+            SqlParameter.Int64Value(Int64(plan.implementation.replayContractVersion)),
+            SqlParameter.Text(encodeStoredValue(replayDispositionValue(plan.replayDisposition))),
+            SqlParameter.Text("receipt-" + operationId.value),
+            SqlParameter.Text("result-" + operationId.value)
+        ]
+    )
+    transaction.execute(
+        "INSERT INTO operation_state_registers(operation_id,state,revision) VALUES (?,'prepared',1)",
+        [SqlParameter.Text(operationId.value)]
+    )
+}
+
+public func mirrorOperationState(
+    transaction: SqliteTransaction,
+    operationId: OperationId,
+    state: String
+): Unit {
+    let existing = transaction.query(
+        "SELECT revision FROM operation_state_registers WHERE operation_id=?",
+        [SqlParameter.Text(operationId.value)]
+    )
+    if (existing.isEmpty()) {
+        transaction.execute(
+            "INSERT OR IGNORE INTO operation_effect_records(" +
+                "operation_id,run_id,tool_call_item_id,normalized_plan,tool_id,tool_version," +
+                "implementation_fingerprint,schema_digest,effective_arguments_digest," +
+                "replay_contract_version,replay_disposition,reserved_receipt_id," +
+                "reserved_result_item_id,created_at_millis) SELECT id,run_id,tool_call_item_id," +
+                "normalized_plan,'legacy','legacy-v1',normalized_plan,normalized_plan," +
+                "normalized_plan,1,'never_replay','legacy-receipt-'||id," +
+                "'legacy-result-'||id,0 FROM operations WHERE id=?",
+            [SqlParameter.Text(operationId.value)]
+        )
+        transaction.execute(
+            "INSERT INTO operation_state_registers(operation_id,state,revision) " +
+                "SELECT id,?,revision FROM operations WHERE id=?",
+            [SqlParameter.Text(state), SqlParameter.Text(operationId.value)]
+        )
+        requireStoreChanged(transaction, "Operation state register is missing")
+        return
+    }
+    transaction.execute(
+        "UPDATE operation_state_registers SET state=?,revision=revision+1 WHERE operation_id=?",
+        [SqlParameter.Text(state), SqlParameter.Text(operationId.value)]
+    )
+    requireStoreChanged(transaction, "Operation state register is missing")
 }
 
 // Read-only deterministic recovery planner for crash boundaries C1-C7.
@@ -526,8 +613,20 @@ func encodeOperationPlan(plan: NormalizedOperationPlan): String {
         ValueField("environment", objectValue(plan.relevantEnvironment)),
         ValueField("effect", textValue(storeEffectName(plan.effectClass))),
         ValueField("retry", textValue(storeRetryName(plan.retryDisposition))),
+        ValueField("replay", replayDispositionValue(plan.replayDisposition)),
         ValueField("idempotency_key", textValue(plan.idempotencyKey)),
-        ValueField("digest", textValue(plan.bindingDigest))
+        ValueField("digest", textValue(plan.bindingDigest)),
+        ValueField("tool_version", textValue(plan.implementation.toolVersion)),
+        ValueField("implementation_fingerprint", textValue(
+            plan.implementation.implementationFingerprint
+        )),
+        ValueField("schema_digest", textValue(plan.implementation.schemaDigest)),
+        ValueField("effective_arguments_digest", textValue(
+            plan.implementation.effectiveArgumentsDigest
+        )),
+        ValueField("replay_contract_version", integerValue(
+            Int64(plan.implementation.replayContractVersion)
+        ))
     ]))
 }
 
@@ -544,19 +643,98 @@ func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
     for (field in value.field("environment").getOrThrow().fields) {
         environment.add(ValueField(field.name, field.value))
     }
+    let bindingDigest = value.field("digest").getOrThrow().text
     NormalizedOperationPlan(
         value.field("tool").getOrThrow().text,
         value.field("arguments").getOrThrow(),
         capabilities.toArray(),
         parseStoreEffect(value.field("effect").getOrThrow().text),
         parseStoreRetry(value.field("retry").getOrThrow().text),
-        value.field("digest").getOrThrow().text,
+        bindingDigest,
         resolvedPaths: storeStringItems(value.field("paths").getOrThrow()),
         resolvedHosts: storeStringItems(value.field("hosts").getOrThrow()),
         cwd: value.field("cwd").getOrThrow().text,
         relevantEnvironment: environment.toArray(),
-        idempotencyKey: value.field("idempotency_key").getOrThrow().text
+        idempotencyKey: value.field("idempotency_key").getOrThrow().text,
+        replayDisposition: match (value.field("replay")) {
+            case Some(raw) => Some(parseReplayDisposition(raw))
+            case None => None
+        },
+        toolVersion: optionalStoreText(value, "tool_version", "legacy-v1"),
+        implementationFingerprint: optionalStoreText(
+            value, "implementation_fingerprint", bindingDigest
+        ),
+        schemaDigest: optionalStoreText(value, "schema_digest", bindingDigest),
+        effectiveArgumentsDigest: optionalStoreText(
+            value, "effective_arguments_digest", bindingDigest
+        ),
+        replayContractVersion: storedReplayContractVersion(value)
     )
+}
+
+func replayDispositionValue(value: ReplayDisposition): AgentValue {
+    match (value) {
+        case ReplayDisposition.Pure => objectValue([ValueField("kind", textValue("pure"))])
+        case ReplayDisposition.SafeReplay => objectValue([
+            ValueField("kind", textValue("safe_replay"))
+        ])
+        case ReplayDisposition.Idempotent(key) => objectValue([
+            ValueField("kind", textValue("idempotent")),
+            ValueField("key", textValue(key))
+        ])
+        case ReplayDisposition.RecoverByProbe(probe) => objectValue([
+            ValueField("kind", textValue("recover_by_probe")),
+            ValueField("probe_id", textValue(probe.value))
+        ])
+        case ReplayDisposition.Compensatable(plan) => objectValue([
+            ValueField("kind", textValue("compensatable")),
+            ValueField("compensation_plan_id", textValue(plan.value))
+        ])
+        case ReplayDisposition.AtMostOnce => objectValue([
+            ValueField("kind", textValue("at_most_once"))
+        ])
+        case ReplayDisposition.NeverReplay => objectValue([
+            ValueField("kind", textValue("never_replay"))
+        ])
+    }
+}
+
+func parseReplayDisposition(value: AgentValue): ReplayDisposition {
+    let kind = value.field("kind").getOrThrow().text
+    match (kind) {
+        case "pure" => ReplayDisposition.Pure
+        case "safe_replay" => ReplayDisposition.SafeReplay
+        case "idempotent" => ReplayDisposition.Idempotent(
+            value.field("key").getOrThrow().text
+        )
+        case "recover_by_probe" => ReplayDisposition.RecoverByProbe(
+            RecoveryProbeId(value.field("probe_id").getOrThrow().text)
+        )
+        case "compensatable" => ReplayDisposition.Compensatable(
+            CompensationPlanId(value.field("compensation_plan_id").getOrThrow().text)
+        )
+        case "at_most_once" => ReplayDisposition.AtMostOnce
+        case "never_replay" => ReplayDisposition.NeverReplay
+        case _ => throw IllegalStateException("unknown stored replay disposition")
+    }
+}
+
+func optionalStoreText(value: AgentValue, name: String, fallback: String): String {
+    match (value.field(name)) {
+        case Some(raw) => raw.text
+        case None => fallback
+    }
+}
+
+func storedReplayContractVersion(value: AgentValue): UInt32 {
+    match (value.field("replay_contract_version")) {
+        case Some(raw) => if (raw.kind == ValueKind.Number && raw.number == "1") {
+            1u32
+        } else {
+            throw IllegalStateException("unsupported replay contract version")
+        }
+        case None => 1u32
+    }
 }
 
 func storeStringItems(value: AgentValue): Array<String> {
