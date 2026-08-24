@@ -86,12 +86,15 @@ main(): Int64 {
         let encodedContinuation = database.query(
             "SELECT continuation FROM runs WHERE id='product-restart-run'"
         )[0].required(0)
+        let encodedDurableContinuation = database.query(
+            "SELECT payload FROM run_continuations WHERE run_id='product-restart-run'"
+        )[0].required(0)
         database.execute(
             "UPDATE runs SET continuation=json_set(continuation,'$.requested_policy',json('null')) " +
                 "WHERE id='product-restart-run'"
         )
-        expect(continuationRepository.continuation(runId).isError(),
-            "v4 waiting approval rejects a null requested policy")
+        expect(continuationRepository.continuation(runId).isOk(),
+            "sealed vNext continuation is preferred over a corrupt legacy fallback")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"
@@ -101,11 +104,21 @@ main(): Int64 {
                 "'$.model_capabilities_snapshot.capability_fingerprint','tampered') " +
                 "WHERE id='product-restart-run'"
         )
-        expect(continuationRepository.continuation(runId).isError(),
-            "capability snapshot fingerprint tampering fails recovery")
+        expect(continuationRepository.continuation(runId).isOk(),
+            "legacy capability tampering cannot override the sealed vNext register")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"
+        )
+        database.execute(
+            "UPDATE run_continuations SET payload='corrupt' " +
+                "WHERE run_id='product-restart-run'"
+        )
+        expect(continuationRepository.continuation(runId).isError(),
+            "corrupt preferred vNext continuation fails recovery")
+        database.execute(
+            "UPDATE run_continuations SET payload=" + sqliteText(encodedDurableContinuation) +
+                " WHERE run_id='product-restart-run'"
         )
         database.close()
         product.closeMcp().value().getOrThrow()
