@@ -14,10 +14,148 @@ main(): Int64 {
     versionContracts()
     manifestContracts()
     runtimeContracts()
+    safeLifecycleContracts()
     migratedFirstPartyContracts()
     fixtureContract()
     println("extension manifest/runtime contract passed")
     0
+}
+
+func safeLifecycleContracts(): Unit {
+    let host = RecordingGenerationHost()
+    let runtime = SafeExtensionLifecycleRuntime(host)
+    expect(runtime.mountInitial(searchProvider(), generation: 12u64).isOk(),
+        "generation lifecycle mounts an initial compiled provider")
+    let oldLease = mustLease(runtime.acquire("axyndra.workspace-search"))
+    expect(oldLease.generation == 12u64, "invocation lease freezes the admitted generation")
+    expect(runtime.reload(searchProvider(), 13u64).isOk(),
+        "reload mounts the new generation before draining the old generation")
+    expect(host.events.toArray() == [
+        "mount:12", "activate:12", "mount:13", "activate:13", "stop:12"
+    ], "generation switch order is mount, activate, then stop-old-admission")
+    let newLease = mustLease(runtime.acquire("axyndra.workspace-search"))
+    expect(newLease.generation == 13u64, "new invocations use only the newest generation")
+    let draining = runtime.diagnostics()
+    expect(draining[0].state == ExtensionLifecycleState.Draining &&
+        draining[0].inFlight == 1u64 && !draining[0].accepting,
+        "old generation stops admission while its pinned invocation drains")
+    oldLease.release()
+    oldLease.release()
+    expect(runtime.diagnostics()[0].state == ExtensionLifecycleState.Inactive &&
+        host.events.contains("dispose:12"),
+        "last idempotent lease release disposes the drained generation exactly once")
+    newLease.release()
+
+    let quarantineHost = RecordingGenerationHost()
+    let quarantine = SafeExtensionLifecycleRuntime(quarantineHost)
+    expect(quarantine.mountInitial(writeProvider(), generation: 20u64).isOk(), "quarantine fixture mounts")
+    let stuck = mustLease(quarantine.acquire("axyndra.workspace-write"))
+    expect(quarantine.reload(writeProvider(), 21u64).isOk(), "quarantine fixture begins drain")
+    expect(!quarantine.finishDrain("axyndra.workspace-write", 20u64).isOk() &&
+        quarantine.diagnostics()[0].state == ExtensionLifecycleState.Quarantined &&
+        !quarantineHost.events.contains("dispose:20"),
+        "drain deadline quarantines rather than force-unloading in-flight code")
+    stuck.release()
+    expect(quarantine.diagnostics()[0].state == ExtensionLifecycleState.Quarantined,
+        "quarantine requires explicit recovery after the stuck lease settles")
+
+    let signed = SignedExtensionPackageManifest(
+        "third-party.safe", "1.0.0", ">=1.1.0 <1.2.0", "1",
+        "module.wasm", ["tool:inspect"], ["filesystem"], ["workspace.read"],
+        1u32, "same-major", "sha256:abc", "ed25519:signature"
+    )
+    let verified = validateIsolatedPluginPackage(
+        signed, ExtensionExecutionKind.WasmComponent, 1u64,
+        ["workspace.read"], FixedSignatureVerifier(true)
+    )
+    expect(match (verified) {
+        case SafeLifecycleResult.Ok(request) =>
+            !request.ambientAuthority && request.grantedCapabilities == ["workspace.read"]
+        case _ => false
+    }, "signed WASM package receives only explicitly granted capabilities")
+    expect(!validateIsolatedPluginPackage(
+        signed, ExtensionExecutionKind.ProcessPlugin, 1u64,
+        [], FixedSignatureVerifier(true)
+    ).isOk(), "plugin capability requests cannot exceed the profile ceiling")
+    expect(!validateIsolatedPluginPackage(
+        signed, ExtensionExecutionKind.ProcessPlugin, 1u64,
+        ["workspace.read"], FixedSignatureVerifier(false)
+    ).isOk(), "invalid package signatures fail closed")
+    expect(!validateIsolatedPluginPackage(
+        signed, ExtensionExecutionKind.TrustedNative, 1u64,
+        ["workspace.read"], FixedSignatureVerifier(true)
+    ).isOk(), "third-party package validator cannot load native code in-process")
+
+    let cycleHost = RecordingGenerationHost()
+    let cycles = SafeExtensionLifecycleRuntime(cycleHost)
+    expect(cycles.mountInitial(searchProvider()).isOk(), "lifecycle stress fixture mounts")
+    for (generation in 2u64..1002u64) {
+        expect(cycles.reload(searchProvider(), generation).isOk(), "generation reload stress cycle succeeds")
+    }
+    var inactive: Int64 = 0
+    var active: Int64 = 0
+    for (diagnostic in cycles.diagnostics()) {
+        if (diagnostic.state == ExtensionLifecycleState.Inactive) { inactive += 1 }
+        if (diagnostic.state == ExtensionLifecycleState.Active) { active += 1 }
+    }
+    expect(inactive == 1000 && active == 1,
+        "1000 reload cycles leave one active generation and no mounted old generation")
+
+    let rollbackHost = RecordingGenerationHost()
+    rollbackHost.failStopGeneration = 30u64
+    let rollback = SafeExtensionLifecycleRuntime(rollbackHost)
+    expect(rollback.mountInitial(searchProvider(), generation: 30u64).isOk(), "reload rollback fixture mounts")
+    expect(!rollback.reload(searchProvider(), 31u64).isOk(), "failure to stop old admission rejects reload")
+    let rollbackDiagnostics = rollback.diagnostics()
+    expect(rollbackDiagnostics[0].state == ExtensionLifecycleState.Active &&
+        rollbackDiagnostics[0].accepting &&
+        rollbackDiagnostics[1].state == ExtensionLifecycleState.Inactive,
+        "failed generation switch disposes the new generation and retains the old active generation")
+}
+
+func mustLease(result: SafeLifecycleResult<ExtensionInvocationLease>): ExtensionInvocationLease {
+    match (result) {
+        case SafeLifecycleResult.Ok(value) => value
+        case SafeLifecycleResult.Err(error) => throw IllegalStateException(error)
+    }
+}
+
+class FixedSignatureVerifier <: ExtensionPackageSignatureVerifier {
+    private let valid: Bool
+    init(valid: Bool) { this.valid = valid }
+    public func verify(_manifest: SignedExtensionPackageManifest): Bool {
+        let _ = _manifest
+        valid
+    }
+}
+
+class RecordingGenerationHost <: GenerationLifecycleHost {
+    let events = ArrayList<String>()
+    var failStopGeneration: UInt64 = 0u64
+    public func mount(_provider: CompiledExtensionProvider, generation: UInt64): HostLifecycleResult {
+        let _ = _provider
+        events.add("mount:${generation}")
+        HostLifecycleResult.Ok
+    }
+    public func activate(_extensionId: String, generation: UInt64): HostLifecycleResult {
+        let _ = _extensionId
+        events.add("activate:${generation}")
+        HostLifecycleResult.Ok
+    }
+    public func stopAdmitting(_extensionId: String, generation: UInt64): HostLifecycleResult {
+        let _ = _extensionId
+        events.add("stop:${generation}")
+        if (generation == failStopGeneration) {
+            HostLifecycleResult.Err("stop.failed", "injected stop-admission failure")
+        } else {
+            HostLifecycleResult.Ok
+        }
+    }
+    public func dispose(_extensionId: String, generation: UInt64): HostLifecycleResult {
+        let _ = _extensionId
+        events.add("dispose:${generation}")
+        HostLifecycleResult.Ok
+    }
 }
 
 func versionContracts(): Unit {
