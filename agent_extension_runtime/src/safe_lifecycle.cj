@@ -2,7 +2,6 @@ package agent_extension_runtime
 
 import std.collection.*
 import std.deriving.*
-import agent_domain.*
 
 @Derive[Equatable]
 public enum ExtensionExecutionKind {
@@ -89,22 +88,23 @@ public class IsolatedPluginLaunchRequest {
 public class IsolatedPluginInvocation {
     public let id: String
     public let method: String
-    public let payload: AgentValue
+    public let payloadJson: String
     public let timeoutMillis: Int64
 
     public init(
         id: String,
         method: String,
-        payload: AgentValue,
+        payloadJson: String,
         timeoutMillis!: Int64 = 30000
     ) {
         if (id.trimAscii() == "" || method.trimAscii() == "" ||
+            payloadJson.trimAscii() == "" ||
             timeoutMillis < 1 || timeoutMillis > 60000) {
             throw IllegalArgumentException("isolated plugin invocation is invalid")
         }
         this.id = id.trimAscii()
         this.method = method.trimAscii()
-        this.payload = payload
+        this.payloadJson = payloadJson.trimAscii()
         this.timeoutMillis = timeoutMillis
     }
 }

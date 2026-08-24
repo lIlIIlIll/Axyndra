@@ -75,6 +75,37 @@ public class ItemTreeEdge {
     }
 }
 
+// A fenced admission is the durable ownership token for one Lane actor. It is
+// deliberately separate from the legacy Thread active-Run pointer so child
+// Lanes can execute concurrently while main-Lane compatibility is retained.
+public class LaneRunAdmission {
+    public let threadId: ThreadId
+    public let laneId: LaneId
+    public let runId: RunId
+    public let ownerId: String
+    public let fenceToken: Int64
+    public let expiresAtMillis: Int64
+
+    public init(
+        threadId: ThreadId,
+        laneId: LaneId,
+        runId: RunId,
+        ownerId: String,
+        fenceToken: Int64,
+        expiresAtMillis: Int64
+    ) {
+        if (ownerId.trimAscii() == "" || fenceToken < 1 || expiresAtMillis < 1) {
+            throw IllegalArgumentException("Lane Run admission is invalid")
+        }
+        this.threadId = threadId
+        this.laneId = laneId
+        this.runId = runId
+        this.ownerId = ownerId.trimAscii()
+        this.fenceToken = fenceToken
+        this.expiresAtMillis = expiresAtMillis
+    }
+}
+
 public func laneKindName(value: LaneKind): String {
     match (value) {
         case LaneKind.Main => "main"

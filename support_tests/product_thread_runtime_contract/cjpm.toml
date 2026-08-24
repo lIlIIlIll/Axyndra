@@ -17,3 +17,4 @@
   "agent_store" = { path = "../../agent_store", output-type = "static" }
   "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "model_adapters" = { path = "../../model_adapters", output-type = "static" }

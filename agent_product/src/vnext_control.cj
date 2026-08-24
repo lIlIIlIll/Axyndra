@@ -22,6 +22,7 @@ public class ProductVnextControl {
     private let ids: ProductIds
     private let threadRuntimes: ThreadRuntimeRegistry
     private let workspaceRoot: String
+    private let extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
     public let storageService: ServiceRegistry<String>
     public let isolatedPlugins: ProductIsolatedPluginHost
 
@@ -32,7 +33,8 @@ public class ProductVnextControl {
         ids: ProductIds,
         threadRuntimes: ThreadRuntimeRegistry,
         workspaceRoot: String,
-        processes: ProcessPort
+        processes: ProcessPort,
+        extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
     ) {
         this.database = database
         this.catalog = catalog
@@ -40,6 +42,7 @@ public class ProductVnextControl {
         this.ids = ids
         this.threadRuntimes = threadRuntimes
         this.workspaceRoot = workspaceRoot
+        this.extensionSignatureVerifier = extensionSignatureVerifier
         isolatedPlugins = ProductIsolatedPluginHost(
             processes, workspaceRoot
         )
@@ -73,6 +76,38 @@ public class ProductVnextControl {
     ): Result<Array<LaneId>> {
         SqliteLaneTreeStore(database).readyLaneIds(
             threadId, afterLaneId: afterLaneId, limit: limit
+        )
+    }
+
+    public func acquireLaneRun(
+        threadId: ThreadId,
+        laneId: LaneId,
+        runId: RunId,
+        ownerId: String,
+        nowMillis: Int64,
+        leaseMillis!: Int64 = 30000
+    ): Result<LaneRunAdmission> {
+        SqliteLaneTreeStore(database).acquireLaneRun(
+            threadId, laneId, runId, ownerId, nowMillis, leaseMillis
+        )
+    }
+
+    public func renewLaneRun(
+        admission: LaneRunAdmission,
+        nowMillis: Int64,
+        leaseMillis!: Int64 = 30000
+    ): Result<LaneRunAdmission> {
+        SqliteLaneTreeStore(database).renewLaneRun(
+            admission, nowMillis, leaseMillis
+        )
+    }
+
+    public func releaseLaneRun(
+        admission: LaneRunAdmission,
+        releasedAtMillis: Int64
+    ): Result<Unit> {
+        SqliteLaneTreeStore(database).releaseLaneRun(
+            admission, releasedAtMillis
         )
     }
 
@@ -329,12 +364,16 @@ public class ProductVnextControl {
         manifest: SignedExtensionPackageManifest,
         executionKind: ExtensionExecutionKind,
         generation: UInt64,
-        capabilityCeiling: Array<String>,
-        verifier: ExtensionPackageSignatureVerifier
+        capabilityCeiling: Array<String>
     ): SafeLifecycleResult<IsolatedPluginLaunchRequest> {
-        validateIsolatedPluginPackage(
-            manifest, executionKind, generation, capabilityCeiling, verifier
-        )
+        match (extensionSignatureVerifier) {
+            case Some(verifier) => validateIsolatedPluginPackage(
+                manifest, executionKind, generation, capabilityCeiling, verifier
+            )
+            case None => SafeLifecycleResult.Err(
+                "extension signature trust root is not configured"
+            )
+        }
     }
 
     public func invokeIsolatedExtension(
@@ -507,6 +546,12 @@ public class ProductIsolatedPluginHost {
                 "extension.ambient_authority", "isolated plugin requested ambient authority"
             )
         }
+        let payload = match (decodeAgentValue(invocation.payloadJson)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return isolatedPluginError<AgentValue>(
+                "extension.invocation_payload_invalid", error.message
+            )
+        }
         let requestValue = objectValue([
             ValueField("protocol", textValue("axyndra-extension-v1")),
             ValueField("extension_id", textValue(launch.manifest.id)),
@@ -514,7 +559,7 @@ public class ProductIsolatedPluginHost {
             ValueField("generation", integerValue(Int64(launch.generation))),
             ValueField("invocation_id", textValue(invocation.id)),
             ValueField("method", textValue(invocation.method)),
-            ValueField("payload", invocation.payload)
+            ValueField("payload", payload)
         ])
         let packagedEntrypoint = workspaceRoot + "/" + launch.manifest.entrypoint
         let executable: String

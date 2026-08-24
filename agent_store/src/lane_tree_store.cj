@@ -149,6 +149,167 @@ public class SqliteLaneTreeStore {
         }
     }
 
+    public func acquireLaneRun(
+        threadId: ThreadId,
+        laneId: LaneId,
+        runId: RunId,
+        ownerId: String,
+        nowMillis: Int64,
+        leaseMillis: Int64
+    ): Result<LaneRunAdmission> {
+        let owner = ownerId.trimAscii()
+        if (owner == "" || nowMillis < 0 || leaseMillis < 1 ||
+            nowMillis > Int64.Max - leaseMillis) {
+            return laneConflict<LaneRunAdmission>("Lane Run lease request is invalid")
+        }
+        let expires = nowMillis + leaseMillis
+        try {
+            database.transaction { transaction =>
+                let lane = transaction.query(
+                    "SELECT status FROM lanes WHERE thread_id=? AND lane_id=?",
+                    [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value)]
+                )
+                if (lane.size != 1 || lane[0].required(0) != "open") {
+                    return laneConflict<LaneRunAdmission>("Lane is absent or closed")
+                }
+                let existing = transaction.query(
+                    "SELECT run_id,owner_id,fence_token,expires_at_millis,state,revision " +
+                        "FROM lane_run_admissions WHERE thread_id=? AND lane_id=?",
+                    [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value)]
+                )
+                if (existing.isEmpty()) {
+                    transaction.execute(
+                        "INSERT INTO lane_run_admissions VALUES (?,?,?,?,?,?,'active',1)",
+                        [
+                            SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value),
+                            SqlParameter.Text(runId.value), SqlParameter.Text(owner),
+                            SqlParameter.Int64Value(1), SqlParameter.Int64Value(expires)
+                        ]
+                    )
+                    recordLaneAdmissionAudit(
+                        transaction, threadId, runId, laneId, owner, 1, "lane.run_acquired",
+                        nowMillis
+                    )
+                    Result.Ok(LaneRunAdmission(
+                        threadId, laneId, runId, owner, 1, expires
+                    ))
+                } else {
+                    let currentRun = existing[0].required(0)
+                    let currentOwner = existing[0].required(1)
+                    let fence = laneDepth(existing[0].required(2))
+                    let currentExpiry = laneDepth(existing[0].required(3))
+                    let state = existing[0].required(4)
+                    let revision = laneDepth(existing[0].required(5))
+                    if (state == "active" && currentExpiry > nowMillis) {
+                        if (currentRun == runId.value && currentOwner == owner) {
+                            return Result.Ok(LaneRunAdmission(
+                                threadId, laneId, runId, owner, fence, currentExpiry
+                            ))
+                        }
+                        return laneConflict<LaneRunAdmission>(
+                            "Lane already owns another active Run"
+                        )
+                    }
+                    if (fence == Int64.Max || revision == Int64.Max) {
+                        return laneConflict<LaneRunAdmission>("Lane Run fence is exhausted")
+                    }
+                    let nextFence = fence + 1
+                    transaction.execute(
+                        "UPDATE lane_run_admissions SET run_id=?,owner_id=?,fence_token=?," +
+                            "expires_at_millis=?,state='active',revision=revision+1 " +
+                            "WHERE thread_id=? AND lane_id=? AND revision=?",
+                        [
+                            SqlParameter.Text(runId.value), SqlParameter.Text(owner),
+                            SqlParameter.Int64Value(nextFence), SqlParameter.Int64Value(expires),
+                            SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value),
+                            SqlParameter.Int64Value(revision)
+                        ]
+                    )
+                    requireStoreChanged(transaction, "Lane Run acquisition lost its fence")
+                    recordLaneAdmissionAudit(
+                        transaction, threadId, runId, laneId, owner, nextFence,
+                        "lane.run_acquired", nowMillis
+                    )
+                    Result.Ok(LaneRunAdmission(
+                        threadId, laneId, runId, owner, nextFence, expires
+                    ))
+                }
+            }
+        } catch (error: Exception) {
+            laneRecovery<LaneRunAdmission>("lane.run_acquire_failed", error.message)
+        }
+    }
+
+    public func renewLaneRun(
+        admission: LaneRunAdmission,
+        nowMillis: Int64,
+        leaseMillis: Int64
+    ): Result<LaneRunAdmission> {
+        if (nowMillis < 0 || leaseMillis < 1 || nowMillis > Int64.Max - leaseMillis) {
+            return laneConflict<LaneRunAdmission>("Lane Run renewal is invalid")
+        }
+        let expires = nowMillis + leaseMillis
+        try {
+            database.transaction { transaction =>
+                transaction.execute(
+                    "UPDATE lane_run_admissions SET expires_at_millis=?,revision=revision+1 " +
+                        "WHERE thread_id=? AND lane_id=? AND run_id=? AND owner_id=? " +
+                        "AND fence_token=? AND state='active' AND expires_at_millis>?",
+                    [
+                        SqlParameter.Int64Value(expires),
+                        SqlParameter.Text(admission.threadId.value),
+                        SqlParameter.Text(admission.laneId.value),
+                        SqlParameter.Text(admission.runId.value),
+                        SqlParameter.Text(admission.ownerId),
+                        SqlParameter.Int64Value(admission.fenceToken),
+                        SqlParameter.Int64Value(nowMillis)
+                    ]
+                )
+                requireStoreChanged(transaction, "Lane Run renewal lost its fence")
+                Result.Ok(LaneRunAdmission(
+                    admission.threadId, admission.laneId, admission.runId,
+                    admission.ownerId, admission.fenceToken, expires
+                ))
+            }
+        } catch (error: Exception) {
+            laneRecovery<LaneRunAdmission>("lane.run_renew_failed", error.message)
+        }
+    }
+
+    public func releaseLaneRun(
+        admission: LaneRunAdmission,
+        releasedAtMillis: Int64
+    ): Result<Unit> {
+        if (releasedAtMillis < 0) {
+            return laneConflict<Unit>("Lane Run release timestamp is invalid")
+        }
+        try {
+            database.transaction { transaction =>
+                transaction.execute(
+                    "UPDATE lane_run_admissions SET state='released',revision=revision+1 " +
+                        "WHERE thread_id=? AND lane_id=? AND run_id=? AND owner_id=? " +
+                        "AND fence_token=? AND state='active'",
+                    [
+                        SqlParameter.Text(admission.threadId.value),
+                        SqlParameter.Text(admission.laneId.value),
+                        SqlParameter.Text(admission.runId.value),
+                        SqlParameter.Text(admission.ownerId),
+                        SqlParameter.Int64Value(admission.fenceToken)
+                    ]
+                )
+                requireStoreChanged(transaction, "Lane Run release lost its fence")
+                recordLaneAdmissionAudit(
+                    transaction, admission.threadId, admission.runId,
+                    admission.laneId, admission.ownerId, admission.fenceToken,
+                    "lane.run_released", releasedAtMillis
+                )
+                Result.Ok(())
+            }
+        } catch (error: Exception) {
+            laneRecovery<Unit>("lane.run_release_failed", error.message)
+        }
+    }
+
     // Forking is an isolation boundary, not another cursor in the source
     // Thread. The selected branch prefix is copied into a new idle Thread in
     // one transaction and its source anchor is retained as an append-only
@@ -326,6 +487,31 @@ public class SqliteLaneTreeStore {
             laneRecovery<Array<ItemId>>("lane.fork_thread_failed", error.message)
         }
     }
+}
+
+func recordLaneAdmissionAudit(
+    transaction: SqliteTransaction,
+    threadId: ThreadId,
+    runId: RunId,
+    laneId: LaneId,
+    ownerId: String,
+    fenceToken: Int64,
+    kind: String,
+    observedAtMillis: Int64
+): Unit {
+    transaction.execute(
+        "INSERT INTO audit_events(thread_id,run_id,operation_id,kind,payload," +
+            "created_at_millis) VALUES (?,?,NULL,?,?,?)",
+        [
+            SqlParameter.Text(threadId.value), SqlParameter.Text(runId.value),
+            SqlParameter.Text(kind), SqlParameter.Text(encodeStoredValue(objectValue([
+                ValueField("lane_id", textValue(laneId.value)),
+                ValueField("owner_id", textValue(ownerId)),
+                ValueField("fence_token", integerValue(fenceToken))
+            ]))),
+            SqlParameter.Int64Value(observedAtMillis)
+        ]
+    )
 }
 
 func forkedItemId(threadId: ThreadId, zeroBasedOrdinal: Int64): String {

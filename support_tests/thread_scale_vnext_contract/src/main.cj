@@ -126,8 +126,59 @@ func laneScaleContract(): Unit {
             cursor = next[0].value
             observed.add(cursor)
         }
+        let admissions = ArrayList<Future<Result<LaneRunAdmission>>>()
+        for (ordinal in 0..64) {
+            admissions.add(spawn {
+                lanes.acquireLaneRun(
+                    ThreadId("lane-scale"),
+                    LaneId("worker-" + paddedLaneOrdinal(ordinal)),
+                    RunId("lane-run-" + paddedLaneOrdinal(ordinal)),
+                    "actor-" + paddedLaneOrdinal(ordinal), 100, 1000
+                )
+            })
+        }
+        let admitted = ArrayList<LaneRunAdmission>()
+        for (future in admissions) {
+            let result = future.get()
+            if (result.isOk()) { admitted.add(result.value().getOrThrow()) }
+        }
+        if (admitted.size != 64 || database.scalarInt(
+            "SELECT COUNT(*) FROM lane_run_admissions WHERE state='active'"
+        ) != 64) {
+            throw IllegalStateException("distinct Lane actors were not admitted independently")
+        }
+        let competingA = spawn {
+            lanes.acquireLaneRun(
+                ThreadId("lane-scale"), LaneId("worker-100"), RunId("race-a"),
+                "race-owner-a", 100, 1000
+            )
+        }
+        let competingB = spawn {
+            lanes.acquireLaneRun(
+                ThreadId("lane-scale"), LaneId("worker-100"), RunId("race-b"),
+                "race-owner-b", 100, 1000
+            )
+        }
+        let raceA = competingA.get()
+        let raceB = competingB.get()
+        if ((if (raceA.isOk()) { 1 } else { 0 }) +
+            (if (raceB.isOk()) { 1 } else { 0 }) != 1) {
+            throw IllegalStateException("one Lane admitted multiple concurrent Runs")
+        }
+        let firstAdmission = admitted[0]
+        lanes.releaseLaneRun(firstAdmission, 200).value().getOrThrow()
+        if (lanes.renewLaneRun(firstAdmission, 201, 1000).isOk()) {
+            throw IllegalStateException("released Lane fence renewed stale authority")
+        }
+        let takeover = lanes.acquireLaneRun(
+            firstAdmission.threadId, firstAdmission.laneId, RunId("lane-run-takeover"),
+            "takeover", 201, 1000
+        ).value().getOrThrow()
+        if (takeover.fenceToken != firstAdmission.fenceToken + 1) {
+            throw IllegalStateException("Lane takeover did not advance the durable fence")
+        }
         println(
-            "vNext Lane scale contract passed lanes=256 ready=64 persist_ms=" +
+            "vNext Lane scale contract passed lanes=256 ready=64 active=64 persist_ms=" +
                 persistMillis.toString()
         )
     } finally {
