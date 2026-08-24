@@ -3608,7 +3608,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         threadRuntimes,
         ProductVnextControl(
             vnextDatabase, catalog, pipeline, ids, threadRuntimes,
-            workspace.rootPath()
+            workspace.rootPath(), processes
         ),
         fixtureProbe: fixtureProbe
     )

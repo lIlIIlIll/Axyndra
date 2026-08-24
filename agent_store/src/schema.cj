@@ -38,7 +38,7 @@ func v1Schema(): Array<String> {
         "CREATE TABLE operation_effect_records (operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, tool_call_item_id TEXT NOT NULL REFERENCES items(id), normalized_plan TEXT NOT NULL, tool_id TEXT NOT NULL, tool_version TEXT NOT NULL, implementation_fingerprint TEXT NOT NULL, schema_digest TEXT NOT NULL, effective_arguments_digest TEXT NOT NULL, replay_contract_version INTEGER NOT NULL, replay_disposition TEXT NOT NULL, reserved_receipt_id TEXT NOT NULL UNIQUE, reserved_result_item_id TEXT NOT NULL UNIQUE, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
         "CREATE TABLE lane_inbox_entries (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, claimed_step_id TEXT, revision INTEGER NOT NULL)",
-        "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT NOT NULL UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT NOT NULL UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
+        "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
         "CREATE TABLE prompt_contribution_artifacts (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE context_manifests (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, step_id TEXT NOT NULL REFERENCES step_records(id) ON DELETE CASCADE, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE lanes (thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, parent_lane_id TEXT, fork_item_id TEXT REFERENCES items(id), config TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,parent_lane_id) REFERENCES lanes(thread_id,lane_id))",
@@ -221,5 +221,20 @@ func v16Migration(): Array<String> {
         "CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, sender_member_id TEXT NOT NULL, recipient_member_id TEXT NOT NULL, item_reference TEXT REFERENCES items(id), payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, acknowledged INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(team_id,sender_member_id) REFERENCES team_members(team_id,member_id), FOREIGN KEY(team_id,recipient_member_id) REFERENCES team_members(team_id,member_id))",
         "CREATE INDEX team_tasks_board ON team_tasks(team_id,status,created_at_millis,id)",
         "CREATE INDEX team_messages_mailbox ON team_messages(team_id,recipient_member_id,acknowledged,created_at_millis,id)"
+    ]
+}
+
+func v17Migration(): Array<String> {
+    [
+        "DROP INDEX step_records_run",
+        "ALTER TABLE context_manifests RENAME TO context_manifests_v16",
+        "ALTER TABLE step_records RENAME TO step_records_v16",
+        "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
+        "INSERT INTO step_records SELECT * FROM step_records_v16",
+        "CREATE INDEX step_records_run ON step_records(run_id,ordinal)",
+        "CREATE TABLE context_manifests (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, step_id TEXT NOT NULL REFERENCES step_records(id) ON DELETE CASCADE, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
+        "INSERT INTO context_manifests SELECT * FROM context_manifests_v16",
+        "DROP TABLE context_manifests_v16",
+        "DROP TABLE step_records_v16"
     ]
 }

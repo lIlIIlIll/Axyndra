@@ -2,10 +2,12 @@
   cjc-version = "1.1.0"
   name = "thread_scale_vnext_contract"
   organization = ""
-  description = "100k Item ThreadCoordinator scaling contract"
+description = "100k Item and multi-Lane persistence/fairness scaling contract"
   version = "1.0.0"
   output-type = "executable"
+  link-option = "-lsqlite3"
 
 [dependencies]
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
+  "agent_store" = { path = "../../agent_store", output-type = "static" }

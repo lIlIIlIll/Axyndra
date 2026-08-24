@@ -10,6 +10,119 @@ public class SqliteContextManifestStore {
 
     public init(database: SqliteDatabase) { this.database = database }
 
+    public func ensureModelStep(
+        runId: RunId,
+        threadId: ThreadId,
+        laneId: LaneId,
+        turnId: SemanticTurnId,
+        stepId: StepId,
+        ordinal: Int64,
+        inputEntryId: ?InboxEntryId,
+        acceptedItemId: ?ItemId,
+        observedAtMillis: Int64
+    ): Result<Unit> {
+        if (ordinal < 0 || observedAtMillis < 0 ||
+            inputEntryId.isSome() != acceptedItemId.isSome()) {
+            return manifestStoreError<Unit>(
+                "context.step_invalid", "model Step enclosure is invalid"
+            )
+        }
+        try {
+            database.transaction { transaction =>
+                let run = transaction.query(
+                    "SELECT runs.thread_id,runs.turn_id,binding.lane_id FROM runs " +
+                        "JOIN run_lane_bindings binding ON binding.run_id=runs.id WHERE runs.id=?",
+                    [SqlParameter.Text(runId.value)]
+                )
+                if (run.size != 1 || run[0].required(0) != threadId.value ||
+                    run[0].required(1) != turnId.value || run[0].required(2) != laneId.value) {
+                    throw IllegalStateException("model Step Run/Lane enclosure changed")
+                }
+                let existing = transaction.query(
+                    "SELECT thread_id,lane_id,turn_id,run_id,ordinal FROM step_records WHERE id=?",
+                    [SqlParameter.Text(stepId.value)]
+                )
+                if (!existing.isEmpty()) {
+                    if (existing.size != 1 || existing[0].required(0) != threadId.value ||
+                        existing[0].required(1) != laneId.value ||
+                        existing[0].required(2) != turnId.value ||
+                        existing[0].required(3) != runId.value ||
+                        manifestRowInt(existing[0].required(4), "Step ordinal") != ordinal) {
+                        throw IllegalStateException("model Step id owns another enclosure")
+                    }
+                    return Result.Ok(())
+                }
+
+                let previous = transaction.query(
+                    "SELECT id,input_entry_id FROM step_records WHERE run_id=? " +
+                        "AND ordinal<? AND status='open' ORDER BY ordinal",
+                    [SqlParameter.Text(runId.value), SqlParameter.Int64Value(ordinal)]
+                )
+                for (row in previous) {
+                    transaction.execute(
+                        "UPDATE step_records SET status='completed',settled_at_millis=?," +
+                            "revision=revision+1 WHERE id=? AND status='open'",
+                        [SqlParameter.Int64Value(observedAtMillis),
+                            SqlParameter.Text(row.required(0))]
+                    )
+                    match (row[1]) {
+                        case Some(entry) => transaction.execute(
+                            "UPDATE lane_inbox_entries SET status='applied',revision=revision+1 " +
+                                "WHERE id=? AND status='claimed' AND claimed_step_id=?",
+                            [SqlParameter.Text(entry), SqlParameter.Text(row.required(0))]
+                        )
+                        case None => ()
+                    }
+                }
+
+                match ((inputEntryId, acceptedItemId)) {
+                    case (Some(entry), Some(item)) =>
+                        if (transaction.query(
+                            "SELECT 1 FROM lane_inbox_entries WHERE id=? AND thread_id=? " +
+                                "AND lane_id=? AND status='queued'",
+                            [SqlParameter.Text(entry.value), SqlParameter.Text(threadId.value),
+                                SqlParameter.Text(laneId.value)]
+                        ).size != 1 || transaction.query(
+                            "SELECT 1 FROM items WHERE id=? AND thread_id=? AND turn_id=?",
+                            [SqlParameter.Text(item.value), SqlParameter.Text(threadId.value),
+                                SqlParameter.Text(turnId.value)]
+                        ).size != 1) {
+                            throw IllegalStateException(
+                                "model Step Inbox entry or accepted Item is missing"
+                            )
+                        }
+                    case (None, None) => ()
+                    case _ => throw IllegalStateException("partial model Step input enclosure")
+                }
+                transaction.execute(
+                    "INSERT INTO step_records(id,thread_id,lane_id,turn_id,run_id,ordinal," +
+                        "input_entry_id,accepted_item_id,status,opened_at_millis," +
+                        "settled_at_millis,revision) VALUES (?,?,?,?,?,?,?,?," +
+                        "'open',?,NULL,1)",
+                    [
+                        SqlParameter.Text(stepId.value), SqlParameter.Text(threadId.value),
+                        SqlParameter.Text(laneId.value), SqlParameter.Text(turnId.value),
+                        SqlParameter.Text(runId.value), SqlParameter.Int64Value(ordinal),
+                        optionalInboxParameter(inputEntryId),
+                        optionalItemParameter(acceptedItemId),
+                        SqlParameter.Int64Value(observedAtMillis)
+                    ]
+                )
+                match (inputEntryId) {
+                    case Some(entry) => transaction.execute(
+                        "UPDATE lane_inbox_entries SET status='claimed',claimed_step_id=?," +
+                            "revision=revision+1 WHERE id=? AND status='queued'",
+                        [SqlParameter.Text(stepId.value), SqlParameter.Text(entry.value)]
+                    )
+                    case None => ()
+                }
+                Result.Ok(())
+            }
+        } catch (error: Exception) {
+            manifestStoreError<Unit>("context.step_commit_failed", error.message)
+        }
+    }
+
     public func save(
         manifest: ModelContextManifest,
         artifacts: Array<PromptArtifact>,
@@ -184,6 +297,26 @@ public class SqliteContextManifestStore {
         } catch (error: Exception) {
             manifestStoreError<Unit>("context.continuation_commit_failed", error.message)
         }
+    }
+}
+
+func optionalInboxParameter(value: ?InboxEntryId): SqlParameter {
+    match (value) {
+        case Some(item) => SqlParameter.Text(item.value)
+        case None => SqlParameter.Null
+    }
+}
+
+func optionalItemParameter(value: ?ItemId): SqlParameter {
+    match (value) {
+        case Some(item) => SqlParameter.Text(item.value)
+        case None => SqlParameter.Null
+    }
+}
+
+func manifestRowInt(value: String, name: String): Int64 {
+    try { Int64.parse(value) } catch (_: Exception) {
+        throw IllegalStateException("invalid " + name)
     }
 }
 

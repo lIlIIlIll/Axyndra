@@ -69,8 +69,8 @@ public class StepRecord {
     public let turnId: SemanticTurnId
     public let runId: RunId
     public let ordinal: Int64
-    public let inputEntryId: InboxEntryId
-    public let acceptedItemId: ItemId
+    public let inputEntryId: ?InboxEntryId
+    public let acceptedItemId: ?ItemId
     public let status: StepStatus
     public let openedAtMillis: Int64
     public let settledAtMillis: ?Int64
@@ -82,13 +82,14 @@ public class StepRecord {
         turnId: SemanticTurnId,
         runId: RunId,
         ordinal: Int64,
-        inputEntryId: InboxEntryId,
-        acceptedItemId: ItemId,
+        inputEntryId!: ?InboxEntryId = None,
+        acceptedItemId!: ?ItemId = None,
         status!: StepStatus = StepStatus.Open,
         openedAtMillis!: Int64 = 0,
         settledAtMillis!: ?Int64 = None
     ) {
         if (ordinal < 0 || openedAtMillis < 0 ||
+            inputEntryId.isSome() != acceptedItemId.isSome() ||
             (status == StepStatus.Open && settledAtMillis.isSome()) ||
             (status != StepStatus.Open && settledAtMillis.isNone())) {
             throw IllegalArgumentException("Step record enclosure is invalid")

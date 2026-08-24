@@ -22,6 +22,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         requestId: RequestId,
         turnId: SemanticTurnId,
         stepId: StepId,
+        stepOrdinal: Int64,
         projection: ModelContextProjection,
         lane: ModelLane,
         renderedRequest: AgentValue,
@@ -58,6 +59,26 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
             estimatedInputTokens,
             false
         )
+        let (inputEntryId, acceptedItemId) = if (stepOrdinal > 0 &&
+            intent.provenance.source == "interaction") {
+            (Some(InboxEntryId(intent.id.value)), Some(intent.id))
+        } else {
+            (Option<InboxEntryId>.None, Option<ItemId>.None)
+        }
+        match (store.ensureModelStep(
+            request.runId,
+            ThreadId(request.sessionId.value),
+            LaneId("main"),
+            turnId,
+            stepId,
+            stepOrdinal,
+            inputEntryId,
+            acceptedItemId,
+            observedAtMillis
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         let compiled = compiler.compile(ContextCompileInput(
             manifestId,
             ThreadId(request.sessionId.value),
