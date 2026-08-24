@@ -284,7 +284,7 @@ public class SqliteDatabase {
             executeLocked("BEGIN IMMEDIATE")
             try {
                 for (statement in v1Schema()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -306,7 +306,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -327,7 +328,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -347,7 +349,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -366,7 +369,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -384,7 +388,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -401,7 +406,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -417,7 +423,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -432,7 +439,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -446,7 +454,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -459,7 +468,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -471,7 +481,8 @@ public class SqliteDatabase {
                 for (statement in v12Migration()) { executeLocked(statement) }
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -482,7 +493,8 @@ public class SqliteDatabase {
             try {
                 for (statement in v13Migration()) { executeLocked(statement) }
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -492,13 +504,24 @@ public class SqliteDatabase {
             executeLocked("BEGIN IMMEDIATE")
             try {
                 for (statement in v14Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=14")
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
                 throw error
             }
-        } else if (version != 14) {
+        } else if (version == 14) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v15Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=15")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        } else if (version != 15) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )

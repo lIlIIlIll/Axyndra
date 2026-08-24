@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 14, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 15, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -99,8 +99,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV14MigrationContract()
-    v7ToV14MigrationContract()
+    v6ToV15MigrationContract()
+    v7ToV15MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -177,7 +177,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV14MigrationContract(): Unit {
+func v6ToV15MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -205,8 +205,8 @@ func v6ToV14MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 14,
-            "v6 database migrates through schema v7 to v14")
+        expect(migrated.scalarInt("PRAGMA user_version") == 15,
+            "v6 database migrates through schema v7 to v15")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -217,7 +217,7 @@ func v6ToV14MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV14MigrationContract(): Unit {
+func v7ToV15MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -241,8 +241,8 @@ func v7ToV14MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 14,
-            "v7 database migrates through schema v8 to v14")
+        expect(migrated.scalarInt("PRAGMA user_version") == 15,
+            "v7 database migrates through schema v8 to v15")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1642,6 +1642,80 @@ func inboxStepContract(database: SqliteDatabase): Unit {
         "Step settlement encloses the claimed Inbox entry")
     contextManifestContract(database)
     laneTreeContract(database)
+    compositionGraphContract(database)
+}
+
+class ContractStringProvider <: ServiceProvider<String> {
+    let releases: ArrayList<String>
+    init(releases: ArrayList<String>) { this.releases = releases }
+    public func acquire(scope: ComponentScope): Result<ServiceLease<String>> {
+        Result.Ok(ServiceLease("service-value", scope, { => releases.add(scope.id) }))
+    }
+}
+
+class ContractDisposable <: DisposableResource {
+    var disposed: Bool = false
+    public init() {}
+    public func dispose(): Unit { disposed = true }
+}
+
+func compositionGraphContract(database: SqliteDatabase): Unit {
+    let host = ComponentScope(RealmKind.Host, "host")
+    let thread = ComponentScope(RealmKind.Thread, "inbox-thread", parent: Some(host))
+    let lane = ComponentScope(RealmKind.Lane, "main", parent: Some(thread))
+    let run = ComponentScope(RealmKind.Run, "inbox-run", parent: Some(lane))
+    let extension = ComponentScope(RealmKind.Extension, "extension-7", parent: Some(host))
+    let component = ComponentInstanceRef(
+        "filesystem-generation-7", "filesystem", "2.0.0", 7, extension
+    )
+    let binding = ResolvedServiceBinding(
+        "FileSystemService", 1u32, component.instanceId, RealmKind.Run
+    )
+    let profile = AgentProfile(
+        "standard", "2.0.0", [component], [binding],
+        objectValue([ValueField("main", textValue("model-lane"))]),
+        objectValue([ValueField("policy", textValue("standard"))]),
+        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        objectValue([ValueField("compiler", textValue("manifest-v1"))]),
+        objectValue([ValueField("trigger", integerValue(88))]), ["workspace"]
+    )
+    let snapshot = CompositionResolver().resolve(
+        CompositionSnapshotId("composition-inbox-1"), profile,
+        "tool-visibility-digest", "prompt-graph-digest"
+    )
+    expect(snapshot.isSealed(), "Composition resolver seals the complete component graph")
+    let store = SqliteCompositionSnapshotStore(database)
+    expect(store.bindRun(RunId("inbox-run"), snapshot, 9).isOk() &&
+        store.bindRun(RunId("inbox-run"), snapshot, 9).isOk(),
+        "Run freezes one idempotent Composition Snapshot")
+    let restored = store.loadRun(RunId("inbox-run"))
+    expect(restored.isOk() && restored.value().getOrThrow().digest == snapshot.digest &&
+        restored.value().getOrThrow().componentInstances[0].generation == 7,
+        "Composition generation survives durable reconstruction")
+
+    let releases = ArrayList<String>()
+    let registry = ServiceRegistry<String>(ServiceKey<String>(
+        "FileSystemService", 1u32, RealmKind.Run
+    ))
+    expect(registry.bind(ContractStringProvider(releases)).isOk() &&
+        registry.acquire(lane).isError(),
+        "typed Service registry rejects an illegal Realm")
+    let lease = registry.acquire(run).value().getOrThrow()
+    expect(lease.value == "service-value", "typed Service lease resolves its provider")
+    lease.release()
+    lease.release()
+    expect(releases.size == 1, "Service lease releases exactly once")
+
+    let scope = EffectScope(component)
+    let resource = ContractDisposable()
+    expect(scope.ownResource(resource).isOk(), "EffectScope accepts owned resources")
+    scope.stopAdmitting()
+    expect(scope.registerPrompt(PromptContribution(
+        "filesystem-generation-7", "run", "after", PromptArtifact("prompt").hash,
+        PromptVisibility.Model
+    )).isError(), "stopped EffectScope rejects new contributions")
+    scope.dispose()
+    expect(resource.disposed, "EffectScope disposes owned resources")
 }
 
 func laneTreeContract(database: SqliteDatabase): Unit {
@@ -1744,6 +1818,8 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE run_composition_bindings")
+    database.execute("DROP TABLE composition_snapshots")
     database.execute("DROP TRIGGER runs_bind_main_lane")
     database.execute("DROP TRIGGER items_create_main_edge")
     database.execute("DROP TRIGGER threads_create_main_lane")
