@@ -34,6 +34,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     let cardMode = headlessCards()
     let todoMode = headlessTodo()
     let askMode = headlessAsk()
+    let initialPromptMode = screen.hasInitialPrompt()
     if (cardMode) {
         screen.seedCardSmoke()
     }
@@ -62,7 +63,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     } else if (askMode) {
         "ask_seeded"
     } else {
-        "default_ready"
+        if (initialPromptMode) { "initial_prompt_ready" } else { "default_ready" }
     })
 
     if (!agentOverlayChromeObserved()) {
@@ -373,6 +374,15 @@ func runHeadless(screen: AgentScreen): Int64 {
             .resize(Rect(0, 0, 80, 24))
             .resize(Rect(0, 0, 60, 18))
             .tick(count: 2)
+    } else if (initialPromptMode) {
+        // Initial-prompt delivery is a separate contract from editing a
+        // multiline composer draft. The transcript assertion below verifies
+        // that the prompt is submitted exactly once.
+        HeadlessScript()
+            .resize(Rect(0, 0, 120, 36))
+            .resize(Rect(0, 0, 80, 24))
+            .resize(Rect(0, 0, 60, 18))
+            .tick(count: 2)
     } else {
         // The default golden validates chrome, Unicode and composer layout.
         // Slash-command behavior is covered by the focused contract methods
@@ -621,10 +631,11 @@ func runHeadless(screen: AgentScreen): Int64 {
         if (cardMode && screen.markdownRenderingObserved()) {
             sawMarkdown = true
         }
+        let composerRail = if (screen.unicodeMode()) { "│" } else { "|" }
         if (snapshotHasAdjacentText(
             snapshot,
-            "│ 你",
-            "│ from cjtui"
+            composerRail + " 你",
+            composerRail + " from cjtui"
         )) {
             sawMultilineComposer = true
         }
@@ -674,7 +685,7 @@ func runHeadless(screen: AgentScreen): Int64 {
         !sawAskSingleSquare || !sawAskSingleSelected || !sawAskNote || !sawAskCustom || !sawAskTabText ||
         !sawAskInline)) ||
         (cardMode && (!sawCards || !sawInlineApprovalChoices || !sawMarkdown)) ||
-        (!setupMode && !todoMode && !askMode && !cardMode && !sawMultilineComposer) ||
+        (!setupMode && !todoMode && !askMode && !cardMode && !initialPromptMode && !sawMultilineComposer) ||
         !sawComposer || !saw120x36 || !saw80x24 || !saw60x18) {
         println(
             "headless cjtui snapshot assertion failed:" + " chinese=" + sawSmallChinese.toString() + " status=" +
@@ -690,6 +701,9 @@ func runHeadless(screen: AgentScreen): Int64 {
                 " multiline-composer=" + sawMultilineComposer.toString() + " markdown=" + sawMarkdown.toString() +
                 " sizes=" + saw120x36.toString() + "/" + saw80x24.toString() + "/" + saw60x18.toString() +
                 " final-status=" + screen.statusText())
+        if (!initialPromptMode && !sawMultilineComposer && !result.snapshots.isEmpty()) {
+            println("headless composer final snapshot:\n" + result.snapshots[result.snapshots.size - 1])
+        }
         return 1
     }
     if (result.frames.isEmpty()) {
