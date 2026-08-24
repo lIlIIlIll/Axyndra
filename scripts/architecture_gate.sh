@@ -4,10 +4,31 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 RG=${RG:-rp-rg}
 
+# shellcheck source=architecture_gate_lib.sh
+source "$ROOT/scripts/architecture_gate_lib.sh"
+
 fail() {
-  printf 'architecture gate failed: %s\n' "$1" >&2
-  exit 1
+  architecture_gate_fail "$1"
 }
+
+require_file() { architecture_gate_require_file "$1"; }
+rg_matches() { architecture_gate_rg_matches "$@"; }
+
+for authority in \
+  agent_app/src/main.cj \
+  agent_core/src/core.cj \
+  agent_core/src/model_control.cj \
+  agent_domain/src/v3_control.cj \
+  agent_embed/src/sdk.cj \
+  agent_product/src/application.cj \
+  agent_product/src/checkpoint_tools.cj \
+  agent_product/src/product.cj \
+  agent_product/src/task_persistence.cj \
+  agent_product/src/task_product.cj \
+  agent_product/src/tools.cj \
+  agent_runtime/src/run_lifecycle.cj; do
+  require_file "$ROOT/$authority"
+done
 
 for removed in \
   agent_ports/src/session_store.cj \
@@ -22,7 +43,10 @@ for removed in \
   fi
 done
 
-if "$RG" -n 'ConversationRepository|Disk(SessionMetadata|Permission|Run|Conversation|Operation|Approval|Audit)Repository|DiskSessionStore|SessionConversationRepository' \
+python3 "$ROOT/scripts/tracked_artifact_gate.py"
+python3 "$ROOT/scripts/docs_gate.py"
+
+if rg_matches -n 'ConversationRepository|Disk(SessionMetadata|Permission|Run|Conversation|Operation|Approval|Audit)Repository|DiskSessionStore|SessionConversationRepository' \
   "$ROOT"/agent_*/src "$ROOT"/persistence_runtime/src \
   "$ROOT"/support_tests --glob '*.cj' >/dev/null; then
   fail "legacy file-backed repository API remains in product or executable contracts"
@@ -167,76 +191,76 @@ print(
 )
 PY
 
-if "$RG" -n '"(agent_json|agent_json_macros|model_runtime|workspace_runtime|process_runtime|run_runtime|state_store|session_runtime|config_runtime|extension_runtime|isolation_runtime|rpc_runtime|agent_rpc_server)"' \
+if rg_matches -n '"(agent_json|agent_json_macros|model_runtime|workspace_runtime|process_runtime|run_runtime|state_store|session_runtime|config_runtime|extension_runtime|isolation_runtime|rpc_runtime|agent_rpc_server)"' \
   "$ROOT/cjpm.toml" "$ROOT"/*/cjpm.toml >/dev/null; then
   fail "product graph contains a removed transition package"
 fi
 
-if "$RG" -n 'import (agent_json|agent_json_macros|model_runtime|workspace_runtime|process_runtime|run_runtime|state_store|session_runtime|config_runtime|extension_runtime|isolation_runtime|rpc_runtime)' \
+if rg_matches -n 'import (agent_json|agent_json_macros|model_runtime|workspace_runtime|process_runtime|run_runtime|state_store|session_runtime|config_runtime|extension_runtime|isolation_runtime|rpc_runtime)' \
   "$ROOT"/agent_*/src "$ROOT"/model_adapters/src "$ROOT"/tool_runtime/src \
   "$ROOT"/persistence_runtime/src "$ROOT"/run_control/src \
   "$ROOT"/task_runtime/src >/dev/null; then
   fail "product code imports a removed transition package"
 fi
 
-if "$RG" -n 'import (agent_core|model_adapters)' \
+if rg_matches -n 'import (agent_core|model_adapters)' \
   "$ROOT/agent_cli/src" >/dev/null; then
   fail "CLI parser crosses the client/domain boundary"
 fi
 
 # Provider DTOs and legacy conversations are never Runtime truth.
-if "$RG" -n 'conversations\.' \
+if rg_matches -n 'conversations\.' \
   "$ROOT/agent_core/src" >/dev/null; then
   fail "AgentCore reads or writes the legacy conversation projection"
 fi
 
-if "$RG" -n 'ConversationRepository' \
+if rg_matches -n 'ConversationRepository' \
   "$ROOT/agent_core/src/core.cj" "$ROOT/agent_embed/src/sdk.cj" >/dev/null; then
   fail "Core or SDK still binds a legacy conversation repository"
 fi
 
-if "$RG" -n 'DiskRunRepository' \
+if rg_matches -n 'DiskRunRepository' \
   "$ROOT/agent_core/src" "$ROOT/agent_product/src" "$ROOT/agent_sdk/src" >/dev/null; then
   fail "production Runtime still uses the file-backed duplicate Run repository"
 fi
 
-if "$RG" -n 'Disk(Operation|Audit|Permission)Repository' \
+if rg_matches -n 'Disk(Operation|Audit|Permission)Repository' \
   "$ROOT/agent_core/src" "$ROOT/agent_product/src" "$ROOT/agent_sdk/src" >/dev/null; then
   fail "production Tool execution still writes file-backed operation, audit, or permission state"
 fi
 
-if "$RG" -n 'ConversationRepository|appendTranscriptOnceAndProject' \
+if rg_matches -n 'ConversationRepository|appendTranscriptOnceAndProject' \
   "$ROOT/agent_product/src/checkpoint_tools.cj" >/dev/null; then
   fail "checkpoint tools mutate legacy model history instead of saving a canonical checkpoint"
 fi
 
-if "$RG" -n 'sessionFile|fromByte|nextByte' \
+if rg_matches -n 'sessionFile|fromByte|nextByte' \
   "$ROOT/agent_product/src" "$ROOT/agent_rpc/src" >/dev/null; then
   fail "Product or RPC retains file-backed subagent transcript protocol"
 fi
 
-if "$RG" -n 'match \(conversations\.' "$ROOT/agent_core/src" >/dev/null; then
+if rg_matches -n 'match \(conversations\.' "$ROOT/agent_core/src" >/dev/null; then
   fail "legacy conversation projection can still veto canonical Runtime progress"
 fi
 
-if "$RG" -n 'conversations\.(append|appendMessageOnce|appendTranscriptOnceAndProject|replace|project)\(' \
+if rg_matches -n 'conversations\.(append|appendMessageOnce|appendTranscriptOnceAndProject|replace|project)\(' \
   "$ROOT/agent_product/src/product.cj" \
   "$ROOT/agent_product/src/application.cj" \
   "$ROOT/agent_product/src/task_product.cj" >/dev/null; then
   fail "Product semantic writes bypass the canonical Thread owner"
 fi
 
-if "$RG" -n 'public func (appendMessage|appendMessageOnce|appendTranscriptOnceAndProject)\(' \
+if rg_matches -n 'public func (appendMessage|appendMessageOnce|appendTranscriptOnceAndProject)\(' \
   "$ROOT/agent_product/src/product.cj" >/dev/null; then
   fail "Product exposes a legacy conversation mutation API"
 fi
 
-if "$RG" -n 'let (worker|deliveryWorker) = spawn' \
+if rg_matches -n 'let (worker|deliveryWorker) = spawn' \
   "$ROOT/agent_product/src/task_product.cj" >/dev/null; then
   fail "Product task runtime starts an unowned background worker"
 fi
 
-if "$RG" -n \
+if rg_matches -n \
   'repairInterruptedToolMessages|pruneOrphanToolResults|coalesceToolResultMessages' \
   "$ROOT/agent_core/src" >/dev/null; then
   fail "AgentCore retains legacy ModelMessage repair as semantic authority"
@@ -245,76 +269,76 @@ fi
 # Core events are already represented by AgentEventPayload. The executable
 # adapter may inspect string codes only inside the explicit Extension escape
 # hatch; it must not erase typed events and redispatch them by detail.code.
-if "$RG" -n 'eventCode\(|match \(eventCode\(' \
+if rg_matches -n 'eventCode\(|match \(eventCode\(' \
   "$ROOT/agent_app/src" >/dev/null; then
   fail "App/TUI bridge redispatches typed AgentEventPayload through string codes"
 fi
 
-if ! "$RG" -n 'import agent_app_protocol\.\*' \
+if ! rg_matches -n 'import agent_app_protocol\.\*' \
   "$ROOT/agent_product/src" >/dev/null; then
   fail "typed App Protocol is not connected to the production boundary"
 fi
 
-if "$RG" -n 'typedEventFromLegacy|public init\([[:space:]]*sequence: Int64,[[:space:]]*runId: RunId,[[:space:]]*kind: AgentEventKind' \
+if rg_matches -n 'typedEventFromLegacy|public init\([[:space:]]*sequence: Int64,[[:space:]]*runId: RunId,[[:space:]]*kind: AgentEventKind' \
   "$ROOT/agent_domain/src" >/dev/null; then
   fail "legacy AgentEvent conversion remains in the typed event runtime"
 fi
 
-if "$RG" -n '\bToolOutcome\b|OperationExecutionOutcomeKind' \
+if rg_matches -n '\bToolOutcome\b|OperationExecutionOutcomeKind' \
   "$ROOT"/agent_*/src "$ROOT/tool_runtime/src" \
   "$ROOT/persistence_runtime/src" >/dev/null; then
   fail "operation outcome still has a legacy or duplicate runtime model"
 fi
 
-if "$RG" -n '\bExecutionBudgetLedger\b' \
+if rg_matches -n '\bExecutionBudgetLedger\b' \
   "$ROOT/agent_domain/src" "$ROOT/agent_runtime/src" \
   "$ROOT/agent_core/src" >/dev/null; then
   fail "Run still has a duplicate execution budget ledger"
 fi
 
-if "$RG" -n 'migrateLegacyContinuation|ContinuationMigrationMetadata|version != 3 && version != 4' \
+if rg_matches -n 'migrateLegacyContinuation|ContinuationMigrationMetadata|version != 3 && version != 4' \
   "$ROOT/agent_domain/src" "$ROOT/agent_product/src" \
   "$ROOT/persistence_runtime/src" >/dev/null; then
   fail "legacy continuation migration remains on the production runtime path"
 fi
 
-if "$RG" -n 'model-attempt-timeout-ms|--yolo|--auto-approve|case "always-ask"|case "write"|case "yolo"' \
+if rg_matches -n 'model-attempt-timeout-ms|--yolo|--auto-approve|case "always-ask"|case "write"|case "yolo"' \
   "$ROOT/agent_app/src" >/dev/null; then
   fail "removed CLI compatibility aliases remain in the production executable"
 fi
 
-if "$RG" -n 'legacyInferredThinkingCapabilities|legacyOfficialProviderDialect|entry\.reasoning' \
+if rg_matches -n 'legacyInferredThinkingCapabilities|legacyOfficialProviderDialect|entry\.reasoning' \
   "$ROOT/agent_product/src" >/dev/null; then
   fail "provider/model capability resolution still contains legacy inference"
 fi
 
-if "$RG" -n 'case Result\.Err\(_\) => match \(session\.messages\(\)\)' \
+if rg_matches -n 'case Result\.Err\(_\) => match \(session\.messages\(\)\)' \
   "$ROOT/agent_app/src/main.cj" >/dev/null; then
   fail "TUI canonical Thread loading still falls back to ModelMessage history"
 fi
 
-if "$RG" -n 'optionalString\(call, "path", ""\)' \
+if rg_matches -n 'optionalString\(call, "path", ""\)' \
   "$ROOT/agent_product/src/tools.cj" >/dev/null; then
   fail "Glob runtime still accepts the removed path argument alias"
 fi
 
-if "$RG" -n 'subagent_runtime|SubagentCoordinator' \
+if rg_matches -n 'subagent_runtime|SubagentCoordinator' \
   "$ROOT/agent_product/cjpm.toml" "$ROOT/agent_product/src" >/dev/null; then
   fail "Product retains a second child-run coordinator or budget authority"
 fi
 
-if "$RG" -n 'taskLegacySettlementReceipt|persistenceVersion|legacyInstanceId' \
+if rg_matches -n 'taskLegacySettlementReceipt|persistenceVersion|legacyInstanceId' \
   "$ROOT/agent_product/src/task_persistence.cj" \
   "$ROOT/agent_product/src/task_product.cj" >/dev/null; then
   fail "Task runtime retains v1 receipt or instance compatibility"
 fi
 
-if ! "$RG" -n 'appendExternalMessageOnce\(sessionId, receiptId, message\)' \
+if ! rg_matches -n 'appendExternalMessageOnce\(sessionId, receiptId, message\)' \
   "$ROOT/agent_product/src/task_product.cj" >/dev/null; then
   fail "async settlement bypasses the canonical Thread external-input boundary"
 fi
 
-if ! "$RG" -n 'Capability\(CapabilityKind\.PeerMessage\)' \
+if ! rg_matches -n 'Capability\(CapabilityKind\.PeerMessage\)' \
   "$ROOT/agent_product/src/tools.cj" >/dev/null; then
   fail "peer messaging is still coupled to the broader delegation capability"
 fi
@@ -345,7 +369,7 @@ if [[ "$run_state_models" != "$ROOT/agent_domain/src/v3_control.cj" ]]; then
   fail "Run state must have one domain model"
 fi
 
-if "$RG" -n \
+if rg_matches -n \
   'rpc-once|rpc-smoke|cancel-smoke|timeout-smoke|concurrency-smoke' \
   "$ROOT/agent_app/src" >/dev/null; then
   fail "product CLI contains a test-only or legacy command"

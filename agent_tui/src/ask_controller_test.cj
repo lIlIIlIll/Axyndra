@@ -35,7 +35,7 @@ class AskControllerTests {
         let buffer = Buffer(area)
         controller.renderEditor(
             Frame(area, buffer),
-            ompTheme(),
+            axyndraTheme(),
             cardArea: Some(cardArea)
         )
         let inputX = cardArea.x + 2 + displayWidth("› Other: ")
@@ -45,7 +45,7 @@ class AskControllerTests {
         let clippedBuffer = Buffer(area)
         controller.renderEditor(
             Frame(area, clippedBuffer),
-            ompTheme(),
+            axyndraTheme(),
             cardArea: Some(clippedCardArea),
             fallbackArea: Some(area)
         )
@@ -212,7 +212,7 @@ class AskControllerTests {
         let _ = controller.updateKey(KeyEvent(KeyCode.Char(r'n')))
         let _ = controller.paste("portable verification")
         let area = Rect(0, 0, 80, 24)
-        controller.renderEditor(Frame(area, Buffer(area)), ompTheme())
+        controller.renderEditor(Frame(area, Buffer(area)), axyndraTheme())
 
         let click = controller.updateMouse(
             MouseEvent(MouseKind.Down, MouseButton.Left, 4, 3)
@@ -284,7 +284,7 @@ class AskControllerTests {
         let _ = controller.updateKey(KeyEvent(KeyCode.Char(r'n')))
         let _ = controller.paste("restored note")
         let area = Rect(0, 0, 80, 24)
-        controller.renderEditor(Frame(area, Buffer(area)), ompTheme())
+        controller.renderEditor(Frame(area, Buffer(area)), axyndraTheme())
         let saved = controller.captureProbeState()
 
         let _ = controller.updateEditor(KeyEvent(KeyCode.Esc))

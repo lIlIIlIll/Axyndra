@@ -24,4 +24,6 @@ model-providers.json
 !eval_experiments/**/*.json
 .direnv
 perf_results/
+*.log
+*.pid
 !agent_tui/cjtui-contract.json

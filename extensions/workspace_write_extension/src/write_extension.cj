@@ -7,7 +7,7 @@ public func workspaceWriteExtensionManifest(): String {
     """
     {
       "schemaVersion": 1,
-      "id": "omp.workspace-write",
+      "id": "axyndra.workspace-write",
       "name": "Workspace Write",
       "version": "1.0.0",
       "description": "Describe workspace writes for host authorization and execution.",
@@ -26,7 +26,7 @@ public class WorkspaceWriteExtension <: Extension {
 
     public func metadata(): ExtensionMetadata {
         ExtensionMetadata(
-            "omp.workspace-write",
+            "axyndra.workspace-write",
             "Workspace Write",
             "1.0.0",
             "Describe workspace writes for host authorization and execution.",

@@ -515,21 +515,8 @@ class HeadlessTextCollector {
 
     func accept(event: AgentEvent): Unit {
         match (event.payload) {
-            case AgentEventPayload.TextDelta(delta) =>
-                append(delta)
-                return
+            case AgentEventPayload.TextDelta(delta) => append(delta)
             case _ => ()
-        }
-        // Legacy AgentCore events remain readable during an on-disk/session
-        // migration, but new typed events take the branch above.
-        let code = match (event.detail.field("code")) {
-            case Some(item) => item.text
-            case None => ""
-        }
-        if (code != "model.text_delta") { return }
-        match (event.detail.field("text")) {
-            case Some(item) => append(item.text)
-            case None => ()
         }
     }
 

@@ -1,0 +1,24 @@
+name: Protected release gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    environment: release
+    runs-on: [self-hosted, linux, x64, cangjie-daily]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - name: Release gate with real provider smoke
+        env:
+          AXYNDRA_SDK_ROOT: /home/elliot/cangjie_sdk/daily
+          AXYNDRA_GATE_KIND: release
+          AXYNDRA_REAL_SMOKE: "1"
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: bash scripts/release_gate.sh

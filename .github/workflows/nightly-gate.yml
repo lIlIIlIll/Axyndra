@@ -1,0 +1,23 @@
+name: Nightly release gate
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    runs-on: [self-hosted, linux, x64, cangjie-daily]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - name: Full local release gate
+        env:
+          AXYNDRA_SDK_ROOT: /home/elliot/cangjie_sdk/daily
+          AXYNDRA_GATE_KIND: implementation
+        run: bash scripts/release_gate.sh

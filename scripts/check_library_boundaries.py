@@ -28,7 +28,7 @@ SDK_EXTENSION_ROOTS = {
     "extensions/workspace_write_extension",
     "support_tests/sdk_fixture_extension",
 }
-PUBLIC_TESTKIT = ROOT / "omp_agent_testkit"
+PUBLIC_TESTKIT = ROOT / "axyndra_agent_testkit"
 TESTKIT_FORBIDDEN = SDK_FORBIDDEN | {
     "agent_domain", "agent_ports", "agent_extensions", "agent_extension_runtime",
     "agent_testkit",
@@ -94,13 +94,13 @@ for source in sorted((ROOT / "agent_sdk" / "src").glob("**/*.cj")):
             errors.append(f"agent_sdk exposes forbidden authority symbol {authority}: {source.relative_to(ROOT)}")
 
 if not PUBLIC_TESTKIT.is_dir():
-    errors.append("public omp_agent_testkit package is missing")
+    errors.append("public axyndra_agent_testkit package is missing")
 else:
     testkit_manifest = tomllib.loads((PUBLIC_TESTKIT / "cjpm.toml").read_text(encoding="utf-8"))
     testkit_dependencies = set(testkit_manifest.get("dependencies", {}))
     if testkit_dependencies != {"agent_sdk", "json4cj"}:
         errors.append(
-            "omp_agent_testkit must depend only on agent_sdk and json4cj; got "
+            "axyndra_agent_testkit must depend only on agent_sdk and json4cj; got "
             + ", ".join(sorted(testkit_dependencies))
         )
     for source in sorted((PUBLIC_TESTKIT / "src").glob("**/*.cj")):
@@ -123,11 +123,11 @@ else:
 
 for member in sorted(members):
     manifest_path = ROOT / member / "cjpm.toml"
-    if not manifest_path.is_file() or member in {"agent_testkit", "omp_agent_testkit"}:
+    if not manifest_path.is_file() or member in {"agent_testkit", "axyndra_agent_testkit"}:
         continue
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     dependencies = set(manifest.get("dependencies", {}))
-    for testkit_dependency in sorted(dependencies.intersection({"agent_testkit", "omp_agent_testkit"})):
+    for testkit_dependency in sorted(dependencies.intersection({"agent_testkit", "axyndra_agent_testkit"})):
         errors.append(
             f"production workspace package {member} depends on testkit package {testkit_dependency}"
         )
@@ -138,7 +138,7 @@ if not consumer_root.is_dir():
 else:
     consumer_manifest = tomllib.loads((consumer_root / "cjpm.toml").read_text(encoding="utf-8"))
     consumer_dependencies = set(consumer_manifest.get("dependencies", {}))
-    expected_consumer_dependencies = {"agent_sdk", "json4cj", "omp_agent_testkit"}
+    expected_consumer_dependencies = {"agent_sdk", "json4cj", "axyndra_agent_testkit"}
     if consumer_dependencies != expected_consumer_dependencies:
         errors.append(
             "testkit consumer dependency surface drifted; got "

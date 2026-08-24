@@ -2,7 +2,7 @@ package testkit_consumer
 
 import agent_sdk.*
 import json4cj.*
-import omp_agent_testkit.*
+import axyndra_agent_testkit.*
 import std.unittest.*
 import std.unittest.testmacro.*
 

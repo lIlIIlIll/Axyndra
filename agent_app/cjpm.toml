@@ -18,6 +18,6 @@
   "agent_rpc" = { path = "../agent_rpc", output-type = "static" }
   "agent_embed" = { path = "../agent_embed", output-type = "static" }
   "agent_tui" = { path = "../agent_tui", output-type = "static" }
-  "core" = { path = "../../cj_tui/packages/core", output-type = "static" }
+  "core" = { path = "../vendor/cj_tui/packages/core", output-type = "static" }
   "model_adapters" = { path = "../model_adapters", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

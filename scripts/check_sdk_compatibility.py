@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline compatibility gate for stable agent_sdk and omp_agent_testkit APIs."""
+"""Offline compatibility gate for stable agent_sdk and axyndra_agent_testkit APIs."""
 
 from __future__ import annotations
 
@@ -14,15 +14,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASELINES = {
     "agent_sdk": ROOT / "compat" / "agent-sdk-v1.api.json",
-    "omp_agent_testkit": ROOT / "compat" / "omp-agent-testkit-v1.api.json",
+    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v1.api.json",
 }
 SOURCES = {
     "agent_sdk": sorted(
         path for path in (ROOT / "agent_sdk" / "src").glob("*.cj")
         if not path.name.endswith("_test.cj")
     ),
-    "omp_agent_testkit": sorted(
-        path for path in (ROOT / "omp_agent_testkit" / "src").glob("*.cj")
+    "axyndra_agent_testkit": sorted(
+        path for path in (ROOT / "axyndra_agent_testkit" / "src").glob("*.cj")
         if not path.name.endswith("_test.cj")
     ),
 }
@@ -36,7 +36,7 @@ EXPERIMENTAL_PREFIXES = {
         "class:HostOperationIntent.",
         "enum:OperationIntent.variant:HostOperation",
     },
-    "omp_agent_testkit": {
+    "axyndra_agent_testkit": {
         "class:FaultRule", "class:FaultRule.",
         "class:FaultPlan", "class:FaultPlan.",
     },

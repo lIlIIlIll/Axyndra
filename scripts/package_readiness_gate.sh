@@ -44,7 +44,7 @@ python3 "$root/scripts/package_readiness.py" materialize-validation "$work_root/
 
 public_packages=(
   json4cj jsonrpc4cj process4cj mcp4cj sandbox4cj
-  llm4cj lsp4cj dap4cj agent_sdk omp_agent_testkit
+  llm4cj lsp4cj dap4cj agent_sdk axyndra_agent_testkit
 )
 for package in "${public_packages[@]}"; do
   printf '== staged package %s ==\n' "$package"
@@ -67,7 +67,7 @@ for consumer in "${public_packages[@]}"; do
   fi
 done
 
-if rp-rg -n '/home/elliot/playground/learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./omp_agent_testkit' \
+if rp-rg -n '/home/elliot/playground/learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./axyndra_agent_testkit' \
   "$work_root/packages" "$work_root/consumers" \
   --glob '!target/**' --glob '!package-inventory.json'; then
   printf 'package readiness: monorepo fallback found in staged package or consumer\n' >&2

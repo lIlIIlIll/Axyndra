@@ -11,7 +11,7 @@ python3 "$ROOT/scripts/check_sdk_compatibility.py" --self-test
 
 for package in \
   agent_sdk \
-  omp_agent_testkit \
+  axyndra_agent_testkit \
   agent_extension_runtime \
   extensions/ast_extension \
   extensions/web_search_extension \
@@ -20,7 +20,7 @@ for package in \
   (cd "$ROOT/$package" && "$ROOT/scripts/pinned_cangjie" cjpm check)
 done
 
-(cd "$ROOT/omp_agent_testkit" && "$ROOT/scripts/pinned_cangjie" cjpm test)
+(cd "$ROOT/axyndra_agent_testkit" && "$ROOT/scripts/pinned_cangjie" cjpm test)
 (cd "$ROOT/support_tests/testkit_consumer" && \
   "$ROOT/scripts/pinned_cangjie" cjpm check && \
   "$ROOT/scripts/pinned_cangjie" cjpm build && \

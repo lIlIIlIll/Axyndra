@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = {
     "agent_sdk": ROOT / "compat" / "agent-sdk-v1.api.json",
-    "omp_agent_testkit": ROOT / "compat" / "omp-agent-testkit-v1.api.json",
+    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v1.api.json",
 }
 
 

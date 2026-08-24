@@ -16,7 +16,7 @@ public func renderTranscriptGallery(
     // `plain` is a transport choice, not a different visual hierarchy.  Both
     // forms render the same OMP card and layout; the serializer alone decides
     // whether semantic cell styles become ANSI SGR sequences.
-    let theme = activeProductTheme(overrideName: "omp")
+    let theme = activeProductTheme(overrideName: "axyndra")
     let snapshot = UiSnapshot()
     snapshot.cards.add(card)
     let source = AgentTranscriptSource(snapshot, {

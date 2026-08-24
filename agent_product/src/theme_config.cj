@@ -197,7 +197,7 @@ func safeThemeName(value: String): Bool {
 }
 
 func builtinThemeName(value: String): Bool {
-    value == "omp" || value == "dark" || value == "light" || value == "mono"
+    value == "axyndra" || value == "dark" || value == "light" || value == "mono"
 }
 
 func sortThemePaths(values: ArrayList<String>): Unit {

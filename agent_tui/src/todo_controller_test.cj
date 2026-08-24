@@ -70,7 +70,7 @@ class TodoControllerTests {
             TuiTodoLoadResult(true, "- [ ] first\n- [ ] second\n", "loaded")
         )
         let area = Rect(0, 0, 80, 24)
-        controller.renderEditor(Frame(area, Buffer(area)), ompTheme())
+        controller.renderEditor(Frame(area, Buffer(area)), axyndraTheme())
 
         let click = controller.updateMouse(
             MouseEvent(MouseKind.Down, MouseButton.Left, 8, 5)

@@ -33,21 +33,45 @@ public class SqliteRow {
     }
 }
 
+public enum SqlParameter {
+    Text(String)
+    | Int64Value(Int64)
+    | Blob(Array<UInt8>)
+    | Null
+}
+
 public class SqliteTransaction {
     private let executeFn: (String) -> Unit
     private let queryFn: (String) -> Array<SqliteRow>
+    private let executeBoundFn: (String, Array<SqlParameter>) -> Unit
+    private let queryBoundFn: (String, Array<SqlParameter>) -> Array<SqliteRow>
 
     public init(
         executeFn: (String) -> Unit,
-        queryFn: (String) -> Array<SqliteRow>
+        queryFn: (String) -> Array<SqliteRow>,
+        executeBoundFn: (String, Array<SqlParameter>) -> Unit,
+        queryBoundFn: (String, Array<SqlParameter>) -> Array<SqliteRow>
     ) {
         this.executeFn = executeFn
         this.queryFn = queryFn
+        this.executeBoundFn = executeBoundFn
+        this.queryBoundFn = queryBoundFn
     }
 
     public func execute(sql: String): Unit { executeFn(sql) }
 
     public func query(sql: String): Array<SqliteRow> { queryFn(sql) }
+
+    public func execute(sql: String, parameters: Array<SqlParameter>): Unit {
+        executeBoundFn(sql, parameters)
+    }
+
+    public func query(
+        sql: String,
+        parameters: Array<SqlParameter>
+    ): Array<SqliteRow> {
+        queryBoundFn(sql, parameters)
+    }
 }
 
 // SqliteDatabase deliberately exposes a small synchronous boundary. The
@@ -132,6 +156,19 @@ public class SqliteDatabase {
         try { queryLocked(sql) } finally { lock.unlock() }
     }
 
+    public func execute(sql: String, parameters: Array<SqlParameter>): Unit {
+        lock.lock()
+        try { executeBoundLocked(sql, parameters) } finally { lock.unlock() }
+    }
+
+    public func query(
+        sql: String,
+        parameters: Array<SqlParameter>
+    ): Array<SqliteRow> {
+        lock.lock()
+        try { queryBoundLocked(sql, parameters) } finally { lock.unlock() }
+    }
+
     public func scalarInt(sql: String): Int64 {
         let rows = query(sql)
         if (rows.size != 1 || rows[0].size < 1) {
@@ -185,7 +222,9 @@ public class SqliteDatabase {
             try {
                 let transaction = SqliteTransaction(
                     { sql => executeLocked(sql) },
-                    { sql => queryLocked(sql) }
+                    { sql => queryLocked(sql) },
+                    { sql, parameters => executeBoundLocked(sql, parameters) },
+                    { sql, parameters => queryBoundLocked(sql, parameters) }
                 )
                 let result = body(transaction)
                 executeLocked("COMMIT")
@@ -209,7 +248,9 @@ public class SqliteDatabase {
             try {
                 let transaction = SqliteTransaction(
                     { sql => executeLocked(sql) },
-                    { sql => queryLocked(sql) }
+                    { sql => queryLocked(sql) },
+                    { sql, parameters => executeBoundLocked(sql, parameters) },
+                    { sql, parameters => queryBoundLocked(sql, parameters) }
                 )
                 let result = body(transaction)
                 executeLocked("COMMIT")
@@ -383,7 +424,33 @@ public class SqliteDatabase {
     }
 
     private func queryLocked(sql: String): Array<SqliteRow> {
+        queryBoundLocked(sql, [])
+    }
+
+    private func executeBoundLocked(
+        sql: String,
+        parameters: Array<SqlParameter>
+    ): Unit {
+        let rows = runPreparedLocked(sql, parameters, false)
+        let _ = rows
+    }
+
+    private func queryBoundLocked(
+        sql: String,
+        parameters: Array<SqlParameter>
+    ): Array<SqliteRow> {
+        runPreparedLocked(sql, parameters, true)
+    }
+
+    private func runPreparedLocked(
+        sql: String,
+        parameters: Array<SqlParameter>,
+        collectRows: Bool
+    ): Array<SqliteRow> {
         ensureOpenLocked()
+        if (sql.trimAscii() == "") {
+            throw IllegalArgumentException("SQLite statement must not be empty")
+        }
         let raw = unsafe { LibC.mallocCString(sql) }
         let out = unsafe { LibC.malloc<CPointer<Unit>>() }
         if (out.isNull()) {
@@ -392,6 +459,8 @@ public class SqliteDatabase {
         }
         unsafe { out.write(CPointer<Unit>()) }
         var statement = CPointer<Unit>()
+        let textValues = ArrayList<CString>()
+        let blobValues = ArrayList<CPointer<UInt8>>()
         try {
             let prepared = unsafe {
                 sqlite3_prepare_v2(handle, raw, -1, out, CPointer<CString>())
@@ -400,11 +469,13 @@ public class SqliteDatabase {
             if (prepared != SQLITE_OK || statement.isNull()) {
                 failLocked("prepare", prepared)
             }
+            bindParametersLocked(statement, parameters, textValues, blobValues)
             let rows = ArrayList<SqliteRow>()
             while (true) {
                 let step = unsafe { sqlite3_step(statement) }
                 if (step == SQLITE_DONE) { break }
                 if (step != SQLITE_ROW) { failLocked("step", step) }
+                if (!collectRows) { continue }
                 let count = unsafe { sqlite3_column_count(statement) }
                 let values = ArrayList<?String>()
                 for (index in 0..Int64(count)) {
@@ -425,9 +496,51 @@ public class SqliteDatabase {
         } finally {
             if (!statement.isNull()) { unsafe { let _ = sqlite3_finalize(statement) } }
             unsafe {
+                for (value in textValues) { LibC.free(value) }
+                for (value in blobValues) { LibC.free(value) }
                 LibC.free(raw)
                 LibC.free(out)
             }
+        }
+    }
+
+    private func bindParametersLocked(
+        statement: CPointer<Unit>,
+        parameters: Array<SqlParameter>,
+        textValues: ArrayList<CString>,
+        blobValues: ArrayList<CPointer<UInt8>>
+    ): Unit {
+        for (offset in 0..parameters.size) {
+            let index = Int32(offset + 1)
+            let code = match (parameters[offset]) {
+                case SqlParameter.Text(value) =>
+                    let raw = unsafe { LibC.mallocCString(value) }
+                    textValues.add(raw)
+                    unsafe { sqlite3_bind_text(statement, index, raw, -1, CPointer<Unit>()) }
+                case SqlParameter.Int64Value(value) =>
+                    unsafe { sqlite3_bind_int64(statement, index, value) }
+                case SqlParameter.Blob(value) =>
+                    if (value.isEmpty()) {
+                        unsafe { sqlite3_bind_zeroblob(statement, index, 0) }
+                    } else {
+                        let raw = unsafe { LibC.malloc<UInt8>(count: value.size) }
+                        for (byteIndex in 0..value.size) {
+                            unsafe { raw.write(byteIndex, value[byteIndex]) }
+                        }
+                        blobValues.add(raw)
+                        unsafe {
+                            sqlite3_bind_blob(
+                                statement,
+                                index,
+                                raw,
+                                Int32(value.size),
+                                CPointer<Unit>()
+                            )
+                        }
+                    }
+                case SqlParameter.Null => unsafe { sqlite3_bind_null(statement, index) }
+            }
+            if (code != SQLITE_OK) { failLocked("bind", code) }
         }
     }
 
@@ -488,6 +601,36 @@ foreign func sqlite3_prepare_v2(
 ): Int32
 @When[os != "Windows"]
 foreign func sqlite3_step(statement: CPointer<Unit>): Int32
+@When[os != "Windows"]
+foreign func sqlite3_bind_text(
+    statement: CPointer<Unit>,
+    index: Int32,
+    value: CString,
+    bytes: Int32,
+    destructor: CPointer<Unit>
+): Int32
+@When[os != "Windows"]
+foreign func sqlite3_bind_int64(
+    statement: CPointer<Unit>,
+    index: Int32,
+    value: Int64
+): Int32
+@When[os != "Windows"]
+foreign func sqlite3_bind_blob(
+    statement: CPointer<Unit>,
+    index: Int32,
+    value: CPointer<UInt8>,
+    bytes: Int32,
+    destructor: CPointer<Unit>
+): Int32
+@When[os != "Windows"]
+foreign func sqlite3_bind_zeroblob(
+    statement: CPointer<Unit>,
+    index: Int32,
+    bytes: Int32
+): Int32
+@When[os != "Windows"]
+foreign func sqlite3_bind_null(statement: CPointer<Unit>, index: Int32): Int32
 @When[os != "Windows"]
 foreign func sqlite3_finalize(statement: CPointer<Unit>): Int32
 @When[os != "Windows"]

@@ -1,0 +1,38 @@
+name: PR gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-build-test:
+    runs-on: [self-hosted, linux, x64, cangjie-daily]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - name: Repository policy gates
+        run: |
+          python3 scripts/tracked_artifact_gate.py
+          python3 scripts/docs_gate.py
+          scripts/architecture_gate_lib_test.sh
+          python3 scripts/tracked_artifact_gate_test.py
+          python3 scripts/docs_gate_test.py
+          scripts/architecture_gate.sh
+      - name: Clean Cangjie build and tests
+        env:
+          AXYNDRA_SDK_ROOT: /home/elliot/cangjie_sdk/daily
+        run: |
+          scripts/pinned_cangjie cjpm clean
+          scripts/pinned_cangjie cjpm check
+          scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
+          scripts/pinned_cangjie cjpm test

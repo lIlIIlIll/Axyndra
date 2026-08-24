@@ -54,9 +54,9 @@ func migratedFirstPartyContracts(): Unit {
     let runtime = ExtensionRuntime(host, probe: probe)
     expect(runtime.start(
         [webProvider(), astProvider()],
-        [ConfiguredExtension("omp.web-search"), ConfiguredExtension("omp.ast")]
+        [ConfiguredExtension("axyndra.web-search"), ConfiguredExtension("axyndra.ast")]
     ).isOk(), "migrated first-party extensions activate through the canonical runtime")
-    expect(host.activationOrder.toArray() == ["omp.ast", "omp.web-search"],
+    expect(host.activationOrder.toArray() == ["axyndra.ast", "axyndra.web-search"],
         "migrated first-party activation order is deterministic")
     expect(host.activeTools.contains("ast_grep") && host.activeTools.contains("ast_edit") &&
         host.activeTools.contains("web_search"), "migrated tools are registered by lifecycle host")
@@ -64,7 +64,7 @@ func migratedFirstPartyContracts(): Unit {
     let unavailable = ExtensionRuntime(RecordingLifecycleHost(), probe: FakeProbe())
     expect(unavailable.start(
         [astProvider(), webProvider()],
-        [ConfiguredExtension("omp.ast"), ConfiguredExtension("omp.web-search")]
+        [ConfiguredExtension("axyndra.ast"), ConfiguredExtension("axyndra.web-search")]
     ).isOk(), "missing requirements on optional extensions do not fail product startup")
     expect(unavailable.diagnostics()[0].state == ExtensionLifecycleState.Failed &&
         unavailable.diagnostics()[1].state == ExtensionLifecycleState.Failed,
@@ -74,7 +74,7 @@ func migratedFirstPartyContracts(): Unit {
 func manifestContracts(): Unit {
     let valid = workspaceSearchExtensionManifest()
     let parsed = mustManifest(valid)
-    expect(parsed.schemaVersion == 1 && parsed.id == "omp.workspace-search", "valid manifest parses")
+    expect(parsed.schemaVersion == 1 && parsed.id == "axyndra.workspace-search", "valid manifest parses")
     expect(parsed.sdk.includes(SemanticVersion(1, 1, 0)), "current SDK is compatible")
     expect(parseExtensionManifest(valid.replace(
         "\"requirements\":", "\"futureOptional\": true, \"requirements\":"
@@ -85,8 +85,8 @@ func manifestContracts(): Unit {
     expectManifestKind(valid.replace("\"schemaVersion\": 1", "\"schemaVersion\": 2"),
         ExtensionRuntimeErrorKind.ManifestSchemaUnsupported, "future schema is rejected")
 
-    expectManifestFailure(valid.replace("\"id\": \"omp.workspace-search\",", ""), "missing id")
-    expectManifestFailure(valid.replace("omp.workspace-search", "Invalid Id"), "invalid id")
+    expectManifestFailure(valid.replace("\"id\": \"axyndra.workspace-search\",", ""), "missing id")
+    expectManifestFailure(valid.replace("axyndra.workspace-search", "Invalid Id"), "invalid id")
     expectManifestFailure(valid.replace("\"version\": \"1.0.0\",", ""), "missing version")
     expectManifestKind(valid.replace("\"version\": \"1.0.0\"", "\"version\": \"1.x\""),
         ExtensionRuntimeErrorKind.ExtensionVersionMalformed, "non-numeric extension version is rejected")
@@ -119,23 +119,23 @@ func runtimeContracts(): Unit {
     expect(runtime.start(
         [writeProvider(), searchProvider()],
         [
-            ConfiguredExtension("omp.workspace-write", required: true),
-            ConfiguredExtension("omp.workspace-search", required: true)
+            ConfiguredExtension("axyndra.workspace-write", required: true),
+            ConfiguredExtension("axyndra.workspace-search", required: true)
         ]
     ).isOk(), "built-in extensions activate")
-    expect(host.activationOrder.toArray() == ["omp.workspace-search", "omp.workspace-write"], "registration order is lexical and deterministic")
+    expect(host.activationOrder.toArray() == ["axyndra.workspace-search", "axyndra.workspace-write"], "registration order is lexical and deterministic")
     let diagnostics = runtime.diagnostics()
     expect(diagnostics.size == 2 && diagnostics[0].state == ExtensionLifecycleState.Active, "active diagnostics are deterministic")
     expect(diagnostics[0].tools == ["grep"] && diagnostics[0].capabilities == ["workspace.read"] && diagnostics[0].requirements == ["rg"], "diagnostics project declarations")
-    expect(runtime.deactivate("omp.workspace-search").isOk(), "deactivation succeeds")
-    expect(runtime.deactivate("omp.workspace-search").isOk(), "double deactivation is idempotent")
+    expect(runtime.deactivate("axyndra.workspace-search").isOk(), "deactivation succeeds")
+    expect(runtime.deactivate("axyndra.workspace-search").isOk(), "double deactivation is idempotent")
     expect(!host.activeTools.contains("grep"), "inactive extension tool is unavailable")
-    expect(runtime.activate("omp.workspace-search").isOk(), "inactive extension reactivates")
+    expect(runtime.activate("axyndra.workspace-search").isOk(), "inactive extension reactivates")
 
     let duplicate = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (duplicate.start(
         [searchProvider(), searchProvider()],
-        [ConfiguredExtension("omp.workspace-search", required: true)]
+        [ConfiguredExtension("axyndra.workspace-search", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) => error.kind == ExtensionRuntimeErrorKind.DuplicateExtensionId
         case _ => false
@@ -145,7 +145,7 @@ func runtimeContracts(): Unit {
     let missing = ExtensionRuntime(RecordingLifecycleHost(), probe: missingProbe)
     expect(match (missing.start(
         [searchProvider()],
-        [ConfiguredExtension("omp.workspace-search", required: true)]
+        [ConfiguredExtension("axyndra.workspace-search", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) => error.kind == ExtensionRuntimeErrorKind.RequirementMissing
         case _ => false
@@ -156,7 +156,7 @@ func runtimeContracts(): Unit {
     let unavailable = ExtensionRuntime(RecordingLifecycleHost(), probe: unavailableProbe)
     expect(match (unavailable.start(
         [searchProvider()],
-        [ConfiguredExtension("omp.workspace-search", required: true)]
+        [ConfiguredExtension("axyndra.workspace-search", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) => error.kind == ExtensionRuntimeErrorKind.RequirementUnavailable
         case _ => false
@@ -166,8 +166,8 @@ func runtimeContracts(): Unit {
     expect(optional.start(
         [searchProvider(), writeProvider()],
         [
-            ConfiguredExtension("omp.workspace-search"),
-            ConfiguredExtension("omp.workspace-write", enabled: false)
+            ConfiguredExtension("axyndra.workspace-search"),
+            ConfiguredExtension("axyndra.workspace-write", enabled: false)
         ]
     ).isOk(), "optional failure and disabled extension do not fail startup")
     expect(optional.diagnostics()[0].state == ExtensionLifecycleState.Failed && optional.diagnostics()[1].state == ExtensionLifecycleState.Inactive, "optional failure and disabled reasons remain diagnostic")
@@ -177,13 +177,13 @@ func runtimeContracts(): Unit {
     ).replace("\"maxExclusive\": \"2.0.0\"", "\"maxExclusive\": \"3.0.0\"")
     let incompatible = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (incompatible.start(
-        [CompiledExtensionProvider("omp.workspace-write", "future", futureManifest, { => WorkspaceWriteExtension() })],
-        [ConfiguredExtension("omp.workspace-write", required: true)]
+        [CompiledExtensionProvider("axyndra.workspace-write", "future", futureManifest, { => WorkspaceWriteExtension() })],
+        [ConfiguredExtension("axyndra.workspace-write", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) =>
             error.kind == ExtensionRuntimeErrorKind.SdkTooOld &&
             error.phase == ExtensionRuntimePhase.Compatibility &&
-            error.extensionId == "omp.workspace-write" &&
+            error.extensionId == "axyndra.workspace-write" &&
             error.extensionVersion == "1.0.0" &&
             error.sdkMinimum == "2.0.0" && error.sdkMaximumExclusive == "3.0.0" &&
             error.hostSdkVersion == AGENT_SDK_VERSION
@@ -194,8 +194,8 @@ func runtimeContracts(): Unit {
     )
     let exactMax = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (exactMax.start(
-        [CompiledExtensionProvider("omp.workspace-write", "old-range", exactMaxManifest, { => WorkspaceWriteExtension() })],
-        [ConfiguredExtension("omp.workspace-write", required: true)]
+        [CompiledExtensionProvider("axyndra.workspace-write", "old-range", exactMaxManifest, { => WorkspaceWriteExtension() })],
+        [ConfiguredExtension("axyndra.workspace-write", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) => error.kind == ExtensionRuntimeErrorKind.SdkTooNew
         case _ => false
@@ -204,8 +204,8 @@ func runtimeContracts(): Unit {
     let optionalIncompatibleHost = RecordingLifecycleHost()
     let optionalIncompatible = ExtensionRuntime(optionalIncompatibleHost, probe: probe)
     expect(optionalIncompatible.start(
-        [CompiledExtensionProvider("omp.workspace-write", "future-optional", futureManifest, { => WorkspaceWriteExtension() })],
-        [ConfiguredExtension("omp.workspace-write")]
+        [CompiledExtensionProvider("axyndra.workspace-write", "future-optional", futureManifest, { => WorkspaceWriteExtension() })],
+        [ConfiguredExtension("axyndra.workspace-write")]
     ).isOk(), "optional incompatible extension does not abort startup")
     expect(optionalIncompatibleHost.activeTools.isEmpty() &&
         optionalIncompatible.diagnostics()[0].state == ExtensionLifecycleState.Failed &&
@@ -215,8 +215,8 @@ func runtimeContracts(): Unit {
     let mismatch = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     let drift = workspaceWriteExtensionManifest().replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"")
     expect(match (mismatch.start(
-        [CompiledExtensionProvider("omp.workspace-write", "drift", drift, { => WorkspaceWriteExtension() })],
-        [ConfiguredExtension("omp.workspace-write", required: true)]
+        [CompiledExtensionProvider("axyndra.workspace-write", "drift", drift, { => WorkspaceWriteExtension() })],
+        [ConfiguredExtension("axyndra.workspace-write", required: true)]
     )) {
         case ExtensionRuntimeResult.Err(error) => error.kind == ExtensionRuntimeErrorKind.MetadataMismatch
         case _ => false
@@ -280,10 +280,10 @@ class RecordingLifecycleHost <: ExtensionLifecycleHost {
     }
 
     public func deactivate(extensionId: String): HostLifecycleResult {
-        if (extensionId == "omp.workspace-search") { remove(activeTools, "grep") }
-        else if (extensionId == "omp.workspace-write") { remove(activeTools, "write") }
-        else if (extensionId == "omp.ast") { remove(activeTools, "ast_grep"); remove(activeTools, "ast_edit") }
-        else if (extensionId == "omp.web-search") { remove(activeTools, "web_search") }
+        if (extensionId == "axyndra.workspace-search") { remove(activeTools, "grep") }
+        else if (extensionId == "axyndra.workspace-write") { remove(activeTools, "write") }
+        else if (extensionId == "axyndra.ast") { remove(activeTools, "ast_grep"); remove(activeTools, "ast_edit") }
+        else if (extensionId == "axyndra.web-search") { remove(activeTools, "web_search") }
         else if (extensionId == "third-party.fixture") { remove(activeTools, "fixture_echo") }
         HostLifecycleResult.Ok
     }
@@ -319,19 +319,19 @@ class StubTool <: ExtensionTool {
 }
 
 func searchProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("omp.workspace-search", "embedded:search", workspaceSearchExtensionManifest(), { => WorkspaceSearchExtension() })
+    CompiledExtensionProvider("axyndra.workspace-search", "embedded:search", workspaceSearchExtensionManifest(), { => WorkspaceSearchExtension() })
 }
 
 func writeProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("omp.workspace-write", "embedded:write", workspaceWriteExtensionManifest(), { => WorkspaceWriteExtension() })
+    CompiledExtensionProvider("axyndra.workspace-write", "embedded:write", workspaceWriteExtensionManifest(), { => WorkspaceWriteExtension() })
 }
 
 func astProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("omp.ast", "embedded:ast", astExtensionManifest(), { => AstExtension() })
+    CompiledExtensionProvider("axyndra.ast", "embedded:ast", astExtensionManifest(), { => AstExtension() })
 }
 
 func webProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("omp.web-search", "embedded:web-search", webSearchExtensionManifest(), { => WebSearchExtension() })
+    CompiledExtensionProvider("axyndra.web-search", "embedded:web-search", webSearchExtensionManifest(), { => WebSearchExtension() })
 }
 
 func manifest(id: String, name: String, description: String, tools: Array<String>): String {
