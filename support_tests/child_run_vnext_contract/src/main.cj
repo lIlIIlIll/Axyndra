@@ -7,8 +7,80 @@ main(): Int64 {
     capabilityCeilingContract()
     budgetReservationContract()
     isolatedResultContract()
+    remoteExecutionRealmContract()
     println("vNext child run contract passed")
     0
+}
+
+func remoteExecutionRealmContract(): Unit {
+    let realm = RemoteExecutionRealm(
+        "worker-eu-1", "https://worker.example/rpc", "worker-key-1",
+        "remote-fs-1", "remote-process-1",
+        services: [RemoteServiceKind.FileSystem, RemoteServiceKind.Process,
+            RemoteServiceKind.Terminal, RemoteServiceKind.Lsp]
+    )
+    expect(realm.supports(RemoteServiceKind.FileSystem) && realm.supports(RemoteServiceKind.Process) &&
+        realm.fileSystemServiceIdentity == "remote-fs-1" &&
+        realm.processServiceIdentity == "remote-process-1",
+        "filesystem and process services are co-located in one Remote Execution Realm")
+    let capabilities = CapabilitySet(values: [
+        Capability(CapabilityKind.WorkspaceRead, resource: "/repo"),
+        Capability(CapabilityKind.ProcessSpawn, resource: "sandbox")
+    ])
+    let envelope = sealRemoteCapabilityEnvelope(SignedRemoteCapabilityEnvelope(
+        "route-envelope-1", RunId("remote-run"), LaneId("remote-lane"), realm.id,
+        capabilities, 100, 200, "nonce-1"
+    ), "signature-1")
+    let transport = RecordingRemoteTransport()
+    let router = RemoteExecutionRouter(realm, capabilities, FixedRemoteVerifier(true), transport)
+    let result = router.route(envelope, RemoteExecutionRequest(
+        OperationId("remote-operation"), RemoteServiceKind.Process,
+        objectValue([ValueField("command", textValue("cjc --version"))]), "lane:remote-lane"
+    ), 150)
+    expect(result.isOk() && result.value().getOrThrow().field("realm").getOrThrow().text == realm.id &&
+        transport.dispatches == 1,
+        "distributed router dispatches a signed request through the selected Realm")
+    expect(RemoteExecutionRouter(
+        realm, capabilities, FixedRemoteVerifier(false), transport
+    ).route(envelope, RemoteExecutionRequest(
+        OperationId("bad-signature"), RemoteServiceKind.Process, objectValue([]), "lane:remote-lane"
+    ), 150).isError(), "invalid remote signature fails before transport")
+    expect(router.route(envelope, RemoteExecutionRequest(
+        OperationId("expired"), RemoteServiceKind.Process, objectValue([]), "lane:remote-lane"
+    ), 200).isError(), "expired distributed authority cannot be routed")
+    let expanded = sealRemoteCapabilityEnvelope(SignedRemoteCapabilityEnvelope(
+        "route-envelope-expanded", RunId("remote-run"), LaneId("remote-lane"), realm.id,
+        CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)]),
+        100, 200, "nonce-2"
+    ), "signature-2")
+    expect(router.route(expanded, RemoteExecutionRequest(
+        OperationId("expanded"), RemoteServiceKind.Process, objectValue([]), "lane:remote-lane"
+    ), 150).isError(), "remote worker authority cannot exceed the frozen parent ceiling")
+    expect(router.route(envelope, RemoteExecutionRequest(
+        OperationId("unbound"), RemoteServiceKind.Dap, objectValue([]), "lane:remote-lane"
+    ), 150).isError() && transport.dispatches == 1,
+        "unbound remote services fail closed without transport dispatch")
+}
+
+class FixedRemoteVerifier <: RemoteCapabilitySignatureVerifier {
+    private let valid: Bool
+    init(valid: Bool) { this.valid = valid }
+    public func verify(_envelope: SignedRemoteCapabilityEnvelope, transportIdentity: String): Bool {
+        let _ = _envelope
+        valid && transportIdentity == "worker-key-1"
+    }
+}
+
+class RecordingRemoteTransport <: RemoteWorkerTransport {
+    var dispatches: Int64 = 0
+    public func dispatch(realm: RemoteExecutionRealm, _envelope: SignedRemoteCapabilityEnvelope, request: RemoteExecutionRequest): Result<AgentValue> {
+        let _ = _envelope
+        dispatches += 1
+        Result.Ok(objectValue([
+            ValueField("realm", textValue(realm.id)),
+            ValueField("route", textValue(request.routeKey))
+        ]))
+    }
 }
 
 func capabilityCeilingContract(): Unit {
