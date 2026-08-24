@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 13, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 14, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -99,8 +99,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV13MigrationContract()
-    v7ToV13MigrationContract()
+    v6ToV14MigrationContract()
+    v7ToV14MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -177,7 +177,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV13MigrationContract(): Unit {
+func v6ToV14MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -205,8 +205,8 @@ func v6ToV13MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 13,
-            "v6 database migrates through schema v7 to v13")
+        expect(migrated.scalarInt("PRAGMA user_version") == 14,
+            "v6 database migrates through schema v7 to v14")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -217,7 +217,7 @@ func v6ToV13MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV13MigrationContract(): Unit {
+func v7ToV14MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -241,8 +241,8 @@ func v7ToV13MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 13,
-            "v7 database migrates through schema v8 to v13")
+        expect(migrated.scalarInt("PRAGMA user_version") == 14,
+            "v7 database migrates through schema v8 to v14")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1641,6 +1641,50 @@ func inboxStepContract(database: SqliteDatabase): Unit {
     )[0].required(0) == "completed",
         "Step settlement encloses the claimed Inbox entry")
     contextManifestContract(database)
+    laneTreeContract(database)
+}
+
+func laneTreeContract(database: SqliteDatabase): Unit {
+    let store = SqliteLaneTreeStore(database)
+    let child = LaneRecord(
+        LaneId("review"), ThreadId("inbox-thread"), LaneKind.SharedHistoryChild,
+        objectValue([ValueField("model", textValue("reviewer"))]),
+        parentLaneId: Some(LaneId("main")),
+        forkItemId: Some(ItemId("inbox-accepted")), createdAtMillis: 7
+    )
+    expect(store.createLane(child).isOk() && store.createLane(child).isOk(),
+        "shared-history Lane creation is idempotent at an owned fork Item")
+    database.transaction { transaction =>
+        transaction.execute(
+            "INSERT INTO items(id,thread_id,turn_id,ordinal,kind,payload,provenance,created_at_millis) " +
+                "VALUES ('review-item','inbox-thread','inbox-turn',2,'system_note',?,?,8)",
+            [
+                SqlParameter.Text(encodeStoredThreadContent(
+                    ThreadItemContent.SystemNote("review branch")
+                )),
+                SqlParameter.Text(encodeStoredProvenance(ItemProvenance(
+                    "lane", runId: Some(RunId("inbox-run"))
+                )))
+            ]
+        )
+        transaction.execute(
+            "UPDATE threads SET next_item_ordinal=3 WHERE id='inbox-thread'"
+        )
+    }
+    expect(store.bindItem(
+        ItemId("review-item"), ThreadId("inbox-thread"), LaneId("review"),
+        ItemId("inbox-accepted")
+    ).isOk(), "new Item binds to a child Lane parent")
+    let mainBranch = store.branchItemIds(ThreadId("inbox-thread"), LaneId("main"))
+        .value().getOrThrow()
+    let review = store.branchItemIds(ThreadId("inbox-thread"), LaneId("review"))
+        .value().getOrThrow()
+    expect(mainBranch.size == 1 && mainBranch[0].value == "inbox-accepted" &&
+        review.size == 2 && review[0].value == "inbox-accepted" &&
+        review[1].value == "review-item" && database.query(
+            "SELECT lane_id FROM run_lane_bindings WHERE run_id='inbox-run'"
+        )[0].required(0) == "main",
+        "main history is an automatic parent chain and child projection shares only its fork prefix")
 }
 
 func contextManifestContract(database: SqliteDatabase): Unit {
@@ -1700,6 +1744,12 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TRIGGER runs_bind_main_lane")
+    database.execute("DROP TRIGGER items_create_main_edge")
+    database.execute("DROP TRIGGER threads_create_main_lane")
+    database.execute("DROP TABLE run_lane_bindings")
+    database.execute("DROP TABLE item_tree_edges")
+    database.execute("DROP TABLE lanes")
     database.execute("DROP TABLE context_manifests")
     database.execute("DROP TABLE prompt_contribution_artifacts")
     database.execute("DROP TABLE step_records")
