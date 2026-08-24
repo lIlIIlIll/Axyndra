@@ -25,12 +25,16 @@ func v1Schema(): Array<String> {
         "CREATE TABLE operation_receipts (id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE CASCADE, outcome TEXT NOT NULL, detail TEXT NOT NULL, verification TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE approvals (id TEXT PRIMARY KEY, operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE, operation_digest TEXT NOT NULL, capability_ceiling TEXT NOT NULL, decision TEXT NOT NULL, source TEXT NOT NULL, expires_at_millis INTEGER)",
         "CREATE TABLE capability_grants (id TEXT PRIMARY KEY, thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE, payload TEXT NOT NULL, expires_at_millis INTEGER)",
-        "CREATE TABLE audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT, run_id TEXT, operation_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
+        "CREATE TABLE audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT, run_id TEXT, operation_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, commit_sequence INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE context_checkpoints (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, covers_through_item_ordinal INTEGER NOT NULL, projector_version TEXT NOT NULL, lane_compatibility TEXT NOT NULL, source_digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE memories (id TEXT PRIMARY KEY, thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE, kind TEXT NOT NULL, payload TEXT NOT NULL, revision INTEGER NOT NULL)",
         "CREATE TABLE memory_events (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, revision INTEGER NOT NULL, operation TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, UNIQUE(memory_id,revision))",
         "CREATE TABLE task_snapshots (root_thread_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL, updated_at_millis INTEGER NOT NULL)",
         "CREATE TABLE artifacts (hash TEXT PRIMARY KEY, mime TEXT NOT NULL, size INTEGER NOT NULL, metadata TEXT NOT NULL, relative_path TEXT NOT NULL)",
+        "CREATE TABLE thread_commit_heads (thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE, last_sequence INTEGER NOT NULL)",
+        "CREATE TABLE run_continuations (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, updated_commit_sequence INTEGER NOT NULL)",
+        "CREATE TABLE run_continuation_facts (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, revision INTEGER NOT NULL, commit_sequence INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(run_id,revision), UNIQUE(thread_id,commit_sequence))",
+        "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
         "CREATE INDEX turns_thread_ordinal ON turns(thread_id, ordinal)",
         "CREATE INDEX items_thread_ordinal ON items(thread_id, ordinal)",
         "CREATE INDEX runs_thread_turn ON runs(thread_id, turn_id)",
@@ -45,7 +49,9 @@ func v1Schema(): Array<String> {
         "CREATE INDEX model_decisions_request ON model_decisions(semantic_request_id)",
         "CREATE INDEX audit_thread_id ON audit_events(thread_id, id)",
         "CREATE INDEX checkpoints_thread_cover ON context_checkpoints(thread_id, covers_through_item_ordinal DESC)",
-        "CREATE INDEX memory_events_memory ON memory_events(memory_id, revision)"
+        "CREATE INDEX memory_events_memory ON memory_events(memory_id, revision)",
+        "CREATE INDEX run_continuation_facts_thread ON run_continuation_facts(thread_id,commit_sequence)",
+        "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)"
     ]
 }
 
@@ -124,5 +130,17 @@ func v9Migration(): Array<String> {
         "ALTER TABLE model_attempts ADD COLUMN replay_barrier TEXT NOT NULL DEFAULT 'none'",
         "ALTER TABLE model_attempts ADD COLUMN dispatch_started_at_millis INTEGER",
         "ALTER TABLE model_attempts ADD COLUMN provider_terminal_at_millis INTEGER"
+    ]
+}
+
+func v10Migration(): Array<String> {
+    [
+        "ALTER TABLE audit_events ADD COLUMN commit_sequence INTEGER NOT NULL DEFAULT 0",
+        "CREATE TABLE thread_commit_heads (thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE, last_sequence INTEGER NOT NULL)",
+        "CREATE TABLE run_continuations (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, updated_commit_sequence INTEGER NOT NULL)",
+        "CREATE TABLE run_continuation_facts (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, revision INTEGER NOT NULL, commit_sequence INTEGER NOT NULL, phase TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(run_id,revision), UNIQUE(thread_id,commit_sequence))",
+        "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
+        "CREATE INDEX run_continuation_facts_thread ON run_continuation_facts(thread_id,commit_sequence)",
+        "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)"
     ]
 }
