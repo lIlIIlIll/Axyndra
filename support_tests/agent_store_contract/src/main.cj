@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 12, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 13, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -99,8 +99,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV12MigrationContract()
-    v7ToV12MigrationContract()
+    v6ToV13MigrationContract()
+    v7ToV13MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -177,7 +177,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV12MigrationContract(): Unit {
+func v6ToV13MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -205,8 +205,8 @@ func v6ToV12MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 12,
-            "v6 database migrates through schema v7 to v12")
+        expect(migrated.scalarInt("PRAGMA user_version") == 13,
+            "v6 database migrates through schema v7 to v13")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -217,7 +217,7 @@ func v6ToV12MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV12MigrationContract(): Unit {
+func v7ToV13MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -241,8 +241,8 @@ func v7ToV12MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 12,
-            "v7 database migrates through schema v8 to v12")
+        expect(migrated.scalarInt("PRAGMA user_version") == 13,
+            "v7 database migrates through schema v8 to v13")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1631,9 +1631,68 @@ func inboxStepContract(database: SqliteDatabase): Unit {
         "SELECT status FROM step_records WHERE id='inbox-step-1'"
     )[0].required(0) == "completed",
         "Step settlement encloses the claimed Inbox entry")
+    contextManifestContract(database)
+}
+
+func contextManifestContract(database: SqliteDatabase): Unit {
+    let thread = SqliteThreadCommitSink(database).loadThread(ThreadId("inbox-thread"))
+    let intent = thread.items[0]
+    let lane = recoveryLane()
+    let artifact = PromptArtifact("Always preserve exact durable intent.")
+    let contribution = PromptContribution(
+        "contract-component", "thread", "system.after_core", artifact.hash,
+        PromptVisibility.Model
+    )
+    let rendered = objectValue([
+        ValueField("system", textValue(artifact.content)),
+        ValueField("messages", listValue([objectValue([
+            ValueField("role", textValue("user")),
+            ValueField("content", textValue("first prompt"))
+        ])])),
+        ValueField("tools", listValue([]))
+    ])
+    let compiled = ContextCompiler("manifest-compiler-v1").compile(ContextCompileInput(
+        ContextManifestId("manifest-inbox-1"), ThreadId("inbox-thread"), LaneId("main"),
+        SemanticTurnId("inbox-turn"), StepId("inbox-step-1"),
+        ModelContextProjection(1, None, [intent], objectValue([]), 3, false),
+        intent.id, objectValue([ValueField("profile", integerValue(1))]),
+        ["skill-v1"], ["memory-v1"], [contribution], [artifact], lane, rendered
+    ))
+    expect(compiled.isOk(), "Context Compiler produces a sealed manifest")
+    let manifest = compiled.value().getOrThrow()
+    let store = SqliteContextManifestStore(database)
+    expect(store.save(manifest, [artifact], 6).isOk() &&
+        store.save(manifest, [artifact], 6).isOk(),
+        "Context Manifest and content-addressed Prompt artifacts persist idempotently")
+    let restored = store.load(manifest.id)
+    let request = reconstructModelRequest(restored.value().getOrThrow())
+    expect(restored.isOk() && request.isOk() &&
+        encodeStoredValue(request.value().getOrThrow()) == encodeStoredValue(rendered) &&
+        restored.value().getOrThrow().toolCatalogSnapshot.field(
+            "snapshot_id"
+        ).getOrThrow().text == lane.toolSet.id,
+        "stored Context Manifest reconstructs the exact provider-neutral request")
+    let replacement = PromptArtifact("A newer plugin prompt must not rewrite old attempts.")
+    expect(replacement.hash != artifact.hash && store.load(manifest.id).value().getOrThrow().digest ==
+        manifest.digest,
+        "new Prompt content cannot mutate a historical Manifest")
+    let canonical = database.query(
+        "SELECT payload FROM context_manifests WHERE id='manifest-inbox-1'"
+    )[0].required(0)
+    database.execute(
+        "UPDATE context_manifests SET payload='corrupt' WHERE id='manifest-inbox-1'"
+    )
+    expect(store.load(manifest.id).isError(),
+        "corrupt Context Manifest fails closed")
+    database.execute(
+        "UPDATE context_manifests SET payload=? WHERE id='manifest-inbox-1'",
+        [SqlParameter.Text(canonical)]
+    )
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE context_manifests")
+    database.execute("DROP TABLE prompt_contribution_artifacts")
     database.execute("DROP TABLE step_records")
     database.execute("DROP TABLE lane_inbox_entries")
     database.execute("DROP TABLE operation_state_registers")
