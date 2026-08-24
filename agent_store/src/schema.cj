@@ -37,6 +37,8 @@ func v1Schema(): Array<String> {
         "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
         "CREATE TABLE operation_effect_records (operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, tool_call_item_id TEXT NOT NULL REFERENCES items(id), normalized_plan TEXT NOT NULL, tool_id TEXT NOT NULL, tool_version TEXT NOT NULL, implementation_fingerprint TEXT NOT NULL, schema_digest TEXT NOT NULL, effective_arguments_digest TEXT NOT NULL, replay_contract_version INTEGER NOT NULL, replay_disposition TEXT NOT NULL, reserved_receipt_id TEXT NOT NULL UNIQUE, reserved_result_item_id TEXT NOT NULL UNIQUE, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
+        "CREATE TABLE lane_inbox_entries (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, claimed_step_id TEXT, revision INTEGER NOT NULL)",
+        "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT NOT NULL UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT NOT NULL UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
         "CREATE INDEX turns_thread_ordinal ON turns(thread_id, ordinal)",
         "CREATE INDEX items_thread_ordinal ON items(thread_id, ordinal)",
         "CREATE INDEX runs_thread_turn ON runs(thread_id, turn_id)",
@@ -53,7 +55,9 @@ func v1Schema(): Array<String> {
         "CREATE INDEX checkpoints_thread_cover ON context_checkpoints(thread_id, covers_through_item_ordinal DESC)",
         "CREATE INDEX memory_events_memory ON memory_events(memory_id, revision)",
         "CREATE INDEX run_continuation_facts_thread ON run_continuation_facts(thread_id,commit_sequence)",
-        "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)"
+        "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)",
+        "CREATE INDEX lane_inbox_queue ON lane_inbox_entries(thread_id,lane_id,status,created_at_millis,id)",
+        "CREATE INDEX step_records_run ON step_records(run_id,ordinal)"
     ]
 }
 
@@ -153,5 +157,14 @@ func v11Migration(): Array<String> {
         "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
         "INSERT INTO operation_effect_records(operation_id,run_id,tool_call_item_id,normalized_plan,tool_id,tool_version,implementation_fingerprint,schema_digest,effective_arguments_digest,replay_contract_version,replay_disposition,reserved_receipt_id,reserved_result_item_id,created_at_millis) SELECT id,run_id,tool_call_item_id,normalized_plan,'legacy','legacy-v1',normalized_plan,normalized_plan,normalized_plan,1,CASE retry_disposition WHEN 'safe' THEN 'safe_replay' WHEN 'by_idempotency_key' THEN 'idempotent' WHEN 'verify_then_retry' THEN 'recover_by_probe' ELSE 'never_replay' END,'legacy-receipt-'||id,'legacy-result-'||id,0 FROM operations",
         "INSERT INTO operation_state_registers(operation_id,state,revision) SELECT id,state,revision FROM operations"
+    ]
+}
+
+func v12Migration(): Array<String> {
+    [
+        "CREATE TABLE lane_inbox_entries (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, claimed_step_id TEXT, revision INTEGER NOT NULL)",
+        "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT NOT NULL UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT NOT NULL UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
+        "CREATE INDEX lane_inbox_queue ON lane_inbox_entries(thread_id,lane_id,status,created_at_millis,id)",
+        "CREATE INDEX step_records_run ON step_records(run_id,ordinal)"
     ]
 }
