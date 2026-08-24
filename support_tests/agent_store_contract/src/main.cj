@@ -97,6 +97,7 @@ main(): Int64 {
     }
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
+    totalContinuationCrashContract()
     v6ToV10MigrationContract()
     v7ToV10MigrationContract()
     sqliteAppendRestoreBenchmark()
@@ -1539,6 +1540,215 @@ func removeV10Schema(database: SqliteDatabase): Unit {
     database.execute("DROP TABLE run_continuations")
     database.execute("DROP TABLE thread_commit_heads")
     database.execute("ALTER TABLE audit_events DROP COLUMN commit_sequence")
+}
+
+func totalContinuationCrashContract(): Unit {
+    let names = [
+        "accepted", "context_compiling", "context_ready", "model_ready",
+        "model_effect_pending", "model_settling", "decision_ready", "tool_batch_ready",
+        "waiting_approval", "tool_effect_pending", "tool_settling", "waiting_external",
+        "checkpoint", "terminalizing"
+    ]
+    var index: Int64 = 0
+    for (name in names) {
+        let root = Directory.createTemp("/tmp").toString()
+        let path = root + "/" + name + ".db"
+        let seed = SqliteDatabase(path)
+        seedContinuationRun(seed, name)
+        seed.close()
+
+        // Deterministic crash immediately before the transaction: reopening
+        // observes neither a register nor an immutable partial fact.
+        let before = SqliteDatabase(path)
+        expect(SqliteSemanticStore(before).continuation(
+            RunId("crash-run-" + name)
+        ).isError() && before.scalarInt(
+            "SELECT COUNT(*) FROM run_continuation_facts"
+        ) == 0, "crash before " + name + " transaction exposes no partial phase")
+        let continuation = crashContinuation(name)
+        expect(interpretRunContinuation(continuation).isOk(),
+            "phase interpreter handles " + name + " exhaustively")
+        let committed = SqliteSemanticStore(before).transact(
+            TransactionPreconditions(
+                ThreadId("crash-thread-" + name), 0,
+                RunId("crash-run-" + name), 0
+            ),
+            DurableWriteSet(
+                continuation: Some(continuation),
+                appEvents: [SemanticAppEvent(
+                    "crash-event-" + name, "run.phase_changed",
+                    objectValue([ValueField("phase", textValue(name))]), index
+                )]
+            )
+        )
+        expect(committed.isOk(), "phase transaction commits for " + name)
+        before.close()
+
+        // Deterministic crash immediately after COMMIT: reopening sees one
+        // exact sealed phase, one fact and one outbox record, never duplicates.
+        let after = SqliteDatabase(path)
+        let recovered = SqliteSemanticStore(after).continuation(
+            RunId("crash-run-" + name)
+        )
+        expect(recovered.isOk() &&
+            runExecutionPhaseName(recovered.value().getOrThrow().phase) == name &&
+            recovered.value().getOrThrow().digest == continuation.digest &&
+            after.scalarInt("SELECT COUNT(*) FROM run_continuation_facts") == 1 &&
+            after.scalarInt("SELECT COUNT(*) FROM app_event_outbox") == 1,
+            "crash after " + name + " transaction restores exactly one phase")
+        after.close()
+        index += 1
+    }
+    let invalidTerminal = sealDurableRunContinuation(phaseContinuation(
+        "invalid-terminal",
+        RunExecutionPhase.Terminalizing(DurablePhaseState(objectValue([]))),
+        workDebt: WorkDebtSnapshot(ownedTasks: [OwnedTaskId("unfinished")])
+    ))
+    expect(interpretRunContinuation(invalidTerminal).isError(),
+        "terminal phase is rejected until all WorkDebt converges")
+}
+
+func seedContinuationRun(database: SqliteDatabase, name: String): Unit {
+    database.transaction { transaction =>
+        transaction.execute(
+            "INSERT INTO threads VALUES (?,?,?,'open',1,?)",
+            [
+                SqlParameter.Text("crash-thread-" + name), SqlParameter.Int64Value(0),
+                SqlParameter.Text("workspace"), SqlParameter.Text("crash-turn-" + name)
+            ]
+        )
+        transaction.execute(
+            "INSERT INTO turns VALUES (?,?,1,'active',?,?)",
+            [
+                SqlParameter.Text("crash-turn-" + name),
+                SqlParameter.Text("crash-thread-" + name),
+                SqlParameter.Text("crash-user-" + name),
+                SqlParameter.Text("crash-run-" + name)
+            ]
+        )
+        transaction.execute(
+            "INSERT INTO items VALUES (?,?,?,1,'user_message','{}','{}',0)",
+            [
+                SqlParameter.Text("crash-user-" + name),
+                SqlParameter.Text("crash-thread-" + name),
+                SqlParameter.Text("crash-turn-" + name)
+            ]
+        )
+        transaction.execute(
+            "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
+                "started_at_millis,finished_at_millis,cancellation_reason) VALUES " +
+                "(?,?,?,1,'running','{}','{}','{}','{}',0,NULL,NULL)",
+            [
+                SqlParameter.Text("crash-run-" + name),
+                SqlParameter.Text("crash-thread-" + name),
+                SqlParameter.Text("crash-turn-" + name)
+            ]
+        )
+    }
+}
+
+func crashContinuation(name: String): DurableRunContinuationV1 {
+    let state = DurablePhaseState(objectValue([
+        ValueField("self_contained_phase", textValue(name))
+    ]))
+    let value = match (name) {
+        case "accepted" => phaseContinuation(name, RunExecutionPhase.Accepted(state))
+        case "context_compiling" => phaseContinuation(name, RunExecutionPhase.ContextCompiling(state))
+        case "context_ready" => phaseContinuation(name, RunExecutionPhase.ContextReady(state))
+        case "model_ready" => phaseContinuation(name, RunExecutionPhase.ModelReady(state))
+        case "model_effect_pending" => phaseContinuation(
+            name, RunExecutionPhase.ModelEffectPending(state),
+            semanticRequestId: Some(SemanticModelRequestId("request-" + name)),
+            attemptId: Some(ModelAttemptId("attempt-" + name)),
+            decisionId: Some(ModelDecisionId("decision-" + name)),
+            usageId: Some(UsageRecordId("usage-" + name)),
+            workDebt: WorkDebtSnapshot(activeAttempts: [ModelAttemptId("attempt-" + name)])
+        )
+        case "model_settling" => phaseContinuation(
+            name, RunExecutionPhase.ModelSettling(state),
+            attemptId: Some(ModelAttemptId("attempt-" + name)),
+            decisionId: Some(ModelDecisionId("decision-" + name)),
+            usageId: Some(UsageRecordId("usage-" + name)),
+            workDebt: WorkDebtSnapshot(activeAttempts: [ModelAttemptId("attempt-" + name)])
+        )
+        case "decision_ready" => phaseContinuation(
+            name, RunExecutionPhase.DecisionReady(state),
+            decisionId: Some(ModelDecisionId("decision-" + name))
+        )
+        case "tool_batch_ready" => phaseContinuation(
+            name, RunExecutionPhase.ToolBatchReady(state),
+            toolBatch: Some(ToolBatchContinuation(
+                ToolBatchId("batch-" + name), 0, [OperationId("operation-" + name)]
+            ))
+        )
+        case "waiting_approval" =>
+            let operation = OperationId("operation-" + name)
+            let approval = ApprovalId("approval-" + name)
+            phaseContinuation(
+                name, RunExecutionPhase.WaitingApproval(state),
+                operationId: Some(operation), approvalId: Some(approval),
+                workDebt: WorkDebtSnapshot(
+                    unsettledOperations: [operation], pendingApprovals: [approval]
+                )
+            )
+        case "tool_effect_pending" =>
+            let operation = OperationId("operation-" + name)
+            phaseContinuation(
+                name, RunExecutionPhase.ToolEffectPending(state),
+                operationId: Some(operation),
+                workDebt: WorkDebtSnapshot(unsettledOperations: [operation])
+            )
+        case "tool_settling" =>
+            let operation = OperationId("operation-" + name)
+            phaseContinuation(
+                name, RunExecutionPhase.ToolSettling(state),
+                operationId: Some(operation),
+                workDebt: WorkDebtSnapshot(unsettledOperations: [operation])
+            )
+        case "waiting_external" =>
+            let handle = ExternalHandleId("external-" + name)
+            phaseContinuation(
+                name, RunExecutionPhase.WaitingExternal(state),
+                external: Some(ExternalWaitState(handle, "remote_job", objectValue([
+                    ValueField("remote_id", textValue("remote-1"))
+                ]))),
+                workDebt: WorkDebtSnapshot(waitingExternal: [handle])
+            )
+        case "checkpoint" => phaseContinuation(name, RunExecutionPhase.Checkpoint(state))
+        case "terminalizing" => phaseContinuation(name, RunExecutionPhase.Terminalizing(state))
+        case _ => throw IllegalStateException("unknown crash continuation phase")
+    }
+    sealDurableRunContinuation(value)
+}
+
+func phaseContinuation(
+    name: String,
+    phase: RunExecutionPhase,
+    semanticRequestId!: ?SemanticModelRequestId = None,
+    attemptId!: ?ModelAttemptId = None,
+    decisionId!: ?ModelDecisionId = None,
+    usageId!: ?UsageRecordId = None,
+    toolBatch!: ?ToolBatchContinuation = None,
+    operationId!: ?OperationId = None,
+    approvalId!: ?ApprovalId = None,
+    external!: ?ExternalWaitState = None,
+    workDebt!: WorkDebtSnapshot = WorkDebtSnapshot()
+): DurableRunContinuationV1 {
+    DurableRunContinuationV1(
+        RunId("crash-run-" + name), LaneId("main"),
+        SemanticTurnId("crash-turn-" + name), 0, phase,
+        CompositionSnapshotId("composition-" + name),
+        ModelLaneSnapshotId("model-lane-" + name),
+        semanticRequestId: semanticRequestId,
+        attemptId: attemptId,
+        reservedDecisionId: decisionId,
+        reservedUsageId: usageId,
+        toolBatch: toolBatch,
+        pendingOperationId: operationId,
+        pendingApprovalId: approvalId,
+        waitingExternal: external,
+        workDebt: workDebt
+    )
 }
 
 func expect(condition: Bool, message: String): Unit {
