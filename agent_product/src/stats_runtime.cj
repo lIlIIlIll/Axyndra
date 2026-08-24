@@ -256,7 +256,9 @@ class ProductStatsRuntime {
                     runUsage.freeze()
                 )
                 runValues.add(runStats)
-                if (snapshot.kind == RunKind.Agent) { turns.add(runStats) }
+                if (snapshot.kind == RunKind.Agent || snapshot.kind == RunKind.Chat) {
+                    turns.add(runStats)
+                }
 
                 let session = match (findStatsSession(
                     sessions,
@@ -774,5 +776,9 @@ func statsRunKindName(kind: RunKind): String {
     match (kind) {
         case RunKind.Agent => "agent"
         case RunKind.Maintenance => "maintenance"
+        case RunKind.Chat => "chat"
+        case RunKind.Compaction => "compaction"
+        case RunKind.NavigationSummary => "navigation_summary"
+        case RunKind.Verification => "verification"
     }
 }

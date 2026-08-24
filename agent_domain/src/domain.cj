@@ -1605,7 +1605,7 @@ public enum ToolInvocationResult {
 // user-turn context indicators such as the last provider input size.
 @Derive[Equatable]
 public enum RunKind {
-    Agent | Maintenance
+    Agent | Maintenance | Chat | Compaction | NavigationSummary | Verification
 }
 
 public class RunSnapshot {
