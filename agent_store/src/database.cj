@@ -284,7 +284,7 @@ public class SqliteDatabase {
             executeLocked("BEGIN IMMEDIATE")
             try {
                 for (statement in v1Schema()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=15")
+                executeLocked("PRAGMA user_version=16")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -521,10 +521,23 @@ public class SqliteDatabase {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
                 throw error
             }
-        } else if (version != 15) {
+        } else if (version != 15 && version != 16) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
+        }
+        // v16 is isolated so an interrupted upgrade remains restartable from
+        // the fully valid v15 boundary.
+        if (version >= 1 && version <= 15) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v16Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=16")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
         }
     }
 

@@ -46,6 +46,10 @@ func v1Schema(): Array<String> {
         "CREATE TABLE run_lane_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE TABLE composition_snapshots (id TEXT PRIMARY KEY, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE run_composition_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, snapshot_id TEXT NOT NULL REFERENCES composition_snapshots(id))",
+        "CREATE TABLE teams (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, coordinator_lane_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(thread_id,coordinator_lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE team_members (team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, member_id TEXT NOT NULL, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, joined_at_millis INTEGER NOT NULL, PRIMARY KEY(team_id,member_id), UNIQUE(team_id,lane_id), FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE team_tasks (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, title TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, assignee_member_id TEXT, item_reference TEXT REFERENCES items(id), work_debt_id TEXT NOT NULL, revision INTEGER NOT NULL, created_at_millis INTEGER NOT NULL, updated_at_millis INTEGER NOT NULL, FOREIGN KEY(team_id,assignee_member_id) REFERENCES team_members(team_id,member_id))",
+        "CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, sender_member_id TEXT NOT NULL, recipient_member_id TEXT NOT NULL, item_reference TEXT REFERENCES items(id), payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, acknowledged INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(team_id,sender_member_id) REFERENCES team_members(team_id,member_id), FOREIGN KEY(team_id,recipient_member_id) REFERENCES team_members(team_id,member_id))",
         "CREATE INDEX turns_thread_ordinal ON turns(thread_id, ordinal)",
         "CREATE INDEX items_thread_ordinal ON items(thread_id, ordinal)",
         "CREATE INDEX runs_thread_turn ON runs(thread_id, turn_id)",
@@ -65,6 +69,8 @@ func v1Schema(): Array<String> {
         "CREATE INDEX app_event_outbox_pending ON app_event_outbox(thread_id,published,commit_sequence,ordinal)",
         "CREATE INDEX lane_inbox_queue ON lane_inbox_entries(thread_id,lane_id,status,created_at_millis,id)",
         "CREATE INDEX step_records_run ON step_records(run_id,ordinal)"
+        ,"CREATE INDEX team_tasks_board ON team_tasks(team_id,status,created_at_millis,id)"
+        ,"CREATE INDEX team_messages_mailbox ON team_messages(team_id,recipient_member_id,acknowledged,created_at_millis,id)"
         ,"CREATE TRIGGER threads_create_main_lane AFTER INSERT ON threads BEGIN INSERT INTO lanes(thread_id,lane_id,kind,parent_lane_id,fork_item_id,config,status,created_at_millis) VALUES (NEW.id,'main','main',NULL,NULL,'o1:0','open',0); END"
         ,"CREATE TRIGGER items_create_main_edge AFTER INSERT ON items BEGIN INSERT INTO item_tree_edges(item_id,thread_id,lane_id,parent_item_id,depth) VALUES (NEW.id,NEW.thread_id,'main',(SELECT id FROM items WHERE thread_id=NEW.thread_id AND ordinal<NEW.ordinal ORDER BY ordinal DESC LIMIT 1),COALESCE((SELECT edge.depth+1 FROM item_tree_edges edge JOIN items prior ON prior.id=edge.item_id WHERE prior.thread_id=NEW.thread_id AND prior.ordinal<NEW.ordinal ORDER BY prior.ordinal DESC LIMIT 1),0)); END"
         ,"CREATE TRIGGER runs_bind_main_lane AFTER INSERT ON runs BEGIN INSERT INTO run_lane_bindings(run_id,thread_id,lane_id) VALUES (NEW.id,NEW.thread_id,'main'); END"
@@ -204,5 +210,16 @@ func v15Migration(): Array<String> {
     [
         "CREATE TABLE composition_snapshots (id TEXT PRIMARY KEY, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE run_composition_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, snapshot_id TEXT NOT NULL REFERENCES composition_snapshots(id))"
+    ]
+}
+
+func v16Migration(): Array<String> {
+    [
+        "CREATE TABLE teams (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, coordinator_lane_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(thread_id,coordinator_lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE team_members (team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, member_id TEXT NOT NULL, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL, joined_at_millis INTEGER NOT NULL, PRIMARY KEY(team_id,member_id), UNIQUE(team_id,lane_id), FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE team_tasks (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, title TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, assignee_member_id TEXT, item_reference TEXT REFERENCES items(id), work_debt_id TEXT NOT NULL, revision INTEGER NOT NULL, created_at_millis INTEGER NOT NULL, updated_at_millis INTEGER NOT NULL, FOREIGN KEY(team_id,assignee_member_id) REFERENCES team_members(team_id,member_id))",
+        "CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE, sender_member_id TEXT NOT NULL, recipient_member_id TEXT NOT NULL, item_reference TEXT REFERENCES items(id), payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, acknowledged INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(team_id,sender_member_id) REFERENCES team_members(team_id,member_id), FOREIGN KEY(team_id,recipient_member_id) REFERENCES team_members(team_id,member_id))",
+        "CREATE INDEX team_tasks_board ON team_tasks(team_id,status,created_at_millis,id)",
+        "CREATE INDEX team_messages_mailbox ON team_messages(team_id,recipient_member_id,acknowledged,created_at_millis,id)"
     ]
 }
