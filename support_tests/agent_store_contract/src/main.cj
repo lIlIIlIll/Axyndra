@@ -8,6 +8,7 @@ import std.collection.*
 import std.time.*
 import agent_domain.*
 import agent_runtime.*
+import agent_ports.*
 import agent_store.*
 import agent_skills.*
 
@@ -23,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 9, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 10, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -73,6 +74,7 @@ main(): Int64 {
         runtimeRecoveryContract(database)
         threadPagingContract(database)
         threadSeedContract(database)
+        semanticStoreContract(database)
     } finally {
         database.close()
     }
@@ -95,8 +97,8 @@ main(): Int64 {
     }
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
-    v6ToV9MigrationContract()
-    v7ToV9MigrationContract()
+    v6ToV10MigrationContract()
+    v7ToV10MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -173,11 +175,12 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV9MigrationContract(): Unit {
+func v6ToV10MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
     try {
+        removeV10Schema(seed)
         // Build an exact pre-v7 shape from the preceding schema: the fresh
         // database already contains every v1-v6 object, so remove only v7's
         // additive tables and set the historical version marker.
@@ -200,8 +203,8 @@ func v6ToV9MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 9,
-            "v6 database migrates through schema v7 and v8 to v9")
+        expect(migrated.scalarInt("PRAGMA user_version") == 10,
+            "v6 database migrates through schema v7 to v10")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -212,11 +215,12 @@ func v6ToV9MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV9MigrationContract(): Unit {
+func v7ToV10MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
     try {
+        removeV10Schema(seed)
         seed.execute("DROP TABLE app_run_event_heads")
         seed.execute("ALTER TABLE app_run_events RENAME TO app_run_events_v8")
         seed.execute(
@@ -235,8 +239,8 @@ func v7ToV9MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 9,
-            "v7 database migrates through schema v8 to v9")
+        expect(migrated.scalarInt("PRAGMA user_version") == 10,
+            "v7 database migrates through schema v8 to v10")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1389,6 +1393,143 @@ func operationCommit(itemId: String, receiptId: String): OperationSemanticCommit
         "{\"result\":\"done\"}", "{\"operationId\":\"operation\"}",
         1, 7, "running"
     )
+}
+
+func semanticStoreContract(database: SqliteDatabase): Unit {
+    database.transaction { transaction =>
+        transaction.execute(
+            "INSERT INTO threads VALUES ('semantic-thread',0,'workspace','open',1,'semantic-turn')"
+        )
+        transaction.execute(
+            "INSERT INTO turns VALUES ('semantic-turn','semantic-thread',1,'active','semantic-user','semantic-run')"
+        )
+        transaction.execute(
+            "INSERT INTO items VALUES ('semantic-user','semantic-thread','semantic-turn',1," +
+                "'user_message','{}','{}',1)"
+        )
+        transaction.execute(
+            "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
+                "started_at_millis,finished_at_millis,cancellation_reason) VALUES " +
+                "('semantic-run','semantic-thread','semantic-turn',1,'running','{}','{}','{}','{}',1,NULL,NULL)"
+        )
+    }
+    let store = SqliteSemanticStore(database)
+    let first = sealDurableRunContinuation(semanticContinuation(
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([
+            ValueField("input_claim", textValue("semantic-user"))
+        ])))
+    ))
+    let committed = store.transact(
+        TransactionPreconditions(
+            ThreadId("semantic-thread"), 0, RunId("semantic-run"), 0
+        ),
+        DurableWriteSet(
+            continuation: Some(first),
+            auditEntries: [SemanticAuditEntry(
+                "run.accepted", objectValue([ValueField("source", textValue("contract"))]), 10
+            )],
+            appEvents: [
+                SemanticAppEvent(
+                    "semantic-event-1", "run.accepted",
+                    objectValue([ValueField("run_id", textValue("semantic-run"))]), 10
+                ),
+                SemanticAppEvent(
+                    "semantic-event-2", "run.phase_changed",
+                    objectValue([ValueField("phase", textValue("accepted"))]), 11
+                )
+            ]
+        )
+    )
+    expect(committed.isOk(), "semantic transaction commits")
+    let receipt = committed.value().getOrThrow()
+    expect(receipt.commitSequence == 1 && receipt.continuationRevision == 1,
+        "semantic transaction allocates first sequence and continuation revision")
+    expect(database.scalarInt(
+        "SELECT COUNT(*) FROM run_continuation_facts WHERE run_id='semantic-run'"
+    ) == 1 && database.scalarInt(
+        "SELECT COUNT(*) FROM audit_events WHERE thread_id='semantic-thread' AND commit_sequence=1"
+    ) == 1 && database.scalarInt(
+        "SELECT COUNT(*) FROM app_event_outbox WHERE thread_id='semantic-thread' AND commit_sequence=1"
+    ) == 2, "fact, register, audit and outbox commit atomically")
+    let restored = store.continuation(RunId("semantic-run"))
+    expect(restored.isOk() && restored.value().getOrThrow().digest == first.digest,
+        "sealed continuation round-trips canonically")
+    let stale = store.transact(
+        TransactionPreconditions(ThreadId("semantic-thread"), 0, RunId("semantic-run"), 1),
+        DurableWriteSet(auditEntries: [SemanticAuditEntry(
+            "stale", objectValue([]), 12
+        )])
+    )
+    expect(stale.isError() && stale.error().getOrThrow().kind == AgentErrorKind.Conflict,
+        "stale Thread revision is rejected as a conflict")
+    expect(database.scalarInt(
+        "SELECT COUNT(*) FROM audit_events WHERE thread_id='semantic-thread'"
+    ) == 1, "conflicting transaction leaves no partial audit write")
+
+    let second = sealDurableRunContinuation(semanticContinuation(
+        RunExecutionPhase.ContextCompiling(DurablePhaseState(objectValue([
+            ValueField("manifest_reservation", textValue("manifest-1"))
+        ])))
+    ))
+    let advanced = store.transact(
+        TransactionPreconditions(ThreadId("semantic-thread"), 1, RunId("semantic-run"), 1),
+        DurableWriteSet(
+            continuation: Some(second),
+            appEvents: [SemanticAppEvent(
+                "semantic-event-3", "run.phase_changed",
+                objectValue([ValueField("phase", textValue("context_compiling"))]), 13
+            )]
+        )
+    )
+    expect(advanced.isOk() && advanced.value().getOrThrow().commitSequence == 2,
+        "per-Thread commit sequence is strictly increasing")
+    let pending = store.pendingOutbox(ThreadId("semantic-thread"), 0)
+    expect(pending.isOk() && pending.value().getOrThrow().size == 3 &&
+        pending.value().getOrThrow()[0].event.eventId == "semantic-event-1" &&
+        pending.value().getOrThrow()[2].event.eventId == "semantic-event-3",
+        "outbox preserves transaction and ordinal order")
+    let duplicate = store.transact(
+        TransactionPreconditions(ThreadId("semantic-thread"), 2, RunId("semantic-run"), 2),
+        DurableWriteSet(appEvents: [SemanticAppEvent(
+            "semantic-event-3", "duplicate", objectValue([]), 14
+        )])
+    )
+    expect(duplicate.isError() && database.scalarInt(
+        "SELECT revision FROM threads WHERE id='semantic-thread'"
+    ) == 2, "duplicate App event rolls back without advancing Thread revision")
+    expect(store.acknowledgeOutbox(ThreadId("semantic-thread"), 1).isOk(),
+        "outbox delivery acknowledgement succeeds")
+    expect(store.pendingOutbox(ThreadId("semantic-thread"), 0).value().getOrThrow().size == 1,
+        "acknowledged outbox rows are derived delivery state only")
+
+    let canonical = encodeDurableRunContinuation(second)
+    database.execute(
+        "UPDATE run_continuations SET payload='corrupt' WHERE run_id='semantic-run'"
+    )
+    let corrupt = store.continuation(RunId("semantic-run"))
+    expect(corrupt.isError() &&
+        corrupt.error().getOrThrow().kind == AgentErrorKind.RecoveryRequired,
+        "corrupt continuation fails closed as RecoveryRequired")
+    database.execute(
+        "UPDATE run_continuations SET payload=? WHERE run_id='semantic-run'",
+        [SqlParameter.Text(canonical)]
+    )
+}
+
+func semanticContinuation(phase: RunExecutionPhase): DurableRunContinuationV1 {
+    DurableRunContinuationV1(
+        RunId("semantic-run"), LaneId("main"), SemanticTurnId("semantic-turn"),
+        0, phase, CompositionSnapshotId("composition-1"),
+        ModelLaneSnapshotId("model-lane-1")
+    )
+}
+
+func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE app_event_outbox")
+    database.execute("DROP TABLE run_continuation_facts")
+    database.execute("DROP TABLE run_continuations")
+    database.execute("DROP TABLE thread_commit_heads")
+    database.execute("ALTER TABLE audit_events DROP COLUMN commit_sequence")
 }
 
 func expect(condition: Bool, message: String): Unit {
