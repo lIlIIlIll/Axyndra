@@ -1,6 +1,7 @@
 package agent_store
 
 import std.convert.*
+import std.collection.*
 import agent_domain.*
 
 public class InboxClaimRequest {
@@ -84,6 +85,60 @@ public class SqliteInboxStepStore {
             }
         } catch (error: Exception) {
             inboxRecovery<Unit>("inbox.enqueue_failed", error.message, entry.id)
+        }
+    }
+
+    public func rejectQueued(entryId: InboxEntryId): Result<Unit> {
+        try {
+            database.transaction { transaction =>
+                let rows = transaction.query(
+                    "SELECT status FROM lane_inbox_entries WHERE id=?",
+                    [SqlParameter.Text(entryId.value)]
+                )
+                if (rows.size != 1) {
+                    return inboxConflict<Unit>("Inbox entry does not exist")
+                }
+                if (rows[0].required(0) == "rejected") { return Result.Ok(()) }
+                if (rows[0].required(0) != "queued") {
+                    return inboxConflict<Unit>("Inbox entry was already delivered")
+                }
+                transaction.execute(
+                    "UPDATE lane_inbox_entries SET status='rejected',revision=revision+1 " +
+                        "WHERE id=? AND status='queued'",
+                    [SqlParameter.Text(entryId.value)]
+                )
+                Result.Ok(())
+            }
+        } catch (error: Exception) {
+            inboxRecovery<Unit>("inbox.reject_failed", error.message, entryId)
+        }
+    }
+
+    public func pendingQueued(
+        threadId: ThreadId,
+        laneId: LaneId
+    ): Result<Array<DurableInboxEntry>> {
+        try {
+            let rows = database.query(
+                "SELECT id,kind,payload,created_at_millis FROM lane_inbox_entries " +
+                    "WHERE thread_id=? AND lane_id=? AND status='queued' " +
+                    "ORDER BY created_at_millis,id",
+                [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value)]
+            )
+            let output = ArrayList<DurableInboxEntry>()
+            for (row in rows) {
+                output.add(DurableInboxEntry(
+                    InboxEntryId(row.required(0)), threadId, laneId,
+                    parseInboxEntryKind(row.required(1)),
+                    decodeStoredValue(row.required(2)),
+                    createdAtMillis: inboxInt(row.required(3), "Inbox timestamp")
+                ))
+            }
+            Result.Ok(output.toArray())
+        } catch (error: Exception) {
+            inboxRecovery<Array<DurableInboxEntry>>(
+                "inbox.pending_read_failed", error.message, InboxEntryId("pending")
+            )
         }
     }
 
@@ -241,7 +296,8 @@ public class SqliteInboxStepStore {
         )
         Result.Ok(StepRecord(
             request.stepId, threadId, LaneId(entry.required(1)), request.turnId,
-            request.runId, stepOrdinal, request.entryId, request.acceptedItemId,
+            request.runId, stepOrdinal, inputEntryId: Some(request.entryId),
+            acceptedItemId: Some(request.acceptedItemId),
             openedAtMillis: request.claimedAtMillis
         ))
     }
@@ -312,8 +368,15 @@ func loadStepLocked(transaction: SqliteTransaction, stepId: StepId): Result<Step
     Result.Ok(StepRecord(
         stepId, ThreadId(row.required(0)), LaneId(row.required(1)),
         SemanticTurnId(row.required(2)), RunId(row.required(3)),
-        inboxInt(row.required(4), "Step ordinal"), InboxEntryId(row.required(5)),
-        ItemId(row.required(6)), status: parseStepStatus(row.required(7)),
+        inboxInt(row.required(4), "Step ordinal"),
+        inputEntryId: match (row[5]) {
+            case Some(value) => Some(InboxEntryId(value))
+            case None => None
+        },
+        acceptedItemId: match (row[6]) {
+            case Some(value) => Some(ItemId(value))
+            case None => None
+        }, status: parseStepStatus(row.required(7)),
         openedAtMillis: inboxInt(row.required(8), "Step open timestamp"),
         settledAtMillis: match (row[9]) {
             case Some(value) => Some(inboxInt(value, "Step settle timestamp"))
@@ -331,6 +394,20 @@ func parseStepStatus(value: String): StepStatus {
         case "quarantined" => StepStatus.Quarantined
         case "interrupted" => StepStatus.Interrupted
         case _ => throw IllegalStateException("unknown Step status")
+    }
+}
+
+func parseInboxEntryKind(value: String): InboxEntryKind {
+    match (value) {
+        case "user_prompt" => InboxEntryKind.UserPrompt
+        case "steering" => InboxEntryKind.Steering
+        case "context_injection" => InboxEntryKind.ContextInjection
+        case "approval_decision" => InboxEntryKind.ApprovalDecision
+        case "external_completion" => InboxEntryKind.ExternalCompletion
+        case "child_run_message" => InboxEntryKind.ChildRunMessage
+        case "cancel" => InboxEntryKind.Cancel
+        case "close" => InboxEntryKind.Close
+        case _ => throw IllegalStateException("unknown Inbox entry kind")
     }
 }
 

@@ -2,6 +2,7 @@ package agent_extension_runtime
 
 import std.collection.*
 import std.deriving.*
+import agent_domain.*
 
 @Derive[Equatable]
 public enum ExtensionExecutionKind {
@@ -70,7 +71,7 @@ public class IsolatedPluginLaunchRequest {
     public let grantedCapabilities: Array<String>
     public let ambientAuthority: Bool
 
-    public init(
+    init(
         manifest: SignedExtensionPackageManifest,
         executionKind: ExtensionExecutionKind,
         generation: UInt64,
@@ -82,6 +83,29 @@ public class IsolatedPluginLaunchRequest {
         this.grantedCapabilities = grantedCapabilities
         // Process and WASM plugins receive only explicit host capabilities.
         this.ambientAuthority = false
+    }
+}
+
+public class IsolatedPluginInvocation {
+    public let id: String
+    public let method: String
+    public let payload: AgentValue
+    public let timeoutMillis: Int64
+
+    public init(
+        id: String,
+        method: String,
+        payload: AgentValue,
+        timeoutMillis!: Int64 = 30000
+    ) {
+        if (id.trimAscii() == "" || method.trimAscii() == "" ||
+            timeoutMillis < 1 || timeoutMillis > 60000) {
+            throw IllegalArgumentException("isolated plugin invocation is invalid")
+        }
+        this.id = id.trimAscii()
+        this.method = method.trimAscii()
+        this.payload = payload
+        this.timeoutMillis = timeoutMillis
     }
 }
 
@@ -101,6 +125,11 @@ public func validateIsolatedPluginPackage(
         manifest.signature.isEmpty()) {
         return SafeLifecycleResult.Err("isolated plugin manifest is incomplete")
     }
+    if (!validIsolatedPluginEntrypoint(manifest.entrypoint)) {
+        return SafeLifecycleResult.Err(
+            "isolated plugin entrypoint must be a package-relative path"
+        )
+    }
     for (capability in manifest.requestedCapabilities) {
         if (!capabilityCeiling.contains(capability)) {
             return SafeLifecycleResult.Err("requested capability exceeds the profile ceiling: ${capability}")
@@ -112,6 +141,19 @@ public func validateIsolatedPluginPackage(
     SafeLifecycleResult.Ok(IsolatedPluginLaunchRequest(
         manifest, executionKind, generation, manifest.requestedCapabilities
     ))
+}
+
+func validIsolatedPluginEntrypoint(value: String): Bool {
+    if (value.startsWith("/") || value.contains("\\") || value.contains("\u{0000}") ||
+        value.contains(":")) {
+        return false
+    }
+    let parts = value.split("/")
+    if (parts.isEmpty()) { return false }
+    for (part in parts where part == "" || part == "." || part == "..") {
+        return false
+    }
+    true
 }
 
 public interface GenerationLifecycleHost {

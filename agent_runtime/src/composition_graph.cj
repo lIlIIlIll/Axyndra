@@ -63,9 +63,14 @@ public interface ServiceProvider<T> {
     func acquire(scope: ComponentScope): Result<ServiceLease<T>>
 }
 
+public interface DisposableResource {
+    func dispose(): Unit
+}
+
 public class ServiceRegistry<T> {
     public let key: ServiceKey<T>
     private var provider: ?ServiceProvider<T> = None
+    private var bindingGeneration: UInt64 = 0u64
 
     public init(key: ServiceKey<T>) { this.key = key }
 
@@ -76,7 +81,17 @@ public class ServiceRegistry<T> {
             )
         }
         this.provider = Some(provider)
+        bindingGeneration += 1u64
         Result.Ok(())
+    }
+
+    public func bindScoped(provider: ServiceProvider<T>): Result<DisposableResource> {
+        match (bind(provider)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => Result.Ok(ScopedServiceBinding<T>(
+                this, bindingGeneration
+            ))
+        }
     }
 
     public func acquire(scope: ComponentScope): Result<ServiceLease<T>> {
@@ -90,6 +105,31 @@ public class ServiceRegistry<T> {
             case None => compositionError<ServiceLease<T>>(
                 "service.unbound", "Service key has no provider"
             )
+        }
+    }
+
+    func releaseBinding(generation: UInt64): Unit {
+        if (generation == bindingGeneration) {
+            provider = None
+            bindingGeneration += 1u64
+        }
+    }
+}
+
+class ScopedServiceBinding<T> <: DisposableResource {
+    private let registry: ServiceRegistry<T>
+    private let generation: UInt64
+    private var disposed: Bool = false
+
+    init(registry: ServiceRegistry<T>, generation: UInt64) {
+        this.registry = registry
+        this.generation = generation
+    }
+
+    public func dispose(): Unit {
+        if (!disposed) {
+            disposed = true
+            registry.releaseBinding(generation)
         }
     }
 }
@@ -259,14 +299,43 @@ public class CompositionResolver {
     }
 }
 
-public interface DisposableResource {
-    func dispose(): Unit
+public class EffectRegistration <: DisposableResource {
+    public let id: String
+    private let disposeFn: () -> Unit
+    private var disposed: Bool = false
+
+    public init(id: String, disposeFn: () -> Unit) {
+        if (id.trimAscii() == "") {
+            throw IllegalArgumentException("effect registration id must not be empty")
+        }
+        this.id = id.trimAscii()
+        this.disposeFn = disposeFn
+    }
+
+    public func dispose(): Unit {
+        if (!disposed) {
+            disposed = true
+            disposeFn()
+        }
+    }
+}
+
+class DeferredDisposal <: DisposableResource {
+    private let action: () -> Unit
+    private var disposed: Bool = false
+    init(action: () -> Unit) { this.action = action }
+    public func dispose(): Unit {
+        if (!disposed) { disposed = true; action() }
+    }
 }
 
 public class EffectScope {
     public let owner: ComponentInstanceRef
     private let resources = ArrayList<DisposableResource>()
     private let prompts = ArrayList<PromptContribution>()
+    private let tools = ArrayList<String>()
+    private let hooks = ArrayList<String>()
+    private let skills = ArrayList<String>()
     private var admitting: Bool = true
 
     public init(owner: ComponentInstanceRef) { this.owner = owner }
@@ -277,10 +346,51 @@ public class EffectScope {
         Result.Ok(())
     }
 
+    public func provideService<T>(
+        registry: ServiceRegistry<T>,
+        provider: ServiceProvider<T>
+    ): Result<Unit> {
+        if (!admitting) {
+            return compositionError<Unit>(
+                "effect_scope.closed", "EffectScope stopped admission"
+            )
+        }
+        match (registry.bindScoped(provider)) {
+            case Result.Ok(binding) =>
+                resources.add(binding)
+                Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    public func registerTool(value: EffectRegistration): Result<Unit> {
+        registerEffect(value, tools)
+    }
+
+    public func registerHook(value: EffectRegistration): Result<Unit> {
+        registerEffect(value, hooks)
+    }
+
+    public func registerSkill(value: EffectRegistration): Result<Unit> {
+        registerEffect(value, skills)
+    }
+
     public func ownResource(value: DisposableResource): Result<Unit> {
         if (!admitting) { return compositionError<Unit>("effect_scope.closed", "EffectScope stopped admission") }
         resources.add(value)
         Result.Ok(())
+    }
+
+    public func ownTask(value: DisposableResource): Result<Unit> {
+        ownResource(value)
+    }
+
+    public func ownProcess(value: DisposableResource): Result<Unit> {
+        ownResource(value)
+    }
+
+    public func deferDispose(action: () -> Unit): Result<Unit> {
+        ownResource(DeferredDisposal(action))
     }
 
     public func stopAdmitting(): Unit { admitting = false }
@@ -293,9 +403,35 @@ public class EffectScope {
             resources[index].dispose()
         }
         resources.clear()
+        prompts.clear()
+        tools.clear()
+        hooks.clear()
+        skills.clear()
     }
 
     public func promptContributions(): Array<PromptContribution> { prompts.toArray() }
+    public func toolContributions(): Array<String> { tools.toArray() }
+    public func hookContributions(): Array<String> { hooks.toArray() }
+    public func skillContributions(): Array<String> { skills.toArray() }
+
+    private func registerEffect(
+        value: EffectRegistration,
+        ids: ArrayList<String>
+    ): Result<Unit> {
+        if (!admitting) {
+            return compositionError<Unit>(
+                "effect_scope.closed", "EffectScope stopped admission"
+            )
+        }
+        if (ids.contains(value.id)) {
+            return compositionError<Unit>(
+                "effect_scope.duplicate", "Effect contribution id is already registered"
+            )
+        }
+        ids.add(value.id)
+        resources.add(value)
+        Result.Ok(())
+    }
 }
 
 public func compositionDigest(value: ResolvedAgentCompositionSnapshot): String {

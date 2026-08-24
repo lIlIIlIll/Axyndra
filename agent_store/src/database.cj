@@ -284,7 +284,7 @@ public class SqliteDatabase {
             executeLocked("BEGIN IMMEDIATE")
             try {
                 for (statement in v1Schema()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=16")
+                executeLocked("PRAGMA user_version=17")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -521,7 +521,7 @@ public class SqliteDatabase {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
                 throw error
             }
-        } else if (version != 15 && version != 16) {
+        } else if (version != 15 && version != 16 && version != 17) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
@@ -533,6 +533,19 @@ public class SqliteDatabase {
             try {
                 for (statement in v16Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=16")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v17 makes Step input enclosure optional so every model request can
+        // own a Step even when no new Inbox entry caused it.
+        if (version >= 1 && version <= 16) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v17Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=17")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}

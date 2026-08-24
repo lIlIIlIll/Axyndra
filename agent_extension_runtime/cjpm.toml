@@ -7,5 +7,6 @@
   output-type = "static"
 
 [dependencies]
+  "agent_domain" = { path = "../agent_domain", output-type = "static" }
   "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
   "json4cj" = { path = "../libs/json4cj", output-type = "static" }
