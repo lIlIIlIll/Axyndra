@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 11, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 12, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -75,6 +75,7 @@ main(): Int64 {
         threadPagingContract(database)
         threadSeedContract(database)
         semanticStoreContract(database)
+        inboxStepContract(database)
     } finally {
         database.close()
     }
@@ -98,8 +99,8 @@ main(): Int64 {
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
     totalContinuationCrashContract()
-    v6ToV11MigrationContract()
-    v7ToV11MigrationContract()
+    v6ToV12MigrationContract()
+    v7ToV12MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
@@ -176,7 +177,7 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
-func v6ToV11MigrationContract(): Unit {
+func v6ToV12MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
     let seed = SqliteDatabase(path)
@@ -204,8 +205,8 @@ func v6ToV11MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 11,
-            "v6 database migrates through schema v7 to v11")
+        expect(migrated.scalarInt("PRAGMA user_version") == 12,
+            "v6 database migrates through schema v7 to v12")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -216,7 +217,7 @@ func v6ToV11MigrationContract(): Unit {
     } finally { migrated.close() }
 }
 
-func v7ToV11MigrationContract(): Unit {
+func v7ToV12MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v7.db"
     let seed = SqliteDatabase(path)
@@ -240,8 +241,8 @@ func v7ToV11MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 11,
-            "v7 database migrates through schema v8 to v11")
+        expect(migrated.scalarInt("PRAGMA user_version") == 12,
+            "v7 database migrates through schema v8 to v12")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1548,7 +1549,93 @@ func semanticContinuation(phase: RunExecutionPhase): DurableRunContinuationV1 {
     )
 }
 
+func inboxStepContract(database: SqliteDatabase): Unit {
+    database.transaction { transaction =>
+        transaction.execute(
+            "INSERT INTO threads VALUES ('inbox-thread',0,'workspace','open',1,'inbox-turn')"
+        )
+        transaction.execute(
+            "INSERT INTO turns VALUES ('inbox-turn','inbox-thread',1,'active','inbox-accepted','inbox-run')"
+        )
+        transaction.execute(
+            "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
+                "started_at_millis,finished_at_millis,cancellation_reason) VALUES " +
+                "('inbox-run','inbox-thread','inbox-turn',1,'running','{}','{}','{}','{}',0,NULL,NULL)"
+        )
+    }
+    let store = SqliteInboxStepStore(database)
+    let first = DurableInboxEntry(
+        InboxEntryId("inbox-entry-1"), ThreadId("inbox-thread"), LaneId("main"),
+        InboxEntryKind.UserPrompt,
+        objectValue([ValueField("text", textValue("first prompt"))]),
+        createdAtMillis: 1
+    )
+    let steering = DurableInboxEntry(
+        InboxEntryId("inbox-entry-2"), ThreadId("inbox-thread"), LaneId("main"),
+        InboxEntryKind.Steering,
+        objectValue([ValueField("text", textValue("steer next"))]),
+        createdAtMillis: 2
+    )
+    expect(store.enqueue(first).isOk() && store.enqueue(first).isOk() &&
+        store.enqueue(steering).isOk(),
+        "durable Inbox enqueue is idempotent and accepts Steering")
+    let continuation = sealDurableRunContinuation(DurableRunContinuationV1(
+        RunId("inbox-run"), LaneId("main"), SemanticTurnId("inbox-turn"), 0,
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([
+            ValueField("claimed_entry_id", textValue("inbox-entry-1")),
+            ValueField("accepted_item_id", textValue("inbox-accepted"))
+        ]))),
+        CompositionSnapshotId("inbox-composition"),
+        ModelLaneSnapshotId("inbox-model-lane")
+    ))
+    let request = InboxClaimRequest(
+        first.id, StepId("inbox-step-1"), RunId("inbox-run"),
+        SemanticTurnId("inbox-turn"), ItemId("inbox-accepted"),
+        0, 0, continuation, 3
+    )
+    let claimed = store.claim(request)
+    expect(claimed.isOk() && store.claim(request).isOk() &&
+        database.query(
+            "SELECT status,claimed_step_id FROM lane_inbox_entries WHERE id='inbox-entry-1'"
+        )[0].required(0) == "claimed" &&
+        database.scalarInt("SELECT COUNT(*) FROM step_records WHERE id='inbox-step-1'") == 1 &&
+        database.scalarInt("SELECT COUNT(*) FROM items WHERE id='inbox-accepted'") == 1 &&
+        database.scalarInt("SELECT COUNT(*) FROM run_continuation_facts WHERE run_id='inbox-run'") == 1 &&
+        database.scalarInt("SELECT revision FROM threads WHERE id='inbox-thread'") == 1,
+        "Inbox claim atomically creates Step, accepted Item and continuation exactly once")
+
+    let secondContinuation = sealDurableRunContinuation(DurableRunContinuationV1(
+        RunId("inbox-run"), LaneId("main"), SemanticTurnId("inbox-turn"), 1,
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([
+            ValueField("claimed_entry_id", textValue("inbox-entry-2"))
+        ]))),
+        CompositionSnapshotId("inbox-composition"),
+        ModelLaneSnapshotId("inbox-model-lane")
+    ))
+    let failed = store.claim(InboxClaimRequest(
+        steering.id, StepId("inbox-step-2"), RunId("inbox-run"),
+        SemanticTurnId("inbox-turn"), ItemId("inbox-accepted"),
+        1, 1, secondContinuation, 4
+    ))
+    expect(failed.isError() && database.query(
+        "SELECT status FROM lane_inbox_entries WHERE id='inbox-entry-2'"
+    )[0].required(0) == "queued" &&
+        database.scalarInt("SELECT COUNT(*) FROM step_records") == 1 &&
+        database.scalarInt("SELECT COUNT(*) FROM run_continuation_facts WHERE run_id='inbox-run'") == 1,
+        "failed claim rolls back Inbox, Step, Item and continuation together")
+    expect(store.settle(
+        StepId("inbox-step-1"), 1, StepStatus.Completed, 5
+    ).isOk() && database.query(
+        "SELECT status FROM lane_inbox_entries WHERE id='inbox-entry-1'"
+    )[0].required(0) == "applied" && database.query(
+        "SELECT status FROM step_records WHERE id='inbox-step-1'"
+    )[0].required(0) == "completed",
+        "Step settlement encloses the claimed Inbox entry")
+}
+
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE step_records")
+    database.execute("DROP TABLE lane_inbox_entries")
     database.execute("DROP TABLE operation_state_registers")
     database.execute("DROP TABLE operation_effect_records")
     database.execute("DROP TABLE app_event_outbox")
