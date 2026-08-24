@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 17, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 18, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -209,8 +209,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 17,
-            "v6 database migrates through schema v7 to v17")
+        expect(migrated.scalarInt("PRAGMA user_version") == 18,
+            "v6 database migrates through schema v7 to v18")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -245,8 +245,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 17,
-            "v7 database migrates through schema v8 to v17")
+        expect(migrated.scalarInt("PRAGMA user_version") == 18,
+            "v7 database migrates through schema v8 to v18")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1945,6 +1945,7 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE lane_run_admissions")
     database.execute("DROP TABLE team_messages")
     database.execute("DROP TABLE team_tasks")
     database.execute("DROP TABLE team_members")

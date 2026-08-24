@@ -44,6 +44,7 @@ func v1Schema(): Array<String> {
         "CREATE TABLE lanes (thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, parent_lane_id TEXT, fork_item_id TEXT REFERENCES items(id), config TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,parent_lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE TABLE item_tree_edges (item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, parent_item_id TEXT REFERENCES items(id), depth INTEGER NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE TABLE run_lane_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE TABLE lane_run_admissions (thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, run_id TEXT NOT NULL, owner_id TEXT NOT NULL, fence_token INTEGER NOT NULL, expires_at_millis INTEGER NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE TABLE composition_snapshots (id TEXT PRIMARY KEY, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE run_composition_bindings (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, snapshot_id TEXT NOT NULL REFERENCES composition_snapshots(id))",
         "CREATE TABLE teams (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, coordinator_lane_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, revision INTEGER NOT NULL, FOREIGN KEY(thread_id,coordinator_lane_id) REFERENCES lanes(thread_id,lane_id))",
@@ -71,6 +72,7 @@ func v1Schema(): Array<String> {
         "CREATE INDEX step_records_run ON step_records(run_id,ordinal)"
         ,"CREATE INDEX team_tasks_board ON team_tasks(team_id,status,created_at_millis,id)"
         ,"CREATE INDEX team_messages_mailbox ON team_messages(team_id,recipient_member_id,acknowledged,created_at_millis,id)"
+        ,"CREATE UNIQUE INDEX lane_run_admissions_active_run ON lane_run_admissions(run_id) WHERE state='active'"
         ,"CREATE TRIGGER threads_create_main_lane AFTER INSERT ON threads BEGIN INSERT INTO lanes(thread_id,lane_id,kind,parent_lane_id,fork_item_id,config,status,created_at_millis) VALUES (NEW.id,'main','main',NULL,NULL,'o1:0','open',0); END"
         ,"CREATE TRIGGER items_create_main_edge AFTER INSERT ON items BEGIN INSERT INTO item_tree_edges(item_id,thread_id,lane_id,parent_item_id,depth) VALUES (NEW.id,NEW.thread_id,'main',(SELECT id FROM items WHERE thread_id=NEW.thread_id AND ordinal<NEW.ordinal ORDER BY ordinal DESC LIMIT 1),COALESCE((SELECT edge.depth+1 FROM item_tree_edges edge JOIN items prior ON prior.id=edge.item_id WHERE prior.thread_id=NEW.thread_id AND prior.ordinal<NEW.ordinal ORDER BY prior.ordinal DESC LIMIT 1),0)); END"
         ,"CREATE TRIGGER runs_bind_main_lane AFTER INSERT ON runs BEGIN INSERT INTO run_lane_bindings(run_id,thread_id,lane_id) VALUES (NEW.id,NEW.thread_id,'main'); END"
@@ -236,5 +238,12 @@ func v17Migration(): Array<String> {
         "INSERT INTO context_manifests SELECT * FROM context_manifests_v16",
         "DROP TABLE context_manifests_v16",
         "DROP TABLE step_records_v16"
+    ]
+}
+
+func v18Migration(): Array<String> {
+    [
+        "CREATE TABLE lane_run_admissions (thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, run_id TEXT NOT NULL, owner_id TEXT NOT NULL, fence_token INTEGER NOT NULL, expires_at_millis INTEGER NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
+        "CREATE UNIQUE INDEX lane_run_admissions_active_run ON lane_run_admissions(run_id) WHERE state='active'"
     ]
 }

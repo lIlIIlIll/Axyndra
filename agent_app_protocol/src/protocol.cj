@@ -194,7 +194,7 @@ public class AppEvent {
 
 @Derive[Equatable]
 public enum AppEventDisposition {
-    Accepted | Stale
+    Accepted | Stale | Gap
 }
 
 // AppEventCursor is a client-side protocol guard. It is not runtime truth: it
@@ -233,8 +233,17 @@ public class AppEventCursor {
         lock.lock()
         try {
             if (event.meta.threadId.value != selectedThreadId.value ||
-                event.meta.sequence <= lastSequence ||
-                event.meta.threadRevision < lastRevision) {
+                event.meta.sequence <= lastSequence) {
+                return AppEventDisposition.Stale
+            }
+            if (event.meta.sequence != lastSequence + 1) {
+                return AppEventDisposition.Gap
+            }
+            // Sequence ownership is transport-level. A received event may be
+            // semantically stale for the selected Run, but it still explains
+            // this exact cursor position and prevents a false gap afterward.
+            lastSequence = event.meta.sequence
+            if (event.meta.threadRevision < lastRevision) {
                 return AppEventDisposition.Stale
             }
             if (appPayloadIsRunScoped(event.payload)) {
@@ -271,7 +280,6 @@ public class AppEventCursor {
                 }
             }
 
-            lastSequence = event.meta.sequence
             lastRevision = event.meta.threadRevision
             match (event.payload) {
                 case AppEventPayload.ThreadSnapshot(snapshot) =>
