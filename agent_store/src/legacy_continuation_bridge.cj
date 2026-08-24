@@ -23,12 +23,41 @@ public func mirrorLegacyRunContinuation(
         ValueField("legacy_payload", textValue(encodedLegacy))
     ]))
     let pendingApproval = ApprovalId("legacy-approval-" + value.approval.operationId.value)
+    let previousRows = transaction.query(
+        "SELECT payload FROM run_continuations WHERE run_id=?",
+        [SqlParameter.Text(value.runId.value)]
+    )
+    let previous: ?DurableRunContinuationV1 = if (previousRows.size == 1) {
+        try { Some(decodeDurableRunContinuation(previousRows[0].required(0))) }
+        catch (_: Exception) { None }
+    } else { None }
+    let laneId = match (previous) {
+        case Some(item) => item.laneId
+        case None => LaneId("main")
+    }
+    let stepOrdinal = match (previous) {
+        case Some(item) => item.stepOrdinal
+        case None => 0
+    }
+    let compositionId = match (previous) {
+        case Some(item) => item.compositionSnapshotId
+        case None => CompositionSnapshotId("legacy-composition")
+    }
+    let modelLaneId = match (previous) {
+        case Some(item) => item.modelLaneSnapshotId
+        case None => ModelLaneSnapshotId("legacy-model-lane")
+    }
+    let contextManifestId = match (previous) {
+        case Some(item) => item.contextManifestId
+        case None => Option<ContextManifestId>.None
+    }
     let continuation = match (value.kind) {
         case RunContinuationKind.WaitingApproval => DurableRunContinuationV1(
-            value.runId, LaneId("main"), SemanticTurnId(runRows[0].required(1)), 0,
+            value.runId, laneId, SemanticTurnId(runRows[0].required(1)), stepOrdinal,
             RunExecutionPhase.WaitingApproval(phasePayload),
-            CompositionSnapshotId("legacy-composition"),
-            ModelLaneSnapshotId("legacy-model-lane"),
+            compositionId,
+            modelLaneId,
+            contextManifestId: contextManifestId,
             pendingOperationId: Some(value.approval.operationId),
             pendingApprovalId: Some(pendingApproval),
             workDebt: WorkDebtSnapshot(
@@ -39,10 +68,11 @@ public func mirrorLegacyRunContinuation(
         case RunContinuationKind.RunningModel =>
             let checkpoint = value.runningModel.getOrThrow()
             DurableRunContinuationV1(
-                value.runId, LaneId("main"), SemanticTurnId(runRows[0].required(1)), 0,
+                value.runId, laneId, SemanticTurnId(runRows[0].required(1)), stepOrdinal,
                 RunExecutionPhase.ModelEffectPending(phasePayload),
-                CompositionSnapshotId("legacy-composition"),
-                ModelLaneSnapshotId("legacy-model-lane"),
+                compositionId,
+                modelLaneId,
+                contextManifestId: contextManifestId,
                 semanticRequestId: Some(checkpoint.semanticRequestId),
                 attemptId: Some(checkpoint.activeAttemptId),
                 reservedDecisionId: Some(ModelDecisionId(

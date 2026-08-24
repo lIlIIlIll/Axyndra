@@ -104,6 +104,93 @@ public class SqliteContextManifestStore {
             )
         }
     }
+
+    // Advances the total continuation after the manifest is durable and
+    // before AgentCore is allowed to dispatch the provider request.
+    public func recordContextReady(
+        runId: RunId,
+        manifest: ModelContextManifest,
+        observedAtMillis: Int64
+    ): Result<Unit> {
+        if (!manifest.isSealed() || observedAtMillis < 0) {
+            return manifestStoreError<Unit>(
+                "context.manifest_invalid", "Context Manifest is not sealed"
+            )
+        }
+        try {
+            database.transaction { transaction =>
+                if (transaction.query(
+                    "SELECT 1 FROM context_manifests WHERE id=? AND digest=?",
+                    [SqlParameter.Text(manifest.id.value), SqlParameter.Text(manifest.digest)]
+                ).size != 1) {
+                    throw IllegalStateException("Context Manifest is not durably committed")
+                }
+                let run = transaction.query(
+                    "SELECT runs.thread_id,runs.turn_id,binding.snapshot_id FROM runs " +
+                    "JOIN run_composition_bindings binding ON binding.run_id=runs.id " +
+                        "WHERE runs.id=?",
+                    [SqlParameter.Text(runId.value)]
+                )
+                if (run.size != 1 || run[0].required(0) != manifest.threadId.value ||
+                    run[0].required(1) != manifest.turnId.value) {
+                    throw IllegalStateException("Context Manifest Run enclosure changed")
+                }
+                let continuation = sealDurableRunContinuation(DurableRunContinuationV1(
+                    runId,
+                    manifest.laneId,
+                    manifest.turnId,
+                    0,
+                    RunExecutionPhase.ContextReady(DurablePhaseState(objectValue([
+                        ValueField("context_manifest_id", textValue(manifest.id.value)),
+                        ValueField("context_manifest_digest", textValue(manifest.digest))
+                    ]))),
+                    CompositionSnapshotId(run[0].required(2)),
+                    ModelLaneSnapshotId("model-lane-" + runId.value),
+                    contextManifestId: Some(manifest.id)
+                ))
+                let revision = contextManifestInt(transaction.query(
+                    "SELECT COALESCE(MAX(revision),0) FROM run_continuation_facts WHERE run_id=?",
+                    [SqlParameter.Text(runId.value)]
+                )[0].required(0)) + 1
+                let sequence = nextLegacyCommitSequence(transaction, manifest.threadId)
+                let payload = encodeDurableRunContinuation(continuation)
+                transaction.execute(
+                    "INSERT INTO run_continuation_facts(" +
+                        "run_id,thread_id,revision,commit_sequence,phase,payload,digest,created_at_millis" +
+                        ") VALUES (?,?,?,?,?,?,?,?)",
+                    [
+                        SqlParameter.Text(runId.value), SqlParameter.Text(manifest.threadId.value),
+                        SqlParameter.Int64Value(revision), SqlParameter.Int64Value(sequence),
+                        SqlParameter.Text("context_ready"), SqlParameter.Text(payload),
+                        SqlParameter.Text(continuation.digest),
+                        SqlParameter.Int64Value(observedAtMillis)
+                    ]
+                )
+                transaction.execute(
+                    "INSERT INTO run_continuations(" +
+                        "run_id,schema_version,revision,phase,payload,digest,updated_commit_sequence" +
+                        ") VALUES (?,1,?,'context_ready',?,?,?) ON CONFLICT(run_id) DO UPDATE SET " +
+                        "schema_version=1,revision=excluded.revision,phase=excluded.phase," +
+                        "payload=excluded.payload,digest=excluded.digest," +
+                        "updated_commit_sequence=excluded.updated_commit_sequence",
+                    [
+                        SqlParameter.Text(runId.value), SqlParameter.Int64Value(revision),
+                        SqlParameter.Text(payload), SqlParameter.Text(continuation.digest),
+                        SqlParameter.Int64Value(sequence)
+                    ]
+                )
+            }
+            Result.Ok(())
+        } catch (error: Exception) {
+            manifestStoreError<Unit>("context.continuation_commit_failed", error.message)
+        }
+    }
+}
+
+func contextManifestInt(value: String): Int64 {
+    try { Int64.parse(value) } catch (_: Exception) {
+        throw IllegalStateException("Context Manifest continuation revision is invalid")
+    }
 }
 
 public func encodeContextManifest(value: ModelContextManifest): String {

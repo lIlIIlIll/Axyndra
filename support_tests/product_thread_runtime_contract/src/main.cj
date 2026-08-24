@@ -4,8 +4,10 @@ import std.fs.*
 import agent_app_protocol.*
 import agent_domain.*
 import agent_product.*
+import agent_runtime.*
 import agent_skills.*
 import agent_store.*
+import tool_runtime.*
 
 main(): Int64 {
     let root = Directory.createTemp("/tmp").toString()
@@ -118,6 +120,59 @@ main(): Int64 {
                 ModelBlock(ModelBlockKind.Text, text: "assistant first")
             ])]
         ).isError(), "Product rejects invalid offline transcript ownership")
+
+        let mainBranch = product.vnext.laneBranch(
+            ThreadId(sessionId.value), LaneId("main")
+        ).value().getOrThrow()
+        let reviewLane = LaneRecord(
+            LaneId("review"), ThreadId(sessionId.value),
+            LaneKind.SharedHistoryChild,
+            objectValue([ValueField("profile", textValue("review"))]),
+            parentLaneId: Some(LaneId("main")),
+            forkItemId: Some(mainBranch[0]),
+            createdAtMillis: 20
+        )
+        expect(product.vnext.createSharedHistoryLane(reviewLane).isOk() &&
+            product.vnext.laneBranch(
+                ThreadId(sessionId.value), LaneId("review")
+            ).value().getOrThrow().size == 1,
+            "Product exposes durable shared-history Lane creation and branch projection")
+        let team = TeamRecord(
+            TeamId("product-team"), ThreadId(sessionId.value), LaneId("main"),
+            "Product review", createdAtMillis: 21
+        )
+        let coordinator = TeamMemberRecord(
+            TeamMemberId("product-coordinator"), team.id,
+            ThreadId(sessionId.value), LaneId("main"), "coordinator",
+            joinedAtMillis: 22
+        )
+        let reviewer = TeamMemberRecord(
+            TeamMemberId("product-reviewer"), team.id,
+            ThreadId(sessionId.value), LaneId("review"), "reviewer",
+            joinedAtMillis: 23
+        )
+        expect(product.vnext.createTeam(team).isOk() &&
+            product.vnext.addTeamMember(coordinator).isOk() &&
+            product.vnext.addTeamMember(reviewer).isOk() &&
+            product.vnext.teamRoster(team.id).value().getOrThrow().size == 2,
+            "Product exposes the durable Team roster on real Thread Lanes")
+        let storageLease = product.vnext.storageService.acquire(
+            ComponentScope(RealmKind.Host, "product-host")
+        ).value().getOrThrow()
+        expect(storageLease.value == "sqlite-vnext",
+            "Product resolves its semantic store through the typed host ServiceRegistry")
+        storageLease.release()
+
+        let program = product.vnext.executeReadOnlyToolProgram(
+            "product-program",
+            "return await tools.read({\"path\":\"input.txt\"});",
+            SessionId("durable-product-program-thread"),
+            CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+        )
+        expect(program.isOk() &&
+            program.value().getOrThrow().status == ToolProgramStatus.Completed &&
+            program.value().getOrThrow().subOperations.size == 1,
+            "Product executes opt-in read-only Tool Programs through one durable child Operation")
         product.close().value().getOrThrow()
 
         let database = SqliteDatabase(stateRoot + "/state.db")
@@ -141,6 +196,38 @@ main(): Int64 {
                 "SELECT COUNT(*) FROM items WHERE thread_id='" + sessionId.value + "'"
             ) == 2,
                 "product composition persists canonical user and assistant Items")
+            expect(database.scalarInt(
+                "SELECT COUNT(*) FROM lane_inbox_entries WHERE thread_id='" +
+                    sessionId.value + "' AND lane_id='main' AND status='applied'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM step_records WHERE thread_id='" +
+                    sessionId.value + "' AND status='completed'"
+            ) == 1,
+                "product admission and terminal settlement enclose the user input in one durable Step")
+            expect(database.scalarInt(
+                "SELECT COUNT(*) FROM composition_snapshots snapshot JOIN " +
+                    "run_composition_bindings binding ON binding.snapshot_id=snapshot.id " +
+                    "JOIN runs ON runs.id=binding.run_id WHERE runs.thread_id='" +
+                    sessionId.value + "'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM context_manifests WHERE thread_id='" +
+                    sessionId.value + "'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM run_continuation_facts facts JOIN runs " +
+                    "ON runs.id=facts.run_id WHERE runs.thread_id='" + sessionId.value +
+                    "' AND facts.phase='accepted'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM run_continuation_facts facts JOIN runs " +
+                    "ON runs.id=facts.run_id WHERE runs.thread_id='" + sessionId.value +
+                    "' AND facts.phase='context_ready' AND " +
+                    "facts.payload LIKE '%context_manifest_id%'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM run_continuation_facts facts JOIN runs " +
+                    "ON runs.id=facts.run_id WHERE runs.thread_id='" + sessionId.value +
+                    "' AND facts.phase='model_effect_pending' AND " +
+                    "facts.payload LIKE '%context_manifest_id%'"
+            ) >= 1,
+                "product freezes Composition, accepted continuation and exact Context Manifest before effects")
             let toolThread = database.query(
                 "SELECT revision,COALESCE(active_turn_id,'') FROM threads WHERE id='" +
                     toolSessionId.value + "'"
@@ -165,6 +252,29 @@ main(): Int64 {
                     toolSessionId.value + "'"
             ) == 1,
                 "checkpoint is durable while canonical Items remain unmodified")
+            let programRuns = database.scalarInt(
+                "SELECT COUNT(*) FROM runs WHERE thread_id='durable-product-program-thread' " +
+                    "AND state='completed' AND budget LIKE '%programmatic%'"
+            )
+            let programOperations = database.scalarInt(
+                "SELECT COUNT(*) FROM operations op JOIN runs ON " +
+                    "runs.id=op.run_id WHERE runs.thread_id=" +
+                    "'durable-product-program-thread'"
+            )
+            let programReceipts = database.scalarInt(
+                "SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON " +
+                    "op.id=receipt.operation_id JOIN runs ON runs.id=op.run_id WHERE " +
+                    "runs.thread_id='durable-product-program-thread'"
+            )
+            let programSteps = database.scalarInt(
+                "SELECT COUNT(*) FROM step_records WHERE thread_id=" +
+                    "'durable-product-program-thread' AND status='completed'"
+            )
+            expect(programRuns == 1 && programOperations == 1 && programReceipts == 1 &&
+                programSteps == 1,
+                "read-only Tool Program owns a separate durable Run, Step, Operation and Receipt " +
+                    "boundary; runs=${programRuns} operations=${programOperations} " +
+                    "receipts=${programReceipts} steps=${programSteps}")
             expect(database.scalarInt(
                 "SELECT COUNT(*) FROM items WHERE thread_id='" + seededSession.value + "'"
             ) == 2 && database.scalarInt(

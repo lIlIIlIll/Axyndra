@@ -13,3 +13,5 @@
   "agent_product" = { path = "../../agent_product", output-type = "static" }
   "agent_skills" = { path = "../../agent_skills", output-type = "static" }
   "agent_store" = { path = "../../agent_store", output-type = "static" }
+  "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
