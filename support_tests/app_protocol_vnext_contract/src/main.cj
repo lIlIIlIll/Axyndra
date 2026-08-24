@@ -47,6 +47,24 @@ func eventCorrelationContract(): Unit {
 }
 
 func staleEventContract(): Unit {
+    let gapCursor = AppEventCursor(ThreadId("gap-thread"))
+    expect(gapCursor.accept(AppEvent(
+        threadMeta(1, 0, "gap-thread"),
+        AppEventPayload.ItemsPage(ThreadItemsPage(
+            ThreadId("gap-thread"), 0, 0, 0, false, []
+        ))
+    )) == AppEventDisposition.Accepted && gapCursor.accept(AppEvent(
+        threadMeta(3, 0, "gap-thread"),
+        AppEventPayload.ItemsPage(ThreadItemsPage(
+            ThreadId("gap-thread"), 0, 0, 0, false, []
+        ))
+    )) == AppEventDisposition.Gap && gapCursor.accept(AppEvent(
+        threadMeta(2, 0, "gap-thread"),
+        AppEventPayload.ItemsPage(ThreadItemsPage(
+            ThreadId("gap-thread"), 0, 0, 0, false, []
+        ))
+    )) == AppEventDisposition.Accepted,
+        "AppEvent cursor exposes a sequence gap and waits for the missing event")
     let cursor = AppEventCursor(ThreadId("thread"))
     let started = AppEvent(
         runMeta(1, 1, "thread", "turn-a", "run-a", 1),

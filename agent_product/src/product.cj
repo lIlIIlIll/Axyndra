@@ -37,6 +37,7 @@ public class ProductConfig {
     public let modelStreamFaultProfile: ?ModelStreamFaultProfile
     public let compactionOverride: ?ProductCompactionSettings
     public let startupMode: ProductStartupMode
+    public let extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
 
     public init(
         settingsRoot!: String = defaultProductHome(),
@@ -52,7 +53,8 @@ public class ProductConfig {
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
         modelStreamFaultProfile!: ?ModelStreamFaultProfile = None,
         compactionOverride!: ?ProductCompactionSettings = None,
-        startupMode!: ProductStartupMode = ProductStartupMode.Full
+        startupMode!: ProductStartupMode = ProductStartupMode.Full,
+        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None
     ) {
         if (unsafeDirectLaunchForTests && !fixture) {
             throw IllegalArgumentException(
@@ -75,6 +77,7 @@ public class ProductConfig {
         this.modelStreamFaultProfile = modelStreamFaultProfile
         this.compactionOverride = compactionOverride
         this.startupMode = startupMode
+        this.extensionSignatureVerifier = extensionSignatureVerifier
     }
 }
 
@@ -3608,7 +3611,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         threadRuntimes,
         ProductVnextControl(
             vnextDatabase, catalog, pipeline, ids, threadRuntimes,
-            workspace.rootPath(), processes
+            workspace.rootPath(), processes, config.extensionSignatureVerifier
         ),
         fixtureProbe: fixtureProbe
     )

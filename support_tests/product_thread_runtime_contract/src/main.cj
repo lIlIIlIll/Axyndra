@@ -11,6 +11,7 @@ import agent_runtime.*
 import agent_skills.*
 import agent_store.*
 import tool_runtime.*
+import model_adapters.*
 
 main(): Int64 {
     let root = Directory.createTemp("/tmp").toString()
@@ -25,6 +26,7 @@ main(): Int64 {
             workspaceRoot: workspace,
             fixture: true,
             asyncEnabled: false,
+            extensionSignatureVerifier: Some(FixedPluginSignatureVerifier(true)),
             compactionOverride: Some(ProductCompactionSettings(
                 keepRecentMessages: 2
             ))
@@ -144,6 +146,14 @@ main(): Int64 {
             "queued follow-up is consumed inside a live Product Run")
 
         isolatedPluginHostContract(workspace)
+        expect(product.vnext.validateIsolatedExtension(
+            SignedExtensionPackageManifest(
+                "product.signed", "1", "1", "1", "plugins/signed.wasm",
+                [], [], [], 1u32, "compatible", "sha256:signed", "signature"
+            ),
+            ExtensionExecutionKind.WasmComponent, 1u64, []
+        ).isOk(),
+            "Product validates extension packages only through its configured trust root")
 
         let remoteTransport = ProductRecordingRemoteTransport()
         let remoteRealm = RemoteExecutionRealm(
@@ -186,6 +196,22 @@ main(): Int64 {
                 ThreadId(sessionId.value), LaneId("review")
             ).value().getOrThrow().size == 1,
             "Product exposes durable shared-history Lane creation and branch projection")
+        let mainAdmission = product.vnext.acquireLaneRun(
+            ThreadId(sessionId.value), LaneId("main"), RunId("product-main-lane-run"),
+            "product-main-actor", 100, leaseMillis: 1000
+        ).value().getOrThrow()
+        let reviewAdmission = product.vnext.acquireLaneRun(
+            ThreadId(sessionId.value), LaneId("review"), RunId("product-review-lane-run"),
+            "product-review-actor", 100, leaseMillis: 1000
+        ).value().getOrThrow()
+        expect(product.vnext.acquireLaneRun(
+            ThreadId(sessionId.value), LaneId("review"), RunId("product-review-race"),
+            "product-review-racer", 100, leaseMillis: 1000
+        ).isError() && mainAdmission.fenceToken == 1 &&
+            reviewAdmission.fenceToken == 1,
+            "Product admits different Lane actors concurrently but fences one Run per Lane")
+        product.vnext.releaseLaneRun(mainAdmission, 110).value().getOrThrow()
+        product.vnext.releaseLaneRun(reviewAdmission, 110).value().getOrThrow()
         let isolatedFork = product.vnext.forkThread(
             ThreadId(sessionId.value), LaneId("main"),
             mainBranch[mainBranch.size - 1], ThreadId("product-isolated-child"),
@@ -427,9 +453,9 @@ func isolatedPluginHostContract(workspace: String): Unit {
         "isolated Process generation mounts before admission")
     let processResult = host.invoke(
         "review.process",
-        IsolatedPluginInvocation("call-1", "review", objectValue([
+        IsolatedPluginInvocation("call-1", "review", encodeAgentValue(objectValue([
             ValueField("path", textValue("input.txt"))
-        ]))
+        ])))
     )
     expect(processResult.isOk() && processPort.requests.size == 1 &&
         processPort.requests[0].executable == workspace + "/plugins/reviewer" &&
@@ -448,7 +474,7 @@ func isolatedPluginHostContract(workspace: String): Unit {
     }
     expect(host.reload(processReload).isOk() && host.invoke(
         "review.process",
-        IsolatedPluginInvocation("call-1b", "review", objectValue([]))
+        IsolatedPluginInvocation("call-1b", "review", encodeAgentValue(objectValue([])))
     ).isOk() && host.diagnostics().size == 2 &&
         host.diagnostics()[0].state == ExtensionLifecycleState.Inactive &&
         !host.diagnostics()[0].accepting &&
@@ -475,7 +501,7 @@ func isolatedPluginHostContract(workspace: String): Unit {
     )
     expect(wasmHost.mountInitial(wasmLaunch).isOk() && wasmHost.invoke(
         "review.wasm",
-        IsolatedPluginInvocation("call-2", "review", objectValue([]))
+        IsolatedPluginInvocation("call-2", "review", encodeAgentValue(objectValue([])))
     ).isOk() && wasmPort.requests.size == 1 &&
         wasmPort.requests[0].executable == "wasmtime-fixture" &&
         wasmPort.requests[0].arguments[0] == workspace + "/plugins/reviewer.wasm" &&
@@ -487,7 +513,7 @@ func isolatedPluginHostContract(workspace: String): Unit {
     let truncatedHost = ProductIsolatedPluginHost(truncated, workspace)
     expect(truncatedHost.mountInitial(processLaunch).isOk() && truncatedHost.invoke(
         "review.process",
-        IsolatedPluginInvocation("call-3", "review", objectValue([]))
+        IsolatedPluginInvocation("call-3", "review", encodeAgentValue(objectValue([])))
     ).isError(), "truncated isolated plugin output fails closed")
     expect(validateIsolatedPluginPackage(
         SignedExtensionPackageManifest(
