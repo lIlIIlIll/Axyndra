@@ -22,7 +22,7 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15
+          sudo apt-get install --yes clang-15 ripgrep
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
       - name: Setup Cangjie
         uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
