@@ -1,14 +1,14 @@
 # SDK, manifest, and extension compatibility
 
-Repository verification is pinned to Cangjie
-`1.1.0-alpha.20260817040003` with cjpm `1.1.3`. `scripts/check_sdk.sh` owns the
+Repository verification is pinned to Cangjie STS `1.1.3` with cjpm `1.1.3`.
+`scripts/check_sdk.sh` owns the
 exact compiler check, while package `cjc-version = "1.1.0"` fields continue to
 describe language compatibility. `scripts/pinned_cangjie` derives compiler,
 runtime, and dynamic stdx paths from the validated SDK root and never consults a
 mutable `daily` symlink. Canonical verification may set
 `AXYNDRA_CANONICAL_TARGET_ROOT` to isolate cjpm artifacts by toolchain identity.
-The former 20260803 compiler is rejected because its test-macro code generation
-crashes when enumerating a legal suite containing `@Bench`.
+Older daily compilers remain unsupported because their test-macro code
+generation can crash when enumerating a legal suite containing `@Bench`.
 
 This is the compatibility contract for compile-time cooperative extensions. It
 separates version identity, source shape, observable semantics, and security
