@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "repository": "git@github-liliilill:lIlIIlIll/cjtui.git",
+  "commit": "ab76bc1b39ed3a9261487beb71b4d1967accc2a2",
+  "root_tree": "169d78a775b7f2035c345625ca543aa214fed19f",
+  "package_trees": {
+    "core": "42a53fc6c184c638f4ddce7991b0a0cbfbbc306f",
+    "markdown": "373dc2870ffe2ead2f71901f7bdc20bfe2c8fad6",
+    "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
+  },
+  "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
+  "vendored_manifest_sha256": "f6d70068bb2c729ecfe0197fd6de14d85cb3f6879a9e796f05a414745ce80b26",
+  "vendored_files": 60,
+  "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file"
+}
