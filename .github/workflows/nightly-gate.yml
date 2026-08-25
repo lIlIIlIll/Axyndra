@@ -10,14 +10,29 @@ permissions:
 
 jobs:
   release-gate:
-    runs-on: [self-hosted, linux, x64, cangjie-daily]
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           clean: true
+      - name: Install native compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-15
+          sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+      - name: Setup Cangjie
+        uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
+        with:
+          channel: nightly
+          version: 1.1.0-alpha.20260817040003
+          archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
+      - name: Configure pinned SDK
+        run: |
+          sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
+          echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
       - name: Full local release gate
         env:
-          AXYNDRA_SDK_ROOT: /home/elliot/cangjie_sdk/daily
           AXYNDRA_GATE_KIND: implementation
         run: bash scripts/release_gate.sh

@@ -14,12 +14,28 @@ concurrency:
 
 jobs:
   clean-build-test:
-    runs-on: [self-hosted, linux, x64, cangjie-daily]
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           clean: true
+      - name: Install native compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-15
+          sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+      - name: Setup Cangjie
+        uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
+        with:
+          channel: nightly
+          version: 1.1.0-alpha.20260817040003
+          archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
+      - name: Configure pinned SDK
+        run: |
+          sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
+          echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
       - name: Repository policy gates
         run: |
           python3 scripts/tracked_artifact_gate.py
@@ -29,14 +45,12 @@ jobs:
           python3 scripts/docs_gate_test.py
           scripts/architecture_gate.sh
       - name: Clean Cangjie build and tests
-        env:
-          AXYNDRA_SDK_ROOT: /home/elliot/cangjie_sdk/daily
         run: |
           scripts/pinned_cangjie cjpm clean
           scripts/pinned_cangjie cjpm check
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
           scripts/pinned_cangjie cjpm test
       - name: vNext focused contracts
-        run: >-
-          python3 scripts/vnext_contract_gate.py
-          --sdk-root /home/elliot/cangjie_sdk/daily
+        run: |
+          python3 scripts/vnext_contract_gate.py \
+            --sdk-root "$AXYNDRA_SDK_ROOT"
