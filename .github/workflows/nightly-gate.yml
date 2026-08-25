@@ -12,6 +12,8 @@ jobs:
   release-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      AXYNDRA_CI_EXPECTED_CJC_VERSION: 1.3.0-alpha.20260825091342
     steps:
       - uses: actions/checkout@v4
         with:
