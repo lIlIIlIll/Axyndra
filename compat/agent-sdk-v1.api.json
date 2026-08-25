@@ -1,0 +1,528 @@
+{
+  "format": 1,
+  "package": "agent_sdk",
+  "api_version": "1.1.0",
+  "symbols": [
+    {
+      "key": "class:CapabilityRequirement",
+      "stability": "STABLE",
+      "signature": "public class CapabilityRequirement"
+    },
+    {
+      "key": "class:CapabilityRequirement.init",
+      "stability": "STABLE",
+      "signature": "public init(name: String, resource!: String = \"\")"
+    },
+    {
+      "key": "class:CapabilityRequirement.let:name",
+      "stability": "STABLE",
+      "signature": "public let name: String"
+    },
+    {
+      "key": "class:CapabilityRequirement.let:resource",
+      "stability": "STABLE",
+      "signature": "public let resource: String"
+    },
+    {
+      "key": "class:ExecutionResult",
+      "stability": "STABLE",
+      "signature": "public class ExecutionResult"
+    },
+    {
+      "key": "class:ExecutionResult.init",
+      "stability": "STABLE",
+      "signature": "public init(value: JsonValue)"
+    },
+    {
+      "key": "class:ExecutionResult.let:value",
+      "stability": "STABLE",
+      "signature": "public let value: JsonValue"
+    },
+    {
+      "key": "class:ExtensionMetadata",
+      "stability": "STABLE",
+      "signature": "public class ExtensionMetadata"
+    },
+    {
+      "key": "class:ExtensionMetadata.init",
+      "stability": "STABLE",
+      "signature": "public init( id: String, name: String, version: String, description: String, vendor!: String = \"\" )"
+    },
+    {
+      "key": "class:ExtensionMetadata.let:description",
+      "stability": "STABLE",
+      "signature": "public let description: String"
+    },
+    {
+      "key": "class:ExtensionMetadata.let:id",
+      "stability": "STABLE",
+      "signature": "public let id: String"
+    },
+    {
+      "key": "class:ExtensionMetadata.let:name",
+      "stability": "STABLE",
+      "signature": "public let name: String"
+    },
+    {
+      "key": "class:ExtensionMetadata.let:vendor",
+      "stability": "STABLE",
+      "signature": "public let vendor: String"
+    },
+    {
+      "key": "class:ExtensionMetadata.let:version",
+      "stability": "STABLE",
+      "signature": "public let version: String"
+    },
+    {
+      "key": "class:ExtensionRegistry",
+      "stability": "STABLE",
+      "signature": "public class ExtensionRegistry"
+    },
+    {
+      "key": "class:ExtensionRegistry.func:register",
+      "stability": "STABLE",
+      "signature": "public func register(extension: Extension): SdkResult<Unit>"
+    },
+    {
+      "key": "class:ExtensionRegistry.func:registeredExtensions",
+      "stability": "STABLE",
+      "signature": "public func registeredExtensions(): Array<ExtensionMetadata>"
+    },
+    {
+      "key": "class:ExtensionRegistry.func:registeredToolNames",
+      "stability": "STABLE",
+      "signature": "public func registeredToolNames(): Array<String>"
+    },
+    {
+      "key": "class:ExtensionRegistry.init",
+      "stability": "STABLE",
+      "signature": "public init()"
+    },
+    {
+      "key": "class:ExtensionToolDefinition",
+      "stability": "STABLE",
+      "signature": "public class ExtensionToolDefinition"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.init",
+      "stability": "STABLE",
+      "signature": "public init( name: String, description: String, inputSchema: JsonValue, capabilities: Array<CapabilityRequirement>, effect!: ExtensionEffect = ExtensionEffect.ReadOnly, outputSchema!: JsonValue = JsonValue.objectValue([]) )"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:capabilities",
+      "stability": "STABLE",
+      "signature": "public let capabilities: Array<CapabilityRequirement>"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:description",
+      "stability": "STABLE",
+      "signature": "public let description: String"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:effect",
+      "stability": "STABLE",
+      "signature": "public let effect: ExtensionEffect"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:inputSchema",
+      "stability": "STABLE",
+      "signature": "public let inputSchema: JsonValue"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:name",
+      "stability": "STABLE",
+      "signature": "public let name: String"
+    },
+    {
+      "key": "class:ExtensionToolDefinition.let:outputSchema",
+      "stability": "STABLE",
+      "signature": "public let outputSchema: JsonValue"
+    },
+    {
+      "key": "class:HostOperationIntent",
+      "stability": "EXPERIMENTAL",
+      "signature": "public class HostOperationIntent"
+    },
+    {
+      "key": "class:HostOperationIntent.init",
+      "stability": "EXPERIMENTAL",
+      "signature": "public init(operation: String, input: JsonValue)"
+    },
+    {
+      "key": "class:HostOperationIntent.let:input",
+      "stability": "EXPERIMENTAL",
+      "signature": "public let input: JsonValue"
+    },
+    {
+      "key": "class:HostOperationIntent.let:operation",
+      "stability": "EXPERIMENTAL",
+      "signature": "public let operation: String"
+    },
+    {
+      "key": "class:InvocationDeadline",
+      "stability": "STABLE",
+      "signature": "public class InvocationDeadline"
+    },
+    {
+      "key": "class:InvocationDeadline.func:exceeded",
+      "stability": "STABLE",
+      "signature": "public func exceeded(nowMillis: Int64): Bool"
+    },
+    {
+      "key": "class:InvocationDeadline.func:isSet",
+      "stability": "STABLE",
+      "signature": "public func isSet(): Bool"
+    },
+    {
+      "key": "class:InvocationDeadline.init",
+      "stability": "STABLE",
+      "signature": "public init(expiresAtMillis!: Int64 = 0)"
+    },
+    {
+      "key": "class:InvocationDeadline.let:expiresAtMillis",
+      "stability": "STABLE",
+      "signature": "public let expiresAtMillis: Int64"
+    },
+    {
+      "key": "class:NeverCancelled",
+      "stability": "STABLE",
+      "signature": "public class NeverCancelled <: InvocationCancellation"
+    },
+    {
+      "key": "class:NeverCancelled.func:isCancelled",
+      "stability": "STABLE",
+      "signature": "public func isCancelled(): Bool"
+    },
+    {
+      "key": "class:NeverCancelled.func:reason",
+      "stability": "STABLE",
+      "signature": "public func reason(): String"
+    },
+    {
+      "key": "class:NeverCancelled.init",
+      "stability": "STABLE",
+      "signature": "public init()"
+    },
+    {
+      "key": "class:SdkError",
+      "stability": "STABLE",
+      "signature": "public class SdkError <: Exception"
+    },
+    {
+      "key": "class:SdkError.init",
+      "stability": "STABLE",
+      "signature": "public init( kind: SdkErrorKind, code: String, message: String, details!: JsonValue = JsonValue.objectValue([]) )"
+    },
+    {
+      "key": "class:SdkError.let:code",
+      "stability": "STABLE",
+      "signature": "public let code: String"
+    },
+    {
+      "key": "class:SdkError.let:details",
+      "stability": "STABLE",
+      "signature": "public let details: JsonValue"
+    },
+    {
+      "key": "class:SdkError.let:kind",
+      "stability": "STABLE",
+      "signature": "public let kind: SdkErrorKind"
+    },
+    {
+      "key": "class:ToolInvocation",
+      "stability": "STABLE",
+      "signature": "public class ToolInvocation"
+    },
+    {
+      "key": "class:ToolInvocation.init",
+      "stability": "STABLE",
+      "signature": "public init( callId: String, input: JsonValue, workspaceRoot: String, cwd: String, cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() )"
+    },
+    {
+      "key": "class:ToolInvocation.let:callId",
+      "stability": "STABLE",
+      "signature": "public let callId: String"
+    },
+    {
+      "key": "class:ToolInvocation.let:cancellation",
+      "stability": "STABLE",
+      "signature": "public let cancellation: InvocationCancellation"
+    },
+    {
+      "key": "class:ToolInvocation.let:cwd",
+      "stability": "STABLE",
+      "signature": "public let cwd: String"
+    },
+    {
+      "key": "class:ToolInvocation.let:deadline",
+      "stability": "STABLE",
+      "signature": "public let deadline: InvocationDeadline"
+    },
+    {
+      "key": "class:ToolInvocation.let:input",
+      "stability": "STABLE",
+      "signature": "public let input: JsonValue"
+    },
+    {
+      "key": "class:ToolInvocation.let:workspaceRoot",
+      "stability": "STABLE",
+      "signature": "public let workspaceRoot: String"
+    },
+    {
+      "key": "class:ToolOutput",
+      "stability": "STABLE",
+      "signature": "public class ToolOutput"
+    },
+    {
+      "key": "class:ToolOutput.init",
+      "stability": "STABLE",
+      "signature": "public init(text!: String = \"\", structured!: JsonValue = JsonValue.objectValue([]))"
+    },
+    {
+      "key": "class:ToolOutput.let:structured",
+      "stability": "STABLE",
+      "signature": "public let structured: JsonValue"
+    },
+    {
+      "key": "class:ToolOutput.let:text",
+      "stability": "STABLE",
+      "signature": "public let text: String"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent",
+      "stability": "STABLE",
+      "signature": "public class WorkspaceSearchIntent"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.init",
+      "stability": "STABLE",
+      "signature": "public init( pattern: String, path!: String = \".\", caseSensitive!: Bool = false, respectGitignore!: Bool = true, skip!: Int64 = 0, countOnly!: Bool = false, maxResults!: Int64 = 1000 )"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:caseSensitive",
+      "stability": "STABLE",
+      "signature": "public let caseSensitive: Bool"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:countOnly",
+      "stability": "STABLE",
+      "signature": "public let countOnly: Bool"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:maxResults",
+      "stability": "STABLE",
+      "signature": "public let maxResults: Int64"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:path",
+      "stability": "STABLE",
+      "signature": "public let path: String"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:pattern",
+      "stability": "STABLE",
+      "signature": "public let pattern: String"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:respectGitignore",
+      "stability": "STABLE",
+      "signature": "public let respectGitignore: Bool"
+    },
+    {
+      "key": "class:WorkspaceSearchIntent.let:skip",
+      "stability": "STABLE",
+      "signature": "public let skip: Int64"
+    },
+    {
+      "key": "class:WorkspaceWriteIntent",
+      "stability": "STABLE",
+      "signature": "public class WorkspaceWriteIntent"
+    },
+    {
+      "key": "class:WorkspaceWriteIntent.init",
+      "stability": "STABLE",
+      "signature": "public init(path: String, content: String)"
+    },
+    {
+      "key": "class:WorkspaceWriteIntent.let:content",
+      "stability": "STABLE",
+      "signature": "public let content: String"
+    },
+    {
+      "key": "class:WorkspaceWriteIntent.let:path",
+      "stability": "STABLE",
+      "signature": "public let path: String"
+    },
+    {
+      "key": "enum:ExtensionEffect",
+      "stability": "STABLE",
+      "signature": "public enum ExtensionEffect"
+    },
+    {
+      "key": "enum:ExtensionEffect.variant:ReadOnly",
+      "stability": "STABLE",
+      "signature": "ReadOnly"
+    },
+    {
+      "key": "enum:ExtensionEffect.variant:SideEffect",
+      "stability": "STABLE",
+      "signature": "SideEffect"
+    },
+    {
+      "key": "enum:OperationIntent",
+      "stability": "STABLE",
+      "signature": "public enum OperationIntent"
+    },
+    {
+      "key": "enum:OperationIntent.variant:HostOperation",
+      "stability": "EXPERIMENTAL",
+      "signature": "HostOperation(HostOperationIntent)"
+    },
+    {
+      "key": "enum:OperationIntent.variant:WorkspaceSearch",
+      "stability": "STABLE",
+      "signature": "WorkspaceSearch(WorkspaceSearchIntent)"
+    },
+    {
+      "key": "enum:OperationIntent.variant:WorkspaceWrite",
+      "stability": "STABLE",
+      "signature": "WorkspaceWrite(WorkspaceWriteIntent)"
+    },
+    {
+      "key": "enum:SdkErrorKind",
+      "stability": "STABLE",
+      "signature": "public enum SdkErrorKind"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Cancelled",
+      "stability": "STABLE",
+      "signature": "Cancelled"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Deadline",
+      "stability": "STABLE",
+      "signature": "Deadline"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Decode",
+      "stability": "STABLE",
+      "signature": "Decode"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Preparation",
+      "stability": "STABLE",
+      "signature": "Preparation"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Unsupported",
+      "stability": "STABLE",
+      "signature": "Unsupported"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Validation",
+      "stability": "STABLE",
+      "signature": "Validation"
+    },
+    {
+      "key": "enum:SdkResult",
+      "stability": "STABLE",
+      "signature": "public enum SdkResult<T>"
+    },
+    {
+      "key": "enum:SdkResult.func:isOk",
+      "stability": "STABLE",
+      "signature": "public func isOk(): Bool"
+    },
+    {
+      "key": "enum:SdkResult.variant:Err",
+      "stability": "STABLE",
+      "signature": "Err(SdkError)"
+    },
+    {
+      "key": "enum:SdkResult.variant:Ok",
+      "stability": "STABLE",
+      "signature": "Ok(T)"
+    },
+    {
+      "key": "func:networkHttp",
+      "stability": "STABLE",
+      "signature": "public func networkHttp(resource!: String = \"\"): CapabilityRequirement"
+    },
+    {
+      "key": "func:validateExtension",
+      "stability": "STABLE",
+      "signature": "public func validateExtension(extension: Extension): SdkResult<Unit>"
+    },
+    {
+      "key": "func:workspaceRead",
+      "stability": "STABLE",
+      "signature": "public func workspaceRead(resource!: String = \"\"): CapabilityRequirement"
+    },
+    {
+      "key": "func:workspaceWrite",
+      "stability": "STABLE",
+      "signature": "public func workspaceWrite(resource!: String = \"\"): CapabilityRequirement"
+    },
+    {
+      "key": "interface:Extension",
+      "stability": "STABLE",
+      "signature": "public interface Extension"
+    },
+    {
+      "key": "interface:Extension.func:metadata",
+      "stability": "STABLE",
+      "signature": "public func metadata(): ExtensionMetadata"
+    },
+    {
+      "key": "interface:Extension.func:tools",
+      "stability": "STABLE",
+      "signature": "public func tools(): Array<ExtensionTool>"
+    },
+    {
+      "key": "interface:ExtensionTool",
+      "stability": "STABLE",
+      "signature": "public interface ExtensionTool"
+    },
+    {
+      "key": "interface:ExtensionTool.func:decode",
+      "stability": "STABLE",
+      "signature": "public func decode( invocation: ToolInvocation, result: ExecutionResult ): SdkResult<ToolOutput>"
+    },
+    {
+      "key": "interface:ExtensionTool.func:definition",
+      "stability": "STABLE",
+      "signature": "public func definition(): ExtensionToolDefinition"
+    },
+    {
+      "key": "interface:ExtensionTool.func:prepare",
+      "stability": "STABLE",
+      "signature": "public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent>"
+    },
+    {
+      "key": "interface:ExtensionTool.func:validate",
+      "stability": "STABLE",
+      "signature": "public func validate(input: JsonValue): SdkResult<JsonValue>"
+    },
+    {
+      "key": "interface:InvocationCancellation",
+      "stability": "STABLE",
+      "signature": "public interface InvocationCancellation"
+    },
+    {
+      "key": "interface:InvocationCancellation.func:isCancelled",
+      "stability": "STABLE",
+      "signature": "public func isCancelled(): Bool"
+    },
+    {
+      "key": "interface:InvocationCancellation.func:reason",
+      "stability": "STABLE",
+      "signature": "public func reason(): String"
+    },
+    {
+      "key": "let:AGENT_SDK_VERSION",
+      "stability": "STABLE",
+      "signature": "public let AGENT_SDK_VERSION"
+    }
+  ]
+}
+
