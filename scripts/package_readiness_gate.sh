@@ -7,6 +7,14 @@ export AXYNDRA_SDK_ROOT="$sdk_root"
 work_root=$(mktemp -d /tmp/axyndra-package-readiness.XXXXXX)
 mkdir -p "$work_root/logs"
 log_sequence=0
+GREP=${GREP:-rp-grep}
+RG=${RG:-rp-rg}
+if ! command -v "$GREP" >/dev/null 2>&1; then
+  GREP=grep
+fi
+if ! command -v "$RG" >/dev/null 2>&1; then
+  RG=rg
+fi
 
 cleanup() {
   if [[ ${AXYNDRA_KEEP_PACKAGE_WORKDIR:-0} == 1 ]]; then
@@ -31,7 +39,7 @@ run_cjpm() {
     cat "$log_file" >&2
     return 1
   fi
-  rp-grep -E 'cjpm (check|build|test) success|Summary: TOTAL|Project tests finished|bundle success' "$log_file" | tail -n 8 || true
+  "$GREP" -E 'cjpm (check|build|test) success|Summary: TOTAL|Project tests finished|bundle success' "$log_file" | tail -n 8 || true
 }
 
 python3 "$root/scripts/package_readiness.py" self-test
@@ -67,7 +75,7 @@ for consumer in "${public_packages[@]}"; do
   fi
 done
 
-if rp-rg -n '/home/elliot/playground/learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./axyndra_agent_testkit' \
+if "$RG" -n '/home/elliot/playground/learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./axyndra_agent_testkit' \
   "$work_root/packages" "$work_root/consumers" \
   --glob '!target/**' --glob '!package-inventory.json'; then
   printf 'package readiness: monorepo fallback found in staged package or consumer\n' >&2
@@ -77,17 +85,17 @@ fi
 process_package="$work_root/packages/process4cj-0.1.0"
 [[ -f "$process_package/native/process4cj_native.c" ]]
 [[ -f "$process_package/native/libprocess4cj_native.a" ]]
-if find "$process_package" -name '*.so' -print -quit | rp-grep -q .; then
+if find "$process_package" -name '*.so' -print -quit | "$GREP" -q .; then
   printf 'package readiness: process4cj candidate unexpectedly contains a dynamic library\n' >&2
   exit 1
 fi
 
 process_binary="$work_root/consumers/process4cj/target/release/bin/main"
-if readelf -d "$process_binary" | rp-grep -E 'RPATH|RUNPATH' | rp-grep -q '/home/|learn_agent_cj'; then
+if readelf -d "$process_binary" | "$GREP" -E 'RPATH|RUNPATH' | "$GREP" -q '/home/|learn_agent_cj'; then
   printf 'package readiness: process consumer has an absolute developer RPATH\n' >&2
   exit 1
 fi
-if ldd "$process_binary" | rp-grep -q 'libprocess4cj_native'; then
+if ldd "$process_binary" | "$GREP" -q 'libprocess4cj_native'; then
   printf 'package readiness: process consumer retained a dynamic process4cj native dependency\n' >&2
   exit 1
 fi
@@ -97,7 +105,7 @@ AXYNDRA_PACKAGE_ROOT="$work_root/process-runtime" \
 AXYNDRA_SDK_ROOT="$sdk_root" \
   "$root/scripts/package_candidate.sh" >/dev/null
 env -u LD_LIBRARY_PATH "$work_root/process-runtime/bin/axyndra"
-if rp-grep -q 'not found' "$work_root/process-runtime/diagnostics/ldd.txt"; then
+if "$GREP" -q 'not found' "$work_root/process-runtime/diagnostics/ldd.txt"; then
   cat "$work_root/process-runtime/diagnostics/ldd.txt" >&2
   exit 1
 fi
