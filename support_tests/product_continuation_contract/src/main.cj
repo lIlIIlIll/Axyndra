@@ -90,38 +90,43 @@ main(): Int64 {
             decodeDurableRunContinuation(encodedDurableContinuation)
         ).getOrThrow()
         expect(database.scalarInt(
-            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
-        ) == 1, "new continuation writes use only the canonical vNext register")
+            "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
+        ) == 0 && database.scalarInt(
+            "SELECT COUNT(*) FROM legacy_run_continuation_imports"
+        ) == 0, "new continuation writes use only the canonical vNext register")
         database.execute(
-            "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
-                " WHERE id='product-restart-run'"
+            "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
+                "'product-restart-run'," + sqliteText(encodedContinuation) + ")"
         )
         database.execute(
-            "UPDATE runs SET continuation=json_set(continuation,'$.requested_policy',json('null')) " +
-                "WHERE id='product-restart-run'"
+            "UPDATE legacy_run_continuation_imports SET " +
+                "payload=json_set(payload,'$.requested_policy',json('null')) " +
+                "WHERE run_id='product-restart-run'"
         )
         expect(continuationRepository.continuation(runId).isError(),
             "legacy migration source rejects divergence from the canonical projection")
         database.execute(
-            "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
-                " WHERE id='product-restart-run'"
+            "UPDATE legacy_run_continuation_imports SET payload=" +
+                sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"
         )
         expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
-            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
-        ) == 1, "matching legacy migration source is consumed and cleared atomically")
+            "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                "WHERE run_id='product-restart-run'"
+        ) == 0, "matching legacy migration source is consumed and cleared atomically")
 
         database.execute(
             "DELETE FROM run_continuations WHERE run_id='product-restart-run'"
         )
         database.execute(
-            "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
-                " WHERE id='product-restart-run'"
+            "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
+                "'product-restart-run'," + sqliteText(encodedContinuation) + ")"
         )
         expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
             "SELECT COUNT(*) FROM run_continuations WHERE run_id='product-restart-run'"
         ) == 1 && database.scalarInt(
-            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
-        ) == 1, "legacy-only database fixture migrates into the canonical register")
+            "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                "WHERE run_id='product-restart-run'"
+        ) == 0, "legacy-only database fixture migrates into the canonical register")
         let migratedDurableContinuation = database.query(
             "SELECT payload FROM run_continuations WHERE run_id='product-restart-run'"
         )[0].required(0)

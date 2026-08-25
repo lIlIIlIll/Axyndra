@@ -128,7 +128,7 @@ public func consumeLegacyRunContinuationSource(
         writeLegacyRunContinuationProjection(transaction, value, encodedLegacy)
     }
     transaction.execute(
-        "UPDATE runs SET continuation=NULL WHERE id=?",
+        "DELETE FROM legacy_run_continuation_imports WHERE run_id=?",
         [SqlParameter.Text(value.runId.value)]
     )
 }

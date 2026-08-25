@@ -122,11 +122,12 @@ agent_tui       → agent_cli + vendored cjtui packages
   与能力快照的 `ModelLane`。Turn admission 在同一事务中绑定 Run、初始 Item、Step 和
   ContextManifest；crash recovery 从 `run_lane_bindings` 恢复该 Lane，禁止回退到
   `main`。
-- `run_continuations` 是恢复寄存器的唯一 canonical source。旧数据库中的
-  `runs.continuation` 只作为一次性迁移输入：恢复 API 会在同一事务中把其 legacy
-  projection 封入 canonical phase payload 并清空旧列；两者不一致时以 typed
-  RecoveryRequired fail closed。后续 phase 更新必须携带该 projection，Operation
-  recovery 和 GC 只读取 canonical register，禁止重新引入 runtime 双读或双写。
+- `run_continuations` 是恢复寄存器的唯一 canonical source。schema v20 会先把旧数据库
+  的 `runs.continuation` 搬入 `legacy_run_continuation_imports`，再从 canonical Run 表
+  删除旧列；恢复 API 在同一事务中把一次性 import projection 封入 canonical phase
+  payload 并删除 import row。两份数据不一致时以 typed RecoveryRequired fail closed。
+  后续 phase 更新必须携带该 projection，Operation recovery 和 GC 只读取 canonical
+  register，禁止重新引入 runtime 双读或双写。
 - AppEvent 的 journal sequence 标识 canonical 事件；mailbox drain 另行分配连接内连续的
   delivery sequence。合并只影响 delivery projection，客户端 cursor 不会把合法合并误判
   为 journal 丢失。

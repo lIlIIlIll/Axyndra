@@ -254,3 +254,11 @@ func v19Migration(): Array<String> {
         "CREATE TRIGGER lane_inbox_preserves_lane BEFORE UPDATE OF thread_id,lane_id ON lane_inbox_entries WHEN NOT EXISTS (SELECT 1 FROM lanes WHERE thread_id=NEW.thread_id AND lane_id=NEW.lane_id) BEGIN SELECT RAISE(ABORT,'lane_inbox_entries references unknown lane'); END"
     ]
 }
+
+func v20Migration(): Array<String> {
+    [
+        "CREATE TABLE legacy_run_continuation_imports (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL)",
+        "INSERT INTO legacy_run_continuation_imports(run_id,payload) SELECT id,continuation FROM runs WHERE continuation IS NOT NULL",
+        "ALTER TABLE runs DROP COLUMN continuation"
+    ]
+}

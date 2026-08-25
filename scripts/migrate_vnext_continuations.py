@@ -60,11 +60,29 @@ def migrate_checkpoint_value(raw: str, checkpoint_id: str) -> str:
     return canonical_json(value)
 
 
+def continuation_storage(database: sqlite3.Connection) -> tuple[str, str, str]:
+    run_columns = {
+        str(row[1]) for row in database.execute("PRAGMA table_info(runs)").fetchall()
+    }
+    if "continuation" in run_columns:
+        return "runs", "id", "continuation"
+    import_table = database.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='legacy_run_continuation_imports'"
+    ).fetchone()[0]
+    if import_table == 1:
+        return "legacy_run_continuation_imports", "run_id", "payload"
+    raise ValueError("database has no supported legacy continuation import source")
+
+
 def inspect(database: sqlite3.Connection) -> tuple[
-    list[tuple[str, str, str]], list[tuple[str, str, str]]
+    list[tuple[str, str, str]], list[tuple[str, str, str]], tuple[str, str, str]
 ]:
+    storage = continuation_storage(database)
+    table, id_column, payload_column = storage
     rows = database.execute(
-        "SELECT id, continuation FROM runs WHERE continuation IS NOT NULL ORDER BY id"
+        f"SELECT {id_column},{payload_column} FROM {table} "
+        f"WHERE {payload_column} IS NOT NULL ORDER BY {id_column}"
     ).fetchall()
     changes: list[tuple[str, str, str]] = []
     for run_id, raw in rows:
@@ -78,7 +96,7 @@ def inspect(database: sqlite3.Connection) -> tuple[
         migrated = migrate_checkpoint_value(raw, checkpoint_id)
         if migrated != raw:
             checkpoints.append((checkpoint_id, raw, migrated))
-    return changes, checkpoints
+    return changes, checkpoints, storage
 
 
 def main(argv: list[str]) -> int:
@@ -93,7 +111,7 @@ def main(argv: list[str]) -> int:
 
     database = sqlite3.connect(f"file:{path}?mode={'rw' if args.apply else 'ro'}", uri=True)
     try:
-        changes, checkpoints = inspect(database)
+        changes, checkpoints, storage = inspect(database)
         if not args.apply:
             print(canonical_json({
                 "status": "dry_run", "database": str(path),
@@ -109,9 +127,11 @@ def main(argv: list[str]) -> int:
         os.chmod(backup, 0o600)
         database.execute("BEGIN IMMEDIATE")
         try:
+            table, id_column, payload_column = storage
             for run_id, raw, migrated in changes:
                 cursor = database.execute(
-                    "UPDATE runs SET continuation=? WHERE id=? AND continuation=?",
+                    f"UPDATE {table} SET {payload_column}=? "
+                    f"WHERE {id_column}=? AND {payload_column}=?",
                     (migrated, run_id, raw),
                 )
                 if cursor.rowcount != 1:

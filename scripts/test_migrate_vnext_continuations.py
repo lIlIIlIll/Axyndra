@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import sqlite3
 from pathlib import Path
 
 
@@ -31,6 +32,18 @@ def main() -> int:
         '{"structured_summary":{},"active_goal":""}', "checkpoint-v1"
     ))
     assert checkpoint["active_state"] == {}
+    legacy = sqlite3.connect(":memory:")
+    legacy.execute("CREATE TABLE runs(id TEXT PRIMARY KEY,continuation TEXT)")
+    assert MODULE.continuation_storage(legacy) == ("runs", "id", "continuation")
+    migrated_schema = sqlite3.connect(":memory:")
+    migrated_schema.execute("CREATE TABLE runs(id TEXT PRIMARY KEY)")
+    migrated_schema.execute(
+        "CREATE TABLE legacy_run_continuation_imports("
+        "run_id TEXT PRIMARY KEY,payload TEXT NOT NULL)"
+    )
+    assert MODULE.continuation_storage(migrated_schema) == (
+        "legacy_run_continuation_imports", "run_id", "payload"
+    )
     print("continuation offline importer contract passed")
     return 0
 
