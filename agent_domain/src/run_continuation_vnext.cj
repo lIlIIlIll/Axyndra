@@ -126,6 +126,28 @@ public func runExecutionPhasePayload(value: RunExecutionPhase): AgentValue {
     }
 }
 
+public func runExecutionPhaseWithState(
+    value: RunExecutionPhase,
+    state: DurablePhaseState
+): RunExecutionPhase {
+    match (value) {
+        case RunExecutionPhase.Accepted(_) => RunExecutionPhase.Accepted(state)
+        case RunExecutionPhase.ContextCompiling(_) => RunExecutionPhase.ContextCompiling(state)
+        case RunExecutionPhase.ContextReady(_) => RunExecutionPhase.ContextReady(state)
+        case RunExecutionPhase.ModelReady(_) => RunExecutionPhase.ModelReady(state)
+        case RunExecutionPhase.ModelEffectPending(_) => RunExecutionPhase.ModelEffectPending(state)
+        case RunExecutionPhase.ModelSettling(_) => RunExecutionPhase.ModelSettling(state)
+        case RunExecutionPhase.DecisionReady(_) => RunExecutionPhase.DecisionReady(state)
+        case RunExecutionPhase.ToolBatchReady(_) => RunExecutionPhase.ToolBatchReady(state)
+        case RunExecutionPhase.WaitingApproval(_) => RunExecutionPhase.WaitingApproval(state)
+        case RunExecutionPhase.ToolEffectPending(_) => RunExecutionPhase.ToolEffectPending(state)
+        case RunExecutionPhase.ToolSettling(_) => RunExecutionPhase.ToolSettling(state)
+        case RunExecutionPhase.WaitingExternal(_) => RunExecutionPhase.WaitingExternal(state)
+        case RunExecutionPhase.Checkpoint(_) => RunExecutionPhase.Checkpoint(state)
+        case RunExecutionPhase.Terminalizing(_) => RunExecutionPhase.Terminalizing(state)
+    }
+}
+
 public class ToolBatchContinuation {
     public let batchId: ToolBatchId
     public let nextOperationOrdinal: Int64

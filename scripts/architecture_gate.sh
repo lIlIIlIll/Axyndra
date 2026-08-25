@@ -419,4 +419,19 @@ if rg_matches -n \
   fail "agent_product retains the removed pre-registry provider routing path"
 fi
 
+legacy_continuation_column_users=$(
+  "$RG" -l \
+    'UPDATE runs SET continuation|runs WHERE continuation IS NOT NULL| AND continuation IS NOT NULL|COALESCE\(continuation' \
+    "$ROOT"/agent_*/src "$ROOT"/persistence_runtime/src \
+    --glob '*.cj' 2>/dev/null | sort || true
+)
+allowed_legacy_continuation_column_users=$(printf '%s\n' \
+  "$ROOT/agent_store/src/legacy_continuation_bridge.cj" \
+  "$ROOT/persistence_runtime/src/sqlite_run_repository.cj" \
+  | sort)
+if [[ "$legacy_continuation_column_users" != "$allowed_legacy_continuation_column_users" ]]; then
+  printf '%s\n' "$legacy_continuation_column_users" >&2
+  fail "runs.continuation must remain migration input only"
+fi
+
 printf 'architecture gate passed\n'

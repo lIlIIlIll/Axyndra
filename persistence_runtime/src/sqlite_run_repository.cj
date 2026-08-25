@@ -34,6 +34,44 @@ public class SqliteRunRepository <: RunRepository {
         this.eventCapacity = eventCapacity
     }
 
+    private func consumeLegacyContinuationColumn(): Result<Unit> {
+        try {
+            database.transaction<Result<Unit>>({ transaction =>
+                let rows = transaction.query(
+                    "SELECT id,continuation FROM runs WHERE continuation IS NOT NULL"
+                )
+                for (row in rows) {
+                    let runId = RunId(row.required(0))
+                    let source = row.required(1)
+                    let legacy = match (decodeContinuation(source)) {
+                        case Result.Ok(value) => value
+                        case Result.Err(error) => return sqliteRunRecovery<Unit>(
+                            runId,
+                            "legacy continuation migration source is corrupt: " + error.message
+                        )
+                    }
+                    if (legacy.runId.value != runId.value) {
+                        return sqliteRunRecovery<Unit>(
+                            runId, "legacy continuation migration identity is corrupt"
+                        )
+                    }
+                    try {
+                        consumeLegacyRunContinuationSource(transaction, legacy, source)
+                    } catch (error: Exception) {
+                        return sqliteRunRecovery<Unit>(
+                            runId, "legacy continuation migration failed: " + error.message
+                        )
+                    }
+                }
+                Result.Ok(())
+            })
+        } catch (error: Exception) {
+            sqliteRunStorageError(
+                "persistence.sqlite_continuation_migration", error.message
+            )
+        }
+    }
+
     public func save(snapshot: RunSnapshot): Result<Unit> {
         try {
             let rows = database.query(
@@ -170,6 +208,10 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func saveContinuation(value: RunContinuation): Result<Unit> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (value.approval.sessionId != value.sessionId.value || value.approval.callId == "" ||
             value.approval.argumentHash == "") {
             return Result.Err(AgentError(
@@ -181,7 +223,7 @@ public class SqliteRunRepository <: RunRepository {
         try {
             database.transaction<Result<Unit>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT runs.thread_id,runs.continuation,run_continuations.payload FROM runs " +
+                    "SELECT runs.thread_id,run_continuations.payload FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(value.runId.value)
                 )
@@ -191,7 +233,7 @@ public class SqliteRunRepository <: RunRepository {
                 if (rows[0].required(0) != value.sessionId.value) {
                     return sqliteRunRecovery<Unit>(value.runId, "pending approval session binding is corrupt")
                 }
-                match (canonicalContinuationFromRow(rows[0], value.runId, 1, 2)) {
+                match (canonicalContinuationFromRow(rows[0], value.runId, 1)) {
                     case Result.Ok(Some(existing)) =>
                             if (!sameContinuationBinding(existing, value)) {
                                 return operationConflict<Unit>("pending approval continuation binding cannot be changed")
@@ -203,11 +245,7 @@ public class SqliteRunRepository <: RunRepository {
                     case Result.Err(error) => return Result.Err(error)
                 }
                 let encoded = encodeContinuation(value)
-                transaction.execute(
-                    "UPDATE runs SET continuation=" + sqliteText(encoded) +
-                        " WHERE id=" + sqliteText(value.runId.value)
-                )
-                mirrorLegacyRunContinuation(transaction, value, encoded)
+                writeLegacyRunContinuationProjection(transaction, value, encoded)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -216,14 +254,18 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func continuation(runId: RunId): Result<RunContinuation> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         try {
             let rows = database.query(
-                "SELECT runs.continuation,run_continuations.payload FROM runs " +
+                "SELECT run_continuations.payload FROM runs " +
                     "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id " +
                     "WHERE runs.id=" + sqliteText(runId.value)
             )
             if (rows.size != 1) { return sqliteRunMissing<RunContinuation>(runId, "Run was not found") }
-            match (canonicalContinuationFromRow(rows[0], runId, 0, 1)) {
+            match (canonicalContinuationFromRow(rows[0], runId, 0)) {
                 case Result.Ok(Some(value)) =>
                     if (value.runId.value == runId.value) { Result.Ok(value) } else {
                         sqliteRunRecovery<RunContinuation>(runId, "pending approval Run binding is corrupt")
@@ -239,12 +281,16 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func pendingContinuation(sessionId: SessionId): Result<?RunContinuation> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         try {
             let rows = database.query(
-                "SELECT runs.app_snapshot,runs.continuation,run_continuations.payload FROM runs " +
+                "SELECT runs.app_snapshot,run_continuations.payload FROM runs " +
                     "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.thread_id=" +
                     sqliteText(sessionId.value) +
-                    " AND (run_continuations.payload IS NOT NULL OR runs.continuation IS NOT NULL)"
+                    " AND run_continuations.payload IS NOT NULL"
             )
             var pending: ?RunContinuation = None
             for (row in rows) {
@@ -264,7 +310,7 @@ public class SqliteRunRepository <: RunRepository {
                         fields: [ErrorField("session_id", sessionId.value)]
                     ))
                 }
-                let value = match (canonicalContinuationFromRow(row, snapshot.runId, 1, 2)) {
+                let value = match (canonicalContinuationFromRow(row, snapshot.runId, 1)) {
                     case Result.Ok(Some(item)) => item
                     case Result.Ok(None) => return sqliteRunRecovery<?RunContinuation>(
                         snapshot.runId, "pending approval continuation is missing"
@@ -280,17 +326,21 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func pendingRecoveryContinuation(sessionId: SessionId): Result<?RunContinuation> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         try {
             let rows = database.query(
-                "SELECT runs.id,runs.continuation,run_continuations.payload FROM runs " +
+                "SELECT runs.id,run_continuations.payload FROM runs " +
                     "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.thread_id=" +
                     sqliteText(sessionId.value) +
-                    " AND (run_continuations.payload IS NOT NULL OR runs.continuation IS NOT NULL)"
+                    " AND run_continuations.payload IS NOT NULL"
             )
             var pending: ?RunContinuation = None
             for (row in rows) {
                 let rowRunId = RunId(row.required(0))
-                let value = match (canonicalContinuationFromRow(row, rowRunId, 1, 2)) {
+                let value = match (canonicalContinuationFromRow(row, rowRunId, 1)) {
                     case Result.Ok(Some(item)) => item
                     case Result.Ok(None) => continue
                     case Result.Err(error) => return Result.Err(error)
@@ -316,17 +366,21 @@ public class SqliteRunRepository <: RunRepository {
         expected: ?RunContinuation,
         next: RunContinuation
     ): Result<RunContinuation> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         try {
             database.transaction<Result<RunContinuation>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT runs.continuation,run_continuations.payload FROM runs " +
+                    "SELECT run_continuations.payload FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(next.runId.value)
                 )
                 if (rows.size != 1) {
                     return sqliteRunMissing<RunContinuation>(next.runId, "Run was not found")
                 }
-                let current = match (canonicalContinuationFromRow(rows[0], next.runId, 0, 1)) {
+                let current = match (canonicalContinuationFromRow(rows[0], next.runId, 0)) {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result.Err(error)
                 }
@@ -339,11 +393,7 @@ public class SqliteRunRepository <: RunRepository {
                     }
                 }
                 let encoded = encodeContinuation(next)
-                transaction.execute(
-                    "UPDATE runs SET continuation=" + sqliteText(encoded) +
-                        " WHERE id=" + sqliteText(next.runId.value)
-                )
-                mirrorLegacyRunContinuation(transaction, next, encoded)
+                writeLegacyRunContinuationProjection(transaction, next, encoded)
                 Result.Ok(next)
             })
         } catch (error: Exception) {
@@ -356,18 +406,22 @@ public class SqliteRunRepository <: RunRepository {
         event: AgentEvent,
         continuation: RunContinuation
     ): Result<Unit> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (!modelContinuationMatchesAttempt(continuation, attempt)) {
             return sqliteRunConflict<Unit>("model continuation does not match its Attempt")
         }
         try {
             database.transaction<Result<Unit>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT runs.continuation,run_continuations.payload FROM runs " +
+                    "SELECT run_continuations.payload FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(attempt.runId.value)
                 )
                 if (rows.size != 1) { return sqliteRunMissing<Unit>(attempt.runId, "Run was not found") }
-                match (canonicalContinuationFromRow(rows[0], attempt.runId, 0, 1)) {
+                match (canonicalContinuationFromRow(rows[0], attempt.runId, 0)) {
                     case Result.Ok(Some(existing)) =>
                             let exactMatch = sameContinuationBinding(existing, continuation)
                             let approvedTransition =
@@ -411,11 +465,7 @@ public class SqliteRunRepository <: RunRepository {
                     }
                 }
                 let encoded = encodeContinuation(continuation)
-                transaction.execute(
-                    "UPDATE runs SET continuation=" + sqliteText(encoded) +
-                        " WHERE id=" + sqliteText(attempt.runId.value)
-                )
-                mirrorLegacyRunContinuation(transaction, continuation, encoded)
+                writeLegacyRunContinuationProjection(transaction, continuation, encoded)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -430,6 +480,10 @@ public class SqliteRunRepository <: RunRepository {
         duplicateEvent: AgentEvent,
         continuation: RunContinuation
     ): Result<Unit> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         if (attempt.parentAttemptId.isNone() ||
             attempt.parentAttemptId.getOrThrow().value != parent.id.value ||
             attempt.attemptNo != parent.attemptNo + 1 ||
@@ -456,7 +510,7 @@ public class SqliteRunRepository <: RunRepository {
                     return sqliteRunRecovery<Unit>(parent.runId, "restart parent Attempt is not recoverable")
                 }
                 let continuationRows = transaction.query(
-                    "SELECT runs.continuation,run_continuations.payload FROM runs " +
+                    "SELECT run_continuations.payload FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(parent.runId.value)
                 )
@@ -464,7 +518,7 @@ public class SqliteRunRepository <: RunRepository {
                     return sqliteRunRecovery<Unit>(parent.runId, "restart continuation is missing")
                 }
                 let previous = match (canonicalContinuationFromRow(
-                    continuationRows[0], parent.runId, 0, 1
+                    continuationRows[0], parent.runId, 0
                 )) {
                     case Result.Ok(Some(value)) => value
                     case Result.Ok(None) => return sqliteRunRecovery<Unit>(
@@ -496,11 +550,7 @@ public class SqliteRunRepository <: RunRepository {
                     case Result.Err(error) => return Result.Err(error)
                 }
                 let encoded = encodeContinuation(continuation)
-                transaction.execute(
-                    "UPDATE runs SET continuation=" + sqliteText(encoded) +
-                        " WHERE id=" + sqliteText(parent.runId.value)
-                )
-                mirrorLegacyRunContinuation(transaction, continuation, encoded)
+                writeLegacyRunContinuationProjection(transaction, continuation, encoded)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -600,15 +650,19 @@ public class SqliteRunRepository <: RunRepository {
         runId: RunId,
         activeAttemptId: ModelAttemptId
     ): Result<Unit> {
+        match (consumeLegacyContinuationColumn()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
         try {
             database.transaction<Result<Unit>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT runs.continuation,run_continuations.payload FROM runs " +
+                    "SELECT run_continuations.payload FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(runId.value)
                 )
                 if (rows.size != 1) { return sqliteRunMissing<Unit>(runId, "Run was not found") }
-                match (canonicalContinuationFromRow(rows[0], runId, 0, 1)) {
+                match (canonicalContinuationFromRow(rows[0], runId, 0)) {
                     case Result.Ok(None) => return Result.Ok(())
                     case Result.Ok(Some(value)) => if (value.runningModel.isNone() ||
                             value.runningModel.getOrThrow().activeAttemptId.value != activeAttemptId.value) {
@@ -622,10 +676,7 @@ public class SqliteRunRepository <: RunRepository {
                         }
                     case Result.Err(error) => return Result.Err(error)
                 }
-                transaction.execute(
-                    "UPDATE runs SET continuation=NULL WHERE id=" + sqliteText(runId.value)
-                )
-                removeLegacyRunContinuationMirror(transaction, runId)
+                removeLegacyRunContinuationProjection(transaction, runId)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -1164,54 +1215,44 @@ func sqliteRunConflict<T>(message: String): Result<T> {
     Result.Err(AgentError(AgentErrorKind.Conflict, "run.sqlite_conflict", message))
 }
 
-// run_continuations is the canonical vNext recovery register. This legacy
-// repository can consume that register only when the phase carries the
-// legacy-continuation-v4 adapter. Native vNext phases deliberately have no
-// lossless RunContinuation projection; while the legacy execution path is
-// still in production, runs.continuation remains its bounded compatibility
-// cursor. Adapter-bearing phases must agree exactly with that cursor.
+// run_continuations is the only production continuation register. The legacy
+// AgentCore projection is carried inside its sealed phase payload until the
+// legacy RunContinuation API is retired; runs.continuation is migration input
+// only and is nulled before any read or write proceeds.
 func canonicalContinuationFromRow(
     row: SqliteRow,
     runId: RunId,
-    legacyIndex: Int64,
     durableIndex: Int64
 ): Result<?RunContinuation> {
-    let legacy: ?RunContinuation = match (row[legacyIndex]) {
-        case Some(source) => match (decodeContinuation(source)) {
-            case Result.Ok(value) => Some(value)
-            case Result.Err(error) => return sqliteRunRecovery<?RunContinuation>(
-                runId, "legacy continuation mirror is corrupt: " + error.message
-            )
-        }
-        case None => None
-    }
-    let canonical: ?RunContinuation = match (row[durableIndex]) {
+    match (row[durableIndex]) {
         case Some(source) =>
-            let adapted = optionalLegacyPayloadFromDurableContinuation(
-                decodeDurableRunContinuation(source)
-            )
-            match (adapted) {
+            let durable = try { decodeDurableRunContinuation(source) }
+            catch (error: Exception) {
+                return sqliteRunRecovery<?RunContinuation>(
+                    runId, "canonical continuation is corrupt: " + error.message
+                )
+            }
+            if (durable.runId.value != runId.value) {
+                return sqliteRunRecovery<?RunContinuation>(
+                    runId, "canonical continuation Run binding is corrupt"
+                )
+            }
+            match (optionalLegacyPayloadFromDurableContinuation(durable)) {
                 case Some(payload) => match (decodeContinuation(payload)) {
-                    case Result.Ok(value) => Some(value)
+                    case Result.Ok(value) => if (value.runId.value == runId.value) {
+                        Result.Ok(Some(value))
+                    } else {
+                        sqliteRunRecovery<?RunContinuation>(
+                            runId, "canonical legacy projection Run binding is corrupt"
+                        )
+                    }
                     case Result.Err(error) => return sqliteRunRecovery<?RunContinuation>(
-                        runId, "canonical continuation adapter is corrupt: " + error.message
+                        runId, "canonical legacy projection is corrupt: " + error.message
                     )
                 }
-                case None => return Result.Ok(legacy)
+                case None => Result.Ok(None)
             }
-        case None => None
-    }
-    match ((canonical, legacy)) {
-        case (Some(authoritative), Some(mirror)) =>
-            if (encodeContinuation(authoritative) != encodeContinuation(mirror)) {
-                sqliteRunRecovery<?RunContinuation>(
-                    runId,
-                    "canonical continuation and legacy mirror diverged"
-                )
-            } else { Result.Ok(Some(authoritative)) }
-        case (Some(authoritative), None) => Result.Ok(Some(authoritative))
-        case (None, Some(migrationSource)) => Result.Ok(Some(migrationSource))
-        case (None, None) => Result.Ok(None)
+        case None => Result.Ok(None)
     }
 }
 

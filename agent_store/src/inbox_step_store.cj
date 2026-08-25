@@ -339,7 +339,8 @@ func putClaimContinuation(
     expectedRevision: Int64,
     observedAtMillis: Int64
 ): Unit {
-    let payload = encodeDurableRunContinuation(value)
+    let durable = preserveLegacyRunContinuationProjection(transaction, value)
+    let payload = encodeDurableRunContinuation(durable)
     let head = transaction.query(
         "SELECT last_sequence FROM thread_commit_heads WHERE thread_id=?",
         [SqlParameter.Text(threadId.value)]
@@ -364,10 +365,10 @@ func putClaimContinuation(
             "run_id,thread_id,revision,commit_sequence,phase,payload,digest,created_at_millis" +
             ") VALUES (?,?,?,?,?,?,?,?)",
         [
-            SqlParameter.Text(value.runId.value), SqlParameter.Text(threadId.value),
+            SqlParameter.Text(durable.runId.value), SqlParameter.Text(threadId.value),
             SqlParameter.Int64Value(revision), SqlParameter.Int64Value(sequence),
-            SqlParameter.Text(runExecutionPhaseName(value.phase)), SqlParameter.Text(payload),
-            SqlParameter.Text(value.digest), SqlParameter.Int64Value(observedAtMillis)
+            SqlParameter.Text(runExecutionPhaseName(durable.phase)), SqlParameter.Text(payload),
+            SqlParameter.Text(durable.digest), SqlParameter.Int64Value(observedAtMillis)
         ]
     )
     transaction.execute(
@@ -378,10 +379,10 @@ func putClaimContinuation(
             "phase=excluded.phase,payload=excluded.payload,digest=excluded.digest," +
             "updated_commit_sequence=excluded.updated_commit_sequence",
         [
-            SqlParameter.Text(value.runId.value), SqlParameter.Int64Value(1),
+            SqlParameter.Text(durable.runId.value), SqlParameter.Int64Value(1),
             SqlParameter.Int64Value(revision),
-            SqlParameter.Text(runExecutionPhaseName(value.phase)), SqlParameter.Text(payload),
-            SqlParameter.Text(value.digest), SqlParameter.Int64Value(sequence)
+            SqlParameter.Text(runExecutionPhaseName(durable.phase)), SqlParameter.Text(payload),
+            SqlParameter.Text(durable.digest), SqlParameter.Int64Value(sequence)
         ]
     )
 }

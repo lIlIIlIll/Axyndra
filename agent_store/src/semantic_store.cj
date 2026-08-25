@@ -202,7 +202,10 @@ public class SqliteSemanticStore <: SemanticStore {
         ) { 1 } else { 0 }
         match (writes.continuation) {
             case Some(value) =>
-                let payload = encodeDurableRunContinuation(value)
+                let durable = preserveLegacyRunContinuationProjection(
+                    transaction, value
+                )
+                let payload = encodeDurableRunContinuation(durable)
                 transaction.execute(
                     "INSERT INTO run_continuation_facts(" +
                         "run_id,thread_id,revision,commit_sequence,phase,payload,digest,created_at_millis" +
@@ -212,9 +215,9 @@ public class SqliteSemanticStore <: SemanticStore {
                         SqlParameter.Text(expected.threadId.value),
                         SqlParameter.Int64Value(nextRevision),
                         SqlParameter.Int64Value(commitSequence),
-                        SqlParameter.Text(runExecutionPhaseName(value.phase)),
+                        SqlParameter.Text(runExecutionPhaseName(durable.phase)),
                         SqlParameter.Text(payload),
-                        SqlParameter.Text(value.digest),
+                        SqlParameter.Text(durable.digest),
                         SqlParameter.Int64Value(semanticCommitTimestamp(writes))
                     ]
                 )
@@ -228,8 +231,8 @@ public class SqliteSemanticStore <: SemanticStore {
                     [
                         SqlParameter.Text(expected.runId.value), SqlParameter.Int64Value(1),
                         SqlParameter.Int64Value(nextRevision),
-                        SqlParameter.Text(runExecutionPhaseName(value.phase)),
-                        SqlParameter.Text(payload), SqlParameter.Text(value.digest),
+                        SqlParameter.Text(runExecutionPhaseName(durable.phase)),
+                        SqlParameter.Text(payload), SqlParameter.Text(durable.digest),
                         SqlParameter.Int64Value(commitSequence)
                     ]
                 )

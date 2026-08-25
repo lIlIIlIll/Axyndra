@@ -1,12 +1,13 @@
 package agent_store
 
 import std.convert.*
+import std.collection.*
 import agent_domain.*
 
-// Bounded migration adapter for the only two legacy continuation variants.
-// It is called inside the legacy repository's existing SQLite transaction so
-// the old JSON column and the new immutable fact/register cannot diverge.
-public func mirrorLegacyRunContinuation(
+// Bounded adapter for the only two legacy AgentCore continuation variants.
+// The legacy projection is sealed into the canonical fact/register transaction;
+// no new write is made to the retired runs.continuation column.
+public func writeLegacyRunContinuationProjection(
     transaction: SqliteTransaction,
     value: RunContinuation,
     encodedLegacy: String
@@ -84,31 +85,135 @@ public func mirrorLegacyRunContinuation(
                 workDebt: WorkDebtSnapshot(activeAttempts: [checkpoint.activeAttemptId])
             )
     }
-    let sealed = sealDurableRunContinuation(continuation)
+    putLegacyCompatibleContinuation(
+        transaction,
+        ThreadId(value.sessionId.value),
+        withLegacyRunContinuationProjection(continuation, encodedLegacy),
+        legacyContinuationTimestamp(value)
+    )
+}
+
+public func consumeLegacyRunContinuationSource(
+    transaction: SqliteTransaction,
+    value: RunContinuation,
+    encodedLegacy: String
+): Unit {
+    let rows = transaction.query(
+        "SELECT thread_id FROM runs WHERE id=?",
+        [SqlParameter.Text(value.runId.value)]
+    )
+    if (rows.size != 1 || rows[0].required(0) != value.sessionId.value) {
+        throw IllegalStateException("legacy continuation Run binding is corrupt")
+    }
+    let current = transaction.query(
+        "SELECT payload FROM run_continuations WHERE run_id=?",
+        [SqlParameter.Text(value.runId.value)]
+    )
+    if (current.size == 1) {
+        let durable = decodeDurableRunContinuation(current[0].required(0))
+        match (optionalLegacyPayloadFromDurableContinuation(durable)) {
+            case Some(existing) => if (existing != encodedLegacy) {
+                throw IllegalStateException(
+                    "canonical continuation and legacy migration source diverged"
+                )
+            }
+            case None => putLegacyCompatibleContinuation(
+                transaction,
+                ThreadId(value.sessionId.value),
+                withLegacyRunContinuationProjection(durable, encodedLegacy),
+                legacyContinuationTimestamp(value)
+            )
+        }
+    } else {
+        writeLegacyRunContinuationProjection(transaction, value, encodedLegacy)
+    }
+    transaction.execute(
+        "UPDATE runs SET continuation=NULL WHERE id=?",
+        [SqlParameter.Text(value.runId.value)]
+    )
+}
+
+public func preserveLegacyRunContinuationProjection(
+    transaction: SqliteTransaction,
+    value: DurableRunContinuationV1
+): DurableRunContinuationV1 {
+    if (optionalLegacyPayloadFromDurableContinuation(value).isSome()) {
+        return value
+    }
+    let rows = transaction.query(
+        "SELECT payload FROM run_continuations WHERE run_id=?",
+        [SqlParameter.Text(value.runId.value)]
+    )
+    if (rows.size != 1) { return value }
+    let previous = decodeDurableRunContinuation(rows[0].required(0))
+    match (optionalLegacyPayloadFromDurableContinuation(previous)) {
+        case Some(payload) => withLegacyRunContinuationProjection(value, payload)
+        case None => value
+    }
+}
+
+public func withLegacyRunContinuationProjection(
+    value: DurableRunContinuationV1,
+    encodedLegacy: String
+): DurableRunContinuationV1 {
+    let fields = ArrayList<ValueField>()
+    for (field in runExecutionPhasePayload(value.phase).fields) {
+        if (field.name != "adapter" && field.name != "legacy_payload") {
+            fields.add(field)
+        }
+    }
+    fields.add(ValueField("adapter", textValue("legacy-continuation-v4")))
+    fields.add(ValueField("legacy_payload", textValue(encodedLegacy)))
+    let phase = runExecutionPhaseWithState(
+        value.phase,
+        DurablePhaseState(objectValue(fields.toArray()))
+    )
+    sealDurableRunContinuation(DurableRunContinuationV1(
+        value.runId, value.laneId, value.turnId, value.stepOrdinal, phase,
+        value.compositionSnapshotId, value.modelLaneSnapshotId,
+        contextManifestId: value.contextManifestId,
+        semanticRequestId: value.semanticRequestId,
+        attemptId: value.attemptId,
+        reservedDecisionId: value.reservedDecisionId,
+        reservedUsageId: value.reservedUsageId,
+        reservedItemIds: value.reservedItemIds,
+        toolBatch: value.toolBatch,
+        pendingOperationId: value.pendingOperationId,
+        pendingApprovalId: value.pendingApprovalId,
+        waitingExternal: value.waitingExternal,
+        workDebt: value.workDebt,
+        recoveryPolicyVersion: value.recoveryPolicyVersion
+    ))
+}
+
+func putLegacyCompatibleContinuation(
+    transaction: SqliteTransaction,
+    threadId: ThreadId,
+    sealed: DurableRunContinuationV1,
+    observedAtMillis: Int64
+): Unit {
     let payload = encodeDurableRunContinuation(sealed)
     let current = transaction.query(
         "SELECT digest FROM run_continuations WHERE run_id=?",
-        [SqlParameter.Text(value.runId.value)]
+        [SqlParameter.Text(sealed.runId.value)]
     )
     if (current.size == 1 && current[0].required(0) == sealed.digest) { return }
     let revisionRows = transaction.query(
         "SELECT COALESCE(MAX(revision),0) FROM run_continuation_facts WHERE run_id=?",
-        [SqlParameter.Text(value.runId.value)]
+        [SqlParameter.Text(sealed.runId.value)]
     )
     let revision = legacyInt(revisionRows[0].required(0), "legacy continuation revision") + 1
-    let commitSequence = nextLegacyCommitSequence(
-        transaction, ThreadId(value.sessionId.value)
-    )
+    let commitSequence = nextLegacyCommitSequence(transaction, threadId)
     transaction.execute(
         "INSERT INTO run_continuation_facts(" +
             "run_id,thread_id,revision,commit_sequence,phase,payload,digest,created_at_millis" +
             ") VALUES (?,?,?,?,?,?,?,?)",
         [
-            SqlParameter.Text(value.runId.value), SqlParameter.Text(value.sessionId.value),
+            SqlParameter.Text(sealed.runId.value), SqlParameter.Text(threadId.value),
             SqlParameter.Int64Value(revision), SqlParameter.Int64Value(commitSequence),
             SqlParameter.Text(runExecutionPhaseName(sealed.phase)),
             SqlParameter.Text(payload), SqlParameter.Text(sealed.digest),
-            SqlParameter.Int64Value(legacyContinuationTimestamp(value))
+            SqlParameter.Int64Value(observedAtMillis)
         ]
     )
     transaction.execute(
@@ -119,7 +224,7 @@ public func mirrorLegacyRunContinuation(
             "phase=excluded.phase,payload=excluded.payload,digest=excluded.digest," +
             "updated_commit_sequence=excluded.updated_commit_sequence",
         [
-            SqlParameter.Text(value.runId.value), SqlParameter.Int64Value(1),
+            SqlParameter.Text(sealed.runId.value), SqlParameter.Int64Value(1),
             SqlParameter.Int64Value(revision),
             SqlParameter.Text(runExecutionPhaseName(sealed.phase)),
             SqlParameter.Text(payload), SqlParameter.Text(sealed.digest),
@@ -128,7 +233,7 @@ public func mirrorLegacyRunContinuation(
     )
 }
 
-public func removeLegacyRunContinuationMirror(
+public func removeLegacyRunContinuationProjection(
     transaction: SqliteTransaction,
     runId: RunId
 ): Unit {
