@@ -4,6 +4,7 @@ import agent_core.*
 import agent_domain.*
 import agent_product.*
 import agent_store.*
+import model_adapters.*
 import persistence_runtime.*
 import tool_runtime.*
 import std.fs.*
@@ -86,14 +87,19 @@ main(): Int64 {
         let encodedDurableContinuation = database.query(
             "SELECT payload FROM run_continuations WHERE run_id='product-restart-run'"
         )[0].required(0)
-        let encodedContinuation = optionalLegacyPayloadFromDurableContinuation(
-            decodeDurableRunContinuation(encodedDurableContinuation)
+        let durableContinuation = decodeDurableRunContinuation(encodedDurableContinuation)
+        let requestSnapshot = optionalRunRequestSnapshotFromDurableContinuation(
+            durableContinuation
         ).getOrThrow()
+        let encodedContinuation = encodeAgentValue(requestSnapshot)
         expect(database.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
         ) == 0 && database.scalarInt(
             "SELECT COUNT(*) FROM legacy_run_continuation_imports"
-        ) == 0, "new continuation writes use only the canonical vNext register")
+        ) == 0 && optionalLegacyPayloadFromDurableContinuation(
+            durableContinuation
+        ).isNone(),
+            "new continuation writes use only the structured canonical snapshot")
         database.execute(
             "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
                 "'product-restart-run'," + sqliteText(encodedContinuation) + ")"

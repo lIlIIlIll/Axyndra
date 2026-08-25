@@ -339,7 +339,7 @@ func putClaimContinuation(
     expectedRevision: Int64,
     observedAtMillis: Int64
 ): Unit {
-    let durable = preserveLegacyRunContinuationProjection(transaction, value)
+    let durable = preserveRunContinuationProjection(transaction, value)
     let payload = encodeDurableRunContinuation(durable)
     let head = transaction.query(
         "SELECT last_sequence FROM thread_commit_heads WHERE thread_id=?",

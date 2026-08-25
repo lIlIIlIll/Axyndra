@@ -267,7 +267,7 @@ public class SqliteContextManifestStore {
                     run[0].required(1) != manifest.turnId.value) {
                     throw IllegalStateException("Context Manifest Run enclosure changed")
                 }
-                let continuation = preserveLegacyRunContinuationProjection(
+                let continuation = preserveRunContinuationProjection(
                     transaction,
                     sealDurableRunContinuation(DurableRunContinuationV1(
                     runId,

@@ -91,6 +91,12 @@ public func decodeDurableRunContinuation(source: String): DurableRunContinuation
         recoveryPolicyVersion: 1u32,
         digest: continuationText(root, "digest")
     )
+    let expectedDigest = modelPolicySha256Text(
+        encodeStoredValue(durableContinuationValue(decoded, false))
+    )
+    if (expectedDigest != decoded.digest) {
+        throw IllegalStateException("durable Run continuation digest does not match payload")
+    }
     if (encodeDurableRunContinuation(decoded) != source) {
         throw IllegalStateException("durable Run continuation is not canonical")
     }

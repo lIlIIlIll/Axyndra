@@ -202,7 +202,7 @@ public class SqliteSemanticStore <: SemanticStore {
         ) { 1 } else { 0 }
         match (writes.continuation) {
             case Some(value) =>
-                let durable = preserveLegacyRunContinuationProjection(
+                let durable = preserveRunContinuationProjection(
                     transaction, value
                 )
                 let payload = encodeDurableRunContinuation(durable)

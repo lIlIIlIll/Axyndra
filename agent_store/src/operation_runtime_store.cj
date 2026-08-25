@@ -582,7 +582,7 @@ public class OperationRecoveryPlanner {
                 runExecutionPhaseName(continuation.phase) == "waiting_approval" &&
                     continuation.pendingOperationId.isSome() &&
                     continuation.pendingOperationId.getOrThrow().value == operationId.value &&
-                    optionalLegacyPayloadFromDurableContinuation(continuation).isSome()
+                    hasRunContinuationProjection(continuation)
             } else { false }
             if (approvals == 0 && continuationPersisted) {
                 // This is a stable user-decision boundary, not a crash gap.

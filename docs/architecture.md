@@ -128,6 +128,13 @@ agent_tui       → agent_cli + vendored cjtui packages
   payload 并删除 import row。两份数据不一致时以 typed RecoveryRequired fail closed。
   后续 phase 更新必须携带该 projection，Operation recovery 和 GC 只读取 canonical
   register，禁止重新引入 runtime 双读或双写。
+- 新写入的 phase projection 使用 `run-request-snapshot-v1`：完整请求以结构化
+  `AgentValue` 保存，并附带独立 SHA-256 摘要；读取时必须先验证摘要，再重建
+  `RunContinuation` 兼容投影。旧 `legacy-continuation-v4` 字符串仅允许存在于 migration
+  bridge，首次 import/write 会升级为结构化 snapshot，其他生产包不得解析或生成它。
+- schema v21 在 `run_continuations.active_attempt_id` 中保存 nullable、带外键的当前 Model
+  Attempt binding。terminal cleanup 在同一 writer transaction 中校验该索引后删除寄存器，
+  不再为清理动作反序列化完整请求快照；旧 v20 行没有索引时仍使用严格 canonical decode。
 - AppEvent 的 journal sequence 标识 canonical 事件；mailbox drain 另行分配连接内连续的
   delivery sequence。合并只影响 delivery projection，客户端 cursor 不会把合法合并误判
   为 journal 丢失。

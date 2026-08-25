@@ -8,22 +8,40 @@ import agent_domain.*
 // deliberately independent from provider and App Protocol JSON so durable
 // recovery never needs a model adapter or transport package.
 public func encodeStoredValue(value: AgentValue): String {
+    let output = ArrayList<Byte>()
+    appendStoredValue(output, value)
+    String.fromUtf8(output.toArray())
+}
+
+func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
     match (value.kind) {
-        case ValueKind.Null => "n"
-        case ValueKind.Boolean => if (value.boolean) { "t" } else { "f" }
-        case ValueKind.Number => "d" + storedFrame(value.number)
-        case ValueKind.Text => "s" + storedFrame(value.text)
+        case ValueKind.Null => output.add(b'n')
+        case ValueKind.Boolean => output.add(if (value.boolean) { b't' } else { b'f' })
+        case ValueKind.Number =>
+            output.add(b'd')
+            appendStoredFrame(output, value.number)
+        case ValueKind.Text =>
+            output.add(b's')
+            appendStoredFrame(output, value.text)
         case ValueKind.List =>
-            var encoded = "l" + storedFrame(value.items.size.toString())
-            for (item in value.items) { encoded += encodeStoredValue(item) }
-            encoded
+            output.add(b'l')
+            appendStoredFrame(output, value.items.size.toString())
+            for (item in value.items) { appendStoredValue(output, item) }
         case ValueKind.Object =>
-            var encoded = "o" + storedFrame(value.fields.size.toString())
+            output.add(b'o')
+            appendStoredFrame(output, value.fields.size.toString())
             for (field in value.fields) {
-                encoded += storedFrame(field.name) + encodeStoredValue(field.value)
+                appendStoredFrame(output, field.name)
+                appendStoredValue(output, field.value)
             }
-            encoded
     }
+}
+
+func appendStoredFrame(output: ArrayList<Byte>, value: String): Unit {
+    let bytes = unsafe { value.rawData() }
+    for (byte in bytes.size.toString().toArray()) { output.add(byte) }
+    output.add(b':')
+    for (byte in bytes) { output.add(byte) }
 }
 
 public func decodeStoredValue(source: String): AgentValue {
@@ -253,11 +271,6 @@ func storedIntField(value: AgentValue, name: String): Int64 {
         throw IllegalStateException("stored field is not numeric: " + name)
     }
     parseStoredInt(field.number, "stored field is not an integer: " + name)
-}
-
-func storedFrame(value: String): String {
-    let bytes = unsafe { value.rawData() }
-    bytes.size.toString() + ":" + value
 }
 
 class StoredValueParser {
