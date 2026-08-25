@@ -93,8 +93,8 @@ main(): Int64 {
             "UPDATE runs SET continuation=json_set(continuation,'$.requested_policy',json('null')) " +
                 "WHERE id='product-restart-run'"
         )
-        expect(continuationRepository.continuation(runId).isOk(),
-            "sealed vNext continuation is preferred over a corrupt legacy fallback")
+        expect(continuationRepository.continuation(runId).isError(),
+            "canonical vNext continuation rejects a divergent legacy mirror")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"
@@ -104,8 +104,8 @@ main(): Int64 {
                 "'$.model_capabilities_snapshot.capability_fingerprint','tampered') " +
                 "WHERE id='product-restart-run'"
         )
-        expect(continuationRepository.continuation(runId).isOk(),
-            "legacy capability tampering cannot override the sealed vNext register")
+        expect(continuationRepository.continuation(runId).isError(),
+            "legacy capability tampering fails closed against the vNext register")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"

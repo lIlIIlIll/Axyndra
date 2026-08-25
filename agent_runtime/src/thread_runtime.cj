@@ -13,6 +13,7 @@ public class ActiveRunSnapshot {
     public let skills: SkillStackSnapshot
     public let state: RunState
     public let transitionSequence: Int64
+    public let executionLaneId: LaneId
 
     public init(
         threadId: ThreadId,
@@ -22,7 +23,8 @@ public class ActiveRunSnapshot {
         lane: ModelLane,
         skills: SkillStackSnapshot,
         state: RunState,
-        transitionSequence: Int64
+        transitionSequence: Int64,
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         this.threadId = threadId
         this.turnId = turnId
@@ -32,6 +34,7 @@ public class ActiveRunSnapshot {
         this.skills = skills
         this.state = state
         this.transitionSequence = transitionSequence
+        this.executionLaneId = executionLaneId
     }
 }
 
@@ -67,6 +70,7 @@ class OwnedActiveRun {
     let lane: ModelLane
     let skills: SkillStackSnapshot
     let lifecycle: RunLifecycle
+    let executionLaneId: LaneId
 
     init(
         turnId: SemanticTurnId,
@@ -74,7 +78,8 @@ class OwnedActiveRun {
         epoch: Int64,
         lane: ModelLane,
         skills: SkillStackSnapshot,
-        lifecycle: RunLifecycle
+        lifecycle: RunLifecycle,
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         this.turnId = turnId
         this.runId = runId
@@ -82,6 +87,7 @@ class OwnedActiveRun {
         this.lane = lane
         this.skills = skills
         this.lifecycle = lifecycle
+        this.executionLaneId = executionLaneId
     }
 }
 
@@ -95,6 +101,7 @@ public class RecoveredRunSpec {
     public let skills: SkillStackSnapshot
     public let deadlineMillis: Int64
     public let parentCancellation: ?CancellationToken
+    public let executionLaneId: LaneId
 
     public init(
         turnId: SemanticTurnId,
@@ -105,7 +112,8 @@ public class RecoveredRunSpec {
         lane: ModelLane,
         skills: SkillStackSnapshot,
         deadlineMillis!: Int64 = 0,
-        parentCancellation!: ?CancellationToken = None
+        parentCancellation!: ?CancellationToken = None,
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         if (epoch < 1 || transitionSequence < 0 || deadlineMillis < 0 ||
             (state != RunState.Running &&
@@ -122,6 +130,7 @@ public class RecoveredRunSpec {
         this.skills = skills
         this.deadlineMillis = deadlineMillis
         this.parentCancellation = parentCancellation
+        this.executionLaneId = executionLaneId
     }
 }
 
@@ -181,7 +190,8 @@ public class AgentThreadRuntime {
                 parent: recovered.parentCancellation,
                 initialState: recovered.state,
                 transitionSequence: recovered.transitionSequence
-            )
+            ),
+            executionLaneId: recovered.executionLaneId
         ))
     }
 
@@ -298,7 +308,8 @@ public class AgentThreadRuntime {
         createdAtMillis!: Int64 = 0,
         deadlineMillis!: Int64 = 0,
         parentCancellation!: ?CancellationToken = None,
-        runBudgetSnapshot!: AgentValue = objectValue([])
+        runBudgetSnapshot!: AgentValue = objectValue([]),
+        executionLaneId!: LaneId = LaneId("main")
     ): Result<ActiveRunSnapshot> {
         lock.lock()
         try {
@@ -311,7 +322,8 @@ public class AgentThreadRuntime {
                 createdAtMillis: createdAtMillis,
                 runLaneSnapshot: modelLaneSnapshotValue(lane),
                 runSkillSnapshot: skillStackSnapshotValue(skills),
-                runBudgetSnapshot: runBudgetSnapshot
+                runBudgetSnapshot: runBudgetSnapshot,
+                executionLaneId: executionLaneId
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
@@ -332,7 +344,8 @@ public class AgentThreadRuntime {
             }
             let _ = lifecycle.machine.commitPreview(runningProposal).value().getOrThrow()
             let owned = OwnedActiveRun(
-                turnId, runId, thread.activeEpoch, lane, skills, lifecycle
+                turnId, runId, thread.activeEpoch, lane, skills, lifecycle,
+                executionLaneId: executionLaneId
             )
             active = Some(owned)
             Result.Ok(activeSnapshot(owned))
@@ -707,7 +720,7 @@ public class AgentThreadRuntime {
         ActiveRunSnapshot(
             coordinator.snapshot().thread.id,
             value.turnId, value.runId, value.epoch, value.lane, value.skills,
-            state, sequence
+            state, sequence, executionLaneId: value.executionLaneId
         )
     }
 

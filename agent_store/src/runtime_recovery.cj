@@ -48,7 +48,8 @@ public class SqliteThreadRuntimeRecovery {
                 ThreadCoordinator(thread, sink), projector,
                 RecoveredRunSpec(
                     run.turnId, run.id, run.epoch, run.state, run.transitionSequence,
-                    run.lane.getOrThrow(), run.skills.getOrThrow()
+                    run.lane.getOrThrow(), run.skills.getOrThrow(),
+                    executionLaneId: run.executionLaneId
                 ),
                 nowMillis,
                 checkpointRepository: Some(SqliteContextCheckpointStore(database))

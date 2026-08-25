@@ -21,6 +21,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         request: AgentRunRequest,
         requestId: RequestId,
         turnId: SemanticTurnId,
+        executionLaneId: LaneId,
         stepId: StepId,
         stepOrdinal: Int64,
         projection: ModelContextProjection,
@@ -29,12 +30,26 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         estimatedInputTokens: Int64,
         observedAtMillis: Int64
     ): Result<Unit> {
-        let intent = currentIntent(projection, turnId)
+        let intent = match (currentIntent(projection, turnId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
         let exactFields = ArrayList<ValueField>()
         exactFields.add(all: renderedRequest.fields)
         exactFields.add(ValueField("request_id", textValue(requestId.value)))
         let exactRequest = objectValue(exactFields.toArray())
-        let system = exactRequest.field("system").getOrThrow().text
+        let system = match (exactRequest.field("system")) {
+            case Some(value) => if (value.kind == ValueKind.Text) { value.text } else {
+                return contextRuntimeError(
+                    "context.rendered_system_invalid",
+                    "rendered model request system field is not text"
+                )
+            }
+            case None => return contextRuntimeError(
+                "context.rendered_system_missing",
+                "rendered model request has no system field"
+            )
+        }
         let artifact = PromptArtifact(system)
         let contribution = PromptContribution(
             "agent-product-core", "run", "system.core", artifact.hash,
@@ -68,7 +83,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         match (store.ensureModelStep(
             request.runId,
             ThreadId(request.sessionId.value),
-            LaneId("main"),
+            executionLaneId,
             turnId,
             stepId,
             stepOrdinal,
@@ -82,7 +97,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         let compiled = compiler.compile(ContextCompileInput(
             manifestId,
             ThreadId(request.sessionId.value),
-            LaneId("main"),
+            executionLaneId,
             turnId,
             stepId,
             boundedProjection,
@@ -113,7 +128,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
     private func currentIntent(
         projection: ModelContextProjection,
         turnId: SemanticTurnId
-    ): ThreadItem {
+    ): Result<ThreadItem> {
         var selected: ?ThreadItem = None
         for (item in projection.recentItems where item.turnId.value == turnId.value) {
             match (item.content) {
@@ -122,10 +137,19 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
             }
         }
         match (selected) {
-            case Some(value) => value
-            case None => throw IllegalStateException(
+            case Some(value) => Result.Ok(value)
+            case None => contextRuntimeError<ThreadItem>(
+                "context.turn_intent_missing",
                 "current model request has no durable Turn intent Item"
             )
         }
     }
+}
+
+func contextRuntimeError<T>(code: String, message: String): Result<T> {
+    Result.Err(AgentError(
+        AgentErrorKind.RecoveryRequired,
+        code,
+        message
+    ))
 }

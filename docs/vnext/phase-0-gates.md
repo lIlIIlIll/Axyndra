@@ -90,9 +90,12 @@ completion from `RecoveryRequired` or unknown outcome.
 - `vnext_contract_gate.py` executes the focused runtime, storage, lifecycle,
   projection, child-run, skill, mailbox and chaos contracts with the pinned
   daily SDK.
-- PR validation runs the focused gate. Implementation and release validation
+- PR validation runs workspace `cjpm test` and the focused gate. Implementation and release validation
   run the same preflight before their broader product, packaging and provider
   gates.
+- Required PR/release workflows load the exact Cangjie version and stdx archive
+  SHA-256 from `scripts/ci_toolchain.env`; `nightly-gate.yml` alone follows the
+  latest nightly as a compatibility canary.
 - Release validation also runs package readiness and relocates the candidate
   into a clean environment without workspace, SDK or `LD_LIBRARY_PATH`
   inheritance before any candidate is accepted.

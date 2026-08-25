@@ -182,6 +182,7 @@ public class ThreadTransition {
     public let runLaneSnapshot: AgentValue
     public let runSkillSnapshot: AgentValue
     public let runBudgetSnapshot: AgentValue
+    public let executionLaneId: LaneId
     public let finishedAtMillis: ?Int64
     public let cancellationReason: ?String
     public let canonicalDecisionBindings: Array<CanonicalDecisionItemBinding>
@@ -198,6 +199,7 @@ public class ThreadTransition {
         runLaneSnapshot!: AgentValue = objectValue([]),
         runSkillSnapshot!: AgentValue = objectValue([]),
         runBudgetSnapshot!: AgentValue = objectValue([]),
+        executionLaneId!: LaneId = LaneId("main"),
         finishedAtMillis!: ?Int64 = None,
         cancellationReason!: ?String = None,
         canonicalDecisionBindings!: Array<CanonicalDecisionItemBinding> = []
@@ -332,6 +334,7 @@ public class ThreadTransition {
         this.runLaneSnapshot = runLaneSnapshot
         this.runSkillSnapshot = runSkillSnapshot
         this.runBudgetSnapshot = runBudgetSnapshot
+        this.executionLaneId = executionLaneId
         this.finishedAtMillis = finishedAtMillis
         this.cancellationReason = cancellationReason
         this.canonicalDecisionBindings = canonicalDecisionBindings
@@ -559,7 +562,8 @@ public class ThreadCoordinator {
         createdAtMillis!: Int64 = 0,
         runLaneSnapshot!: AgentValue = objectValue([]),
         runSkillSnapshot!: AgentValue = objectValue([]),
-        runBudgetSnapshot!: AgentValue = objectValue([])
+        runBudgetSnapshot!: AgentValue = objectValue([]),
+        executionLaneId!: LaneId = LaneId("main")
     ): Result<AgentThreadSnapshot> {
         lock.lock()
         try {
@@ -622,7 +626,8 @@ public class ThreadCoordinator {
                 committedTurn: Some(turn),
                 runLaneSnapshot: runLaneSnapshot,
                 runSkillSnapshot: runSkillSnapshot,
-                runBudgetSnapshot: runBudgetSnapshot
+                runBudgetSnapshot: runBudgetSnapshot,
+                executionLaneId: executionLaneId
             ))) {
                 case Result.Ok(_) => Result.Ok(snapshotLocked())
                 case Result.Err(error) =>

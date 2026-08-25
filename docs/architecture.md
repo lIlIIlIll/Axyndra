@@ -118,6 +118,13 @@ agent_tui       → agent_cli + vendored cjtui packages
   canonical Step 读取并校验 Thread/Lane/Turn/Run enclosure，不能由调用者复制或回退
   为零。Lane Inbox identity 包含 Thread/Lane enclosure，claim 同时校验 Run 的 durable
   Lane binding。
+- execution Lane 是 `AgentRunRequest` 的显式语义 enclosure，并独立于描述模型、工具
+  与能力快照的 `ModelLane`。Turn admission 在同一事务中绑定 Run、初始 Item、Step 和
+  ContextManifest；crash recovery 从 `run_lane_bindings` 恢复该 Lane，禁止回退到
+  `main`。
+- `run_continuations` 是恢复寄存器的 canonical source。`runs.continuation` 只作为旧格式
+  的有界迁移镜像；两者同时存在时必须逐字节等价，否则以 typed RecoveryRequired
+  fail closed，不能选择任意一份继续运行。
 - AppEvent 的 journal sequence 标识 canonical 事件；mailbox drain 另行分配连接内连续的
   delivery sequence。合并只影响 delivery projection，客户端 cursor 不会把合法合并误判
   为 journal 丢失。

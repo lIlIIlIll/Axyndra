@@ -10,8 +10,9 @@ export CANGJIE_STDX_PATH="$stdx_root"
 export LD_LIBRARY_PATH="$repo_root/libs/process4cj/native:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 driver_root="$repo_root/support_tests/provider_driver"
 driver="$driver_root/target/release/bin/main"
-port="${AGENT_BLACKBOX_PORT:-18765}"
+requested_port="${AGENT_BLACKBOX_PORT:-0}"
 work="$(mktemp -d)"
+port_file="$work/mock-port"
 
 cleanup() {
   if [[ -n "${server_pid:-}" ]]; then
@@ -32,15 +33,42 @@ trap cleanup EXIT
 )
 
 python3 "$repo_root/support_tests/provider_blackbox/mock_server.py" \
-  --port "$port" &
+  --port "$requested_port" --port-file "$port_file" &
 server_pid=$!
 
 for _ in {1..50}; do
-  if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',$port),.1); s.close()" 2>/dev/null; then
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    wait "$server_pid"
+    echo "provider blackbox mock server exited before publishing its port" >&2
+    exit 1
+  fi
+  if [[ -s "$port_file" ]]; then
     break
   fi
   sleep 0.02
 done
+if [[ ! -s "$port_file" ]]; then
+  echo "provider blackbox mock server did not publish its port" >&2
+  exit 1
+fi
+port="$(<"$port_file")"
+ready=0
+for _ in {1..50}; do
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    wait "$server_pid"
+    echo "provider blackbox mock server exited before becoming ready" >&2
+    exit 1
+  fi
+  if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',$port),.1); s.close()" 2>/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 0.02
+done
+if [[ "$ready" != "1" ]]; then
+  echo "provider blackbox mock server did not become ready" >&2
+  exit 1
+fi
 
 home="$work/home"
 mkdir -p "$home/credentials"

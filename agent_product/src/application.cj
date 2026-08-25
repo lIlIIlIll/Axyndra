@@ -182,7 +182,14 @@ public class ApplicationSession <: AgentInteractionSource {
                 } else {
                     value
                 }
-            case Result.Err(_) => product.model
+            case Result.Err(error) =>
+                pendingRecovery = Some(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "session.model_metadata_recovery_failed",
+                    error.message,
+                    fields: [ErrorField("session_id", this.sessionId.value)]
+                ))
+                product.model
         }
         // Older sessions have no model metadata. Persisting the resolved
         // default here migrates them lazily without a separate schema pass.
@@ -208,16 +215,31 @@ public class ApplicationSession <: AgentInteractionSource {
                         queuedInteractions.add(QueuedInteraction(
                             correlation, kind, text, entry.id.value
                         ))
+                    } else {
+                        pendingRecovery = Some(AgentError(
+                            AgentErrorKind.RecoveryRequired,
+                            "inbox.queued_payload_corrupt",
+                            "durable queued interaction is missing required fields",
+                            fields: [
+                                ErrorField("session_id", sessionId.value),
+                                ErrorField("inbox_entry_id", entry.id.value)
+                            ]
+                        ))
+                        return
                     }
                 }
-            case Result.Err(_) => ()
+            case Result.Err(error) => pendingRecovery = Some(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "inbox.queued_restore_failed",
+                error.message,
+                fields: [ErrorField("session_id", sessionId.value)]
+            ))
         }
     }
 
     private func restorePendingContinuation(): Unit {
         currentRequest = None
         pendingApproval = None
-        pendingRecovery = None
         pendingModelResume = false
         let approvalContinuation: ?RunContinuation = match (product.pendingContinuation(sessionId)) {
             case Result.Ok(Some(value)) =>
@@ -3570,7 +3592,8 @@ func handoffRunRequest(base: AgentRunRequest): AgentRunRequest {
         toolContext: base.toolContext,
         skillStack: base.skillStack,
         contextWindow: base.contextWindow,
-        providerSafetyMargin: base.providerSafetyMargin
+        providerSafetyMargin: base.providerSafetyMargin,
+        executionLaneId: base.executionLaneId
     )
 }
 

@@ -21,6 +21,7 @@ import std.fs.*
 import std.sync.*
 import agent_extension_runtime.*
 import std.time.*
+import stdx.crypto.crypto.*
 
 public class ProductConfig {
     public let settingsRoot: String
@@ -91,7 +92,7 @@ public enum ProductStartupMode {
 
 public class ProductIds <: IdGenerator {
     private let lock = Mutex()
-    private var counter: Int64 = 0
+    private let random = SecureRandom()
 
     public init() {}
 
@@ -108,12 +109,27 @@ public class ProductIds <: IdGenerator {
     private func next(prefix: String): String {
         lock.lock()
         try {
-            counter += 1
-            prefix + "-" + DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString() + "-" + counter.toString()
+            prefix + "-" +
+                DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString() + "-" +
+                productIdHex(random.nextUInt64(), random.nextUInt64())
         } finally {
             lock.unlock()
         }
     }
+}
+
+private func productIdHex(high: UInt64, low: UInt64): String {
+    let digits = "0123456789abcdef".toArray()
+    let encoded = ArrayList<Byte>()
+    for (value in [high, low]) {
+        var shift: UInt64 = 60
+        while (true) {
+            encoded.add(digits[Int64((value >> shift) & 0x0f)])
+            if (shift == 0) { break }
+            shift -= 4
+        }
+    }
+    String.fromUtf8(encoded.toArray())
 }
 
 public class ProductClipboardCopy {
@@ -295,7 +311,8 @@ public class ProductRuntime {
         modeSystem!: String = "",
         guide!: String = "",
         readOnly!: Bool = false,
-        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], [])
+        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], []),
+        executionLaneId!: LaneId = LaneId("main")
     ): AgentRunRequest {
         let targetSession = match (sessionId) {
             case Some(value) => value
@@ -405,6 +422,7 @@ public class ProductRuntime {
             skillStack: resolvedSkillStack,
             contextWindow: providerContextWindow,
             providerSafetyMargin: providerSafetyMargin,
+            executionLaneId: executionLaneId,
             budget: ResourceBudget(
                 maxInputTokens: contextLimit,
                 maxOutputTokens: outputLimit,
@@ -1290,7 +1308,8 @@ public class ProductRuntime {
                 SkillStackSnapshot([], [])
             } else { skillStackFromSnapshotValue(value.skillStackPayload) },
             contextWindow: value.contextWindow,
-            providerSafetyMargin: value.providerSafetyMargin
+            providerSafetyMargin: value.providerSafetyMargin,
+            executionLaneId: value.executionLaneId
         )
     }
 
@@ -1323,7 +1342,8 @@ public class ProductRuntime {
             skillStackPayload: skillStackSnapshotValue(request.skillStack),
             contextWindow: request.contextWindow,
             providerSafetyMargin: request.providerSafetyMargin,
-            toolContextPayload: productToolContextValue(request.toolContext)
+            toolContextPayload: productToolContextValue(request.toolContext),
+            executionLaneId: request.executionLaneId
         ))
     }
 

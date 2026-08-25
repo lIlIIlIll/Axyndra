@@ -669,11 +669,60 @@ func commitVnextRunAdmission(
     runId: RunId
 ): Unit {
     let threadId = turn.threadId
-    let laneId = LaneId("main")
+    let laneId = transition.executionLaneId
     let stepId = StepId("step-" + runId.value + "-0")
     let entryId = InboxEntryId("inbox-" + runId.value)
     let compositionId = CompositionSnapshotId("composition-" + runId.value)
     let laneSnapshotId = ModelLaneSnapshotId("model-lane-" + runId.value)
+
+    if (transaction.query(
+        "SELECT 1 FROM lanes WHERE thread_id=? AND lane_id=? AND status='open'",
+        [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value)]
+    ).size != 1) {
+        throw IllegalStateException("Run execution Lane is absent or closed")
+    }
+    // runs_bind_main_lane provides backward-compatible admission for old
+    // writers. The authoritative TurnStarted transaction immediately narrows
+    // that binding to the explicitly requested execution Lane.
+    transaction.execute(
+        "UPDATE run_lane_bindings SET lane_id=? WHERE run_id=? AND thread_id=?",
+        [SqlParameter.Text(laneId.value), SqlParameter.Text(runId.value),
+            SqlParameter.Text(threadId.value)]
+    )
+    requireStoreChanged(transaction, "Run execution Lane binding was not committed")
+    if (laneId.value != "main") {
+        let parentRows = transaction.query(
+            "SELECT edge.item_id,edge.depth FROM item_tree_edges edge " +
+                "JOIN items prior ON prior.id=edge.item_id WHERE edge.thread_id=? " +
+                "AND edge.lane_id=? AND prior.ordinal<? ORDER BY prior.ordinal DESC LIMIT 1",
+            [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value),
+                SqlParameter.Int64Value(item.ordinal)]
+        )
+        let fallbackRows = transaction.query(
+            "SELECT lane.fork_item_id,edge.depth FROM lanes lane " +
+                "LEFT JOIN item_tree_edges edge ON edge.item_id=lane.fork_item_id " +
+                "WHERE lane.thread_id=? AND lane.lane_id=?",
+            [SqlParameter.Text(threadId.value), SqlParameter.Text(laneId.value)]
+        )
+        let parentId: ?String = if (!parentRows.isEmpty()) {
+            Some(parentRows[0].required(0))
+        } else if (!fallbackRows.isEmpty()) {
+            fallbackRows[0][0]
+        } else { None }
+        let parentDepth: Int64 = if (!parentRows.isEmpty()) {
+            parseStoreInt(parentRows[0].required(1), "Lane parent depth")
+        } else if (!fallbackRows.isEmpty() && fallbackRows[0][1].isSome()) {
+            parseStoreInt(fallbackRows[0].required(1), "Lane fork depth")
+        } else { -1 }
+        transaction.execute(
+            "UPDATE item_tree_edges SET lane_id=?,parent_item_id=?,depth=? WHERE item_id=?",
+            [SqlParameter.Text(laneId.value), match (parentId) {
+                case Some(value) => SqlParameter.Text(value)
+                case None => SqlParameter.Null
+            }, SqlParameter.Int64Value(parentDepth + 1), SqlParameter.Text(item.id.value)]
+        )
+        requireStoreChanged(transaction, "Run input Item Lane binding was not committed")
+    }
 
     // The accepted user Item is both the canonical Thread input and the Step
     // enclosure. This avoids a second shadow Item while retaining durable
@@ -705,7 +754,7 @@ func commitVnextRunAdmission(
 
     let profile = AgentProfile(
         "agent-product", "1", [], [],
-        objectValue([ValueField("main", transition.runLaneSnapshot)]),
+        objectValue([ValueField(laneId.value, transition.runLaneSnapshot)]),
         objectValue([ValueField("catalog", transition.runLaneSnapshot)]),
         CapabilitySet(),
         objectValue([ValueField("compiler", textValue("agent-product-context-v1"))]),

@@ -166,9 +166,20 @@ public func removeLegacyRunContinuationMirror(
 public func legacyPayloadFromDurableContinuation(
     value: DurableRunContinuationV1
 ): String {
+    match (optionalLegacyPayloadFromDurableContinuation(value)) {
+        case Some(payload) => payload
+        case None => throw IllegalStateException(
+            "durable continuation is not a supported legacy adapter"
+        )
+    }
+}
+
+public func optionalLegacyPayloadFromDurableContinuation(
+    value: DurableRunContinuationV1
+): ?String {
     let payload = runExecutionPhasePayload(value.phase)
     if (payload.kind != ValueKind.Object) {
-        throw IllegalStateException("legacy continuation adapter payload is not an object")
+        return None
     }
     var adapter: ?String = None
     var legacy: ?String = None
@@ -181,9 +192,10 @@ public func legacyPayloadFromDurableContinuation(
         }
     }
     if (adapter != Some("legacy-continuation-v4") || legacy.isNone()) {
-        throw IllegalStateException("durable continuation is not a supported legacy adapter")
+        None
+    } else {
+        legacy
     }
-    legacy.getOrThrow()
 }
 
 func nextLegacyCommitSequence(

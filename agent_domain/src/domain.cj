@@ -1259,6 +1259,7 @@ public class RunContinuation {
     public let providerSafetyMargin: Int64
     public let toolContextPayload: AgentValue
     public let runningModel: ?RunningModelCheckpoint
+    public let executionLaneId: LaneId
 
     public init(
         runId: RunId,
@@ -1285,7 +1286,8 @@ public class RunContinuation {
         skillStackPayload!: AgentValue = AgentValue(ValueKind.Object),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
-        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object)
+        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object),
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         if (model.trimAscii() == "" || prompt.trimAscii() == "") {
             throw IllegalArgumentException("run continuation model and prompt must not be empty")
@@ -1317,6 +1319,7 @@ public class RunContinuation {
         this.providerSafetyMargin = providerSafetyMargin
         this.toolContextPayload = toolContextPayload
         this.runningModel = None
+        this.executionLaneId = executionLaneId
     }
 
     public init(
@@ -1345,7 +1348,8 @@ public class RunContinuation {
         skillStackPayload!: AgentValue = AgentValue(ValueKind.Object),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
-        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object)
+        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object),
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         if (kind != RunContinuationKind.RunningModel || model.trimAscii() == "" ||
             prompt.trimAscii() == "") {
@@ -1385,6 +1389,7 @@ public class RunContinuation {
         this.providerSafetyMargin = providerSafetyMargin
         this.toolContextPayload = toolContextPayload
         this.runningModel = Some(runningModel)
+        this.executionLaneId = executionLaneId
     }
 }
 

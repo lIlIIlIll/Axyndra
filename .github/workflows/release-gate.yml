@@ -22,28 +22,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes clang-15 ripgrep unzip
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
-      - name: Resolve latest Cangjie nightly
-        id: cangjie-nightly
+      - name: Load pinned Cangjie toolchain
+        id: cangjie-toolchain
         run: |
-          version=$(python3 scripts/latest_cangjie_nightly.py)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          source scripts/ci_toolchain.env
+          echo "version=$AXYNDRA_CI_CANGJIE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "stdx_sha256=$AXYNDRA_CI_STDX_SHA256" >> "$GITHUB_OUTPUT"
       - name: Setup Cangjie
         uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
         with:
           channel: nightly
-          version: ${{ steps.cangjie-nightly.outputs.version }}
+          version: ${{ steps.cangjie-toolchain.outputs.version }}
           archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
       - name: Setup matching nightly stdx
         run: |
           stdx_root=$(bash scripts/setup_ci_nightly_stdx.sh \
-            "${{ steps.cangjie-nightly.outputs.version }}" "$RUNNER_TEMP")
+            "${{ steps.cangjie-toolchain.outputs.version }}" "$RUNNER_TEMP" \
+            "${{ steps.cangjie-toolchain.outputs.stdx_sha256 }}")
           echo "CANGJIE_STDX_PATH=$stdx_root" >> "$GITHUB_ENV"
       - name: Configure pinned SDK
         run: |
           sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
           echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
-          echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-nightly.outputs.version }}" >> "$GITHUB_ENV"
-          AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-nightly.outputs.version }}" \
+          echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-toolchain.outputs.version }}" >> "$GITHUB_ENV"
+          AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-toolchain.outputs.version }}" \
             AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
       - name: Release gate with real provider smoke
         env:

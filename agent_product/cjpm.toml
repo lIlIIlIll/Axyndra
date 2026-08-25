@@ -39,3 +39,7 @@
   "workspace_write_extension" = { path = "../extensions/workspace_write_extension", output-type = "static" }
   "ast_extension" = { path = "../extensions/ast_extension", output-type = "static" }
   "web_search_extension" = { path = "../extensions/web_search_extension", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

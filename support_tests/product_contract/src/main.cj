@@ -21,6 +21,7 @@ main(): Int64 {
     }
     let root = Directory.createTemp("target").toString()
     try {
+        runProductIdContracts()
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("finalization")) {
             runApplicationResponseProjectionOnly(root)
             runHybridCompactionSummaryContracts(root)
@@ -100,6 +101,23 @@ main(): Int64 {
         0
     } finally {
         let _ = removeIfExists(root, recursive: true)
+    }
+}
+
+func runProductIdContracts(): Unit {
+    let first = ProductIds()
+    let second = ProductIds()
+    let observed = ArrayList<String>()
+    for (_ in 0..64) {
+        for (value in [first.nextRunId().value, second.nextRunId().value]) {
+            expect(value.startsWith("run-") && value.size > 40,
+                "product IDs include a time-ordered prefix and random identity")
+            for (existing in observed) {
+                expect(existing != value,
+                    "independent ProductIds generators never share durable identity")
+            }
+            observed.add(value)
+        }
     }
 }
 
