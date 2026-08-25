@@ -310,6 +310,31 @@ func toolEvidenceBlocksRetryContract(): Unit {
 }
 
 func cancellationAndRunDeadlineBarriersContract(): Unit {
+    let admissionRuns = MemoryRuns(blockInitialSave: true)
+    let admissionModel = CancellationBarrierModel()
+    let admissionCatalog = ToolCatalog()
+    let admissionCore = AgentCore(
+        admissionModel, admissionRuns,
+        ToolPipeline(admissionCatalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        admissionCatalog
+    )
+    let admissionRunId = RunId("cancellation-admission-window-run")
+    let admissionFuture = spawn {
+        admissionCore.start(AgentRunRequest(
+            admissionRunId, SessionId("cancellation-admission-window-session"),
+            "fixture", "cancel before the compatibility snapshot is visible"
+        ))
+    }
+    while (!admissionRuns.initialSaveStarted()) {
+        sleep(Duration.millisecond)
+    }
+    let admissionCancel = spawn { admissionCore.cancel(admissionRunId) }
+    sleep(Duration.millisecond * 20)
+    admissionRuns.releaseInitialSave()
+    expect(admissionCancel.get().isOk() && admissionFuture.get().isError() &&
+        admissionModel.calls == 0,
+        "cancellation uses the active owner before the compatibility snapshot is visible")
+
     let cancellationRuns = MemoryRuns()
     let cancellationModel = CancellationBarrierModel()
     let cancellationCatalog = ToolCatalog()
@@ -4115,20 +4140,48 @@ class MemoryRuns <: RunRepository {
     var claims: Int64 = 0
     var savedContinuation: ?RunContinuation = None
     var savedDecision: ?ApprovalDecisionReceipt = None
+    private let initialSaveLock = Mutex()
+    private let blockInitialSave: Bool
+    private var initialSaveEntered: Bool = false
+    private var initialSaveReleased: Bool = false
 
     public init(
         failStreamTelemetry!: Bool = false,
         failClaimBeforeCommitAt!: Int64 = 0,
-        failClaimAfterCommitAt!: Int64 = 0
+        failClaimAfterCommitAt!: Int64 = 0,
+        blockInitialSave!: Bool = false
     ) {
         this.failStreamTelemetry = failStreamTelemetry
         this.failClaimBeforeCommitAt = failClaimBeforeCommitAt
         this.failClaimAfterCommitAt = failClaimAfterCommitAt
+        this.blockInitialSave = blockInitialSave
     }
 
     public func save(snapshot: RunSnapshot): Result<Unit> {
+        if (blockInitialSave && snapshots.isEmpty()) {
+            initialSaveLock.lock()
+            initialSaveEntered = true
+            initialSaveLock.unlock()
+            while (true) {
+                initialSaveLock.lock()
+                let released = initialSaveReleased
+                initialSaveLock.unlock()
+                if (released) { break }
+                sleep(Duration.millisecond)
+            }
+        }
         snapshots.add(snapshot)
         Result.Ok(())
+    }
+
+    public func initialSaveStarted(): Bool {
+        initialSaveLock.lock()
+        try { initialSaveEntered } finally { initialSaveLock.unlock() }
+    }
+
+    public func releaseInitialSave(): Unit {
+        initialSaveLock.lock()
+        try { initialSaveReleased = true } finally { initialSaveLock.unlock() }
     }
 
     public func find(runId: RunId): Result<RunSnapshot> {

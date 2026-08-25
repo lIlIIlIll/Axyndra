@@ -3,8 +3,9 @@ set -euo pipefail
 
 version=${1:-}
 destination=${2:-}
+expected_sha256=${3:-}
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]{14}$ || -z "$destination" ]]; then
-  printf 'usage: %s NIGHTLY_VERSION DESTINATION\n' "$0" >&2
+  printf 'usage: %s NIGHTLY_VERSION DESTINATION [EXPECTED_SHA256]\n' "$0" >&2
   exit 2
 fi
 
@@ -15,6 +16,9 @@ url="https://gitcode.com/Cangjie/nightly_build/releases/download/$version/$archi
 
 mkdir -p -- "$extract_root"
 curl -fL --retry 3 --connect-timeout 20 -o "$archive" "$url"
+if [[ -n "$expected_sha256" ]]; then
+  printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status
+fi
 unzip -tqq "$archive"
 unzip -q -o "$archive" -d "$extract_root"
 

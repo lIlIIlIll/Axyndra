@@ -19,6 +19,7 @@ public class DurableRunSnapshot {
     public let startedAtMillis: Int64
     public let finishedAtMillis: ?Int64
     public let cancellationReason: ?String
+    public let executionLaneId: LaneId
 
     public init(
         id: RunId,
@@ -33,7 +34,8 @@ public class DurableRunSnapshot {
         usage: AgentValue,
         startedAtMillis: Int64,
         finishedAtMillis: ?Int64,
-        cancellationReason: ?String
+        cancellationReason: ?String,
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         this.id = id
         this.threadId = threadId
@@ -48,6 +50,7 @@ public class DurableRunSnapshot {
         this.startedAtMillis = startedAtMillis
         this.finishedAtMillis = finishedAtMillis
         this.cancellationReason = cancellationReason
+        this.executionLaneId = executionLaneId
     }
 
     public func hasRecoverableLaunchSnapshot(): Bool {
@@ -62,8 +65,10 @@ public class SqliteRunStore {
 
     public func load(runId: RunId): DurableRunSnapshot {
         let rows = database.query(
-            "SELECT thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
-                "started_at_millis,finished_at_millis,cancellation_reason FROM runs WHERE id=" +
+            "SELECT runs.thread_id,runs.turn_id,runs.epoch,runs.state,runs.lane_snapshot," +
+                "runs.skill_snapshot,runs.budget,runs.usage,runs.started_at_millis," +
+                "runs.finished_at_millis,runs.cancellation_reason,binding.lane_id FROM runs " +
+                "JOIN run_lane_bindings binding ON binding.run_id=runs.id WHERE runs.id=" +
                 sqliteText(runId.value)
         )
         if (rows.size != 1) { throw IllegalStateException("durable Run does not exist") }
@@ -91,7 +96,8 @@ public class SqliteRunStore {
             parseRunStoreInt(journalRows[0].required(0), "Run journal sequence"),
             lane, skills, decodeStoredValue(row.required(6)), decodeStoredValue(row.required(7)),
             parseRunStoreInt(row.required(8), "Run start timestamp"),
-            optionalRunStoreInt(row[9], "Run finish timestamp"), row[10]
+            optionalRunStoreInt(row[9], "Run finish timestamp"), row[10],
+            executionLaneId: LaneId(row.required(11))
         )
     }
 

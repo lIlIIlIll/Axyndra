@@ -321,8 +321,15 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18765)
+    parser.add_argument("--port-file")
     args = parser.parse_args()
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    if args.port_file:
+        port_file = args.port_file + ".tmp"
+        with open(port_file, "w", encoding="utf-8") as stream:
+            stream.write(str(server.server_address[1]) + "\n")
+        os.replace(port_file, args.port_file)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

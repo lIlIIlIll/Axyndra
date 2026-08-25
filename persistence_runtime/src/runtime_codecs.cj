@@ -140,7 +140,8 @@ func continuationRequestBindingValue(value: RunContinuation): AgentValue {
         ValueField("skill_stack", value.skillStackPayload),
         ValueField("context_window", integerValue(value.contextWindow)),
         ValueField("provider_safety_margin", integerValue(value.providerSafetyMargin)),
-        ValueField("tool_context", value.toolContextPayload)
+        ValueField("tool_context", value.toolContextPayload),
+        ValueField("execution_lane_id", textValue(value.executionLaneId.value))
     ])
 }
 
@@ -538,6 +539,7 @@ func continuationValue(
         ValueField("context_window", integerValue(value.contextWindow)),
         ValueField("provider_safety_margin", integerValue(value.providerSafetyMargin)),
         ValueField("tool_context", value.toolContextPayload),
+        ValueField("execution_lane_id", textValue(value.executionLaneId.value)),
         ValueField("running_model", match (value.runningModel) {
             case Some(checkpoint) => runningModelCheckpointValue(checkpoint)
             case None => nullValue()
@@ -1045,6 +1047,16 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             case Some(item) => item
             case None => return codecError("missing field: tool_context")
         }
+        // v4 payloads written before execution Lane enclosure was introduced
+        // are canonically main-Lane continuations.
+        let executionLaneId = match (value.field("execution_lane_id")) {
+            case Some(item) => if (item.kind == ValueKind.Text && item.text.trimAscii() != "") {
+                item.text
+            } else {
+                return codecError("field is not non-empty text: execution_lane_id")
+            }
+            case None => "main"
+        }
         let runningModel: ?RunningModelCheckpoint = match (value.field("running_model")) {
             case Some(raw) => if (raw.kind == ValueKind.Null) { None } else {
                 match (runningModelCheckpointFromValue(raw)) {
@@ -1080,7 +1092,8 @@ func decodeContinuation(source: String): Result<RunContinuation> {
                     modelCapabilitiesSnapshot: capabilitiesSnapshot,
                     resolverVersion: UInt32(resolverVersion), skillStackPayload: skillStack,
                     contextWindow: contextWindow, providerSafetyMargin: safetyMargin,
-                    toolContextPayload: toolContext
+                    toolContextPayload: toolContext,
+                    executionLaneId: LaneId(executionLaneId)
                 ))
             case RunContinuationKind.RunningModel =>
                 let policy = match (requestedPolicy) {
@@ -1108,7 +1121,8 @@ func decodeContinuation(source: String): Result<RunContinuation> {
                     parallelToolCalls: parallelToolCalls,
                     resolverVersion: UInt32(resolverVersion), skillStackPayload: skillStack,
                     contextWindow: contextWindow, providerSafetyMargin: safetyMargin,
-                    toolContextPayload: toolContext
+                    toolContextPayload: toolContext,
+                    executionLaneId: LaneId(executionLaneId)
                 ))
         }
     } catch (error: Exception) {

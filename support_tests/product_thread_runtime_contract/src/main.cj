@@ -196,6 +196,47 @@ main(): Int64 {
                 ThreadId(sessionId.value), LaneId("review")
             ).value().getOrThrow().size == 1,
             "Product exposes durable shared-history Lane creation and branch projection")
+
+        let laneExecutionSession = SessionId("durable-product-review-execution")
+        expect(product.client.start(product.request(
+            "seed the review execution branch",
+            sessionId: Some(laneExecutionSession)
+        ), {_ => ()}).isOk(), "Product seeds a canonical main Lane before branching")
+        let laneExecutionMain = product.vnext.laneBranch(
+            ThreadId(laneExecutionSession.value), LaneId("main")
+        ).value().getOrThrow()
+        expect(product.vnext.createSharedHistoryLane(LaneRecord(
+            LaneId("review"), ThreadId(laneExecutionSession.value),
+            LaneKind.SharedHistoryChild,
+            objectValue([ValueField("profile", textValue("review"))]),
+            parentLaneId: Some(LaneId("main")),
+            forkItemId: Some(laneExecutionMain[laneExecutionMain.size - 1]),
+            createdAtMillis: 30
+        )).isOk(), "Product creates the non-main execution Lane")
+        let reviewExecutionRequest = product.request(
+            "execute the complete model step on review",
+            sessionId: Some(laneExecutionSession),
+            executionLaneId: LaneId("review")
+        )
+        expect(product.client.start(reviewExecutionRequest, {_ => ()}).isOk(),
+            "Product executes AgentCore through an explicit non-main Lane")
+
+        let corruptQueueSession = SessionId("durable-product-corrupt-queue")
+        expect(product.client.start(product.request(
+            "seed the corrupt queue recovery fixture",
+            sessionId: Some(corruptQueueSession)
+        ), {_ => ()}).isOk(), "Product seeds a Thread for queued recovery evidence")
+        let corruptEntryId = scopedInboxEntryId(
+            ThreadId(corruptQueueSession.value), LaneId("main"), "corrupt-payload"
+        )
+        expect(product.vnext.enqueueLaneInput(DurableInboxEntry(
+            corruptEntryId, ThreadId(corruptQueueSession.value), LaneId("main"),
+            InboxEntryKind.Steering,
+            objectValue([ValueField("correlation_id", textValue("corrupt-payload"))])
+        )).isOk() && product.applicationSession(
+            sessionId: Some(corruptQueueSession)
+        ).resumeStartup().isError(),
+            "corrupt durable queued input fails startup recovery instead of being ignored")
         let mainAdmission = product.vnext.acquireLaneRun(
             ThreadId(sessionId.value), LaneId("main"), RunId("product-main-lane-run"),
             "product-main-actor", 100, leaseMillis: 1000
@@ -263,6 +304,23 @@ main(): Int64 {
 
         let database = SqliteDatabase(stateRoot + "/state.db")
         try {
+            expect(database.scalarInt(
+                "SELECT COUNT(*) FROM run_lane_bindings WHERE run_id='" +
+                    reviewExecutionRequest.runId.value + "' AND thread_id='" +
+                    laneExecutionSession.value + "' AND lane_id='review'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM step_records WHERE run_id='" +
+                    reviewExecutionRequest.runId.value + "' AND lane_id='review'"
+            ) >= 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM context_manifests manifest JOIN step_records step " +
+                    "ON step.id=manifest.step_id WHERE step.run_id='" +
+                    reviewExecutionRequest.runId.value + "' AND manifest.lane_id='review'"
+            ) >= 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM item_tree_edges edge JOIN items item ON item.id=edge.item_id " +
+                    "WHERE item.turn_id='turn-" + reviewExecutionRequest.runId.value +
+                    "' AND edge.lane_id='review'"
+            ) >= 1,
+                "non-main Product Run keeps Run, Step, Context and Item Lane enclosure aligned")
             let thread = database.query(
                 "SELECT revision,COALESCE(active_turn_id,'') FROM threads WHERE id='" +
                     sessionId.value + "'"

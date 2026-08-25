@@ -162,7 +162,8 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         budget: ResourceBudget(maxOutputTokens: 8192),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
-        cacheKey: "initial"
+        cacheKey: "initial",
+        executionLaneId: LaneId("review")
     )
     expect(repository.saveContinuation(initial).isOk(),
         "current continuation is installed as the CAS source")
@@ -172,20 +173,23 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         budget: ResourceBudget(maxOutputTokens: 8192),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
-        cacheKey: "updated"
+        cacheKey: "updated",
+        executionLaneId: LaneId("review")
     )
     let winner = repository.compareAndSwapContinuation(Some(initial), updated)
     let concurrentEquivalent = repository.compareAndSwapContinuation(Some(initial), updated)
     expect(winner.isOk() && concurrentEquivalent.isOk() &&
-        concurrentEquivalent.value().getOrThrow().cacheKey == "updated",
-        "equivalent concurrent continuation CAS loser reuses the winner idempotently")
+        concurrentEquivalent.value().getOrThrow().cacheKey == "updated" &&
+        repository.continuation(runId).value().getOrThrow().executionLaneId.value == "review",
+        "equivalent continuation CAS preserves its non-main execution Lane")
     let drifted = RunContinuation(
         runId, sessionId, "fixture", "resume current continuation", approval,
         thinking: ThinkingLevel.High,
         budget: ResourceBudget(maxOutputTokens: 8192),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
-        cacheKey: "drifted"
+        cacheKey: "drifted",
+        executionLaneId: LaneId("review")
     )
     expect(repository.compareAndSwapContinuation(Some(initial), drifted).isError(),
         "non-equivalent concurrent continuation remains a CAS conflict")

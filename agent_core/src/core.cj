@@ -79,6 +79,9 @@ public class AgentRunRequest {
     public let skillStack: SkillStackSnapshot
     public let contextWindow: Int64
     public let providerSafetyMargin: Int64
+    // Semantic execution enclosure. ModelLane remains the immutable model/tool
+    // capability snapshot and must not be used as a Thread branch identity.
+    public let executionLaneId: LaneId
 
     public init(
         runId: RunId,
@@ -106,7 +109,8 @@ public class AgentRunRequest {
         toolContext!: ToolContextDescriptor = ToolContextDescriptor(),
         skillStack!: SkillStackSnapshot = SkillStackSnapshot([], []),
         contextWindow!: Int64 = 0,
-        providerSafetyMargin!: Int64 = 1024
+        providerSafetyMargin!: Int64 = 1024,
+        executionLaneId!: LaneId = LaneId("main")
     ) {
         if (prompt.trimAscii() == "") {
             throw IllegalArgumentException("agent prompt must not be empty")
@@ -156,6 +160,7 @@ public class AgentRunRequest {
         this.parallelToolCalls = parallelToolCalls
         this.skillStack = skillStack
         this.providerSafetyMargin = providerSafetyMargin
+        this.executionLaneId = executionLaneId
         this.contextWindow = if (contextWindow > 0) {
             contextWindow
         } else if (budget.maxInputTokens > Int64.Max - budget.maxOutputTokens -
@@ -370,6 +375,7 @@ public interface ModelContextManifestRuntimePort {
         request: AgentRunRequest,
         requestId: RequestId,
         turnId: SemanticTurnId,
+        executionLaneId: LaneId,
         stepId: StepId,
         stepOrdinal: Int64,
         projection: ModelContextProjection,
@@ -386,6 +392,7 @@ class InMemoryModelContextManifestRuntimePort <: ModelContextManifestRuntimePort
         request: AgentRunRequest,
         requestId: RequestId,
         turnId: SemanticTurnId,
+        executionLaneId: LaneId,
         stepId: StepId,
         stepOrdinal: Int64,
         projection: ModelContextProjection,
@@ -397,6 +404,7 @@ class InMemoryModelContextManifestRuntimePort <: ModelContextManifestRuntimePort
         let _ = request
         let _ = requestId
         let _ = turnId
+        let _ = executionLaneId
         let _ = stepId
         let _ = stepOrdinal
         let _ = projection
@@ -529,6 +537,7 @@ public class AgentCore <: AgentRunner {
             coreUserContent(user),
             coreModelLane(request, catalog),
             request.skillStack,
+            executionLaneId: request.executionLaneId,
             createdAtMillis: agentUtcMillis(),
             deadlineMillis: request.budget.deadlineMillis,
             runBudgetSnapshot: coreBudgetSnapshot(request.budget)
@@ -1941,6 +1950,7 @@ public class AgentCore <: AgentRunner {
                 request,
                 preparedModelRequest.requestId,
                 active.turnId,
+                active.executionLaneId,
                 StepId(
                     "step-" + request.runId.value + "-" +
                         (counter.turns - 1).toString()
@@ -3898,6 +3908,7 @@ public class AgentCore <: AgentRunner {
                             )),
                             coreModelLane(request, catalog),
                             request.skillStack,
+                            executionLaneId: request.executionLaneId,
                             createdAtMillis: agentUtcMillis(),
                             deadlineMillis: request.budget.deadlineMillis,
                             runBudgetSnapshot: coreBudgetSnapshot(request.budget)
@@ -4274,6 +4285,7 @@ public class AgentCore <: AgentRunner {
                             [ModelBlock(ModelBlockKind.Text, text: request.prompt)]
                         )),
                         coreModelLane(request, catalog), request.skillStack,
+                        executionLaneId: request.executionLaneId,
                         createdAtMillis: agentUtcMillis(),
                         deadlineMillis: request.budget.deadlineMillis,
                         runBudgetSnapshot: coreBudgetSnapshot(request.budget)
@@ -4339,6 +4351,30 @@ public class AgentCore <: AgentRunner {
     }
 
     public func cancel(runId: RunId): Result<Unit> {
+        // start() registers the single-owner control before it persists the
+        // compatibility RunSnapshot. Cancellation must remain effective in
+        // that narrow admission window instead of treating the not-yet-written
+        // snapshot as durable corruption. The active worker owns settlement.
+        match (controls.find(runId)) {
+            case Some(control) =>
+                if (!isAwaitingApproval(control.state())) {
+                    let _ = control.requestCancel(
+                        CancellationReasonKind.User,
+                        "run.cancelled",
+                        "execution was cancelled by the user"
+                    )
+                    for (_ in 0..100) {
+                        let terminal = match (runs.find(runId)) {
+                            case Result.Ok(value) => isTerminalRunState(value.status)
+                            case Result.Err(_) => isTerminalRunState(control.state())
+                        }
+                        if (terminal) { return Result.Ok(()) }
+                        sleep(Duration.millisecond * 10)
+                    }
+                    return Result.Ok(())
+                }
+            case None => ()
+        }
         let previous = match (runs.find(runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -4556,7 +4592,8 @@ public class AgentCore <: AgentRunner {
             skillStackPayload: skillStackSnapshotValue(request.skillStack),
             contextWindow: request.contextWindow,
             providerSafetyMargin: request.providerSafetyMargin,
-            toolContextPayload: toolContextDescriptorValue(request.toolContext)
+            toolContextPayload: toolContextDescriptorValue(request.toolContext),
+            executionLaneId: request.executionLaneId
         )
         let restartEvent: ?AgentEvent = match (restartParent) {
             case Some(parent) => Some(AgentEvent(
@@ -4762,7 +4799,8 @@ func continuationFromRequest(
         skillStackPayload: skillStackSnapshotValue(request.skillStack),
         contextWindow: request.contextWindow,
         providerSafetyMargin: request.providerSafetyMargin,
-        toolContextPayload: toolContextDescriptorValue(request.toolContext)
+        toolContextPayload: toolContextDescriptorValue(request.toolContext),
+        executionLaneId: request.executionLaneId
     )
 }
 
@@ -4811,7 +4849,8 @@ func requestFromContinuation(
             skillStackFromSnapshotValue(value.skillStackPayload)
         },
         contextWindow: value.contextWindow,
-        providerSafetyMargin: value.providerSafetyMargin
+        providerSafetyMargin: value.providerSafetyMargin,
+        executionLaneId: value.executionLaneId
     )
 }
 
