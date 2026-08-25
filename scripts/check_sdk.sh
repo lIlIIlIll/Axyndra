@@ -6,6 +6,9 @@ expected_cjpm_version='1.1.3'
 if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJC_VERSION:-}" ]]; then
   expected_version=$AXYNDRA_CI_EXPECTED_CJC_VERSION
 fi
+if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJPM_VERSION:-}" ]]; then
+  expected_cjpm_version=$AXYNDRA_CI_EXPECTED_CJPM_VERSION
+fi
 sdk_root=${AXYNDRA_SDK_ROOT:-${CANGJIE_SDK_ROOT:-}}
 
 if [[ -z "$sdk_root" ]]; then
