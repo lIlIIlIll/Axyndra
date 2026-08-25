@@ -3,6 +3,9 @@ set -euo pipefail
 
 expected_version='1.1.0-alpha.20260817040003'
 expected_cjpm_version='1.1.3'
+if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJC_VERSION:-}" ]]; then
+  expected_version=$AXYNDRA_CI_EXPECTED_CJC_VERSION
+fi
 sdk_root=${AXYNDRA_SDK_ROOT:-${CANGJIE_SDK_ROOT:-}}
 
 if [[ -z "$sdk_root" ]]; then
