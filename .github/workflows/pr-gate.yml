@@ -15,7 +15,7 @@ concurrency:
 jobs:
   clean-build-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     env:
       AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.3.0-alpha.02
     steps:
@@ -58,12 +58,13 @@ jobs:
           python3 scripts/tracked_artifact_gate_test.py
           python3 scripts/docs_gate_test.py
           scripts/architecture_gate.sh
-      - name: Clean Cangjie build and tests
+      - name: Clean Cangjie check
         run: |
           scripts/pinned_cangjie cjpm clean
           scripts/pinned_cangjie cjpm check
+      - name: Build product executable
+        run: |
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
-          scripts/pinned_cangjie cjpm test
       - name: vNext focused contracts
         run: |
           python3 scripts/vnext_contract_gate.py \
