@@ -22,6 +22,12 @@ public enum InboxEntryStatus {
 }
 
 @Derive[Equatable]
+public enum InboxEnqueueOutcome {
+    Inserted | AlreadyQueued | AlreadyClaimed | AlreadyApplied
+    | AlreadyRejected | AlreadySuperseded
+}
+
+@Derive[Equatable]
 public enum StepStatus {
     Open | Completed | Cancelled | Failed | Quarantined | Interrupted
 }
@@ -60,6 +66,23 @@ public class DurableInboxEntry {
         this.createdAtMillis = createdAtMillis
         this.claimedStepId = claimedStepId
     }
+}
+
+// Correlation ids are caller-local. Durable Inbox identity includes its full
+// Thread/Lane enclosure so the same external correlation can safely recur in
+// another Thread without competing for a global SQLite key.
+public func scopedInboxEntryId(
+    threadId: ThreadId,
+    laneId: LaneId,
+    correlationId: String
+): InboxEntryId {
+    let normalized = correlationId.trimAscii()
+    if (normalized == "") {
+        throw IllegalArgumentException("Inbox correlation id is empty")
+    }
+    InboxEntryId("inbox-" + modelPolicySha256Text(
+        threadId.value + "\n" + laneId.value + "\n" + normalized
+    ))
 }
 
 public class StepRecord {

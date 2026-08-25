@@ -28,11 +28,13 @@ public class AgentQueuedInput {
     public let text: String
     public let correlationId: String
     public let kind: String
+    public let durableItemId: String
 
     public init(
         text: String,
         correlationId!: String = "",
-        kind!: String = "steer"
+        kind!: String = "steer",
+        durableItemId!: String = ""
     ) {
         if (text.trimAscii() == "") {
             throw IllegalArgumentException("queued agent input must not be empty")
@@ -40,6 +42,7 @@ public class AgentQueuedInput {
         this.text = text
         this.correlationId = correlationId
         this.kind = kind
+        this.durableItemId = durableItemId
     }
 }
 
@@ -3345,7 +3348,9 @@ public class AgentCore <: AgentRunner {
         for (value in values) {
             let thread = control.runtime.threadSnapshot()
             match (control.runtime.appendUserInput(
-                ItemId(if (value.correlationId != "") {
+                ItemId(if (value.durableItemId != "") {
+                    value.durableItemId
+                } else if (value.correlationId != "") {
                     "interaction-" + value.correlationId
                 } else {
                     "interaction-" + context.runId.value + "-" +

@@ -232,12 +232,31 @@ public class SqliteContextManifestStore {
         }
         try {
             database.transaction { transaction =>
-                if (transaction.query(
-                    "SELECT 1 FROM context_manifests WHERE id=? AND digest=?",
+                let enclosure = transaction.query(
+                    "SELECT manifest.thread_id,manifest.lane_id,manifest.turn_id," +
+                        "manifest.step_id,step.thread_id,step.lane_id,step.turn_id," +
+                        "step.run_id,step.ordinal FROM context_manifests manifest " +
+                        "JOIN step_records step ON step.id=manifest.step_id " +
+                        "WHERE manifest.id=? AND manifest.digest=?",
                     [SqlParameter.Text(manifest.id.value), SqlParameter.Text(manifest.digest)]
-                ).size != 1) {
+                )
+                if (enclosure.size != 1) {
                     throw IllegalStateException("Context Manifest is not durably committed")
                 }
+                let row = enclosure[0]
+                if (row.required(0) != manifest.threadId.value ||
+                    row.required(1) != manifest.laneId.value ||
+                    row.required(2) != manifest.turnId.value ||
+                    row.required(3) != manifest.stepId.value ||
+                    row.required(4) != manifest.threadId.value ||
+                    row.required(5) != manifest.laneId.value ||
+                    row.required(6) != manifest.turnId.value ||
+                    row.required(7) != runId.value) {
+                    throw IllegalStateException(
+                        "Context Manifest Step enclosure is inconsistent"
+                    )
+                }
+                let stepOrdinal = manifestRowInt(row.required(8), "Step ordinal")
                 let run = transaction.query(
                     "SELECT runs.thread_id,runs.turn_id,binding.snapshot_id FROM runs " +
                     "JOIN run_composition_bindings binding ON binding.run_id=runs.id " +
@@ -252,7 +271,7 @@ public class SqliteContextManifestStore {
                     runId,
                     manifest.laneId,
                     manifest.turnId,
-                    0,
+                    stepOrdinal,
                     RunExecutionPhase.ContextReady(DurablePhaseState(objectValue([
                         ValueField("context_manifest_id", textValue(manifest.id.value)),
                         ValueField("context_manifest_digest", textValue(manifest.digest))

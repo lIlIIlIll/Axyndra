@@ -370,23 +370,26 @@ main(): Int64 {
             ) >= 2,
                 "each Product model request owns a distinct durable Step and Context Manifest")
             expect(database.query(
-                "SELECT status FROM lane_inbox_entries WHERE id='interaction-persisted-steering'"
+                "SELECT status FROM lane_inbox_entries WHERE thread_id='" +
+                    sessionId.value + "' AND payload LIKE '%persisted-steering%'"
             )[0].required(0) == "rejected" && database.query(
-                "SELECT status FROM lane_inbox_entries WHERE id='interaction-persisted-follow-up'"
+                "SELECT status FROM lane_inbox_entries WHERE thread_id='" +
+                    sessionId.value + "' AND payload LIKE '%persisted-follow-up%'"
             )[0].required(0) == "queued",
                 "withdrawal is durable and undelivered interaction survives process close")
-            let deliveredStatus = database.query(
-                "SELECT status FROM lane_inbox_entries " +
-                    "WHERE id='interaction-delivered-follow-up'"
-            )[0].required(0)
+            let deliveredRow = database.query(
+                "SELECT id,status FROM lane_inbox_entries WHERE thread_id='" +
+                    deliveredSession.value + "' AND payload LIKE '%delivered-follow-up%'"
+            )[0]
+            let deliveredEntryId = deliveredRow.required(0)
+            let deliveredStatus = deliveredRow.required(1)
             let deliveredSteps = database.scalarInt(
                 "SELECT COUNT(*) FROM step_records WHERE thread_id='" +
                     deliveredSession.value + "'"
             )
             let deliveredEnclosures = database.scalarInt(
-                "SELECT COUNT(*) FROM step_records WHERE input_entry_id=" +
-                    "'interaction-delivered-follow-up' AND accepted_item_id=" +
-                    "'interaction-delivered-follow-up'"
+                "SELECT COUNT(*) FROM step_records WHERE input_entry_id='" +
+                    deliveredEntryId + "' AND accepted_item_id='" + deliveredEntryId + "'"
             )
             expect(deliveredStatus == "applied" && deliveredSteps >= 2 &&
                 deliveredEnclosures == 1,

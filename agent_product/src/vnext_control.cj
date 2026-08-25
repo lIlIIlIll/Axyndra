@@ -113,7 +113,10 @@ public class ProductVnextControl {
 
     public func enqueueLaneInput(entry: DurableInboxEntry): Result<Unit> {
         match (threadRuntimes.acquire(entry.threadId, workspaceRoot)) {
-            case Result.Ok(_) => SqliteInboxStepStore(database).enqueue(entry)
+            case Result.Ok(_) => match (SqliteInboxStepStore(database).enqueue(entry)) {
+                case Result.Ok(_) => Result.Ok(())
+                case Result.Err(error) => Result.Err(error)
+            }
             case Result.Err(error) => Result.Err(error)
         }
     }

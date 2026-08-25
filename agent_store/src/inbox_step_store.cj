@@ -47,13 +47,24 @@ public class SqliteInboxStepStore {
 
     public init(database: SqliteDatabase) { this.database = database }
 
-    public func enqueue(entry: DurableInboxEntry): Result<Unit> {
+    public func enqueue(entry: DurableInboxEntry): Result<InboxEnqueueOutcome> {
         if (entry.status != InboxEntryStatus.Queued || entry.claimedStepId.isSome()) {
-            return inboxConflict<Unit>("only a queued Inbox entry may be enqueued")
+            return inboxConflict<InboxEnqueueOutcome>(
+                "only a queued Inbox entry may be enqueued"
+            )
         }
         let payload = encodeStoredValue(entry.payload)
         try {
             database.transaction { transaction =>
+                if (transaction.query(
+                    "SELECT 1 FROM lanes WHERE thread_id=? AND lane_id=?",
+                    [SqlParameter.Text(entry.threadId.value),
+                        SqlParameter.Text(entry.laneId.value)]
+                ).size != 1) {
+                    return inboxConflict<InboxEnqueueOutcome>(
+                        "Inbox entry references an unknown Lane"
+                    )
+                }
                 let existing = transaction.query(
                     "SELECT thread_id,lane_id,kind,payload,status FROM lane_inbox_entries WHERE id=?",
                     [SqlParameter.Text(entry.id.value)]
@@ -72,19 +83,23 @@ public class SqliteInboxStepStore {
                             SqlParameter.Int64Value(entry.createdAtMillis)
                         ]
                     )
-                    Result.Ok(())
+                    Result.Ok(InboxEnqueueOutcome.Inserted)
                 } else if (existing.size == 1 &&
                     existing[0].required(0) == entry.threadId.value &&
                     existing[0].required(1) == entry.laneId.value &&
                     existing[0].required(2) == inboxEntryKindName(entry.kind) &&
                     existing[0].required(3) == payload) {
-                    Result.Ok(())
+                    Result.Ok(inboxEnqueueOutcome(existing[0].required(4)))
                 } else {
-                    inboxConflict<Unit>("Inbox entry id already owns different content")
+                    inboxConflict<InboxEnqueueOutcome>(
+                        "Inbox entry id already owns different content"
+                    )
                 }
             }
         } catch (error: Exception) {
-            inboxRecovery<Unit>("inbox.enqueue_failed", error.message, entry.id)
+            inboxRecovery<InboxEnqueueOutcome>(
+                "inbox.enqueue_failed", error.message, entry.id
+            )
         }
     }
 
@@ -232,11 +247,14 @@ public class SqliteInboxStepStore {
             return inboxConflict<StepRecord>("Inbox claim Thread revision changed")
         }
         let runRows = transaction.query(
-            "SELECT thread_id,turn_id FROM runs WHERE id=?",
+            "SELECT runs.thread_id,runs.turn_id,binding.lane_id FROM runs " +
+                "JOIN run_lane_bindings binding ON binding.run_id=runs.id WHERE runs.id=?",
             [SqlParameter.Text(request.runId.value)]
         )
         if (runRows.size != 1 || runRows[0].required(0) != threadId.value ||
-            runRows[0].required(1) != request.turnId.value) {
+            runRows[0].required(1) != request.turnId.value ||
+            runRows[0].required(2) != entry.required(1) ||
+            request.continuation.laneId.value != entry.required(1)) {
             return inboxConflict<StepRecord>("Inbox claim Run enclosure changed")
         }
         let revisionRows = transaction.query(
@@ -300,6 +318,17 @@ public class SqliteInboxStepStore {
             acceptedItemId: Some(request.acceptedItemId),
             openedAtMillis: request.claimedAtMillis
         ))
+    }
+}
+
+func inboxEnqueueOutcome(status: String): InboxEnqueueOutcome {
+    match (status) {
+        case "queued" => InboxEnqueueOutcome.AlreadyQueued
+        case "claimed" => InboxEnqueueOutcome.AlreadyClaimed
+        case "applied" => InboxEnqueueOutcome.AlreadyApplied
+        case "rejected" => InboxEnqueueOutcome.AlreadyRejected
+        case "superseded" => InboxEnqueueOutcome.AlreadySuperseded
+        case _ => throw IllegalStateException("invalid Inbox status")
     }
 }
 
