@@ -21,7 +21,7 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15 ripgrep
+          sudo apt-get install --yes clang-15 ripgrep unzip
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
       - name: Resolve latest Cangjie nightly
         id: cangjie-nightly
@@ -29,11 +29,16 @@ jobs:
           version=$(python3 scripts/latest_cangjie_nightly.py)
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Setup Cangjie
-        uses: Zxilly/setup-cangjie@647b8de21a4c9f95e4d4f5565ca75110fa9d17e4
+        uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
         with:
           channel: nightly
           version: ${{ steps.cangjie-nightly.outputs.version }}
-          components: stdx
+          archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
+      - name: Setup matching nightly stdx
+        run: |
+          stdx_root=$(bash scripts/setup_ci_nightly_stdx.sh \
+            "${{ steps.cangjie-nightly.outputs.version }}" "$RUNNER_TEMP")
+          echo "CANGJIE_STDX_PATH=$stdx_root" >> "$GITHUB_ENV"
       - name: Configure pinned SDK
         run: |
           sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
