@@ -5,6 +5,11 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=architecture_gate_lib.sh
 source "$ROOT/scripts/architecture_gate_lib.sh"
 
+GREP=${GREP:-rp-grep}
+if ! command -v "$GREP" >/dev/null 2>&1; then
+  GREP=grep
+fi
+
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -15,7 +20,7 @@ if (architecture_gate_require_file "$tmp/missing.cj") 2>"$tmp/missing.err"; then
   printf 'missing authority was accepted\n' >&2
   exit 1
 fi
-rp-grep -q 'required architecture authority missing' "$tmp/missing.err"
+"$GREP" -q 'required architecture authority missing' "$tmp/missing.err"
 
 cat >"$tmp/rg-none" <<'EOF'
 #!/usr/bin/env bash
@@ -38,6 +43,6 @@ if (architecture_gate_rg_matches pattern "$tmp/authority.cj") 2>"$tmp/rg.err"; t
   printf 'search execution error was accepted\n' >&2
   exit 1
 fi
-rp-grep -q 'search command failed with exit 2' "$tmp/rg.err"
+"$GREP" -q 'search command failed with exit 2' "$tmp/rg.err"
 
 printf 'architecture gate helper tests passed\n'

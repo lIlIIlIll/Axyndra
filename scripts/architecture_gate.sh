@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 RG=${RG:-rp-rg}
+if ! command -v "$RG" >/dev/null 2>&1; then
+  RG=rg
+fi
 
 # shellcheck source=architecture_gate_lib.sh
 source "$ROOT/scripts/architecture_gate_lib.sh"

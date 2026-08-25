@@ -7,6 +7,14 @@ source "$root/scripts/sdk_paths.sh"
 stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
 source_binary=${AXYNDRA_SOURCE_BINARY:-"$root/target/release/bin/agent_app"}
 package_root=${AXYNDRA_PACKAGE_ROOT:-"$root/dist/axyndra"}
+AWK=${AWK:-rp-awk}
+GREP=${GREP:-rp-grep}
+if ! command -v "$AWK" >/dev/null 2>&1; then
+  AWK=awk
+fi
+if ! command -v "$GREP" >/dev/null 2>&1; then
+  GREP=grep
+fi
 
 if [[ ! -x "$source_binary" ]]; then
   printf 'axyndra: build artifact is missing: %s\n' "$source_binary" >&2
@@ -46,7 +54,7 @@ while ((${#queue[@]})); do
     cp -f -- "$canonical" "$destination"
     queue+=("$destination")
   done < <(
-    ldd "$current" | rp-awk '
+    ldd "$current" | "$AWK" '
       /=> \/.* \(0x/ { print $1 "|" $3 }
       /^\/[[:graph:]]+ \(0x/ { print "|" $1 }
     '
@@ -61,7 +69,7 @@ done
 
 env -u LD_LIBRARY_PATH ldd "$package_root/bin/axyndra" \
   > "$package_root/diagnostics/ldd.txt"
-if rp-grep -q 'not found' "$package_root/diagnostics/ldd.txt"; then
+if "$GREP" -q 'not found' "$package_root/diagnostics/ldd.txt"; then
   cat "$package_root/diagnostics/ldd.txt" >&2
   exit 1
 fi
