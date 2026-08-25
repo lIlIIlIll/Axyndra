@@ -83,33 +83,48 @@ main(): Int64 {
             RunState.WaitingApproval
         )).value().getOrThrow()
         product.persistPendingApproval(request, approval).value().getOrThrow()
-        let encodedContinuation = database.query(
-            "SELECT continuation FROM runs WHERE id='product-restart-run'"
-        )[0].required(0)
         let encodedDurableContinuation = database.query(
             "SELECT payload FROM run_continuations WHERE run_id='product-restart-run'"
         )[0].required(0)
+        let encodedContinuation = optionalLegacyPayloadFromDurableContinuation(
+            decodeDurableRunContinuation(encodedDurableContinuation)
+        ).getOrThrow()
+        expect(database.scalarInt(
+            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
+        ) == 1, "new continuation writes use only the canonical vNext register")
+        database.execute(
+            "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
+                " WHERE id='product-restart-run'"
+        )
         database.execute(
             "UPDATE runs SET continuation=json_set(continuation,'$.requested_policy',json('null')) " +
                 "WHERE id='product-restart-run'"
         )
         expect(continuationRepository.continuation(runId).isError(),
-            "canonical vNext continuation rejects a divergent legacy mirror")
+            "legacy migration source rejects divergence from the canonical projection")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"
         )
+        expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
+            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
+        ) == 1, "matching legacy migration source is consumed and cleared atomically")
+
         database.execute(
-            "UPDATE runs SET continuation=json_set(continuation," +
-                "'$.model_capabilities_snapshot.capability_fingerprint','tampered') " +
-                "WHERE id='product-restart-run'"
+            "DELETE FROM run_continuations WHERE run_id='product-restart-run'"
         )
-        expect(continuationRepository.continuation(runId).isError(),
-            "legacy capability tampering fails closed against the vNext register")
         database.execute(
             "UPDATE runs SET continuation=" + sqliteText(encodedContinuation) +
                 " WHERE id='product-restart-run'"
         )
+        expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
+            "SELECT COUNT(*) FROM run_continuations WHERE run_id='product-restart-run'"
+        ) == 1 && database.scalarInt(
+            "SELECT COUNT(*) FROM runs WHERE id='product-restart-run' AND continuation IS NULL"
+        ) == 1, "legacy-only database fixture migrates into the canonical register")
+        let migratedDurableContinuation = database.query(
+            "SELECT payload FROM run_continuations WHERE run_id='product-restart-run'"
+        )[0].required(0)
         database.execute(
             "UPDATE run_continuations SET payload='corrupt' " +
                 "WHERE run_id='product-restart-run'"
@@ -117,7 +132,7 @@ main(): Int64 {
         expect(continuationRepository.continuation(runId).isError(),
             "corrupt preferred vNext continuation fails recovery")
         database.execute(
-            "UPDATE run_continuations SET payload=" + sqliteText(encodedDurableContinuation) +
+            "UPDATE run_continuations SET payload=" + sqliteText(migratedDurableContinuation) +
                 " WHERE run_id='product-restart-run'"
         )
         database.close()

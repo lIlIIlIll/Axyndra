@@ -267,7 +267,9 @@ public class SqliteContextManifestStore {
                     run[0].required(1) != manifest.turnId.value) {
                     throw IllegalStateException("Context Manifest Run enclosure changed")
                 }
-                let continuation = sealDurableRunContinuation(DurableRunContinuationV1(
+                let continuation = preserveLegacyRunContinuationProjection(
+                    transaction,
+                    sealDurableRunContinuation(DurableRunContinuationV1(
                     runId,
                     manifest.laneId,
                     manifest.turnId,
@@ -279,7 +281,7 @@ public class SqliteContextManifestStore {
                     CompositionSnapshotId(run[0].required(2)),
                     ModelLaneSnapshotId("model-lane-" + runId.value),
                     contextManifestId: Some(manifest.id)
-                ))
+                )))
                 let revision = contextManifestInt(transaction.query(
                     "SELECT COALESCE(MAX(revision),0) FROM run_continuation_facts WHERE run_id=?",
                     [SqlParameter.Text(runId.value)]

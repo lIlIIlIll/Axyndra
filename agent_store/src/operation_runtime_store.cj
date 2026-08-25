@@ -571,14 +571,23 @@ public class OperationRecoveryPlanner {
             let approvals = database.scalarInt(
                 "SELECT COUNT(*) FROM approvals WHERE operation_id=" + sqliteText(operationId.value)
             )
-            let continuationPersisted = database.scalarInt(
-                "SELECT COUNT(*) FROM runs WHERE id=" + sqliteText(runId.value) +
-                    " AND continuation IS NOT NULL"
-            ) > 0
+            let continuationRows = database.query(
+                "SELECT payload FROM run_continuations WHERE run_id=" +
+                    sqliteText(runId.value)
+            )
+            let continuationPersisted = if (continuationRows.size == 1) {
+                let continuation = decodeDurableRunContinuation(
+                    continuationRows[0].required(0)
+                )
+                runExecutionPhaseName(continuation.phase) == "waiting_approval" &&
+                    continuation.pendingOperationId.isSome() &&
+                    continuation.pendingOperationId.getOrThrow().value == operationId.value &&
+                    optionalLegacyPayloadFromDurableContinuation(continuation).isSome()
+            } else { false }
             if (approvals == 0 && continuationPersisted) {
                 // This is a stable user-decision boundary, not a crash gap.
-                // The immutable continuation is sufficient to recover the
-                // Run and present/settle the exact same ApprovalRequest.
+                // The canonical register carries the immutable legacy
+                // projection needed to present/settle the same ApprovalRequest.
                 return
             }
             actions.add(recoveryAction(

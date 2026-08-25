@@ -1048,6 +1048,39 @@ func recoveryPlannerContract(database: SqliteDatabase): Unit {
         RecoveryActionKind.RequestApprovalOnce,
         "C2 prepared Operation requests approval exactly once"
     )
+    let pendingApprovalId = ApprovalId("legacy-approval-recovery-operation")
+    let approvalBoundary = withLegacyRunContinuationProjection(
+        sealDurableRunContinuation(DurableRunContinuationV1(
+            RunId("recovery-run"), LaneId("main"), SemanticTurnId("recovery-turn"), 1,
+            RunExecutionPhase.WaitingApproval(DurablePhaseState(objectValue([]))),
+            CompositionSnapshotId("recovery-composition"),
+            ModelLaneSnapshotId("recovery-model-lane"),
+            pendingOperationId: Some(operationId),
+            pendingApprovalId: Some(pendingApprovalId),
+            workDebt: WorkDebtSnapshot(
+                unsettledOperations: [operationId],
+                pendingApprovals: [pendingApprovalId]
+            )
+        )),
+        "{\"fixture\":\"waiting-approval\"}"
+    )
+    database.execute(
+        "INSERT INTO run_continuations(" +
+            "run_id,schema_version,revision,phase,payload,digest,updated_commit_sequence" +
+            ") VALUES (?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET " +
+            "schema_version=excluded.schema_version,revision=excluded.revision," +
+            "phase=excluded.phase,payload=excluded.payload,digest=excluded.digest," +
+            "updated_commit_sequence=excluded.updated_commit_sequence",
+        [
+            SqlParameter.Text("recovery-run"), SqlParameter.Int64Value(1),
+            SqlParameter.Int64Value(1), SqlParameter.Text("waiting_approval"),
+            SqlParameter.Text(encodeDurableRunContinuation(approvalBoundary)),
+            SqlParameter.Text(approvalBoundary.digest), SqlParameter.Int64Value(1)
+        ]
+    )
+    expect(planner.inspect(ThreadId("recovery-thread")).isEmpty(),
+        "canonical WaitingApproval register is a stable recovery boundary")
+    database.execute("DELETE FROM run_continuations WHERE run_id='recovery-run'")
     operationStore.recordApproval(
         "rejected-approval", operationId, RunId("recovery-run"), plan,
         CapabilitySet(), false, "user"
