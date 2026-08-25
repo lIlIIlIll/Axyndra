@@ -28,3 +28,5 @@ perf_results/
 *.pid
 !agent_tui/cjtui-contract.json
 !vendor/cj_tui/PROVENANCE.json
+!vendor/cj_tui/docs/api-contract-v1.txt
+!vendor/cj_tui/packages/core/tests/fixtures/file_picker/notes.txt
