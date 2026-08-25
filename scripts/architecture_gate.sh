@@ -426,12 +426,11 @@ legacy_continuation_column_users=$(
     --glob '*.cj' 2>/dev/null | sort || true
 )
 allowed_legacy_continuation_column_users=$(printf '%s\n' \
-  "$ROOT/agent_store/src/legacy_continuation_bridge.cj" \
-  "$ROOT/persistence_runtime/src/sqlite_run_repository.cj" \
+  "$ROOT/agent_store/src/schema.cj" \
   | sort)
 if [[ "$legacy_continuation_column_users" != "$allowed_legacy_continuation_column_users" ]]; then
   printf '%s\n' "$legacy_continuation_column_users" >&2
-  fail "runs.continuation must remain migration input only"
+  fail "runs.continuation must remain historical schema migration input only"
 fi
 
 printf 'architecture gate passed\n'

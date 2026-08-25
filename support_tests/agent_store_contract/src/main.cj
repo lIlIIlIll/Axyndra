@@ -20,11 +20,12 @@ main(): Int64 {
         )
     }
     threadCodecContract()
+    v19ToV20ContinuationColumnContract()
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 19, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 20, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -181,6 +182,44 @@ func sqliteAppendRestoreBenchmark(): Unit {
         appendMillis.toString() + " restore_ms=" + restoreMillis.toString())
 }
 
+func v19ToV20ContinuationColumnContract(): Unit {
+    let root = Directory.createTemp("/tmp").toString()
+    let path = root + "/v19.db"
+    let seed = SqliteDatabase(path)
+    try {
+        seed.execute("ALTER TABLE runs ADD COLUMN continuation TEXT")
+        seed.execute("DROP TABLE legacy_run_continuation_imports")
+        seed.execute(
+            "INSERT INTO threads VALUES ('v19-thread',0,'workspace','open',1,'v19-turn')"
+        )
+        seed.execute(
+            "INSERT INTO turns VALUES ('v19-turn','v19-thread',1,'active','v19-user','v19-run')"
+        )
+        seed.execute(
+            "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot," +
+                "budget,usage,started_at_millis,continuation) VALUES(" +
+                "'v19-run','v19-thread','v19-turn',1,'waiting_approval','{}','{}','{}','{}'," +
+                "1,'legacy-v19-payload')"
+        )
+        seed.execute("PRAGMA user_version=19")
+    } finally { seed.close() }
+
+    let migrated = SqliteDatabase(path)
+    try {
+        expect(migrated.scalarInt("PRAGMA user_version") == 20,
+            "v19 database migrates to schema v20")
+        expect(migrated.scalarInt(
+            "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
+        ) == 0, "v20 removes the legacy continuation column from canonical Runs")
+        expect(migrated.query(
+            "SELECT payload FROM legacy_run_continuation_imports WHERE run_id='v19-run'"
+        )[0].required(0) == "legacy-v19-payload",
+            "v20 preserves the legacy payload in its explicit one-shot import table")
+        expect(migrated.query("PRAGMA foreign_key_check").isEmpty(),
+            "v19 to v20 migration preserves foreign-key integrity")
+    } finally { migrated.close() }
+}
+
 func v6ToV16MigrationContract(): Unit {
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/v6.db"
@@ -209,8 +248,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 19,
-            "v6 database migrates through schema v7 to v19")
+        expect(migrated.scalarInt("PRAGMA user_version") == 20,
+            "v6 database migrates through schema v7 to v20")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -245,8 +284,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 19,
-            "v7 database migrates through schema v8 to v19")
+        expect(migrated.scalarInt("PRAGMA user_version") == 20,
+            "v7 database migrates through schema v8 to v20")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -2068,6 +2107,8 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE legacy_run_continuation_imports")
+    database.execute("ALTER TABLE runs ADD COLUMN continuation TEXT")
     database.execute("DROP TABLE lane_run_admissions")
     database.execute("DROP TABLE team_messages")
     database.execute("DROP TABLE team_tasks")

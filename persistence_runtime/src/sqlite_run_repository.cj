@@ -34,11 +34,11 @@ public class SqliteRunRepository <: RunRepository {
         this.eventCapacity = eventCapacity
     }
 
-    private func consumeLegacyContinuationColumn(): Result<Unit> {
+    private func consumeLegacyContinuationImports(): Result<Unit> {
         try {
             database.transaction<Result<Unit>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT id,continuation FROM runs WHERE continuation IS NOT NULL"
+                    "SELECT run_id,payload FROM legacy_run_continuation_imports"
                 )
                 for (row in rows) {
                     let runId = RunId(row.required(0))
@@ -208,7 +208,7 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func saveContinuation(value: RunContinuation): Result<Unit> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -254,7 +254,7 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func continuation(runId: RunId): Result<RunContinuation> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -281,7 +281,7 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func pendingContinuation(sessionId: SessionId): Result<?RunContinuation> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -326,7 +326,7 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func pendingRecoveryContinuation(sessionId: SessionId): Result<?RunContinuation> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -366,7 +366,7 @@ public class SqliteRunRepository <: RunRepository {
         expected: ?RunContinuation,
         next: RunContinuation
     ): Result<RunContinuation> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -406,7 +406,7 @@ public class SqliteRunRepository <: RunRepository {
         event: AgentEvent,
         continuation: RunContinuation
     ): Result<Unit> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -480,7 +480,7 @@ public class SqliteRunRepository <: RunRepository {
         duplicateEvent: AgentEvent,
         continuation: RunContinuation
     ): Result<Unit> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -650,7 +650,7 @@ public class SqliteRunRepository <: RunRepository {
         runId: RunId,
         activeAttemptId: ModelAttemptId
     ): Result<Unit> {
-        match (consumeLegacyContinuationColumn()) {
+        match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
@@ -1217,8 +1217,9 @@ func sqliteRunConflict<T>(message: String): Result<T> {
 
 // run_continuations is the only production continuation register. The legacy
 // AgentCore projection is carried inside its sealed phase payload until the
-// legacy RunContinuation API is retired; runs.continuation is migration input
-// only and is nulled before any read or write proceeds.
+// legacy RunContinuation API is retired. Schema v20 moves any old column value
+// into a one-shot import table; production reads and writes use only the sealed
+// canonical register.
 func canonicalContinuationFromRow(
     row: SqliteRow,
     runId: RunId,

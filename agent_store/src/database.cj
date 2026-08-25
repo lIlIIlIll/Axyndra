@@ -285,7 +285,8 @@ public class SqliteDatabase {
             try {
                 for (statement in v1Schema()) { executeLocked(statement) }
                 for (statement in v19Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=19")
+                for (statement in v20Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=20")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -523,7 +524,7 @@ public class SqliteDatabase {
                 throw error
             }
         } else if (version != 15 && version != 16 && version != 17 &&
-            version != 18 && version != 19) {
+            version != 18 && version != 19 && version != 20) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
@@ -573,6 +574,20 @@ public class SqliteDatabase {
             try {
                 for (statement in v19Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=19")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v20 removes the retired continuation column from the canonical Run
+        // table. Any legacy payload is moved to an explicit one-shot import
+        // queue before the column is dropped.
+        if (version >= 1 && version <= 19) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v20Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=20")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
