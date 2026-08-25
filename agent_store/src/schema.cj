@@ -37,7 +37,7 @@ func v1Schema(): Array<String> {
         "CREATE TABLE app_event_outbox (event_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, commit_sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, published INTEGER NOT NULL DEFAULT 0, UNIQUE(thread_id,commit_sequence,ordinal))",
         "CREATE TABLE operation_effect_records (operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, tool_call_item_id TEXT NOT NULL REFERENCES items(id), normalized_plan TEXT NOT NULL, tool_id TEXT NOT NULL, tool_version TEXT NOT NULL, implementation_fingerprint TEXT NOT NULL, schema_digest TEXT NOT NULL, effective_arguments_digest TEXT NOT NULL, replay_contract_version INTEGER NOT NULL, replay_disposition TEXT NOT NULL, reserved_receipt_id TEXT NOT NULL UNIQUE, reserved_result_item_id TEXT NOT NULL UNIQUE, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE operation_state_registers (operation_id TEXT PRIMARY KEY REFERENCES operation_effect_records(operation_id) ON DELETE CASCADE, state TEXT NOT NULL, revision INTEGER NOT NULL)",
-        "CREATE TABLE lane_inbox_entries (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, claimed_step_id TEXT, revision INTEGER NOT NULL)",
+        "CREATE TABLE lane_inbox_entries (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created_at_millis INTEGER NOT NULL, claimed_step_id TEXT, revision INTEGER NOT NULL, FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE TABLE step_records (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, input_entry_id TEXT UNIQUE REFERENCES lane_inbox_entries(id), accepted_item_id TEXT UNIQUE REFERENCES items(id), status TEXT NOT NULL, opened_at_millis INTEGER NOT NULL, settled_at_millis INTEGER, revision INTEGER NOT NULL, UNIQUE(run_id,ordinal))",
         "CREATE TABLE prompt_contribution_artifacts (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE context_manifests (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, lane_id TEXT NOT NULL, turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE, step_id TEXT NOT NULL REFERENCES step_records(id) ON DELETE CASCADE, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
@@ -245,5 +245,12 @@ func v18Migration(): Array<String> {
     [
         "CREATE TABLE lane_run_admissions (thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, run_id TEXT NOT NULL, owner_id TEXT NOT NULL, fence_token INTEGER NOT NULL, expires_at_millis INTEGER NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(thread_id,lane_id), FOREIGN KEY(thread_id,lane_id) REFERENCES lanes(thread_id,lane_id))",
         "CREATE UNIQUE INDEX lane_run_admissions_active_run ON lane_run_admissions(run_id) WHERE state='active'"
+    ]
+}
+
+func v19Migration(): Array<String> {
+    [
+        "CREATE TRIGGER lane_inbox_requires_lane BEFORE INSERT ON lane_inbox_entries WHEN NOT EXISTS (SELECT 1 FROM lanes WHERE thread_id=NEW.thread_id AND lane_id=NEW.lane_id) BEGIN SELECT RAISE(ABORT,'lane_inbox_entries references unknown lane'); END",
+        "CREATE TRIGGER lane_inbox_preserves_lane BEFORE UPDATE OF thread_id,lane_id ON lane_inbox_entries WHEN NOT EXISTS (SELECT 1 FROM lanes WHERE thread_id=NEW.thread_id AND lane_id=NEW.lane_id) BEGIN SELECT RAISE(ABORT,'lane_inbox_entries references unknown lane'); END"
     ]
 }

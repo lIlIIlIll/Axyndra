@@ -15,6 +15,7 @@ public class AppEventMailbox {
     private let lock = Mutex()
     private let capacity: Int64
     private let events = ArrayList<AppEvent>()
+    private var nextDeliverySequence: Int64 = 1
 
     public init(capacity!: Int64 = 1024) {
         if (capacity < 1) {
@@ -59,7 +60,12 @@ public class AppEventMailbox {
         try {
             let count = min(maximum, events.size)
             let output = ArrayList<AppEvent>()
-            for (_ in 0..count) { output.add(events.remove(at: 0)) }
+            for (_ in 0..count) {
+                output.add(withDeliverySequence(
+                    events.remove(at: 0), nextDeliverySequence
+                ))
+                nextDeliverySequence += 1
+            }
             output.toArray()
         } finally {
             lock.unlock()
@@ -70,6 +76,22 @@ public class AppEventMailbox {
         lock.lock()
         try { events.size } finally { lock.unlock() }
     }
+}
+
+func withDeliverySequence(event: AppEvent, sequence: Int64): AppEvent {
+    let meta = event.meta
+    AppEvent(
+        AppEventMeta(
+            meta.sequence,
+            meta.threadId,
+            meta.threadRevision,
+            turnId: meta.turnId,
+            runId: meta.runId,
+            epoch: meta.epoch,
+            deliverySequence: Some(sequence)
+        ),
+        event.payload
+    )
 }
 
 func sealedByQueuedEvent(events: ArrayList<AppEvent>, incoming: AppEvent): Bool {

@@ -114,6 +114,13 @@ agent_tui       → agent_cli + vendored cjtui packages
 - SQLite WAL 中的 Thread/Turn/Item 是 canonical transcript；Run journal 有界，
   Operation/Receipt/Approval/Audit 是独立的副作用证据。跨这些记录的状态转换使用
   单一事务，artifact body 进入 content-addressed blob store。
+- `ContextReady` continuation 的 `stepOrdinal` 必须在同一事务中从 manifest 绑定的
+  canonical Step 读取并校验 Thread/Lane/Turn/Run enclosure，不能由调用者复制或回退
+  为零。Lane Inbox identity 包含 Thread/Lane enclosure，claim 同时校验 Run 的 durable
+  Lane binding。
+- AppEvent 的 journal sequence 标识 canonical 事件；mailbox drain 另行分配连接内连续的
+  delivery sequence。合并只影响 delivery projection，客户端 cursor 不会把合法合并误判
+  为 journal 丢失。
 - ContextCheckpoint 绑定 `coversThroughItemOrdinal`、source digest、projector version
   与 lane compatibility；compaction 从不修改 canonical Items，失效 checkpoint 可由
   完整 Thread 重建。

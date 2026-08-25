@@ -24,7 +24,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 18, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 19, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -209,8 +209,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 18,
-            "v6 database migrates through schema v7 to v18")
+        expect(migrated.scalarInt("PRAGMA user_version") == 19,
+            "v6 database migrates through schema v7 to v19")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -245,8 +245,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 18,
-            "v7 database migrates through schema v8 to v18")
+        expect(migrated.scalarInt("PRAGMA user_version") == 19,
+            "v7 database migrates through schema v8 to v19")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -1596,9 +1596,14 @@ func inboxStepContract(database: SqliteDatabase): Unit {
         objectValue([ValueField("text", textValue("steer next"))]),
         createdAtMillis: 2
     )
-    expect(store.enqueue(first).isOk() && store.enqueue(first).isOk() &&
+    expect(store.enqueue(first).value().getOrThrow() == InboxEnqueueOutcome.Inserted &&
+        store.enqueue(first).value().getOrThrow() == InboxEnqueueOutcome.AlreadyQueued &&
         store.enqueue(steering).isOk(),
-        "durable Inbox enqueue is idempotent and accepts Steering")
+        "durable Inbox enqueue reports insertion and queued replay explicitly")
+    expect(store.enqueue(DurableInboxEntry(
+        InboxEntryId("unknown-lane-entry"), ThreadId("inbox-thread"), LaneId("missing"),
+        InboxEntryKind.Steering, objectValue([])
+    )).isError(), "Inbox enqueue rejects an unknown Lane before persistence")
     let continuation = sealDurableRunContinuation(DurableRunContinuationV1(
         RunId("inbox-run"), LaneId("main"), SemanticTurnId("inbox-turn"), 0,
         RunExecutionPhase.Accepted(DurablePhaseState(objectValue([
@@ -1651,10 +1656,56 @@ func inboxStepContract(database: SqliteDatabase): Unit {
         "SELECT status FROM step_records WHERE id='inbox-step-1'"
     )[0].required(0) == "completed",
         "Step settlement encloses the claimed Inbox entry")
-    contextManifestContract(database)
+    expect(store.enqueue(first).value().getOrThrow() == InboxEnqueueOutcome.AlreadyApplied,
+        "terminal Inbox replay returns its explicit terminal state")
     laneTreeContract(database)
+    inboxLaneIsolationContract(database)
     compositionGraphContract(database)
+    contextManifestContract(database)
     teamStoreContract(database)
+}
+
+func inboxLaneIsolationContract(database: SqliteDatabase): Unit {
+    let store = SqliteInboxStepStore(database)
+    let reviewEntry = DurableInboxEntry(
+        InboxEntryId("review-lane-entry"), ThreadId("inbox-thread"), LaneId("review"),
+        InboxEntryKind.Steering,
+        objectValue([ValueField("text", textValue("review only"))]),
+        createdAtMillis: 8
+    )
+    expect(store.enqueue(reviewEntry).isOk(), "known child Lane accepts durable input")
+    let reviewContinuation = sealDurableRunContinuation(DurableRunContinuationV1(
+        RunId("inbox-run"), LaneId("review"), SemanticTurnId("inbox-turn"), 1,
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([]))),
+        CompositionSnapshotId("inbox-composition"),
+        ModelLaneSnapshotId("inbox-model-lane")
+    ))
+    expect(store.claim(InboxClaimRequest(
+        reviewEntry.id, StepId("review-lane-step"), RunId("inbox-run"),
+        SemanticTurnId("inbox-turn"), ItemId("review-lane-accepted"),
+        1, 1, reviewContinuation, 9
+    )).isError() && database.query(
+        "SELECT status FROM lane_inbox_entries WHERE id='review-lane-entry'"
+    )[0].required(0) == "queued",
+        "Inbox claim rejects a Run bound to another Lane without consuming input")
+
+    database.execute(
+        "INSERT INTO threads(id,revision,workspace_id,status,next_item_ordinal,active_turn_id) " +
+            "VALUES ('inbox-thread-two',0,'workspace','open',1,NULL)"
+    )
+    let firstId = scopedInboxEntryId(
+        ThreadId("inbox-thread"), LaneId("main"), "shared-correlation"
+    )
+    let secondId = scopedInboxEntryId(
+        ThreadId("inbox-thread-two"), LaneId("main"), "shared-correlation"
+    )
+    expect(firstId.value != secondId.value && store.enqueue(DurableInboxEntry(
+        firstId, ThreadId("inbox-thread"), LaneId("main"), InboxEntryKind.Steering,
+        objectValue([ValueField("text", textValue("first"))])
+    )).isOk() && store.enqueue(DurableInboxEntry(
+        secondId, ThreadId("inbox-thread-two"), LaneId("main"), InboxEntryKind.Steering,
+        objectValue([ValueField("text", textValue("second"))])
+    )).isOk(), "Inbox durable identity is scoped across Threads")
 }
 
 func teamStoreContract(database: SqliteDatabase): Unit {
@@ -1939,6 +1990,36 @@ func contextManifestContract(database: SqliteDatabase): Unit {
     expect(replacement.hash != artifact.hash && store.load(manifest.id).value().getOrThrow().digest ==
         manifest.digest,
         "new Prompt content cannot mutate a historical Manifest")
+    expect(store.ensureModelStep(
+        RunId("inbox-run"), ThreadId("inbox-thread"), LaneId("main"),
+        SemanticTurnId("inbox-turn"), StepId("inbox-step-context-2"), 2,
+        None, None, 10
+    ).isOk(), "later model Step persists its nonzero ordinal")
+    let secondCompiled = ContextCompiler("manifest-compiler-v1").compile(ContextCompileInput(
+        ContextManifestId("manifest-inbox-2"), ThreadId("inbox-thread"), LaneId("main"),
+        SemanticTurnId("inbox-turn"), StepId("inbox-step-context-2"),
+        ModelContextProjection(1, None, [intent], objectValue([]), 3, false),
+        intent.id, objectValue([ValueField("profile", integerValue(1))]),
+        ["skill-v1"], ["memory-v1"], [contribution], [artifact], lane, rendered
+    ))
+    let secondManifest = secondCompiled.value().getOrThrow()
+    expect(store.save(secondManifest, [artifact], 10).isOk(),
+        "later Context Manifest is durable before continuation")
+    database.execute(
+        "UPDATE step_records SET lane_id='review' WHERE id='inbox-step-context-2'"
+    )
+    expect(store.recordContextReady(
+        RunId("inbox-run"), secondManifest, 11
+    ).isError(), "ContextReady rejects a Manifest/Step identity mismatch")
+    database.execute(
+        "UPDATE step_records SET lane_id='main' WHERE id='inbox-step-context-2'"
+    )
+    expect(store.recordContextReady(
+        RunId("inbox-run"), secondManifest, 11
+    ).isOk() && decodeDurableRunContinuation(database.query(
+        "SELECT payload FROM run_continuations WHERE run_id='inbox-run'"
+    )[0].required(0)).stepOrdinal == 2,
+        "ContextReady recovery preserves a nonzero canonical Step ordinal")
     let canonical = database.query(
         "SELECT payload FROM context_manifests WHERE id='manifest-inbox-1'"
     )[0].required(0)

@@ -60,15 +60,18 @@ public class QueuedInteraction {
     public let correlationId: String
     public let kind: String
     public let input: String
+    public let durableItemId: String
 
     public init(
         correlationId: String,
         kind: String,
-        input: String
+        input: String,
+        durableItemId: String
     ) {
         this.correlationId = correlationId
         this.kind = kind
         this.input = input
+        this.durableItemId = durableItemId
     }
 }
 
@@ -203,7 +206,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     let text = applicationInboxText(entry.payload, "text")
                     if (correlation != "" && kind != "" && text != "") {
                         queuedInteractions.add(QueuedInteraction(
-                            correlation, kind, text
+                            correlation, kind, text, entry.id.value
                         ))
                     }
                 }
@@ -1083,8 +1086,11 @@ public class ApplicationSession <: AgentInteractionSource {
                     )
                 )
             }
+            let durableItemId = applicationInboxEntryId(
+                sessionId, LaneId("main"), effectiveCorrelation
+            )
             match (product.vnext.enqueueLaneInput(DurableInboxEntry(
-                InboxEntryId("interaction-" + effectiveCorrelation),
+                InboxEntryId(durableItemId),
                 ThreadId(sessionId.value), LaneId("main"),
                 applicationInboxKind(kind),
                 objectValue([
@@ -1101,7 +1107,8 @@ public class ApplicationSession <: AgentInteractionSource {
                 QueuedInteraction(
                     effectiveCorrelation,
                     kind,
-                    prompt
+                    prompt,
+                    durableItemId
                 )
             )
             Result.Ok(())
@@ -1126,7 +1133,9 @@ public class ApplicationSession <: AgentInteractionSource {
                 let queued = queuedInteractions[index]
                 if (queued.correlationId == correlationId) {
                     match (product.vnext.rejectLaneInput(
-                        InboxEntryId("interaction-" + correlationId)
+                        InboxEntryId(applicationInboxEntryId(
+                            sessionId, LaneId("main"), correlationId
+                        ))
                     )) {
                         case Result.Ok(_) =>
                             queuedInteractions.remove(at: index)
@@ -1871,7 +1880,8 @@ public class ApplicationSession <: AgentInteractionSource {
                     AgentQueuedInput(
                         value.input,
                         correlationId: value.correlationId,
-                        kind: value.kind
+                        kind: value.kind,
+                        durableItemId: value.durableItemId
                     )
                 )
                 queuedInteractions.remove(at: index)
@@ -3214,6 +3224,14 @@ func applicationInboxKind(kind: String): InboxEntryKind {
         case "cancel" => InboxEntryKind.Cancel
         case _ => InboxEntryKind.UserPrompt
     }
+}
+
+func applicationInboxEntryId(
+    sessionId: SessionId,
+    laneId: LaneId,
+    correlationId: String
+): String {
+    scopedInboxEntryId(ThreadId(sessionId.value), laneId, correlationId).value
 }
 
 func applicationInboxText(value: AgentValue, name: String): String {

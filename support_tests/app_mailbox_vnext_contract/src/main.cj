@@ -6,6 +6,7 @@ import std.time.*
 
 main(): Int64 {
     coalescingContract()
+    cursorCompatibilityContract()
     terminalBackpressureContract()
     mailboxBenchmark()
     println("vNext app mailbox contract passed")
@@ -41,6 +42,9 @@ func coalescingContract(): Unit {
     let drained = mailbox.drain()
     expect(drained[0].meta.sequence == 100 && drained[1].meta.sequence == 102,
         "coalescing preserves increasing event order")
+    expect(drained[0].meta.deliverySequence == 1 &&
+        drained[1].meta.deliverySequence == 2,
+        "mailbox assigns a contiguous delivery sequence after coalescing")
     expect(match (drained[1].payload) {
         case AppEventPayload.OperationUpdated(_, AppOperationPhase.Completed, _) => true
         case _ => false
@@ -57,6 +61,29 @@ func coalescingContract(): Unit {
         sealed.push(draftEvent(4, "sealed-item", "late")) ==
         AppMailboxPushResult.Stale,
         "queued committed Item rejects its late mutable draft")
+}
+
+func cursorCompatibilityContract(): Unit {
+    let mailbox = AppEventMailbox(capacity: 4)
+    expect(mailbox.push(AppEvent(
+        meta(1), AppEventPayload.RunStarted(AppRunPhase.Running)
+    )) == AppMailboxPushResult.Enqueued, "Run start enters the mailbox")
+    for (sequence in 2..102) {
+        expect(mailbox.push(draftEvent(
+            sequence, "cursor-draft", "text " + sequence.toString()
+        )) != AppMailboxPushResult.Backpressure,
+            "cursor draft stream remains coalescible")
+    }
+    expect(mailbox.push(operationEvent(102, AppOperationPhase.Completed)) ==
+        AppMailboxPushResult.Enqueued,
+        "terminal Operation remains deliverable")
+    let cursor = AppEventCursor(ThreadId("thread"))
+    let drained = mailbox.drain()
+    expect(drained.size == 3, "combined mailbox contract drains canonical projections")
+    for (event in drained) {
+        expect(cursor.accept(event) != AppEventDisposition.Gap,
+            "coalesced mailbox output is consumable by the protocol cursor")
+    }
 }
 
 func terminalBackpressureContract(): Unit {

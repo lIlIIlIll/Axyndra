@@ -93,6 +93,9 @@ completion from `RecoveryRequired` or unknown outcome.
 - PR validation runs the focused gate. Implementation and release validation
   run the same preflight before their broader product, packaging and provider
   gates.
+- Release validation also runs package readiness and relocates the candidate
+  into a clean environment without workspace, SDK or `LD_LIBRARY_PATH`
+  inheritance before any candidate is accepted.
 
 Managed-heap, coverage, mutation and real-provider evidence remain
 evidence-insufficient until their raw artifacts exist. RSS must not be

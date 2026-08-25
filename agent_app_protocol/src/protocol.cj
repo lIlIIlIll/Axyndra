@@ -98,7 +98,10 @@ public enum AppOperationPhase {
 }
 
 public class AppEventMeta {
+    // sequence identifies the canonical journal event. deliverySequence is
+    // connection-local and remains contiguous after mailbox coalescing.
     public let sequence: Int64
+    public let deliverySequence: Int64
     public let threadId: ThreadId
     public let threadRevision: Int64
     public let turnId: ?SemanticTurnId
@@ -111,7 +114,8 @@ public class AppEventMeta {
         threadRevision: Int64,
         turnId!: ?SemanticTurnId = None,
         runId!: ?RunId = None,
-        epoch!: Int64 = 0
+        epoch!: Int64 = 0,
+        deliverySequence!: ?Int64 = None
     ) {
         if (sequence < 1) {
             throw IllegalArgumentException("app event sequence must be positive")
@@ -121,6 +125,13 @@ public class AppEventMeta {
         }
         if (epoch < 0) {
             throw IllegalArgumentException("app event epoch must not be negative")
+        }
+        let effectiveDeliverySequence = match (deliverySequence) {
+            case Some(value) => value
+            case None => sequence
+        }
+        if (effectiveDeliverySequence < 1) {
+            throw IllegalArgumentException("app event delivery sequence must be positive")
         }
         match ((turnId, runId)) {
             case (Some(_), Some(_)) => if (epoch < 1) {
@@ -134,6 +145,7 @@ public class AppEventMeta {
             )
         }
         this.sequence = sequence
+        this.deliverySequence = effectiveDeliverySequence
         this.threadId = threadId
         this.threadRevision = threadRevision
         this.turnId = turnId
@@ -233,16 +245,16 @@ public class AppEventCursor {
         lock.lock()
         try {
             if (event.meta.threadId.value != selectedThreadId.value ||
-                event.meta.sequence <= lastSequence) {
+                event.meta.deliverySequence <= lastSequence) {
                 return AppEventDisposition.Stale
             }
-            if (event.meta.sequence != lastSequence + 1) {
+            if (event.meta.deliverySequence != lastSequence + 1) {
                 return AppEventDisposition.Gap
             }
             // Sequence ownership is transport-level. A received event may be
             // semantically stale for the selected Run, but it still explains
             // this exact cursor position and prevents a false gap afterward.
-            lastSequence = event.meta.sequence
+            lastSequence = event.meta.deliverySequence
             if (event.meta.threadRevision < lastRevision) {
                 return AppEventDisposition.Stale
             }
