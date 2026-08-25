@@ -1,0 +1,193 @@
+{
+  "format": 1,
+  "package": "omp_agent_testkit",
+  "api_version": "1.0.0",
+  "symbols": [
+    {
+      "key": "class:ExtensionContractHarness",
+      "stability": "STABLE",
+      "signature": "public class ExtensionContractHarness"
+    },
+    {
+      "key": "class:ExtensionContractHarness.func:decode",
+      "stability": "STABLE",
+      "signature": "public func decode( prepared: PreparedExtensionCase, result: ExecutionResult ): SdkResult<ToolOutput>"
+    },
+    {
+      "key": "class:ExtensionContractHarness.func:definition",
+      "stability": "STABLE",
+      "signature": "public func definition(toolName: String): SdkResult<ExtensionToolDefinition>"
+    },
+    {
+      "key": "class:ExtensionContractHarness.func:metadata",
+      "stability": "STABLE",
+      "signature": "public func metadata(): ExtensionMetadata"
+    },
+    {
+      "key": "class:ExtensionContractHarness.func:prepare",
+      "stability": "STABLE",
+      "signature": "public func prepare( toolName: String, input: JsonValue, workspaceRoot!: String = \"\", cwd!: String = \"\", callId!: String = \"test-call\", cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() ): SdkResult<PreparedExtensionCase>"
+    },
+    {
+      "key": "class:ExtensionContractHarness.func:toolNames",
+      "stability": "STABLE",
+      "signature": "public func toolNames(): Array<String>"
+    },
+    {
+      "key": "class:ExtensionContractHarness.init",
+      "stability": "STABLE",
+      "signature": "public init(extension: Extension)"
+    },
+    {
+      "key": "class:FaultPlan",
+      "stability": "EXPERIMENTAL",
+      "signature": "public class FaultPlan"
+    },
+    {
+      "key": "class:FaultPlan.func:calls",
+      "stability": "EXPERIMENTAL",
+      "signature": "public func calls(point: String): Int64"
+    },
+    {
+      "key": "class:FaultPlan.func:shouldFail",
+      "stability": "EXPERIMENTAL",
+      "signature": "public func shouldFail(point: String): Bool"
+    },
+    {
+      "key": "class:FaultPlan.init",
+      "stability": "EXPERIMENTAL",
+      "signature": "public init(rules!: Array<FaultRule> = [])"
+    },
+    {
+      "key": "class:FaultRule",
+      "stability": "EXPERIMENTAL",
+      "signature": "public class FaultRule"
+    },
+    {
+      "key": "class:FaultRule.init",
+      "stability": "EXPERIMENTAL",
+      "signature": "public init(point: String, occurrence!: Int64 = 1, repeat!: Bool = false)"
+    },
+    {
+      "key": "class:FaultRule.let:occurrence",
+      "stability": "EXPERIMENTAL",
+      "signature": "public let occurrence: Int64"
+    },
+    {
+      "key": "class:FaultRule.let:point",
+      "stability": "EXPERIMENTAL",
+      "signature": "public let point: String"
+    },
+    {
+      "key": "class:FaultRule.let:repeat",
+      "stability": "EXPERIMENTAL",
+      "signature": "public let repeat: Bool"
+    },
+    {
+      "key": "class:ManualCancellation",
+      "stability": "STABLE",
+      "signature": "public class ManualCancellation <: InvocationCancellation"
+    },
+    {
+      "key": "class:ManualCancellation.func:cancel",
+      "stability": "STABLE",
+      "signature": "public func cancel(reason!: String = \"test cancellation\"): Bool"
+    },
+    {
+      "key": "class:ManualCancellation.func:isCancelled",
+      "stability": "STABLE",
+      "signature": "public func isCancelled(): Bool"
+    },
+    {
+      "key": "class:ManualCancellation.func:reason",
+      "stability": "STABLE",
+      "signature": "public func reason(): String"
+    },
+    {
+      "key": "class:ManualCancellation.init",
+      "stability": "STABLE",
+      "signature": "public init()"
+    },
+    {
+      "key": "class:ManualClock",
+      "stability": "STABLE",
+      "signature": "public class ManualClock"
+    },
+    {
+      "key": "class:ManualClock.func:advance",
+      "stability": "STABLE",
+      "signature": "public func advance(millis: Int64): Int64"
+    },
+    {
+      "key": "class:ManualClock.func:deadlineAfter",
+      "stability": "STABLE",
+      "signature": "public func deadlineAfter(millis: Int64): InvocationDeadline"
+    },
+    {
+      "key": "class:ManualClock.func:nowMillis",
+      "stability": "STABLE",
+      "signature": "public func nowMillis(): Int64"
+    },
+    {
+      "key": "class:ManualClock.func:setMillis",
+      "stability": "STABLE",
+      "signature": "public func setMillis(millis: Int64): Int64"
+    },
+    {
+      "key": "class:ManualClock.init",
+      "stability": "STABLE",
+      "signature": "public init(initialMillis!: Int64 = 0)"
+    },
+    {
+      "key": "class:PreparedExtensionCase",
+      "stability": "STABLE",
+      "signature": "public class PreparedExtensionCase"
+    },
+    {
+      "key": "class:PreparedExtensionCase.let:definition",
+      "stability": "STABLE",
+      "signature": "public let definition: ExtensionToolDefinition"
+    },
+    {
+      "key": "class:PreparedExtensionCase.let:intent",
+      "stability": "STABLE",
+      "signature": "public let intent: OperationIntent"
+    },
+    {
+      "key": "class:PreparedExtensionCase.let:invocation",
+      "stability": "STABLE",
+      "signature": "public let invocation: ToolInvocation"
+    },
+    {
+      "key": "class:SequenceIds",
+      "stability": "STABLE",
+      "signature": "public class SequenceIds"
+    },
+    {
+      "key": "class:SequenceIds.func:next",
+      "stability": "STABLE",
+      "signature": "public func next(scope!: String = \"id\"): String"
+    },
+    {
+      "key": "class:SequenceIds.init",
+      "stability": "STABLE",
+      "signature": "public init(prefix!: String = \"test\")"
+    },
+    {
+      "key": "func:assertCapabilityNotRequested",
+      "stability": "STABLE",
+      "signature": "public func assertCapabilityNotRequested( definition: ExtensionToolDefinition, capability: String ): Unit"
+    },
+    {
+      "key": "func:assertCapabilityRequested",
+      "stability": "STABLE",
+      "signature": "public func assertCapabilityRequested( definition: ExtensionToolDefinition, capability: String ): Unit"
+    },
+    {
+      "key": "func:requireSdkOk",
+      "stability": "STABLE",
+      "signature": "public func requireSdkOk<T>(result: SdkResult<T>, label!: String = \"SDK result\"): T"
+    }
+  ]
+}
+

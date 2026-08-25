@@ -1,0 +1,4 @@
+size=120x36
+required=Welcome back!,message,model,wide-char
+layout=welcome-or-transcript,working,composer-rules,status
+priority=approval,composer,latest-message
