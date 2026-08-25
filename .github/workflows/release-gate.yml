@@ -24,7 +24,7 @@ jobs:
         uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
         with:
           channel: nightly
-          version: 1.1.0-alpha.20260817040003
+          version: 1.3.0-alpha.20260825091342
           archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
       - name: Configure pinned SDK
         run: |
