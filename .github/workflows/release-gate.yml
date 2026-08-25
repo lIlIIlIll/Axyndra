@@ -42,6 +42,7 @@ jobs:
         run: |
           sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
           echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-nightly.outputs.version }}" >> "$GITHUB_ENV"
           AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-nightly.outputs.version }}" \
             AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
       - name: Release gate with real provider smoke
