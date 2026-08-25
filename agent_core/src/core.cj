@@ -529,6 +529,16 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        // Publish the single-owner control before durable admission starts.
+        // startTurn() creates the canonical Run before the compatibility
+        // snapshot is visible, so registering afterwards leaves an early
+        // cancellation able to misclassify that valid window as corruption.
+        let control = CoreRunControl(request.runId, request.budget, runtime)
+        match (controls.add(control)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        control.bindCancellation(model, tools)
         let semanticTurnId = SemanticTurnId("turn-" + request.runId.value)
         let active = match (runtime.startTurn(
             semanticTurnId,
@@ -543,16 +553,10 @@ public class AgentCore <: AgentRunner {
             runBudgetSnapshot: coreBudgetSnapshot(request.budget)
         )) {
             case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let control = CoreRunControl(request.runId, request.budget, runtime)
-        match (controls.add(control)) {
-            case Result.Ok(_) => ()
             case Result.Err(error) =>
-                let _ = runtime.finish(RunState.Failed, 1000, reason: error.code)
+                finishControl(request.runId)
                 return Result.Err(error)
         }
-        control.bindCancellation(model, tools)
         let transition = RunTransition(
             active.transitionSequence,
             RunState.Created,
