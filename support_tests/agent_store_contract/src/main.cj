@@ -20,12 +20,13 @@ main(): Int64 {
         )
     }
     threadCodecContract()
+    runRequestSnapshotProjectionContract()
     v19ToV20ContinuationColumnContract()
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 20, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 21, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -111,6 +112,40 @@ main(): Int64 {
     0
 }
 
+func runRequestSnapshotProjectionContract(): Unit {
+    let base = sealDurableRunContinuation(DurableRunContinuationV1(
+        RunId("snapshot-run"), LaneId("main"), SemanticTurnId("snapshot-turn"), 0,
+        RunExecutionPhase.Accepted(DurablePhaseState(objectValue([]))),
+        CompositionSnapshotId("snapshot-composition"),
+        ModelLaneSnapshotId("snapshot-model-lane")
+    ))
+    let snapshot = objectValue([
+        ValueField("version", integerValue(4)),
+        ValueField("marker", textValue("stable"))
+    ])
+    let projected = withRunRequestSnapshotProjection(base, snapshot)
+    expect(optionalRunRequestSnapshotFromDurableContinuation(projected).isSome() &&
+        optionalLegacyPayloadFromDurableContinuation(projected).isNone(),
+        "new Run continuation projections are structured canonical snapshots")
+    snapshot.fields[1] = ValueField("marker", textValue("tampered"))
+    var rejected = false
+    try {
+        let _ = optionalRunRequestSnapshotFromDurableContinuation(projected)
+    } catch (_: Exception) { rejected = true }
+    expect(rejected, "Run request snapshot digest rejects in-memory payload tampering")
+
+    let largeSnapshot = objectValue([
+        ValueField("version", integerValue(4)),
+        ValueField("marker", textValue(String.fromUtf8(
+            Array<Byte>(32768, repeat: b'x')
+        )))
+    ])
+    let largeProjected = withRunRequestSnapshotProjection(base, largeSnapshot)
+    let encodedLarge = encodeDurableRunContinuation(largeProjected)
+    expect(decodeDurableRunContinuation(encodedLarge).digest == largeProjected.digest,
+        "large structured Run snapshots preserve exact canonical decoding")
+}
+
 func typedParameterContract(database: SqliteDatabase): Unit {
     database.execute(
         "CREATE TABLE parameter_contract(" +
@@ -188,6 +223,7 @@ func v19ToV20ContinuationColumnContract(): Unit {
     let seed = SqliteDatabase(path)
     try {
         seed.execute("ALTER TABLE runs ADD COLUMN continuation TEXT")
+        seed.execute("ALTER TABLE run_continuations DROP COLUMN active_attempt_id")
         seed.execute("DROP TABLE legacy_run_continuation_imports")
         seed.execute(
             "INSERT INTO threads VALUES ('v19-thread',0,'workspace','open',1,'v19-turn')"
@@ -206,8 +242,8 @@ func v19ToV20ContinuationColumnContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 20,
-            "v19 database migrates to schema v20")
+        expect(migrated.scalarInt("PRAGMA user_version") == 21,
+            "v19 database migrates through schema v21")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
         ) == 0, "v20 removes the legacy continuation column from canonical Runs")
@@ -248,8 +284,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 20,
-            "v6 database migrates through schema v7 to v20")
+        expect(migrated.scalarInt("PRAGMA user_version") == 21,
+            "v6 database migrates through schema v7 to v21")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -284,8 +320,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 20,
-            "v7 database migrates through schema v8 to v20")
+        expect(migrated.scalarInt("PRAGMA user_version") == 21,
+            "v7 database migrates through schema v8 to v21")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -2107,6 +2143,7 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("ALTER TABLE run_continuations DROP COLUMN active_attempt_id")
     database.execute("DROP TABLE legacy_run_continuation_imports")
     database.execute("ALTER TABLE runs ADD COLUMN continuation TEXT")
     database.execute("DROP TABLE lane_run_admissions")

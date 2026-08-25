@@ -193,6 +193,45 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
     )
     expect(repository.compareAndSwapContinuation(Some(initial), drifted).isError(),
         "non-equivalent concurrent continuation remains a CAS conflict")
+
+    let semanticId = SemanticModelRequestId("migration-semantic")
+    let attemptId = ModelAttemptId("migration-attempt")
+    let checkpoint = RunningModelCheckpoint(
+        semanticId,
+        objectValue([ValueField("model", textValue("fixture"))]),
+        "migration-semantic-digest", "migration-wire-digest",
+        attemptId, attemptId, "migration-turn", "migration-request", 0
+    )
+    let running = RunContinuation(
+        RunContinuationKind.RunningModel,
+        runId, sessionId, "fixture", "resume current continuation",
+        checkpoint, requested, capabilities,
+        thinking: ThinkingLevel.High,
+        budget: ResourceBudget(maxOutputTokens: 8192),
+        cacheKey: "updated",
+        executionLaneId: LaneId("review")
+    )
+    let attempt = DurableModelAttempt(
+        attemptId, semanticId, runId, 1, ModelAttemptLifecycle.Created,
+        objectValue([]), "initial", 0, 0,
+        providerRequestId: "migration-request",
+        semanticRequestDigest: "migration-semantic-digest",
+        wirePolicyDigest: "migration-wire-digest"
+    )
+    expect(repository.prepareModelAttempt(
+        attempt,
+        scopedEvent(1, runId, semanticId, attemptId,
+            AgentEventPayload.Extension(AgentEventKind.Audit, objectValue([]))),
+        running
+    ).isOk() && database.query(
+        "SELECT active_attempt_id FROM run_continuations WHERE run_id='migration-run'"
+    )[0].required(0) == attemptId.value,
+        "approved continuation indexes its exact active model Attempt")
+    expect(repository.clearModelExecutionContinuation(runId, attemptId).isOk() &&
+        database.scalarInt(
+            "SELECT COUNT(*) FROM run_continuations WHERE run_id='migration-run'"
+        ) == 0,
+        "completed model Attempt atomically clears the structured continuation")
 }
 
 func restartAttemptAtomicityContract(database: SqliteDatabase): Unit {

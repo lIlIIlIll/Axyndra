@@ -3,6 +3,7 @@ package persistence_runtime
 import agent_domain.*
 import agent_ports.*
 import agent_store.*
+import model_adapters.*
 import std.collection.*
 import std.convert.*
 
@@ -56,7 +57,9 @@ public class SqliteRunRepository <: RunRepository {
                         )
                     }
                     try {
-                        consumeLegacyRunContinuationSource(transaction, legacy, source)
+                        consumeLegacyRunContinuationSource(
+                            transaction, legacy, source, runContinuationSnapshotValue(legacy)
+                        )
                     } catch (error: Exception) {
                         return sqliteRunRecovery<Unit>(
                             runId, "legacy continuation migration failed: " + error.message
@@ -244,8 +247,9 @@ public class SqliteRunRepository <: RunRepository {
                     case Result.Ok(None) => ()
                     case Result.Err(error) => return Result.Err(error)
                 }
-                let encoded = encodeContinuation(value)
-                writeLegacyRunContinuationProjection(transaction, value, encoded)
+                writeRunContinuationSnapshotProjection(
+                    transaction, value, runContinuationSnapshotValue(value)
+                )
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -392,8 +396,9 @@ public class SqliteRunRepository <: RunRepository {
                         case None => sqliteRunConflict<RunContinuation>("Run continuation changed concurrently")
                     }
                 }
-                let encoded = encodeContinuation(next)
-                writeLegacyRunContinuationProjection(transaction, next, encoded)
+                writeRunContinuationSnapshotProjection(
+                    transaction, next, runContinuationSnapshotValue(next)
+                )
                 Result.Ok(next)
             })
         } catch (error: Exception) {
@@ -464,8 +469,9 @@ public class SqliteRunRepository <: RunRepository {
                         case Result.Err(error) => return Result.Err(error)
                     }
                 }
-                let encoded = encodeContinuation(continuation)
-                writeLegacyRunContinuationProjection(transaction, continuation, encoded)
+                writeRunContinuationSnapshotProjection(
+                    transaction, continuation, runContinuationSnapshotValue(continuation)
+                )
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -549,8 +555,9 @@ public class SqliteRunRepository <: RunRepository {
                     case Result.Ok(_) => ()
                     case Result.Err(error) => return Result.Err(error)
                 }
-                let encoded = encodeContinuation(continuation)
-                writeLegacyRunContinuationProjection(transaction, continuation, encoded)
+                writeRunContinuationSnapshotProjection(
+                    transaction, continuation, runContinuationSnapshotValue(continuation)
+                )
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -657,15 +664,22 @@ public class SqliteRunRepository <: RunRepository {
         try {
             database.transaction<Result<Unit>>({ transaction =>
                 let rows = transaction.query(
-                    "SELECT run_continuations.payload FROM runs " +
+                    "SELECT run_continuations.payload,run_continuations.active_attempt_id FROM runs " +
                         "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
                         sqliteText(runId.value)
                 )
                 if (rows.size != 1) { return sqliteRunMissing<Unit>(runId, "Run was not found") }
-                match (canonicalContinuationFromRow(rows[0], runId, 0)) {
-                    case Result.Ok(None) => return Result.Ok(())
-                    case Result.Ok(Some(value)) => if (value.runningModel.isNone() ||
-                            value.runningModel.getOrThrow().activeAttemptId.value != activeAttemptId.value) {
+                match (rows[0][1]) {
+                    case Some(storedAttemptId) => if (storedAttemptId != activeAttemptId.value) {
+                        return sqliteRunConflict<Unit>(
+                            "model continuation Attempt binding drift: expected=" +
+                                activeAttemptId.value + ", actual=" + storedAttemptId
+                        )
+                    }
+                    case None => match (canonicalContinuationFromRow(rows[0], runId, 0)) {
+                        case Result.Ok(None) => return Result.Ok(())
+                        case Result.Ok(Some(value)) => if (value.runningModel.isNone() ||
+                                value.runningModel.getOrThrow().activeAttemptId.value != activeAttemptId.value) {
                             return sqliteRunConflict<Unit>(
                                 "model continuation Attempt binding drift: expected=" +
                                     activeAttemptId.value + ", actual=" + match (value.runningModel) {
@@ -674,9 +688,10 @@ public class SqliteRunRepository <: RunRepository {
                                     }
                             )
                         }
-                    case Result.Err(error) => return Result.Err(error)
+                        case Result.Err(error) => return Result.Err(error)
+                    }
                 }
-                removeLegacyRunContinuationProjection(transaction, runId)
+                removeRunContinuationProjection(transaction, runId)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -1215,11 +1230,9 @@ func sqliteRunConflict<T>(message: String): Result<T> {
     Result.Err(AgentError(AgentErrorKind.Conflict, "run.sqlite_conflict", message))
 }
 
-// run_continuations is the only production continuation register. The legacy
-// AgentCore projection is carried inside its sealed phase payload until the
-// legacy RunContinuation API is retired. Schema v20 moves any old column value
-// into a one-shot import table; production reads and writes use only the sealed
-// canonical register.
+// run_continuations is the only production continuation register. New writes
+// carry a structured, digest-verified Run request snapshot in the sealed phase
+// payload. The opaque v4 projection remains a read-only migration format.
 func canonicalContinuationFromRow(
     row: SqliteRow,
     runId: RunId,
@@ -1238,23 +1251,42 @@ func canonicalContinuationFromRow(
                     runId, "canonical continuation Run binding is corrupt"
                 )
             }
-            match (optionalLegacyPayloadFromDurableContinuation(durable)) {
-                case Some(payload) => match (decodeContinuation(payload)) {
+            match (optionalRunRequestSnapshotFromDurableContinuation(durable)) {
+                case Some(snapshot) =>
+                    match (decodeContinuation(encodeAgentValue(snapshot))) {
                     case Result.Ok(value) => if (value.runId.value == runId.value) {
                         Result.Ok(Some(value))
                     } else {
                         sqliteRunRecovery<?RunContinuation>(
-                            runId, "canonical legacy projection Run binding is corrupt"
+                            runId, "canonical request snapshot Run binding is corrupt"
                         )
                     }
                     case Result.Err(error) => return sqliteRunRecovery<?RunContinuation>(
-                        runId, "canonical legacy projection is corrupt: " + error.message
+                        runId, "canonical request snapshot is corrupt: " + error.message
                     )
+                    }
+                case None => match (optionalLegacyPayloadFromDurableContinuation(durable)) {
+                    case Some(payload) => match (decodeContinuation(payload)) {
+                        case Result.Ok(value) => if (value.runId.value == runId.value) {
+                            Result.Ok(Some(value))
+                        } else {
+                            sqliteRunRecovery<?RunContinuation>(
+                                runId, "legacy projection Run binding is corrupt"
+                            )
+                        }
+                        case Result.Err(error) => sqliteRunRecovery<?RunContinuation>(
+                            runId, "legacy projection is corrupt: " + error.message
+                        )
+                    }
+                    case None => Result.Ok(None)
                 }
-                case None => Result.Ok(None)
             }
         case None => Result.Ok(None)
     }
+}
+
+func runContinuationSnapshotValue(value: RunContinuation): AgentValue {
+    continuationValue(value, approvalRequestValue(value.approval))
 }
 
 func saveSqliteDecision(

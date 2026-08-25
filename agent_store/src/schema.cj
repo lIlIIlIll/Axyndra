@@ -262,3 +262,9 @@ func v20Migration(): Array<String> {
         "ALTER TABLE runs DROP COLUMN continuation"
     ]
 }
+
+func v21Migration(): Array<String> {
+    [
+        "ALTER TABLE run_continuations ADD COLUMN active_attempt_id TEXT REFERENCES model_attempts(id)"
+    ]
+}

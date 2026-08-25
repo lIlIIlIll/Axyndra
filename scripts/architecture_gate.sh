@@ -433,4 +433,17 @@ if [[ "$legacy_continuation_column_users" != "$allowed_legacy_continuation_colum
   fail "runs.continuation must remain historical schema migration input only"
 fi
 
+legacy_continuation_payload_users=$(
+  "$RG" -l 'legacy-continuation-v4|legacy_payload' \
+    "$ROOT"/agent_*/src "$ROOT"/persistence_runtime/src \
+    --glob '*.cj' 2>/dev/null | sort || true
+)
+allowed_legacy_continuation_payload_users=$(printf '%s\n' \
+  "$ROOT/agent_store/src/legacy_continuation_bridge.cj" \
+  | sort)
+if [[ "$legacy_continuation_payload_users" != "$allowed_legacy_continuation_payload_users" ]]; then
+  printf '%s\n' "$legacy_continuation_payload_users" >&2
+  fail "opaque legacy continuation payloads must remain isolated to the migration bridge"
+fi
+
 printf 'architecture gate passed\n'

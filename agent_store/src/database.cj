@@ -286,7 +286,8 @@ public class SqliteDatabase {
                 for (statement in v1Schema()) { executeLocked(statement) }
                 for (statement in v19Migration()) { executeLocked(statement) }
                 for (statement in v20Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=20")
+                for (statement in v21Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=21")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -524,7 +525,7 @@ public class SqliteDatabase {
                 throw error
             }
         } else if (version != 15 && version != 16 && version != 17 &&
-            version != 18 && version != 19 && version != 20) {
+            version != 18 && version != 19 && version != 20 && version != 21) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
@@ -588,6 +589,20 @@ public class SqliteDatabase {
             try {
                 for (statement in v20Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=20")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v21 indexes the active model Attempt on the continuation register so
+        // terminal cleanup does not need to deserialize the full request
+        // snapshot while holding the SQLite writer transaction.
+        if (version >= 1 && version <= 20) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v21Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=21")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
