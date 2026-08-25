@@ -420,6 +420,15 @@ func usageValue(usage: ModelUsage): AgentValue {
         case Some(value) => integerValue(value)
         case None => nullValue()
     }))
+    fields.add(ValueField("source", textValue(modelUsageSourceName(usage.source))))
+    fields.add(ValueField("evidence", match (usage.evidence) {
+        case Some(value) => objectValue([
+            ValueField("protocol", textValue(value.protocol)),
+            ValueField("event_kind", textValue(value.eventKind)),
+            ValueField("provider_response_id", textValue(value.providerResponseId))
+        ])
+        case None => nullValue()
+    }))
     objectValue(fields.toArray())
 }
 

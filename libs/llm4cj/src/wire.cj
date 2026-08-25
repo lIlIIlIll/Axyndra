@@ -469,12 +469,13 @@ func encodeResponsesWireFunctionCall(block: LlmWireBlock): JsonValue {
 }
 
 func encodeChatWireMessage(messages: JsonValue, message: LlmWireMessage, callIds: HashSet<String>): Unit {
-    var text = ""; var hasImage = false
+    var text = ""; var reasoning = ""; var hasImage = false
     let parts = JsonValue.arrayValue([]); let calls = JsonValue.arrayValue([]); let results = ArrayList<LlmWireBlock>()
     for (block in message.blocks) {
         match (block.kind) {
-            case LlmWireBlockKind.Text | LlmWireBlockKind.Reasoning | LlmWireBlockKind.Refusal =>
+            case LlmWireBlockKind.Text | LlmWireBlockKind.Refusal =>
                 text += block.text; parts.add(JsonValue.objectValue([JsonField("type", JsonValue.stringValue("text")), JsonField("text", JsonValue.stringValue(block.text))]))
+            case LlmWireBlockKind.Reasoning => reasoning += block.text
             case LlmWireBlockKind.Image =>
                 hasImage = true; let image = requiredWireImage(block)
                 parts.add(JsonValue.objectValue([JsonField("type", JsonValue.stringValue("image_url")), JsonField("image_url", JsonValue.objectValue([
@@ -488,9 +489,10 @@ func encodeChatWireMessage(messages: JsonValue, message: LlmWireMessage, callIds
             case _ => ()
         }
     }
-    if (text != "" || hasImage || !calls.items.isEmpty()) {
+    if (text != "" || reasoning != "" || hasImage || !calls.items.isEmpty()) {
         let value = JsonValue.objectValue([JsonField("role", JsonValue.stringValue(wireRoleName(message.role)))])
         value.put("content", if (hasImage) { parts } else { JsonValue.stringValue(text) })
+        if (reasoning != "") { value.put("reasoning_content", JsonValue.stringValue(reasoning)) }
         if (!calls.items.isEmpty()) { value.put("tool_calls", calls) }
         messages.add(value)
     }
@@ -868,23 +870,26 @@ public func decodeChatCompletionsWireReply(source: String, provider!: String = "
     if (content != "") { blocks.add(LlmWireBlock(LlmWireBlockKind.Text, text: content)) }
     let reasoning = wireString(message, "reasoning_content")
     if (reasoning != "") { blocks.add(LlmWireBlock(LlmWireBlockKind.Reasoning, text: reasoning)) }
-    match (message.field("tool_calls")) {
-        case Some(raw) => for (entry in wireArray(raw, "Chat Completions tool_calls").items) {
-            let call = wireObject(entry, "Chat Completions tool call")
-            let function = wireObject(wireField(call, "function"), "Chat Completions function")
-            let arguments = wireString(function, "arguments")
-            blocks.add(LlmWireBlock(
-                LlmWireBlockKind.ToolCall, callId: wireString(call, "id"), name: wireString(function, "name"),
-                arguments: if (arguments == "") { JsonValue.objectValue([]) } else { parseJson(arguments) }
-            ))
+    let finishReason = wireString(choice, "finish_reason")
+    if (finishReason != "max_tokens" && finishReason != "length") {
+        match (message.field("tool_calls")) {
+            case Some(raw) => for (entry in wireArray(raw, "Chat Completions tool_calls").items) {
+                let call = wireObject(entry, "Chat Completions tool call")
+                let function = wireObject(wireField(call, "function"), "Chat Completions function")
+                let arguments = wireString(function, "arguments")
+                blocks.add(LlmWireBlock(
+                    LlmWireBlockKind.ToolCall, callId: wireString(call, "id"), name: wireString(function, "name"),
+                    arguments: if (arguments == "") { JsonValue.objectValue([]) } else { parseJson(arguments) }
+                ))
+            }
+            case None => ()
         }
-        case None => ()
     }
     let usage = wireObjectOrEmpty(root, "usage")
     let promptDetails = wireObjectOrEmpty(usage, "prompt_tokens_details")
     let completionDetails = wireObjectOrEmpty(usage, "completion_tokens_details")
     LlmWireReply(
-        blocks.toArray(), stopReason: wireString(choice, "finish_reason"),
+        blocks.toArray(), stopReason: finishReason,
         usage: LlmWireUsage(
             inputTokens: wireInt(usage, "prompt_tokens"), outputTokens: wireInt(usage, "completion_tokens"),
             reasoningTokens: wireInt(completionDetails, "reasoning_tokens"),
@@ -1007,7 +1012,8 @@ func decodeChatWireStream(source: String): LlmWireStreamResult {
     }
     let message = JsonValue.objectValue([JsonField("role", JsonValue.stringValue("assistant")), JsonField("content", JsonValue.stringValue(content))])
     if (reasoning != "") { message.put("reasoning_content", JsonValue.stringValue(reasoning)) }
-    if (!calls.isEmpty()) {
+    let outputLimited = finishReason == "max_tokens" || finishReason == "length"
+    if (!calls.isEmpty() && !outputLimited) {
         let values = JsonValue.arrayValue([])
         for (call in calls) { values.add(JsonValue.objectValue([
             JsonField("id", JsonValue.stringValue(call.id)), JsonField("type", JsonValue.stringValue("function")),
@@ -1015,7 +1021,7 @@ func decodeChatWireStream(source: String): LlmWireStreamResult {
         ])) }
         message.put("tool_calls", values)
     }
-    if (content == "" && reasoning == "" && calls.isEmpty()) { throw LlmTransportError(LlmTransportErrorKind.InvalidWire, "llm.chat_output_missing", "Chat Completions stream contained no accepted output") }
+    if (content == "" && reasoning == "" && calls.isEmpty() && !outputLimited) { throw LlmTransportError(LlmTransportErrorKind.InvalidWire, "llm.chat_output_missing", "Chat Completions stream contained no accepted output") }
     let usage = JsonValue.objectValue([
         JsonField("prompt_tokens", JsonValue.numberValue(input.toString())), JsonField("completion_tokens", JsonValue.numberValue(outputTokens.toString())),
         JsonField("prompt_tokens_details", JsonValue.objectValue([JsonField("cached_tokens", JsonValue.numberValue(cacheRead.toString())), JsonField("cache_write_tokens", JsonValue.numberValue(cacheWrite.toString()))])),
@@ -1125,19 +1131,20 @@ func decodeMessagesWireStream(source: String): LlmWireStreamResult {
             case _ => ()
         }
     }
-    if (blocks.isEmpty()) { throw LlmTransportError(LlmTransportErrorKind.InvalidWire, "llm.messages_output_missing", "Messages stream contained no content") }
+    let outputLimited = stopReason == "max_tokens" || stopReason == "length"
+    if (blocks.isEmpty() && !outputLimited) { throw LlmTransportError(LlmTransportErrorKind.InvalidWire, "llm.messages_output_missing", "Messages stream contained no content") }
     if (!messageTerminalObserved) { throw LlmTransportError(
         LlmTransportErrorKind.InvalidWire,
         "llm.messages_terminal_missing",
         "Messages stream did not contain message_stop"
     ) }
-    for (block in blocks where !block.completed) { throw LlmTransportError(
+    for (block in blocks where !block.completed && !outputLimited) { throw LlmTransportError(
         LlmTransportErrorKind.InvalidWire,
         "llm.messages_content_block_incomplete",
         "Messages stream reached message_stop with an incomplete content block"
     ) }
     let content = JsonValue.arrayValue([])
-    for (block in blocks) {
+    for (block in blocks where block.completed) {
         let value = JsonValue.objectValue([JsonField("type", JsonValue.stringValue(block.kind))])
         match (block.kind) {
             case "text" => value.put("text", JsonValue.stringValue(block.text))

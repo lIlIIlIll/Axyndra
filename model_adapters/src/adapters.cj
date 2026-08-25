@@ -22,8 +22,27 @@ public enum ProviderDialect {
     | DeepSeekMessages
     | OpenAiResponses
     | OpenAiChat
+    | DeepSeekChat
     | GenericMessages
     | GenericChat
+}
+
+// Non-secret HTTP metadata owned by the provider runtime. Authentication is
+// resolved separately and cannot be supplied through configurable headers.
+public class ProviderHeader {
+    public let name: String
+    public let value: String
+
+    public init(name: String, value: String) {
+        let normalized = name.trimAscii().toAsciiLower()
+        if (!validProviderHeaderName(normalized) || value.contains("\r") ||
+            value.contains("\n") || value.contains("\"") || value.contains("\\") ||
+            restrictedProviderHeader(normalized)) {
+            throw IllegalArgumentException("provider default header is invalid or reserved")
+        }
+        this.name = normalized
+        this.value = value.trimAscii()
+    }
 }
 
 public class ProviderSpec {
@@ -39,6 +58,8 @@ public class ProviderSpec {
     public let dialect: ProviderDialect
     public let endpointMaxOutputTokens: ?Int64
     public let capabilities: domain.ModelCapabilities
+    public let profileHeaders: Array<ProviderHeader>
+    public let modelHeaders: Array<ProviderHeader>
 
     public init(
         id: String,
@@ -52,7 +73,9 @@ public class ProviderSpec {
         messagesFastMode!: Bool = false,
         dialect!: ?ProviderDialect = None,
         endpointMaxOutputTokens!: ?Int64 = None,
-        capabilities!: domain.ModelCapabilities = defaultProviderCapabilities()
+        capabilities!: domain.ModelCapabilities = defaultProviderCapabilities(),
+        profileHeaders!: Array<ProviderHeader> = [],
+        modelHeaders!: Array<ProviderHeader> = []
     ) {
         if (id.trimAscii() == "") {
             throw IllegalArgumentException("provider id must not be empty")
@@ -98,6 +121,8 @@ public class ProviderSpec {
         this.dialect = normalizedDialect
         this.endpointMaxOutputTokens = endpointMaxOutputTokens
         this.capabilities = capabilities
+        this.profileHeaders = profileHeaders
+        this.modelHeaders = modelHeaders
     }
 
     public func endpoint(): String {
@@ -119,9 +144,71 @@ func providerDialectMatchesProtocol(
             (ProviderDialect.GenericMessages, ProviderProtocol.Messages) |
             (ProviderDialect.OpenAiResponses, ProviderProtocol.Responses) |
             (ProviderDialect.OpenAiChat, ProviderProtocol.Completions) |
+            (ProviderDialect.DeepSeekChat, ProviderProtocol.Completions) |
             (ProviderDialect.GenericChat, ProviderProtocol.Completions) => true
         case _ => false
     }
+}
+
+func validProviderHeaderName(value: String): Bool {
+    if (value == "") { return false }
+    for (character in value.toRuneArray()) {
+        if (!((character >= r'a' && character <= r'z') ||
+            (character >= r'0' && character <= r'9') || character == r'-')) {
+            return false
+        }
+    }
+    true
+}
+
+func restrictedProviderHeader(value: String): Bool {
+    value == "authorization" || value == "proxy-authorization" ||
+        value == "x-api-key" || value == "cookie" || value == "set-cookie" ||
+        value == "host" || value == "content-length"
+}
+
+func addOrReplaceProviderHeader(
+    headers: ArrayList<ProviderHeader>,
+    value: ProviderHeader
+): Unit {
+    for (index in 0..headers.size) {
+        if (headers[index].name == value.name) {
+            headers.remove(at: index)
+            break
+        }
+    }
+    headers.add(value)
+}
+
+// Precedence is profile < model < adapter request headers. Auth is appended
+// by the transport after this merge and is never configurable.
+public func effectiveProviderHeaders(
+    provider: ProviderSpec,
+    streaming: Bool
+): Array<ProviderHeader> {
+    let headers = ArrayList<ProviderHeader>()
+    for (value in provider.profileHeaders) { addOrReplaceProviderHeader(headers, value) }
+    for (value in provider.modelHeaders) { addOrReplaceProviderHeader(headers, value) }
+    addOrReplaceProviderHeader(headers, ProviderHeader("content-type", "application/json"))
+    addOrReplaceProviderHeader(headers, ProviderHeader(
+        "accept", if (streaming) { "text/event-stream" } else { "application/json" }
+    ))
+    match (provider.protocol) {
+        case ProviderProtocol.Messages =>
+            addOrReplaceProviderHeader(headers, ProviderHeader("anthropic-version", "2023-06-01"))
+            for (header in providerBetaHeaders(provider)) {
+                match (header.indexOf(":")) {
+                    case Some(separator) => if (separator > 0) {
+                        addOrReplaceProviderHeader(headers, ProviderHeader(
+                            header[..separator], header[separator + 1..]
+                        ))
+                    }
+                    case None => ()
+                }
+            }
+        case _ => ()
+    }
+    headers.toArray()
 }
 
 public interface ProviderTransport {
@@ -139,11 +226,73 @@ public interface ProviderTransport {
     }
 }
 
+// Credential resolution is separately cancellable so a request can be
+// stopped before an HTTP client or subprocess exists.
+public interface ProviderCredentialResolver {
+    func resolve(provider: ProviderSpec, requestId: String): domain.Result<String>
+    func cancel(requestId: String): domain.Result<Unit> {
+        let _ = requestId
+        domain.Result.Ok(())
+    }
+    func complete(requestId: String): Unit { let _ = requestId }
+}
+
+public class EnvironmentFileCredentialResolver <: ProviderCredentialResolver {
+    private let cancelled = ArrayList<String>()
+    private let lock = Mutex()
+
+    public func resolve(provider: ProviderSpec, requestId: String): domain.Result<String> {
+        if (credentialResolutionCancelled(requestId)) {
+            return cancelledCredentialResolution(requestId)
+        }
+        defaultProviderCredential(provider)
+    }
+
+    public func cancel(requestId: String): domain.Result<Unit> {
+        lock.lock()
+        try {
+            if (!cancelled.contains(requestId)) { cancelled.add(requestId) }
+            domain.Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    public func complete(requestId: String): Unit {
+        lock.lock()
+        try {
+            for (index in 0..cancelled.size) {
+                if (cancelled[index] == requestId) {
+                    cancelled.remove(at: index)
+                    break
+                }
+            }
+        } finally { lock.unlock() }
+    }
+
+    private func credentialResolutionCancelled(requestId: String): Bool {
+        lock.lock()
+        try { cancelled.contains(requestId) } finally { lock.unlock() }
+    }
+}
+
+func cancelledCredentialResolution(requestId: String): domain.Result<String> {
+    domain.Result.Err(domain.AgentError(
+        domain.AgentErrorKind.Cancelled,
+        "model.cancelled",
+        "model request was cancelled during credential resolution",
+        fields: [domain.ErrorField("request_id", requestId)]
+    ))
+}
+
 // Production transport. Credentials are written to a mode-0600 curl config
 // file and never appear in the child-process argument list.
 public class CurlProviderTransport <: ProviderTransport {
     private let active = ArrayList<ActiveCurl>()
     private let activeLock = Mutex()
+    private let credentials: ProviderCredentialResolver
+
+    public init(credentials!: ProviderCredentialResolver = EnvironmentFileCredentialResolver()) {
+        this.credentials = credentials
+    }
 
     public func post(
         provider: ProviderSpec,
@@ -153,7 +302,7 @@ public class CurlProviderTransport <: ProviderTransport {
         chunks: (String) -> Unit
     ): domain.Result<String> {
         try {
-            let apiKey = match (providerCredential(provider)) {
+            let apiKey = match (credentials.resolve(provider, requestId)) {
                 case domain.Result.Ok(value) => value
                 case domain.Result.Err(error) => return domain.Result.Err(error)
             }
@@ -182,7 +331,7 @@ public class CurlProviderTransport <: ProviderTransport {
             File.writeTo(requestPath, payload.toArray())
             File.writeTo(
                 configPath,
-                curlConfig(provider, apiKey).toArray()
+                curlConfig(provider, apiKey, streaming).toArray()
             )
             let (chmodCode, _, _) = executeWithOutput(
                 "chmod",
@@ -282,10 +431,11 @@ public class CurlProviderTransport <: ProviderTransport {
                     fallbackAllowed: true
                 )
             )
-        }
+        } finally { credentials.complete(requestId) }
     }
 
     public func cancel(requestId: String): domain.Result<Unit> {
+        let credentialCancellation = credentials.cancel(requestId)
         activeLock.lock()
         try {
             for (item in active where item.requestId == requestId) {
@@ -295,7 +445,7 @@ public class CurlProviderTransport <: ProviderTransport {
                 } catch (_: Exception) {}
                 return domain.Result.Ok(())
             }
-            domain.Result.Ok(())
+            credentialCancellation
         } finally {
             activeLock.unlock()
         }
@@ -726,6 +876,7 @@ public class ProviderModelPort <: ports.ModelPort {
             case ProviderDialect.OpenAiResponses => encodeResponsesRequest(normalized)
             case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat =>
                 encodeCompletionsRequest(normalized)
+            case ProviderDialect.DeepSeekChat => encodeDeepSeekChatRequest(normalized)
         }
         // A streaming Core request with no attempt hard deadline is governed
         // by Core's idle watchdog and Run wall budget. Non-streaming/direct
@@ -2757,6 +2908,11 @@ func decodeProviderReply(
         match (reply.completionDisposition) {
             case domain.CompletionDisposition.Complete |
                  domain.CompletionDisposition.ToolUse => ()
+            // Output-limited is a valid provider terminal fact, not a valid
+            // Decision. Preserve the normalized reply so AgentCore can apply
+            // its durable child-Attempt recovery policy.
+            case domain.CompletionDisposition.OutputLimited =>
+                return domain.Result.Ok(reply)
             case _ => return domain.Result.Err(domain.AgentError(
                 domain.AgentErrorKind.Protocol,
                 "model.decision_terminal_unaccepted",
@@ -2764,7 +2920,8 @@ func decodeProviderReply(
                 retryable: true,
                 fallbackAllowed: true,
                 fields: [
-                    domain.ErrorField("provider_id", provider.id),
+                    domain.ErrorField("provider_profile_id", provider.id),
+                    domain.ErrorField("api_protocol", providerProtocolName(provider.protocol)),
                     domain.ErrorField("stop_reason", reply.stopReason),
                     domain.ErrorField(
                         "completion_disposition",
@@ -2948,6 +3105,15 @@ func fromLlmWireReply(
     }
     let outcome = decisionOutcomeFrom(blocks.toArray())
     let disposition = completionDispositionFrom(protocol, reply.stopReason, outcome)
+    let usageEventKind = if (streaming) {
+        match (protocol) {
+            case ProviderProtocol.Messages => "message_stop"
+            case ProviderProtocol.Responses => "response.completed"
+            case ProviderProtocol.Completions => "finish_reason"
+        }
+    } else {
+        "response_body"
+    }
     domain.ModelReply(
         blocks.toArray(),
         stopReason: reply.stopReason,
@@ -2956,22 +3122,28 @@ func fromLlmWireReply(
             outputTokens: reply.usage.outputTokens,
             reasoningTokens: reply.usage.reasoningTokens,
             cacheReadTokens: reply.usage.cacheReadTokens,
-            cacheWriteTokens: reply.usage.cacheWriteTokens
+            cacheWriteTokens: reply.usage.cacheWriteTokens,
+            source: if (streaming) {
+                domain.ModelUsageSource.ProviderStreamFinal
+            } else {
+                domain.ModelUsageSource.ProviderFinal
+            },
+            evidence: Some(domain.ModelUsageEvidence(
+                providerProtocolName(protocol),
+                usageEventKind,
+                providerResponseId: reply.responseId
+            ))
         )),
-        acceptedOutput: !blocks.isEmpty(),
+        acceptedOutput: !blocks.isEmpty() && match (disposition) {
+            case domain.CompletionDisposition.OutputLimited |
+                domain.CompletionDisposition.ProtocolIncomplete => false
+            case _ => true
+        },
         providerId: providerId,
         responseId: reply.responseId,
         terminalEvidence: Some(domain.TerminalEvidence(
             providerProtocolName(protocol),
-            if (streaming) {
-                match (protocol) {
-                    case ProviderProtocol.Messages => "message_stop"
-                    case ProviderProtocol.Responses => "response.completed"
-                    case ProviderProtocol.Completions => "finish_reason"
-                }
-            } else {
-                "response_body"
-            },
+            usageEventKind,
             rawStopReason: reply.stopReason,
             messageTerminalObserved: true,
             streamEofObserved: true,
@@ -3017,7 +3189,7 @@ func completionDispositionFrom(
         case ProviderProtocol.Completions => match (raw) {
             case "stop" => domain.CompletionDisposition.Complete
             case "tool_calls" | "function_call" => domain.CompletionDisposition.ToolUse
-            case "length" => domain.CompletionDisposition.OutputLimited
+            case "length" | "max_tokens" => domain.CompletionDisposition.OutputLimited
             case "content_filter" => domain.CompletionDisposition.Filtered
             case _ => domain.CompletionDisposition.Unknown
         }
@@ -3156,14 +3328,13 @@ func messageText(message: domain.ModelMessage): String {
     result
 }
 
-func curlConfig(provider: ProviderSpec, apiKey: String): String {
-    var result = "header = \"content-type: application/json\"\n"
+func curlConfig(provider: ProviderSpec, apiKey: String, streaming: Bool): String {
+    var result = ""
+    for (header in effectiveProviderHeaders(provider, streaming)) {
+        result += "header = \"" + header.name + ": " + header.value + "\"\n"
+    }
     match (provider.protocol) {
         case ProviderProtocol.Messages =>
-            result += "header = \"anthropic-version: 2023-06-01\"\n"
-            for (header in providerBetaHeaders(provider)) {
-                result += "header = \"" + header + "\"\n"
-            }
             result += "header = \"x-api-key: " + apiKey + "\"\n"
         case ProviderProtocol.Responses => result += "header = \"authorization: Bearer " + apiKey + "\"\n"
         case ProviderProtocol.Completions => result += "header = \"authorization: Bearer " + apiKey + "\"\n"
@@ -3196,7 +3367,7 @@ func configurationError(name: String): domain.Result<String> {
     )
 }
 
-func providerCredential(provider: ProviderSpec): domain.Result<String> {
+func defaultProviderCredential(provider: ProviderSpec): domain.Result<String> {
     match (getVariable(provider.apiKeyEnv)) {
         case Some(value) =>
             if (value.trimAscii() != "") {

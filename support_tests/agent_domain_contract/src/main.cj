@@ -130,7 +130,8 @@ main(): Int64 {
         AttemptPolicyInput(requested, budgetSnapshot)
     ).value().getOrThrow()
     expect(resolved.output.effectiveWireLimit == 12000 &&
-        isThinking(resolved.thinking.effective, ThinkingLevel.Medium),
+        isThinking(resolved.thinking.effective, ThinkingLevel.Medium) &&
+        resolved.decisionReserveTokens == 1024,
         "output limits and available thinking budget resolve independently")
     expect(resolved.output.constraints.size == 2 &&
         resolved.thinking.constraints.size == 1,
@@ -155,6 +156,53 @@ main(): Int64 {
     expect(insufficient.isError() &&
         insufficient.error().getOrThrow().code == "model.thinking_policy_incompatible",
         "budget insufficiency fails before provider I/O instead of silently disabling thinking")
+
+    let effortSnapshot = ModelExecutionCapabilitiesSnapshot(
+        "effort-model",
+        ThinkingCapabilities(
+            ThinkingControlMode.Effort,
+            supportedLevels: [ThinkingLevel.Low, ThinkingLevel.High, ThinkingLevel.Max]
+        ),
+        4096
+    )
+    let recoveredHigh = resolveModelAttemptPolicy(AttemptPolicyInput(
+        RequestedModelPolicy(
+            ThinkingLevel.Max,
+            RequestOutputBudget(4096),
+            userRequestedThinking: Some(ThinkingLevel.Max),
+            thinkingSource: ThinkingPreferenceSource.ExplicitUser
+        ),
+        effortSnapshot,
+        recoveryCeiling: nextLowerThinkingCeiling(effortSnapshot, ThinkingLevel.Max)
+    )).value().getOrThrow()
+    let recoveredOff = resolveModelAttemptPolicy(AttemptPolicyInput(
+        RequestedModelPolicy(ThinkingLevel.Low, RequestOutputBudget(4096)),
+        effortSnapshot,
+        recoveryCeiling: Some(ThinkingLevel.Off)
+    )).value().getOrThrow()
+    expect(recoveredHigh.thinking.effective == ThinkingLevel.High &&
+        recoveredHigh.userRequestedThinking == Some(ThinkingLevel.Max) &&
+        recoveredHigh.thinkingSource == ThinkingPreferenceSource.ExplicitUser &&
+        recoveredOff.thinking.effective == ThinkingLevel.Off &&
+        recoveredOff.thinking.budgetTokens.isNone(),
+        "recovery ceiling follows real supported levels without rewriting requested policy")
+    expect(rejects({ => ModelUsage(outputTokens: 3, reasoningTokens: 4) }),
+        "reasoning usage is a subset of output usage and cannot be double counted")
+    expect(rejects({ => ModelUsage(
+        outputTokens: 3,
+        source: ModelUsageSource.ProviderFinal
+    ) }), "provider usage source requires typed terminal evidence")
+    let evidencedUsage = ModelUsage(
+        outputTokens: 3,
+        reasoningTokens: 2,
+        source: ModelUsageSource.ProviderStreamFinal,
+        evidence: Some(ModelUsageEvidence(
+            "openai_chat_completions", "finish_reason", providerResponseId: "response-1"
+        ))
+    )
+    expect(evidencedUsage.reasoningTokens == 2 &&
+        evidencedUsage.evidence.getOrThrow().providerResponseId == "response-1",
+        "provider usage records source and terminal evidence without double counting reasoning")
 
     let repeated = resolveModelAttemptPolicy(
         AttemptPolicyInput(requested, budgetSnapshot)

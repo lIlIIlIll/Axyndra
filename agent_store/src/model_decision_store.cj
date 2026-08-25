@@ -784,6 +784,15 @@ func encodeStoredModelUsage(value: ModelUsage): String {
         ValueField("cost_micros", match (value.costMicros) {
             case Some(cost) => integerValue(cost)
             case None => nullValue()
+        }),
+        ValueField("source", textValue(modelUsageSourceName(value.source))),
+        ValueField("evidence", match (value.evidence) {
+            case Some(evidence) => objectValue([
+                ValueField("protocol", textValue(evidence.protocol)),
+                ValueField("event_kind", textValue(evidence.eventKind)),
+                ValueField("provider_response_id", textValue(evidence.providerResponseId))
+            ])
+            case None => nullValue()
         })
     ]))
 }
@@ -791,6 +800,29 @@ func encodeStoredModelUsage(value: ModelUsage): String {
 func decodeStoredModelUsage(source: String): ModelUsage {
     let value = decodeStoredValue(source)
     let cost = storedField(value, "cost_micros")
+    let usageSource = match (value.field("source")) {
+        case Some(item) =>
+            if (item.kind != ValueKind.Text) {
+                throw IllegalStateException("Decision usage source has invalid type")
+            }
+            modelUsageSourceFromName(item.text)
+        case None => ModelUsageSource.Unknown
+    }
+    let usageEvidence: ?ModelUsageEvidence = match (value.field("evidence")) {
+        case None => None
+        case Some(item) =>
+            if (item.kind == ValueKind.Null) {
+                None
+            } else if (item.kind == ValueKind.Object) {
+                Some(ModelUsageEvidence(
+                    storedTextField(item, "protocol"),
+                    storedTextField(item, "event_kind"),
+                    providerResponseId: storedTextField(item, "provider_response_id")
+                ))
+            } else {
+                throw IllegalStateException("Decision usage evidence has invalid type")
+            }
+    }
     ModelUsage(
         inputTokens: storedIntField(value, "input_tokens"),
         outputTokens: storedIntField(value, "output_tokens"),
@@ -803,7 +835,9 @@ func decodeStoredModelUsage(source: String): ModelUsage {
             Some(parseModelDecisionInt(cost.number, "Decision usage cost"))
         } else {
             throw IllegalStateException("Decision usage cost has invalid type")
-        }
+        },
+        source: usageSource,
+        evidence: usageEvidence
     )
 }
 

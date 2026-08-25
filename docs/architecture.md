@@ -65,12 +65,18 @@ agent_tui       → agent_cli + vendored cjtui packages
 - `agent_domain` 不依赖 JSON、文件系统、进程、网络、RPC 或终端库。核心事件使用
   `EventMeta` 与可穷举的 `AgentEventPayload`；`kind/detail` 只是适配器边界投影。
 - `ModelPort.execute` 是唯一模型执行原语，只有 `agent_core` 可以调用。Provider
-  的协议编码和网络错误分类属于 `model_adapters`。
+  的 profile/model 解析、typed API adapter、协议编码和网络错误分类属于
+  `model_adapters`。协议只能由显式 `model.apiId` 选择；同协议厂商差异使用该 API
+  专属 typed dialect，消息模型、流状态机、工具生命周期或 terminal/continuation
+  发生结构变化时必须新增 `LlmApiAdapter`，禁止用厂商名、模型名或 URL 猜测协议。
+  完整分层与判定规则见 [LLM Provider Runtime](llm-provider-runtime.md)。
 - Model generation 与 Operation execution 使用独立的 durable state machine；
   provider terminal、validated Decision、atomic canonical projection 与 execution
   handoff 的边界见 [Model Attempt Runtime](model-attempt-runtime.md)。
 - `NativeProviderTransport` 是生产默认传输：使用 `stdx.net.http`，逐行发送 SSE，
-  每请求独立 client，按 request ID 取消，并限制响应体。它不依赖 shell 或 curl。
+  每请求独立 client，按 request ID 取消（包括凭据解析阶段），并限制响应体。它不依赖
+  shell 或 curl。Profile/model header 使用类型化、分层覆盖的配置，认证头始终由凭据
+  边界单独拥有。
 - Prompt 由 `PromptBuilder` 按稳定性、类型、信任来源、source/version 确定性排序。
   Tool Output 和 External 内容作为转义后的不可信数据块，不会被提升成系统指令。
 - Thread、Context 与 Memory 是三个边界。不可变的 Turn/Item 是语义事实；Context

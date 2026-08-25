@@ -904,6 +904,8 @@ func runConfigFileContracts(root: String): Unit {
             providerProfile: "roundtrip-provider",
             contextWindow: Some(321000),
             maxOutputTokens: Some(12000),
+            apiId: "openai_chat_completions",
+            dialect: "deepseek_chat",
             thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking)),
             structuredOutput: Some(false),
             promptCache: Some(true),
@@ -913,13 +915,15 @@ func runConfigFileContracts(root: String): Unit {
             outputCostMicrosPerMillion: Some(202),
             cacheReadCostMicrosPerMillion: Some(33),
             cacheWriteCostMicrosPerMillion: Some(44),
-            fastServiceTier: "flex"
+            fastServiceTier: "flex",
+            defaultHeaders: [ProviderDefaultHeader("x-model-route", "roundtrip, canary")]
         )).isOk(),
         "rich model metadata is atomically written"
     )
     let roundtrip = loadModelCatalog(roundtripRoot).value().getOrThrow()[0]
     expect(
         roundtrip.contextWindow == Some(321000) && roundtrip.maxOutputTokens == Some(12000) &&
+            roundtrip.apiId == "openai_chat_completions" && roundtrip.dialect == "deepseek_chat" &&
             match (roundtrip.thinking) {
                 case Some(value) => value.mode == ThinkingControlMode.NoThinking
                 case None => false
@@ -927,7 +931,10 @@ func runConfigFileContracts(root: String): Unit {
             roundtrip.promptCache == Some(true) && roundtrip.inputCostMicrosPerMillion == Some(101) &&
             roundtrip.outputCostMicrosPerMillion == Some(202) &&
             roundtrip.cacheReadCostMicrosPerMillion == Some(33) &&
-            roundtrip.cacheWriteCostMicrosPerMillion == Some(44) && roundtrip.fastServiceTier == "flex",
+            roundtrip.cacheWriteCostMicrosPerMillion == Some(44) && roundtrip.fastServiceTier == "flex" &&
+            roundtrip.defaultHeaders.size == 1 &&
+            roundtrip.defaultHeaders[0].name == "x-model-route" &&
+            roundtrip.defaultHeaders[0].value == "roundtrip, canary",
         "rich model metadata round-trips without fabricated defaults"
     )
     let oldCatalogRoot = root + "/old-model-catalog"
@@ -1148,6 +1155,11 @@ func runConfigFileContracts(root: String): Unit {
 
 func runProviderProfileContracts(root: String): Unit {
     let profileRoot = root + "/profiles"
+    expect(rejectsIllegalArgument({ =>
+        let _ = ProviderDefaultHeader("authorization", "Bearer secret")
+    }) && rejectsIllegalArgument({ =>
+        let _ = ProviderDefaultHeader("x-route", "safe\r\ninjected: secret")
+    }), "profile headers reject credential ownership and line injection before persistence")
     expect(
         ensureProductLayout(profileRoot).isOk(),
         "provider profile layout is created"
@@ -1161,7 +1173,8 @@ func runProviderProfileContracts(root: String): Unit {
                 "messages",
                 "https://api.anthropic.com",
                 "ANTHROPIC_API_KEY",
-                dialect: "anthropic_messages"
+                dialect: "anthropic_messages",
+                defaultHeaders: [ProviderDefaultHeader("x-profile-route", "anthropic")]
             )
         ).isOk() && upsertProviderProfile(
             profileRoot,
@@ -1171,7 +1184,7 @@ func runProviderProfileContracts(root: String): Unit {
                 "messages",
                 "https://api.deepseek.com/anthropic",
                 "DEEPSEEK_API_KEY",
-                dialect: "anthropic_messages"
+                dialect: "deepseek_messages"
             )
         ).isOk(),
         "multiple provider profiles coexist"
@@ -1185,7 +1198,8 @@ func runProviderProfileContracts(root: String): Unit {
                 thinking: Some(ThinkingCapabilities(
                     ThinkingControlMode.Budget,
                     supportedLevels: canonicalNonOffThinkingLevels()
-                ))
+                )),
+                promptCache: Some(true)
             )
         ).isOk() && upsertModelCatalogEntry(
             profileRoot,
@@ -1201,9 +1215,12 @@ func runProviderProfileContracts(root: String): Unit {
         "same model ID can be bound to different provider profiles"
     )
     let profileModels = loadModelNames(profileRoot).value().getOrThrow()
+    let loadedProfiles = loadProviderProfiles(profileRoot).value().getOrThrow()
     expect(
-        loadProviderProfiles(profileRoot).value().getOrThrow().size == 2 && profileModels.size == 2 &&
-            profileModels[0] != profileModels[1],
+        loadedProfiles.size == 2 && profileModels.size == 2 &&
+            profileModels[0] != profileModels[1] &&
+            loadedProfiles[0].defaultHeaders.size == 1 &&
+            loadedProfiles[0].defaultHeaders[0].name == "x-profile-route",
         "profile and qualified model catalogs round-trip"
     )
     let customLegacyRoot = root + "/custom-legacy-thinking"
@@ -1270,7 +1287,7 @@ func runProviderProfileContracts(root: String): Unit {
     expect(
         officialCache.cachePolicy == ModelCachePolicy.StablePrefix && officialCache.cacheKey != "" &&
             compatibleCache.cachePolicy == ModelCachePolicy.Default && compatibleCache.cacheKey == "",
-        "prompt caching is inferred only for an exact official endpoint; compatible endpoints opt in explicitly"
+        "prompt caching follows explicit model capability and compatible endpoints remain conservative"
     )
     expect(
         saveProviderCredential(
@@ -6816,5 +6833,14 @@ func toolOutcomeFailed(result: Result<ToolInvocationResult>): Bool {
 func expect(condition: Bool, message: String): Unit {
     if (!condition) {
         throw IllegalStateException(message)
+    }
+}
+
+func rejectsIllegalArgument(action: () -> Unit): Bool {
+    try {
+        action()
+        false
+    } catch (_: IllegalArgumentException) {
+        true
     }
 }

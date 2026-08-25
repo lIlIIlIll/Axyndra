@@ -3804,46 +3804,105 @@ public func configuredProfileModelPort(
     catalog: Array<ModelCatalogEntry>,
     settingsRoot: String
 ): ModelPort {
-    let routes = ArrayList<ProductModelRoute>()
+    let runtimeProfiles = ArrayList<RuntimeProviderProfile>()
+    for (profile in profiles) {
+        runtimeProfiles.add(RuntimeProviderProfile(
+            profile.id,
+            profile.provider,
+            profile.baseUrl,
+            profile.apiKeyEnv,
+            authentication: profile.authentication,
+            credentialFile: credentialPath(settingsRoot, profile.id),
+            timeoutMillis: profile.timeoutMillis,
+            defaultHeaders: runtimeProviderHeaders(profile.defaultHeaders),
+            endpointMaxOutputTokens: profile.endpointMaxOutputTokens
+        ))
+    }
+    let runtimeModels = ArrayList<RuntimeModelDescriptor>()
     for (entry in catalog where entry.providerProfile != "") {
         match (findProviderProfile(profiles, entry.providerProfile)) {
-            case Some(profile) => routes.add(
-                ProductModelRoute(
-                    entry.displayId(),
-                    entry.id,
-                    if (profile.authentication == "oauth") {
-                        UnsupportedOAuthModelPort(profile.id)
-                    } else {
-                        providerModelPort(
-                            ProviderSpec(
-                                profile.id,
-                                providerProtocol(profile.protocol),
-                                entry.id,
-                                profile.baseUrl,
-                                profile.apiKeyEnv,
-                                credentialFile: credentialPath(
-                                    settingsRoot,
-                                    profile.id
-                                ),
-                                timeoutMillis: profile.timeoutMillis,
-                                provider: profile.provider,
-                                dialect: Some(productProviderDialect(profile)),
-                                endpointMaxOutputTokens: profile.endpointMaxOutputTokens,
-                                capabilities: productModelCapabilities(
-                                    entry,
-                                    protocol: profile.protocol,
-                                    provider: profile.provider,
-                                    baseUrl: profile.baseUrl
-                                )
-                            )
-                        )
-                    }
-                )
-            )
+            case Some(profile) => runtimeModels.add(RuntimeModelDescriptor(
+                entry.displayId(), entry.providerProfile, entry.id,
+                runtimeApiBinding(entry, profile),
+                productModelCapabilities(
+                    entry,
+                    protocol: profile.protocol,
+                    provider: profile.provider,
+                    baseUrl: profile.baseUrl
+                ),
+                defaultHeaders: runtimeProviderHeaders(entry.defaultHeaders)
+            ))
             case None => ()
         }
     }
-    RoutedProductModelPort(routes.toArray())
+    UnifiedModelRuntime(
+        runtimeProfiles.toArray(), runtimeModels.toArray(), defaultLlmApiRegistry()
+    )
+}
+
+func runtimeProviderHeaders(values: Array<ProviderDefaultHeader>): Array<ProviderHeader> {
+    let headers = ArrayList<ProviderHeader>()
+    for (value in values) { headers.add(ProviderHeader(value.name, value.value)) }
+    headers.toArray()
+}
+
+func runtimeApiBinding(
+    entry: ModelCatalogEntry,
+    profile: ProviderProfile
+): ModelApiBinding {
+    let selectedDialect = if (entry.dialect != "") { entry.dialect } else { profile.dialect }
+    let selectedApi = if (entry.apiId != "") { entry.apiId } else { match (profile.protocol) {
+        case "messages" => "anthropic_messages"
+        case "responses" => "openai_responses"
+        case _ => "openai_chat_completions"
+    } }
+    match (selectedDialect) {
+        case "anthropic_messages" => ModelApiBinding(
+            LlmApiId.AnthropicMessages,
+            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Anthropic)
+        )
+        case "deepseek_messages" => ModelApiBinding(
+            LlmApiId.AnthropicMessages,
+            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.DeepSeek)
+        )
+        case "generic_messages" => ModelApiBinding(
+            LlmApiId.AnthropicMessages,
+            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Generic)
+        )
+        case "openai_responses" => ModelApiBinding(
+            LlmApiId.OpenAiResponses,
+            TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
+        )
+        case "deepseek_chat" => ModelApiBinding(
+            LlmApiId.OpenAiChatCompletions,
+            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.DeepSeek)
+        )
+        case "openai_chat" => ModelApiBinding(
+            LlmApiId.OpenAiChatCompletions,
+            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.OpenAi)
+        )
+        case "generic_chat" => ModelApiBinding(
+            LlmApiId.OpenAiChatCompletions,
+            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.Generic)
+        )
+        case _ => match (selectedApi) {
+            // Legacy configs already carry an explicit protocol. The migration
+            // selects only the generic dialect for that protocol and never
+            // inspects provider names, model names, or endpoint URLs.
+            case "anthropic_messages" => ModelApiBinding(
+                LlmApiId.AnthropicMessages,
+                TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Generic)
+            )
+            case "openai_responses" => ModelApiBinding(
+                LlmApiId.OpenAiResponses,
+                TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
+            )
+            case _ => ModelApiBinding(
+                LlmApiId.OpenAiChatCompletions,
+                TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.Generic)
+            )
+        }
+    }
 }
 
 func productModelCapabilities(
@@ -3852,6 +3911,9 @@ func productModelCapabilities(
     provider!: String = "",
     baseUrl!: String = ""
 ): ModelCapabilities {
+    let _ = protocol
+    let _ = provider
+    let _ = baseUrl
     let contextWindow = match (entry.contextWindow) {
         case Some(value) => value
         case None => 128000
@@ -3882,7 +3944,9 @@ func productModelCapabilities(
         },
         promptCache: match (entry.promptCache) {
             case Some(value) => value
-            case None => officialPromptCacheDefault(provider, protocol, baseUrl)
+            // Cache support is a model capability. Absence is conservative;
+            // provider names and endpoint URLs are never capability probes.
+            case None => false
         },
         contextWindowTokens: contextWindow,
         maxOutputTokens: maxOutput,
@@ -3911,23 +3975,6 @@ func configuredProductModelCapabilities(
         )
     }
     productModelCapabilities(entry)
-}
-
-func officialPromptCacheDefault(
-    provider: String,
-    protocol: String,
-    baseUrl: String
-): Bool {
-    let providerName = provider.toAsciiLower()
-    let endpoint = baseUrl.toAsciiLower().removeSuffix("/")
-    if (providerName == "openai" &&
-        (protocol == "responses" || protocol == "completions" || protocol == "chat-completions")) {
-        return endpoint == "https://api.openai.com" || endpoint == "https://api.openai.com/v1"
-    }
-    if (providerName == "anthropic" && protocol == "messages") {
-        return endpoint == "https://api.anthropic.com" || endpoint == "https://api.anthropic.com/v1"
-    }
-    false
 }
 
 func productToolResultError(result: ToolResult): AgentError {
@@ -3979,18 +4026,6 @@ func productToolResultText(
     }
 }
 
-class ProductModelRoute {
-    let displayId: String
-    let modelId: String
-    let port: ModelPort
-
-    init(displayId: String, modelId: String, port: ModelPort) {
-        this.displayId = displayId
-        this.modelId = modelId
-        this.port = port
-    }
-}
-
 class UnsupportedOAuthModelPort <: ModelPort {
     private let providerId: String
 
@@ -4024,76 +4059,6 @@ func oauthNotSupported<T>(providerId: String): Result<T> {
     )
 }
 
-class RoutedProductModelPort <: ModelPort {
-    private let routes: Array<ProductModelRoute>
-
-    init(routes: Array<ProductModelRoute>) {
-        this.routes = routes
-    }
-
-    public func execute(
-        request: ModelRequest,
-        events: ModelEventSink
-    ): Result<ModelReply> {
-        for (route in routes where route.displayId == request.model) {
-            return route.port.execute(
-                withRoutedModel(request, route.modelId),
-                events
-            )
-        }
-        Result.Err(
-            AgentError(
-                AgentErrorKind.Configuration,
-                "model.provider_profile_not_found",
-                "model is not bound to a configured provider profile",
-                fields: [ErrorField("model", request.model)]
-            )
-        )
-    }
-
-    public func cancel(requestId: String): Result<Unit> {
-        var firstError: ?AgentError = None
-        for (route in routes) {
-            match (route.port.cancel(requestId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    if (firstError.isNone()) {
-                        firstError = Some(error)
-                    }
-            }
-        }
-        match (firstError) {
-            case Some(error) => Result.Err(error)
-            case None => Result.Ok(())
-        }
-    }
-}
-
-func withRoutedModel(
-    request: ModelRequest,
-    model: String
-): ModelRequest {
-    ModelRequest(
-        model,
-        request.messages,
-        system: request.system,
-        tools: request.tools,
-        thinking: request.thinking,
-        maxOutputTokens: request.maxOutputTokens,
-        wireMaxOutputTokens: Some(request.wireMaxOutputTokens),
-        streaming: request.streaming,
-        parallelToolCalls: request.parallelToolCalls,
-        requestId: request.requestId,
-        serviceTier: request.serviceTier,
-        cachePolicy: request.cachePolicy,
-        toolChoice: request.toolChoice,
-        structuredOutput: request.structuredOutput,
-        cacheKey: request.cacheKey,
-        transportHardTimeoutMillis: request.transportHardTimeoutMillis,
-        resolvedPolicy: request.resolvedPolicy
-    )
-}
-
 func findProviderProfile(
     profiles: Array<ProviderProfile>,
     id: String
@@ -4102,30 +4067,6 @@ func findProviderProfile(
         return Some(profile)
     }
     None
-}
-
-func providerProtocol(value: String): ProviderProtocol {
-    match (value) {
-        case "messages" => ProviderProtocol.Messages
-        case "completions" | "chat-completions" => ProviderProtocol.Completions
-        case _ => ProviderProtocol.Responses
-    }
-}
-
-func productProviderDialect(profile: ProviderProfile): ProviderDialect {
-    match (profile.dialect) {
-        case "anthropic_messages" => ProviderDialect.AnthropicMessages
-        case "deepseek_messages" => ProviderDialect.DeepSeekMessages
-        case "openai_responses" => ProviderDialect.OpenAiResponses
-        case "openai_chat" => ProviderDialect.OpenAiChat
-        case "generic_messages" => ProviderDialect.GenericMessages
-        case "generic_chat" => ProviderDialect.GenericChat
-        case _ => match (profile.protocol) {
-            case "messages" => ProviderDialect.GenericMessages
-            case "responses" => ProviderDialect.OpenAiResponses
-            case _ => ProviderDialect.GenericChat
-        }
-    }
 }
 
 func productToolContextValue(value: ToolContextDescriptor): AgentValue {

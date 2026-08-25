@@ -322,7 +322,14 @@ func modelDecisionDurabilityContract(): Unit {
             "Decision and stable blocks commit atomically"
         )
         expect(
-            store.finalizeUsage(decision.id, ModelUsage(inputTokens: 5, outputTokens: 2), 13).isOk(),
+            store.finalizeUsage(decision.id, ModelUsage(
+                inputTokens: 5,
+                outputTokens: 2,
+                source: ModelUsageSource.ProviderStreamFinal,
+                evidence: Some(ModelUsageEvidence(
+                    "anthropic_messages", "message_stop", providerResponseId: "response-1"
+                ))
+            ), 13).isOk(),
             "late usage finalizes separately"
         )
         let recovered = store.loadDecision(decision.id)
@@ -331,7 +338,9 @@ func modelDecisionDurabilityContract(): Unit {
                 recovered.decision.blocks[0].id.value == "decision-block-1" &&
                 recovered.decision.blocks[0].scopedToolCallId.getOrThrow().value ==
                     "scoped-call-1" &&
-                recovered.usage.getOrThrow().outputTokens == 2,
+                recovered.usage.getOrThrow().outputTokens == 2 &&
+                recovered.usage.getOrThrow().evidence.getOrThrow().eventKind == "message_stop" &&
+                recovered.usage.getOrThrow().evidence.getOrThrow().providerResponseId == "response-1",
             "durable Decision, stable block identities and separate usage recover"
         )
         expect(

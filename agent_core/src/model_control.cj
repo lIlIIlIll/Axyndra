@@ -285,6 +285,8 @@ public func retryDisposition(error: AgentError, durableDecisionExists: Bool): At
                  AttemptFailureKind.AttemptSoftDeadlineExceeded |
                  AttemptFailureKind.AttemptHardDeadlineExceeded |
                  AttemptFailureKind.DecisionIncompleteAtDeadline => AttemptRetryDisposition.RetrySamePolicy
+            case AttemptFailureKind.OutputLimitedBeforeDecision |
+                 AttemptFailureKind.OutputLimited => AttemptRetryDisposition.RetryEscalated
             case _ => if (error.retryable) {
                 AttemptRetryDisposition.RetrySamePolicy
             } else { AttemptRetryDisposition.DoNotRetry }
@@ -613,7 +615,9 @@ public class ControlledModelPort <: ModelPort {
                     costMicros: match (requestCost) {
                         case Some(value) => Some(value)
                         case None => reply.usage.costMicros
-                    }
+                    },
+                    source: reply.usage.source,
+                    evidence: reply.usage.evidence
                 )
                 match (repository.append(AgentEvent(
                     EventMeta(
@@ -923,6 +927,8 @@ func accountedModelAttemptUsage(
         costMicros: match (pricing) {
             case Some(value) => priceModelUsage(reply.usage, value)
             case None => reply.usage.costMicros
-        }
+        },
+        source: reply.usage.source,
+        evidence: reply.usage.evidence
     )
 }

@@ -4,6 +4,7 @@ import agent_domain as domain
 import agent_ports as ports
 import model_adapters.*
 import std.collection.*
+import std.sync.*
 
 main(): Int64 {
     expect(
@@ -834,8 +835,335 @@ main(): Int64 {
     let _ = activeStreamPort.execute(activeStreamRequest, { _ => () })
     expect(activeStreamTransport.timeoutMillis == 0,
         "T6 active Core streams omit the provider whole-request timeout")
+    let deepSeekReplay = domain.ModelRequest(
+        "deepseek", [domain.ModelMessage(domain.ModelRole.Assistant, [
+            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "opaque reasoning"),
+            domain.ModelBlock(
+                domain.ModelBlockKind.ToolCall,
+                callId: "replay-call", name: "echo", arguments: domain.objectValue([])
+            )
+        ])],
+        thinking: domain.ThinkingLevel.High
+    )
+    expect(encodeDeepSeekChatRequest(deepSeekReplay).contains(
+        "\"reasoning_content\":\"opaque reasoning\""
+    ), "DeepSeek Chat replay keeps assistant reasoning_content separate from visible content")
+    let partialToolStream =
+        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\",\"tool_calls\":[{\"index\":0,\"id\":\"partial\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]},\"finish_reason\":null}],\"usage\":null}\n\n" +
+        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"delta\":null,\"finish_reason\":\"max_tokens\"}],\"usage\":{\"completion_tokens\":100,\"completion_tokens_details\":{\"reasoning_tokens\":90}}}\n\n" +
+        "data: [DONE]\n\n"
+    let partialReply = replyOrThrow(providerModelPort(
+        ProviderSpec(
+            "deepseek-partial", ProviderProtocol.Completions, "deepseek",
+            "https://fixture.invalid", "KEY", dialect: Some(ProviderDialect.DeepSeekChat)
+        ),
+        transport: StaticTransport(partialToolStream)
+    ).execute(domain.ModelRequest(
+        "deepseek", request.messages, thinking: domain.ThinkingLevel.High,
+        streaming: true
+    ), { _ => () }))
+    var partialTools: Int64 = 0
+    for (block in partialReply.blocks) {
+        if (let domain.ModelBlockKind.ToolCall <- block.kind) { partialTools += 1 }
+    }
+    expect(match (partialReply.completionDisposition) {
+            case domain.CompletionDisposition.OutputLimited => true
+            case _ => false
+        } &&
+        partialReply.reasoningTokens == 90 && partialReply.outputTokens == 100 &&
+        match (partialReply.usage.source) {
+            case domain.ModelUsageSource.ProviderStreamFinal => true
+            case _ => false
+        } &&
+        partialReply.usage.evidence.getOrThrow().eventKind == "finish_reason" &&
+        partialReply.usage.evidence.getOrThrow().providerResponseId == "limited" &&
+        partialTools == 0 && !partialReply.acceptedOutput,
+        "output-limited partial tool JSON remains diagnostic-only while usage and terminal facts survive")
+    outputLimitedPositionContract(request)
+    unifiedRuntimeContract(request)
+    cancellableCredentialResolutionContract(request)
     println("model_adapters contract passed")
     0
+}
+
+func outputLimitedPositionContract(request: domain.ModelRequest): Unit {
+    let deltas = [
+        ("thinking", "{\"reasoning_content\":\"still thinking\"}"),
+        ("text", "{\"content\":\"partial answer\"}"),
+        ("tool_name", "{\"tool_calls\":[{\"index\":0,\"id\":\"partial-name\",\"function\":{\"name\":\"ec\",\"arguments\":\"{}\"}}]}"),
+        ("tool_arguments", "{\"tool_calls\":[{\"index\":0,\"id\":\"partial-args\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]}" )
+    ]
+    for ((position, delta) in deltas) {
+        let stream =
+            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"delta\":" + delta + ",\"finish_reason\":null}],\"usage\":null}\n\n" +
+            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"delta\":null,\"finish_reason\":\"max_tokens\"}],\"usage\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":16}}}\n\n" +
+            "data: [DONE]\n\n"
+        let reply = replyOrThrow(providerModelPort(
+            ProviderSpec(
+                "deepseek-limited-" + position,
+                ProviderProtocol.Completions,
+                "deepseek",
+                "https://fixture.invalid",
+                "KEY",
+                dialect: Some(ProviderDialect.DeepSeekChat)
+            ),
+            transport: StaticTransport(stream)
+        ).execute(domain.ModelRequest(
+            "deepseek", request.messages,
+            thinking: domain.ThinkingLevel.High,
+            streaming: true
+        ), { _ => () }))
+        var toolCalls: Int64 = 0
+        for (block in reply.blocks) {
+            if (let domain.ModelBlockKind.ToolCall <- block.kind) { toolCalls += 1 }
+        }
+        expect(match (reply.completionDisposition) {
+                case domain.CompletionDisposition.OutputLimited => true
+                case _ => false
+            } && !reply.acceptedOutput && toolCalls == 0,
+            "output limit during " + position + " cannot produce an accepted or executable tool Decision")
+    }
+}
+
+func cancellableCredentialResolutionContract(request: domain.ModelRequest): Unit {
+    let credentials = BlockingCredentialResolver()
+    let port = providerModelPort(
+        ProviderSpec(
+            "credential-cancel", ProviderProtocol.Completions, "fixture-model",
+            "http://127.0.0.1:1", "UNUSED_KEY"
+        ),
+        transport: NativeProviderTransport(credentials: credentials)
+    )
+    let running = spawn {
+        port.execute(domain.ModelRequest(
+            request.model, request.messages, requestId: "credential-cancel-request"
+        ), { _ => () })
+    }
+    var waits: Int64 = 0
+    while (credentials.started.fetchAdd(0) == 0 && waits < 1000) {
+        sleep(Duration.millisecond)
+        waits += 1
+    }
+    expect(credentials.started.fetchAdd(0) == 1,
+        "credential resolver begins before provider I/O")
+    expect(port.cancel("credential-cancel-request").isOk(),
+        "ModelPort cancellation reaches credential resolution")
+    let result = running.get()
+    expect(match (result) {
+        case domain.Result.Err(error) => match (error.kind) {
+            case domain.AgentErrorKind.Cancelled => error.code == "model.cancelled" &&
+                error.fields.size == 1 && error.fields[0].value == "credential-cancel-request"
+            case _ => false
+        }
+        case domain.Result.Ok(_) => false
+    } && credentials.completed.fetchAdd(0) == 1,
+        "credential cancellation is terminal, prompt, and contains no secret diagnostics")
+}
+
+class BlockingCredentialResolver <: ProviderCredentialResolver {
+    let started = AtomicInt64(0)
+    let cancelled = AtomicInt64(0)
+    let completed = AtomicInt64(0)
+
+    public func resolve(
+        provider: ProviderSpec,
+        requestId: String
+    ): domain.Result<String> {
+        let _ = provider
+        started.fetchAdd(1)
+        var waits: Int64 = 0
+        while (cancelled.fetchAdd(0) == 0 && waits < 5000) {
+            sleep(Duration.millisecond)
+            waits += 1
+        }
+        if (cancelled.fetchAdd(0) > 0) {
+            domain.Result.Err(domain.AgentError(
+                domain.AgentErrorKind.Cancelled,
+                "model.cancelled",
+                "credential resolution cancelled",
+                fields: [domain.ErrorField("request_id", requestId)]
+            ))
+        } else {
+            domain.Result.Err(domain.AgentError(
+                domain.AgentErrorKind.Timeout,
+                "fixture.credential_timeout",
+                "credential resolver was not cancelled"
+            ))
+        }
+    }
+
+    public func cancel(requestId: String): domain.Result<Unit> {
+        let _ = requestId
+        cancelled.fetchAdd(1)
+        domain.Result.Ok(())
+    }
+
+    public func complete(requestId: String): Unit {
+        let _ = requestId
+        completed.fetchAdd(1)
+    }
+}
+
+func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
+    let transport = DispatchTransport()
+    let profiles = [
+        RuntimeProviderProfile(
+            "gateway-a", "gateway", "https://fixture.invalid", "KEY_A",
+            defaultHeaders: [ProviderHeader("x-profile", "a"), ProviderHeader("x-route", "profile")]
+        ),
+        RuntimeProviderProfile(
+            "gateway-b", "gateway", "https://fixture.invalid", "KEY_B",
+            defaultHeaders: [ProviderHeader("x-profile", "b")]
+        )
+    ]
+    let capabilities = domain.ModelCapabilities(
+        toolCalling: true, parallelToolCalling: true, reasoning: true,
+        contextWindowTokens: 128000, maxOutputTokens: 32768,
+        thinking: Some(domain.ThinkingCapabilities(
+            domain.ThinkingControlMode.Effort,
+            supportedLevels: [
+                domain.ThinkingLevel.Low,
+                domain.ThinkingLevel.High,
+                domain.ThinkingLevel.Max
+            ]
+        ))
+    )
+    let models = [
+        RuntimeModelDescriptor(
+            "gateway-a/deepseek", "gateway-a", "deepseek",
+            ModelApiBinding(
+                LlmApiId.OpenAiChatCompletions,
+                TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.DeepSeek)
+            ), capabilities,
+            defaultHeaders: [ProviderHeader("x-route", "model")]
+        ),
+        RuntimeModelDescriptor(
+            "gateway-a/responses", "gateway-a", "responses",
+            ModelApiBinding(
+                LlmApiId.OpenAiResponses,
+                TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
+            ), capabilities
+        ),
+        RuntimeModelDescriptor(
+            "gateway-a/messages", "gateway-a", "messages",
+            ModelApiBinding(
+                LlmApiId.AnthropicMessages,
+                TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.DeepSeek)
+            ), capabilities
+        ),
+        RuntimeModelDescriptor(
+            "gateway-b/deepseek", "gateway-b", "deepseek",
+            ModelApiBinding(
+                LlmApiId.OpenAiChatCompletions,
+                TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.DeepSeek)
+            ), capabilities
+        )
+    ]
+    let runtime: ports.ModelPort = UnifiedModelRuntime(
+        profiles, models, defaultLlmApiRegistry(transport: transport)
+    )
+    for (model in [
+        "gateway-a/deepseek", "gateway-a/responses",
+        "gateway-a/messages", "gateway-b/deepseek"
+    ]) {
+        let routed = domain.ModelRequest(
+            model, request.messages, thinking: domain.ThinkingLevel.High,
+            maxOutputTokens: 4096, streaming: false,
+            resolvedPolicy: Some(domain.ResolvedModelRequestPolicy(
+                domain.ThinkingResolution(
+                    domain.ThinkingLevel.High,
+                    domain.ThinkingLevel.High,
+                    domain.ThinkingControlMode.Effort
+                ),
+                domain.OutputLimitResolution(4096, 4096)
+            ))
+        )
+        expect(runtime.execute(routed, { _ => () }).isOk(),
+            "unified runtime dispatches " + model)
+    }
+    expect(
+        transport.protocols.size == 4 &&
+        transport.protocols[0] == "chat" && transport.protocols[1] == "responses" &&
+        transport.protocols[2] == "messages" && transport.protocols[3] == "chat" &&
+        transport.profileIds[0] == "gateway-a" && transport.profileIds[3] == "gateway-b" &&
+        transport.payloads[0].contains("\"max_tokens\":4096") &&
+        transport.payloads[0].contains("\"thinking\":{\"type\":\"enabled\"}") &&
+        transport.payloads[0].contains("\"reasoning_effort\":\"high\"") &&
+        transport.headers[0].contains("x-profile:a") &&
+        transport.headers[0].contains("x-route:model") &&
+        transport.headers[0].contains("content-type:application/json") &&
+        transport.headers[3].contains("x-profile:b") &&
+        !transport.headers[3].contains("x-profile:a"),
+        "profiles reuse one API adapter while one profile dispatches mixed APIs with typed DeepSeek lowering"
+    )
+    var secretHeaderRejected = false
+    try {
+        let _ = ProviderHeader("authorization", "secret")
+    } catch (_: IllegalArgumentException) { secretHeaderRejected = true }
+    expect(secretHeaderRejected,
+        "profile and model headers cannot inject authentication secrets")
+    let missingApi = UnifiedModelRuntime(
+        profiles, [models[0]], LlmApiAdapterRegistry([])
+    ).execute(domain.ModelRequest(
+        "gateway-a/deepseek", request.messages, thinking: domain.ThinkingLevel.Off
+    ), { _ => () })
+    expectErrorCode(
+        missingApi, "model.api_adapter_not_registered",
+        "an unregistered model API fails closed before transport"
+    )
+    var mismatchRejected = false
+    try {
+        let _ = ModelApiBinding(
+            LlmApiId.AnthropicMessages,
+            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.Generic)
+        )
+    } catch (_: IllegalArgumentException) {
+        mismatchRejected = true
+    }
+    expect(mismatchRejected, "typed dialect/API mismatch is rejected before transport")
+}
+
+class DispatchTransport <: ProviderTransport {
+    let protocols = ArrayList<String>()
+    let profileIds = ArrayList<String>()
+    let payloads = ArrayList<String>()
+    let headers = ArrayList<String>()
+
+    public func post(
+        provider: ProviderSpec,
+        payload: String,
+        streaming: Bool,
+        requestId: String,
+        chunks: (String) -> Unit
+    ): domain.Result<String> {
+        let _ = streaming
+        let _ = requestId
+        let _ = chunks
+        profileIds.add(provider.id)
+        payloads.add(payload)
+        var merged = ""
+        for (header in effectiveProviderHeaders(provider, streaming)) {
+            merged += header.name + ":" + header.value + "\n"
+        }
+        headers.add(merged)
+        match (provider.protocol) {
+            case ProviderProtocol.Completions =>
+                protocols.add("chat")
+                domain.Result.Ok(
+                    "{\"id\":\"chat\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{}}"
+                )
+            case ProviderProtocol.Responses =>
+                protocols.add("responses")
+                domain.Result.Ok(
+                    "{\"id\":\"responses\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{}}"
+                )
+            case ProviderProtocol.Messages =>
+                protocols.add("messages")
+                domain.Result.Ok(
+                    "{\"id\":\"messages\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],\"stop_reason\":\"end_turn\",\"usage\":{}}"
+                )
+        }
+    }
 }
 
 class StaticTransport <: ProviderTransport {

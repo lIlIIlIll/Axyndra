@@ -159,6 +159,9 @@ public class ThinkingCapabilities {
 public class RequestOutputBudget {
     public let hardLimit: Int64
     public let minVisibleResponseTokens: Int64
+    // Compatibility alias: this budget protects the complete Decision frame,
+    // not merely user-visible prose.
+    public let decisionReserveTokens: Int64
 
     public init(
         hardLimit: Int64,
@@ -169,6 +172,7 @@ public class RequestOutputBudget {
         }
         this.hardLimit = hardLimit
         this.minVisibleResponseTokens = minVisibleResponseTokens
+        this.decisionReserveTokens = minVisibleResponseTokens
     }
 }
 
@@ -301,6 +305,7 @@ public class ResolvedModelRequestPolicy {
     public let capabilityFingerprint: String
     public let capabilitySnapshotPayload: String
     public let minVisibleResponseTokens: Int64
+    public let decisionReserveTokens: Int64
     public let thinkingSource: ThinkingPreferenceSource
     public let userRequestedThinking: ?ThinkingLevel
 
@@ -322,6 +327,7 @@ public class ResolvedModelRequestPolicy {
         this.capabilityFingerprint = capabilityFingerprint
         this.capabilitySnapshotPayload = capabilitySnapshotPayload
         this.minVisibleResponseTokens = minVisibleResponseTokens
+        this.decisionReserveTokens = minVisibleResponseTokens
         this.thinkingSource = thinkingSource
         this.userRequestedThinking = userRequestedThinking
     }
@@ -420,6 +426,15 @@ func resolveAttemptThinking(
         ))
     }
     match (input.recoveryCeiling) {
+        case Some(ThinkingLevel.Off) => if (effective != ThinkingLevel.Off) {
+            let before = effective
+            effective = ThinkingLevel.Off
+            constraints.add(thinkingConstraint(
+                ResolutionConstraintKind.AttemptRecoveryCeiling,
+                before,
+                effective
+            ))
+        }
         case Some(ceiling) => if (thinkingLevelRank(effective) > thinkingLevelRank(ceiling)) {
             let before = effective
             effective = match (highestSupportedAtMost(capabilities.supportedLevels, ceiling)) {
@@ -435,7 +450,7 @@ func resolveAttemptThinking(
         case None => ()
     }
     var budgetTokens: ?Int64 = None
-    if (capabilities.mode == ThinkingControlMode.Budget) {
+    if (capabilities.mode == ThinkingControlMode.Budget && effective != ThinkingLevel.Off) {
         let available = wireLimit - input.requestedPolicy.requestOutputBudget.minVisibleResponseTokens
         let budgetLevel = highestBudgetLevelAtMost(capabilities, effective, available)
         let selected = match (budgetLevel) {
@@ -464,6 +479,21 @@ func resolveAttemptThinking(
         },
         constraints: constraints.toArray()
     ))
+}
+
+// Select the next real model-supported recovery ceiling. Off is the final
+// fail-closed step and is always available as the absence of thinking.
+public func nextLowerThinkingCeiling(
+    capabilities: ModelExecutionCapabilitiesSnapshot,
+    effective: ThinkingLevel
+): ?ThinkingLevel {
+    if (effective == ThinkingLevel.Off) { return None }
+    var candidate = ThinkingLevel.Off
+    for (level in capabilities.thinking.supportedLevels where
+        thinkingLevelRank(level) < thinkingLevelRank(effective)) {
+        candidate = level
+    }
+    Some(candidate)
 }
 
 func incompatibleThinking(

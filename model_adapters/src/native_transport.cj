@@ -38,6 +38,11 @@ private class NativeBodyRead {
 public class NativeProviderTransport <: ProviderTransport {
     private let active = ArrayList<ActiveNativeRequest>()
     private let activeLock = Mutex()
+    private let credentials: ProviderCredentialResolver
+
+    public init(credentials!: ProviderCredentialResolver = EnvironmentFileCredentialResolver()) {
+        this.credentials = credentials
+    }
 
     public func post(
         provider: ProviderSpec,
@@ -54,11 +59,14 @@ public class NativeProviderTransport <: ProviderTransport {
                 fields: [domain.ErrorField("provider_id", provider.id)]
             ))
         }
-        let apiKey = match (providerCredential(provider)) {
+        let apiKey = match (credentials.resolve(provider, requestId)) {
             case domain.Result.Ok(value) => value
-            case domain.Result.Err(error) => return domain.Result.Err(error)
+            case domain.Result.Err(error) =>
+                credentials.complete(requestId)
+                return domain.Result.Err(error)
         }
         if (apiKey.contains("\n") || apiKey.contains("\r")) {
+            credentials.complete(requestId)
             return domain.Result.Err(domain.AgentError(
                 domain.AgentErrorKind.Configuration,
                 "model.invalid_api_key",
@@ -71,6 +79,7 @@ public class NativeProviderTransport <: ProviderTransport {
         match (registerNative(requestId, client)) {
             case domain.Result.Err(error) =>
                 try { client.close() } catch (_: Exception) {}
+                credentials.complete(requestId)
                 return domain.Result.Err(error)
             case domain.Result.Ok(_) => ()
         }
@@ -80,12 +89,10 @@ public class NativeProviderTransport <: ProviderTransport {
             let builder = HttpRequestBuilder()
                 .url(provider.endpoint())
                 .post()
-                .header("content-type", "application/json")
-                .header(
-                    "accept",
-                    if (streaming) { "text/event-stream" } else { "application/json" }
-                )
                 .body(payload)
+            for (header in effectiveProviderHeaders(provider, streaming)) {
+                builder.header(header.name, header.value)
+            }
             if (provider.timeoutMillis > 0) {
                 builder.readTimeout(timeout).writeTimeout(timeout)
             } else {
@@ -97,18 +104,6 @@ public class NativeProviderTransport <: ProviderTransport {
             }
             match (provider.protocol) {
                 case ProviderProtocol.Messages =>
-                    builder.header("anthropic-version", "2023-06-01")
-                    for (header in providerBetaHeaders(provider)) {
-                        match (header.indexOf(":")) {
-                            case Some(separator) => if (separator > 0) {
-                                builder.header(
-                                    header[..separator].trimAscii(),
-                                    header[separator + 1..].trimAscii()
-                                )
-                            }
-                            case None => ()
-                        }
-                    }
                     builder.header("x-api-key", apiKey)
                 case ProviderProtocol.Responses | ProviderProtocol.Completions =>
                     builder.header("authorization", "Bearer " + apiKey)
@@ -201,6 +196,7 @@ public class NativeProviderTransport <: ProviderTransport {
                 }
             }
         } finally {
+            credentials.complete(requestId)
             let item = finishNative(requestId)
             match (item) {
                 case Some(value) =>
@@ -215,6 +211,7 @@ public class NativeProviderTransport <: ProviderTransport {
     }
 
     public func cancel(requestId: String): domain.Result<Unit> {
+        let credentialCancellation = credentials.cancel(requestId)
         activeLock.lock()
         try {
             for (item in active where item.requestId == requestId) {
@@ -226,7 +223,7 @@ public class NativeProviderTransport <: ProviderTransport {
                 try { item.client.close() } catch (_: Exception) {}
                 return domain.Result.Ok(())
             }
-            domain.Result.Ok(())
+            credentialCancellation
         } finally {
             activeLock.unlock()
         }
