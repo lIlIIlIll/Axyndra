@@ -6,6 +6,9 @@
 | 能力 | 实现位置 | 当前边界 | 聚焦证据 |
 | --- | --- | --- | --- |
 | Provider-neutral 模型协议 | `agent_domain`, `agent_ports`, `model_adapters` | Runtime 不接触 Provider JSON；capability 在网络调用前校验 | `model_adapters_contract`, `v3_domain_contract` |
+| Unified LLM runtime | `model_adapters/src/unified_runtime.cj`, `agent_product` | Provider Profile、Model、Wire API 与 API-scoped typed dialect 正交组合；协议由 `model.apiId` 显式选择；字段/能力/replay 差异复用 adapter，消息、流、工具或 terminal 状态机结构变化必须新增 adapter；未知 API 或错误 dialect 在 I/O 前 fail-closed | `model_adapters_contract`, `product_contract` |
+| Provider auth、headers 与 usage 证据 | `agent_product`, `model_adapters`, `agent_domain`, `agent_store` | profile/model/request header 按类型化优先级合并且认证头保留；取消覆盖凭据解析与网络；usage 记录 final/stream-final 来源及 terminal evidence 并向后兼容持久化 | `model_adapters_contract`, `product_contract`, `agent_domain_contract`, `agent_store_contract` |
+| Output-limited recovery | `agent_core`, `agent_domain` | 未形成 accepted Decision 时创建有界 child Attempt，持久化降低后的 recovery ceiling；截断工具块不进入 canonical Decision 或执行 | `agent_core_contract`, `agent_domain_contract`, `model_adapters_contract` |
 | 图像、结构化输出与缓存 | `agent_domain`, `model_adapters`, `agent_core`, `agent_sdk` | typed Image/Schema/Result；宿主二次 schema 校验；StablePrefix 映射 Provider 缓存参数；能力或 cache key 缺失时请求前失败 | `model_adapters_contract`, `sdk_contract`, `v3_domain_contract` |
 | 原生 HTTP 与 SSE | `model_adapters/src/native_transport.cj` | `stdx.net.http`、每请求独立 client、request-ID cancel、64 MiB 响应上限；生产默认不依赖 curl | `model_adapters_contract` |
 | 类型化事件与状态机 | `agent_domain/src/v3_control.cj`, `agent_core/src/runtime_control.cj` | 强 ID 关联、合法状态转换、父子取消、deadline、累计预算 | `v3_domain_contract`, `agent_core_contract` |

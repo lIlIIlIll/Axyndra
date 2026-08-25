@@ -208,6 +208,21 @@ if rg_matches -n 'import (agent_core|model_adapters)' \
   fail "CLI parser crosses the client/domain boundary"
 fi
 
+if rg_matches -n 'import (model_adapters|llm4cj)' \
+  "$ROOT/agent_core/src" "$ROOT/agent_runtime/src" >/dev/null; then
+  fail "Agent runtime crosses ModelPort into provider API or transport code"
+fi
+
+if rg_matches -n 'import agent_(domain|ports|core|runtime|product)' \
+  "$ROOT/libs/llm4cj/src" >/dev/null; then
+  fail "llm4cj must remain transport-only"
+fi
+
+if ! rg_matches -n 'UnifiedModelRuntime\(' \
+  "$ROOT/agent_product/src/product.cj" >/dev/null; then
+  fail "production composition root does not install the unified model runtime"
+fi
+
 # Provider DTOs and legacy conversations are never Runtime truth.
 if rg_matches -n 'conversations\.' \
   "$ROOT/agent_core/src" >/dev/null; then
@@ -393,6 +408,12 @@ allowed_model_callers=$(printf '%s\n' \
 if [[ "$model_callers" != "$allowed_model_callers" ]]; then
   printf '%s\n' "$model_callers" >&2
   fail "provider/model execute calls must stay inside agent_core's control plane"
+fi
+
+if rg_matches -n \
+  'RoutedProductModelPort|ProductModelRoute|productProviderDialect|func providerProtocol\(' \
+  "$ROOT/agent_product/src" >/dev/null; then
+  fail "agent_product retains the removed pre-registry provider routing path"
 fi
 
 printf 'architecture gate passed\n'

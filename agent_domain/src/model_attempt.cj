@@ -69,7 +69,7 @@ public enum DecisionOutcome {
 
 @Derive[Equatable]
 public enum AttemptPolicyReason {
-    Initial | Retry | DeadlineEscalation
+    Initial | Retry | DeadlineEscalation | OutputLimitRecovery
 }
 
 @Derive[Equatable]
@@ -83,6 +83,7 @@ public enum AttemptFailureKind {
     | ProviderTerminalMissing
     | ProtocolIncomplete
     | OutputLimited
+    | OutputLimitedBeforeDecision
     | ProviderTransportError
     | ProviderProtocolError
     | UserCancelled

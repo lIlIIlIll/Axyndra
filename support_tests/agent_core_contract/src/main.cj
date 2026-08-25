@@ -108,6 +108,8 @@ main(): Int64 {
     durableDecisionSuppressesRetryRaceContract()
     modelResumeCrashWindowMatrixContract()
     typedTerminalFailureContract()
+    outputLimitedBeforeDecisionRecoveryContract()
+    outputLimitedRecoveryExhaustionContract()
     modelIdleTimeoutContract()
     idleRetryRecoversContract()
     retryBackoffControlContract()
@@ -712,11 +714,11 @@ func typedTerminalFailureContract(): Unit {
     )
     expect(limited.isError() && match (limited.error()) {
         case Some(error) => match (error.attemptFailure) {
-            case Some(value) => value.kind == AttemptFailureKind.OutputLimited
+            case Some(value) => value.kind == AttemptFailureKind.OutputLimitedBeforeDecision
             case None => false
         }
         case None => false
-    }, "T11 output-limited terminal is typed separately from transport timeout")
+    }, "T11 output-limited-before-decision is typed separately from transport timeout")
     let missing = runTerminalFailureModel(
         MissingTerminalModel(), "missing-terminal-run", "missing-terminal-session"
     )
@@ -779,6 +781,178 @@ class MissingTerminalModel <: ModelPort {
             providerId: "fixture", responseId: "missing-terminal",
             completionDisposition: CompletionDisposition.ProtocolIncomplete,
             decisionOutcome: DecisionOutcome.Response,
+            validationVersion: 1
+        ))
+    }
+}
+
+func outputLimitedBeforeDecisionRecoveryContract(): Unit {
+    let model = ReasoningStarvationModel()
+    let decisions = RecordingModelDecisionPort()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let echo = EchoTool()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        echo
+    ).isOk(), "reasoning-starvation fixture tool registers")
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(
+            mode: ModelAttemptRecoveryMode.RecoveryV1,
+            maxRecoveryRetries: 1
+        )
+    ).start(AgentRunRequest(
+        RunId("reasoning-starvation-run"),
+        SessionId("reasoning-starvation-session"),
+        "deepseek/profile-model",
+        "produce one complete tool decision",
+        thinking: ThinkingLevel.High,
+        userRequestedThinking: Some(ThinkingLevel.High),
+        thinkingSource: ThinkingPreferenceSource.ExplicitUser,
+        modelCapabilitiesSnapshot: Some(ModelExecutionCapabilitiesSnapshot(
+            "deepseek/profile-model",
+            ThinkingCapabilities(
+                ThinkingControlMode.Effort,
+                supportedLevels: [ThinkingLevel.Low, ThinkingLevel.High]
+            ),
+            4096
+        )),
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxOutputTokens: 4096)
+    ))
+    expect(result.isOk() && model.calls == 3 && model.thinkingLevels.size == 3 &&
+        model.thinkingLevels[0] == ThinkingLevel.High &&
+        model.thinkingLevels[1] == ThinkingLevel.Low &&
+        model.thinkingLevels[2] == ThinkingLevel.High,
+        "output-limited child attempt lowers only that semantic request and the next turn restores requested thinking")
+    expect(decisions.createdAttempts.size == 3 &&
+        decisions.createdAttempts[0].parentAttemptId.isNone() &&
+        decisions.createdAttempts[1].parentAttemptId.isSome() &&
+        decisions.createdAttempts[1].policyReason == "output_limit_recovery" &&
+        decisions.createdAttempts[1].policy.field("thinking_source").getOrThrow().text == "explicit_user" &&
+        echo.persistedResults == 1,
+        "child Attempt is durable before I/O, retains requested-policy audit, and only the accepted retry tool executes")
+}
+
+class ReasoningStarvationModel <: ModelPort {
+    var calls: Int64 = 0
+    let thinkingLevels = ArrayList<ThinkingLevel>()
+
+    public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
+        calls += 1
+        thinkingLevels.add(request.thinking)
+        if (calls == 1) {
+            events(ModelEvent.ReasoningDelta("long reasoning"))
+            events(ModelEvent.ToolCallStarted("partial-call", "echo"))
+            events(ModelEvent.ToolArgumentsDelta("partial-call", "{\"text\":"))
+            let terminal = TerminalEvidence(
+                "openai_chat_completions", "finish_reason",
+                rawStopReason: "max_tokens", messageTerminalObserved: true,
+                streamEofObserved: true, adapterVersion: "deepseek-regression-v1"
+            )
+            events(ModelEvent.ProviderProgress(
+                ProviderStreamEvent.MessageTerminalObserved(terminal)
+            ))
+            return Result.Ok(ModelReply(
+                [ModelBlock(ModelBlockKind.Reasoning, text: "long reasoning")],
+                stopReason: "max_tokens", acceptedOutput: false,
+                providerId: "deepseek-openai", responseId: "limited-1",
+                usage: Some(ModelUsage(outputTokens: 100, reasoningTokens: 90)),
+                terminalEvidence: Some(terminal),
+                completionDisposition: CompletionDisposition.OutputLimited,
+                decisionOutcome: DecisionOutcome.Unknown,
+                validationVersion: 1
+            ))
+        }
+        if (calls == 2) {
+            events(ModelEvent.ToolCallStarted("accepted-call", "echo"))
+            events(ModelEvent.ToolArgumentsDelta("accepted-call", "{}"))
+            events(ModelEvent.ToolCallCompleted("accepted-call"))
+            events(ModelEvent.Completed)
+            return Result.Ok(contractModelReply(
+                [ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "accepted-call", name: "echo", arguments: objectValue([])
+                )],
+                stopReason: "tool_calls", providerId: "deepseek-openai",
+                responseId: "accepted-2"
+            ))
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "done")],
+            stopReason: "stop", providerId: "deepseek-openai",
+            responseId: "final-3"
+        ))
+    }
+}
+
+func outputLimitedRecoveryExhaustionContract(): Unit {
+    let model = AlwaysOutputLimitedModel()
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let result = AgentCore(
+        model, MemoryRuns(),
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(maxRecoveryRetries: 1)
+    ).start(AgentRunRequest(
+        RunId("reasoning-exhausted-run"), SessionId("reasoning-exhausted-session"),
+        "deepseek/exhausted", "never reaches a decision",
+        thinking: ThinkingLevel.High,
+        modelCapabilitiesSnapshot: Some(ModelExecutionCapabilitiesSnapshot(
+            "deepseek/exhausted",
+            ThinkingCapabilities(
+                ThinkingControlMode.Effort,
+                supportedLevels: [ThinkingLevel.Low, ThinkingLevel.High]
+            ),
+            2048
+        )),
+        budget: ResourceBudget(maxOutputTokens: 2048)
+    ))
+    expect(result.isError() && model.calls == 2 && decisions.decisions == 0 &&
+        match (result.error()) {
+            case Some(error) => error.code == "model.output_limited_before_decision" &&
+                error.field("recovery_attempts") == Some("1") &&
+                error.field("reasoning_tokens") == Some("90") &&
+                error.field("effective_wire_output_tokens") == Some("2048") &&
+                error.field("effective_thinking_level") == Some("low") &&
+                error.field("parent_attempt_id").isSome() &&
+                error.field("reasoning_share").isSome() &&
+                error.field("decision_boundary_accepted") == Some("false")
+            case None => false
+        },
+        "output-limited recovery is bounded and reports the reasoning-starvation root cause")
+}
+
+class AlwaysOutputLimitedModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
+        calls += 1
+        events(ModelEvent.ReasoningDelta("reasoning"))
+        let terminal = TerminalEvidence(
+            "openai_chat_completions", "finish_reason",
+            rawStopReason: "max_tokens", messageTerminalObserved: true,
+            streamEofObserved: true, adapterVersion: "deepseek-exhaustion-v1"
+        )
+        events(ModelEvent.ProviderProgress(
+            ProviderStreamEvent.MessageTerminalObserved(terminal)
+        ))
+        Result.Ok(ModelReply(
+            [ModelBlock(ModelBlockKind.Reasoning, text: "reasoning")],
+            stopReason: "max_tokens", acceptedOutput: false,
+            providerId: "deepseek-openai", responseId: "limited-" + calls.toString(),
+            usage: Some(ModelUsage(outputTokens: 100, reasoningTokens: 90)),
+            terminalEvidence: Some(terminal),
+            completionDisposition: CompletionDisposition.OutputLimited,
             validationVersion: 1
         ))
     }

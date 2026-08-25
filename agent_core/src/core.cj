@@ -2497,10 +2497,11 @@ public class AgentCore <: AgentRunner {
         var attempt: Int64 = 1
         var retried = false
         var retryOrigin: ?AgentError = None
+        var recoveryCeiling: ?ThinkingLevel = None
         while (attempt <= maxAttempts) {
             let rawAttemptRequest = modelRequestForAttempt(modelRequest, attempt)
             let attemptRequest = match (resolvedModelRequestForAttempt(
-                request, rawAttemptRequest
+                request, rawAttemptRequest, recoveryCeiling: recoveryCeiling
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
@@ -2509,6 +2510,8 @@ public class AgentCore <: AgentRunner {
                 attemptRequest,
                 if (attempt == 1) {
                     AttemptPolicyReason.Initial
+                } else if (recoveryCeiling.isSome()) {
+                    AttemptPolicyReason.OutputLimitRecovery
                 } else {
                     AttemptPolicyReason.Retry
                 },
@@ -2587,8 +2590,12 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (result) {
-                case Result.Ok(reply) =>
+            let durableResult = durableResultForAttempt(
+                request, semanticRequestId, attemptId, result,
+                terminalizeFailure: false
+            )
+            match (durableResult) {
+                case Result.Ok(durableValue) =>
                     if (retried) {
                         let _ = emitDetail(
                             context,
@@ -2603,11 +2610,9 @@ public class AgentCore <: AgentRunner {
                             sink
                         )
                     }
-                    let durable = durableResultForAttempt(
-                        request, semanticRequestId, attemptId, Result.Ok(reply)
-                    )
                     return recordDurableDecisionLifecycle(
-                        durable, context, control, semanticRequestId, attemptId, sink
+                        Result.Ok(durableValue), context, control,
+                        semanticRequestId, attemptId, sink
                     )
                 case Result.Err(error) =>
                     if (retryOrigin.isNone()) { retryOrigin = Some(error) }
@@ -2673,9 +2678,20 @@ public class AgentCore <: AgentRunner {
                     let retryableDisposition =
                         disposition == AttemptRetryDisposition.RetryEscalated ||
                         disposition == AttemptRetryDisposition.RetrySamePolicy
+                    let outputLimitedRecovery = match (error.attemptFailure) {
+                        case Some(failure) =>
+                            failure.kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
+                                failure.kind == AttemptFailureKind.OutputLimited
+                        case None => false
+                    }
+                    let replaySafeForRecovery =
+                        persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.NoBarrier ||
+                        (outputLimitedRecovery &&
+                            (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
+                                persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal))
                     let willRetry = retryableDisposition && attempt < maxAttempts &&
                         modelAttemptRecovery.maxRecoveryRetries > 0 &&
-                        persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.NoBarrier
+                        replaySafeForRecovery
                     match (modelDecisionRuntime.terminalizeAttempt(
                         attemptId,
                         if (willRetry) {
@@ -2715,7 +2731,11 @@ public class AgentCore <: AgentRunner {
                         )
                     }
                     if (!willRetry) {
-                        let terminalError = representativeModelRetryError(retryOrigin, error)
+                        let terminalError = if (outputLimitedRecovery) {
+                            outputLimitedExhaustedError(
+                                error, attempt, effectiveAttemptRequest, attemptId
+                            )
+                        } else { representativeModelRetryError(retryOrigin, error) }
                         if (retried) {
                             let _ = emitDetail(
                                 context,
@@ -2734,6 +2754,21 @@ public class AgentCore <: AgentRunner {
                         return Result.Err(terminalError)
                     }
                     retried = true
+                    if (disposition == AttemptRetryDisposition.RetryEscalated) {
+                        let effectiveThinking = match (effectiveAttemptRequest.resolvedPolicy) {
+                            case Some(value) => value.thinking.effective
+                            case None => effectiveAttemptRequest.thinking
+                        }
+                        recoveryCeiling = nextLowerThinkingCeiling(
+                            request.modelCapabilitiesSnapshot,
+                            effectiveThinking
+                        )
+                        if (recoveryCeiling.isNone()) {
+                            return Result.Err(outputLimitedExhaustedError(
+                                error, attempt, effectiveAttemptRequest, attemptId
+                            ))
+                        }
+                    }
                     let _ = emitAttemptLifecycle(
                         context, control, semanticRequestId, attemptId,
                         "model.attempt_retry_scheduled", sink,
@@ -4539,10 +4574,12 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         semanticRequestId: SemanticModelRequestId,
         attemptId: ModelAttemptId,
-        result: Result<ModelReply>
+        result: Result<ModelReply>,
+        terminalizeFailure!: Bool = true
     ): Result<DurableModelResult> {
         match (result) {
             case Result.Err(error) =>
+                if (!terminalizeFailure) { return Result.Err(error) }
                 match (modelDecisionRuntime.terminalizeAttempt(
                     attemptId,
                     if (error.kind == AgentErrorKind.Cancelled) {
@@ -4563,6 +4600,7 @@ public class AgentCore <: AgentRunner {
                 )) {
                     case Result.Ok(value) => value
                     case Result.Err(error) =>
+                        if (!terminalizeFailure) { return Result.Err(error) }
                         let _ = modelDecisionRuntime.terminalizeAttempt(
                             attemptId, ModelAttemptLifecycle.Failed,
                             match (error.attemptFailure) {
@@ -5009,6 +5047,61 @@ func representativeModelRetryError(
             }
         case None => current
     }
+}
+
+func outputLimitedExhaustedError(
+    error: AgentError,
+    attempts: Int64,
+    request: ModelRequest,
+    attemptId: ModelAttemptId
+): AgentError {
+    let fields = ArrayList<ErrorField>()
+    for (field in error.fields where field.name != "recovery_attempts") {
+        fields.add(field)
+    }
+    if (!errorHasField(error, "provider_model")) {
+        fields.add(ErrorField("provider_model", request.model))
+    }
+    match (request.resolvedPolicy) {
+        case Some(policy) =>
+            fields.add(ErrorField(
+                "effective_wire_output_tokens",
+                policy.output.effectiveWireLimit.toString()
+            ))
+            fields.add(ErrorField(
+                "effective_thinking_level",
+                thinkingLevelName(policy.thinking.effective)
+            ))
+        case None => ()
+    }
+    if (attempts > 1 && !errorHasField(error, "parent_attempt_id")) {
+        fields.add(ErrorField(
+            "parent_attempt_id",
+            attemptId.value.removeSuffix("-attempt-" + attempts.toString()) +
+                "-attempt-" + (attempts - 1).toString()
+        ))
+    }
+    fields.add(ErrorField("recovery_attempts", max(0, attempts - 1).toString()))
+    AgentError(
+        error.kind,
+        "model.output_limited_before_decision",
+        "model exhausted the output budget before an accepted decision boundary",
+        retryable: false,
+        fallbackAllowed: error.fallbackAllowed,
+        fields: fields.toArray(),
+        attemptFailure: Some(AttemptFailure(
+            AttemptFailureKind.OutputLimitedBeforeDecision,
+            diagnostics: match (error.attemptFailure) {
+                case Some(value) => value.diagnostics
+                case None => AttemptFailureDiagnostics()
+            }
+        ))
+    )
+}
+
+func errorHasField(error: AgentError, name: String): Bool {
+    for (field in error.fields where field.name == name) { return true }
+    false
 }
 
 func resolvedModelRequestForAttempt(
@@ -5634,6 +5727,7 @@ func attemptPolicyReasonName(value: AttemptPolicyReason): String {
         case AttemptPolicyReason.Initial => "initial"
         case AttemptPolicyReason.Retry => "retry"
         case AttemptPolicyReason.DeadlineEscalation => "deadline_escalation"
+        case AttemptPolicyReason.OutputLimitRecovery => "output_limit_recovery"
     }
 }
 
@@ -5648,6 +5742,7 @@ func attemptFailureKindName(value: AttemptFailureKind): String {
         case AttemptFailureKind.ProviderTerminalMissing => "provider_terminal_missing"
         case AttemptFailureKind.ProtocolIncomplete => "protocol_incomplete"
         case AttemptFailureKind.OutputLimited => "output_limited"
+        case AttemptFailureKind.OutputLimitedBeforeDecision => "output_limited_before_decision"
         case AttemptFailureKind.ProviderTransportError => "provider_transport_error"
         case AttemptFailureKind.ProviderProtocolError => "provider_protocol_error"
         case AttemptFailureKind.UserCancelled => "user_cancelled"
@@ -5717,9 +5812,26 @@ func validatedModelDecision(
     match (reply.completionDisposition) {
         case CompletionDisposition.Complete | CompletionDisposition.ToolUse => ()
         case CompletionDisposition.OutputLimited => return invalidAttemptDecision(
-            AttemptFailureKind.OutputLimited,
-            "model.decision_output_limited",
-            "provider stopped because the output limit was reached"
+            AttemptFailureKind.OutputLimitedBeforeDecision,
+            "model.output_limited_before_decision",
+            "provider exhausted the output budget before an accepted decision boundary",
+            fields: [
+                ErrorField("provider_profile_id", reply.providerId),
+                ErrorField("provider_response_id", reply.responseId),
+                ErrorField("attempt_id", attemptId.value),
+                ErrorField("api_protocol", evidence.protocol),
+                ErrorField("raw_stop_reason", evidence.rawStopReason),
+                ErrorField("completion_tokens", reply.outputTokens.toString()),
+                ErrorField("reasoning_tokens", reply.reasoningTokens.toString()),
+                ErrorField("decision_output_tokens", max(0,
+                    reply.outputTokens - reply.reasoningTokens).toString()),
+                ErrorField("reasoning_share", if (reply.outputTokens > 0) {
+                    (Float64(reply.reasoningTokens) / Float64(reply.outputTokens)).toString()
+                } else { "" }),
+                ErrorField("partial_stream", "true"),
+                ErrorField("decision_boundary_observed", "false"),
+                ErrorField("decision_boundary_accepted", "false")
+            ]
         )
         case CompletionDisposition.ProtocolIncomplete | CompletionDisposition.Unknown =>
             return invalidAttemptDecision(
@@ -5930,15 +6042,18 @@ func invalidDecision<T>(code: String, message: String): Result<T> {
 func invalidAttemptDecision<T>(
     kind: AttemptFailureKind,
     code: String,
-    message: String
+    message: String,
+    fields!: Array<ErrorField> = []
 ): Result<T> {
     Result.Err(AgentError(
         AgentErrorKind.Protocol,
         code,
         message,
         retryable: kind == AttemptFailureKind.OutputLimited ||
+            kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
             kind == AttemptFailureKind.ProviderTerminalMissing ||
             kind == AttemptFailureKind.ProtocolIncomplete,
+        fields: fields,
         attemptFailure: Some(AttemptFailure(kind))
     ))
 }

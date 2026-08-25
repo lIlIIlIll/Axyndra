@@ -2331,6 +2331,37 @@ func requiredModelUsage(value: AgentValue): Result<ModelUsage> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    let source = match (value.field("source")) {
+        case Some(item) =>
+            if (item.kind != ValueKind.Text) {
+                return codecError("field is not text: source")
+            }
+            modelUsageSourceFromName(item.text)
+        case None => ModelUsageSource.Unknown
+    }
+    let evidence: ?ModelUsageEvidence = match (value.field("evidence")) {
+        case None => None
+        case Some(item) =>
+            if (item.kind == ValueKind.Null) {
+                None
+            } else if (item.kind == ValueKind.Object) {
+                let protocol = match (requiredText(item, "protocol")) {
+                    case Result.Ok(entry) => entry
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                let eventKind = match (requiredText(item, "event_kind")) {
+                    case Result.Ok(entry) => entry
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                let responseId = match (requiredText(item, "provider_response_id")) {
+                    case Result.Ok(entry) => entry
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                Some(ModelUsageEvidence(protocol, eventKind, providerResponseId: responseId))
+            } else {
+                return codecError("field is not usage evidence")
+            }
+    }
     try {
         Result.Ok(ModelUsage(
             inputTokens: input,
@@ -2338,7 +2369,9 @@ func requiredModelUsage(value: AgentValue): Result<ModelUsage> {
             reasoningTokens: reasoning,
             cacheReadTokens: cacheRead,
             cacheWriteTokens: cacheWrite,
-            costMicros: cost
+            costMicros: cost,
+            source: source,
+            evidence: evidence
         ))
     } catch (error: Exception) {
         codecError(error.message)

@@ -539,6 +539,30 @@ public class ModelRequest {
 // Provider-independent token accounting. Cache token counts are subsets of
 // inputTokens after adapter normalization; costMicros is absent unless the
 // active model catalog supplied every rate needed by the observed usage.
+@Derive[Equatable]
+public enum ModelUsageSource {
+    Unknown | ProviderFinal | ProviderStreamFinal | Estimated
+}
+
+public class ModelUsageEvidence {
+    public let protocol: String
+    public let eventKind: String
+    public let providerResponseId: String
+
+    public init(
+        protocol: String,
+        eventKind: String,
+        providerResponseId!: String = ""
+    ) {
+        if (protocol.trimAscii() == "" || eventKind.trimAscii() == "") {
+            throw IllegalArgumentException("model usage evidence is incomplete")
+        }
+        this.protocol = protocol.trimAscii()
+        this.eventKind = eventKind.trimAscii()
+        this.providerResponseId = providerResponseId.trimAscii()
+    }
+}
+
 public class ModelUsage {
     public let inputTokens: Int64
     public let outputTokens: Int64
@@ -546,6 +570,8 @@ public class ModelUsage {
     public let cacheReadTokens: Int64
     public let cacheWriteTokens: Int64
     public let costMicros: ?Int64
+    public let source: ModelUsageSource
+    public let evidence: ?ModelUsageEvidence
 
     public init(
         inputTokens!: Int64 = 0,
@@ -553,7 +579,9 @@ public class ModelUsage {
         reasoningTokens!: Int64 = 0,
         cacheReadTokens!: Int64 = 0,
         cacheWriteTokens!: Int64 = 0,
-        costMicros!: ?Int64 = None
+        costMicros!: ?Int64 = None,
+        source!: ModelUsageSource = ModelUsageSource.Unknown,
+        evidence!: ?ModelUsageEvidence = None
     ) {
         if (inputTokens < 0 || outputTokens < 0 || reasoningTokens < 0 ||
             cacheReadTokens < 0 || cacheWriteTokens < 0 ||
@@ -566,12 +594,43 @@ public class ModelUsage {
         if (cacheReadTokens + cacheWriteTokens > inputTokens) {
             throw IllegalArgumentException("cached input tokens must not exceed total input tokens")
         }
+        if (reasoningTokens > outputTokens) {
+            throw IllegalArgumentException(
+                "reasoning tokens are a subset of output tokens"
+            )
+        }
+        match (source) {
+            case ModelUsageSource.Unknown => ()
+            case _ => if (evidence.isNone()) {
+                throw IllegalArgumentException("model usage source requires evidence")
+            }
+        }
         this.inputTokens = inputTokens
         this.outputTokens = outputTokens
         this.reasoningTokens = reasoningTokens
         this.cacheReadTokens = cacheReadTokens
         this.cacheWriteTokens = cacheWriteTokens
         this.costMicros = costMicros
+        this.source = source
+        this.evidence = evidence
+    }
+}
+
+public func modelUsageSourceName(value: ModelUsageSource): String {
+    match (value) {
+        case ModelUsageSource.Unknown => "unknown"
+        case ModelUsageSource.ProviderFinal => "provider_final"
+        case ModelUsageSource.ProviderStreamFinal => "provider_stream_final"
+        case ModelUsageSource.Estimated => "estimated"
+    }
+}
+
+public func modelUsageSourceFromName(value: String): ModelUsageSource {
+    match (value) {
+        case "provider_final" => ModelUsageSource.ProviderFinal
+        case "provider_stream_final" => ModelUsageSource.ProviderStreamFinal
+        case "estimated" => ModelUsageSource.Estimated
+        case _ => ModelUsageSource.Unknown
     }
 }
 

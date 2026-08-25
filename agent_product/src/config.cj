@@ -256,6 +256,21 @@ public class ProductApprovalSettings {
     }
 }
 
+public class ProviderDefaultHeader {
+    public let name: String
+    public let value: String
+
+    public init(name: String, value: String) {
+        let normalized = name.trimAscii().toAsciiLower()
+        if (!validConfiguredHeaderName(normalized) || value.contains("\r") ||
+            value.contains("\n") || configuredHeaderIsReserved(normalized)) {
+            throw IllegalArgumentException("provider default header is invalid or reserved")
+        }
+        this.name = normalized
+        this.value = value.trimAscii()
+    }
+}
+
 public class ProviderProfile {
     public let id: String
     public let provider: String
@@ -266,6 +281,7 @@ public class ProviderProfile {
     public let timeoutMillis: Int64
     public let dialect: String
     public let endpointMaxOutputTokens: ?Int64
+    public let defaultHeaders: Array<ProviderDefaultHeader>
 
     public init(
         id: String,
@@ -276,7 +292,8 @@ public class ProviderProfile {
         authentication!: String = "api-key",
         timeoutMillis!: Int64 = 120000,
         dialect!: String = "",
-        endpointMaxOutputTokens!: ?Int64 = None
+        endpointMaxOutputTokens!: ?Int64 = None,
+        defaultHeaders!: Array<ProviderDefaultHeader> = []
     ) {
         if (id.trimAscii() == "" || provider.trimAscii() == "" || protocol.trimAscii() == "" || baseUrl.trimAscii() == "") {
             throw IllegalArgumentException("provider profile fields must not be empty")
@@ -305,12 +322,13 @@ public class ProviderProfile {
         if (dialect != "" && dialect != "anthropic_messages" &&
             dialect != "deepseek_messages" && dialect != "openai_responses" &&
             dialect != "openai_chat" && dialect != "generic_messages" &&
-            dialect != "generic_chat") {
+            dialect != "generic_chat" && dialect != "deepseek_chat") {
             throw IllegalArgumentException("unknown provider profile dialect")
         }
         if ((dialect.endsWith("_messages") && protocol != "messages") ||
             (dialect == "openai_responses" && protocol != "responses") ||
-            ((dialect == "openai_chat" || dialect == "generic_chat") &&
+            ((dialect == "openai_chat" || dialect == "generic_chat" ||
+                dialect == "deepseek_chat") &&
                 protocol != "completions" && protocol != "chat-completions")) {
             throw IllegalArgumentException("provider dialect is incompatible with protocol")
         }
@@ -329,6 +347,7 @@ public class ProviderProfile {
         this.timeoutMillis = timeoutMillis
         this.dialect = dialect
         this.endpointMaxOutputTokens = endpointMaxOutputTokens
+        this.defaultHeaders = defaultHeaders
     }
 }
 
@@ -378,11 +397,62 @@ func providerProfileAsciiDecimal(value: String): Bool {
     true
 }
 
+func validConfiguredHeaderName(value: String): Bool {
+    if (value == "") { return false }
+    for (byte in unsafe { value.rawData() }) {
+        if (!((byte >= b'a' && byte <= b'z') || (byte >= b'0' && byte <= b'9') ||
+            byte == b'-')) {
+            return false
+        }
+    }
+    true
+}
+
+func configuredHeaderIsReserved(value: String): Bool {
+    value == "authorization" || value == "proxy-authorization" ||
+        value == "x-api-key" || value == "cookie" || value == "set-cookie" ||
+        value == "host" || value == "content-length"
+}
+
+func configuredHeadersFromInline(source: String, name: String): Array<ProviderDefaultHeader> {
+    let values = match (parseCatalogModalities(source, name)) {
+        case Some(items) => items
+        case None => Array<String>()
+    }
+    let headers = ArrayList<ProviderDefaultHeader>()
+    for (value in values) {
+        let separator = value.indexOf(":")
+        if (separator.isNone() || separator.getOrThrow() == 0) {
+            throw IllegalArgumentException(name + " entries must be 'name: value'")
+        }
+        headers.add(ProviderDefaultHeader(
+            value[..separator.getOrThrow()], value[separator.getOrThrow() + 1..]
+        ))
+    }
+    headers.toArray()
+}
+
+func encodeConfiguredHeaders(
+    name: String,
+    values: Array<ProviderDefaultHeader>,
+    indent: String
+): String {
+    if (values.isEmpty()) { return "" }
+    var source = indent + name + ": ["
+    for (index in 0..values.size) {
+        if (index > 0) { source += ", " }
+        source += configYamlQuote(values[index].name + ": " + values[index].value)
+    }
+    source + "]\n"
+}
+
 public class ModelCatalogEntry {
     public let id: String
     public let providerProfile: String
     public let contextWindow: ?Int64
     public let maxOutputTokens: ?Int64
+    public let apiId: String
+    public let dialect: String
     public let thinking: ?ThinkingCapabilities
     public let structuredOutput: ?Bool
     public let promptCache: ?Bool
@@ -393,12 +463,15 @@ public class ModelCatalogEntry {
     public let cacheReadCostMicrosPerMillion: ?Int64
     public let cacheWriteCostMicrosPerMillion: ?Int64
     public let fastServiceTier: String
+    public let defaultHeaders: Array<ProviderDefaultHeader>
 
     public init(
         id: String,
         providerProfile!: String = "",
         contextWindow!: ?Int64 = None,
         maxOutputTokens!: ?Int64 = None,
+        apiId!: String = "",
+        dialect!: String = "",
         thinking!: ?ThinkingCapabilities = None,
         structuredOutput!: ?Bool = None,
         promptCache!: ?Bool = None,
@@ -408,13 +481,34 @@ public class ModelCatalogEntry {
         outputCostMicrosPerMillion!: ?Int64 = None,
         cacheReadCostMicrosPerMillion!: ?Int64 = None,
         cacheWriteCostMicrosPerMillion!: ?Int64 = None,
-        fastServiceTier!: String = ""
+        fastServiceTier!: String = "",
+        defaultHeaders!: Array<ProviderDefaultHeader> = []
     ) {
         if (id.trimAscii() == "") {
             throw IllegalArgumentException("model id must not be empty")
         }
         if (providerProfile != "" && !isSafeProfileId(providerProfile)) {
             throw IllegalArgumentException("model provider profile ID is invalid")
+        }
+        if (apiId != "" && apiId != "openai_chat_completions" &&
+            apiId != "openai_responses" && apiId != "anthropic_messages") {
+            throw IllegalArgumentException("model API id is unknown")
+        }
+        if (dialect != "" && dialect != "openai_chat" &&
+            dialect != "deepseek_chat" && dialect != "generic_chat" &&
+            dialect != "openai_responses" && dialect != "anthropic_messages" &&
+            dialect != "deepseek_messages" && dialect != "generic_messages") {
+            throw IllegalArgumentException("model dialect is unknown")
+        }
+        if ((apiId == "openai_chat_completions" && dialect != "" &&
+                dialect != "openai_chat" && dialect != "deepseek_chat" &&
+                dialect != "generic_chat") ||
+            (apiId == "openai_responses" && dialect != "" &&
+                dialect != "openai_responses") ||
+            (apiId == "anthropic_messages" && dialect != "" &&
+                dialect != "anthropic_messages" && dialect != "deepseek_messages" &&
+                dialect != "generic_messages")) {
+            throw IllegalArgumentException("model dialect is incompatible with API id")
         }
         for (value in [contextWindow, maxOutputTokens]) {
             match (value) {
@@ -457,6 +551,8 @@ public class ModelCatalogEntry {
         this.providerProfile = providerProfile
         this.contextWindow = contextWindow
         this.maxOutputTokens = maxOutputTokens
+        this.apiId = apiId
+        this.dialect = dialect
         this.thinking = thinking
         this.structuredOutput = structuredOutput
         this.promptCache = promptCache
@@ -467,6 +563,7 @@ public class ModelCatalogEntry {
         this.cacheReadCostMicrosPerMillion = cacheReadCostMicrosPerMillion
         this.cacheWriteCostMicrosPerMillion = cacheWriteCostMicrosPerMillion
         this.fastServiceTier = fastServiceTier
+        this.defaultHeaders = defaultHeaders
     }
 
     public func displayId(): String {
@@ -524,14 +621,11 @@ public func configuredDialectForSetup(
     protocol: String,
     baseUrl: String
 ): String {
-    let endpoint = baseUrl.trimAscii().toAsciiLower().removeSuffix("/")
-    if (provider == "anthropic" && protocol == "messages" &&
-        (endpoint == "https://api.deepseek.com/anthropic" ||
-            endpoint == "https://api.deepseek.com/anthropic/v1")) {
-        "deepseek_messages"
-    } else if (provider == "anthropic" && protocol == "messages" &&
-        (endpoint == "https://api.anthropic.com" ||
-            endpoint == "https://api.anthropic.com/v1")) {
+    let _ = baseUrl
+    // `provider` is the setup wizard's explicit compatibility selection, not
+    // a value inferred from an endpoint or model name. Custom endpoints stay
+    // generic until their configuration declares a typed dialect.
+    if (provider == "anthropic" && protocol == "messages") {
         "anthropic_messages"
     } else if (provider == "openai" && protocol == "responses") {
         "openai_responses"
@@ -1584,6 +1678,8 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
         var currentProvider = ""
         var contextWindow: ?Int64 = None
         var maxOutputTokens: ?Int64 = None
+        var apiId = ""
+        var modelDialect = ""
         var thinkingMode = ""
         var thinkingLevels: ?Array<String> = None
         let thinkingBudgets = ArrayList<ThinkingBudgetTier>()
@@ -1598,6 +1694,7 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
         var cacheReadCost: ?Int64 = None
         var cacheWriteCost: ?Int64 = None
         var fastServiceTier = ""
+        var defaultHeaders: Array<ProviderDefaultHeader> = []
         let seenFields = HashSet<String>()
         var sawRoot = false
         for (line in String.fromUtf8(File.readFrom(path)).split("\n")) {
@@ -1625,6 +1722,8 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                     currentProvider,
                     contextWindow,
                     maxOutputTokens,
+                    apiId,
+                    modelDialect,
                     thinkingMode,
                     thinkingLevels,
                     thinkingBudgets.toArray(),
@@ -1636,12 +1735,15 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                     outputCost,
                     cacheReadCost,
                     cacheWriteCost,
-                    fastServiceTier
+                    fastServiceTier,
+                    defaultHeaders
                 )
                 currentId = yamlScalar(trimmed[5..].trimAscii())
                 currentProvider = ""
                 contextWindow = None
                 maxOutputTokens = None
+                apiId = ""
+                modelDialect = ""
                 thinkingMode = ""
                 thinkingLevels = None
                 thinkingBudgets.clear()
@@ -1656,6 +1758,7 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                 cacheReadCost = None
                 cacheWriteCost = None
                 fastServiceTier = ""
+                defaultHeaders = []
                 seenFields.clear()
                 claimModelField(seenFields, "id")
             } else if (trimmed.startsWith("id:")) {
@@ -1665,6 +1768,8 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                     currentProvider,
                     contextWindow,
                     maxOutputTokens,
+                    apiId,
+                    modelDialect,
                     thinkingMode,
                     thinkingLevels,
                     thinkingBudgets.toArray(),
@@ -1676,12 +1781,15 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                     outputCost,
                     cacheReadCost,
                     cacheWriteCost,
-                    fastServiceTier
+                    fastServiceTier,
+                    defaultHeaders
                 )
                 currentId = yamlScalar(trimmed[3..].trimAscii())
                 currentProvider = ""
                 contextWindow = None
                 maxOutputTokens = None
+                apiId = ""
+                modelDialect = ""
                 thinkingMode = ""
                 thinkingLevels = None
                 thinkingBudgets.clear()
@@ -1696,6 +1804,7 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                 cacheReadCost = None
                 cacheWriteCost = None
                 fastServiceTier = ""
+                defaultHeaders = []
                 seenFields.clear()
                 claimModelField(seenFields, "id")
             } else if (trimmed == "thinking:") {
@@ -1726,6 +1835,12 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
                 inThinkingBudgets = false
                 claimModelField(seenFields, "provider")
                 currentProvider = yamlScalar(trimmed[9..].trimAscii())
+            } else if (trimmed.startsWith("api:")) {
+                claimModelField(seenFields, "api")
+                apiId = yamlScalar(trimmed[4..].trimAscii())
+            } else if (trimmed.startsWith("dialect:")) {
+                claimModelField(seenFields, "dialect")
+                modelDialect = yamlScalar(trimmed[8..].trimAscii())
             } else if (trimmed.startsWith("context_window:")) {
                 claimModelField(seenFields, "context_window")
                 contextWindow = parseCatalogInteger(trimmed[15..].trimAscii(), "context_window", positive: true)
@@ -1765,6 +1880,11 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
             } else if (trimmed.startsWith("fast_service_tier:")) {
                 claimModelField(seenFields, "fast_service_tier")
                 fastServiceTier = yamlScalar(trimmed[18..].trimAscii())
+            } else if (trimmed.startsWith("default_headers:")) {
+                claimModelField(seenFields, "default_headers")
+                defaultHeaders = configuredHeadersFromInline(
+                    trimmed[16..].trimAscii(), "default_headers"
+                )
             } else {
                 throw IllegalArgumentException("unknown models.yml field: " + trimmed)
             }
@@ -1778,6 +1898,8 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
             currentProvider,
             contextWindow,
             maxOutputTokens,
+            apiId,
+            modelDialect,
             thinkingMode,
             thinkingLevels,
             thinkingBudgets.toArray(),
@@ -1789,7 +1911,8 @@ public func loadModelCatalog(root: String): Result<Array<ModelCatalogEntry>> {
             outputCost,
             cacheReadCost,
             cacheWriteCost,
-            fastServiceTier
+            fastServiceTier,
+            defaultHeaders
         )
         Result.Ok(values.toArray())
     } catch (error: Exception) {
@@ -1820,6 +1943,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
         var timeoutMillis: Int64 = 120000
         var dialect = ""
         var endpointMaxOutputTokens: ?Int64 = None
+        var defaultHeaders: Array<ProviderDefaultHeader> = []
         for (line in String.fromUtf8(File.readFrom(path)).split("\n")) {
             let trimmed = line.trimAscii()
             if (trimmed.startsWith("- id:")) {
@@ -1833,7 +1957,8 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                     authentication,
                     timeoutMillis,
                     dialect,
-                    endpointMaxOutputTokens
+                    endpointMaxOutputTokens,
+                    defaultHeaders
                 )
                 id = yamlScalar(trimmed[5..].trimAscii())
                 provider = ""
@@ -1844,6 +1969,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                 timeoutMillis = 120000
                 dialect = ""
                 endpointMaxOutputTokens = None
+                defaultHeaders = []
             } else if (trimmed.startsWith("provider:")) {
                 provider = yamlScalar(trimmed[9..].trimAscii())
             } else if (trimmed.startsWith("protocol:")) {
@@ -1867,6 +1993,10 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                     "endpoint_max_output_tokens",
                     positive: true
                 )
+            } else if (trimmed.startsWith("default_headers:")) {
+                defaultHeaders = configuredHeadersFromInline(
+                    trimmed[16..].trimAscii(), "default_headers"
+                )
             }
         }
         appendProviderProfile(
@@ -1879,7 +2009,8 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
             authentication,
             timeoutMillis,
             dialect,
-            endpointMaxOutputTokens
+            endpointMaxOutputTokens,
+            defaultHeaders
         )
         Result.Ok(values.toArray())
     } catch (error: Exception) {
@@ -2014,6 +2145,8 @@ func appendModelEntry(
     provider: String,
     contextWindow: ?Int64,
     maxOutputTokens: ?Int64,
+    apiId: String,
+    dialect: String,
     thinkingMode: String,
     thinkingLevels: ?Array<String>,
     thinkingBudgets: Array<ThinkingBudgetTier>,
@@ -2025,7 +2158,8 @@ func appendModelEntry(
     outputCost: ?Int64,
     cacheReadCost: ?Int64,
     cacheWriteCost: ?Int64,
-    fastServiceTier: String
+    fastServiceTier: String,
+    defaultHeaders: Array<ProviderDefaultHeader>
 ): Unit {
     if (id == "") {
         return
@@ -2038,6 +2172,8 @@ func appendModelEntry(
         providerProfile: provider,
         contextWindow: contextWindow,
         maxOutputTokens: maxOutputTokens,
+        apiId: apiId,
+        dialect: dialect,
         thinking: buildCatalogThinkingCapabilities(
             thinkingMode, thinkingLevels, thinkingBudgets
         ),
@@ -2049,7 +2185,8 @@ func appendModelEntry(
         outputCostMicrosPerMillion: outputCost,
         cacheReadCostMicrosPerMillion: cacheReadCost,
         cacheWriteCostMicrosPerMillion: cacheWriteCost,
-        fastServiceTier: fastServiceTier
+        fastServiceTier: fastServiceTier,
+        defaultHeaders: defaultHeaders
     ))
 }
 
@@ -2063,7 +2200,8 @@ func appendProviderProfile(
     authentication: String,
     timeoutMillis: Int64,
     dialect: String,
-    endpointMaxOutputTokens: ?Int64
+    endpointMaxOutputTokens: ?Int64,
+    defaultHeaders: Array<ProviderDefaultHeader>
 ): Unit {
     if (id == "") {
         return
@@ -2082,7 +2220,8 @@ func appendProviderProfile(
             authentication: authentication,
             timeoutMillis: timeoutMillis,
             dialect: dialect,
-            endpointMaxOutputTokens: endpointMaxOutputTokens
+            endpointMaxOutputTokens: endpointMaxOutputTokens,
+            defaultHeaders: defaultHeaders
         )
     )
 }
@@ -2102,6 +2241,7 @@ func encodeProviderProfiles(values: Array<ProviderProfile>): String {
             case Some(limit) => source += "    endpoint_max_output_tokens: " + limit.toString() + "\n"
             case None => ()
         }
+        source += encodeConfiguredHeaders("default_headers", value.defaultHeaders, "    ")
     }
     source
 }
@@ -2112,6 +2252,12 @@ func encodeModelCatalog(values: Array<ModelCatalogEntry>): String {
         source += "  - id: " + configYamlQuote(value.id) + "\n"
         if (value.providerProfile != "") {
             source += "    provider: " + configYamlQuote(value.providerProfile) + "\n"
+        }
+        if (value.apiId != "") {
+            source += "    api: " + configYamlQuote(value.apiId) + "\n"
+        }
+        if (value.dialect != "") {
+            source += "    dialect: " + configYamlQuote(value.dialect) + "\n"
         }
         source += encodeCatalogOptionalInteger("context_window", value.contextWindow)
         source += encodeCatalogOptionalInteger("max_output_tokens", value.maxOutputTokens)
@@ -2148,6 +2294,7 @@ func encodeModelCatalog(values: Array<ModelCatalogEntry>): String {
         if (value.fastServiceTier != "") {
             source += "    fast_service_tier: " + configYamlQuote(value.fastServiceTier) + "\n"
         }
+        source += encodeConfiguredHeaders("default_headers", value.defaultHeaders, "    ")
     }
     source
 }
@@ -2230,7 +2377,7 @@ func parseCatalogModalities(source: String, name: String): ?Array<String> {
         throw IllegalArgumentException("model modalities must not be empty: " + name)
     }
     let values = ArrayList<String>()
-    for (part in body.split(",")) {
+    for (part in splitInlineYamlList(body, name)) {
         let value = yamlScalar(part.trimAscii())
         if (value == "") {
             throw IllegalArgumentException("model modality must not be empty: " + name)
@@ -2238,6 +2385,45 @@ func parseCatalogModalities(source: String, name: String): ?Array<String> {
         values.add(value)
     }
     Some(values.toArray())
+}
+
+// Inline lists are used by the legacy catalog format. Split only on commas
+// outside quoted scalars so header values such as "canary, stable" survive a
+// canonical write/read round trip.
+func splitInlineYamlList(body: String, name: String): Array<String> {
+    let values = ArrayList<String>()
+    let bytes = unsafe { body.rawData() }
+    var start: Int64 = 0
+    var quoteState: Int64 = 0
+    var escaped = false
+    for (index in 0..bytes.size) {
+        let byte = bytes[index]
+        if (escaped) {
+            escaped = false
+            continue
+        }
+        if (quoteState == 34 && byte == b'\\') {
+            escaped = true
+            continue
+        }
+        if (quoteState == 0 && (byte == b'"' || byte == b'\'')) {
+            quoteState = if (byte == b'"') { 34 } else { 39 }
+            continue
+        }
+        if ((quoteState == 34 && byte == b'"') || (quoteState == 39 && byte == b'\'')) {
+            quoteState = 0
+            continue
+        }
+        if (quoteState == 0 && byte == b',') {
+            values.add(body[start..index])
+            start = index + 1
+        }
+    }
+    if (quoteState != 0 || escaped) {
+        throw IllegalArgumentException("unterminated inline list scalar: " + name)
+    }
+    values.add(body[start..])
+    values.toArray()
 }
 
 func parseThinkingLevelName(source: String): ThinkingLevel {
