@@ -193,6 +193,14 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
     )
     expect(repository.compareAndSwapContinuation(Some(initial), drifted).isError(),
         "non-equivalent concurrent continuation remains a CAS conflict")
+    expect(repository.saveDecision(ApprovalDecisionReceipt(
+        approval.operationId,
+        runId,
+        sessionId,
+        approval.callId,
+        approval.argumentHash,
+        ApprovalDecision.Approve
+    )).isOk(), "approved continuation persists its decision receipt before model dispatch")
 
     let semanticId = SemanticModelRequestId("migration-semantic")
     let attemptId = ModelAttemptId("migration-attempt")
