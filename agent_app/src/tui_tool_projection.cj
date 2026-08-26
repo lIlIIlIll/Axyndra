@@ -1,5 +1,9 @@
 package agent_app
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_tui.*
 import model_adapters.*
@@ -50,12 +54,12 @@ func projectRestoredTuiToolCompletion(
 }
 
 private func projectShellCompletion(output: AgentValue): TuiToolCompletionPayload {
-    let rawStdout = if (output.kind == ValueKind.Text) {
+    let rawStdout = if (output.unifiedKind == ValueKind.Text) {
         output.text
     } else {
         valueText(output, "stdout")
     }
-    let rawStderr = if (output.kind == ValueKind.Object) { valueText(output, "stderr") } else { "" }
+    let rawStderr = if (output.unifiedKind == ValueKind.Object) { valueText(output, "stderr") } else { "" }
     let stdout = boundedTerminalPreview(rawStdout)
     let stderr = boundedTerminalPreview(rawStderr)
     let exitCode = valueText(output, "exit_code")
@@ -109,7 +113,7 @@ private func projectTuiValue(
         budget.truncated = true
         return textValue("… nested value omitted …")
     }
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => nullValue()
         case ValueKind.Boolean => boolValue(value.boolean)
         case ValueKind.Number => numberValue(value.number)
@@ -148,7 +152,7 @@ private func projectTuiValue(
 
 private func valueText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(field) => match (field.kind) {
+        case Some(field) => match (field.unifiedKind) {
             case ValueKind.Text => field.text
             case ValueKind.Number => field.number
             case ValueKind.Boolean => field.boolean.toString()
@@ -170,7 +174,7 @@ private func valueInteger(value: AgentValue, name: String, fallback: Int64): Int
 
 private func valueBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(field) => match (field.kind) {
+        case Some(field) => match (field.unifiedKind) {
             case ValueKind.Boolean => field.boolean
             case ValueKind.Text => field.text == "true"
             case _ => false
@@ -185,7 +189,7 @@ private func firstArtifactId(output: AgentValue): String {
     let directId = valueText(output, "artifact_id")
     if (directId != "") { return directId }
     match (output.field("artifacts")) {
-        case Some(artifacts) => if (artifacts.kind == ValueKind.List && !artifacts.items.isEmpty()) {
+        case Some(artifacts) => if (artifacts.unifiedKind == ValueKind.List && !artifacts.items.isEmpty()) {
             let first = artifacts.items[0]
             let id = valueText(first, "id")
             if (id != "") { id } else { valueText(first, "path") }

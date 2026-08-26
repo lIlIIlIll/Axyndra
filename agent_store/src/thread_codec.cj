@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.convert.*
 import agent_domain.*
@@ -14,7 +18,7 @@ public func encodeStoredValue(value: AgentValue): String {
 }
 
 func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => output.add(b'n')
         case ValueKind.Boolean => output.add(if (value.boolean) { b't' } else { b'f' })
         case ValueKind.Number =>
@@ -167,7 +171,7 @@ public func decodeStoredProvenance(source: String): ItemProvenance {
 
 func storedOptionalRunId(value: AgentValue): ?RunId {
     let candidate = storedField(value, "run_id")
-    if (candidate.kind == ValueKind.Null) {
+    if (candidate.unifiedKind == ValueKind.Null) {
         None
     } else {
         Some(RunId(storedText(candidate, "run_id")))
@@ -176,7 +180,7 @@ func storedOptionalRunId(value: AgentValue): ?RunId {
 
 func storedOptionalOperationId(value: AgentValue): ?OperationId {
     let candidate = storedField(value, "operation_id")
-    if (candidate.kind == ValueKind.Null) {
+    if (candidate.unifiedKind == ValueKind.Null) {
         None
     } else {
         Some(OperationId(storedText(candidate, "operation_id")))
@@ -210,7 +214,7 @@ func storedMessageParts(parts: Array<ThreadMessagePart>): AgentValue {
 }
 
 func decodeStoredMessageParts(value: AgentValue): Array<ThreadMessagePart> {
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         throw IllegalStateException("stored Thread message parts are not a list")
     }
     let parts = ArrayList<ThreadMessagePart>()
@@ -237,7 +241,7 @@ func decodeStoredMessageParts(value: AgentValue): Array<ThreadMessagePart> {
 }
 
 func storedField(value: AgentValue, name: String): AgentValue {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         throw IllegalStateException("stored value is not an object")
     }
     match (value.field(name)) {
@@ -251,7 +255,7 @@ func storedTextField(value: AgentValue, name: String): String {
 }
 
 func storedText(value: AgentValue, name: String): String {
-    if (value.kind != ValueKind.Text) {
+    if (value.unifiedKind != ValueKind.Text) {
         throw IllegalStateException("stored field is not text: " + name)
     }
     value.text
@@ -259,7 +263,7 @@ func storedText(value: AgentValue, name: String): String {
 
 func storedBoolField(value: AgentValue, name: String): Bool {
     let field = storedField(value, name)
-    if (field.kind != ValueKind.Boolean) {
+    if (field.unifiedKind != ValueKind.Boolean) {
         throw IllegalStateException("stored field is not boolean: " + name)
     }
     field.boolean
@@ -267,7 +271,7 @@ func storedBoolField(value: AgentValue, name: String): Bool {
 
 func storedIntField(value: AgentValue, name: String): Int64 {
     let field = storedField(value, name)
-    if (field.kind != ValueKind.Number) {
+    if (field.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("stored field is not numeric: " + name)
     }
     parseStoredInt(field.number, "stored field is not an integer: " + name)

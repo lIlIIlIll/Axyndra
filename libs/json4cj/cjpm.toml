@@ -1,9 +1,0 @@
-[package]
-  cjc-version = "1.1.0"
-  name = "json4cj"
-  organization = ""
-  description = "Bounded, strict JSON values, parser, and encoder for Cangjie"
-  version = "0.1.0"
-  output-type = "static"
-
-[dependencies]

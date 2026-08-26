@@ -1,5 +1,9 @@
 package agent_mcp
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_protocol.*
 

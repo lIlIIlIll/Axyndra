@@ -31,12 +31,12 @@
     {
       "key": "class:ExecutionResult.init",
       "stability": "STABLE",
-      "signature": "public init(value: JsonValue)"
+      "signature": "public init(value: JsonNode)"
     },
     {
       "key": "class:ExecutionResult.let:value",
       "stability": "STABLE",
-      "signature": "public let value: JsonValue"
+      "signature": "public let value: JsonNode"
     },
     {
       "key": "class:ExtensionMetadata",
@@ -106,7 +106,7 @@
     {
       "key": "class:ExtensionToolDefinition.init",
       "stability": "STABLE",
-      "signature": "public init( name: String, description: String, inputSchema: JsonValue, capabilities: Array<CapabilityRequirement>, effect!: ExtensionEffect = ExtensionEffect.ReadOnly, outputSchema!: JsonValue = JsonValue.objectValue([]) )"
+      "signature": "public init( name: String, description: String, inputSchema: JsonNode, capabilities: Array<CapabilityRequirement>, effect!: ExtensionEffect = ExtensionEffect.ReadOnly, outputSchema!: JsonNode = jsonObject([]) )"
     },
     {
       "key": "class:ExtensionToolDefinition.let:capabilities",
@@ -126,7 +126,7 @@
     {
       "key": "class:ExtensionToolDefinition.let:inputSchema",
       "stability": "STABLE",
-      "signature": "public let inputSchema: JsonValue"
+      "signature": "public let inputSchema: JsonNode"
     },
     {
       "key": "class:ExtensionToolDefinition.let:name",
@@ -136,7 +136,7 @@
     {
       "key": "class:ExtensionToolDefinition.let:outputSchema",
       "stability": "STABLE",
-      "signature": "public let outputSchema: JsonValue"
+      "signature": "public let outputSchema: JsonNode"
     },
     {
       "key": "class:HostOperationIntent",
@@ -146,12 +146,12 @@
     {
       "key": "class:HostOperationIntent.init",
       "stability": "EXPERIMENTAL",
-      "signature": "public init(operation: String, input: JsonValue)"
+      "signature": "public init(operation: String, input: JsonNode)"
     },
     {
       "key": "class:HostOperationIntent.let:input",
       "stability": "EXPERIMENTAL",
-      "signature": "public let input: JsonValue"
+      "signature": "public let input: JsonNode"
     },
     {
       "key": "class:HostOperationIntent.let:operation",
@@ -211,7 +211,7 @@
     {
       "key": "class:SdkError.init",
       "stability": "STABLE",
-      "signature": "public init( kind: SdkErrorKind, code: String, message: String, details!: JsonValue = JsonValue.objectValue([]) )"
+      "signature": "public init( kind: SdkErrorKind, code: String, message: String, details!: JsonNode = jsonObject([]) )"
     },
     {
       "key": "class:SdkError.let:code",
@@ -221,7 +221,7 @@
     {
       "key": "class:SdkError.let:details",
       "stability": "STABLE",
-      "signature": "public let details: JsonValue"
+      "signature": "public let details: JsonNode"
     },
     {
       "key": "class:SdkError.let:kind",
@@ -236,7 +236,7 @@
     {
       "key": "class:ToolInvocation.init",
       "stability": "STABLE",
-      "signature": "public init( callId: String, input: JsonValue, workspaceRoot: String, cwd: String, cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() )"
+      "signature": "public init( callId: String, input: JsonNode, workspaceRoot: String, cwd: String, cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() )"
     },
     {
       "key": "class:ToolInvocation.let:callId",
@@ -261,7 +261,7 @@
     {
       "key": "class:ToolInvocation.let:input",
       "stability": "STABLE",
-      "signature": "public let input: JsonValue"
+      "signature": "public let input: JsonNode"
     },
     {
       "key": "class:ToolInvocation.let:workspaceRoot",
@@ -276,12 +276,12 @@
     {
       "key": "class:ToolOutput.init",
       "stability": "STABLE",
-      "signature": "public init(text!: String = \"\", structured!: JsonValue = JsonValue.objectValue([]))"
+      "signature": "public init(text!: String = \"\", structured!: JsonNode = jsonObject([]))"
     },
     {
       "key": "class:ToolOutput.let:structured",
       "stability": "STABLE",
-      "signature": "public let structured: JsonValue"
+      "signature": "public let structured: JsonNode"
     },
     {
       "key": "class:ToolOutput.let:text",
@@ -501,7 +501,7 @@
     {
       "key": "interface:ExtensionTool.func:validate",
       "stability": "STABLE",
-      "signature": "public func validate(input: JsonValue): SdkResult<JsonValue>"
+      "signature": "public func validate(input: JsonNode): SdkResult<JsonNode>"
     },
     {
       "key": "interface:InvocationCancellation",
@@ -525,4 +525,3 @@
     }
   ]
 }
-

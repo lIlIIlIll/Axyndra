@@ -30,7 +30,7 @@
 | MCP product server | `agent_product/src/product_mcp_server.cj`, `agent_app/src/mcp_server_cli.cj` | `axyndra mcp-server` 与嵌入式 builder 暴露同一 Tool catalog；Host policy/approval 仍权威，input-required/approval 不能伪装成功 | `product_mcp_server_contract` |
 | Embeddable SDK | `agent_sdk` | `AgentBuilder` 显式注入 Provider/Store/Policy/Budget；复用唯一 AgentCore | `sdk_contract` |
 | Headless/JSONL | `agent_embed/src/headless.cj`, `agent_app` | typed exit status、UTF-8 JSONL、可插入 redactor、审批 continuation/cancel | `sdk_contract`, `artifact_contract` |
-| Public SDK testkit | `axyndra_agent_testkit` | deterministic clock/ID/cancellation、pure extension contract harness、experimental named fault plan；仅依赖 agent_sdk/json4cj | `testkit_consumer`, `testkit_extension_contract` |
+| Public SDK testkit | `axyndra_agent_testkit` | deterministic clock/ID/cancellation、pure extension contract harness、experimental named fault plan；JSON 值由 yjson 提供 | `testkit_consumer`, `testkit_extension_contract` |
 | Internal Agent testkit | `agent_testkit` | scripted Model/Tool/policy、Run/Operation port doubles、audit recorder、benchmark 分位数；仅内部测试依赖 | `testkit_contract`, `chaos_contract`, `extensions_contract` |
 | Coding Agent tools | `agent_product` | read/search/edit/shell 受 workspace、approval、operation receipt 与 audit 约束 | `product_contract`, `worktree_contract` |
 | Planning/Subagent/Task | `subagent_runtime`, `task_runtime`, `run_control` | 子任务仍使用 AgentCore；权限、取消和预算不因委派消失 | `orchestration_contract`, `task_persistence_contract` |

@@ -1,5 +1,9 @@
 package goal_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import agent_store.*
@@ -38,14 +42,14 @@ func verifyRegisteredSchema(root: String): Unit {
         let schema = definition.inputSchema
         expect(
             schema.field("type").getOrThrow().text == "object" &&
-            propertyNames(schema) ==
-                ["op", "objective", "token_budget"] &&
-            requiredNames(schema) == ["op"] &&
-            enumNames(
+            sameStringSet(propertyNames(schema),
+                ["op", "objective", "token_budget"]) &&
+            sameStringSet(requiredNames(schema), ["op"]) &&
+            sameStringSet(enumNames(
                 schema.field("properties").getOrThrow()
                     .field("op").getOrThrow()
-            ) == ["create", "get", "complete", "resume", "drop"],
-            "goal exposes the exact pinned operation schema"
+            ), ["create", "get", "complete", "resume", "drop"]),
+            "goal exposes the reviewed operation schema"
         )
     }
     expect(found, "goal is registered as a real product tool")
@@ -120,7 +124,7 @@ func verifyDurableLifecycle(root: String): Unit {
 
     let empty = invoke(runtime, context, call("empty", "get"))
     expect(
-        empty.output.field("goal").getOrThrow().kind ==
+        empty.output.field("goal").getOrThrow().unifiedKind ==
             ValueKind.Null &&
         empty.output.field("content").getOrThrow().text ==
             "No active goal.",
@@ -296,7 +300,7 @@ func verifyDurableLifecycle(root: String): Unit {
         dropped.output.field("goal").getOrThrow()
             .field("status").getOrThrow().text == "dropped" &&
         invoke(restarted, context, call("after-drop", "get"))
-            .output.field("goal").getOrThrow().kind == ValueKind.Null,
+            .output.field("goal").getOrThrow().unifiedKind == ValueKind.Null,
         "drop returns the terminal goal and clears active persistence"
     )
 
@@ -367,6 +371,21 @@ func enumNames(schema: AgentValue): Array<String> {
         result.add(value.text)
     }
     result.toArray()
+}
+
+func sameStringSet(left: Array<String>, right: Array<String>): Bool {
+    if (left.size != right.size) { return false }
+    for (candidate in left) {
+        var found = false
+        for (expected in right) {
+            if (candidate == expected) {
+                found = true
+                break
+            }
+        }
+        if (!found) { return false }
+    }
+    true
 }
 
 func expect(condition: Bool, message: String): Unit {

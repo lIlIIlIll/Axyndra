@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_cli.*
 import agent_core.*
 import agent_domain.*
@@ -3258,7 +3262,7 @@ func applicationInboxEntryId(
 
 func applicationInboxText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == ValueKind.Text) { field.text } else { "" }
+        case Some(field) => if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }

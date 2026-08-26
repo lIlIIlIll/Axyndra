@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import std.collection.*
 import std.convert.*
@@ -36,14 +37,14 @@ public class McpClient {
     public func pendingCount(): Int64 { correlation.pendingCount() }
 
     public func discover(): McpResult<McpDiscoverResult> {
-        match (send(MCP_METHOD_DISCOVER, JsonValue.objectValue([]))) {
+        match (send(MCP_METHOD_DISCOVER, jsonObject([]))) {
             case McpResult.Ok(value) => decodeMcpDiscover(value)
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
 
     public func ping(): McpResult<Unit> {
-        match (send(MCP_METHOD_PING, JsonValue.objectValue([]))) {
+        match (send(MCP_METHOD_PING, jsonObject([]))) {
             case McpResult.Ok(value) =>
                 if (mcpText(value, "resultType") == MCP_RESULT_COMPLETE) { McpResult.Ok(()) }
                 else { invalidMcp<Unit>("mcp.ping_result_invalid", "ping result must be complete") }
@@ -52,9 +53,9 @@ public class McpClient {
     }
 
     public func listTools(cursor!: String = ""): McpResult<McpToolListPage> {
-        let fields = ArrayList<JsonField>()
-        if (cursor != "") { fields.add(JsonField("cursor", JsonValue.stringValue(cursor))) }
-        match (send(MCP_METHOD_TOOLS_LIST, JsonValue.objectValue(fields.toArray()))) {
+        let fields = ArrayList<JsonObjectEntry>()
+        if (cursor != "") { fields.add(JsonObjectEntry("cursor", jsonString(cursor))) }
+        match (send(MCP_METHOD_TOOLS_LIST, jsonObject(fields.toArray()))) {
             case McpResult.Ok(value) => match (decodeMcpToolPage(value)) {
                 case McpResult.Ok(page) => rememberTools(page.tools); McpResult.Ok(page)
                 case McpResult.Err(error) => McpResult.Err(error)
@@ -120,25 +121,25 @@ public class McpClient {
 
     public func callTool(
         name: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         continuation!: McpToolCallContinuation = McpToolCallContinuation(),
         owner!: String = ""
     ): McpResult<McpCallToolOutcome> {
-        if (name.trimAscii() == "" || arguments.kind != JsonKind.Object) {
+        if (name.trimAscii() == "" || arguments.unifiedKind != UnifiedJsonKind.Object) {
             return invalidMcp<McpCallToolOutcome>(
                 "mcp.call_invalid", "MCP tool call requires a name and object arguments"
             )
         }
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField("name", JsonValue.stringValue(name)))
-        fields.add(JsonField("arguments", arguments))
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("name", jsonString(name)))
+        fields.add(JsonObjectEntry("arguments", arguments))
         if (!continuation.inputResponses.fields.isEmpty()) {
-            fields.add(JsonField("inputResponses", continuation.inputResponses))
+            fields.add(JsonObjectEntry("inputResponses", continuation.inputResponses))
         }
         if (continuation.requestState != "") {
-            fields.add(JsonField("requestState", JsonValue.stringValue(continuation.requestState)))
+            fields.add(JsonObjectEntry("requestState", jsonString(continuation.requestState)))
         }
-        match (send(MCP_METHOD_TOOLS_CALL, JsonValue.objectValue(fields.toArray()), owner: owner)) {
+        match (send(MCP_METHOD_TOOLS_CALL, jsonObject(fields.toArray()), owner: owner)) {
             case McpResult.Ok(value) => decodeMcpCallOutcome(value, knownTool(name))
             case McpResult.Err(error) => McpResult.Err(error)
         }
@@ -146,9 +147,9 @@ public class McpClient {
 
     public func retryToolCall(
         name: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         pending: McpInputRequiredResult,
-        inputResponses: JsonValue,
+        inputResponses: JsonNode,
         owner!: String = ""
     ): McpResult<McpCallToolOutcome> {
         match (validateMcpInputResponses(pending, inputResponses)) {
@@ -163,7 +164,7 @@ public class McpClient {
         }
     }
 
-    public func notify(method: String, params!: JsonValue = JsonValue.objectValue([])): McpResult<Unit> {
+    public func notify(method: String, params!: JsonNode = jsonObject([])): McpResult<Unit> {
         if (state() != McpLifecycleState.Ready) {
             return lifecycleFailure<Unit>("mcp.client_not_ready", "MCP client is not ready")
         }
@@ -198,14 +199,14 @@ public class McpClient {
         }
     }
 
-    private func send(method: String, params: JsonValue, owner!: String = ""): McpResult<JsonValue> {
+    private func send(method: String, params: JsonNode, owner!: String = ""): McpResult<JsonNode> {
         if (state() != McpLifecycleState.Ready) {
-            return lifecycleFailure<JsonValue>("mcp.client_not_ready", "MCP client is not ready")
+            return lifecycleFailure<JsonNode>("mcp.client_not_ready", "MCP client is not ready")
         }
         let id = nextRequestId()
         match (correlation.reserve(id)) {
             case JsonRpcResult.Ok(_) => ()
-            case JsonRpcResult.Err(error) => return invalidMcp<JsonValue>(error.code, error.message)
+            case JsonRpcResult.Err(error) => return invalidMcp<JsonNode>(error.code, error.message)
         }
         if (owner != "") { addActive(owner, id) }
         let response = transport.request(JsonRpcRequest(id, method, params: withMcpRequestMeta(params, meta)))
@@ -216,7 +217,7 @@ public class McpClient {
             case McpResult.Ok(value) =>
                 if (!sameJsonRpcId(id, value.id)) {
                     let _ = correlation.cancel(id); let _ = correlation.release(id)
-                    return invalidMcp<JsonValue>(
+                    return invalidMcp<JsonNode>(
                         "mcp.response_id_mismatch", "MCP response id does not match request"
                     )
                 }
@@ -231,7 +232,7 @@ public class McpClient {
                 let _ = correlation.complete(id)
                 let result = match (value.payload) {
                     case JsonRpcResponsePayload.Success(result) => validateMcpResult(result)
-                    case JsonRpcResponsePayload.Failure(error) => remoteMcpError<JsonValue>(error)
+                    case JsonRpcResponsePayload.Failure(error) => remoteMcpError<JsonNode>(error)
                 }
                 let _ = correlation.release(id)
                 result
@@ -275,18 +276,18 @@ public class McpClient {
     }
 }
 
-func withMcpRequestMeta(params: JsonValue, meta: McpRequestMeta): JsonValue {
-    let fields = ArrayList<JsonField>()
-    if (params.kind == JsonKind.Object) {
+func withMcpRequestMeta(params: JsonNode, meta: McpRequestMeta): JsonNode {
+    let fields = ArrayList<JsonObjectEntry>()
+    if (params.unifiedKind == UnifiedJsonKind.Object) {
         for (field in params.fields where field.name != "_meta") { fields.add(field) }
     }
-    fields.add(JsonField("_meta", meta.toValue()))
-    JsonValue.objectValue(fields.toArray())
+    fields.add(JsonObjectEntry("_meta", meta.toValue()))
+    jsonObject(fields.toArray())
 }
 
-func validateMcpResult(value: JsonValue): McpResult<JsonValue> {
-    if (value.kind != JsonKind.Object || mcpText(value, "resultType") == "") {
-        return invalidMcp<JsonValue>("mcp.result_invalid", "MCP result must be an object with resultType")
+func validateMcpResult(value: JsonNode): McpResult<JsonNode> {
+    if (value.unifiedKind != UnifiedJsonKind.Object || mcpText(value, "resultType") == "") {
+        return invalidMcp<JsonNode>("mcp.result_invalid", "MCP result must be an object with resultType")
     }
     match (mcpServerInfo(value)) {
         case McpResult.Ok(_) => McpResult.Ok(value)
@@ -294,9 +295,9 @@ func validateMcpResult(value: JsonValue): McpResult<JsonValue> {
     }
 }
 
-func mcpServerInfo(value: JsonValue): McpResult<McpImplementationInfo> {
+func mcpServerInfo(value: JsonNode): McpResult<McpImplementationInfo> {
     let meta = match (value.field("_meta")) {
-        case Some(item) => if (item.kind == JsonKind.Object) { item } else {
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Object) { item } else {
             return invalidMcp<McpImplementationInfo>("mcp.result_meta_invalid", "MCP result _meta must be an object")
         }
         case None => return invalidMcp<McpImplementationInfo>("mcp.result_meta_missing", "MCP result omitted _meta")
@@ -307,7 +308,7 @@ func mcpServerInfo(value: JsonValue): McpResult<McpImplementationInfo> {
     }
 }
 
-func decodeMcpDiscover(value: JsonValue): McpResult<McpDiscoverResult> {
+func decodeMcpDiscover(value: JsonNode): McpResult<McpDiscoverResult> {
     if (mcpText(value, "resultType") != MCP_RESULT_COMPLETE) {
         return invalidMcp<McpDiscoverResult>("mcp.discover_invalid", "server/discover result must be complete")
     }
@@ -315,12 +316,12 @@ func decodeMcpDiscover(value: JsonValue): McpResult<McpDiscoverResult> {
         case Some(item) => item
         case None => return invalidMcp<McpDiscoverResult>("mcp.discover_versions_missing", "server/discover omitted supportedVersions")
     }
-    if (versionsValue.kind != JsonKind.List || versionsValue.items.isEmpty()) {
+    if (versionsValue.unifiedKind != UnifiedJsonKind.List || versionsValue.items.isEmpty()) {
         return invalidMcp<McpDiscoverResult>("mcp.discover_versions_invalid", "supportedVersions must be a non-empty array")
     }
     let versions = ArrayList<String>(); var current = false
     for (item in versionsValue.items) {
-        if (item.kind != JsonKind.Text || item.text == "") {
+        if (item.unifiedKind != UnifiedJsonKind.Text || item.text == "") {
             return invalidMcp<McpDiscoverResult>("mcp.discover_versions_invalid", "supportedVersions contains an invalid version")
         }
         versions.add(item.text); if (item.text == MCP_PROTOCOL_VERSION) { current = true }
@@ -334,12 +335,12 @@ func decodeMcpDiscover(value: JsonValue): McpResult<McpDiscoverResult> {
         case Some(item) => item
         case None => return invalidMcp<McpDiscoverResult>("mcp.capabilities_missing", "server/discover omitted capabilities")
     }
-    if (capabilities.kind != JsonKind.Object) {
+    if (capabilities.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpDiscoverResult>("mcp.capabilities_invalid", "server capabilities must be an object")
     }
     var tools = false; var changed = false
     match (capabilities.field("tools")) {
-        case Some(item) => if (item.kind == JsonKind.Object) { tools = true; changed = mcpBool(item, "listChanged", false) }
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Object) { tools = true; changed = mcpBool(item, "listChanged", false) }
         case None => ()
     }
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
@@ -353,14 +354,14 @@ func decodeMcpDiscover(value: JsonValue): McpResult<McpDiscoverResult> {
     )) } catch (error: Exception) { invalidMcp<McpDiscoverResult>("mcp.discover_invalid", error.message) }
 }
 
-func decodeMcpImplementationInfo(value: JsonValue): McpResult<McpImplementationInfo> {
-    if (value.kind != JsonKind.Object || mcpText(value, "name") == "" || mcpText(value, "version") == "") {
+func decodeMcpImplementationInfo(value: JsonNode): McpResult<McpImplementationInfo> {
+    if (value.unifiedKind != UnifiedJsonKind.Object || mcpText(value, "name") == "" || mcpText(value, "version") == "") {
         return invalidMcp<McpImplementationInfo>("mcp.implementation_info_invalid", "implementation info requires name and version")
     }
     McpResult.Ok(McpImplementationInfo(mcpText(value, "name"), mcpText(value, "version"), title: mcpText(value, "title")))
 }
 
-public func decodeMcpToolPage(value: JsonValue): McpResult<McpToolListPage> {
+public func decodeMcpToolPage(value: JsonNode): McpResult<McpToolListPage> {
     if (mcpText(value, "resultType") != MCP_RESULT_COMPLETE) {
         return invalidMcp<McpToolListPage>("mcp.tool_page_invalid", "tools/list result must be complete")
     }
@@ -368,7 +369,7 @@ public func decodeMcpToolPage(value: JsonValue): McpResult<McpToolListPage> {
         case Some(item) => item
         case None => return invalidMcp<McpToolListPage>("mcp.tools_missing", "tools/list omitted tools")
     }
-    if (source.kind != JsonKind.List) { return invalidMcp<McpToolListPage>("mcp.tools_invalid", "tools must be an array") }
+    if (source.unifiedKind != UnifiedJsonKind.List) { return invalidMcp<McpToolListPage>("mcp.tools_invalid", "tools must be an array") }
     let tools = ArrayList<McpTool>()
     for (item in source.items) { match (decodeMcpTool(item)) {
         case McpResult.Ok(tool) => tools.add(tool)
@@ -379,30 +380,30 @@ public func decodeMcpToolPage(value: JsonValue): McpResult<McpToolListPage> {
     McpResult.Ok(McpToolListPage(tools.toArray(), nextCursor: mcpText(value, "nextCursor"), ttlMillis: ttl, cacheScope: scope))
 }
 
-func decodeMcpTool(value: JsonValue): McpResult<McpTool> {
-    if (value.kind != JsonKind.Object) { return invalidMcp<McpTool>("mcp.tool_invalid", "tool descriptor must be an object") }
-    let schema = match (value.field("inputSchema")) { case Some(item) => item; case None => JsonValue.nullValue() }
-    if (mcpText(value, "name") == "" || schema.kind != JsonKind.Object || mcpText(schema, "type") != "object") {
+func decodeMcpTool(value: JsonNode): McpResult<McpTool> {
+    if (value.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<McpTool>("mcp.tool_invalid", "tool descriptor must be an object") }
+    let schema = match (value.field("inputSchema")) { case Some(item) => item; case None => jsonNull() }
+    if (mcpText(value, "name") == "" || schema.unifiedKind != UnifiedJsonKind.Object || mcpText(schema, "type") != "object") {
         return invalidMcp<McpTool>("mcp.tool_invalid", "tool has invalid name or inputSchema")
     }
     try { McpResult.Ok(McpTool(
         mcpText(value, "name"), mcpText(value, "description"), schema,
-        outputSchema: mcpField(value, "outputSchema", JsonValue.nullValue()),
+        outputSchema: mcpField(value, "outputSchema", jsonNull()),
         annotations: mcpObject(value, "annotations"), meta: mcpObject(value, "_meta")
     )) } catch (error: Exception) { invalidMcp<McpTool>("mcp.tool_invalid", error.message) }
 }
 
-func decodeMcpCallOutcome(value: JsonValue, tool: ?McpTool): McpResult<McpCallToolOutcome> {
+func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToolOutcome> {
     let resultType = mcpText(value, "resultType")
     if (resultType == MCP_RESULT_COMPLETE) {
-            let content = mcpField(value, "content", JsonValue.nullValue())
-            if (content.kind != JsonKind.List) { return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "tools/call content must be an array") }
-            for (block in content.items where block.kind != JsonKind.Object) {
+            let content = mcpField(value, "content", jsonNull())
+            if (content.unifiedKind != UnifiedJsonKind.List) { return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "tools/call content must be an array") }
+            for (block in content.items where block.unifiedKind != UnifiedJsonKind.Object) {
                 return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "content block must be an object")
             }
-            let structured = mcpField(value, "structuredContent", JsonValue.nullValue())
+            let structured = mcpField(value, "structuredContent", jsonNull())
             match (tool) {
-                case Some(descriptor) => if (descriptor.outputSchema.kind != JsonKind.Null && !mcpBool(value, "isError", false) && structured.kind == JsonKind.Null) {
+                case Some(descriptor) => if (descriptor.outputSchema.unifiedKind != UnifiedJsonKind.Null && !mcpBool(value, "isError", false) && structured.unifiedKind == UnifiedJsonKind.Null) {
                     return invalidMcp<McpCallToolOutcome>("mcp.structured_content_missing", "tools/call omitted structuredContent")
                 }
                 case None => ()
@@ -421,10 +422,10 @@ func decodeMcpCallOutcome(value: JsonValue, tool: ?McpTool): McpResult<McpCallTo
     }
 }
 
-func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonValue): McpResult<Unit> {
-    if (responses.kind != JsonKind.Object) { return invalidMcp<Unit>("mcp.input_responses_invalid", "inputResponses must be an object") }
+func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonNode): McpResult<Unit> {
+    if (responses.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.input_responses_invalid", "inputResponses must be an object") }
     for (request in pending.inputRequests.fields) { match (responses.field(request.name)) {
-        case Some(value) => if (value.kind != JsonKind.Object) { return invalidMcp<Unit>("mcp.input_response_invalid", "input response must be an object") }
+        case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.input_response_invalid", "input response must be an object") }
         case None => return invalidMcp<Unit>("mcp.input_response_missing", "retry must answer every input request")
     } }
     for (response in responses.fields where pending.inputRequests.field(response.name).isNone()) {
@@ -435,9 +436,9 @@ func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonV
 
 func remoteMcpError<T>(error: JsonRpcError): McpResult<T> {
     var remoteCode = ""
-    if (error.data.kind == JsonKind.Object) {
+    if (error.data.unifiedKind == UnifiedJsonKind.Object) {
         match (error.data.field("code")) {
-            case Some(value) => if (value.kind == JsonKind.Text) { remoteCode = value.text }
+            case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Text) { remoteCode = value.text }
             case None => ()
         }
     }
@@ -461,8 +462,8 @@ func invalidMcp<T>(code: String, message: String): McpResult<T> {
 func lifecycleFailure<T>(code: String, message: String): McpResult<T> {
     McpResult.Err(McpError(McpErrorKind.Lifecycle, code, message))
 }
-func mcpText(value: JsonValue, name: String): String { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Text) { item.text } else { "" }; case None => "" } }
-func mcpBool(value: JsonValue, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
-func mcpInteger(value: JsonValue, name: String): Int64 { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { -1 } } else { -1 }; case None => -1 } }
-func mcpField(value: JsonValue, name: String, fallback: JsonValue): JsonValue { match (value.field(name)) { case Some(item) => item; case None => fallback } }
-func mcpObject(value: JsonValue, name: String): JsonValue { let found = mcpField(value, name, JsonValue.objectValue([])); if (found.kind == JsonKind.Object) { found } else { JsonValue.objectValue([]) } }
+func mcpText(value: JsonNode, name: String): String { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Text) { item.text } else { "" }; case None => "" } }
+func mcpBool(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
+func mcpInteger(value: JsonNode, name: String): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { -1 } } else { -1 }; case None => -1 } }
+func mcpField(value: JsonNode, name: String, fallback: JsonNode): JsonNode { match (value.field(name)) { case Some(item) => item; case None => fallback } }
+func mcpObject(value: JsonNode, name: String): JsonNode { let found = mcpField(value, name, jsonObject([])); if (found.unifiedKind == UnifiedJsonKind.Object) { found } else { jsonObject([]) } }

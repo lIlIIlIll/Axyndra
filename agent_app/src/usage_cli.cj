@@ -1,5 +1,9 @@
 package agent_app
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -363,7 +367,7 @@ func usageSafeProvider(value: String): Bool {
 func usageTextOr(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) { item.text } else { "" }
+            if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }
@@ -371,7 +375,7 @@ func usageTextOr(value: AgentValue, name: String): String {
 func usageIntegerOr(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Number) {
+            if (item.unifiedKind == ValueKind.Number) {
                 try {
                     Int64.parse(item.number)
                 } catch (_: Exception) {

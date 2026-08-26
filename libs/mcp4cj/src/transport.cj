@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import process4cj.*
 import std.collection.*
@@ -327,9 +328,9 @@ public class StdioMcpServer {
 
     private func dispatchRequest(request: JsonRpcRequest): Unit {
         if (!reserveActive(request.id)) {
-            writeConsole(mcpFailureResponse(request.id, JSON_RPC_INTERNAL_ERROR, "MCP stdio server is at its concurrent request limit", data: JsonValue.objectValue([
-                JsonField("code", JsonValue.stringValue("mcp.stdio_server_busy")),
-                JsonField("max_concurrent_requests", JsonValue.numberValue(framing.maxConcurrentRequests.toString()))
+            writeConsole(mcpFailureResponse(request.id, JSON_RPC_INTERNAL_ERROR, "MCP stdio server is at its concurrent request limit", data: jsonObject([
+                JsonObjectEntry("code", jsonString("mcp.stdio_server_busy")),
+                JsonObjectEntry("max_concurrent_requests", jsonNumber(framing.maxConcurrentRequests.toString()))
             ]))); return
         }
         let _ = spawn { try { writeConsole(server.handleRequest(request)) } finally { removeActive(request.id) } }
@@ -347,8 +348,8 @@ public class StdioMcpServer {
     private func activeSnapshot(): Array<JsonRpcId> { activeLock.lock(); try { activeRequests.toArray() } finally { activeLock.unlock() } }
     private func drainActiveRequests(): McpResult<Unit> {
         waitForActiveRequests(); let active = activeSnapshot()
-        for (id in active) { let _ = server.handleNotification(JsonRpcNotification(MCP_METHOD_CANCELLED, params: JsonValue.objectValue([
-            JsonField("requestId", requestIdValue(id)), JsonField("reason", JsonValue.stringValue("MCP stdio server is closing"))
+        for (id in active) { let _ = server.handleNotification(JsonRpcNotification(MCP_METHOD_CANCELLED, params: jsonObject([
+            JsonObjectEntry("requestId", requestIdValue(id)), JsonObjectEntry("reason", jsonString("MCP stdio server is closing"))
         ]))) }
         waitForActiveRequests()
         let remaining = activeSnapshot()
@@ -357,10 +358,10 @@ public class StdioMcpServer {
                 McpErrorKind.Deadline,
                 "mcp.stdio_shutdown_incomplete",
                 "MCP stdio server still has active requests after bounded shutdown",
-                data: JsonValue.objectValue([
-                    JsonField(
+                data: jsonObject([
+                    JsonObjectEntry(
                         "active_requests",
-                        JsonValue.numberValue(remaining.size.toString())
+                        jsonNumber(remaining.size.toString())
                     )
                 ])
             ))
@@ -373,9 +374,9 @@ public class StdioMcpServer {
 }
 
 public func mcpCancellationNotification(requestId: JsonRpcId, reason: String): JsonRpcNotification {
-    JsonRpcNotification(MCP_METHOD_CANCELLED, params: JsonValue.objectValue([
-        JsonField("requestId", requestIdValue(requestId)),
-        JsonField("reason", JsonValue.stringValue(reason))
+    JsonRpcNotification(MCP_METHOD_CANCELLED, params: jsonObject([
+        JsonObjectEntry("requestId", requestIdValue(requestId)),
+        JsonObjectEntry("reason", jsonString(reason))
     ]))
 }
 
@@ -512,11 +513,11 @@ func readMatchingResponse(
     mcpFailure<JsonRpcResponse>(McpErrorKind.Transport, "mcp.stdio_unreachable", "unreachable")
 }
 
-func requestIdValue(id: JsonRpcId): JsonValue {
+func requestIdValue(id: JsonRpcId): JsonNode {
     match (id.kind) {
-        case JsonRpcIdKind.Text => JsonValue.stringValue(id.value)
-        case JsonRpcIdKind.Number => JsonValue.numberValue(id.value)
-        case JsonRpcIdKind.Null => JsonValue.nullValue()
+        case JsonRpcIdKind.Text => jsonString(id.value)
+        case JsonRpcIdKind.Number => jsonNumber(id.value)
+        case JsonRpcIdKind.Null => jsonNull()
     }
 }
 

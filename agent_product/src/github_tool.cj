@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import tool_runtime.*
@@ -514,14 +518,14 @@ func githubSearchFields(kind: String): String {
 func githubPullRequests(call: ToolCall): Result<Array<String>> {
     match (call.arguments.field("pr")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text &&
+            if (value.unifiedKind == ValueKind.Text &&
                 value.text.trimAscii() != "") {
                 Result.Ok([value.text.trimAscii()])
-            } else if (value.kind == ValueKind.List &&
+            } else if (value.unifiedKind == ValueKind.List &&
                 value.items.size > 0) {
                 let targets = ArrayList<String>()
                 for (item in value.items) {
-                    if (item.kind != ValueKind.Text ||
+                    if (item.unifiedKind != ValueKind.Text ||
                         item.text.trimAscii() == "") {
                         return githubArgumentError<Array<String>>(
                             call,
@@ -572,9 +576,9 @@ func appendRepeatedOption(
 ): Unit {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.List) {
+            if (value.unifiedKind == ValueKind.List) {
                 for (item in value.items where
-                     item.kind == ValueKind.Text &&
+                     item.unifiedKind == ValueKind.Text &&
                      item.text.trimAscii() != "") {
                     arguments.add(option)
                     arguments.add(item.text.trimAscii())

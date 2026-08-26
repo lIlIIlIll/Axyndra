@@ -1,5 +1,9 @@
 package product_mcp_server_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import agent_protocol.*

@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import persistence_runtime.*
 import tool_runtime.*
@@ -258,7 +262,7 @@ func parseTodoInitList(call: ToolCall): Result<TodoListParse> {
         case Some(value) => value
         case None => return Result.Ok(TodoListParse([], false))
     }
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         return todoArgumentError<TodoListParse>(
             call,
             "list",
@@ -267,7 +271,7 @@ func parseTodoInitList(call: ToolCall): Result<TodoListParse> {
     }
     let entries = ArrayList<TodoInitEntry>()
     for (entry in value.items) {
-        if (entry.kind != ValueKind.Object) {
+        if (entry.unifiedKind != ValueKind.Object) {
             return todoArgumentError<TodoListParse>(
                 call,
                 "list",
@@ -285,7 +289,7 @@ func parseTodoInitList(call: ToolCall): Result<TodoListParse> {
         }
         let phase = match (entry.field("phase")) {
             case Some(field) =>
-                if (field.kind != ValueKind.Text ||
+                if (field.unifiedKind != ValueKind.Text ||
                     field.text.trimAscii() == "") {
                     return todoArgumentError<TodoListParse>(
                         call,
@@ -346,7 +350,7 @@ func parseTodoStrings(
     name: String,
     value: AgentValue
 ): Result<Array<String>> {
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         return todoArgumentError<Array<String>>(
             call,
             name,
@@ -355,7 +359,7 @@ func parseTodoStrings(
     }
     let values = ArrayList<String>()
     for (item in value.items) {
-        if (item.kind != ValueKind.Text ||
+        if (item.unifiedKind != ValueKind.Text ||
             item.text.trimAscii() == "") {
             return todoArgumentError<Array<String>>(
                 call,
@@ -371,7 +375,7 @@ func parseTodoStrings(
 func todoText(call: ToolCall, name: String): Result<String> {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind != ValueKind.Text) {
+            if (value.unifiedKind != ValueKind.Text) {
                 todoArgumentError<String>(
                     call,
                     name,
@@ -901,7 +905,7 @@ func todoErrorResult(
 func todoOpValue(call: ToolCall): AgentValue {
     match (call.arguments.field("op")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 textValue(value.text)
             } else {
                 nullValue()

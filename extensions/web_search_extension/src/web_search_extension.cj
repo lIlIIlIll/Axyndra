@@ -1,7 +1,8 @@
 package web_search_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 
 public func webSearchExtensionManifest(): String {
@@ -39,7 +40,7 @@ public class WebSearchExtensionTool <: ExtensionTool {
             "web_search", "Search the web for up-to-date information.", webSearchSchema(), [networkHttp()]
         )
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         if (textField(input, "query").trimAscii() == "") {
             return invalid("web_search.query_required", "web_search requires a non-empty query")
         }
@@ -59,39 +60,39 @@ public class WebSearchExtensionTool <: ExtensionTool {
         }
     }
     public func decode(_: ToolInvocation, result: ExecutionResult): SdkResult<ToolOutput> {
-        if (result.value.kind != JsonKind.Object) {
+        if (result.value.unifiedKind != UnifiedJsonKind.Object) {
             return SdkResult.Err(SdkError(SdkErrorKind.Decode, "web_search.result_not_object", "web search host returned a non-object result"))
         }
         SdkResult.Ok(ToolOutput(structured: result.value))
     }
 }
 
-func webSearchSchema(): JsonValue {
+func webSearchSchema(): JsonNode {
     objectSchema([
-        JsonField("query", stringSchema()),
-        JsonField("recency", enumSchema(["day", "week", "month", "year"])),
-        JsonField("limit", numberSchema()),
-        JsonField("max_tokens", numberSchema()),
-        JsonField("temperature", numberSchema()),
-        JsonField("num_search_results", numberSchema())
+        JsonObjectEntry("query", stringSchema()),
+        JsonObjectEntry("recency", enumSchema(["day", "week", "month", "year"])),
+        JsonObjectEntry("limit", numberSchema()),
+        JsonObjectEntry("max_tokens", numberSchema()),
+        JsonObjectEntry("temperature", numberSchema()),
+        JsonObjectEntry("num_search_results", numberSchema())
     ], ["query"])
 }
-func objectSchema(properties: Array<JsonField>, required: Array<String>): JsonValue {
-    let names = ArrayList<JsonValue>()
-    for (name in required) { names.add(JsonValue.stringValue(name)) }
-    JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("object")), JsonField("properties", JsonValue.objectValue(properties)),
-        JsonField("required", JsonValue.arrayValue(names.toArray())), JsonField("additionalProperties", JsonValue.boolValue(false))
+func objectSchema(properties: Array<JsonObjectEntry>, required: Array<String>): JsonNode {
+    let names = ArrayList<JsonNode>()
+    for (name in required) { names.add(jsonString(name)) }
+    jsonObject([
+        JsonObjectEntry("type", jsonString("object")), JsonObjectEntry("properties", jsonObject(properties)),
+        JsonObjectEntry("required", jsonArray(names.toArray())), JsonObjectEntry("additionalProperties", jsonBool(false))
     ])
 }
-func stringSchema(): JsonValue { JsonValue.objectValue([JsonField("type", JsonValue.stringValue("string"))]) }
-func numberSchema(): JsonValue { JsonValue.objectValue([JsonField("type", JsonValue.stringValue("number"))]) }
-func enumSchema(values: Array<String>): JsonValue {
-    let encoded = ArrayList<JsonValue>()
-    for (value in values) { encoded.add(JsonValue.stringValue(value)) }
-    JsonValue.objectValue([JsonField("type", JsonValue.stringValue("string")), JsonField("enum", JsonValue.arrayValue(encoded.toArray()))])
+func stringSchema(): JsonNode { jsonObject([JsonObjectEntry("type", jsonString("string"))]) }
+func numberSchema(): JsonNode { jsonObject([JsonObjectEntry("type", jsonString("number"))]) }
+func enumSchema(values: Array<String>): JsonNode {
+    let encoded = ArrayList<JsonNode>()
+    for (value in values) { encoded.add(jsonString(value)) }
+    jsonObject([JsonObjectEntry("type", jsonString("string")), JsonObjectEntry("enum", jsonArray(encoded.toArray()))])
 }
 func invalid<T>(code: String, message: String): SdkResult<T> { SdkResult.Err(SdkError(SdkErrorKind.Validation, code, message)) }
-func textField(value: JsonValue, name: String): String {
-    match (value.field(name)) { case Some(field) => if (field.kind == JsonKind.Text) { field.text } else { "" }; case None => "" }
+func textField(value: JsonNode, name: String): String {
+    match (value.field(name)) { case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }; case None => "" }
 }

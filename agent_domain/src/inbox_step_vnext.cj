@@ -1,5 +1,9 @@
 package agent_domain
 
+import yjson.*
+
+import yjson_support.*
+
 import std.deriving.*
 
 public class StepId {
@@ -52,7 +56,7 @@ public class DurableInboxEntry {
         createdAtMillis!: Int64 = 0,
         claimedStepId!: ?StepId = None
     ) {
-        if (payload.kind != ValueKind.Object || createdAtMillis < 0 ||
+        if (payload.unifiedKind != ValueKind.Object || createdAtMillis < 0 ||
             (status == InboxEntryStatus.Claimed && claimedStepId.isNone()) ||
             (status == InboxEntryStatus.Queued && claimedStepId.isSome())) {
             throw IllegalArgumentException("durable Inbox entry is invalid")

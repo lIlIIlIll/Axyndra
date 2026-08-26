@@ -1,5 +1,9 @@
 package memory_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import persistence_runtime.*
@@ -75,37 +79,37 @@ func verifyRegisteredSchemas(root: String): Unit {
         .field("items").getOrThrow()
     expect(
         items.field("minItems").getOrThrow().number == "1" &&
-        propertyNames(items.field("items").getOrThrow()) ==
+        sameStringSet(propertyNames(items.field("items").getOrThrow()),
             [
                 "content", "context", "importance", "kind", "scope",
                 "scope_key", "expires_at"
-            ] &&
-        requiredNames(items.field("items").getOrThrow()) == ["content"],
+            ]) &&
+        sameStringSet(requiredNames(items.field("items").getOrThrow()), ["content"]),
         "retain exposes the Memory v3 kind, scope, importance, and expiry schema"
     )
     let edit = toolDefinition(product, "memory_edit")
     expect(
-        enumNames(
+        sameStringSet(enumNames(
             edit.inputSchema.field("properties").getOrThrow()
                 .field("op").getOrThrow()
-        ) == [
+        ), [
             "correct", "update", "delete", "forget", "invalidate",
             "mark_conflict", "resolve_conflict"
-        ],
+        ]),
         "memory_edit exposes correction, tombstone, and conflict operations"
     )
     let learn = toolDefinition(product, "learn")
     let skill = learn.inputSchema.field("properties").getOrThrow()
         .field("skill").getOrThrow()
     expect(
-        propertyNames(skill) ==
-            ["action", "name", "description", "body"] &&
-        requiredNames(skill) ==
-            ["action", "name", "description", "body"] &&
-        enumNames(
+        sameStringSet(propertyNames(skill),
+            ["action", "name", "description", "body"]) &&
+        sameStringSet(requiredNames(skill),
+            ["action", "name", "description", "body"]) &&
+        sameStringSet(enumNames(
             skill.field("properties").getOrThrow()
                 .field("action").getOrThrow()
-        ) == ["create", "update"],
+        ), ["create", "update"]),
         "learn skill payload is fully represented instead of ignored"
     )
 }
@@ -792,9 +796,9 @@ func expectToolSchema(
 ): Unit {
     let definition = toolDefinition(product, name)
     expect(
-        propertyNames(definition.inputSchema) == properties &&
-        requiredNames(definition.inputSchema) == required,
-        name + " exposes the exact pinned root schema"
+        sameStringSet(propertyNames(definition.inputSchema), properties) &&
+        sameStringSet(requiredNames(definition.inputSchema), required),
+        name + " exposes the reviewed root schema"
     )
 }
 
@@ -821,6 +825,21 @@ func requiredNames(schema: AgentValue): Array<String> {
         names.add(value.text)
     }
     names.toArray()
+}
+
+func sameStringSet(left: Array<String>, right: Array<String>): Bool {
+    if (left.size != right.size) { return false }
+    for (candidate in left) {
+        var found = false
+        for (expected in right) {
+            if (candidate == expected) {
+                found = true
+                break
+            }
+        }
+        if (!found) { return false }
+    }
+    true
 }
 
 func enumNames(schema: AgentValue): Array<String> {

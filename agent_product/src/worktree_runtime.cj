@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
@@ -377,7 +381,7 @@ func hasLiveIsolationOwner(directory: String): Bool {
     }
     let pid = match (value.field("pid")) {
         case Some(field) =>
-            if (field.kind != ValueKind.Number) { return false }
+            if (field.unifiedKind != ValueKind.Number) { return false }
             try {
                 Int64.parse(field.number)
             } catch (_: Exception) {
@@ -390,7 +394,7 @@ func hasLiveIsolationOwner(directory: String): Bool {
     if (!exists(Path(statPath))) { return false }
     let expected = match (value.field("startToken")) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) {
+            if (field.unifiedKind == ValueKind.Text) {
                 field.text
             } else {
                 ""

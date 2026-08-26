@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.convert.*
 import agent_domain.*
@@ -201,13 +205,13 @@ func compositionField(value: AgentValue, name: String): AgentValue {
 
 func compositionText(value: AgentValue, name: String): String {
     let field = compositionField(value, name)
-    if (field.kind != ValueKind.Text) { throw IllegalStateException("Composition text expected") }
+    if (field.unifiedKind != ValueKind.Text) { throw IllegalStateException("Composition text expected") }
     field.text
 }
 
 func compositionInt(value: AgentValue, name: String): Int64 {
     let field = compositionField(value, name)
-    if (field.kind != ValueKind.Number) { throw IllegalStateException("Composition integer expected") }
+    if (field.unifiedKind != ValueKind.Number) { throw IllegalStateException("Composition integer expected") }
     try { Int64.parse(field.number) } catch (_: Exception) {
         throw IllegalStateException("Composition integer is invalid")
     }
@@ -215,7 +219,7 @@ func compositionInt(value: AgentValue, name: String): Int64 {
 
 func compositionList(value: AgentValue, name: String): Array<AgentValue> {
     let field = compositionField(value, name)
-    if (field.kind != ValueKind.List) { throw IllegalStateException("Composition list expected") }
+    if (field.unifiedKind != ValueKind.List) { throw IllegalStateException("Composition list expected") }
     field.items
 }
 

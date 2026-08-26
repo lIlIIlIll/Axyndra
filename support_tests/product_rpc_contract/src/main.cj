@@ -1,5 +1,9 @@
 package product_rpc_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_cli.*
 import agent_core.*
 import agent_domain.*
@@ -115,7 +119,7 @@ main(): Int64 {
             )
         ).value().getOrThrow().field("data").getOrThrow().field("commands").getOrThrow()
         expect(
-            discovery.kind == ValueKind.List &&
+            discovery.unifiedKind == ValueKind.List &&
                 discovery.items.size == slashCommandDefinitions().size &&
                 allSlashDescriptorsPresent(discovery.items) &&
                 !hasSlashDescriptor(discovery.items, "negotiate_protocol"),
@@ -763,11 +767,11 @@ func optionalTextItemsMatch(
 }
 
 func textItemsMatch(actual: AgentValue, expected: Array<String>): Bool {
-    if (actual.kind != ValueKind.List || actual.items.size != expected.size) {
+    if (actual.unifiedKind != ValueKind.List || actual.items.size != expected.size) {
         return false
     }
     for (index in 0..expected.size) {
-        if (actual.items[index].kind != ValueKind.Text ||
+        if (actual.items[index].unifiedKind != ValueKind.Text ||
             actual.items[index].text != expected[index]) {
             return false
         }
@@ -779,7 +783,7 @@ func optionalTextMatch(actual: ?AgentValue, expected: String): Bool {
     if (expected == "") {
         return actual.isNone()
     }
-    actual.isSome() && actual.getOrThrow().kind == ValueKind.Text &&
+    actual.isSome() && actual.getOrThrow().unifiedKind == ValueKind.Text &&
         actual.getOrThrow().text == expected
 }
 
@@ -805,7 +809,7 @@ func optionalSubcommandsMatch(
 }
 
 func subcommandsMatch(actual: AgentValue, expected: Array<String>): Bool {
-    if (actual.kind != ValueKind.List || actual.items.size != expected.size) {
+    if (actual.unifiedKind != ValueKind.List || actual.items.size != expected.size) {
         return false
     }
     for (index in 0..expected.size) {

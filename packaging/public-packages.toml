@@ -1,11 +1,10 @@
 [public]
 generic = [
-  "libs/json4cj",
+  "libs/yjson_support",
   "libs/jsonrpc4cj",
   "libs/process4cj",
   "libs/mcp4cj",
   "libs/sandbox4cj",
-  "libs/llm4cj",
   "libs/lsp4cj",
   "libs/dap4cj",
 ]
@@ -52,24 +51,22 @@ packages = [
 ]
 
 [runtime_requirements]
-json4cj = []
+yjson_support = ["yjson main"]
 jsonrpc4cj = []
 process4cj = ["linux-x86_64", "glibc"]
 mcp4cj = ["Cangjie stdx", "process executable for stdio transport"]
 sandbox4cj = ["Linux", "bubblewrap for enforcement", "timeout/prlimit when configured"]
-llm4cj = ["process executable for transport adapters"]
 lsp4cj = ["language server executable supplied by host"]
 dap4cj = ["debug adapter executable supplied by host"]
 agent_sdk = []
 axyndra_agent_testkit = []
 
 [stability]
-json4cj = "pre-1.0 public generic"
+yjson_support = "pre-1.0 Axyndra JSON integration helpers"
 jsonrpc4cj = "pre-1.0 public generic"
 process4cj = "pre-1.0 public generic; Linux x86_64 implementation"
 mcp4cj = "pre-1.0 public generic"
 sandbox4cj = "stable public generic; Linux implementation"
-llm4cj = "stable public generic"
 lsp4cj = "stable public generic"
 dap4cj = "stable public generic"
 agent_sdk = "stable core with documented experimental symbols"

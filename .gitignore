@@ -11,6 +11,7 @@ build-script-cache/
 **/__pycache__/
 *.pyc
 **/cjpm.lock
+!cjpm.lock
 **/*.profraw
 .api-test-logs/
 .agent-state/

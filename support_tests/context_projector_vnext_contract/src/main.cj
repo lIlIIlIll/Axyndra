@@ -1,5 +1,9 @@
 package context_projector_vnext_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_runtime.*
 import std.time.*

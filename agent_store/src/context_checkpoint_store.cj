@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import agent_domain.*
 import agent_runtime.*
@@ -162,7 +166,7 @@ func checkpointField(value: AgentValue, name: String): AgentValue {
 
 func checkpointTextField(value: AgentValue, name: String): String {
     let item = checkpointField(value, name)
-    if (item.kind != ValueKind.Text) {
+    if (item.unifiedKind != ValueKind.Text) {
         throw IllegalStateException("checkpoint payload field is not text: " + name)
     }
     item.text
@@ -170,12 +174,12 @@ func checkpointTextField(value: AgentValue, name: String): String {
 
 func checkpointStringList(value: AgentValue, name: String): Array<String> {
     let item = checkpointField(value, name)
-    if (item.kind != ValueKind.List) {
+    if (item.unifiedKind != ValueKind.List) {
         throw IllegalStateException("checkpoint payload field is not a list: " + name)
     }
     let result = ArrayList<String>()
     for (candidate in item.items) {
-        if (candidate.kind != ValueKind.Text) {
+        if (candidate.unifiedKind != ValueKind.Text) {
             throw IllegalStateException("checkpoint payload list contains a non-text value")
         }
         result.add(candidate.text)

@@ -1,7 +1,8 @@
 package workspace_write_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -25,9 +26,9 @@ class WorkspaceWriteExtensionTests {
         for (_ in 0..16) {
             content += content
         }
-        let result = WorkspaceWriteTool().validate(JsonValue.objectValue([
-            JsonField("path", JsonValue.stringValue("app.js")),
-            JsonField("content", JsonValue.stringValue(content))
+        let result = WorkspaceWriteTool().validate(jsonObject([
+            JsonObjectEntry("path", jsonString("app.js")),
+            JsonObjectEntry("content", jsonString(content))
         ]))
         @Expect(result.isOk(), false)
     }

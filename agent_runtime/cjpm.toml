@@ -7,5 +7,7 @@
   output-type = "static"
 
 [dependencies]
+  "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
   "agent_domain" = { path = "../agent_domain", output-type = "static" }
   "agent_skills" = { path = "../agent_skills", output-type = "static" }

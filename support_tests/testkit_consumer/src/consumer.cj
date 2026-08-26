@@ -1,7 +1,8 @@
 package testkit_consumer
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 
 public class ConsumerExtension <: Extension {
     public func metadata(): ExtensionMetadata {
@@ -21,14 +22,14 @@ class ConsumerTool <: ExtensionTool {
         ExtensionToolDefinition(
             "consumer_echo",
             "Prepare a pure consumer fixture intent.",
-            JsonValue.objectValue([JsonField("type", JsonValue.stringValue("object"))]),
+            jsonObject([JsonObjectEntry("type", jsonString("object"))]),
             [workspaceRead()]
         )
     }
 
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         match (input.field("text")) {
-            case Some(value) => if (value.kind == JsonKind.Text) {
+            case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Text) {
                 SdkResult.Ok(input)
             } else {
                 invalid("consumer.text_invalid")

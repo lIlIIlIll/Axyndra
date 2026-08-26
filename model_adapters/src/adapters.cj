@@ -2,7 +2,8 @@ package model_adapters
 
 import agent_domain as domain
 import agent_ports as ports
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import llm4cj.*
 import process4cj.*
 import std.collection.*
@@ -2702,7 +2703,7 @@ public func providerModelPort(
 }
 
 public func encodeAgentValue(value: domain.AgentValue): String {
-    encodeJson(value)
+    stringifyUnifiedJson(value)
 }
 
 public func decodeAgentValue(
@@ -2710,15 +2711,15 @@ public func decodeAgentValue(
     maxBytes!: Int64 = 1048576
 ): domain.Result<domain.AgentValue> {
     try {
-        domain.Result.Ok(parseJson(source, maxBytes: maxBytes))
-    } catch (error: JsonError) {
+        domain.Result.Ok(parseUnifiedJson(source, maxBytes: maxBytes))
+    } catch (error: JsonException) {
         domain.Result.Err(
             domain.AgentError(
                 domain.AgentErrorKind.Protocol,
                 "value.invalid_json",
                 error.message,
                 fields: [
-                    domain.ErrorField("json_error_kind", jsonErrorKindName(error.kind))
+                    domain.ErrorField("json_error_kind", error.code)
                 ]
             )
         )
@@ -3307,15 +3308,6 @@ func validateModelRequestContent(request: domain.ModelRequest): domain.Result<Un
     domain.Result.Ok(())
 }
 
-
-func jsonErrorKindName(kind: JsonErrorKind): String {
-    match (kind) {
-        case JsonErrorKind.InvalidSyntax => "invalid_syntax"
-        case JsonErrorKind.ResourceLimit => "resource_limit"
-        case JsonErrorKind.InvalidValue => "invalid_value"
-        case JsonErrorKind.EncodingLimit => "encoding_limit"
-    }
-}
 
 func messageText(message: domain.ModelMessage): String {
     var result = ""

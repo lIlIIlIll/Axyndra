@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import agent_domain.*
 import agent_ports.*
 import tool_runtime.*
@@ -650,7 +651,7 @@ func decodeAstMatches(
     workspaceRoot: String
 ): Result<Array<AstMatch>> {
     let root = try {
-        parseJson(source, maxBytes: 16777216, maxDepth: 64)
+        parseUnifiedJson(source, maxBytes: 16777216, maxDepth: 64)
     } catch (error: Exception) {
         return Result.Err(AgentError(
             AgentErrorKind.Transport,
@@ -658,7 +659,7 @@ func decodeAstMatches(
             error.message
         ))
     }
-    if (root.kind != JsonKind.List) {
+    if (root.unifiedKind != UnifiedJsonKind.List) {
         return Result.Err(AgentError(
             AgentErrorKind.Transport,
             "tool.ast_grep_protocol",
@@ -671,11 +672,11 @@ func decodeAstMatches(
         let text = astJsonText(item, "text")
         let range = match (item.field("range")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let start = match (range.field("start")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         result.add(AstMatch(
             astWorkspaceRelative(path, workspaceRoot),
@@ -693,7 +694,7 @@ func decodeAstReplacements(
     workspaceRoot: String
 ): Result<Array<AstReplacement>> {
     let root = try {
-        parseJson(source, maxBytes: 33554432, maxDepth: 64)
+        parseUnifiedJson(source, maxBytes: 33554432, maxDepth: 64)
     } catch (error: Exception) {
         return Result.Err(AgentError(
             AgentErrorKind.Transport,
@@ -701,7 +702,7 @@ func decodeAstReplacements(
             error.message
         ))
     }
-    if (root.kind != JsonKind.List) {
+    if (root.unifiedKind != UnifiedJsonKind.List) {
         return Result.Err(AgentError(
             AgentErrorKind.Transport,
             "tool.ast_edit_protocol",
@@ -712,15 +713,15 @@ func decodeAstReplacements(
     for (item in root.items) {
         let range = match (item.field("range")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let offsets = match (range.field("byteOffset")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let start = match (range.field("start")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let startOffset = astJsonInteger(offsets, "start", -1)
         let endOffset = astJsonInteger(offsets, "end", -1)
@@ -758,7 +759,7 @@ func decodeAstEditOps(call: ToolCall): Result<Array<AstEditOp>> {
                 "required argument is missing"
             )
     }
-    if (value.kind != ValueKind.List || value.items.isEmpty()) {
+    if (value.unifiedKind != ValueKind.List || value.items.isEmpty()) {
         return invalidArgument(
             call,
             "ops",
@@ -768,7 +769,7 @@ func decodeAstEditOps(call: ToolCall): Result<Array<AstEditOp>> {
     let result = ArrayList<AstEditOp>()
     for (index in 0..value.items.size) {
         let item = value.items[index]
-        if (item.kind != ValueKind.Object) {
+        if (item.unifiedKind != ValueKind.Object) {
             return invalidArgument(
                 call,
                 "ops",
@@ -777,7 +778,7 @@ func decodeAstEditOps(call: ToolCall): Result<Array<AstEditOp>> {
         }
         let pattern = match (item.field("pat")) {
             case Some(field) =>
-                if (field.kind == ValueKind.Text) {
+                if (field.unifiedKind == ValueKind.Text) {
                     field.text
                 } else {
                     return invalidArgument(
@@ -795,7 +796,7 @@ func decodeAstEditOps(call: ToolCall): Result<Array<AstEditOp>> {
         }
         let output = match (item.field("out")) {
             case Some(field) =>
-                if (field.kind == ValueKind.Text) {
+                if (field.unifiedKind == ValueKind.Text) {
                     field.text
                 } else {
                     return invalidArgument(
@@ -841,7 +842,7 @@ func decodeAstEditPaths(call: ToolCall): Result<Array<String>> {
                 "required argument is missing"
             )
     }
-    if (value.kind != ValueKind.List || value.items.isEmpty()) {
+    if (value.unifiedKind != ValueKind.List || value.items.isEmpty()) {
         return invalidArgument(
             call,
             "paths",
@@ -851,7 +852,7 @@ func decodeAstEditPaths(call: ToolCall): Result<Array<String>> {
     let result = ArrayList<String>()
     for (index in 0..value.items.size) {
         let item = value.items[index]
-        if (item.kind != ValueKind.Text ||
+        if (item.unifiedKind != ValueKind.Text ||
             item.text.trimAscii() == "") {
             return invalidArgument(
                 call,
@@ -1067,22 +1068,22 @@ func astPlural(value: Int64, one: String, many: String): String {
     if (value == 1) { one } else { many }
 }
 
-func astJsonText(value: JsonValue, name: String): String {
+func astJsonText(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
 
 func astJsonInteger(
-    value: JsonValue,
+    value: JsonNode,
     name: String,
     fallback: Int64
 ): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Number) {
+            if (field.unifiedKind == UnifiedJsonKind.Number) {
                 try {
                     Int64.parse(field.text)
                 } catch (_: Exception) {
@@ -1095,7 +1096,7 @@ func astJsonInteger(
     }
 }
 
-func renderAstMeta(value: JsonValue): String {
+func renderAstMeta(value: JsonNode): String {
     let variables = match (value.field("metaVariables")) {
         case Some(item) => item
         case None => return ""
@@ -1105,7 +1106,7 @@ func renderAstMeta(value: JsonValue): String {
         case None => return ""
     }
     let entries = ArrayList<String>()
-    for (member in single.members) {
+    for (member in single.fields) {
         let captured = astJsonText(member.value, "text")
         entries.add(member.name + "=" + captured)
     }

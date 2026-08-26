@@ -1,6 +1,7 @@
 package model_adapters
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.deriving.*
 
@@ -14,10 +15,10 @@ public class ContentBlock {
     public let id: String
     public let name: String
     public let text: String
-    public let input: JsonValue
+    public let input: JsonNode
 
     public init(kind: ContentBlockKind, id!: String = "", name!: String = "",
-        text!: String = "", input!: JsonValue = JsonValue.nullValue()) {
+        text!: String = "", input!: JsonNode = jsonNull()) {
         this.kind = kind
         this.id = id
         this.name = name
@@ -51,18 +52,18 @@ public class MessageResponse {
 }
 
 public func parseMessageResponse(raw: String): MessageResponse {
-    let root = parseJson(raw)
-    requireKind(root, JsonKind.Object, "message response")
+    let root = parseUnifiedJson(raw)
+    requireKind(root, UnifiedJsonKind.Object, "message response")
     let stopReason = optionalStringField(root, "stop_reason")
     let contentValue = requiredField(root, "content")
-    requireKind(contentValue, JsonKind.List, "content")
+    requireKind(contentValue, UnifiedJsonKind.List, "content")
     let blocks = ArrayList<ContentBlock>()
     for (value in contentValue.items) { blocks.add(parseContentBlock(value)) }
     MessageResponse(raw, stopReason, blocks.toArray())
 }
 
-func parseContentBlock(value: JsonValue): ContentBlock {
-    requireKind(value, JsonKind.Object, "content block")
+func parseContentBlock(value: JsonNode): ContentBlock {
+    requireKind(value, UnifiedJsonKind.Object, "content block")
     let blockType = requiredStringField(value, "type")
     match (blockType) {
         case "text" => ContentBlock(ContentBlockKind.Text, text: requiredStringField(value, "text"))
@@ -87,28 +88,30 @@ func parseContentBlock(value: JsonValue): ContentBlock {
     }
 }
 
-func requiredField(value: JsonValue, name: String): JsonValue {
+func requiredField(value: JsonNode, name: String): JsonNode {
     match (value.field(name)) {
         case Some(found) => found
-        case None => throw JsonParseError("missing field ${name}", 0)
+        case None => throw JsonException("missing field ${name}", code: "missing_field")
     }
 }
 
-func requiredStringField(value: JsonValue, name: String): String {
+func requiredStringField(value: JsonNode, name: String): String {
     let found = requiredField(value, name)
-    requireKind(found, JsonKind.Text, name)
+    requireKind(found, UnifiedJsonKind.Text, name)
     found.text
 }
 
-func optionalStringField(value: JsonValue, name: String): String {
+func optionalStringField(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(found) =>
-            requireKind(found, JsonKind.Text, name)
+            requireKind(found, UnifiedJsonKind.Text, name)
             found.text
         case None => ""
     }
 }
 
-func requireKind(value: JsonValue, expected: JsonKind, label: String): Unit {
-    if (value.kind != expected) { throw JsonParseError("${label} has the wrong JSON type", 0) }
+func requireKind(value: JsonNode, expected: UnifiedJsonKind, label: String): Unit {
+    if (value.unifiedKind != expected) {
+        throw JsonException("${label} has the wrong JSON type", code: "type_mismatch")
+    }
 }

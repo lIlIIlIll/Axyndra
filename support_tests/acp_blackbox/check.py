@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import queue
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,7 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("AXYNDRA_BINARY", ROOT / "target/release/bin/agent_app"))
+_FRAME_QUEUES: dict[int, queue.Queue[dict[str, Any]]] = {}
 
 
 def main() -> None:
@@ -340,20 +342,14 @@ def wait_for(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     frames: list[dict[str, Any]] = []
     deadline = time.monotonic() + timeout
-    assert process.stdout is not None
+    frame_queue = frame_queue_for(process)
     while time.monotonic() < deadline:
-        readable, _, _ = select.select(
-            [process.stdout],
-            [],
-            [],
-            max(0.0, deadline - time.monotonic()),
-        )
-        if not readable:
+        try:
+            frame = frame_queue.get(
+                timeout=max(0.0, deadline - time.monotonic())
+            )
+        except queue.Empty:
             break
-        line = process.stdout.readline()
-        if not line:
-            break
-        frame = json.loads(line)
         frames.append(frame)
         if predicate(frame):
             return frame, frames
@@ -372,21 +368,36 @@ def collect_until(
 ) -> list[dict[str, Any]]:
     frames = list(initial)
     deadline = time.monotonic() + timeout
-    assert process.stdout is not None
+    frame_queue = frame_queue_for(process)
     while not predicate(frames) and time.monotonic() < deadline:
-        readable, _, _ = select.select(
-            [process.stdout],
-            [],
-            [],
-            max(0.0, deadline - time.monotonic()),
-        )
-        if not readable:
+        try:
+            frames.append(
+                frame_queue.get(
+                    timeout=max(0.0, deadline - time.monotonic())
+                )
+            )
+        except queue.Empty:
             break
-        line = process.stdout.readline()
-        if not line:
-            break
-        frames.append(json.loads(line))
     assert predicate(frames), frames
+    return frames
+
+
+def frame_queue_for(
+    process: subprocess.Popen[str],
+) -> queue.Queue[dict[str, Any]]:
+    existing = _FRAME_QUEUES.get(process.pid)
+    if existing is not None:
+        return existing
+    assert process.stdout is not None
+    frames: queue.Queue[dict[str, Any]] = queue.Queue()
+
+    def read_frames() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            frames.put(json.loads(line))
+
+    threading.Thread(target=read_frames, daemon=True).start()
+    _FRAME_QUEUES[process.pid] = frames
     return frames
 
 

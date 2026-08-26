@@ -1,5 +1,9 @@
 package model_adapters_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain as domain
 import agent_ports as ports
 import model_adapters.*
@@ -61,7 +65,7 @@ main(): Int64 {
     let decoded = decodeAgentValue(encoded)
     match (decoded) {
         case domain.Result.Ok(restored) =>
-            expect(match (restored.kind) {
+            expect(match (restored.unifiedKind) {
                 case domain.ValueKind.Object => true
                 case _ => false
             },

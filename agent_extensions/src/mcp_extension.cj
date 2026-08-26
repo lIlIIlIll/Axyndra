@@ -1,5 +1,9 @@
 package agent_extensions
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import std.collection.*
@@ -172,7 +176,7 @@ func redactMcpError(error: AgentError, redact: McpTextRedactor): AgentError {
 }
 
 func redactMcpValue(value: AgentValue, redact: McpTextRedactor): AgentValue {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => textValue(redact(value.text))
         case ValueKind.Number =>
             let filtered = redact(value.number)

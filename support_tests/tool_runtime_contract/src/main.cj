@@ -1,5 +1,9 @@
 package tool_runtime_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import std.collection.*
@@ -223,7 +227,7 @@ func runToolProgramContracts(): Unit {
         ]
     )
     let completed = runtime.execute(program, context)
-    expect(completed.status == ToolProgramStatus.Completed && completed.value.kind == ValueKind.List &&
+    expect(completed.status == ToolProgramStatus.Completed && completed.value.unifiedKind == ValueKind.List &&
         completed.value.items.size == 2 && completed.value.items[0].text == "read" &&
         completed.subOperations.size == 3 && operations.executions == 3,
         "restricted program executes let/if/bounded-for/map/filter/reduce/parallel/try-catch/return")
@@ -338,8 +342,10 @@ func runSchemaValidationContracts(): Unit {
                     ]))
                 ])),
                 ValueField("alias", objectValue([
-                    ValueField("type", textValue("string")),
-                    ValueField("nullable", boolValue(true))
+                    ValueField("type", listValue([
+                        textValue("string"),
+                        textValue("null")
+                    ]))
                 ])),
                 ValueField("labels", objectValue([
                     ValueField("type", textValue("object")),
@@ -363,15 +369,15 @@ func runSchemaValidationContracts(): Unit {
     )
     expect(
         validator.validate(valid, definition).isOk(),
-        "schema validator accepts nested objects, arrays, all primitive types, anyOf, and nullable"
+        "schema validator accepts nested objects, arrays, all primitive types, anyOf, and null unions"
     )
     expectSchemaViolation(
         validator,
         definition,
         objectValue([]),
-        "$[\"profile\"]",
+        "$",
         "required",
-        "required schema errors carry the missing property's JSON path"
+        "required schema errors identify the containing object"
     )
     expectSchemaViolation(
         validator,

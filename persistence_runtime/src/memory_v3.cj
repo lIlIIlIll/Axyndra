@@ -1,5 +1,9 @@
 package persistence_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import model_adapters.*
@@ -1144,7 +1148,7 @@ func memoryV3DecodeEvent(value: AgentValue): Result<MemoryV3Record> {
     let conflicts = ArrayList<String>()
     match (item.field("conflictIds")) {
         case Some(list) =>
-            for (entry in list.items where entry.kind == ValueKind.Text) {
+            for (entry in list.items where entry.unifiedKind == ValueKind.Text) {
                 conflicts.add(entry.text)
             }
         case None => ()

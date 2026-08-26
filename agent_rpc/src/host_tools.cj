@@ -1,5 +1,9 @@
 package agent_rpc
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -135,7 +139,7 @@ class RpcHostToolBridge {
         let id = textField(frame, "id")
         let result = match (frame.field("result")) {
             case Some(value) =>
-                if (value.kind != ValueKind.Object) {
+                if (value.unifiedKind != ValueKind.Object) {
                     return hostToolError(
                         "host tool result must be an object"
                     )
@@ -321,7 +325,7 @@ func decodeDefinitions(
 ): Result<Array<RpcHostToolDefinition>> {
     let values = match (request.field("tools")) {
         case Some(value) =>
-            if (value.kind != ValueKind.List) {
+            if (value.unifiedKind != ValueKind.List) {
                 return hostToolError("host tools must be a list")
             }
             value.items
@@ -329,7 +333,7 @@ func decodeDefinitions(
     }
     let definitions = ArrayList<RpcHostToolDefinition>()
     for (value in values) {
-        if (value.kind != ValueKind.Object) {
+        if (value.unifiedKind != ValueKind.Object) {
             return hostToolError("host tool definition must be an object")
         }
         let name = textField(value, "name").trimAscii()
@@ -350,7 +354,7 @@ func decodeDefinitions(
         }
         let parameters = match (value.field("parameters")) {
             case Some(schema) =>
-                if (schema.kind != ValueKind.Object) {
+                if (schema.unifiedKind != ValueKind.Object) {
                     return hostToolError(
                         "host tool \"" + name +
                             "\" must provide a JSON Schema object"
@@ -382,7 +386,7 @@ func containsDefinition(
 func textField(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
@@ -390,7 +394,7 @@ func textField(value: AgentValue, name: String): String {
 func boolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            field.kind == ValueKind.Boolean && field.boolean
+            field.unifiedKind == ValueKind.Boolean && field.boolean
         case None => false
     }
 }

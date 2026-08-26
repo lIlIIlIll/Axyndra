@@ -1,5 +1,9 @@
 package product_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_core.*
 import agent_domain.*
 import agent_product.*
@@ -1725,9 +1729,8 @@ func runProcessCancellationContract(processes: LocalProcessPort): Unit {
 func expectCoreToolSchemas(catalog: ToolCatalog): Unit {
     expectToolSchema(catalog, "ask", ["questions"], ["questions"])
     expectToolSchema(catalog, "plan_write", ["content"], ["content"])
-    // OMP's pinned read surface remains `path`. axyndra adds only optional
-    // artifact pagination/export fields, so compatibility is additive rather
-    // than falsely claiming byte-for-byte schema equality.
+    // The read contract includes the core path plus optional artifact
+    // pagination/export fields. Object member order is not part of JSON Schema.
     expectToolSchemaWithOptionalExtensions(
         catalog,
         "read",
@@ -5307,7 +5310,7 @@ func runProcessHubContracts(
         processStart.agentInvoked && !processStartResult.field("readyTimedOut").getOrThrow().boolean &&
             startedDaemon.field("state").getOrThrow().text == "ready" &&
             startedDaemon.field("readyMatch").getOrThrow().text == "READY" &&
-            startedDaemon.field("pid").getOrThrow().kind == ValueKind.Number &&
+            startedDaemon.field("pid").getOrThrow().unifiedKind == ValueKind.Number &&
             startedDaemon.field("id").getOrThrow().text != "" && startedDaemon.field("owner").getOrThrow().text != "",
         "hub start supervises a named process and waits for its ready " + "condition"
     )
@@ -5376,7 +5379,7 @@ func runProcessHubContracts(
     ).getOrThrow().field("daemon").getOrThrow()
     expect(
         processStop.agentInvoked && stoppedDaemon.field("state").getOrThrow().text == "exited" &&
-            stoppedDaemon.field("pid").getOrThrow().kind == ValueKind.Null,
+            stoppedDaemon.field("pid").getOrThrow().unifiedKind == ValueKind.Null,
         "hub stop terminates the process group and returns a terminal " + "snapshot"
     )
     let guardedHubProduct = openProduct(
@@ -6421,7 +6424,7 @@ func expectToolSchema(
         expect(
             sameStrings(propertyNames.toArray(), expectedProperties) && sameStrings(requiredNames.toArray(),
                 expectedRequired),
-            toolName + " schema matches the pinned OMP wire surface"
+            toolName + " schema exposes the reviewed tool wire surface"
         )
         return
     }
@@ -6452,7 +6455,7 @@ func expectToolSchemaWithOptionalExtensions(
         expect(
             sameStrings(propertyNames.toArray(), expectedProperties.toArray()) &&
                 sameStrings(requiredNames.toArray(), expectedRequired),
-            toolName + " preserves the pinned OMP schema with optional axyndra artifact extensions"
+            toolName + " schema exposes the reviewed core and artifact fields"
         )
         return
     }
@@ -6463,8 +6466,15 @@ func sameStrings(left: Array<String>, right: Array<String>): Bool {
     if (left.size != right.size) {
         return false
     }
-    for (index in 0..left.size) {
-        if (left[index] != right[index]) {
+    for (candidate in left) {
+        var found = false
+        for (expected in right) {
+            if (candidate == expected) {
+                found = true
+                break
+            }
+        }
+        if (!found) {
             return false
         }
     }
@@ -6521,7 +6531,7 @@ func toolResultListContains(
                 case Some(value) => for (item in value.items) {
                     match (item.field(fieldName)) {
                         case Some(field) =>
-                            if (field.kind == ValueKind.Text && field.text == expected) {
+                            if (field.unifiedKind == ValueKind.Text && field.text == expected) {
                                 return true
                             }
                         case None => ()

@@ -1,5 +1,9 @@
 package agent_testkit
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import tool_runtime.*

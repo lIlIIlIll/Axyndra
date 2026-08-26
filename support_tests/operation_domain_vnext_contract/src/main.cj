@@ -1,5 +1,9 @@
 package operation_domain_vnext_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 
 main(): Int64 {

@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import agent_core.*
 import agent_domain.*
@@ -39,7 +43,7 @@ class ProductContextManifestRuntime <: ModelContextManifestRuntimePort {
         exactFields.add(ValueField("request_id", textValue(requestId.value)))
         let exactRequest = objectValue(exactFields.toArray())
         let system = match (exactRequest.field("system")) {
-            case Some(value) => if (value.kind == ValueKind.Text) { value.text } else {
+            case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else {
                 return contextRuntimeError(
                     "context.rendered_system_invalid",
                     "rendered model request system field is not text"

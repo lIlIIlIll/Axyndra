@@ -1,5 +1,9 @@
 package sqlite_run_repository_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import persistence_runtime.*
@@ -587,7 +591,7 @@ func telemetryRetentionContract(
 
 func fieldText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }
@@ -628,7 +632,7 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
         repository.workMode(target).value().getOrThrow() == "plan" &&
         repository.draft(target).value().getOrThrow() == "draft" &&
         repository.todoPhases(target).value().getOrThrow().items.size == 1 &&
-        repository.goalState(target).value().getOrThrow().kind == ValueKind.Object,
+        repository.goalState(target).value().getOrThrow().unifiedKind == ValueKind.Object,
         "SQLite Thread metadata copies atomically without file sidecars")
     expect(repository.setWorkMode(source, "unsafe").isError() &&
         repository.setWorkspaceBinding(source, root, "/").isError(),

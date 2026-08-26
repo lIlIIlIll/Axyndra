@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import std.io.*
 import std.unittest.*
@@ -17,16 +18,16 @@ class Mcp4CjTests {
         let tool = McpTool(
             "read_file",
             "read a file",
-            JsonValue.objectValue([JsonField("type", JsonValue.stringValue("object"))])
+            jsonObject([JsonObjectEntry("type", jsonString("object"))])
         )
         let page = McpToolListPage([tool], nextCursor: "next")
         @Expect(page.tools.size, 1)
         @Expect(page.nextCursor, "next")
 
         let outcome = McpCallToolOutcome.Complete(McpCallToolResult(
-            [JsonValue.objectValue([
-                JsonField("type", JsonValue.stringValue("text")),
-                JsonField("text", JsonValue.stringValue("ok"))
+            [jsonObject([
+                JsonObjectEntry("type", jsonString("text")),
+                JsonObjectEntry("text", jsonString("ok"))
             ])], isError: false
         ))
         @Expect(mcpCallToolOutcomeValue(outcome).field("resultType").getOrThrow().text, MCP_RESULT_COMPLETE)
@@ -107,14 +108,14 @@ class Mcp4CjTests {
 
     @TestCase
     func clientAndServerOwnLifecyclePaginationCallsAndCancellation() {
-        let tool = McpTool("echo", "echo", JsonValue.objectValue([
-            JsonField("type", JsonValue.stringValue("object")),
-            JsonField("properties", JsonValue.objectValue([
-                JsonField("value", JsonValue.objectValue([JsonField("type", JsonValue.stringValue("string"))]))
+        let tool = McpTool("echo", "echo", jsonObject([
+            JsonObjectEntry("type", jsonString("object")),
+            JsonObjectEntry("properties", jsonObject([
+                JsonObjectEntry("value", jsonObject([JsonObjectEntry("type", jsonString("string"))]))
             ])),
-            JsonField("required", JsonValue.arrayValue([JsonValue.stringValue("value")]))
+            JsonObjectEntry("required", jsonArray([jsonString("value")]))
         ]))
-        let host = MemoryMcpToolHost([tool], { _: String, arguments: JsonValue, _: McpToolCallContinuation =>
+        let host = MemoryMcpToolHost([tool], { _: String, arguments: JsonNode, _: McpToolCallContinuation =>
             McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult([], structuredContent: arguments)))
         }, pageSize: 1)
         let server = McpServer(McpDiscoverResult(McpImplementationInfo("server", "1")), host)
@@ -122,11 +123,11 @@ class Mcp4CjTests {
         let client = McpClient(transport, McpRequestMeta(McpImplementationInfo("client", "1")))
         @Expect(client.discover().isOk(), true)
         @Expect(client.listTools().isOk(), true)
-        match (client.callTool("echo", JsonValue.objectValue([JsonField("value", JsonValue.stringValue("ok"))]))) {
+        match (client.callTool("echo", jsonObject([JsonObjectEntry("value", jsonString("ok"))]))) {
             case McpResult.Ok(McpCallToolOutcome.Complete(value)) => @Expect(value.structuredContent.field("value").getOrThrow().text, "ok")
             case _ => @Fail("generic tools/call failed")
         }
-        @Expect(client.callTool("echo", JsonValue.objectValue([])).isOk(), false)
+        @Expect(client.callTool("echo", jsonObject([])).isOk(), false)
         @Expect(client.notify("notifications/test").isOk(), true)
         @Expect(client.close().isOk(), true)
         @Expect(client.close().isOk(), true)

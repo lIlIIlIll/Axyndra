@@ -216,9 +216,13 @@ if rg_matches -n 'import (model_adapters|llm4cj)' \
   fail "Agent runtime crosses ModelPort into provider API or transport code"
 fi
 
-if rg_matches -n 'import agent_(domain|ports|core|runtime|product)' \
-  "$ROOT/libs/llm4cj/src" >/dev/null; then
-  fail "llm4cj must remain transport-only"
+if [[ -d "$ROOT/libs/llm4cj" || -d "$ROOT/libs/json4cj" ]]; then
+  fail "extracted llm4cj/json4cj source remains in the Axyndra workspace"
+fi
+
+if ! rg_matches -n '"llm4cj".*git = "https://github.com/lIlIIlIll/llm4cj.git".*branch = "main"' \
+  "$ROOT/model_adapters/cjpm.toml" >/dev/null; then
+  fail "model_adapters does not depend on llm4cj main from the standalone repository"
 fi
 
 if ! rg_matches -n 'UnifiedModelRuntime\(' \

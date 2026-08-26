@@ -3,7 +3,8 @@ package model_adapters
 // Shared teaching support for message JSON and small string scans.
 // The lesson chapters import this package so their own source can stay focused on agent behavior.
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 
 public func stripUnsafeControlChars(text: String): String {
@@ -64,7 +65,7 @@ public func indexOf(text: String, pattern: String, from: Int64): Int64 {
 }
 
 public func jsonField(text: String, name: String, from: Int64): String {
-    let nameIndex = indexOf(text, jsonQuote(name), from)
+    let nameIndex = indexOf(text, quoteUnifiedJson(name), from)
     if (nameIndex < 0) { return "" }
     let colonIndex = indexOf(text, ":", nameIndex)
     if (colonIndex < 0) { return "" }
@@ -79,12 +80,12 @@ public func jsonInputField(text: String, name: String, toolUseIndex: Int64): Str
 
 public func jsonContentArray(response: String): String {
     try {
-        match (parseJson(response).field("content")) {
+        match (parseUnifiedJson(response).field("content")) {
             case Some(content) =>
-                if (content.kind == JsonKind.List) { content.stringify() } else { "[]" }
+                if (content.unifiedKind == UnifiedJsonKind.List) { content.stringify() } else { "[]" }
             case None => "[]"
         }
-    } catch (_: JsonParseError) {
+    } catch (_: JsonException) {
         "[]"
     }
 }

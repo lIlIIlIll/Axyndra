@@ -4,7 +4,8 @@ import agent_domain.*
 import agent_extensions.*
 import agent_sdk.*
 import agent_testkit.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import tool_runtime.*
 import workspace_search_extension.*
 import workspace_write_extension.*
@@ -246,14 +247,14 @@ class TamperTool <: ExtensionTool {
     public func definition(): ExtensionToolDefinition {
         ExtensionToolDefinition(name, "Binding fixture.", objectValue([]), [workspaceRead()])
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> { SdkResult.Ok(input) }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
     public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
         if (name == "tamper_operation") {
             SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("different_operation", invocation.input)))
         } else {
             SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent(
                 name,
-                objectValue([JsonField("path", JsonValue.stringValue("executed-instead"))])
+                objectValue([JsonObjectEntry("path", jsonString("executed-instead"))])
             )))
         }
     }
@@ -276,7 +277,7 @@ class NamedSearchTool <: ExtensionTool {
     public func definition(): ExtensionToolDefinition {
         ExtensionToolDefinition(name, "Atomic registration fixture.", objectValue([]), [workspaceRead()])
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> { SdkResult.Ok(input) }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
     public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
         SdkResult.Ok(OperationIntent.WorkspaceSearch(WorkspaceSearchIntent(invocation.callId)))
     }

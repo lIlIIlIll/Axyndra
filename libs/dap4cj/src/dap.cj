@@ -1,6 +1,7 @@
 package dap4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import process4cj.*
 import std.collection.*
 import std.convert.*
@@ -23,15 +24,15 @@ public enum DapResult<T> {
     public func isOk(): Bool { match (this) { case Ok(_) => true; case Err(_) => false } }
 }
 
-public func encodeDapMessage(value: JsonValue): Array<Byte> {
-    encodeContentLengthFrame(encodeJson(value))
+public func encodeDapMessage(value: JsonNode): Array<Byte> {
+    encodeContentLengthFrame(stringifyUnifiedJson(value))
 }
 
 public func readDapMessage(
     stream: InputStream,
     maxBodyBytes!: Int64 = 33554432,
     maxDepth!: Int64 = 128
-): DapResult<JsonValue> {
+): DapResult<JsonNode> {
     let body = try { readContentLengthBody(stream, maxBodyBytes: maxBodyBytes) } catch (error: ProcessError) {
         return DapResult.Err(DapError(
             if (let ProcessErrorKind.Io <- error.kind) { DapErrorKind.Transport } else { DapErrorKind.Frame },
@@ -40,13 +41,13 @@ public func readDapMessage(
         ))
     }
     let value = try {
-        parseJson(String.fromUtf8(body), maxBytes: maxBodyBytes, maxDepth: maxDepth)
-    } catch (error: JsonError) {
+        parseUnifiedJson(String.fromUtf8(body), maxBytes: maxBodyBytes, maxDepth: maxDepth)
+    } catch (error: JsonException) {
         return DapResult.Err(DapError(DapErrorKind.Json, "dap.json_invalid", error.message))
     } catch (error: Exception) {
         return DapResult.Err(DapError(DapErrorKind.Json, "dap.utf8_invalid", error.message))
     }
-    if (value.kind != JsonKind.Object || value.field("seq").isNone() || value.field("type").isNone()) {
+    if (value.unifiedKind != UnifiedJsonKind.Object || value.field("seq").isNone() || value.field("type").isNone()) {
         return DapResult.Err(DapError(DapErrorKind.Protocol, "dap.envelope_invalid", "DAP message requires seq and type"))
     }
     DapResult.Ok(value)
@@ -77,13 +78,13 @@ public class DapCorrelation {
     }
 }
 
-public type DapEventHandler = (String, JsonValue) -> Unit
-public type DapReverseRequestHandler = (String, JsonValue) -> DapResult<JsonValue>
+public type DapEventHandler = (String, JsonNode) -> Unit
+public type DapReverseRequestHandler = (String, JsonNode) -> DapResult<JsonNode>
 
 class DapPendingRequest {
     let sequence: Int64
     let command: String
-    var result: ?JsonValue = None
+    var result: ?JsonNode = None
     var error: ?DapError = None
     init(sequence: Int64, command: String) { this.sequence = sequence; this.command = command }
 }
@@ -107,8 +108,8 @@ public class DapClient {
 
     public init(
         process: ManagedProcess,
-        eventHandler!: DapEventHandler = { _: String, _: JsonValue => () },
-        reverseRequestHandler!: DapReverseRequestHandler = { command: String, _: JsonValue =>
+        eventHandler!: DapEventHandler = { _: String, _: JsonNode => () },
+        reverseRequestHandler!: DapReverseRequestHandler = { command: String, _: JsonNode =>
             DapResult.Err(DapError(DapErrorKind.Protocol, "dap.request_unsupported", "unsupported adapter request: " + command))
         },
         maxFrameBytes!: Int64 = 33554432
@@ -131,8 +132,8 @@ public class DapClient {
 
     public static func `spawn`(
         command: ProcessCommand,
-        eventHandler!: DapEventHandler = { _: String, _: JsonValue => () },
-        reverseRequestHandler!: DapReverseRequestHandler = { command: String, _: JsonValue =>
+        eventHandler!: DapEventHandler = { _: String, _: JsonNode => () },
+        reverseRequestHandler!: DapReverseRequestHandler = { command: String, _: JsonNode =>
             DapResult.Err(DapError(DapErrorKind.Protocol, "dap.request_unsupported", "unsupported adapter request: " + command))
         },
         maxFrameBytes!: Int64 = 33554432,
@@ -146,15 +147,15 @@ public class DapClient {
         }
     }
 
-    public func initialize(arguments: JsonValue, timeoutMillis!: Int64 = 30000): DapResult<JsonValue> {
+    public func initialize(arguments: JsonNode, timeoutMillis!: Int64 = 30000): DapResult<JsonNode> {
         request("initialize", arguments, timeoutMillis: timeoutMillis)
     }
 
     public func request(
         command: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         timeoutMillis!: Int64 = 30000
-    ): DapResult<JsonValue> {
+    ): DapResult<JsonNode> {
         let sequence = match (beginRequest(command, arguments)) {
             case DapResult.Ok(value) => value
             case DapResult.Err(error) => return DapResult.Err(error)
@@ -162,7 +163,7 @@ public class DapClient {
         waitResponse(sequence, timeoutMillis: timeoutMillis)
     }
 
-    public func beginRequest(command: String, arguments: JsonValue): DapResult<Int64> {
+    public func beginRequest(command: String, arguments: JsonNode): DapResult<Int64> {
         let item: DapPendingRequest
         stateLock.lock()
         try {
@@ -170,18 +171,18 @@ public class DapClient {
             item = DapPendingRequest(nextSequence, command); nextSequence++
             pending.add(item)
         } finally { stateLock.unlock() }
-        match (write(JsonValue.objectValue([
-            JsonField("seq", JsonValue.numberValue(item.sequence.toString())),
-            JsonField("type", JsonValue.stringValue("request")),
-            JsonField("command", JsonValue.stringValue(command)),
-            JsonField("arguments", arguments)
+        match (write(jsonObject([
+            JsonObjectEntry("seq", jsonNumber(item.sequence.toString())),
+            JsonObjectEntry("type", jsonString("request")),
+            JsonObjectEntry("command", jsonString(command)),
+            JsonObjectEntry("arguments", arguments)
         ]))) {
             case DapResult.Ok(_) => DapResult.Ok(item.sequence)
             case DapResult.Err(error) => settleError(item.sequence, error); DapResult.Err(error)
         }
     }
 
-    public func waitResponse(requestSequence: Int64, timeoutMillis!: Int64 = 30000): DapResult<JsonValue> {
+    public func waitResponse(requestSequence: Int64, timeoutMillis!: Int64 = 30000): DapResult<JsonNode> {
         if (timeoutMillis <= 0) { return DapResult.Err(DapError(DapErrorKind.Deadline, "dap.deadline_invalid", "deadline must be positive")) }
         let deadline = MonoTime.now() + Duration.millisecond * timeoutMillis
         while (MonoTime.now() < deadline) {
@@ -207,19 +208,19 @@ public class DapClient {
             }
         } finally { stateLock.unlock() }
         if (!found) { return DapResult.Ok(()) }
-        let arguments = JsonValue.objectValue([
-            JsonField("requestId", JsonValue.numberValue(requestSequence.toString()))
+        let arguments = jsonObject([
+            JsonObjectEntry("requestId", jsonNumber(requestSequence.toString()))
         ])
         let sequence: Int64
         stateLock.lock(); try { sequence = nextSequence; nextSequence++ } finally { stateLock.unlock() }
         // DAP cancel is a control request. Its response is intentionally not
         // correlated with an application waiter, so it must not occupy the
         // pending table.
-        write(JsonValue.objectValue([
-            JsonField("seq", JsonValue.numberValue(sequence.toString())),
-            JsonField("type", JsonValue.stringValue("request")),
-            JsonField("command", JsonValue.stringValue("cancel")),
-            JsonField("arguments", arguments)
+        write(jsonObject([
+            JsonObjectEntry("seq", jsonNumber(sequence.toString())),
+            JsonObjectEntry("type", jsonString("request")),
+            JsonObjectEntry("command", jsonString("cancel")),
+            JsonObjectEntry("arguments", arguments)
         ]))
     }
 
@@ -230,7 +231,7 @@ public class DapClient {
     }
     public func stderrSnapshot(): String { try { String.fromUtf8(stderr.snapshot()) } catch (_: Exception) { "" } }
 
-    public func disconnect(arguments!: JsonValue = JsonValue.objectValue([]), timeoutMillis!: Int64 = 3000): DapResult<Unit> {
+    public func disconnect(arguments!: JsonNode = jsonObject([]), timeoutMillis!: Int64 = 3000): DapResult<Unit> {
         if (isClosed()) { return DapResult.Ok(()) }
         match (request("disconnect", arguments, timeoutMillis: timeoutMillis)) {
             case DapResult.Ok(_) => close()
@@ -238,7 +239,7 @@ public class DapClient {
         }
     }
 
-    public func terminate(arguments!: JsonValue = JsonValue.objectValue([]), timeoutMillis!: Int64 = 3000): DapResult<Unit> {
+    public func terminate(arguments!: JsonNode = jsonObject([]), timeoutMillis!: Int64 = 3000): DapResult<Unit> {
         if (isClosed()) { return DapResult.Ok(()) }
         match (request("terminate", arguments, timeoutMillis: timeoutMillis)) {
             case DapResult.Ok(_) => DapResult.Ok(())
@@ -277,7 +278,7 @@ public class DapClient {
         }
     }
 
-    private func dispatch(message: JsonValue): Unit {
+    private func dispatch(message: JsonNode): Unit {
         match (textField(message, "type")) {
             case "event" => eventHandler(
                 textField(message, "event"), objectField(message, "body")
@@ -296,33 +297,33 @@ public class DapClient {
         }
     }
 
-    private func handleReverseRequest(message: JsonValue): Unit {
+    private func handleReverseRequest(message: JsonNode): Unit {
         let requestSequence = integerField(message, "seq", 0)
         let command = textField(message, "command")
         let result = reverseHandler(command, objectField(message, "arguments"))
         let responseSequence: Int64
         stateLock.lock(); try { responseSequence = nextSequence; nextSequence++ } finally { stateLock.unlock() }
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField("seq", JsonValue.numberValue(responseSequence.toString())))
-        fields.add(JsonField("type", JsonValue.stringValue("response")))
-        fields.add(JsonField("request_seq", JsonValue.numberValue(requestSequence.toString())))
-        fields.add(JsonField("command", JsonValue.stringValue(command)))
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("seq", jsonNumber(responseSequence.toString())))
+        fields.add(JsonObjectEntry("type", jsonString("response")))
+        fields.add(JsonObjectEntry("request_seq", jsonNumber(requestSequence.toString())))
+        fields.add(JsonObjectEntry("command", jsonString(command)))
         match (result) {
-            case DapResult.Ok(body) => fields.add(JsonField("success", JsonValue.boolValue(true))); fields.add(JsonField("body", body))
-            case DapResult.Err(error) => fields.add(JsonField("success", JsonValue.boolValue(false))); fields.add(JsonField("message", JsonValue.stringValue(error.message)))
+            case DapResult.Ok(body) => fields.add(JsonObjectEntry("success", jsonBool(true))); fields.add(JsonObjectEntry("body", body))
+            case DapResult.Err(error) => fields.add(JsonObjectEntry("success", jsonBool(false))); fields.add(JsonObjectEntry("message", jsonString(error.message)))
         }
-        let _ = write(JsonValue.objectValue(fields.toArray()))
+        let _ = write(jsonObject(fields.toArray()))
     }
 
-    private func write(value: JsonValue): DapResult<Unit> {
+    private func write(value: JsonNode): DapResult<Unit> {
         writeLock.lock(); try {
             try { process.writeStdin(encodeDapMessage(value)); process.flushInput(); DapResult.Ok(()) }
             catch (error: ProcessError) { DapResult.Err(DapError(DapErrorKind.Transport, "dap.write_failed", error.message)) }
         } finally { writeLock.unlock() }
     }
-    private func settleResult(sequence: Int64, value: JsonValue): Unit { stateLock.lock(); try { for (item in pending where item.sequence == sequence && item.result.isNone() && item.error.isNone()) { item.result = Some(value); return } } finally { stateLock.unlock() } }
+    private func settleResult(sequence: Int64, value: JsonNode): Unit { stateLock.lock(); try { for (item in pending where item.sequence == sequence && item.result.isNone() && item.error.isNone()) { item.result = Some(value); return } } finally { stateLock.unlock() } }
     private func settleError(sequence: Int64, error: DapError): Unit { stateLock.lock(); try { for (item in pending where item.sequence == sequence && item.result.isNone() && item.error.isNone()) { item.error = Some(error); return } } finally { stateLock.unlock() } }
-    private func take(sequence: Int64): ?DapResult<JsonValue> {
+    private func take(sequence: Int64): ?DapResult<JsonNode> {
         stateLock.lock(); try {
             for (index in 0..pending.size where pending[index].sequence == sequence) {
                 let item = pending[index]
@@ -340,7 +341,7 @@ public class DapClient {
     private func closedFailure(): DapError { match (closeError) { case Some(error) => error; case None => DapError(DapErrorKind.Transport, "dap.client_closed", "DAP client is closed") } }
 }
 
-func textField(value: JsonValue, name: String): String { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Text) { item.text } else { "" }; case None => "" } }
-func integerField(value: JsonValue, name: String, fallback: Int64): Int64 { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }; case None => fallback } }
-func boolField(value: JsonValue, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.kind == JsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
-func objectField(value: JsonValue, name: String): JsonValue { match (value.field(name)) { case Some(item) => item; case None => JsonValue.objectValue([]) } }
+func textField(value: JsonNode, name: String): String { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Text) { item.text } else { "" }; case None => "" } }
+func integerField(value: JsonNode, name: String, fallback: Int64): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }; case None => fallback } }
+func boolField(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
+func objectField(value: JsonNode, name: String): JsonNode { match (value.field(name)) { case Some(item) => item; case None => jsonObject([]) } }

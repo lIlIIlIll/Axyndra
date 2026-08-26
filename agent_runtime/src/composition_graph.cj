@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.deriving.*
 import agent_domain.*
@@ -210,8 +214,8 @@ public class AgentProfile {
         baseProfile!: String = ""
     ) {
         if (id.trimAscii() == "" || version.trimAscii() == "" ||
-            modelRoles.kind != ValueKind.Object || toolVisibility.kind != ValueKind.Object ||
-            contextPolicy.kind != ValueKind.Object || compactionPolicy.kind != ValueKind.Object ||
+            modelRoles.unifiedKind != ValueKind.Object || toolVisibility.unifiedKind != ValueKind.Object ||
+            contextPolicy.unifiedKind != ValueKind.Object || compactionPolicy.unifiedKind != ValueKind.Object ||
             !uniqueComponentInstances(componentInstances) ||
             !uniqueServiceBindings(serviceBindings)) {
             throw IllegalArgumentException("Agent Profile is invalid")

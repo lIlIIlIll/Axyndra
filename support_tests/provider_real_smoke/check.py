@@ -6,9 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import select
+import queue
 import subprocess
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -204,6 +205,17 @@ def rpc_approval_continue(
     assert process.stdin is not None
     assert process.stdout is not None
     frames: list[dict[str, object]] = []
+    received: queue.Queue[dict[str, object] | None] = queue.Queue()
+
+    def read_frames() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            value = json.loads(line)
+            if isinstance(value, dict):
+                received.put(value)
+        received.put(None)
+
+    threading.Thread(target=read_frames, daemon=True).start()
     if spec.base_url.startswith("http://127.0.0.1:"):
         outside = workspace.parent / "outside"
         outside.mkdir()
@@ -232,16 +244,11 @@ def rpc_approval_continue(
                     f"{scenario} timed out; frames="
                     + json.dumps(frames, ensure_ascii=False)
                 )
-            readable, _, _ = select.select(
-                [process.stdout],
-                [],
-                [],
-                remaining,
-            )
-            if not readable:
+            try:
+                value = received.get(timeout=remaining)
+            except queue.Empty:
                 continue
-            line = process.stdout.readline()
-            if not line:
+            if value is None:
                 error = (
                     process.stderr.read()
                     if process.stderr is not None
@@ -250,9 +257,7 @@ def rpc_approval_continue(
                 raise SystemExit(
                     f"{scenario} RPC process ended early: {error}"
                 )
-            value = json.loads(line)
-            if isinstance(value, dict):
-                frames.append(value)
+            frames.append(value)
 
     try:
         wait_for(

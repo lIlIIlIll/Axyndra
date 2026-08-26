@@ -1,3 +1,5 @@
 version = 0
 
 [requires]
+  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", branch = "main", output-type = "static"}
+  llm4cj = {git = "https://github.com/lIlIIlIll/llm4cj.git", commitId = "4cb831950c6e82977179c3bbf8c8a20afd787238", branch = "main", output-type = "static"}

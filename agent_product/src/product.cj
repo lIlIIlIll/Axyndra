@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_client.*
 import agent_app_protocol.*
 import agent_core.*
@@ -2929,17 +2933,17 @@ public func encodeTodoPhases(phases: Array<TodoPhase>): AgentValue {
 }
 
 public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         return invalidTodoData("todo phases must be a list")
     }
     let phases = ArrayList<TodoPhase>()
     for (phaseValue in value.items) {
-        if (phaseValue.kind != ValueKind.Object) {
+        if (phaseValue.unifiedKind != ValueKind.Object) {
             return invalidTodoData("todo phase must be an object")
         }
         let name = match (phaseValue.field("name")) {
             case Some(field) =>
-                if (field.kind != ValueKind.Text || field.text.trimAscii() == "") {
+                if (field.unifiedKind != ValueKind.Text || field.text.trimAscii() == "") {
                     return invalidTodoData("todo phase name must be a non-empty string")
                 }
                 field.text
@@ -2947,7 +2951,7 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
         }
         let taskValues = match (phaseValue.field("tasks")) {
             case Some(field) =>
-                if (field.kind != ValueKind.List) {
+                if (field.unifiedKind != ValueKind.List) {
                     return invalidTodoData("todo phase tasks must be a list")
                 }
                 field.items
@@ -2955,12 +2959,12 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
         }
         let tasks = ArrayList<TodoItem>()
         for (taskValue in taskValues) {
-            if (taskValue.kind != ValueKind.Object) {
+            if (taskValue.unifiedKind != ValueKind.Object) {
                 return invalidTodoData("todo task must be an object")
             }
             let content = match (taskValue.field("content")) {
                 case Some(field) =>
-                    if (field.kind != ValueKind.Text || field.text.trimAscii() == "") {
+                    if (field.unifiedKind != ValueKind.Text || field.text.trimAscii() == "") {
                         return invalidTodoData("todo task content must be a non-empty string")
                     }
                     field.text
@@ -2968,7 +2972,7 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
             }
             let status = match (taskValue.field("status")) {
                 case Some(field) =>
-                    if (field.kind != ValueKind.Text) {
+                    if (field.unifiedKind != ValueKind.Text) {
                         return invalidTodoData("todo task status must be a string")
                     }
                     match (todoStatusValue(field.text)) {
@@ -2979,7 +2983,7 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
             }
             let blocker = match (taskValue.field("blocker")) {
                 case Some(field) =>
-                    if (field.kind != ValueKind.Text) {
+                    if (field.unifiedKind != ValueKind.Text) {
                         return invalidTodoData("todo task blocker must be a string")
                     }
                     field.text
@@ -3218,7 +3222,7 @@ func compactText(value: String, limit: Int64): String {
 func argumentText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -3230,7 +3234,7 @@ func argumentText(value: AgentValue, name: String): String {
 func argumentNumber(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Number) { item.number } else { "" }
+            if (item.unifiedKind == ValueKind.Number) { item.number } else { "" }
         case None => ""
     }
 }
@@ -4035,7 +4039,7 @@ func productToolResultError(result: ToolResult): AgentError {
         code,
         productToolResultText(result, "message", code),
         retryable: match (result.output.field("retryable")) {
-            case Some(value) => value.kind == ValueKind.Boolean && value.boolean
+            case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
             case None => false
         }
     )
@@ -4048,7 +4052,7 @@ func productToolResultText(
 ): String {
     match (result.output.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text && value.text != "") {
+            if (value.unifiedKind == ValueKind.Text && value.text != "") {
                 value.text
             } else {
                 fallback
