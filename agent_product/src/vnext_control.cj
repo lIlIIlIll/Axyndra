@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.sync.*
 import agent_domain.*

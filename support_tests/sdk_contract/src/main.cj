@@ -1,5 +1,9 @@
 package sdk_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_core.*
 import agent_domain.*
 import agent_ports.*
@@ -200,20 +204,30 @@ func headlessRunStreamsTypedEvents(): Bool {
     ).build().value().getOrThrow()
     let result = HeadlessRunner(sdk).run("say hello")
     let description = sdk.configuration.describe()
-    expect(
+    let completed = expect(
         result.status == HeadlessStatus.Completed && result.exitCode == 0 &&
-            result.text == "你好 SDK" &&
-            result.jsonEvents.contains("\"type\":\"agent_event\"") &&
+            result.text == "你好 SDK",
+        "headless runner returns typed success and UTF-8 text"
+    )
+    let events = expect(
+        result.jsonEvents.contains("\"type\":\"agent_event\"") &&
             result.jsonEvents.contains("\"kind\":\"model\"") &&
-            result.jsonEvents.contains("你好 SDK") &&
-            provider.calls == 1 && provider.lastModel == "file-model" &&
+            result.jsonEvents.contains("你好 SDK"),
+        "headless runner emits typed UTF-8 JSONL events"
+    )
+    let providerContract = expect(
+        provider.calls == 1 && provider.lastModel == "file-model" &&
             provider.lastSystem.contains("sdk-base-contract") &&
-            sdk.configuration.model.origin == Origin.File &&
-            description.contains("model=file-model (origin=file)") &&
+            sdk.configuration.model.origin == Origin.File,
+        "headless runner preserves provider configuration"
+    )
+    let metadata = expect(
+        description.contains("model=file-model (origin=file)") &&
             description.contains("prompt=[REDACTED]") &&
             !description.contains("sdk-base-contract"),
-        "headless runner returns typed success, UTF-8 JSONL events, and secret-safe config metadata"
+        "headless configuration metadata remains secret-safe"
     )
+    completed && events && providerContract && metadata
 }
 
 func headlessOutputIsScopedToCurrentRun(): Bool {

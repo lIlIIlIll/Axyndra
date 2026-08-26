@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_client.*
 import agent_core.*
 import agent_domain.*
@@ -2003,7 +2007,7 @@ public class ProductTaskRuntime {
             }
             let result = match (call.arguments.field("result")) {
                 case Some(value) =>
-                    if (value.kind != ValueKind.Object) {
+                    if (value.unifiedKind != ValueKind.Object) {
                         return yieldArgumentError(call, "result must be an object")
                     }
                     value
@@ -2021,7 +2025,7 @@ public class ProductTaskRuntime {
             let target = state.getOrThrow()
             match (error) {
                 case Some(value) =>
-                    if (value.kind != ValueKind.Text || value.text.trimAscii() == "") {
+                    if (value.unifiedKind != ValueKind.Text || value.text.trimAscii() == "") {
                         return yieldArgumentError(
                             call,
                             "result.error must be a non-empty string"
@@ -2033,7 +2037,7 @@ public class ProductTaskRuntime {
                         case Result.Ok(labels) =>
                             if (labels.isEmpty()) {
                                 target.terminal = Some(value)
-                            } else if (typeValue.getOrThrow().kind == ValueKind.List) {
+                            } else if (typeValue.getOrThrow().unifiedKind == ValueKind.List) {
                                 target.sections.add(ProductYieldSection(labels, value))
                             } else {
                                 target.terminal = Some(value)
@@ -2042,7 +2046,7 @@ public class ProductTaskRuntime {
                     }
                     case None => match (typeValue) {
                         case Some(value) =>
-                            if (value.kind == ValueKind.Text && value.text.trimAscii() != "") {
+                            if (value.unifiedKind == ValueKind.Text && value.text.trimAscii() != "") {
                                 target.useLastTurn = true
                             } else {
                                 return yieldArgumentError(
@@ -4019,7 +4023,7 @@ func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
     }
     let context = match (call.arguments.field("context")) {
         case Some(value) =>
-            if (value.kind != ValueKind.Text || value.text.trimAscii() == "") {
+            if (value.unifiedKind != ValueKind.Text || value.text.trimAscii() == "") {
                 return taskError<ProductTaskBatch>(
                     "task.context_required",
                     "batch task requires non-empty context"
@@ -4032,7 +4036,7 @@ func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
         )
     }
     let raw = tasksValue.getOrThrow()
-    if (raw.kind != ValueKind.List || raw.items.isEmpty() || raw.items.size > 8) {
+    if (raw.unifiedKind != ValueKind.List || raw.items.isEmpty() || raw.items.size > 8) {
         return taskError<ProductTaskBatch>(
             "task.batch_size",
             "tasks must contain between 1 and 8 task items"
@@ -4042,7 +4046,7 @@ func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
     let names = ArrayList<String>()
     var index: Int64 = 0
     for (item in raw.items) {
-        if (item.kind != ValueKind.Object) {
+        if (item.unifiedKind != ValueKind.Object) {
             return taskError<ProductTaskBatch>(
                 "task.item_invalid",
                 "every tasks item must be an object"
@@ -4149,9 +4153,9 @@ func parseProductTask(call: ToolCall): Result<ProductTaskSpec> {
     }
     let outputSchema: ?AgentValue = match (call.arguments.field("outputSchema")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Null) {
+            if (value.unifiedKind == ValueKind.Null) {
                 None
-            } else if (value.kind == ValueKind.Object || value.kind == ValueKind.Boolean || value.kind == ValueKind.Text) {
+            } else if (value.unifiedKind == ValueKind.Object || value.unifiedKind == ValueKind.Boolean || value.unifiedKind == ValueKind.Text) {
                 Some(value)
             } else {
                 return taskError<ProductTaskSpec>(
@@ -4180,7 +4184,7 @@ func productTaskText(
 ): Result<String> {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind != ValueKind.Text) {
+            if (value.unifiedKind != ValueKind.Text) {
                 taskError<String>(
                     "task.invalid_arguments",
                     name + " must be a string"
@@ -4437,7 +4441,7 @@ func updateSubagentProgress(
 ): Bool {
     let code = match (event.detail.field("code")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 value.text
             } else {
                 ""
@@ -4454,7 +4458,7 @@ func updateSubagentProgress(
         state.toolCount += 1
         state.currentTool = match (event.detail.field("name")) {
             case Some(value) =>
-                if (value.kind == ValueKind.Text) {
+                if (value.unifiedKind == ValueKind.Text) {
                     value.text
                 } else {
                     ""
@@ -4473,7 +4477,7 @@ func updateSubagentProgress(
 func taskEventInteger(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Number) {
+            if (field.unifiedKind == ValueKind.Number) {
                 try {
                     Int64.parse(field.number)
                 } catch (_: Exception) {
@@ -4528,7 +4532,7 @@ func yieldLabels(value: ?AgentValue): Result<Array<String>> {
     match (value) {
         case None => Result.Ok([])
         case Some(field) =>
-            if (field.kind == ValueKind.Text) {
+            if (field.unifiedKind == ValueKind.Text) {
                 if (field.text.trimAscii() == "") {
                     taskError<Array<String>>(
                         "yield.type_invalid",
@@ -4537,10 +4541,10 @@ func yieldLabels(value: ?AgentValue): Result<Array<String>> {
                 } else {
                     Result.Ok([field.text])
                 }
-            } else if (field.kind == ValueKind.List) {
+            } else if (field.unifiedKind == ValueKind.List) {
                 let labels = ArrayList<String>()
                 for (item in field.items) {
-                    if (item.kind != ValueKind.Text || item.text.trimAscii() == "") {
+                    if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
                         return taskError<Array<String>>(
                             "yield.type_invalid",
                             "type must be a string or non-empty string array"
@@ -4572,14 +4576,14 @@ func validateTaskSchema(
     match (schema) {
         case None => TaskSchemaValidation(true)
         case Some(value) =>
-            if (value.kind == ValueKind.Boolean) {
+            if (value.unifiedKind == ValueKind.Boolean) {
                 return if (value.boolean) {
                     TaskSchemaValidation(true)
                 } else {
                     TaskSchemaValidation(false, error: "schema rejects all values")
                 }
             }
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 return TaskSchemaValidation(true)
             }
             validateTaskSchemaValue(value, output, "$")
@@ -4593,14 +4597,14 @@ func validateTaskSchemaValue(
 ): TaskSchemaValidation {
     let expected = match (schema.field("type")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 value.text
             } else {
                 ""
             }
         case None => ""
     }
-    if (expected != "" && !taskSchemaKindMatches(expected, output.kind)) {
+    if (expected != "" && !taskSchemaKindMatches(expected, output.unifiedKind)) {
         return TaskSchemaValidation(
             false,
             error: path + " must be " + expected
@@ -4608,8 +4612,8 @@ func validateTaskSchemaValue(
     }
     match (schema.field("required")) {
         case Some(required) =>
-            if (required.kind == ValueKind.List && output.kind == ValueKind.Object) {
-                for (item in required.items where item.kind == ValueKind.Text && output.field(item.text).isNone()) {
+            if (required.unifiedKind == ValueKind.List && output.unifiedKind == ValueKind.Object) {
+                for (item in required.items where item.unifiedKind == ValueKind.Text && output.field(item.text).isNone()) {
                     return TaskSchemaValidation(
                         false,
                         error: path + "." + item.text + " is required"
@@ -4620,7 +4624,7 @@ func validateTaskSchemaValue(
     }
     match (schema.field("properties")) {
         case Some(properties) =>
-            if (properties.kind == ValueKind.Object && output.kind == ValueKind.Object) {
+            if (properties.unifiedKind == ValueKind.Object && output.unifiedKind == ValueKind.Object) {
                 for (field in properties.fields) {
                     match (output.field(field.name)) {
                         case Some(child) =>
@@ -4671,7 +4675,7 @@ func productTaskResultValue(result: ProductTaskResult): AgentValue {
     fields.add(
         ValueField(
             "output",
-            textValue(if (result.output.kind == ValueKind.Text) {
+            textValue(if (result.output.unifiedKind == ValueKind.Text) {
                 result.output.text
             } else {
                 encodeAgentValue(result.output)
@@ -4872,7 +4876,7 @@ func jobIds(call: ToolCall): Result<Array<String>> {
         case Some(value) => value
         case None => return Result.Ok([])
     }
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         return taskError<Array<String>>(
             "hub.ids_invalid",
             "hub ids must be an array of strings"
@@ -4880,7 +4884,7 @@ func jobIds(call: ToolCall): Result<Array<String>> {
     }
     let ids = ArrayList<String>()
     for (item in value.items) {
-        if (item.kind != ValueKind.Text || item.text.trimAscii() == "") {
+        if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
             return taskError<Array<String>>(
                 "hub.ids_invalid",
                 "hub ids must contain non-empty strings"
@@ -4898,7 +4902,7 @@ func jobTimeout(call: ToolCall): Result<Int64> {
         case Some(value) => value
         case None => return Result.Ok(30000)
     }
-    if (value.kind != ValueKind.Number) {
+    if (value.unifiedKind != ValueKind.Number) {
         return taskError<Int64>(
             "hub.timeout_invalid",
             "hub timeoutMs must be a non-negative integer"
@@ -4967,7 +4971,7 @@ func mergeProcessLists(
                 "process supervisor returned no daemon list"
             )
         }
-        if (daemons.kind != ValueKind.List) {
+        if (daemons.unifiedKind != ValueKind.List) {
             return taskError<ToolResult>(
                 "hub.process_list_invalid",
                 "process supervisor returned an invalid daemon list"

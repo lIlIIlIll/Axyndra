@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.deriving.*
 import std.sync.*
@@ -208,9 +212,9 @@ public class ThreadTransition {
             after.thread.revision != before.thread.revision + 1) {
             throw IllegalArgumentException("thread transition must advance one matching revision")
         }
-        if (runLaneSnapshot.kind != ValueKind.Object ||
-            runSkillSnapshot.kind != ValueKind.Object ||
-            runBudgetSnapshot.kind != ValueKind.Object) {
+        if (runLaneSnapshot.unifiedKind != ValueKind.Object ||
+            runSkillSnapshot.unifiedKind != ValueKind.Object ||
+            runBudgetSnapshot.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("Run launch snapshots must be objects")
         }
         if (committedItem.isSome() && !committedItems.isEmpty()) {

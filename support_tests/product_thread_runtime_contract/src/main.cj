@@ -1,5 +1,9 @@
 package product_thread_runtime_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import std.fs.*
 import std.collection.*
 import agent_app_protocol.*

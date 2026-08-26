@@ -1,5 +1,9 @@
 package agent_rpc
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_cli.*
 import agent_core.*
 import agent_domain.*
@@ -1730,7 +1734,7 @@ func productIntegerField(value: AgentValue, name: String): Int64 {
 
 func productBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => item.kind == ValueKind.Boolean && item.boolean
+        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.boolean
         case None => false
     }
 }

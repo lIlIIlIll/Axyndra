@@ -7,5 +7,6 @@
   output-type = "static"
 
 [dependencies]
-  "json4cj" = { path = "../libs/json4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
+  "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
   "process4cj" = { path = "../libs/process4cj", output-type = "static" }

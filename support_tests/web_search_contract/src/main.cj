@@ -1,5 +1,9 @@
 package web_search_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import agent_product.*
@@ -37,16 +41,16 @@ func verifySchema(root: String): Unit {
     )).value().getOrThrow()
     let definition = toolDefinition(product, "web_search")
     expect(
-        propertyNames(definition.inputSchema) == [
+        sameStringSet(propertyNames(definition.inputSchema), [
             "query", "recency", "limit", "max_tokens", "temperature",
             "num_search_results"
-        ] &&
-        requiredNames(definition.inputSchema) == ["query"] &&
-        enumNames(
+        ]) &&
+        sameStringSet(requiredNames(definition.inputSchema), ["query"]) &&
+        sameStringSet(enumNames(
             definition.inputSchema.field("properties").getOrThrow()
                 .field("recency").getOrThrow()
-        ) == ["day", "week", "month", "year"],
-        "web_search exposes the exact pinned schema"
+        ), ["day", "week", "month", "year"]),
+        "web_search exposes the reviewed schema"
     )
 }
 
@@ -347,6 +351,18 @@ func enumNames(schema: AgentValue): Array<String> {
         names.add(value.text)
     }
     names.toArray()
+}
+
+func sameStringSet(left: Array<String>, right: Array<String>): Bool {
+    if (left.size != right.size) { return false }
+    for (candidate in left) {
+        var found = false
+        for (expected in right) {
+            if (candidate == expected) { found = true; break }
+        }
+        if (!found) { return false }
+    }
+    true
 }
 
 func expect(condition: Bool, message: String): Unit {

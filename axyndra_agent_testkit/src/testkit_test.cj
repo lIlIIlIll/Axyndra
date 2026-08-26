@@ -1,7 +1,8 @@
 package axyndra_agent_testkit
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -47,14 +48,14 @@ class PublicAgentTestkitTests {
         @Expect(harness.toolNames().size, 1)
         let prepared = requireSdkOk(harness.prepare(
             "fixture",
-            JsonValue.objectValue([JsonField("value", JsonValue.stringValue("ok"))]),
+            jsonObject([JsonObjectEntry("value", jsonString("ok"))]),
             callId: "fixture-call"
         ))
         assertCapabilityRequested(prepared.definition, "workspace.read")
         let output = requireSdkOk(harness.decode(
             prepared,
-            ExecutionResult(JsonValue.objectValue([
-                JsonField("value", JsonValue.stringValue("done"))
+            ExecutionResult(jsonObject([
+                JsonObjectEntry("value", jsonString("done"))
             ]))
         ))
         @Expect(output.structured.field("value").getOrThrow().text, "done")
@@ -73,11 +74,11 @@ class FixtureTool <: ExtensionTool {
         ExtensionToolDefinition(
             "fixture",
             "fixture tool",
-            JsonValue.objectValue([JsonField("type", JsonValue.stringValue("object"))]),
+            jsonObject([JsonObjectEntry("type", jsonString("object"))]),
             [workspaceRead()]
         )
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> { SdkResult.Ok(input) }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
     public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
         SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("fixture", invocation.input)))
     }

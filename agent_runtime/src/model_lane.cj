@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.deriving.*
 import std.collection.*
 import std.convert.*
@@ -53,7 +57,7 @@ public class ToolSnapshotEntry {
         requiredCapabilities: Array<Capability>
     ) {
         if (name.trimAscii() == "" || executorVersion.trimAscii() == "" ||
-            inputSchema.kind != ValueKind.Object) {
+            inputSchema.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException(
                 "tool snapshot requires a name, object schema, and executor version"
             )
@@ -234,13 +238,13 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
 public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
     let capabilityValue = laneObjectField(value, "capabilities")
     let toolValues = laneField(value, "tools")
-    if (toolValues.kind != ValueKind.List) {
+    if (toolValues.unifiedKind != ValueKind.List) {
         throw IllegalStateException("ModelLane tools snapshot is not a list")
     }
     let tools = ArrayList<ToolSnapshotEntry>()
     for (tool in toolValues.items) {
         let capabilityItems = laneField(tool, "capabilities")
-        if (capabilityItems.kind != ValueKind.List) {
+        if (capabilityItems.unifiedKind != ValueKind.List) {
             throw IllegalStateException("Tool capability snapshot is not a list")
         }
         let capabilities = ArrayList<Capability>()
@@ -325,7 +329,7 @@ func laneCapabilityKind(value: String): CapabilityKind {
 }
 
 func laneField(value: AgentValue, name: String): AgentValue {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         throw IllegalStateException("ModelLane snapshot is not an object")
     }
     match (value.field(name)) {
@@ -336,7 +340,7 @@ func laneField(value: AgentValue, name: String): AgentValue {
 
 func laneObjectField(value: AgentValue, name: String): AgentValue {
     let item = laneField(value, name)
-    if (item.kind != ValueKind.Object) {
+    if (item.unifiedKind != ValueKind.Object) {
         throw IllegalStateException("ModelLane snapshot field is not an object: " + name)
     }
     item
@@ -344,7 +348,7 @@ func laneObjectField(value: AgentValue, name: String): AgentValue {
 
 func laneTextField(value: AgentValue, name: String): String {
     let item = laneField(value, name)
-    if (item.kind != ValueKind.Text) {
+    if (item.unifiedKind != ValueKind.Text) {
         throw IllegalStateException("ModelLane snapshot field is not text: " + name)
     }
     item.text
@@ -352,7 +356,7 @@ func laneTextField(value: AgentValue, name: String): String {
 
 func laneBoolField(value: AgentValue, name: String): Bool {
     let item = laneField(value, name)
-    if (item.kind != ValueKind.Boolean) {
+    if (item.unifiedKind != ValueKind.Boolean) {
         throw IllegalStateException("ModelLane snapshot field is not boolean: " + name)
     }
     item.boolean
@@ -360,7 +364,7 @@ func laneBoolField(value: AgentValue, name: String): Bool {
 
 func laneIntField(value: AgentValue, name: String): Int64 {
     let item = laneField(value, name)
-    if (item.kind != ValueKind.Number) {
+    if (item.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("ModelLane snapshot field is not numeric: " + name)
     }
     try { Int64.parse(item.number) } catch (_: Exception) {

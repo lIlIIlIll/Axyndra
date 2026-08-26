@@ -1,7 +1,8 @@
 package sdk_fixture_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 
 public func fixtureExtensionManifest(): String {
     """
@@ -34,13 +35,13 @@ public func runFixtureContract(): Int64 {
     }, "duplicate id is rejected")
 
     let tool = extension.tools()[0]
-    expect(match (tool.validate(JsonValue.objectValue([]))) {
+    expect(match (tool.validate(jsonObject([]))) {
         case SdkResult.Err(error) => error.kind == SdkErrorKind.Validation
         case SdkResult.Ok(_) => false
     }, "extension validation is typed")
     let cancelled = ToolInvocation(
         "fixture-cancelled",
-        JsonValue.objectValue([JsonField("text", JsonValue.stringValue("x"))]),
+        jsonObject([JsonObjectEntry("text", jsonString("x"))]),
         "/workspace",
         "/workspace",
         cancellation: CancelledFixture()
@@ -74,24 +75,24 @@ class FixtureTool <: ExtensionTool {
         ExtensionToolDefinition(
             "fixture_echo",
             "Fixture read intent.",
-            JsonValue.objectValue([
-                JsonField("type", JsonValue.stringValue("object")),
-                JsonField("properties", JsonValue.objectValue([
-                    JsonField("text", JsonValue.objectValue([
-                        JsonField("type", JsonValue.stringValue("string"))
+            jsonObject([
+                JsonObjectEntry("type", jsonString("object")),
+                JsonObjectEntry("properties", jsonObject([
+                    JsonObjectEntry("text", jsonObject([
+                        JsonObjectEntry("type", jsonString("string"))
                     ]))
                 ])),
-                JsonField("required", JsonValue.arrayValue([
-                    JsonValue.stringValue("text")
+                JsonObjectEntry("required", jsonArray([
+                    jsonString("text")
                 ]))
             ]),
             [workspaceRead()]
         )
     }
 
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         match (input.field("text")) {
-            case Some(value) => if (value.kind == JsonKind.Text) {
+            case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Text) {
                 SdkResult.Ok(input)
             } else {
                 invalid()
@@ -124,7 +125,7 @@ class FixtureTool <: ExtensionTool {
         SdkResult.Ok(ToolOutput(structured: result.value))
     }
 
-    private func invalid(): SdkResult<JsonValue> {
+    private func invalid(): SdkResult<JsonNode> {
         SdkResult.Err(SdkError(
             SdkErrorKind.Validation,
             "fixture.text_required",

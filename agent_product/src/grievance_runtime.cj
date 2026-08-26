@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
@@ -150,7 +154,7 @@ class ProductGrievanceRuntime {
         let values: Array<AgentValue> =
             match (root.field("grievances")) {
             case Some(value) =>
-                if (value.kind != ValueKind.List) {
+                if (value.unifiedKind != ValueKind.List) {
                     return grievanceError<ProductGrievanceList>(
                         "grievances.invalid_store",
                         "grievances must be a list",
@@ -228,7 +232,7 @@ class ProductGrievanceRuntime {
 func grievanceText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            match (field.kind) {
+            match (field.unifiedKind) {
                 case ValueKind.Text => field.text
                 case _ => ""
             }
@@ -239,7 +243,7 @@ func grievanceText(value: AgentValue, name: String): String {
 func grievanceInteger(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            match (field.kind) {
+            match (field.unifiedKind) {
                 case ValueKind.Number =>
                     try { Int64.parse(field.number) }
                     catch (_: Exception) { 0 }
@@ -252,7 +256,7 @@ func grievanceInteger(value: AgentValue, name: String): Int64 {
 func grievanceBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            match (field.kind) {
+            match (field.unifiedKind) {
                 case ValueKind.Boolean => field.boolean
                 case _ => false
             }

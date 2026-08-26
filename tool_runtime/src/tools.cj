@@ -1,5 +1,9 @@
 package tool_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_runtime.*
 import agent_ports.*
@@ -57,10 +61,10 @@ public class ObjectArgumentValidator <: ToolArgumentValidator {
                 )
             )
         }
-        if (call.arguments.kind != ValueKind.Object) {
+        if (call.arguments.unifiedKind != ValueKind.Object) {
             return invalidToolArguments(
                 call,
-                JsonSchemaViolation(
+                UnifiedJsonSchemaViolation(
                     "$",
                     "type",
                     "tool arguments must be an object"
@@ -79,7 +83,7 @@ public class ObjectArgumentValidator <: ToolArgumentValidator {
 
 func invalidToolArguments(
     call: ToolCall,
-    violation: JsonSchemaViolation
+    violation: UnifiedJsonSchemaViolation
 ): Result<Unit> {
     Result.Err(
         AgentError(
@@ -2154,7 +2158,7 @@ public func approvalPermanentDenialReason(request: ApprovalRequest): ?String {
 func approvalTextField(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -2193,7 +2197,7 @@ func approvalHash(source: String): String {
 }
 
 func canonicalApprovalValue(value: AgentValue): String {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => "null"
         case ValueKind.Boolean =>
             if (value.boolean) {

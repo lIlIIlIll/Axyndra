@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import agent_domain.*
 import agent_ports.*
 import tool_runtime.*
@@ -230,7 +231,7 @@ public class ProductWebSearchRuntime {
         let parsed = try {
             parseWebSearchResponse(
                 provider,
-                parseJson(result.stdout, maxBytes: 16777216),
+                parseUnifiedJson(result.stdout, maxBytes: 16777216),
                 limit
             )
         } catch (error: Exception) {
@@ -329,39 +330,39 @@ public class ProductWebSearchRuntime {
                 }
                 Result.Ok(arguments.toArray())
             case "tavily" =>
-                let payload = JsonValue.objectValue([
-                    JsonField(
+                let payload = jsonObject([
+                    JsonObjectEntry(
                         "api_key",
-                        JsonValue.stringValue(
+                        jsonString(
                             webSearchVariable("TAVILY_API_KEY")
                         )
                     ),
-                    JsonField("query", JsonValue.stringValue(query)),
-                    JsonField(
+                    JsonObjectEntry("query", jsonString(query)),
+                    JsonObjectEntry(
                         "max_results",
-                        JsonValue.numberValue(limit.toString())
+                        jsonNumber(limit.toString())
                     ),
-                    JsonField(
+                    JsonObjectEntry(
                         "include_answer",
-                        JsonValue.boolValue(true)
+                        jsonBool(true)
                     ),
-                    JsonField(
+                    JsonObjectEntry(
                         "search_depth",
-                        JsonValue.stringValue("basic")
+                        jsonString("basic")
                     )
                 ])
                 if (recency != "") {
                     payload.put(
                         "time_range",
-                        JsonValue.stringValue(recency)
+                        jsonString(recency)
                     )
                 }
                 match (call.arguments.field("max_tokens")) {
                     case Some(value) =>
-                        if (value.kind == ValueKind.Number) {
+                        if (value.unifiedKind == ValueKind.Number) {
                             payload.put(
                                 "max_tokens",
-                                JsonValue.numberValue(value.number)
+                                jsonNumber(value.number)
                             )
                         }
                     case None => ()
@@ -411,12 +412,12 @@ class WebSearchTool <: ToolExecutor {
 
 func parseWebSearchResponse(
     provider: String,
-    root: JsonValue,
+    root: JsonNode,
     limit: Int64
 ): ProductSearchResponse {
     let sources = ArrayList<ProductSearchSource>()
     var answer = ""
-    let rawItems: Array<JsonValue> = match (provider) {
+    let rawItems: Array<JsonNode> = match (provider) {
         case "brave" =>
             match (root.field("web")) {
                 case Some(web) => jsonArrayItems(web, "results")
@@ -521,18 +522,18 @@ func webSearchFailure(
     )
 }
 
-func jsonArrayItems(value: JsonValue, name: String): Array<JsonValue> {
+func jsonArrayItems(value: JsonNode, name: String): Array<JsonNode> {
     match (value.field(name)) {
         case Some(array) =>
-            if (array.kind == JsonKind.List) { array.items } else { [] }
+            if (array.unifiedKind == UnifiedJsonKind.List) { array.items } else { [] }
         case None => []
     }
 }
 
-func jsonString(value: JsonValue, name: String): String {
+func jsonString(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }
         case None => ""
     }
 }

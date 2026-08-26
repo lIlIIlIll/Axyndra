@@ -1,6 +1,7 @@
 package jsonrpc4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.convert.*
 import std.sync.*
@@ -115,9 +116,9 @@ public func sameJsonRpcId(left: JsonRpcId, right: JsonRpcId): Bool {
 public class JsonRpcRequest {
     public let id: JsonRpcId
     public let method: String
-    public let params: JsonValue
+    public let params: JsonNode
 
-    public init(id: JsonRpcId, method: String, params!: JsonValue = JsonValue.objectValue([])) {
+    public init(id: JsonRpcId, method: String, params!: JsonNode = jsonObject([])) {
         requireMethod(method)
         requireParams(params)
         this.id = id
@@ -128,9 +129,9 @@ public class JsonRpcRequest {
 
 public class JsonRpcNotification {
     public let method: String
-    public let params: JsonValue
+    public let params: JsonNode
 
-    public init(method: String, params!: JsonValue = JsonValue.objectValue([])) {
+    public init(method: String, params!: JsonNode = jsonObject([])) {
         requireMethod(method)
         requireParams(params)
         this.method = method
@@ -141,9 +142,9 @@ public class JsonRpcNotification {
 public class JsonRpcError {
     public let code: Int64
     public let message: String
-    public let data: JsonValue
+    public let data: JsonNode
 
-    public init(code: Int64, message: String, data!: JsonValue = JsonValue.nullValue()) {
+    public init(code: Int64, message: String, data!: JsonNode = jsonNull()) {
         if (message.trimAscii() == "") {
             throw IllegalArgumentException("JSON-RPC error message must not be empty")
         }
@@ -154,7 +155,7 @@ public class JsonRpcError {
 }
 
 public enum JsonRpcResponsePayload {
-    Success(JsonValue) | Failure(JsonRpcError)
+    Success(JsonNode) | Failure(JsonRpcError)
 }
 
 public class JsonRpcResponse {
@@ -172,39 +173,39 @@ public enum JsonRpcEnvelope {
 }
 
 public func encodeJsonRpc(envelope: JsonRpcEnvelope): String {
-    encodeJson(jsonRpcValue(envelope))
+    stringifyUnifiedJson(jsonRpcValue(envelope))
 }
 
-public func jsonRpcValue(envelope: JsonRpcEnvelope): JsonValue {
+public func jsonRpcValue(envelope: JsonRpcEnvelope): JsonNode {
     match (envelope) {
         case JsonRpcEnvelope.Request(request) =>
-            JsonValue.objectValue([
-                JsonField("jsonrpc", JsonValue.stringValue(JSON_RPC_VERSION)),
-                JsonField("id", jsonRpcIdValue(request.id)),
-                JsonField("method", JsonValue.stringValue(request.method)),
-                JsonField("params", request.params)
+            jsonObject([
+                JsonObjectEntry("jsonrpc", jsonString(JSON_RPC_VERSION)),
+                JsonObjectEntry("id", jsonRpcIdValue(request.id)),
+                JsonObjectEntry("method", jsonString(request.method)),
+                JsonObjectEntry("params", request.params)
             ])
         case JsonRpcEnvelope.Notification(notification) =>
-            JsonValue.objectValue([
-                JsonField("jsonrpc", JsonValue.stringValue(JSON_RPC_VERSION)),
-                JsonField("method", JsonValue.stringValue(notification.method)),
-                JsonField("params", notification.params)
+            jsonObject([
+                JsonObjectEntry("jsonrpc", jsonString(JSON_RPC_VERSION)),
+                JsonObjectEntry("method", jsonString(notification.method)),
+                JsonObjectEntry("params", notification.params)
             ])
         case JsonRpcEnvelope.Response(response) => match (response.payload) {
-            case JsonRpcResponsePayload.Success(result) => JsonValue.objectValue([
-                JsonField("jsonrpc", JsonValue.stringValue(JSON_RPC_VERSION)),
-                JsonField("id", jsonRpcIdValue(response.id)),
-                JsonField("result", result)
+            case JsonRpcResponsePayload.Success(result) => jsonObject([
+                JsonObjectEntry("jsonrpc", jsonString(JSON_RPC_VERSION)),
+                JsonObjectEntry("id", jsonRpcIdValue(response.id)),
+                JsonObjectEntry("result", result)
             ])
             case JsonRpcResponsePayload.Failure(error) =>
-                let fields = ArrayList<JsonField>()
-                fields.add(JsonField("code", JsonValue.numberValue(error.code.toString())))
-                fields.add(JsonField("message", JsonValue.stringValue(error.message)))
-                if (error.data.kind != JsonKind.Null) { fields.add(JsonField("data", error.data)) }
-                JsonValue.objectValue([
-                    JsonField("jsonrpc", JsonValue.stringValue(JSON_RPC_VERSION)),
-                    JsonField("id", jsonRpcIdValue(response.id)),
-                    JsonField("error", JsonValue.objectValue(fields.toArray()))
+                let fields = ArrayList<JsonObjectEntry>()
+                fields.add(JsonObjectEntry("code", jsonNumber(error.code.toString())))
+                fields.add(JsonObjectEntry("message", jsonString(error.message)))
+                if (error.data.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("data", error.data)) }
+                jsonObject([
+                    JsonObjectEntry("jsonrpc", jsonString(JSON_RPC_VERSION)),
+                    JsonObjectEntry("id", jsonRpcIdValue(response.id)),
+                    JsonObjectEntry("error", jsonObject(fields.toArray()))
                 ])
         }
     }
@@ -212,8 +213,8 @@ public func jsonRpcValue(envelope: JsonRpcEnvelope): JsonValue {
 
 public func decodeJsonRpc(source: String, maxBytes!: Int64 = 8388608): JsonRpcResult<JsonRpcEnvelope> {
     let root = try {
-        parseJson(source, maxBytes: maxBytes)
-    } catch (error: JsonError) {
+        parseUnifiedJson(source, maxBytes: maxBytes)
+    } catch (error: JsonException) {
         return failure<JsonRpcEnvelope>(
             JsonRpcProtocolErrorKind.Parse,
             "json_rpc.parse_error",
@@ -224,12 +225,12 @@ public func decodeJsonRpc(source: String, maxBytes!: Int64 = 8388608): JsonRpcRe
     decodeJsonRpcValue(root)
 }
 
-public func decodeJsonRpcValue(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
-    if (root.kind != JsonKind.Object) {
+public func decodeJsonRpcValue(root: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
+    if (root.unifiedKind != UnifiedJsonKind.Object) {
         return invalidRequest<JsonRpcEnvelope>("JSON-RPC message must be an object")
     }
     let version = match (root.field("jsonrpc")) {
-        case Some(value) => if (value.kind == JsonKind.Text) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Text) {
             value.text
         } else {
             return invalidRequest<JsonRpcEnvelope>("jsonrpc must be the string 2.0")
@@ -245,8 +246,8 @@ public func decodeJsonRpcValue(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> 
     }
 }
 
-func decodeCall(root: JsonValue, method: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
-    if (method.kind != JsonKind.Text || method.text.trimAscii() == "") {
+func decodeCall(root: JsonNode, method: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
+    if (method.unifiedKind != UnifiedJsonKind.Text || method.text.trimAscii() == "") {
         return invalidRequest<JsonRpcEnvelope>("method must be a non-empty string")
     }
     if (root.field("result").isSome() || root.field("error").isSome()) {
@@ -254,9 +255,9 @@ func decodeCall(root: JsonValue, method: JsonValue): JsonRpcResult<JsonRpcEnvelo
     }
     let params = match (root.field("params")) {
         case Some(value) => value
-        case None => JsonValue.objectValue([])
+        case None => jsonObject([])
     }
-    if (params.kind != JsonKind.Object && params.kind != JsonKind.List) {
+    if (params.unifiedKind != UnifiedJsonKind.Object && params.unifiedKind != UnifiedJsonKind.List) {
         return invalidRequest<JsonRpcEnvelope>("params must be an object or array")
     }
     match (root.field("id")) {
@@ -272,7 +273,7 @@ func decodeCall(root: JsonValue, method: JsonValue): JsonRpcResult<JsonRpcEnvelo
     }
 }
 
-func decodeResponse(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
+func decodeResponse(root: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
     let id = match (root.field("id")) {
         case Some(value) => match (decodeJsonRpcId(value)) {
             case JsonRpcResult.Ok(id) => id
@@ -291,12 +292,12 @@ func decodeResponse(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
         ))
         case None =>
             let value = remoteError.getOrThrow()
-            if (value.kind != JsonKind.Object) {
+            if (value.unifiedKind != UnifiedJsonKind.Object) {
                 return invalidRequest<JsonRpcEnvelope>("error must be an object")
             }
             let code = match (value.field("code")) {
                 case Some(item) =>
-                    if (item.kind != JsonKind.Number) {
+                    if (item.unifiedKind != UnifiedJsonKind.Number) {
                         return invalidRequest<JsonRpcEnvelope>("error code must be an integer")
                     }
                     try {
@@ -308,7 +309,7 @@ func decodeResponse(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
             }
             let message = match (value.field("message")) {
                 case Some(item) =>
-                    if (item.kind != JsonKind.Text || item.text.trimAscii() == "") {
+                    if (item.unifiedKind != UnifiedJsonKind.Text || item.text.trimAscii() == "") {
                         return invalidRequest<JsonRpcEnvelope>("error message must be a non-empty string")
                     }
                     item.text
@@ -316,7 +317,7 @@ func decodeResponse(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
             }
             let data = match (value.field("data")) {
                 case Some(item) => item
-                case None => JsonValue.nullValue()
+                case None => jsonNull()
             }
             JsonRpcResult.Ok(JsonRpcEnvelope.Response(JsonRpcResponse(
                 id, JsonRpcResponsePayload.Failure(JsonRpcError(code, message, data: data))
@@ -324,28 +325,28 @@ func decodeResponse(root: JsonValue): JsonRpcResult<JsonRpcEnvelope> {
     }
 }
 
-func decodeJsonRpcId(value: JsonValue): JsonRpcResult<JsonRpcId> {
-    match (value.kind) {
-        case JsonKind.Text => try {
+func decodeJsonRpcId(value: JsonNode): JsonRpcResult<JsonRpcId> {
+    match (value.unifiedKind) {
+        case UnifiedJsonKind.Text => try {
             JsonRpcResult.Ok(jsonRpcTextId(value.text))
         } catch (error: IllegalArgumentException) {
             invalidRequest<JsonRpcId>(error.message)
         }
-        case JsonKind.Number => try {
+        case UnifiedJsonKind.Number => try {
             JsonRpcResult.Ok(JsonRpcId(JsonRpcIdKind.Number, value: value.number))
         } catch (error: IllegalArgumentException) {
             invalidRequest<JsonRpcId>(error.message)
         }
-        case JsonKind.Null => JsonRpcResult.Ok(jsonRpcNullId())
+        case UnifiedJsonKind.Null => JsonRpcResult.Ok(jsonRpcNullId())
         case _ => invalidRequest<JsonRpcId>("id must be a string, integer, or null")
     }
 }
 
-func jsonRpcIdValue(id: JsonRpcId): JsonValue {
+func jsonRpcIdValue(id: JsonRpcId): JsonNode {
     match (id.kind) {
-        case JsonRpcIdKind.Text => JsonValue.stringValue(id.value)
-        case JsonRpcIdKind.Number => JsonValue.numberValue(id.value)
-        case JsonRpcIdKind.Null => JsonValue.nullValue()
+        case JsonRpcIdKind.Text => jsonString(id.value)
+        case JsonRpcIdKind.Number => jsonNumber(id.value)
+        case JsonRpcIdKind.Null => jsonNull()
     }
 }
 
@@ -353,8 +354,8 @@ func requireMethod(method: String): Unit {
     if (method.trimAscii() == "") { throw IllegalArgumentException("JSON-RPC method must not be empty") }
 }
 
-func requireParams(params: JsonValue): Unit {
-    if (params.kind != JsonKind.Object && params.kind != JsonKind.List) {
+func requireParams(params: JsonNode): Unit {
+    if (params.unifiedKind != UnifiedJsonKind.Object && params.unifiedKind != UnifiedJsonKind.List) {
         throw IllegalArgumentException("JSON-RPC params must be an object or array")
     }
 }

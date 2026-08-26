@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.convert.*
 import std.sync.*
@@ -29,7 +30,7 @@ public class McpTask {
     public let lastUpdatedAt: String
     public let ttl: ?Int64
     public let pollInterval: ?Int64
-    public let result: JsonValue
+    public let result: JsonNode
     public init(
         taskId: String,
         status: McpTaskStatus,
@@ -38,7 +39,7 @@ public class McpTask {
         lastUpdatedAt!: String = "",
         ttl!: ?Int64 = None,
         pollInterval!: ?Int64 = None,
-        result!: JsonValue = JsonValue.nullValue()
+        result!: JsonNode = jsonNull()
     ) {
         if (taskId.trimAscii() == "") { throw IllegalArgumentException("MCP task id must not be empty") }
         match (ttl) { case Some(value) => if (value < 0) { throw IllegalArgumentException("MCP task ttl must not be negative") }; case None => () }

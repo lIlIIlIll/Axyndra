@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import agent_domain.*
 import agent_runtime.*
@@ -790,7 +794,7 @@ func optionalStoreText(value: AgentValue, name: String, fallback: String): Strin
 
 func storedReplayContractVersion(value: AgentValue): UInt32 {
     match (value.field("replay_contract_version")) {
-        case Some(raw) => if (raw.kind == ValueKind.Number && raw.number == "1") {
+        case Some(raw) => if (raw.unifiedKind == ValueKind.Number && raw.number == "1") {
             1u32
         } else {
             throw IllegalStateException("unsupported replay contract version")

@@ -14,7 +14,8 @@
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
   "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
-  "json4cj" = { path = "../../libs/json4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
   "workspace_search_extension" = { path = "../../extensions/workspace_search_extension", output-type = "static" }
   "workspace_write_extension" = { path = "../../extensions/workspace_write_extension", output-type = "static" }

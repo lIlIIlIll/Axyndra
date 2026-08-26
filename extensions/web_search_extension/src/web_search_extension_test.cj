@@ -1,7 +1,8 @@
 package web_search_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -10,9 +11,9 @@ class WebSearchExtensionTests {
     @TestCase
     func validatesAndPreparesNetworkIntent() {
         let tool = WebSearchExtensionTool()
-        let input = JsonValue.objectValue([
-            JsonField("query", JsonValue.stringValue("cangjie")),
-            JsonField("recency", JsonValue.stringValue("week"))
+        let input = jsonObject([
+            JsonObjectEntry("query", jsonString("cangjie")),
+            JsonObjectEntry("recency", jsonString("week"))
         ])
         @Assert(tool.prepare(ToolInvocation("web-1", input, "/workspace", "/workspace")).isOk())
         @Expect(tool.definition().capabilities[0].name, "network.http")
@@ -22,10 +23,10 @@ class WebSearchExtensionTests {
     @TestCase
     func rejectsEmptyQueryAndInvalidRecency() {
         let tool = WebSearchExtensionTool()
-        @Expect(tool.validate(JsonValue.objectValue([])).isOk(), false)
-        @Expect(tool.validate(JsonValue.objectValue([
-            JsonField("query", JsonValue.stringValue("x")),
-            JsonField("recency", JsonValue.stringValue("forever"))
+        @Expect(tool.validate(jsonObject([])).isOk(), false)
+        @Expect(tool.validate(jsonObject([
+            JsonObjectEntry("query", jsonString("x")),
+            JsonObjectEntry("recency", jsonString("forever"))
         ])).isOk(), false)
     }
 }

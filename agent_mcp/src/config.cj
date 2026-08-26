@@ -1,5 +1,9 @@
 package agent_mcp
 
+import yjson_support.*
+
+import yjson.*
+
 import process4cj.*
 import mcp4cj as library
 
@@ -186,7 +190,7 @@ public class McpHttpRequestMetadata {
     }
 
     public func validateBody(requestMethod: String, requestParams: AgentValue): Result<Unit> {
-        if (requestParams.kind != ValueKind.Object || protocolVersion == "" || method == "") {
+        if (requestParams.unifiedKind != ValueKind.Object || protocolVersion == "" || method == "") {
             return Result.Err(AgentError(
                 AgentErrorKind.Protocol,
                 "mcp.http_header_mismatch",
@@ -196,9 +200,9 @@ public class McpHttpRequestMetadata {
         }
         let bodyProtocol = match (requestParams.field("_meta")) {
             case Some(meta) =>
-                if (meta.kind == ValueKind.Object) {
+                if (meta.unifiedKind == ValueKind.Object) {
                     match (meta.field(MCP_META_PROTOCOL_VERSION)) {
-                        case Some(value) => if (value.kind == ValueKind.Text) { value.text } else { "" }
+                        case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
                         case None => ""
                     }
                 } else { "" }
@@ -233,7 +237,7 @@ public class McpHttpRequestMetadata {
         }
         if (requestMethod == MCP_METHOD_TOOLS_CALL) {
             let bodyName = match (requestParams.field("name")) {
-                case Some(value) => if (value.kind == ValueKind.Text) { value.text } else { "" }
+                case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
                 case None => ""
             }
             if (name == "" || name != bodyName) {

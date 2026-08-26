@@ -1,6 +1,7 @@
 package lsp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import process4cj.*
 import std.collection.*
@@ -24,15 +25,15 @@ public enum LspResult<T> {
     public func isOk(): Bool { match (this) { case Ok(_) => true; case Err(_) => false } }
 }
 
-public func encodeLspMessage(value: JsonValue): Array<Byte> {
-    encodeContentLengthFrame(encodeJson(value))
+public func encodeLspMessage(value: JsonNode): Array<Byte> {
+    encodeContentLengthFrame(stringifyUnifiedJson(value))
 }
 
 public func readLspMessage(
     stream: InputStream,
     maxBodyBytes!: Int64 = 33554432,
     maxDepth!: Int64 = 128
-): LspResult<JsonValue> {
+): LspResult<JsonNode> {
     let body = try { readContentLengthBody(stream, maxBodyBytes: maxBodyBytes) } catch (error: ProcessError) {
         return LspResult.Err(LspError(
             if (let ProcessErrorKind.Io <- error.kind) { LspErrorKind.Transport } else { LspErrorKind.Frame },
@@ -41,8 +42,8 @@ public func readLspMessage(
         ))
     }
     try {
-        LspResult.Ok(parseJson(String.fromUtf8(body), maxBytes: maxBodyBytes, maxDepth: maxDepth))
-    } catch (error: JsonError) {
+        LspResult.Ok(parseUnifiedJson(String.fromUtf8(body), maxBytes: maxBodyBytes, maxDepth: maxDepth))
+    } catch (error: JsonException) {
         LspResult.Err(LspError(LspErrorKind.Json, "lsp.json_invalid", error.message))
     } catch (error: Exception) {
         LspResult.Err(LspError(LspErrorKind.Json, "lsp.utf8_invalid", error.message))
@@ -64,12 +65,12 @@ public class LspCorrelation {
     }
 }
 
-public type LspNotificationHandler = (String, JsonValue) -> Unit
-public type LspRequestHandler = (String, JsonValue) -> LspResult<JsonValue>
+public type LspNotificationHandler = (String, JsonNode) -> Unit
+public type LspRequestHandler = (String, JsonNode) -> LspResult<JsonNode>
 
 class LspPendingRequest {
     let id: Int64
-    var response: ?JsonValue = None
+    var response: ?JsonNode = None
     var error: ?LspError = None
     var cancelled: Bool = false
     init(id: Int64) { this.id = id }
@@ -88,15 +89,15 @@ public class LspClient {
     private var nextId: Int64 = 1
     private var closed = false
     private var closeError: ?LspError = None
-    private var capabilities = JsonValue.objectValue([])
+    private var capabilities = jsonObject([])
     private var reader: ?Future<Unit> = None
     private var stderrReader: ?Future<Unit> = None
     private let stderr = BoundedByteBuffer(65536)
 
     public init(
         process: ManagedProcess,
-        notificationHandler!: LspNotificationHandler = { _: String, _: JsonValue => () },
-        requestHandler!: LspRequestHandler = { method: String, _: JsonValue =>
+        notificationHandler!: LspNotificationHandler = { _: String, _: JsonNode => () },
+        requestHandler!: LspRequestHandler = { method: String, _: JsonNode =>
             LspResult.Err(LspError(
                 LspErrorKind.Protocol, "lsp.method_not_found",
                 "unsupported server request: " + method
@@ -124,8 +125,8 @@ public class LspClient {
 
     public static func `spawn`(
         command: ProcessCommand,
-        notificationHandler!: LspNotificationHandler = { _: String, _: JsonValue => () },
-        requestHandler!: LspRequestHandler = { method: String, _: JsonValue =>
+        notificationHandler!: LspNotificationHandler = { _: String, _: JsonNode => () },
+        requestHandler!: LspRequestHandler = { method: String, _: JsonNode =>
             LspResult.Err(LspError(LspErrorKind.Protocol, "lsp.method_not_found", "unsupported server request: " + method))
         },
         maxFrameBytes!: Int64 = 33554432,
@@ -141,15 +142,15 @@ public class LspClient {
         }
     }
 
-    public func initialize(params: JsonValue, timeoutMillis!: Int64 = 30000): LspResult<JsonValue> {
+    public func initialize(params: JsonNode, timeoutMillis!: Int64 = 30000): LspResult<JsonNode> {
         match (request("initialize", params, timeoutMillis: timeoutMillis)) {
             case LspResult.Ok(value) =>
                 stateLock.lock()
                 try { capabilities = match (value.field("capabilities")) {
                     case Some(found) => found
-                    case None => JsonValue.objectValue([])
+                    case None => jsonObject([])
                 } } finally { stateLock.unlock() }
-                match (notify("initialized", JsonValue.objectValue([]))) {
+                match (notify("initialized", jsonObject([]))) {
                     case LspResult.Ok(_) => LspResult.Ok(value)
                     case LspResult.Err(error) => LspResult.Err(error)
                 }
@@ -157,15 +158,15 @@ public class LspClient {
         }
     }
 
-    public func serverCapabilities(): JsonValue {
+    public func serverCapabilities(): JsonNode {
         stateLock.lock(); try { capabilities } finally { stateLock.unlock() }
     }
 
     public func request(
         method: String,
-        params: JsonValue,
+        params: JsonNode,
         timeoutMillis!: Int64 = 30000
-    ): LspResult<JsonValue> {
+    ): LspResult<JsonNode> {
         if (timeoutMillis <= 0) {
             return LspResult.Err(LspError(LspErrorKind.Deadline, "lsp.deadline_invalid", "deadline must be positive"))
         }
@@ -176,11 +177,11 @@ public class LspClient {
             item = LspPendingRequest(nextId); nextId++
             pending.add(item)
         } finally { stateLock.unlock() }
-        match (write(JsonValue.objectValue([
-            JsonField("jsonrpc", JsonValue.stringValue("2.0")),
-            JsonField("id", JsonValue.numberValue(item.id.toString())),
-            JsonField("method", JsonValue.stringValue(method)),
-            JsonField("params", params)
+        match (write(jsonObject([
+            JsonObjectEntry("jsonrpc", jsonString("2.0")),
+            JsonObjectEntry("id", jsonNumber(item.id.toString())),
+            JsonObjectEntry("method", jsonString(method)),
+            JsonObjectEntry("params", params)
         ]))) {
             case LspResult.Ok(_) => ()
             case LspResult.Err(error) => settleError(item.id, error); return LspResult.Err(error)
@@ -198,12 +199,12 @@ public class LspClient {
         LspResult.Err(LspError(LspErrorKind.Deadline, "lsp.deadline_exceeded", "LSP request deadline exceeded"))
     }
 
-    public func notify(method: String, params: JsonValue): LspResult<Unit> {
+    public func notify(method: String, params: JsonNode): LspResult<Unit> {
         stateLock.lock(); try { if (closed || closeError.isSome()) { return LspResult.Err(closedError()) } } finally { stateLock.unlock() }
-        write(JsonValue.objectValue([
-            JsonField("jsonrpc", JsonValue.stringValue("2.0")),
-            JsonField("method", JsonValue.stringValue(method)),
-            JsonField("params", params)
+        write(jsonObject([
+            JsonObjectEntry("jsonrpc", jsonString("2.0")),
+            JsonObjectEntry("method", jsonString(method)),
+            JsonObjectEntry("params", params)
         ]))
     }
 
@@ -220,11 +221,11 @@ public class LspClient {
             }
         } finally { stateLock.unlock() }
         if (!found) { return LspResult.Ok(()) }
-        write(JsonValue.objectValue([
-            JsonField("jsonrpc", JsonValue.stringValue("2.0")),
-            JsonField("method", JsonValue.stringValue("$/cancelRequest")),
-            JsonField("params", JsonValue.objectValue([
-                JsonField("id", JsonValue.numberValue(requestId.toString()))
+        write(jsonObject([
+            JsonObjectEntry("jsonrpc", jsonString("2.0")),
+            JsonObjectEntry("method", jsonString("$/cancelRequest")),
+            JsonObjectEntry("params", jsonObject([
+                JsonObjectEntry("id", jsonNumber(requestId.toString()))
             ]))
         ]))
     }
@@ -241,8 +242,8 @@ public class LspClient {
 
     public func shutdown(timeoutMillis!: Int64 = 3000): LspResult<Unit> {
         if (isClosed()) { return LspResult.Ok(()) }
-        match (request("shutdown", JsonValue.nullValue(), timeoutMillis: timeoutMillis)) {
-            case LspResult.Ok(_) => let _ = notify("exit", JsonValue.objectValue([])); close()
+        match (request("shutdown", jsonNull(), timeoutMillis: timeoutMillis)) {
+            case LspResult.Ok(_) => let _ = notify("exit", jsonObject([])); close()
             case LspResult.Err(error) => let _ = close(); LspResult.Err(error)
         }
     }
@@ -282,11 +283,11 @@ public class LspClient {
         }
     }
 
-    private func dispatch(message: JsonValue): Unit {
+    private func dispatch(message: JsonNode): Unit {
         match (message.field("method")) {
             case Some(methodValue) =>
-                if (methodValue.kind != JsonKind.Text) { failAll(LspError(LspErrorKind.Protocol, "lsp.method_invalid", "method must be a string")); return }
-                let params = match (message.field("params")) { case Some(value) => value; case None => JsonValue.objectValue([]) }
+                if (methodValue.unifiedKind != UnifiedJsonKind.Text) { failAll(LspError(LspErrorKind.Protocol, "lsp.method_invalid", "method must be a string")); return }
+                let params = match (message.field("params")) { case Some(value) => value; case None => jsonObject([]) }
                 match (message.field("id")) {
                     case Some(id) => handleServerRequest(id, methodValue.text, params)
                     case None => notificationHandler(methodValue.text, params)
@@ -296,32 +297,32 @@ public class LspClient {
                 if (id < 0) { failAll(LspError(LspErrorKind.Protocol, "lsp.response_id_invalid", "response id is invalid")); return }
                 match (message.field("error")) {
                     case Some(error) => settleError(id, LspError(
-                        LspErrorKind.Protocol, "lsp.server_error", encodeJson(error)
+                        LspErrorKind.Protocol, "lsp.server_error", stringifyUnifiedJson(error)
                     ))
                     case None => settleResponse(id, match (message.field("result")) {
                         case Some(value) => value
-                        case None => JsonValue.nullValue()
+                        case None => jsonNull()
                     })
                 }
         }
     }
 
-    private func handleServerRequest(id: JsonValue, method: String, params: JsonValue): Unit {
+    private func handleServerRequest(id: JsonNode, method: String, params: JsonNode): Unit {
         match (requestHandler(method, params)) {
-            case LspResult.Ok(value) => let _ = write(JsonValue.objectValue([
-                JsonField("jsonrpc", JsonValue.stringValue("2.0")), JsonField("id", id), JsonField("result", value)
+            case LspResult.Ok(value) => let _ = write(jsonObject([
+                JsonObjectEntry("jsonrpc", jsonString("2.0")), JsonObjectEntry("id", id), JsonObjectEntry("result", value)
             ]))
-            case LspResult.Err(error) => let _ = write(JsonValue.objectValue([
-                JsonField("jsonrpc", JsonValue.stringValue("2.0")), JsonField("id", id),
-                JsonField("error", JsonValue.objectValue([
-                    JsonField("code", JsonValue.numberValue("-32601")),
-                    JsonField("message", JsonValue.stringValue(error.message))
+            case LspResult.Err(error) => let _ = write(jsonObject([
+                JsonObjectEntry("jsonrpc", jsonString("2.0")), JsonObjectEntry("id", id),
+                JsonObjectEntry("error", jsonObject([
+                    JsonObjectEntry("code", jsonNumber("-32601")),
+                    JsonObjectEntry("message", jsonString(error.message))
                 ]))
             ]))
         }
     }
 
-    private func write(value: JsonValue): LspResult<Unit> {
+    private func write(value: JsonNode): LspResult<Unit> {
         writeLock.lock()
         try {
             try { process.writeStdin(encodeLspMessage(value)); process.flushInput(); LspResult.Ok(()) }
@@ -329,7 +330,7 @@ public class LspClient {
         } finally { writeLock.unlock() }
     }
 
-    private func settleResponse(id: Int64, value: JsonValue): Unit {
+    private func settleResponse(id: Int64, value: JsonNode): Unit {
         stateLock.lock(); try { for (item in pending where item.id == id && item.response.isNone() && item.error.isNone()) { item.response = Some(value); return } }
         finally { stateLock.unlock() }
     }
@@ -337,7 +338,7 @@ public class LspClient {
         stateLock.lock(); try { for (item in pending where item.id == id && item.response.isNone() && item.error.isNone()) { item.error = Some(error); return } }
         finally { stateLock.unlock() }
     }
-    private func take(id: Int64): ?LspResult<JsonValue> {
+    private func take(id: Int64): ?LspResult<JsonNode> {
         stateLock.lock(); try {
             for (index in 0..pending.size where pending[index].id == id) {
                 let item = pending[index]
@@ -360,9 +361,9 @@ public class LspClient {
     private func closedError(): LspError { match (closeError) { case Some(error) => error; case None => LspError(LspErrorKind.Transport, "lsp.client_closed", "LSP client is closed") } }
 }
 
-func jsonInteger(value: JsonValue, name: String, fallback: Int64): Int64 {
+func jsonInteger(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == JsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }
         case None => fallback
     }
 }

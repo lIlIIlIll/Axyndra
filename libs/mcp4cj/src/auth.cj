@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 
 public class McpProtectedResourceMetadata {
@@ -111,14 +112,14 @@ public class McpTokenClaims {
     public let audience: Array<String>
     public let scopes: Array<String>
     public let expiresAtMillis: ?Int64
-    public let claims: JsonValue
+    public let claims: JsonNode
     public init(
         subject: String,
         issuer: String,
         audience: Array<String>,
         scopes!: Array<String> = [],
         expiresAtMillis!: ?Int64 = None,
-        claims!: JsonValue = JsonValue.objectValue([])
+        claims!: JsonNode = jsonObject([])
     ) {
         if (subject.trimAscii() == "" || issuer.trimAscii() == "" || audience.isEmpty()) { throw IllegalArgumentException("MCP token claims require subject, issuer, and audience") }
         requireObject(claims, "MCP token claims")

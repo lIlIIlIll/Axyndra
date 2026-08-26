@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import std.collection.*
 import std.sync.*
@@ -130,13 +131,13 @@ public class StreamableHttpMcpTransport <: McpTransport {
         // protocol notification gives a synchronous server a deterministic
         // cancellation signal even when its HTTP stack exposes disconnects
         // only after the handler returns.
-        let cancelParams = JsonValue.objectValue([
-            JsonField("_meta", JsonValue.objectValue([
-                JsonField(MCP_META_PROTOCOL_VERSION, JsonValue.stringValue(MCP_PROTOCOL_VERSION)),
-                JsonField(MCP_META_CLIENT_CAPABILITIES, JsonValue.objectValue([]))
+        let cancelParams = jsonObject([
+            JsonObjectEntry("_meta", jsonObject([
+                JsonObjectEntry(MCP_META_PROTOCOL_VERSION, jsonString(MCP_PROTOCOL_VERSION)),
+                JsonObjectEntry(MCP_META_CLIENT_CAPABILITIES, jsonObject([]))
             ])),
-            JsonField("requestId", mcpRequestIdJson(requestId)),
-            JsonField("reason", JsonValue.stringValue(reason))
+            JsonObjectEntry("requestId", mcpRequestIdJson(requestId)),
+            JsonObjectEntry("reason", jsonString(reason))
         ])
         match (post(
             JsonRpcEnvelope.Notification(JsonRpcNotification(
@@ -164,7 +165,7 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func post(
         envelope: JsonRpcEnvelope,
         operation: String,
-        params: JsonValue,
+        params: JsonNode,
         expectedId: ?JsonRpcId
     ): McpResult<?JsonRpcResponse> {
         if (state() != McpLifecycleState.Ready) {
@@ -206,7 +207,7 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func prepare(
         envelope: JsonRpcEnvelope,
         operation: String,
-        params: JsonValue
+        params: JsonNode
     ): McpResult<(Client, HttpRequest)> {
         try {
             let timeout = Duration.millisecond * config.framing.requestTimeoutMillis
@@ -431,13 +432,13 @@ func ambiguousHttpMcp<T>(operation: String, message: String): McpResult<T> {
     httpMcpFailure<T>(McpErrorKind.Transport, if (call) { "mcp.http_call_response_lost" } else { "mcp.http_response_lost" }, if (call) { "MCP tools/call may have executed before its response was lost" } else { "MCP HTTP response was lost: " + message }, retrySafe: false)
 }
 func cancelledHttpMcp<T>(): McpResult<T> { httpMcpFailure<T>(McpErrorKind.Cancelled, "mcp.http_request_cancelled", "MCP HTTP request was cancelled", retrySafe: false) }
-func mcpProtocolVersion(params: JsonValue): String { match (params.field("_meta")) { case Some(meta) => if (meta.kind == JsonKind.Object) { mcpText(meta, MCP_META_PROTOCOL_VERSION) } else { "" }; case None => "" } }
+func mcpProtocolVersion(params: JsonNode): String { match (params.field("_meta")) { case Some(meta) => if (meta.unifiedKind == UnifiedJsonKind.Object) { mcpText(meta, MCP_META_PROTOCOL_VERSION) } else { "" }; case None => "" } }
 func envelopeId(envelope: JsonRpcEnvelope): JsonRpcId { match (envelope) { case JsonRpcEnvelope.Request(value) => value.id; case JsonRpcEnvelope.Response(value) => value.id; case JsonRpcEnvelope.Notification(_) => jsonRpcNullId() } }
-func mcpRequestIdJson(id: JsonRpcId): JsonValue {
+func mcpRequestIdJson(id: JsonRpcId): JsonNode {
     match (id.kind) {
-        case JsonRpcIdKind.Text => JsonValue.stringValue(id.value)
-        case JsonRpcIdKind.Number => JsonValue.numberValue(id.value)
-        case JsonRpcIdKind.Null => JsonValue.nullValue()
+        case JsonRpcIdKind.Text => jsonString(id.value)
+        case JsonRpcIdKind.Number => jsonNumber(id.value)
+        case JsonRpcIdKind.Null => jsonNull()
     }
 }
 func responseStatus(envelope: JsonRpcEnvelope): UInt16 { match (envelope) { case JsonRpcEnvelope.Response(value) => match (value.payload) { case JsonRpcResponsePayload.Failure(error) => if (error.code == JSON_RPC_METHOD_NOT_FOUND) { 404 } else { 200 }; case _ => 200 }; case _ => 200 } }
@@ -502,24 +503,24 @@ func projectMcpHttpResponse(request: JsonRpcEnvelope, response: JsonRpcEnvelope)
                     case Some(candidate) => candidate
                     case None => return response
                 }
-                if (tools.kind != JsonKind.List) { return response }
-                let accepted = ArrayList<JsonValue>()
+                if (tools.unifiedKind != UnifiedJsonKind.List) { return response }
+                let accepted = ArrayList<JsonNode>()
                 for (tool in tools.items) {
                     let schema = match (tool.field("inputSchema")) {
                         case Some(candidate) => candidate
-                        case None => JsonValue.nullValue()
+                        case None => jsonNull()
                     }
                     if (validMcpHttpSchema(schema)) { accepted.add(tool) }
                 }
-                let fields = ArrayList<JsonField>()
+                let fields = ArrayList<JsonObjectEntry>()
                 for (field in result.fields) {
                     fields.add(if (field.name == "tools") {
-                        JsonField("tools", JsonValue.arrayValue(accepted.toArray()))
+                        JsonObjectEntry("tools", jsonArray(accepted.toArray()))
                     } else { field })
                 }
                 JsonRpcEnvelope.Response(JsonRpcResponse(
                     value.id,
-                    JsonRpcResponsePayload.Success(JsonValue.objectValue(fields.toArray()))
+                    JsonRpcResponsePayload.Success(jsonObject(fields.toArray()))
                 ))
             case _ => response
         }
@@ -527,18 +528,18 @@ func projectMcpHttpResponse(request: JsonRpcEnvelope, response: JsonRpcEnvelope)
     }
 }
 
-func validMcpHttpSchema(schema: JsonValue): Bool {
-    if (schema.kind != JsonKind.Object) { return false }
+func validMcpHttpSchema(schema: JsonNode): Bool {
+    if (schema.unifiedKind != UnifiedJsonKind.Object) { return false }
     match (schema.field("x-mcp-header")) {
         case Some(header) =>
-            if (header.kind != JsonKind.Text || !validHttpToken(header.text)) { return false }
+            if (header.unifiedKind != UnifiedJsonKind.Text || !validHttpToken(header.text)) { return false }
             let kind = mcpText(schema, "type")
             if (kind != "string" && kind != "boolean") { return false }
         case None => ()
     }
     match (schema.field("properties")) {
         case Some(properties) =>
-            if (properties.kind != JsonKind.Object) { return false }
+            if (properties.unifiedKind != UnifiedJsonKind.Object) { return false }
             for (field in properties.fields) { if (!validMcpHttpSchema(field.value)) { return false } }
         case None => ()
     }

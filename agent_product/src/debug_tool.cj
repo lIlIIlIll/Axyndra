@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import agent_domain.*
 import tool_runtime.*
 import std.collection.*
@@ -83,9 +84,9 @@ class DebugRuntime {
                         },
                         session: Some(session),
                         response: Some(dapObject([
-                            JsonField(
+                            JsonObjectEntry(
                                 "output",
-                                JsonValue.stringValue(
+                                jsonString(
                                     session.client.outputSnapshot()
                                 )
                             )
@@ -122,7 +123,7 @@ class DebugRuntime {
                     context,
                     call,
                     "continue",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis
                 )
             case "step_over" =>
@@ -130,7 +131,7 @@ class DebugRuntime {
                     context,
                     call,
                     "next",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis
                 )
             case "step_in" =>
@@ -138,7 +139,7 @@ class DebugRuntime {
                     context,
                     call,
                     "stepIn",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis
                 )
             case "step_out" =>
@@ -146,7 +147,7 @@ class DebugRuntime {
                     context,
                     call,
                     "stepOut",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis
                 )
             case "pause" =>
@@ -160,7 +161,7 @@ class DebugRuntime {
                     context,
                     call,
                     "threads",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis
                 )
             case "scopes" =>
@@ -180,7 +181,7 @@ class DebugRuntime {
                     context,
                     call,
                     "loadedSources",
-                    JsonValue.objectValue([]),
+                    jsonObject([]),
                     timeoutMillis,
                     capability: "supportsLoadedSourcesRequest"
                 )
@@ -252,10 +253,10 @@ class DebugRuntime {
         let arguments = mergeDapObjects(
             adapter.launchDefaults,
             dapObject([
-                JsonField("request", JsonValue.stringValue("launch")),
-                JsonField("program", JsonValue.stringValue(program)),
-                JsonField("cwd", JsonValue.stringValue(cwd)),
-                JsonField(
+                JsonObjectEntry("request", jsonString("launch")),
+                JsonObjectEntry("program", jsonString(program)),
+                JsonObjectEntry("cwd", jsonString(cwd)),
+                JsonObjectEntry(
                     "args",
                     debugJsonStringArray(call, "args")
                 )
@@ -339,38 +340,38 @@ class DebugRuntime {
                 return Result.Err(error)
         }
         let session = registerSession(adapter, cwd, "", client)
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField(
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry(
             "request",
-            JsonValue.stringValue("attach")
+            jsonString("attach")
         ))
-        fields.add(JsonField("cwd", JsonValue.stringValue(cwd)))
+        fields.add(JsonObjectEntry("cwd", jsonString(cwd)))
         if (pid >= 0) {
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "pid",
-                JsonValue.numberValue(pid.toString())
+                jsonNumber(pid.toString())
             ))
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "processId",
-                JsonValue.numberValue(pid.toString())
+                jsonNumber(pid.toString())
             ))
         }
         if (port >= 0) {
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "port",
-                JsonValue.numberValue(port.toString())
+                jsonNumber(port.toString())
             ))
         }
         let host = optionalString(call, "host", "")
         if (host != "") {
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "host",
-                JsonValue.stringValue(host)
+                jsonString(host)
             ))
         }
         let arguments = mergeDapObjects(
             adapter.attachDefaults,
-            JsonValue.objectValue(fields.toArray())
+            jsonObject(fields.toArray())
         )
         match (startDebugRequest(
             context,
@@ -397,7 +398,7 @@ class DebugRuntime {
         context: ToolInvocationContext,
         session: ProductDapSession,
         command: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         timeoutMillis: Int64
     ): Result<Unit> {
         let sequence = match (session.client.beginRequest(
@@ -417,7 +418,7 @@ class DebugRuntime {
             match (session.client.request(
                 context.runId,
                 "configurationDone",
-                JsonValue.objectValue([]),
+                jsonObject([]),
                 timeoutMillis
             )) {
                 case Result.Ok(_) => ()
@@ -483,7 +484,7 @@ class DebugRuntime {
                     )
                 }
                 let arguments = dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "breakpoints",
                         encodeFunctionBreakpoints(
                             session.functionBreakpoints
@@ -552,19 +553,19 @@ class DebugRuntime {
                 session,
                 "setBreakpoints",
                 dapObject([
-                    JsonField("source", dapObject([
-                        JsonField(
+                    JsonObjectEntry("source", dapObject([
+                        JsonObjectEntry(
                             "path",
-                            JsonValue.stringValue(file)
+                            jsonString(file)
                         )
                     ])),
-                    JsonField(
+                    JsonObjectEntry(
                         "breakpoints",
                         encodeSourceBreakpoints(source.values)
                     ),
-                    JsonField(
+                    JsonObjectEntry(
                         "sourceModified",
-                        JsonValue.boolValue(false)
+                        jsonBool(false)
                     )
                 ]),
                 timeoutMillis,
@@ -635,7 +636,7 @@ class DebugRuntime {
                 session,
                 "setInstructionBreakpoints",
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "breakpoints",
                         encodeInstructionBreakpoints(
                             session.instructionBreakpoints
@@ -667,10 +668,10 @@ class DebugRuntime {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
-            let arguments = ArrayList<JsonField>()
-            arguments.add(JsonField(
+            let arguments = ArrayList<JsonObjectEntry>()
+            arguments.add(JsonObjectEntry(
                 "name",
-                JsonValue.stringValue(name)
+                jsonString(name)
             ))
             let variablesReference = debugOptionalInteger(
                 call,
@@ -678,18 +679,18 @@ class DebugRuntime {
                 debugOptionalInteger(call, "scope_id", -1)
             )
             if (variablesReference >= 0) {
-                arguments.add(JsonField(
+                arguments.add(JsonObjectEntry(
                     "variablesReference",
-                    JsonValue.numberValue(
+                    jsonNumber(
                         variablesReference.toString()
                     )
                 ))
             }
             let frameId = debugOptionalInteger(call, "frame_id", -1)
             if (frameId >= 0) {
-                arguments.add(JsonField(
+                arguments.add(JsonObjectEntry(
                     "frameId",
-                    JsonValue.numberValue(frameId.toString())
+                    jsonNumber(frameId.toString())
                 ))
             }
             requestResult(
@@ -697,7 +698,7 @@ class DebugRuntime {
                 call,
                 session,
                 "dataBreakpointInfo",
-                JsonValue.objectValue(arguments.toArray()),
+                jsonObject(arguments.toArray()),
                 timeoutMillis
             )
         })
@@ -752,7 +753,7 @@ class DebugRuntime {
                 session,
                 "setDataBreakpoints",
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "breakpoints",
                         encodeDataBreakpoints(session.dataBreakpoints)
                     )
@@ -771,7 +772,7 @@ class DebugRuntime {
         context: ToolInvocationContext,
         call: ToolCall,
         command: String,
-        extraArguments: JsonValue,
+        extraArguments: JsonNode,
         timeoutMillis: Int64
     ): Result<ToolResult> {
         withActive({ session =>
@@ -786,9 +787,9 @@ class DebugRuntime {
             let arguments = mergeDapObjects(
                 extraArguments,
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "threadId",
-                        JsonValue.numberValue(
+                        jsonNumber(
                             snapshot.threadId.toString()
                         )
                     )
@@ -830,13 +831,13 @@ class DebugRuntime {
                         response: Some(mergeDapObjects(
                             body,
                             dapObject([
-                                JsonField(
+                                JsonObjectEntry(
                                     "state",
-                                    JsonValue.stringValue(state)
+                                    jsonString(state)
                                 ),
-                                JsonField(
+                                JsonObjectEntry(
                                     "timedOut",
-                                    JsonValue.boolValue(timedOut)
+                                    jsonBool(timedOut)
                                 )
                             ])
                         ))
@@ -855,13 +856,13 @@ class DebugRuntime {
             let threadId = session.client.snapshot().threadId
             let arguments = if (threadId > 0) {
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "threadId",
-                        JsonValue.numberValue(threadId.toString())
+                        jsonNumber(threadId.toString())
                     )
                 ])
             } else {
-                JsonValue.objectValue([])
+                jsonObject([])
             }
             let stopRevision = session.client.currentStopRevision()
             match (session.client.request(
@@ -900,14 +901,14 @@ class DebugRuntime {
             case Result.Err(error) => return Result.Err(error)
         }
         withActive({ session =>
-            let fields = ArrayList<JsonField>()
-            fields.add(JsonField(
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry(
                 "expression",
-                JsonValue.stringValue(expression)
+                jsonString(expression)
             ))
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "context",
-                JsonValue.stringValue(
+                jsonString(
                     optionalString(call, "context", "repl")
                 )
             ))
@@ -917,7 +918,7 @@ class DebugRuntime {
                 call,
                 session,
                 "evaluate",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )
         })
@@ -937,22 +938,22 @@ class DebugRuntime {
                     "No stopped debug thread is available"
                 )
             }
-            let fields = ArrayList<JsonField>()
-            fields.add(JsonField(
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry(
                 "threadId",
-                JsonValue.numberValue(snapshot.threadId.toString())
+                jsonNumber(snapshot.threadId.toString())
             ))
             let levels = debugOptionalInteger(call, "levels", -1)
             if (levels >= 0) {
-                fields.add(JsonField(
+                fields.add(JsonObjectEntry(
                     "levels",
-                    JsonValue.numberValue(levels.toString())
+                    jsonNumber(levels.toString())
                 ))
             }
             match (session.client.request(
                 context.runId,
                 "stackTrace",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )) {
                 case Result.Ok(body) =>
@@ -993,9 +994,9 @@ class DebugRuntime {
                 session,
                 "scopes",
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "frameId",
-                        JsonValue.numberValue(frameId.toString())
+                        jsonNumber(frameId.toString())
                     )
                 ]),
                 timeoutMillis
@@ -1027,9 +1028,9 @@ class DebugRuntime {
                 session,
                 "variables",
                 dapObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "variablesReference",
-                        JsonValue.numberValue(reference.toString())
+                        jsonNumber(reference.toString())
                     )
                 ]),
                 timeoutMillis
@@ -1078,14 +1079,14 @@ class DebugRuntime {
                         "instruction pointer"
                 )
             }
-            let fields = ArrayList<JsonField>()
-            fields.add(JsonField(
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry(
                 "memoryReference",
-                JsonValue.stringValue(reference)
+                jsonString(reference)
             ))
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "instructionCount",
-                JsonValue.numberValue(count.toString())
+                jsonNumber(count.toString())
             ))
             addOptionalNumber(call, "offset", "offset", fields)
             addOptionalNumber(
@@ -1094,9 +1095,9 @@ class DebugRuntime {
                 "instructionOffset",
                 fields
             )
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "resolveSymbols",
-                JsonValue.boolValue(
+                jsonBool(
                     optionalBoolean(call, "resolve_symbols", false)
                 )
             ))
@@ -1105,7 +1106,7 @@ class DebugRuntime {
                 call,
                 session,
                 "disassemble",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )
         })
@@ -1137,14 +1138,14 @@ class DebugRuntime {
                     "memory reads"
                 )
             }
-            let fields = ArrayList<JsonField>()
-            fields.add(JsonField(
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry(
                 "memoryReference",
-                JsonValue.stringValue(reference)
+                jsonString(reference)
             ))
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "count",
-                JsonValue.numberValue(count.toString())
+                jsonNumber(count.toString())
             ))
             addOptionalNumber(call, "offset", "offset", fields)
             requestResult(
@@ -1152,7 +1153,7 @@ class DebugRuntime {
                 call,
                 session,
                 "readMemory",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )
         })
@@ -1180,19 +1181,19 @@ class DebugRuntime {
                     "memory writes"
                 )
             }
-            let fields = ArrayList<JsonField>()
-            fields.add(JsonField(
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry(
                 "memoryReference",
-                JsonValue.stringValue(reference)
+                jsonString(reference)
             ))
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "data",
-                JsonValue.stringValue(data)
+                jsonString(data)
             ))
             addOptionalNumber(call, "offset", "offset", fields)
-            fields.add(JsonField(
+            fields.add(JsonObjectEntry(
                 "allowPartial",
-                JsonValue.boolValue(
+                jsonBool(
                     optionalBoolean(call, "allow_partial", false)
                 )
             ))
@@ -1201,7 +1202,7 @@ class DebugRuntime {
                 call,
                 session,
                 "writeMemory",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )
         })
@@ -1218,7 +1219,7 @@ class DebugRuntime {
                     "module introspection"
                 )
             }
-            let fields = ArrayList<JsonField>()
+            let fields = ArrayList<JsonObjectEntry>()
             addOptionalNumber(
                 call,
                 "start_module",
@@ -1236,7 +1237,7 @@ class DebugRuntime {
                 call,
                 session,
                 "modules",
-                JsonValue.objectValue(fields.toArray()),
+                jsonObject(fields.toArray()),
                 timeoutMillis
             )
         })
@@ -1253,7 +1254,7 @@ class DebugRuntime {
         }
         let arguments = match (call.arguments.field("arguments")) {
             case Some(value) =>
-                if (value.kind != ValueKind.Object) {
+                if (value.unifiedKind != ValueKind.Object) {
                     return invalidArgument(
                         call,
                         "arguments",
@@ -1261,7 +1262,7 @@ class DebugRuntime {
                     )
                 }
                 debugAgentValueToJson(value)
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         withActive({ session =>
             requestResult(
@@ -1280,7 +1281,7 @@ class DebugRuntime {
         context: ToolInvocationContext,
         call: ToolCall,
         command: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         timeoutMillis: Int64,
         capability!: String = ""
     ): Result<ToolResult> {
@@ -1307,7 +1308,7 @@ class DebugRuntime {
         call: ToolCall,
         session: ProductDapSession,
         command: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         timeoutMillis: Int64,
         action!: String = ""
     ): Result<ToolResult> {
@@ -1358,13 +1359,13 @@ class DebugRuntime {
                     context.runId,
                     command,
                     dapObject([
-                        JsonField(
+                        JsonObjectEntry(
                             "restart",
-                            JsonValue.boolValue(false)
+                            jsonBool(false)
                         ),
-                        JsonField(
+                        JsonObjectEntry(
                             "terminateDebuggee",
-                            JsonValue.boolValue(true)
+                            jsonBool(true)
                         )
                     ]),
                     timeoutMillis
@@ -1477,13 +1478,13 @@ class DebugRuntime {
             context.runId,
             "stackTrace",
             dapObject([
-                JsonField(
+                JsonObjectEntry(
                     "threadId",
-                    JsonValue.numberValue(snapshot.threadId.toString())
+                    jsonNumber(snapshot.threadId.toString())
                 ),
-                JsonField(
+                JsonObjectEntry(
                     "levels",
-                    JsonValue.numberValue("1")
+                    jsonNumber("1")
                 )
             ]),
             timeoutMillis
@@ -1708,31 +1709,31 @@ func dapAdapterNames(adapters: Array<DapAdapterSpec>): String {
 }
 
 func mergeDapObjects(
-    base: JsonValue,
-    overrides: JsonValue
-): JsonValue {
-    let result = JsonValue.objectValue([])
-    if (base.kind == JsonKind.Object) {
-        for (member in base.members) {
+    base: JsonNode,
+    overrides: JsonNode
+): JsonNode {
+    let result = jsonObject([])
+    if (base.unifiedKind == UnifiedJsonKind.Object) {
+        for (member in base.fields) {
             result.put(member.name, member.value)
         }
     }
-    if (overrides.kind == JsonKind.Object) {
-        for (member in overrides.members) {
+    if (overrides.unifiedKind == UnifiedJsonKind.Object) {
+        for (member in overrides.fields) {
             result.put(member.name, member.value)
         }
     }
     result
 }
 
-func debugJsonStringArray(call: ToolCall, name: String): JsonValue {
-    let result = JsonValue.arrayValue([])
+func debugJsonStringArray(call: ToolCall, name: String): JsonNode {
+    let result = jsonArray([])
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.List) {
+            if (value.unifiedKind == ValueKind.List) {
                 for (item in value.items
-                     where item.kind == ValueKind.Text) {
-                    result.add(JsonValue.stringValue(item.text))
+                     where item.unifiedKind == ValueKind.Text) {
+                    result.add(jsonString(item.text))
                 }
             }
         case None => ()
@@ -1740,21 +1741,21 @@ func debugJsonStringArray(call: ToolCall, name: String): JsonValue {
     result
 }
 
-func debugAgentValueToJson(value: AgentValue): JsonValue {
-    match (value.kind) {
-        case ValueKind.Null => JsonValue.nullValue()
-        case ValueKind.Boolean => JsonValue.boolValue(value.boolean)
+func debugAgentValueToJson(value: AgentValue): JsonNode {
+    match (value.unifiedKind) {
+        case ValueKind.Null => jsonNull()
+        case ValueKind.Boolean => jsonBool(value.boolean)
         case ValueKind.Number =>
-            JsonValue.numberValue(value.number)
-        case ValueKind.Text => JsonValue.stringValue(value.text)
+            jsonNumber(value.number)
+        case ValueKind.Text => jsonString(value.text)
         case ValueKind.List =>
-            let result = JsonValue.arrayValue([])
+            let result = jsonArray([])
             for (item in value.items) {
                 result.add(debugAgentValueToJson(item))
             }
             result
         case ValueKind.Object =>
-            let result = JsonValue.objectValue([])
+            let result = jsonObject([])
             for (field in value.fields) {
                 result.put(
                     field.name,
@@ -1765,21 +1766,21 @@ func debugAgentValueToJson(value: AgentValue): JsonValue {
     }
 }
 
-func debugJsonToAgentValue(value: JsonValue): AgentValue {
-    match (value.kind) {
-        case JsonKind.Null => nullValue()
-        case JsonKind.Boolean => boolValue(value.boolean)
-        case JsonKind.Number => numberValue(value.text)
-        case JsonKind.Text => textValue(value.text)
-        case JsonKind.List =>
+func debugJsonToAgentValue(value: JsonNode): AgentValue {
+    match (value.unifiedKind) {
+        case UnifiedJsonKind.Null => nullValue()
+        case UnifiedJsonKind.Boolean => boolValue(value.boolean)
+        case UnifiedJsonKind.Number => numberValue(value.text)
+        case UnifiedJsonKind.Text => textValue(value.text)
+        case UnifiedJsonKind.List =>
             let result = ArrayList<AgentValue>()
             for (item in value.items) {
                 result.add(debugJsonToAgentValue(item))
             }
             listValue(result.toArray())
-        case JsonKind.Object =>
+        case UnifiedJsonKind.Object =>
             let result = ArrayList<ValueField>()
-            for (member in value.members) {
+            for (member in value.fields) {
                 result.add(ValueField(
                     member.name,
                     debugJsonToAgentValue(member.value)
@@ -1794,7 +1795,7 @@ func debugResult(
     action: String,
     content: String,
     session!: ?ProductDapSession = None,
-    response!: ?JsonValue = None
+    response!: ?JsonNode = None
 ): ToolResult {
     let fields = ArrayList<ValueField>()
     fields.add(ValueField("content", textValue(content)))
@@ -2048,13 +2049,13 @@ func removeDataBreakpoint(
 
 func encodeSourceBreakpoints(
     values: Array<DapBreakpoint>
-): JsonValue {
-    let result = JsonValue.arrayValue([])
+): JsonNode {
+    let result = jsonArray([])
     for (value in values) {
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField(
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry(
             "line",
-            JsonValue.numberValue(value.line.toString())
+            jsonNumber(value.line.toString())
         ))
         addDapOptionalString("condition", value.condition, fields)
         addDapOptionalString(
@@ -2062,20 +2063,20 @@ func encodeSourceBreakpoints(
             value.hitCondition,
             fields
         )
-        result.add(JsonValue.objectValue(fields.toArray()))
+        result.add(jsonObject(fields.toArray()))
     }
     result
 }
 
 func encodeFunctionBreakpoints(
     values: ArrayList<DapFunctionBreakpoint>
-): JsonValue {
-    let result = JsonValue.arrayValue([])
+): JsonNode {
+    let result = jsonArray([])
     for (value in values) {
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField(
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry(
             "name",
-            JsonValue.stringValue(value.name)
+            jsonString(value.name)
         ))
         addDapOptionalString("condition", value.condition, fields)
         addDapOptionalString(
@@ -2083,24 +2084,24 @@ func encodeFunctionBreakpoints(
             value.hitCondition,
             fields
         )
-        result.add(JsonValue.objectValue(fields.toArray()))
+        result.add(jsonObject(fields.toArray()))
     }
     result
 }
 
 func encodeInstructionBreakpoints(
     values: ArrayList<DapInstructionBreakpoint>
-): JsonValue {
-    let result = JsonValue.arrayValue([])
+): JsonNode {
+    let result = jsonArray([])
     for (value in values) {
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField(
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry(
             "instructionReference",
-            JsonValue.stringValue(value.reference)
+            jsonString(value.reference)
         ))
-        fields.add(JsonField(
+        fields.add(JsonObjectEntry(
             "offset",
-            JsonValue.numberValue(value.offset.toString())
+            jsonNumber(value.offset.toString())
         ))
         addDapOptionalString("condition", value.condition, fields)
         addDapOptionalString(
@@ -2108,20 +2109,20 @@ func encodeInstructionBreakpoints(
             value.hitCondition,
             fields
         )
-        result.add(JsonValue.objectValue(fields.toArray()))
+        result.add(jsonObject(fields.toArray()))
     }
     result
 }
 
 func encodeDataBreakpoints(
     values: ArrayList<DapDataBreakpoint>
-): JsonValue {
-    let result = JsonValue.arrayValue([])
+): JsonNode {
+    let result = jsonArray([])
     for (value in values) {
-        let fields = ArrayList<JsonField>()
-        fields.add(JsonField(
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry(
             "dataId",
-            JsonValue.stringValue(value.dataId)
+            jsonString(value.dataId)
         ))
         addDapOptionalString("accessType", value.accessType, fields)
         addDapOptionalString("condition", value.condition, fields)
@@ -2130,7 +2131,7 @@ func encodeDataBreakpoints(
             value.hitCondition,
             fields
         )
-        result.add(JsonValue.objectValue(fields.toArray()))
+        result.add(jsonObject(fields.toArray()))
     }
     result
 }
@@ -2138,10 +2139,10 @@ func encodeDataBreakpoints(
 func addDapOptionalString(
     name: String,
     value: String,
-    fields: ArrayList<JsonField>
+    fields: ArrayList<JsonObjectEntry>
 ): Unit {
     if (value != "") {
-        fields.add(JsonField(name, JsonValue.stringValue(value)))
+        fields.add(JsonObjectEntry(name, jsonString(value)))
     }
 }
 
@@ -2149,14 +2150,14 @@ func addOptionalNumber(
     call: ToolCall,
     sourceName: String,
     targetName: String,
-    fields: ArrayList<JsonField>
+    fields: ArrayList<JsonObjectEntry>
 ): Unit {
     let missing: Int64 = -9223372036854775807
     let value = debugOptionalInteger(call, sourceName, missing)
     if (value != missing) {
-        fields.add(JsonField(
+        fields.add(JsonObjectEntry(
             targetName,
-            JsonValue.numberValue(value.toString())
+            jsonNumber(value.toString())
         ))
     }
 }
@@ -2164,7 +2165,7 @@ func addOptionalNumber(
 func addFrameId(
     call: ToolCall,
     session: ProductDapSession,
-    fields: ArrayList<JsonField>
+    fields: ArrayList<JsonObjectEntry>
 ): Unit {
     let value = debugOptionalInteger(
         call,
@@ -2172,9 +2173,9 @@ func addFrameId(
         session.client.snapshot().frameId
     )
     if (value > 0) {
-        fields.add(JsonField(
+        fields.add(JsonObjectEntry(
             "frameId",
-            JsonValue.numberValue(value.toString())
+            jsonNumber(value.toString())
         ))
     }
 }
@@ -2189,11 +2190,11 @@ func debugOptionalInteger(
 
 func setFirstStackFrame(
     session: ProductDapSession,
-    body: JsonValue
+    body: JsonNode
 ): Unit {
     match (body.field("stackFrames")) {
         case Some(frames) =>
-            if (frames.kind == JsonKind.List &&
+            if (frames.unifiedKind == UnifiedJsonKind.List &&
                 !frames.items.isEmpty()) {
                 session.client.setTopFrame(frames.items[0])
             }

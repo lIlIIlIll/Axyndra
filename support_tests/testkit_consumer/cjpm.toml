@@ -8,5 +8,6 @@
 
 [dependencies]
   "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
-  "json4cj" = { path = "../../libs/json4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "axyndra_agent_testkit" = { path = "../../axyndra_agent_testkit", output-type = "static" }

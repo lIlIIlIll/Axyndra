@@ -1,6 +1,7 @@
 package agent_domain
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.deriving.*
 
 public class ThreadId {
@@ -140,7 +141,7 @@ public func validateThreadItemContent(content: ThreadItemContent): Unit {
         case ThreadItemContent.UserMessage(parts) => validateThreadMessageParts(parts)
         case ThreadItemContent.AssistantMessage(parts) => validateThreadMessageParts(parts)
         case ThreadItemContent.ToolCall(_, name, arguments) =>
-            if (name.trimAscii() == "" || arguments.kind != ValueKind.Object) {
+            if (name.trimAscii() == "" || arguments.unifiedKind != ValueKind.Object) {
                 throw IllegalArgumentException(
                     "tool-call Item requires a name and object arguments"
                 )

@@ -1,12 +1,11 @@
 [workspace]
   members = [
-    "libs/json4cj",
+    "libs/yjson_support",
     "libs/jsonrpc4cj",
     "libs/process4cj",
     "libs/mcp4cj",
     "libs/sandbox4cj",
     "libs/skill_runtime",
-    "libs/llm4cj",
     "libs/lsp4cj",
     "libs/dap4cj",
     "agent_domain",
@@ -41,13 +40,12 @@
     "agent_app"
   ]
   build-members = [
-    "libs/json4cj",
+    "libs/yjson_support",
     "libs/jsonrpc4cj",
     "libs/process4cj",
     "libs/mcp4cj",
     "libs/sandbox4cj",
     "libs/skill_runtime",
-    "libs/llm4cj",
     "libs/lsp4cj",
     "libs/dap4cj",
     "agent_domain",
@@ -82,13 +80,12 @@
     "agent_app"
   ]
   test-members = [
-    "libs/json4cj",
+    "libs/yjson_support",
     "libs/jsonrpc4cj",
     "libs/process4cj",
     "libs/mcp4cj",
     "libs/sandbox4cj",
     "libs/skill_runtime",
-    "libs/llm4cj",
     "libs/lsp4cj",
     "libs/dap4cj",
     "agent_domain",

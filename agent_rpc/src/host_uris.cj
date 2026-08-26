@@ -1,5 +1,9 @@
 package agent_rpc
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -357,7 +361,7 @@ func decodeUriDefinitions(
 ): Result<Array<RpcHostUriDefinition>> {
     let values = match (request.field("schemes")) {
         case Some(value) =>
-            if (value.kind != ValueKind.List) {
+            if (value.unifiedKind != ValueKind.List) {
                 return hostUriError("host URI schemes must be a list")
             }
             value.items
@@ -367,7 +371,7 @@ func decodeUriDefinitions(
     }
     let definitions = ArrayList<RpcHostUriDefinition>()
     for (value in values) {
-        if (value.kind != ValueKind.Object) {
+        if (value.unifiedKind != ValueKind.Object) {
             return hostUriError(
                 "host URI scheme definition must be an object"
             )
@@ -436,7 +440,7 @@ func optionalBoolean(
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Boolean) {
+            if (field.unifiedKind == ValueKind.Boolean) {
                 field.boolean
             } else {
                 fallback
@@ -452,9 +456,9 @@ func stringListField(
     let result = ArrayList<String>()
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.List) {
+            if (field.unifiedKind == ValueKind.List) {
                 for (item in field.items where
-                     item.kind == ValueKind.Text) {
+                     item.unifiedKind == ValueKind.Text) {
                     result.add(item.text)
                 }
             }

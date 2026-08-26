@@ -1,5 +1,9 @@
 package sdk_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import std.collection.*

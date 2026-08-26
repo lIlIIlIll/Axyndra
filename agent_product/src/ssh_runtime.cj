@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
@@ -165,7 +169,7 @@ class ProductSshRuntime {
             case Some(value) => value
             case None => return Result.Ok([])
         }
-        if (hostsValue.kind != ValueKind.Object) {
+        if (hostsValue.unifiedKind != ValueKind.Object) {
             return sshConfigError<Array<ProductSshHost>>(
                 "ssh.config_invalid",
                 "SSH config hosts must be an object",
@@ -175,7 +179,7 @@ class ProductSshRuntime {
         let hosts = ArrayList<ProductSshHost>()
         for (field in hostsValue.fields) {
             let value = field.value
-            if (value.kind != ValueKind.Object) {
+            if (value.unifiedKind != ValueKind.Object) {
                 return sshConfigError<Array<ProductSshHost>>(
                     "ssh.config_invalid",
                     "SSH host \"" + field.name +
@@ -295,7 +299,7 @@ func sshHostValue(host: ProductSshHost): AgentValue {
 func sshTextField(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) { item.text } else { "" }
+            if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }
@@ -303,7 +307,7 @@ func sshTextField(value: AgentValue, name: String): String {
 func sshBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(item) =>
-            item.kind == ValueKind.Boolean && item.boolean
+            item.unifiedKind == ValueKind.Boolean && item.boolean
         case None => false
     }
 }
@@ -311,7 +315,7 @@ func sshBoolField(value: AgentValue, name: String): Bool {
 func sshPortField(value: AgentValue): ?Int64 {
     match (value.field("port")) {
         case Some(item) =>
-            if (item.kind != ValueKind.Number) { return None }
+            if (item.unifiedKind != ValueKind.Number) { return None }
             try {
                 Some(Int64.parse(item.number))
             } catch (_: Exception) {

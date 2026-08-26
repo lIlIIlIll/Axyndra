@@ -1,9 +1,14 @@
 package agent_mcp
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_protocol.*
 import mcp4cj as library
 import std.collection.*
+import std.convert.*
 
 // Product compatibility facade. All MCP correlation, pagination and lifecycle
 // state is owned by mcp4cj; this class only maps library errors to AgentError.
@@ -105,6 +110,7 @@ func agentMcpLibraryError(error: AgentError): library.McpError {
     let dataFields = ArrayList<ValueField>()
     dataFields.add(ValueField("code", textValue(error.code)))
     for (field in error.fields) {
+        if (isMcpEnvelopeField(field.name)) { continue }
         dataFields.add(ValueField(field.name, textValue(field.value)))
     }
     library.McpError(
@@ -112,8 +118,25 @@ func agentMcpLibraryError(error: AgentError): library.McpError {
         error.code,
         error.message,
         retryable: error.retryable,
-        retrySafe: error.kind != AgentErrorKind.RecoveryRequired,
-        remoteCode: error.code,
+        retrySafe: agentMcpRetrySafe(error),
+        rpcCode: agentMcpIntegerField(error, "json_rpc_code"),
+        httpStatus: agentMcpIntegerField(error, "http_status"),
+        remoteCode: error.field("remote_code") ?? error.code,
         data: objectValue(dataFields.toArray())
     )
+}
+
+func agentMcpRetrySafe(error: AgentError): Bool {
+    match (error.field("retry_safe")) {
+        case Some("true") => true
+        case Some("false") => false
+        case _ => error.kind != AgentErrorKind.RecoveryRequired
+    }
+}
+
+func agentMcpIntegerField(error: AgentError, name: String): ?Int64 {
+    match (error.field(name)) {
+        case Some(value) => try { Some(Int64.parse(value)) } catch (_: Exception) { None<Int64> }
+        case None => None<Int64>
+    }
 }

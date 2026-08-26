@@ -1,5 +1,9 @@
 package agent_core_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_core.*
 import agent_domain.*
 import agent_ports.*
@@ -240,7 +244,7 @@ func deadlineRetryExactReplayContract(): Unit {
             case Some(_) => match (event.payload) {
                 case AgentEventPayload.Extension(_, detail) =>
                     let code = match (detail.field("code")) {
-                        case Some(value) => if (value.kind == ValueKind.Text) { value.text } else { "" }
+                        case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
                         case None => ""
                     }
                     if (code == "model.tool_started" || code == "model.tool_arguments") {
@@ -4200,7 +4204,7 @@ class MemoryRuns <: RunRepository {
         if (failStreamTelemetry && event.meta.attemptId.isSome() && match (event.payload) {
             case AgentEventPayload.TextDelta(_) | AgentEventPayload.ReasoningDelta(_) => true
             case AgentEventPayload.Extension(_, detail) => match (detail.field("code")) {
-                case Some(value) => value.kind == ValueKind.Text &&
+                case Some(value) => value.unifiedKind == ValueKind.Text &&
                     value.text == "model.tool_arguments"
                 case None => false
             }
@@ -4588,8 +4592,8 @@ func fixtureAttemptWithDispatch(
 }
 
 func fixtureAgentValuesEqual(left: AgentValue, right: AgentValue): Bool {
-    if (left.kind != right.kind) { return false }
-    match (left.kind) {
+    if (left.unifiedKind != right.unifiedKind) { return false }
+    match (left.unifiedKind) {
         case ValueKind.Null => true
         case ValueKind.Boolean => left.boolean == right.boolean
         case ValueKind.Number => left.number == right.number

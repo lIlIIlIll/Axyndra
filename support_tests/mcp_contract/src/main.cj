@@ -1,5 +1,9 @@
 package mcp_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import agent_protocol.*
@@ -235,7 +239,7 @@ func runStdioAdmissionAndShutdownContracts(): Unit {
                             let maximum = error.data.field("max_concurrent_requests").getOrThrow()
                             busy = error.code == JSON_RPC_INTERNAL_ERROR &&
                                 requiredText(error.data, "code") == "mcp.stdio_server_busy" &&
-                                maximum.kind == ValueKind.Number && maximum.number == "2" &&
+                                maximum.unifiedKind == ValueKind.Number && maximum.number == "2" &&
                                 line.size <= 512
                         }
                 }
@@ -1150,7 +1154,7 @@ func completeResult(outcome: McpCallToolOutcome): McpCallToolResult {
 
 func requiredText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }

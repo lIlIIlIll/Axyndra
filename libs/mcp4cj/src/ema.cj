@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 
 public let MCP_EMA_EXTENSION = "io.modelcontextprotocol/enterprise-managed-authorization"
 
@@ -9,13 +10,13 @@ public class McpEnterpriseAuthorizationContext {
     public let organization: String
     public let subject: String
     public let requestedScopes: Array<String>
-    public let attributes: JsonValue
+    public let attributes: JsonNode
     public init(
         resource: String,
         organization: String,
         subject: String,
         requestedScopes!: Array<String> = [],
-        attributes!: JsonValue = JsonValue.objectValue([])
+        attributes!: JsonNode = jsonObject([])
     ) {
         if (resource.trimAscii() == "" || organization.trimAscii() == "" || subject.trimAscii() == "") {
             throw IllegalArgumentException("MCP enterprise authorization context requires resource, organization, and subject")

@@ -1,5 +1,9 @@
 package thread_runtime_integration_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import std.fs.*
 import std.sync.*
 import std.collection.*
@@ -111,7 +115,7 @@ main(): Int64 {
             durableRun.lane.getOrThrow().modelId == "model-a" &&
             durableRun.skills.getOrThrow().active.isEmpty() &&
             durableRun.usage.field("input_tokens").getOrThrow().number == "38" &&
-            durableRun.usage.field("cost_micros").getOrThrow().kind == ValueKind.Null &&
+            durableRun.usage.field("cost_micros").getOrThrow().unifiedKind == ValueKind.Null &&
             runtime.threadSnapshot().thread.revision == revisionBeforeLateUsage,
             "RunStore reconstructs launch snapshots and late usage without semantic mutation")
 

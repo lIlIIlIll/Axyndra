@@ -2,7 +2,8 @@ package extension_runtime_contract
 
 import agent_sdk.*
 import agent_extension_runtime.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import sdk_fixture_extension.*
 import std.collection.*
 import workspace_search_extension.*
@@ -444,9 +445,9 @@ class StubTool <: ExtensionTool {
     private let name: String
     init(name: String) { this.name = name }
     public func definition(): ExtensionToolDefinition {
-        ExtensionToolDefinition(name, "Stub tool.", JsonValue.objectValue([]), [workspaceRead()])
+        ExtensionToolDefinition(name, "Stub tool.", jsonObject([]), [workspaceRead()])
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> { SdkResult.Ok(input) }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
     public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
         SdkResult.Ok(OperationIntent.WorkspaceSearch(WorkspaceSearchIntent(invocation.callId)))
     }
@@ -473,21 +474,21 @@ func webProvider(): CompiledExtensionProvider {
 }
 
 func manifest(id: String, name: String, description: String, tools: Array<String>): String {
-    let toolValues = ArrayList<JsonValue>()
-    for (tool in tools) { toolValues.add(JsonValue.stringValue(tool)) }
-    encodeJson(JsonValue.objectValue([
-        JsonField("schemaVersion", JsonValue.numberValue("1")),
-        JsonField("id", JsonValue.stringValue(id)),
-        JsonField("name", JsonValue.stringValue(name)),
-        JsonField("version", JsonValue.stringValue("1.0.0")),
-        JsonField("description", JsonValue.stringValue(description)),
-        JsonField("sdk", JsonValue.objectValue([
-            JsonField("min", JsonValue.stringValue("1.0.0")),
-            JsonField("maxExclusive", JsonValue.stringValue("2.0.0"))
+    let toolValues = ArrayList<JsonNode>()
+    for (tool in tools) { toolValues.add(jsonString(tool)) }
+    stringifyUnifiedJson(jsonObject([
+        JsonObjectEntry("schemaVersion", jsonNumber("1")),
+        JsonObjectEntry("id", jsonString(id)),
+        JsonObjectEntry("name", jsonString(name)),
+        JsonObjectEntry("version", jsonString("1.0.0")),
+        JsonObjectEntry("description", jsonString(description)),
+        JsonObjectEntry("sdk", jsonObject([
+            JsonObjectEntry("min", jsonString("1.0.0")),
+            JsonObjectEntry("maxExclusive", jsonString("2.0.0"))
         ])),
-        JsonField("tools", JsonValue.arrayValue(toolValues.toArray())),
-        JsonField("capabilities", JsonValue.arrayValue([JsonValue.stringValue("workspace.read")])),
-        JsonField("requirements", JsonValue.objectValue([JsonField("executables", JsonValue.arrayValue([]))]))
+        JsonObjectEntry("tools", jsonArray(toolValues.toArray())),
+        JsonObjectEntry("capabilities", jsonArray([jsonString("workspace.read")])),
+        JsonObjectEntry("requirements", jsonObject([JsonObjectEntry("executables", jsonArray([]))]))
     ]))
 }
 

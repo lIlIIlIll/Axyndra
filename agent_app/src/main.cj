@@ -1,5 +1,9 @@
 package agent_app
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_core.*
 import agent_app_protocol.*
@@ -620,7 +624,7 @@ func printConfigValue(
             )
         )
     } else {
-        match (value.kind) {
+        match (value.unifiedKind) {
             case ValueKind.Text => println(value.text)
             case ValueKind.Boolean => println(value.boolean.toString())
             case _ => println(encodeAgentValue(value))
@@ -3686,7 +3690,7 @@ func approvalDisplayArguments(details: ApprovalDetails): String {
     if (details.toolName == "bash" || details.toolName == "bash_readonly") {
         match (details.arguments.field("command")) {
             case Some(value) =>
-                if (value.kind == ValueKind.Text) {
+                if (value.unifiedKind == ValueKind.Text) {
                     value.text
                 } else {
                     ""
@@ -3704,7 +3708,7 @@ func tuiApprovalInspect(details: ApprovalDetails): String {
         case Some(summary) =>
             let content = match (details.arguments.field("content")) {
                 case Some(value) =>
-                    if (value.kind == ValueKind.Text) {
+                    if (value.unifiedKind == ValueKind.Text) {
                         redactApprovalText(value.text)
                     } else {
                         ""
@@ -4547,7 +4551,7 @@ func eventInteger(event: AgentEvent, name: String): Int64 {
 
 func eventBoolean(event: AgentEvent, name: String): Bool {
     match (event.detail.field(name)) {
-        case Some(value) => value.kind == ValueKind.Boolean && value.boolean
+        case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
         case None => false
     }
 }

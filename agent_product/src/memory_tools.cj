@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import persistence_runtime.*
 import tool_runtime.*
@@ -433,7 +437,7 @@ public class ProductMemoryRuntime {
                     None
                 ))
             case Some(raw) =>
-                if (raw.kind != ValueKind.Object) {
+                if (raw.unifiedKind != ValueKind.Object) {
                     return memoryToolError<ToolResult>(
                         call,
                         "skill",
@@ -1020,7 +1024,7 @@ func managedSkillInput(
     value: AgentValue,
     allowDelete: Bool
 ): Result<ManagedSkillInput> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return memoryToolError<ManagedSkillInput>(
             call,
             "skill",
@@ -1125,7 +1129,7 @@ func memoryV3Drafts(
                 "required argument is missing"
             )
     }
-    if (raw.kind != ValueKind.List || raw.items.size == 0) {
+    if (raw.unifiedKind != ValueKind.List || raw.items.size == 0) {
         return memoryToolError<Array<MemoryV3Draft>>(
             call,
             fieldName,
@@ -1134,7 +1138,7 @@ func memoryV3Drafts(
     }
     let drafts = ArrayList<MemoryV3Draft>()
     for (item in raw.items) {
-        if (item.kind != ValueKind.Object) {
+        if (item.unifiedKind != ValueKind.Object) {
             return memoryToolError<Array<MemoryV3Draft>>(
                 call,
                 fieldName,
@@ -1470,7 +1474,7 @@ func memoryV3ImportanceFromValue(
     match (value.field("importance")) {
         case None => Result.Ok(fallback)
         case Some(raw) =>
-            if (raw.kind != ValueKind.Number) {
+            if (raw.unifiedKind != ValueKind.Number) {
                 return memoryToolError<Int64>(call, "importance", "importance must be a number")
             }
             try {
@@ -1497,7 +1501,7 @@ func memoryV3ExpiresAtFromValue(
     match (value.field("expires_at")) {
         case None => Result.Ok(fallback)
         case Some(raw) =>
-            if (raw.kind != ValueKind.Number) {
+            if (raw.unifiedKind != ValueKind.Number) {
                 return memoryToolError<Int64>(call, "expires_at", "expires_at must be an integer")
             }
             try {
@@ -1525,7 +1529,7 @@ func memoryV3OptionalText(
     match (value.field(name)) {
         case None => Result.Ok(None)
         case Some(raw) =>
-            if (raw.kind == ValueKind.Text) {
+            if (raw.unifiedKind == ValueKind.Text) {
                 Result.Ok(Some(raw.text))
             } else {
                 memoryToolError<?String>(call, name, name + " must be a string")
@@ -1552,7 +1556,7 @@ func memoryV3SearchOptions(
     match (call.arguments.field("kinds")) {
         case None => ()
         case Some(raw) =>
-            if (raw.kind != ValueKind.List) {
+            if (raw.unifiedKind != ValueKind.List) {
                 return memoryToolError<MemoryV3SearchOptions>(
                     call,
                     "kinds",
@@ -1560,7 +1564,7 @@ func memoryV3SearchOptions(
                 )
             }
             for (item in raw.items) {
-                if (item.kind != ValueKind.Text) {
+                if (item.unifiedKind != ValueKind.Text) {
                     return memoryToolError<MemoryV3SearchOptions>(
                         call,
                         "kinds",
@@ -1577,7 +1581,7 @@ func memoryV3SearchOptions(
     let limit = match (call.arguments.field("limit")) {
         case None => 10
         case Some(raw) =>
-            if (raw.kind != ValueKind.Number) {
+            if (raw.unifiedKind != ValueKind.Number) {
                 return memoryToolError<MemoryV3SearchOptions>(
                     call,
                     "limit",
@@ -1633,7 +1637,7 @@ func memoryV3ConflictIds(call: ToolCall, primaryId: String): Result<Array<String
             "mark_conflict requires at least one conflicting memory id"
         )
     }
-    if (raw.kind != ValueKind.List || raw.items.isEmpty()) {
+    if (raw.unifiedKind != ValueKind.List || raw.items.isEmpty()) {
         return memoryToolError<Array<String>>(
             call,
             "conflict_ids",
@@ -1643,7 +1647,7 @@ func memoryV3ConflictIds(call: ToolCall, primaryId: String): Result<Array<String
     let ids = ArrayList<String>()
     ids.add(primaryId)
     for (item in raw.items) {
-        if (item.kind != ValueKind.Text || item.text.trimAscii() == "") {
+        if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
             return memoryToolError<Array<String>>(
                 call,
                 "conflict_ids",
@@ -1685,7 +1689,7 @@ func requiredNonemptyMemoryString(
 func optionalMemoryText(call: ToolCall, name: String): ?String {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 Some(value.text)
             } else {
                 None
@@ -1704,7 +1708,7 @@ func optionalMemoryString(call: ToolCall, name: String): String {
 func memoryObjectString(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }

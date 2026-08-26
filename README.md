@@ -184,7 +184,7 @@ approval:
 | `agent_domain` | 协议无关领域值、`Result<T>`、预算、事件和审批 |
 | `agent_protocol` | 与传输无关的 JSON-RPC 2.0 值、编解码和关联状态 |
 | `agent_ports` | 模型、仓储、工作区、进程、审计等端口 |
-| `model_adapters` | Agent `ModelRequest`/`ModelReply` 与 `llm4cj` wire DTO 的语义映射及产品重试策略 |
+| `model_adapters` | Agent `ModelRequest`/`ModelReply` 与独立仓库 `llm4cj` wire DTO 的语义映射及产品重试策略；依赖始终跟随其 `main` 分支 |
 | `tool_runtime` | catalog → validation → policy → approval → receipt |
 | `agent_core` | 唯一模型/工具循环 |
 | `persistence_runtime` | 仓储实现、bounded events、schema 生命周期 |

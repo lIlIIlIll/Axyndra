@@ -1,5 +1,9 @@
 package agent_domain_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 
 main(): Int64 {
@@ -28,7 +32,7 @@ main(): Int64 {
         ValueField("enabled", boolValue(true)),
         ValueField("limits", listValue([integerValue(1), integerValue(2)]))
     ])
-    expect(nested.kind == ValueKind.Object, "structured object value")
+    expect(nested.unifiedKind == ValueKind.Object, "structured object value")
     expect(match (nested.field("name")) {
         case Some(value) => value.text == "echo"
         case None => false

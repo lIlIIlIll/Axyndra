@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import process4cj.*
 import model_adapters.*
@@ -637,7 +641,7 @@ class ProductProcessSupervisor {
         var readyTimeout: Int64 = 30000
         match (call.arguments.field("ready")) {
             case Some(ready) =>
-                if (ready.kind != ValueKind.Object) {
+                if (ready.unifiedKind != ValueKind.Object) {
                     return supervisorError<ProductDaemonSpec>(
                         "hub.process_ready_invalid",
                         "ready must be an object"
@@ -1414,7 +1418,7 @@ class ProductProcessSupervisor {
                     addBrokerRecoveryWarning(file, error.message)
                     return None
             }
-            if (value.kind != ValueKind.Object ||
+            if (value.unifiedKind != ValueKind.Object ||
                 daemonRecordInteger(value, "version", 0) != 2) {
                 addBrokerRecoveryWarning(file, "record version is invalid")
                 return None
@@ -1583,7 +1587,7 @@ func decodeDaemonSpecRecord(
     value: AgentValue,
     workspace: LocalWorkspace
 ): ?ProductDaemonSpec {
-    if (value.kind != ValueKind.Object) { return None }
+    if (value.unifiedKind != ValueKind.Object) { return None }
     let name = daemonRecordText(value, "name")
     let application = daemonRecordText(value, "application")
     if (!safeDaemonName(name) || application == "") { return None }
@@ -1616,7 +1620,7 @@ func decodeDaemonSpecRecord(
     var readyTimeoutMillis: Int64 = 30000
     match (ready) {
         case Some(item) =>
-            if (item.kind == ValueKind.Object) {
+            if (item.unifiedKind == ValueKind.Object) {
                 readyLog = daemonRecordText(item, "log")
                 readyPort = daemonRecordInteger(item, "port", 0)
                 let host = daemonRecordText(item, "host")
@@ -1626,7 +1630,7 @@ func decodeDaemonSpecRecord(
                     "timeoutMs",
                     30000
                 )
-            } else if (item.kind != ValueKind.Null) {
+            } else if (item.unifiedKind != ValueKind.Null) {
                 return None
             }
         case None => ()
@@ -1675,7 +1679,7 @@ func decodeDaemonSpecRecord(
 func daemonRecordText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
@@ -1687,7 +1691,7 @@ func daemonRecordInteger(
 ): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind != ValueKind.Number) { return fallback }
+            if (field.unifiedKind != ValueKind.Number) { return fallback }
             try { Int64.parse(field.number) } catch (_: Exception) { fallback }
         case None => fallback
     }
@@ -1699,7 +1703,7 @@ func daemonRecordOptionalInteger(
 ): ?Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind != ValueKind.Number) { return None }
+            if (field.unifiedKind != ValueKind.Number) { return None }
             try { Some(Int64.parse(field.number)) } catch (_: Exception) { None }
         case None => None
     }
@@ -1712,7 +1716,7 @@ func daemonRecordBoolean(
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Boolean) { field.boolean } else { fallback }
+            if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
         case None => fallback
     }
 }
@@ -1725,10 +1729,10 @@ func daemonRecordStringList(
         case Some(item) => item
         case None => return Some([])
     }
-    if (field.kind != ValueKind.List) { return None }
+    if (field.unifiedKind != ValueKind.List) { return None }
     let values = ArrayList<String>()
     for (item in field.items) {
-        if (item.kind != ValueKind.Text) { return None }
+        if (item.unifiedKind != ValueKind.Text) { return None }
         values.add(item.text)
     }
     Some(values.toArray())
@@ -1742,12 +1746,12 @@ func daemonRecordEnvironment(
         case Some(item) => item
         case None => return Some(HashMap<String, String>())
     }
-    if (field.kind != ValueKind.Object) { return None }
+    if (field.unifiedKind != ValueKind.Object) { return None }
     let result = HashMap<String, String>()
     for (item in field.fields) {
         if (!validEnvironmentName(item.name) ||
             directSecretName(item.name) ||
-            item.value.kind != ValueKind.Text ||
+            item.value.unifiedKind != ValueKind.Text ||
             item.value.text.contains("\u{0000}")) {
             return None
         }
@@ -1766,9 +1770,9 @@ func daemonRecordEnvironmentBindings(
             case Some(item) => item
             case None => continue
         }
-        if (field.kind != ValueKind.Object) { return None }
+        if (field.unifiedKind != ValueKind.Object) { return None }
         for (item in field.fields) {
-            if (item.value.kind != ValueKind.Text ||
+            if (item.value.unifiedKind != ValueKind.Text ||
                 directContains(targets, item.name)) {
                 return None
             }
@@ -1837,7 +1841,7 @@ func safeDaemonName(value: String): Bool {
 func daemonText(call: ToolCall, name: String): String {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 value.text.trimAscii()
             } else {
                 ""
@@ -1849,7 +1853,7 @@ func daemonText(call: ToolCall, name: String): String {
 func daemonValueText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) {
+            if (field.unifiedKind == ValueKind.Text) {
                 field.text.trimAscii()
             } else {
                 ""
@@ -1897,7 +1901,7 @@ func daemonBoolean(
 ): Bool {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Boolean) {
+            if (value.unifiedKind == ValueKind.Boolean) {
                 value.boolean
             } else {
                 fallback
@@ -1913,7 +1917,7 @@ func daemonStringList(
     match (call.arguments.field(name)) {
         case None => Result.Ok([])
         case Some(value) =>
-            if (value.kind != ValueKind.List) {
+            if (value.unifiedKind != ValueKind.List) {
                 return supervisorError<Array<String>>(
                     "hub.process_string_list_invalid",
                     name + " must be a string array"
@@ -1921,7 +1925,7 @@ func daemonStringList(
             }
             let values = ArrayList<String>()
             for (item in value.items) {
-                if (item.kind != ValueKind.Text) {
+                if (item.unifiedKind != ValueKind.Text) {
                     return supervisorError<Array<String>>(
                         "hub.process_string_list_invalid",
                         name + " must be a string array"
@@ -1940,14 +1944,14 @@ func daemonEnvironment(
     match (call.arguments.field("env")) {
         case None => Result.Ok(result)
         case Some(value) =>
-            if (value.kind != ValueKind.Object) {
+            if (value.unifiedKind != ValueKind.Object) {
                 return supervisorError<HashMap<String, String>>(
                     "hub.process_env_invalid",
                     "env must be an object of string values"
                 )
             }
             for (field in value.fields) {
-                if (field.value.kind != ValueKind.Text ||
+                if (field.value.unifiedKind != ValueKind.Text ||
                     !validEnvironmentName(field.name) ||
                     directSecretName(field.name) ||
                     field.value.text.contains("\u{0000}")) {
@@ -1971,14 +1975,14 @@ func daemonEnvironmentBindings(
         match (call.arguments.field(section)) {
             case None => ()
             case Some(value) =>
-                if (value.kind != ValueKind.Object) {
+                if (value.unifiedKind != ValueKind.Object) {
                     return supervisorError<Array<DirectEnvironmentBinding>>(
                         "hub.process_env_binding_invalid",
                         section + " must map target names to host source names"
                     )
                 }
                 for (field in value.fields) {
-                    if (field.value.kind != ValueKind.Text ||
+                    if (field.value.unifiedKind != ValueKind.Text ||
                         directContains(targets, field.name)) {
                         return supervisorError<Array<DirectEnvironmentBinding>>(
                             "hub.process_env_binding_invalid",

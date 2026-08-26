@@ -1,6 +1,7 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -11,12 +12,12 @@ class McpProtocol2026Tests {
         let client = McpClientCapabilities(
             roots: Some(McpCapabilityFeature(listChanged: true)),
             sampling: true,
-            extensions: JsonValue.objectValue([
-                JsonField("io.example/client", JsonValue.objectValue([JsonField("enabled", JsonValue.boolValue(true))]))
+            extensions: jsonObject([
+                JsonObjectEntry("io.example/client", jsonObject([JsonObjectEntry("enabled", jsonBool(true))]))
             ])
         ).toValue()
         @Expect(client.field("roots").getOrThrow().field("listChanged").getOrThrow().boolean, true)
-        @Expect(client.field("sampling").getOrThrow().kind == JsonKind.Object, true)
+        @Expect(client.field("sampling").getOrThrow().unifiedKind == UnifiedJsonKind.Object, true)
         @Expect(client.field("io.example/client").getOrThrow().field("enabled").getOrThrow().boolean, true)
 
         let server = McpServerCapabilities2026(
@@ -25,7 +26,7 @@ class McpProtocol2026Tests {
             resources: Some(McpCapabilityFeature(subscribe: true)),
             tools: Some(McpCapabilityFeature(listChanged: true))
         ).toValue()
-        @Expect(server.field("completions").getOrThrow().kind == JsonKind.Object, true)
+        @Expect(server.field("completions").getOrThrow().unifiedKind == UnifiedJsonKind.Object, true)
         @Expect(server.field("resources").getOrThrow().field("subscribe").getOrThrow().boolean, true)
     }
 
@@ -69,11 +70,11 @@ class McpProtocol2026Tests {
         let _ = @ExpectThrows[IllegalArgumentException](McpProtectedResourceMetadata(
             "https://mcp.example", ["http://issuer.example"]
         ))
-        @Expect(validateMcpAppToolMeta(JsonValue.objectValue([])).isOk(), false)
-        @Expect(validateMcpAppToolMeta(JsonValue.objectValue([
-            JsonField(MCP_APPS_RESOURCE_URI_META, JsonValue.stringValue("ui://example/app")),
-            JsonField(MCP_APPS_VISIBILITY_META, JsonValue.arrayValue([
-                JsonValue.stringValue("model"), JsonValue.stringValue("app")
+        @Expect(validateMcpAppToolMeta(jsonObject([])).isOk(), false)
+        @Expect(validateMcpAppToolMeta(jsonObject([
+            JsonObjectEntry(MCP_APPS_RESOURCE_URI_META, jsonString("ui://example/app")),
+            JsonObjectEntry(MCP_APPS_VISIBILITY_META, jsonArray([
+                jsonString("model"), jsonString("app")
             ]))
         ])).isOk(), true)
     }

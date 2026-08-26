@@ -1,5 +1,9 @@
 package agent_mcp
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_protocol.*
 import mcp4cj as library
@@ -128,11 +132,11 @@ func mcpLibraryError(error: library.McpError): AgentError {
     if (error.remoteCode != "") {
         fields.add(ErrorField("remote_code", error.remoteCode))
     }
-    if (error.data.kind == ValueKind.Object) {
+    if (error.data.unifiedKind == ValueKind.Object) {
         var accepted: Int64 = 0
         for (field in error.data.fields) {
-            if (accepted >= 32 || field.name == "code") { continue }
-            let value: ?String = match (field.value.kind) {
+            if (accepted >= 32 || isMcpEnvelopeField(field.name)) { continue }
+            let value: ?String = match (field.value.unifiedKind) {
                 case ValueKind.Text => Some(field.value.text)
                 case ValueKind.Number => Some(field.value.number)
                 case ValueKind.Boolean => Some(if (field.value.boolean) { "true" } else { "false" })
@@ -167,6 +171,12 @@ func mcpLibraryError(error: library.McpError): AgentError {
         error.message,
         fields: fields.toArray()
     )
+}
+
+func isMcpEnvelopeField(name: String): Bool {
+    name == "code" || name == "mcp_error_kind" || name == "retryable" ||
+        name == "retry_safe" || name == "json_rpc_code" ||
+        name == "http_status" || name == "remote_code"
 }
 
 func mcpLibraryErrorKindName(kind: library.McpErrorKind): String {

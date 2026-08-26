@@ -10,6 +10,8 @@
   target-dir = "target"
 
 [dependencies]
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_store" = { path = "../../agent_store", output-type = "static" }
   "persistence_runtime" = { path = "../../persistence_runtime", output-type = "static" }

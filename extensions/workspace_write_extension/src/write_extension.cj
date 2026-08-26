@@ -1,7 +1,8 @@
 package workspace_write_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 
 public func workspaceWriteExtensionManifest(): String {
     """
@@ -53,7 +54,7 @@ public class WorkspaceWriteTool <: ExtensionTool {
         )
     }
 
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         let path = textField(input, "path")
         if (path == "") {
             return invalid("write.path_required", "write requires a non-empty path")
@@ -88,7 +89,7 @@ public class WorkspaceWriteTool <: ExtensionTool {
         result: ExecutionResult
     ): SdkResult<ToolOutput> {
         let _ = _invocation
-        if (result.value.kind != JsonKind.Object) {
+        if (result.value.unifiedKind != UnifiedJsonKind.Object) {
             return SdkResult.Err(SdkError(
                 SdkErrorKind.Decode,
                 "write.result_not_object",
@@ -99,8 +100,8 @@ public class WorkspaceWriteTool <: ExtensionTool {
     }
 }
 
-func validateWriteContent(input: JsonValue, content: JsonValue): SdkResult<JsonValue> {
-    if (content.kind != JsonKind.Text) {
+func validateWriteContent(input: JsonNode, content: JsonNode): SdkResult<JsonNode> {
+    if (content.unifiedKind != UnifiedJsonKind.Text) {
         return invalid("write.content_invalid", "write content must be a string")
     }
     let contentBytes = unsafe { content.text.rawData() }
@@ -113,31 +114,31 @@ func validateWriteContent(input: JsonValue, content: JsonValue): SdkResult<JsonV
     SdkResult.Ok(input)
 }
 
-func writeSchema(): JsonValue {
-    let stringType = JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("string"))
+func writeSchema(): JsonNode {
+    let stringType = jsonObject([
+        JsonObjectEntry("type", jsonString("string"))
     ])
-    let boundedContentType = JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("string")),
-        JsonField("maxLength", JsonValue.numberValue("32768")),
-        JsonField(
+    let boundedContentType = jsonObject([
+        JsonObjectEntry("type", jsonString("string")),
+        JsonObjectEntry("maxLength", jsonNumber("32768")),
+        JsonObjectEntry(
             "description",
-            JsonValue.stringValue(
+            jsonString(
                 "Complete content for exactly one file. Maximum 32768 UTF-8 bytes; no markdown fences or other files."
             )
         )
     ])
-    JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("object")),
-        JsonField("properties", JsonValue.objectValue([
-            JsonField("path", stringType),
-            JsonField("content", boundedContentType)
+    jsonObject([
+        JsonObjectEntry("type", jsonString("object")),
+        JsonObjectEntry("properties", jsonObject([
+            JsonObjectEntry("path", stringType),
+            JsonObjectEntry("content", boundedContentType)
         ])),
-        JsonField("required", JsonValue.arrayValue([
-            JsonValue.stringValue("path"),
-            JsonValue.stringValue("content")
+        JsonObjectEntry("required", jsonArray([
+            jsonString("path"),
+            jsonString("content")
         ])),
-        JsonField("additionalProperties", JsonValue.boolValue(false))
+        JsonObjectEntry("additionalProperties", jsonBool(false))
     ])
 }
 
@@ -145,9 +146,9 @@ func invalid<T>(code: String, message: String): SdkResult<T> {
     SdkResult.Err(SdkError(SdkErrorKind.Validation, code, message))
 }
 
-func textField(value: JsonValue, name: String): String {
+func textField(value: JsonNode, name: String): String {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Text) { field.text } else { "" }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
