@@ -158,8 +158,11 @@ public class McpOAuthClient {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
-        if (grant.returnedIssuer != metadata.issuer) {
-            return authenticationMcpFailure<McpOAuthTokenSet>("mcp.oauth_issuer_mismatch", "authorization response issuer mismatch")
+        match (validateMcpAuthorizationResponseIssuer(
+            grant.returnedIssuer, metadata.issuer, metadata.authorizationResponseIssParameterSupported
+        )) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
         }
         var redirectAllowed = false
         for (uri in client.redirectUris where uri == grant.redirectUri) { redirectAllowed = true; break }
@@ -180,6 +183,28 @@ public class McpOAuthClient {
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
+}
+
+public func validateMcpAuthorizationResponseIssuer(
+    returnedIssuer: String,
+    expectedIssuer: String,
+    issuerParameterSupported: Bool
+): McpResult<Unit> {
+    if (expectedIssuer == "") { return McpResult.Ok(()) }
+    if (returnedIssuer == "") {
+        if (issuerParameterSupported) {
+            return authenticationMcpFailure<Unit>(
+                "mcp.oauth_issuer_missing", "authorization response omitted its advertised issuer"
+            )
+        }
+        return McpResult.Ok(())
+    }
+    if (returnedIssuer != expectedIssuer) {
+        return authenticationMcpFailure<Unit>(
+            "mcp.oauth_issuer_mismatch", "authorization response issuer mismatch"
+        )
+    }
+    McpResult.Ok(())
 }
 
 public class McpResourceServerAuthorizer {

@@ -1,9 +1,7 @@
 package agent_mcp
 
 import yjson_support.*
-
 import yjson.*
-
 import agent_domain.*
 import agent_protocol.*
 import mcp4cj as library
@@ -39,6 +37,10 @@ public class StdioMcpTransport <: McpTransport {
         }
     }
 
+    public func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle> {
+        mapMcpResult(primitive.openSubscription(request))
+    }
+
     public func notify(notification: JsonRpcNotification): Result<Unit> {
         match (primitive.notify(notification)) {
             case library.McpResult.Ok(_) => Result.Ok(())
@@ -52,6 +54,9 @@ public class StdioMcpTransport <: McpTransport {
             case library.McpResult.Ok(_) => Result.Ok(())
             case library.McpResult.Err(error) => Result.Err(mcpLibraryError(error))
         }
+    }
+    public func registerTools(tools: Array<McpTool>): Result<Unit> {
+        mapMcpResult(primitive.registerTools(tools))
     }
 
     public func stderrSnapshot(): String { primitive.stderrSnapshot() }

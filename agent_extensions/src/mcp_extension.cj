@@ -51,6 +51,26 @@ class McpToolExecutor <: ToolExecutor {
                         redact(pending.requestState)
                     )]
                 ))
+            case Result.Ok(McpCallToolOutcome.Task(task)) =>
+                // The generic ToolExecutor contract has no task lifecycle
+                // channel. Preserve the remote task identity for a task-aware
+                // caller instead of treating task creation as completion.
+                Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "mcp.tool_task_pending",
+                    "MCP tool started a task that requires task-aware handling",
+                    fields: [ErrorField("task_id", redact(task.taskId))]
+                ))
+            case Result.Ok(McpCallToolOutcome.Extension(resultType, _)) =>
+                // Product adapters must opt into extension result semantics.
+                // Returning the raw payload here would silently widen the
+                // trusted ToolExecutor contract.
+                Result.Err(AgentError(
+                    AgentErrorKind.Protocol,
+                    "mcp.tool_result_type_unsupported",
+                    "MCP tool returned an unsupported extension result type",
+                    fields: [ErrorField("result_type", redact(resultType))]
+                ))
         }
     }
 

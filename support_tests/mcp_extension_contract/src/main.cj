@@ -39,10 +39,10 @@ main(): Int64 {
     )
     let client = McpClient(
         FakeMcpTransport(McpServer(
-            McpDiscoverResult(McpImplementationInfo("bridge-server", "1")),
+            McpDiscoverResult(serverInfo: McpImplementationInfo("bridge-server", "1")),
             host
         )),
-        McpRequestMeta(McpImplementationInfo("bridge-client", "1"))
+        McpRequestMeta(clientInfo: McpImplementationInfo("bridge-client", "1"))
     )
     let extension = discoverMcpExtension(
         "fixture server",
@@ -89,8 +89,85 @@ main(): Int64 {
         "MCP Tool Runtime executor invokes the original remote tool and maps its result"
     )
     expect(client.close().isOk(), "MCP extension client closes its transport")
+
+    let taskError = executeOutcome(
+        McpCallToolOutcome.Task(McpTask(
+            "task-1",
+            McpTaskStatus.Working,
+            "2026-08-27T00:00:00Z",
+            "2026-08-27T00:00:00Z",
+            None
+        )),
+        clientCapabilities: McpClientCapabilities(extensions: objectValue([
+            ValueField("io.modelcontextprotocol/tasks", objectValue([]))
+        ]))
+    ).error().getOrThrow()
+    expect(
+        taskError.kind == AgentErrorKind.Conflict &&
+            taskError.code == "mcp.tool_task_pending" &&
+            errorField(taskError, "task_id") == "task-1",
+        "generic MCP extension executor preserves task identity without claiming completion"
+    )
+
+    let extensionError = executeOutcome(McpCallToolOutcome.Extension(
+        "com.example/custom-result",
+        objectValue([ValueField("resultType", textValue("com.example/custom-result"))])
+    )).error().getOrThrow()
+    expect(
+        extensionError.kind == AgentErrorKind.Protocol &&
+            extensionError.code == "mcp.tool_result_type_unsupported" &&
+            errorField(extensionError, "result_type") == "com.example/custom-result",
+        "generic MCP extension executor rejects result types without an explicit product adapter"
+    )
     println("mcp extension contract passed")
     0
+}
+
+func executeOutcome(
+    outcome: McpCallToolOutcome,
+    clientCapabilities!: McpClientCapabilities = McpClientCapabilities()
+): Result<ToolResult> {
+    let tool = McpTool(
+        "fixture-outcome",
+        "Return a fixture MCP outcome.",
+        objectValue([
+            ValueField("type", textValue("object")),
+            ValueField("properties", objectValue([]))
+        ])
+    )
+    let client = McpClient(
+        FakeMcpTransport(McpServer(
+            McpDiscoverResult(serverInfo: McpImplementationInfo("outcome-server", "1")),
+            MemoryMcpToolHost([tool], {_, _, _ => Result.Ok(outcome)})
+        )),
+        McpRequestMeta(
+            clientInfo: McpImplementationInfo("outcome-client", "1"),
+            clientCapabilities: clientCapabilities
+        )
+    )
+    let extension = discoverMcpExtension("outcome server", client, 2000)
+        .value().getOrThrow()
+    let result = extension.tools()[0].executor.execute(
+        ToolInvocationContext(
+            RunId("outcome-run"),
+            SessionId("outcome-session"),
+            CapabilitySet(values: [
+                Capability(CapabilityKind.ExtensionInvoke, resource: "outcome server")
+            ])
+        ),
+        ToolCall(
+            "outcome-call",
+            extension.tools()[0].descriptor.definition.name,
+            objectValue([])
+        )
+    )
+    expect(client.close().isOk(), "outcome MCP extension client closes its transport")
+    result
+}
+
+func errorField(error: AgentError, name: String): String {
+    for (field in error.fields where field.name == name) { return field.value }
+    ""
 }
 
 func expect(condition: Bool, message: String): Unit {

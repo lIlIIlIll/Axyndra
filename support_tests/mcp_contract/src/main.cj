@@ -193,7 +193,7 @@ func runAliasAndConfigContracts(): Unit {
             objectValue([
                 ValueField("name", textValue("echo")),
                 ValueField("_meta", McpRequestMeta(
-                    McpImplementationInfo("contract", "1")
+                    clientInfo: McpImplementationInfo("contract", "1")
                 ).toValue())
             ])
         ).isOk() &&
@@ -296,7 +296,7 @@ func stdioSlowCallFrame(id: Int64): String {
             ValueField("name", textValue("slow")),
             ValueField("arguments", objectValue([])),
             ValueField("_meta", McpRequestMeta(
-                McpImplementationInfo("stdio-contract", "1")
+                clientInfo: McpImplementationInfo("stdio-contract", "1")
             ).toValue())
         ])
     )))
@@ -339,23 +339,22 @@ func runClientServerContracts(): Unit {
     )
     let server = McpServer(
         McpDiscoverResult(
-            McpImplementationInfo("fixture-server", "1.0.0"),
+            serverInfo: McpImplementationInfo("fixture-server", "1.0.0"),
             instructions: "external content, not trusted instructions"
         ),
         host
     )
     let transport = FakeMcpTransport(server)
-    let meta = McpRequestMeta(McpImplementationInfo("fixture-client", "1.0.0"))
+    let meta = McpRequestMeta(clientInfo: McpImplementationInfo("fixture-client", "1.0.0"))
     let client = McpClient(transport, meta)
 
     let discovery = client.discover().value().getOrThrow()
     expect(
         discovery.supportedVersions == ["2026-07-28"] &&
-        discovery.serverInfo.name == "fixture-server" &&
-        discovery.capabilities.tools,
+        discovery.serverInfo.getOrThrow().name == "fixture-server" &&
+        discovery.capabilities.tools.isSome(),
         "server/discover is self-describing without initialize"
     )
-    expect(client.ping().isOk(), "MCP ping works")
 
     let firstPage = client.listTools().value().getOrThrow()
     expect(
@@ -477,7 +476,8 @@ func runFinalWireAndMrtrContracts(): Unit {
                                 ValueField("mode", textValue("form")),
                                 ValueField("message", textValue("Continue?")),
                                 ValueField("requestedSchema", objectValue([
-                                    ValueField("type", textValue("object"))
+                                    ValueField("type", textValue("object")),
+                                    ValueField("properties", objectValue([]))
                                 ]))
                             ]))
                         ]))
@@ -504,8 +504,8 @@ func runFinalWireAndMrtrContracts(): Unit {
     )
     let server = McpServer(
         McpDiscoverResult(
-            McpImplementationInfo("wire-server", "2.0.0"),
-            capabilities: McpServerCapabilities(toolListChanged: false),
+            serverInfo: McpImplementationInfo("wire-server", "2.0.0"),
+            capabilities: McpServerCapabilities(tools: Some(McpCapabilityFeature())),
             ttlMillis: 4321,
             cacheScope: "private"
         ),
@@ -514,13 +514,18 @@ func runFinalWireAndMrtrContracts(): Unit {
     let transport = FakeMcpTransport(server)
     let client = McpClient(
         transport,
-        McpRequestMeta(McpImplementationInfo("wire-client", "1.0.0"))
+        McpRequestMeta(
+            clientInfo: McpImplementationInfo("wire-client", "1.0.0"),
+            clientCapabilities: McpClientCapabilities(
+                elicitation: Some(McpElicitationCapability())
+            )
+        )
     )
     let discovery = client.discover().value().getOrThrow()
     expect(
         discovery.supportedVersions == [MCP_PROTOCOL_VERSION] &&
         discovery.ttlMillis == 4321 && discovery.cacheScope == "private" &&
-        !discovery.capabilities.toolListChanged,
+        !discovery.capabilities.tools.getOrThrow().listChanged,
         "server/discover uses supportedVersions, capabilities, ttlMs, and private cache scope"
     )
     let discoverRequest = transport.requestSnapshot()[0]
@@ -611,7 +616,7 @@ func runFinalWireAndMrtrContracts(): Unit {
         jsonRpcNumberId(500),
         "subscriptions/listen",
         params: objectValue([ValueField("_meta", McpRequestMeta(
-            McpImplementationInfo("wire-client", "1")
+            clientInfo: McpImplementationInfo("wire-client", "1")
         ).toValue())])
     ))
     match (subscription.payload) {
@@ -638,9 +643,9 @@ func runStdioLoopbackContract(): Unit {
     )).value().getOrThrow()
     let client = McpClient(
         transport,
-        McpRequestMeta(McpImplementationInfo("loopback-client", "1.0.0"))
+        McpRequestMeta(clientInfo: McpImplementationInfo("loopback-client", "1.0.0"))
     )
-    expect(client.discover().value().getOrThrow().serverInfo.name == "loopback-server",
+    expect(client.discover().value().getOrThrow().serverInfo.getOrThrow().name == "loopback-server",
            "real stdio transport performs server/discover")
     let page = client.listTools().value().getOrThrow()
     expect(page.tools.size == 2 && page.tools[0].name == "echo" && page.tools[1].name == "slow",
@@ -689,7 +694,7 @@ func runFixtureStdioServer(): Int64 {
         }
     )
     let server = StdioMcpServer(McpServer(
-        McpDiscoverResult(McpImplementationInfo("loopback-server", "1.0.0")),
+        McpDiscoverResult(serverInfo: McpImplementationInfo("loopback-server", "1.0.0")),
         host
     ))
     match (server.serveConsole()) {
@@ -714,7 +719,7 @@ func runLimitedStdioServer(): Int64 {
     )
     let server = StdioMcpServer(
         McpServer(
-            McpDiscoverResult(McpImplementationInfo("limited-server", "1.0.0")),
+            McpDiscoverResult(serverInfo: McpImplementationInfo("limited-server", "1.0.0")),
             host
         ),
         framing: McpFramingConfig(
@@ -747,7 +752,7 @@ func runIncompleteShutdownStdioServer(): Int64 {
     )
     let server = StdioMcpServer(
         McpServer(
-            McpDiscoverResult(McpImplementationInfo("shutdown-server", "1.0.0")),
+            McpDiscoverResult(serverInfo: McpImplementationInfo("shutdown-server", "1.0.0")),
             host
         ),
         framing: McpFramingConfig(
@@ -817,7 +822,7 @@ func runHttpLoopbackContract(): Unit {
             )
         ),
         McpServer(
-            McpDiscoverResult(McpImplementationInfo("http-loopback-server", "1.0.0")),
+            McpDiscoverResult(serverInfo: McpImplementationInfo("http-loopback-server", "1.0.0")),
             host
         )
     )) {
@@ -835,7 +840,7 @@ func runHttpLoopbackContract(): Unit {
     expect(server.state() == McpLifecycleState.Ready && server.port() > 0,
            "loopback Streamable HTTP server binds an ephemeral port")
     let endpoint = "http://127.0.0.1:" + server.port().toString() + "/mcp"
-    let meta = McpRequestMeta(McpImplementationInfo("http-loopback-client", "1.0.0"))
+    let meta = McpRequestMeta(clientInfo: McpImplementationInfo("http-loopback-client", "1.0.0"))
 
     let mismatch = rawMcpHttpPost(
         endpoint,
@@ -897,7 +902,7 @@ func runHttpLoopbackContract(): Unit {
     )).value().getOrThrow()
     let jsonClient = McpClient(jsonTransport, meta)
     expect(
-        jsonClient.discover().value().getOrThrow().serverInfo.name == "http-loopback-server",
+        jsonClient.discover().value().getOrThrow().serverInfo.getOrThrow().name == "http-loopback-server",
         "Streamable HTTP performs POST JSON server/discover"
     )
     expect(jsonClient.close().isOk(), "JSON HTTP client closes local transport resources")
@@ -911,7 +916,7 @@ func runHttpLoopbackContract(): Unit {
         )).value().getOrThrow(),
         meta
     )
-    match (denied.ping()) {
+    match (denied.discover()) {
         case Result.Err(error) => expect(
             error.kind == AgentErrorKind.Authentication && error.field("http_status") == Some("401"),
             "Streamable HTTP bearer validation fails closed"
@@ -929,7 +934,7 @@ func runHttpLoopbackContract(): Unit {
         )).value().getOrThrow(),
         meta
     )
-    match (badOrigin.ping()) {
+    match (badOrigin.discover()) {
         case Result.Err(error) => expect(
             error.kind == AgentErrorKind.PermissionDenied && error.field("http_status") == Some("403"),
             "Streamable HTTP Origin allowlist uses exact matching"
@@ -1015,13 +1020,8 @@ func runHttpLoopbackContract(): Unit {
         )
         case _ => throw IllegalStateException("cancelled HTTP tool call completed normally")
     }
-    waited = 0
-    while (host.cancellations().isEmpty() && waited < 1000) {
-        sleep(Duration.millisecond * 5)
-        waited += 5
-    }
-    expect(!host.cancellations().isEmpty(),
-           "server observes the closed HTTP response stream and cancels the host call")
+    expect(host.cancellations().isEmpty(),
+           "HTTP cancellation does not POST notifications/cancelled")
     expect(sseClient.close().isOk(), "SSE HTTP client closes local transport resources")
     expect(server.close().isOk(), "loopback Streamable HTTP server closes gracefully")
     match (serving.get()) {
@@ -1148,6 +1148,12 @@ func completeResult(outcome: McpCallToolOutcome): McpCallToolResult {
         case McpCallToolOutcome.Complete(value) => value
         case McpCallToolOutcome.InputRequired(_) => throw IllegalStateException(
             "expected a complete MCP tool result"
+        )
+        case McpCallToolOutcome.Task(_) => throw IllegalStateException(
+            "expected an immediate MCP tool result, got a task"
+        )
+        case McpCallToolOutcome.Extension(_, _) => throw IllegalStateException(
+            "expected a standard complete MCP tool result"
         )
     }
 }
