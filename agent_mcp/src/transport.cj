@@ -1,9 +1,5 @@
 package agent_mcp
 
-import yjson_support.*
-
-import yjson.*
-
 import agent_domain.*
 import agent_protocol.*
 
@@ -11,8 +7,10 @@ public interface McpTransport {
     func kind(): McpTransportKind
     func state(): McpLifecycleState
     func request(request: JsonRpcRequest): Result<JsonRpcResponse>
+    func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle>
     func notify(notification: JsonRpcNotification): Result<Unit>
     func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit>
+    func registerTools(tools: Array<McpTool>): Result<Unit>
     func close(): Result<Unit>
 }
 

@@ -350,14 +350,22 @@ main(): Int64 {
             output.awaitContains("\"type\":\"prompt_result\",\"id\":\"h1\"," + "\"agentInvoked\":false"),
             "local RPC command reports agentInvoked false"
         )
+        let taskAccepted = server
+            .handle("{\"id\":\"task-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
+            .contains("\"success\":true")
+        let lifecycleVisible = output.awaitContains(
+            "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"")
+        let progressVisible = output.awaitContains("\"type\":\"subagent_progress\"")
+        let childEventVisible = output.awaitContains("\"type\":\"subagent_event\"")
+        let taskResultVisible = output.awaitContains(
+            "\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true")
         expect(
-            server
-                .handle("{\"id\":\"task-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
-                .contains("\"success\":true") && output.awaitContains(
-                "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"") && output.awaitContains(
-                "\"type\":\"subagent_progress\"") && output.awaitContains("\"type\":\"subagent_event\"") &&
-                output.awaitContains("\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true"),
-            "RPC streams real task lifecycle, progress, and child events"
+            taskAccepted && lifecycleVisible && progressVisible && childEventVisible && taskResultVisible,
+            "RPC streams real task lifecycle, progress, and child events: accepted=" +
+                taskAccepted.toString() + ", lifecycle=" + lifecycleVisible.toString() +
+                ", progress=" + progressVisible.toString() + ", childEvent=" +
+                childEventVisible.toString() + ", result=" + taskResultVisible.toString() +
+                ", frames=" + output.snapshot()
         )
         expect(
             server.handle("{\"id\":\"sub-finished\",\"type\":\"get_subagents\"}").contains("\"subagents\":[]") &&

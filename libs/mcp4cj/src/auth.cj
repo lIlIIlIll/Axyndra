@@ -32,12 +32,16 @@ public class McpAuthorizationServerMetadata {
     public let tokenEndpoint: String
     public let registrationEndpoint: String
     public let codeChallengeMethodsSupported: Array<String>
+    public let authorizationGrantProfilesSupported: Array<String>
+    public let authorizationResponseIssParameterSupported: Bool
     public init(
         issuer: String,
         authorizationEndpoint: String,
         tokenEndpoint: String,
         registrationEndpoint!: String = "",
-        codeChallengeMethodsSupported!: Array<String> = []
+        codeChallengeMethodsSupported!: Array<String> = [],
+        authorizationGrantProfilesSupported!: Array<String> = [],
+        authorizationResponseIssParameterSupported!: Bool = false
     ) {
         if (!secureMcpMetadataUrl(issuer) || !secureMcpMetadataUrl(authorizationEndpoint) || !secureMcpMetadataUrl(tokenEndpoint)) {
             throw IllegalArgumentException("MCP authorization metadata endpoints must use HTTPS or loopback HTTP")
@@ -48,10 +52,16 @@ public class McpAuthorizationServerMetadata {
         this.issuer = issuer; this.authorizationEndpoint = authorizationEndpoint
         this.tokenEndpoint = tokenEndpoint; this.registrationEndpoint = registrationEndpoint
         this.codeChallengeMethodsSupported = codeChallengeMethodsSupported
+        this.authorizationGrantProfilesSupported = authorizationGrantProfilesSupported
+        this.authorizationResponseIssParameterSupported = authorizationResponseIssParameterSupported
     }
 
     public func supportsS256(): Bool {
         for (method in codeChallengeMethodsSupported where method == "S256") { return true }
+        false
+    }
+    public func supportsGrantProfile(profile: String): Bool {
+        for (value in authorizationGrantProfilesSupported where value == profile) { return true }
         false
     }
 }
@@ -61,16 +71,29 @@ public class McpOAuthClientMetadata {
     public let redirectUris: Array<String>
     public let clientName: String
     public let tokenEndpointAuthMethod: String
+    public let applicationType: String
     public init(
         clientId: String,
         redirectUris: Array<String>,
         clientName!: String = "mcp4cj",
-        tokenEndpointAuthMethod!: String = "none"
+        tokenEndpointAuthMethod!: String = "none",
+        applicationType!: String = ""
     ) {
         if (clientId.trimAscii() == "" || redirectUris.isEmpty()) { throw IllegalArgumentException("MCP OAuth client metadata requires clientId and redirectUris") }
         for (uri in redirectUris where !secureMcpRedirectUri(uri)) { throw IllegalArgumentException("MCP OAuth redirect URI is not secure") }
+        let resolvedType = if (applicationType != "") { applicationType }
+            else if (redirectUris[0].startsWith("http://")) { "native" } else { "web" }
+        if (resolvedType != "native" && resolvedType != "web") {
+            throw IllegalArgumentException("MCP OAuth application_type must be native or web")
+        }
+        if (resolvedType == "web") {
+            for (uri in redirectUris where uri.startsWith("http://")) {
+                throw IllegalArgumentException("web OAuth clients must use HTTPS redirect URIs")
+            }
+        }
         this.clientId = clientId; this.redirectUris = redirectUris; this.clientName = clientName
         this.tokenEndpointAuthMethod = tokenEndpointAuthMethod
+        this.applicationType = resolvedType
     }
 }
 

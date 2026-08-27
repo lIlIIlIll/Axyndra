@@ -212,7 +212,7 @@ func buildProductMcpServer(
 ): McpServer {
     McpServer(
         McpDiscoverResult(
-            McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
+            serverInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
             instructions: options.instructions
         ),
         ProductMcpToolHost(catalog, pipeline, ids, options, toolContext)

@@ -37,7 +37,7 @@ main(): Int64 {
                     Capability(CapabilityKind.Delegate)
                 ])
             ))),
-            McpRequestMeta(McpImplementationInfo("contract-client", "1"))
+            McpRequestMeta(clientInfo: McpImplementationInfo("contract-client", "1"))
         )
         // This is the exact capability set used by `axyndra mcp-server`
         // without any explicit --allow-* option.
@@ -48,7 +48,7 @@ main(): Int64 {
                     Capability(CapabilityKind.WorkspaceRead)
                 ])
             ))),
-            McpRequestMeta(McpImplementationInfo("contract-client", "1"))
+            McpRequestMeta(clientInfo: McpImplementationInfo("contract-client", "1"))
         )
         try {
             runDirectoryContract(fullClient, defaultClient)
@@ -107,7 +107,7 @@ func runTypedRequestIdentityContract(product: ProductRuntime): Unit {
         expect(server.handleNotification(mcpCancellationNotification(
             jsonRpcNumberId(1),
             "cancel numeric only",
-            McpRequestMeta(McpImplementationInfo("typed-identity-client", "1"))
+            McpRequestMeta(clientInfo: McpImplementationInfo("typed-identity-client", "1"))
         )).isOk(), "numeric MCP cancellation is accepted")
 
         waited = 0
@@ -141,7 +141,7 @@ func productMcpIdentityRequest(id: JsonRpcId): JsonRpcRequest {
             ValueField("name", textValue("mcp_identity_block")),
             ValueField("arguments", objectValue([])),
             ValueField("_meta", McpRequestMeta(
-                McpImplementationInfo("typed-identity-client", "1")
+                clientInfo: McpImplementationInfo("typed-identity-client", "1")
             ).toValue())
         ])
     )
@@ -247,7 +247,7 @@ class ProductMcpIdentityTool <: ToolExecutor {
 func runDirectoryContract(full: McpClient, defaultClient: McpClient): Unit {
     let discovery = full.discover().value().getOrThrow()
     expect(
-        discovery.serverInfo.name == "axyndra" && discovery.capabilities.tools,
+        discovery.serverInfo.getOrThrow().name == "axyndra" && discovery.capabilities.tools.isSome(),
         "product MCP server advertises its real tool directory"
     )
     let fullPage = full.listTools().value().getOrThrow()
@@ -325,6 +325,12 @@ func complete(outcome: McpCallToolOutcome): McpCallToolResult {
         case McpCallToolOutcome.Complete(value) => value
         case McpCallToolOutcome.InputRequired(_) => throw IllegalStateException(
             "product tool unexpectedly requested MRTR input"
+        )
+        case McpCallToolOutcome.Task(task) => throw IllegalStateException(
+            "product tool unexpectedly returned task ${task.taskId}"
+        )
+        case McpCallToolOutcome.Extension(resultType, _) => throw IllegalStateException(
+            "product tool unexpectedly returned extension ${resultType}"
         )
     }
 }

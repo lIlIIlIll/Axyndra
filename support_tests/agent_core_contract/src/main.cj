@@ -372,16 +372,27 @@ func cancellationAndRunDeadlineBarriersContract(): Unit {
     let deadlineRuns = MemoryRuns()
     let deadlineModel = CancellationBarrierModel()
     let deadlineCatalog = ToolCatalog()
-    let deadline = AgentCore(
+    let deadlineCore = AgentCore(
         deadlineModel, deadlineRuns,
         ToolPipeline(deadlineCatalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
         deadlineCatalog
-    ).start(AgentRunRequest(
-        RunId("run-deadline-barrier-run"),
-        SessionId("run-deadline-barrier-session"),
-        "fixture", "expire after dispatch",
-        budget: ResourceBudget(maxWallMillis: 20, maxIdleMillis: 60000)
-    ))
+    )
+    let deadlineRunId = RunId("run-deadline-barrier-run")
+    // Separate admission/dispatch from expiry. A 20 ms wall budget could
+    // expire during admission on a loaded full-workspace gate, so it did not
+    // deterministically exercise the post-dispatch replay barrier.
+    let deadlineFuture = spawn {
+        deadlineCore.start(AgentRunRequest(
+            deadlineRunId,
+            SessionId("run-deadline-barrier-session"),
+            "fixture", "expire after dispatch",
+            budget: ResourceBudget(maxWallMillis: 5000, maxIdleMillis: 60000)
+        ))
+    }
+    while (!deadlineModel.hasStarted()) {
+        sleep(Duration.millisecond * 5)
+    }
+    let deadline = deadlineFuture.get()
     expect(deadline.isError() && deadlineModel.calls == 1 &&
         deadlineRuns.modelAttempts.size == 1 &&
         deadlineRuns.modelAttempts[0].replayBarrier ==

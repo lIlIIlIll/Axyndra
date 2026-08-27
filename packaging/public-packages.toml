@@ -51,7 +51,7 @@ packages = [
 ]
 
 [runtime_requirements]
-yjson_support = ["yjson main"]
+yjson_support = ["yjson commit 92858f75aedc3dd6f7322789117854514549e62c"]
 jsonrpc4cj = []
 process4cj = ["linux-x86_64", "glibc"]
 mcp4cj = ["Cangjie stdx", "process executable for stdio transport"]

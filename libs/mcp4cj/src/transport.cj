@@ -122,9 +122,69 @@ public interface McpTransport {
     func kind(): McpTransportKind
     func state(): McpLifecycleState
     func request(request: JsonRpcRequest): McpResult<JsonRpcResponse>
+    func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle>
     func notify(notification: JsonRpcNotification): McpResult<Unit>
     func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
+    func registerTools(tools: Array<McpTool>): McpResult<Unit>
     func close(): McpResult<Unit>
+}
+
+class McpStdioPendingResponse {
+    let id: JsonRpcId
+    var response: ?JsonRpcResponse = None
+    var error: ?McpError = None
+    init(id: JsonRpcId) { this.id = id }
+}
+
+class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
+    private let id: JsonRpcId
+    private let cancelAction: (JsonRpcId) -> McpResult<Unit>
+    private let lock = Mutex()
+    private let queued = ArrayList<JsonRpcNotification>()
+    private var accepted: ?McpSubscriptionFilter = None
+    private var stopped = false
+    private var failure: ?McpError = None
+    init(id: JsonRpcId, cancelAction: (JsonRpcId) -> McpResult<Unit>) {
+        this.id = id; this.cancelAction = cancelAction
+    }
+    public func subscriptionId(): JsonRpcId { id }
+    public func acknowledged(): McpSubscriptionFilter {
+        while (true) {
+            lock.lock(); try {
+                match (accepted) { case Some(value) => return value; case None => () }
+                match (failure) { case Some(error) => throw error; case None => () }
+                if (stopped) { throw IllegalStateException("MCP subscription closed before acknowledgement") }
+            } finally { lock.unlock() }
+            sleep(Duration.millisecond * 5)
+        }
+        McpSubscriptionFilter()
+    }
+    public func next(): McpResult<?JsonRpcNotification> {
+        while (true) {
+            lock.lock(); try {
+                if (!queued.isEmpty()) {
+                    let value = queued[0]; queued.remove(at: 0); return McpResult.Ok(Some(value))
+                }
+                match (failure) { case Some(error) => return McpResult.Err(error); case None => () }
+                if (stopped) { return McpResult.Ok(None) }
+            } finally { lock.unlock() }
+            sleep(Duration.millisecond * 5)
+        }
+        McpResult.Ok(None)
+    }
+    public func close(): McpResult<Unit> {
+        lock.lock(); try { if (stopped) { return McpResult.Ok(()) }; stopped = true } finally { lock.unlock() }
+        cancelAction(id)
+    }
+    func acknowledge(value: McpSubscriptionFilter): Unit {
+        lock.lock(); try { if (!stopped) { accepted = Some(value) } } finally { lock.unlock() }
+    }
+    func push(value: JsonRpcNotification): Unit {
+        lock.lock(); try { if (!stopped) { queued.add(value) } } finally { lock.unlock() }
+    }
+    func complete(): Unit { lock.lock(); try { stopped = true } finally { lock.unlock() } }
+    func fail(error: McpError): Unit { lock.lock(); try { failure = Some(error); stopped = true } finally { lock.unlock() } }
+    func ready(): Bool { lock.lock(); try { accepted.isSome() || stopped } finally { lock.unlock() } }
 }
 
 public class StdioMcpTransport <: McpTransport {
@@ -133,8 +193,12 @@ public class StdioMcpTransport <: McpTransport {
     private let lifecycle = McpLifecycle()
     private let requestLock = Mutex()
     private let writerLock = Mutex()
+    private let pendingLock = Mutex()
+    private let pending = ArrayList<McpStdioPendingResponse>()
+    private let subscriptions = ArrayList<StdioMcpSubscriptionHandle>()
     private let stderrBytes = BoundedByteBuffer(65536)
     private let stderrDrain: Future<Unit>
+    private var stdoutDrain: ?Future<Unit> = None
 
     init(config: McpStdioConfig, process: ManagedProcess) {
         this.config = config
@@ -151,6 +215,7 @@ public class StdioMcpTransport <: McpTransport {
                 let _ = captured.append(buffer, count: count)
             }
         }
+        stdoutDrain = Some(spawn { readPump() })
     }
 
     public func kind(): McpTransportKind { McpTransportKind.Stdio }
@@ -162,21 +227,22 @@ public class StdioMcpTransport <: McpTransport {
             if (state() != McpLifecycleState.Ready) {
                 return mcpFailure<JsonRpcResponse>(McpErrorKind.Transport, "mcp.stdio_not_ready", "MCP stdio transport is not ready")
             }
+            let waiting = McpStdioPendingResponse(request.id)
+            pendingLock.lock(); try { pending.add(waiting) } finally { pendingLock.unlock() }
             match (write(JsonRpcEnvelope.Request(request))) {
                 case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => return McpResult.Err(error)
+                case McpResult.Err(error) => removePending(waiting); return McpResult.Err(error)
             }
-            let response = spawn { readMatchingResponse(process.stdout, request.id, config.framing.maxFrameBytes) }
             let deadline = MonoTime.now() + Duration.millisecond * config.framing.requestTimeoutMillis
-            while (response.tryGet().isNone() && MonoTime.now() < deadline) {
+            while (waiting.response.isNone() && waiting.error.isNone() && MonoTime.now() < deadline) {
                 sleep(Duration.millisecond * 5)
             }
-            match (response.tryGet()) {
-                case Some(value) => match (value) {
-                    case McpResult.Ok(result) => McpResult.Ok(result)
-                    case McpResult.Err(error) => fail(error)
-                }
-                case None =>
+            removePending(waiting)
+            match (waiting.response) {
+                case Some(value) => McpResult.Ok(value)
+                case None => match (waiting.error) {
+                    case Some(error) => McpResult.Err(error)
+                    case None =>
                     let error = McpError(
                         McpErrorKind.Deadline,
                         "mcp.stdio_timeout",
@@ -184,10 +250,29 @@ public class StdioMcpTransport <: McpTransport {
                         retryable: false
                     )
                     let _ = process.terminate(force: true)
-                    let _ = response.get()
                     fail(error)
+                }
             }
         } finally { requestLock.unlock() }
+    }
+
+    public func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle> {
+        if (state() != McpLifecycleState.Ready || request.method != MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+            return mcpFailure<McpSubscriptionHandle>(McpErrorKind.Protocol, "mcp.stdio_subscription_invalid", "invalid MCP stdio subscription request")
+        }
+        let handle = StdioMcpSubscriptionHandle(request.id, { id => closeSubscription(id) })
+        pendingLock.lock(); try { subscriptions.add(handle) } finally { pendingLock.unlock() }
+        match (write(JsonRpcEnvelope.Request(request))) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => removeSubscription(handle); return McpResult.Err(error)
+        }
+        let deadline = MonoTime.now() + Duration.millisecond * config.framing.requestTimeoutMillis
+        while (!handle.ready() && MonoTime.now() < deadline) { sleep(Duration.millisecond * 5) }
+        if (!handle.ready()) {
+            let _ = handle.close(); removeSubscription(handle)
+            return mcpFailure<McpSubscriptionHandle>(McpErrorKind.Deadline, "mcp.stdio_subscription_ack_timeout", "MCP subscription acknowledgement timed out")
+        }
+        McpResult.Ok(handle)
     }
 
     public func notify(notification: JsonRpcNotification): McpResult<Unit> {
@@ -199,6 +284,9 @@ public class StdioMcpTransport <: McpTransport {
 
     public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
         notify(mcpCancellationNotification(requestId, reason))
+    }
+    public func registerTools(tools: Array<McpTool>): McpResult<Unit> {
+        let _ = tools; McpResult.Ok(())
     }
 
     public func stderrSnapshot(): String {
@@ -215,6 +303,7 @@ public class StdioMcpTransport <: McpTransport {
         }
         if (process.tryExit().isNone()) { let _ = process.terminate(force: true) }
         let _ = process.wait()
+        match (stdoutDrain) { case Some(value) => try { value.get() } catch (_: Exception) {}; case None => () }
         try { stderrDrain.get() } catch (_: Exception) {}
         let _ = process.close()
         let _ = lifecycle.transition(McpLifecycleState.Stopped)
@@ -236,6 +325,76 @@ public class StdioMcpTransport <: McpTransport {
                 fail(McpError(McpErrorKind.Transport, "mcp.stdio_write_failed", error.message))
             }
         } finally { writerLock.unlock() }
+    }
+
+    private func readPump(): Unit {
+        while (state() == McpLifecycleState.Ready) {
+            let line = try {
+                match (readLineBounded(process.stdout, config.framing.maxFrameBytes, allowPartialAtEof: true)) {
+                    case Some(value) => value
+                    case None => failAll(McpError(McpErrorKind.Transport, "mcp.stdio_eof", "MCP stdio server closed")); return
+                }
+            } catch (error: Exception) {
+                failAll(McpError(McpErrorKind.Transport, "mcp.stdio_read_failed", error.message)); return
+            }
+            let envelope = match (decodeJsonRpc(line, maxBytes: config.framing.maxFrameBytes)) {
+                case JsonRpcResult.Ok(value) => value
+                case JsonRpcResult.Err(error) => failAll(McpError(McpErrorKind.Protocol, error.code, error.message)); return
+            }
+            match (envelope) {
+                case JsonRpcEnvelope.Response(response) => routeResponse(response)
+                case JsonRpcEnvelope.Notification(notification) => routeNotification(notification)
+                case JsonRpcEnvelope.Request(_) => failAll(McpError(McpErrorKind.Protocol, "mcp.stdio_server_request_unsupported", "MCP stdio server sent an unsupported reverse request")); return
+            }
+        }
+    }
+
+    private func routeResponse(response: JsonRpcResponse): Unit {
+        pendingLock.lock(); try {
+            for (item in pending where sameJsonRpcId(item.id, response.id)) { item.response = Some(response); return }
+            for (item in subscriptions where sameJsonRpcId(item.subscriptionId(), response.id)) { item.complete(); return }
+        } finally { pendingLock.unlock() }
+    }
+
+    private func routeNotification(notification: JsonRpcNotification): Unit {
+        let id = subscriptionNotificationId(notification)
+        match (id) {
+            case Some(value) => pendingLock.lock(); try {
+                for (item in subscriptions where sameJsonRpcId(item.subscriptionId(), value)) {
+                    if (notification.method == MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED) {
+                        match (decodeMcpSubscriptionFilter(notification.params)) {
+                            case McpResult.Ok(filter) => item.acknowledge(filter)
+                            case McpResult.Err(error) => item.fail(error)
+                        }
+                    } else { item.push(notification) }
+                    return
+                }
+            } finally { pendingLock.unlock() }
+            case None => ()
+        }
+    }
+
+    private func failAll(error: McpError): Unit {
+        pendingLock.lock(); try {
+            for (item in pending) { item.error = Some(error) }
+            for (item in subscriptions) { item.fail(error) }
+        } finally { pendingLock.unlock() }
+        if (state() == McpLifecycleState.Ready) { let _ = lifecycle.transition(McpLifecycleState.Failed) }
+    }
+    private func removePending(item: McpStdioPendingResponse): Unit {
+        pendingLock.lock(); try { for (index in 0..pending.size where sameJsonRpcId(pending[index].id, item.id)) { pending.remove(at: index); return } } finally { pendingLock.unlock() }
+    }
+    private func removeSubscription(item: StdioMcpSubscriptionHandle): Unit {
+        pendingLock.lock(); try { for (index in 0..subscriptions.size where sameJsonRpcId(subscriptions[index].subscriptionId(), item.subscriptionId())) { subscriptions.remove(at: index); return } } finally { pendingLock.unlock() }
+    }
+    private func closeSubscription(id: JsonRpcId): McpResult<Unit> {
+        let result = cancel(id, "subscription closed by caller")
+        pendingLock.lock(); try {
+            for (index in 0..subscriptions.size where sameJsonRpcId(subscriptions[index].subscriptionId(), id)) {
+                subscriptions.remove(at: index); break
+            }
+        } finally { pendingLock.unlock() }
+        result
     }
 
     private func fail<T>(error: McpError): McpResult<T> {
@@ -267,6 +426,7 @@ public class StdioMcpServer {
     private let writerLock = Mutex()
     private let activeLock = Mutex()
     private let activeRequests = ArrayList<JsonRpcId>()
+    private let activeSubscriptions = ArrayList<McpServerActiveSubscription>()
     private var output: ?OutputStream = None
 
     public init(server: McpServer, framing!: McpFramingConfig = McpFramingConfig()) {
@@ -304,7 +464,9 @@ public class StdioMcpServer {
             }
             match (envelope) {
                 case JsonRpcEnvelope.Request(request) => dispatchRequest(request)
-                case JsonRpcEnvelope.Notification(notification) => let _ = server.handleNotification(notification)
+                case JsonRpcEnvelope.Notification(notification) =>
+                    if (notification.method == MCP_METHOD_CANCELLED) { closeServerSubscription(notification) }
+                    let _ = server.handleNotification(notification)
                 case JsonRpcEnvelope.Response(_) => ()
             }
         }
@@ -333,20 +495,83 @@ public class StdioMcpServer {
                 JsonObjectEntry("max_concurrent_requests", jsonNumber(framing.maxConcurrentRequests.toString()))
             ]))); return
         }
-        let _ = spawn { try { writeConsole(server.handleRequest(request)) } finally { removeActive(request.id) } }
+        if (request.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+            let _ = spawn { serveSubscription(request) }
+        } else {
+            let _ = spawn {
+                try {
+                    writeConsole(server.handleRequest(
+                        request,
+                        notificationSink: { notification =>
+                            writeConsoleEnvelope(JsonRpcEnvelope.Notification(notification))
+                        }
+                    ))
+                } finally { removeActive(request.id) }
+            }
+        }
     }
     private func writeConsole(response: JsonRpcResponse): Unit {
+        writeConsoleEnvelope(JsonRpcEnvelope.Response(response))
+    }
+    private func writeConsoleEnvelope(envelope: JsonRpcEnvelope): Unit {
         writerLock.lock(); try {
             match (output) {
-                case Some(stream) => stream.write((encodeJsonRpc(JsonRpcEnvelope.Response(response)) + "\n").toArray()); stream.flush()
+                case Some(stream) => stream.write((encodeJsonRpc(envelope) + "\n").toArray()); stream.flush()
                 case None => ()
             }
         } finally { writerLock.unlock() }
+    }
+    private func serveSubscription(request: JsonRpcRequest): Unit {
+        let source = match (server.openSubscription(request)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) =>
+                writeConsole(mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, error.message))
+                removeActive(request.id); return
+        }
+        let active = McpServerActiveSubscription(request.id, source)
+        activeLock.lock(); try { activeSubscriptions.add(active) } finally { activeLock.unlock() }
+        let acknowledgement = tagMcpSubscriptionNotification(JsonRpcNotification(
+            MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED,
+            params: source.acknowledged().toValue()
+        ), request.id)
+        writeConsoleEnvelope(JsonRpcEnvelope.Notification(acknowledgement))
+        try {
+            while (!active.closed) {
+                match (source.next()) {
+                    case McpResult.Ok(Some(notification)) => writeConsoleEnvelope(JsonRpcEnvelope.Notification(
+                        tagMcpSubscriptionNotification(notification, request.id)
+                    ))
+                    case McpResult.Ok(None) => return
+                    case McpResult.Err(_) => return
+                }
+            }
+        } finally {
+            let _ = source.close(); removeServerSubscription(active); removeActive(request.id)
+        }
+    }
+    private func closeServerSubscription(notification: JsonRpcNotification): Unit {
+        let id = match (notification.params.field("requestId")) {
+            case Some(value) => match (decodeMcpRequestId(value)) {
+                case McpResult.Ok(found) => found
+                case McpResult.Err(_) => return
+            }
+            case None => return
+        }
+        activeLock.lock(); try {
+            for (item in activeSubscriptions where sameJsonRpcId(item.id, id)) {
+                item.closed = true; let _ = item.source.close(); return
+            }
+        } finally { activeLock.unlock() }
+    }
+    private func removeServerSubscription(item: McpServerActiveSubscription): Unit {
+        activeLock.lock(); try { for (index in 0..activeSubscriptions.size where sameJsonRpcId(activeSubscriptions[index].id, item.id)) { activeSubscriptions.remove(at: index); return } } finally { activeLock.unlock() }
     }
     private func reserveActive(id: JsonRpcId): Bool { activeLock.lock(); try { if (activeRequests.size >= framing.maxConcurrentRequests) { return false }; activeRequests.add(id); true } finally { activeLock.unlock() } }
     private func removeActive(id: JsonRpcId): Unit { activeLock.lock(); try { for (index in 0..activeRequests.size) { if (sameJsonRpcId(activeRequests[index], id)) { activeRequests.remove(at: index); return } } } finally { activeLock.unlock() } }
     private func activeSnapshot(): Array<JsonRpcId> { activeLock.lock(); try { activeRequests.toArray() } finally { activeLock.unlock() } }
     private func drainActiveRequests(): McpResult<Unit> {
+        let subscriptions = activeSubscriptionSnapshot()
+        for (item in subscriptions) { item.closed = true; let _ = item.source.close() }
         waitForActiveRequests(); let active = activeSnapshot()
         for (id in active) { let _ = server.handleNotification(JsonRpcNotification(MCP_METHOD_CANCELLED, params: jsonObject([
             JsonObjectEntry("requestId", requestIdValue(id)), JsonObjectEntry("reason", jsonString("MCP stdio server is closing"))
@@ -367,10 +592,20 @@ public class StdioMcpServer {
             ))
         } else { McpResult.Ok(()) }
     }
+    private func activeSubscriptionSnapshot(): Array<McpServerActiveSubscription> {
+        activeLock.lock(); try { activeSubscriptions.toArray() } finally { activeLock.unlock() }
+    }
     private func waitForActiveRequests(): Unit {
         let deadline = MonoTime.now() + Duration.millisecond * framing.gracefulShutdownMillis
         while (!activeSnapshot().isEmpty() && MonoTime.now() < deadline) { sleep(Duration.millisecond) }
     }
+}
+
+class McpServerActiveSubscription {
+    let id: JsonRpcId
+    let source: McpSubscriptionSource
+    var closed = false
+    init(id: JsonRpcId, source: McpSubscriptionSource) { this.id = id; this.source = source }
 }
 
 public func mcpCancellationNotification(requestId: JsonRpcId, reason: String): JsonRpcNotification {
@@ -475,49 +710,22 @@ func decodeMcpSseData(data: String, expectedId: JsonRpcId, maxBytes: Int64): Mcp
 
 func utf8ByteSize(value: String): Int64 { unsafe { value.rawData().size } }
 
-func readMatchingResponse(
-    stream: InputStream,
-    expected: JsonRpcId,
-    maxFrameBytes: Int64
-): McpResult<JsonRpcResponse> {
-    while (true) {
-        let line = try {
-            match (readLineBounded(stream, maxFrameBytes)) {
-                case Some(value) => value
-                case None => return mcpFailure<JsonRpcResponse>(McpErrorKind.Transport, "mcp.stdio_eof", "MCP stdio server closed")
-            }
-        } catch (error: ProcessError) {
-            return mcpFailure<JsonRpcResponse>(
-                if (let ProcessErrorKind.Io <- error.kind) { McpErrorKind.Transport } else { McpErrorKind.Protocol },
-                "mcp.stdio_read_failed",
-                error.message
-            )
-        }
-        match (decodeJsonRpc(line, maxBytes: maxFrameBytes)) {
-            case JsonRpcResult.Err(error) => return McpResult.Err(McpError(
-                McpErrorKind.Protocol,
-                error.code,
-                error.message,
-                rpcCode: Some(error.rpcCode)
-            ))
-            case JsonRpcResult.Ok(JsonRpcEnvelope.Response(response)) =>
-                if (sameJsonRpcId(response.id, expected)) { return McpResult.Ok(response) }
-            case JsonRpcResult.Ok(JsonRpcEnvelope.Notification(_)) => ()
-            case JsonRpcResult.Ok(JsonRpcEnvelope.Request(_)) => return mcpFailure<JsonRpcResponse>(
-                McpErrorKind.Protocol,
-                "mcp.stdio_server_request_unsupported",
-                "MCP stdio server sent an unsupported reverse request"
-            )
-        }
-    }
-    mcpFailure<JsonRpcResponse>(McpErrorKind.Transport, "mcp.stdio_unreachable", "unreachable")
-}
-
 func requestIdValue(id: JsonRpcId): JsonNode {
     match (id.kind) {
         case JsonRpcIdKind.Text => jsonString(id.value)
         case JsonRpcIdKind.Number => jsonNumber(id.value)
         case JsonRpcIdKind.Null => jsonNull()
+    }
+}
+
+func subscriptionNotificationId(notification: JsonRpcNotification): ?JsonRpcId {
+    let meta = mcpObject(notification.params, "_meta")
+    match (meta.field(MCP_META_SUBSCRIPTION_ID)) {
+        case Some(value) => match (decodeMcpRequestId(value)) {
+            case McpResult.Ok(id) => Some(id)
+            case McpResult.Err(_) => None
+        }
+        case None => None
     }
 }
 

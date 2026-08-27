@@ -1,17 +1,15 @@
 [package]
   cjc-version = "1.1.0"
-  name = "mcp_contract"
+  name = "mcp_conformance_server"
   organization = ""
   version = "1.0.0"
   output-type = "executable"
-  link-option = "--whole-archive /usr/lib/llvm15/lib/clang/15.0.7/lib/linux/libclang_rt.profile-x86_64.a --no-whole-archive"
 
 [dependencies]
+  "mcp4cj" = { path = "../../libs/mcp4cj", output-type = "static" }
+  "jsonrpc4cj" = { path = "../../libs/jsonrpc4cj", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", branch = "main", output-type = "static" }
-  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
-  "agent_protocol" = { path = "../../agent_protocol", output-type = "static" }
-  "agent_mcp" = { path = "../../agent_mcp", output-type = "static" }
 
 [target.x86_64-unknown-linux-gnu]
   [target.x86_64-unknown-linux-gnu.bin-dependencies]

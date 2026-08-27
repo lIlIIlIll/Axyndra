@@ -22,6 +22,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+YJSON_COMMIT = "92858f75aedc3dd6f7322789117854514549e62c"
 INVENTORY_PATH = ROOT / "packaging" / "public-packages.toml"
 IMPORT = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 PATH_DEPENDENCY = re.compile(
@@ -485,7 +486,7 @@ def consumer_manifest(name: str, version: str, stage_root: Path, dependencies: l
         if dependency == "yjson":
             lines.append(
                 '  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", '
-                'branch = "main", output-type = "static" }'
+                f'commitId = "{YJSON_COMMIT}", branch = "main", output-type = "static" }}'
             )
             continue
         dependency_manifest = load_toml(next(stage_root.glob(f"{dependency}-*/cjpm.toml")))

@@ -2,6 +2,7 @@ package mcp4cj
 
 import yjson.*
 import yjson_support.*
+import jsonrpc4cj.*
 import std.collection.*
 import std.sync.*
 
@@ -20,10 +21,36 @@ public let MCP_UNSUPPORTED_PROTOCOL_VERSION: Int64 = -32022
 public let MCP_RESULT_COMPLETE = "complete"
 public let MCP_RESULT_INPUT_REQUIRED = "input_required"
 public let MCP_METHOD_DISCOVER = "server/discover"
-public let MCP_METHOD_PING = "ping"
 public let MCP_METHOD_TOOLS_LIST = "tools/list"
 public let MCP_METHOD_TOOLS_CALL = "tools/call"
 public let MCP_METHOD_CANCELLED = "notifications/cancelled"
+
+public enum McpTaskSupport <: Equatable<McpTaskSupport> {
+    Forbidden | Optional | Required
+
+    public operator func ==(other: McpTaskSupport): Bool {
+        match (this) {
+            case Forbidden => if (let Forbidden <- other) { true } else { false }
+            case Optional => if (let Optional <- other) { true } else { false }
+            case Required => if (let Required <- other) { true } else { false }
+        }
+    }
+    public operator func !=(other: McpTaskSupport): Bool { !(this == other) }
+}
+
+public class McpToolExecution {
+    public let taskSupport: McpTaskSupport
+    public init(taskSupport!: McpTaskSupport = McpTaskSupport.Forbidden) {
+        this.taskSupport = taskSupport
+    }
+    public func toValue(): JsonNode {
+        jsonObject([JsonObjectEntry("taskSupport", jsonString(match (taskSupport) {
+            case McpTaskSupport.Forbidden => "forbidden"
+            case McpTaskSupport.Optional => "optional"
+            case McpTaskSupport.Required => "required"
+        }))])
+    }
+}
 
 public enum McpErrorKind <: Equatable<McpErrorKind> {
     Protocol | Transport | Lifecycle | Authentication | Authorization | Remote | Cancelled | Deadline
@@ -101,61 +128,47 @@ public class McpImplementationInfo {
 
 public class McpRequestMeta {
     public let protocolVersion: String
-    public let clientInfo: McpImplementationInfo
-    public let clientCapabilities: JsonNode
+    public let clientInfo: ?McpImplementationInfo
+    public let clientCapabilities: McpClientCapabilities
 
     public init(
-        clientInfo: McpImplementationInfo,
-        clientCapabilities!: JsonNode = jsonObject([]),
+        clientInfo!: ?McpImplementationInfo = None,
+        clientCapabilities!: McpClientCapabilities = McpClientCapabilities(),
         protocolVersion!: String = MCP_PROTOCOL_VERSION
     ) {
         if (protocolVersion != MCP_PROTOCOL_VERSION) {
             throw IllegalArgumentException("unsupported MCP protocol version")
         }
-        requireObject(clientCapabilities, "MCP client capabilities")
         this.protocolVersion = protocolVersion
         this.clientInfo = clientInfo
         this.clientCapabilities = clientCapabilities
     }
 
     public func toValue(): JsonNode {
-        jsonObject([
-            JsonObjectEntry(MCP_META_PROTOCOL_VERSION, jsonString(protocolVersion)),
-            JsonObjectEntry(MCP_META_CLIENT_INFO, clientInfo.toValue()),
-            JsonObjectEntry(MCP_META_CLIENT_CAPABILITIES, clientCapabilities)
-        ])
-    }
-}
-
-public class McpServerCapabilities {
-    public let tools: Bool
-    public let toolListChanged: Bool
-    public init(tools!: Bool = true, toolListChanged!: Bool = false) {
-        this.tools = tools
-        this.toolListChanged = toolListChanged
-    }
-    public func toValue(): JsonNode {
         let fields = ArrayList<JsonObjectEntry>()
-        if (tools) {
-            fields.add(JsonObjectEntry("tools", jsonObject([
-                JsonObjectEntry("listChanged", jsonBool(toolListChanged))
-            ])))
+        fields.add(JsonObjectEntry(MCP_META_PROTOCOL_VERSION, jsonString(protocolVersion)))
+        match (clientInfo) {
+            case Some(value) => fields.add(JsonObjectEntry(MCP_META_CLIENT_INFO, value.toValue()))
+            case None => ()
         }
+        fields.add(JsonObjectEntry(MCP_META_CLIENT_CAPABILITIES, clientCapabilities.toValue()))
         jsonObject(fields.toArray())
     }
 }
 
 public class McpDiscoverResult {
     public let supportedVersions: Array<String>
-    public let serverInfo: McpImplementationInfo
+    public let serverInfo: ?McpImplementationInfo
     public let capabilities: McpServerCapabilities
     public let instructions: String
     public let ttlMillis: Int64
     public let cacheScope: String
 
     public init(
-        serverInfo: McpImplementationInfo,
-        capabilities!: McpServerCapabilities = McpServerCapabilities(),
+        serverInfo!: ?McpImplementationInfo = None,
+        capabilities!: McpServerCapabilities = McpServerCapabilities(
+            tools: Some(McpCapabilityFeature())
+        ),
         instructions!: String = "",
         supportedVersions!: Array<String> = [MCP_PROTOCOL_VERSION],
         ttlMillis!: Int64 = 300000,
@@ -194,6 +207,7 @@ public class McpTool {
     public let inputSchema: JsonNode
     public let outputSchema: JsonNode
     public let annotations: JsonNode
+    public let execution: ?McpToolExecution
     public let meta: JsonNode
 
     public init(
@@ -202,6 +216,7 @@ public class McpTool {
         inputSchema: JsonNode,
         outputSchema!: JsonNode = jsonNull(),
         annotations!: JsonNode = jsonObject([]),
+        execution!: ?McpToolExecution = None,
         meta!: JsonNode = jsonObject([])
     ) {
         if (name.trimAscii() == "") { throw IllegalArgumentException("MCP tool name must not be empty") }
@@ -218,6 +233,7 @@ public class McpTool {
         this.inputSchema = inputSchema
         this.outputSchema = outputSchema
         this.annotations = annotations
+        this.execution = execution
         this.meta = meta
     }
 
@@ -228,6 +244,10 @@ public class McpTool {
         fields.add(JsonObjectEntry("inputSchema", inputSchema))
         if (outputSchema.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("outputSchema", outputSchema)) }
         if (!annotations.fields.isEmpty()) { fields.add(JsonObjectEntry("annotations", annotations)) }
+        match (execution) {
+            case Some(value) => fields.add(JsonObjectEntry("execution", value.toValue()))
+            case None => ()
+        }
         if (!meta.fields.isEmpty()) { fields.add(JsonObjectEntry("_meta", meta)) }
         jsonObject(fields.toArray())
     }
@@ -317,8 +337,11 @@ public class McpInputRequiredResult {
         if (inputRequests.fields.isEmpty() && requestState == "") {
             throw IllegalArgumentException("MCP input_required requires inputRequests or requestState")
         }
-        for (field in inputRequests.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
-            throw IllegalArgumentException("MCP input request entries must be request objects")
+        for (field in inputRequests.fields) {
+            match (decodeMcpInputRequest(field.value)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => throw IllegalArgumentException(error.message)
+            }
         }
         this.inputRequests = inputRequests
         this.requestState = requestState
@@ -338,9 +361,15 @@ public class McpInputRequiredResult {
 public class McpToolCallContinuation {
     public let inputResponses: JsonNode
     public let requestState: String
+    public let tasksSupported: Bool
+    private let progressToken: JsonNode
+    private let notificationSink: (JsonRpcNotification) -> Unit
     public init(
         inputResponses!: JsonNode = jsonObject([]),
-        requestState!: String = ""
+        requestState!: String = "",
+        tasksSupported!: Bool = false,
+        progressToken!: JsonNode = jsonNull(),
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
     ) {
         requireObject(inputResponses, "MCP MRTR inputResponses")
         for (field in inputResponses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
@@ -348,18 +377,31 @@ public class McpToolCallContinuation {
         }
         this.inputResponses = inputResponses
         this.requestState = requestState
+        this.tasksSupported = tasksSupported
+        this.progressToken = progressToken
+        this.notificationSink = notificationSink
     }
     public func isRetry(): Bool { !inputResponses.fields.isEmpty() || requestState != "" }
+    public func hasProgressToken(): Bool { progressToken.unifiedKind != UnifiedJsonKind.Null }
+    public func reportProgress(progress: Float64, total!: ?Float64 = None, message!: String = ""): Unit {
+        if (!hasProgressToken()) { return }
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("progressToken", progressToken))
+        fields.add(JsonObjectEntry("progress", jsonNumber(progress.toString())))
+        match (total) { case Some(value) => fields.add(JsonObjectEntry("total", jsonNumber(value.toString()))); case None => () }
+        if (message != "") { fields.add(JsonObjectEntry("message", jsonString(message))) }
+        notificationSink(JsonRpcNotification("notifications/progress", params: jsonObject(fields.toArray())))
+    }
 }
 
-public enum McpCallToolOutcome {
-    Complete(McpCallToolResult) | InputRequired(McpInputRequiredResult)
-}
+public type McpCallToolOutcome = McpOperationOutcome<McpCallToolResult>
 
 public func mcpCallToolOutcomeValue(outcome: McpCallToolOutcome): JsonNode {
     match (outcome) {
         case McpCallToolOutcome.Complete(value) => value.toValue()
         case McpCallToolOutcome.InputRequired(value) => value.toValue()
+        case McpCallToolOutcome.Task(value) => value.toValue(resultType: MCP_RESULT_TASK)
+        case McpCallToolOutcome.Extension(_, value) => value
     }
 }
 

@@ -8,7 +8,7 @@
 
 [dependencies]
   "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
-  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", branch = "main", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", branch = "main", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "axyndra_agent_testkit" = { path = "../../axyndra_agent_testkit", output-type = "static" }
   "workspace_search_extension" = { path = "../../extensions/workspace_search_extension", output-type = "static" }

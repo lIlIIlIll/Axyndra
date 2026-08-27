@@ -2,6 +2,7 @@ package mcp4cj
 
 import yjson.*
 import yjson_support.*
+import jsonrpc4cj.*
 import std.collection.*
 
 // MCP 2026-07-28 request and notification names. `ping` is intentionally not
@@ -13,6 +14,9 @@ public let MCP_METHOD_RESOURCES_LIST = "resources/list"
 public let MCP_METHOD_RESOURCE_TEMPLATES_LIST = "resources/templates/list"
 public let MCP_METHOD_RESOURCES_READ = "resources/read"
 public let MCP_METHOD_SUBSCRIPTIONS_LISTEN = "subscriptions/listen"
+public let MCP_METHOD_ROOTS_LIST = "roots/list"
+public let MCP_METHOD_SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
+public let MCP_METHOD_ELICITATION_CREATE = "elicitation/create"
 public let MCP_NOTIFICATION_PROGRESS = "notifications/progress"
 public let MCP_NOTIFICATION_MESSAGE = "notifications/message"
 public let MCP_NOTIFICATION_RESOURCES_UPDATED = "notifications/resources/updated"
@@ -20,6 +24,172 @@ public let MCP_NOTIFICATION_RESOURCES_LIST_CHANGED = "notifications/resources/li
 public let MCP_NOTIFICATION_TOOLS_LIST_CHANGED = "notifications/tools/list_changed"
 public let MCP_NOTIFICATION_PROMPTS_LIST_CHANGED = "notifications/prompts/list_changed"
 public let MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED = "notifications/subscriptions/acknowledged"
+public let MCP_META_SUBSCRIPTION_ID = "io.modelcontextprotocol/subscriptionId"
+
+// Deprecated client features remain on the 2026-07-28 wire only as typed
+// multi-round-trip input requests, not as live reverse transport requests.
+public enum McpInputRequest {
+    Roots(JsonNode) | Sampling(JsonNode) | Elicitation(JsonNode)
+
+    public func method(): String {
+        match (this) {
+            case Roots(_) => MCP_METHOD_ROOTS_LIST
+            case Sampling(_) => MCP_METHOD_SAMPLING_CREATE_MESSAGE
+            case Elicitation(_) => MCP_METHOD_ELICITATION_CREATE
+        }
+    }
+    public func params(): JsonNode {
+        match (this) {
+            case Roots(value) => value
+            case Sampling(value) => value
+            case Elicitation(value) => value
+        }
+    }
+    public func toValue(): JsonNode {
+        jsonObject([JsonObjectEntry("method", jsonString(method())), JsonObjectEntry("params", params())])
+    }
+}
+
+public enum McpInputResponse {
+    Roots(JsonNode) | Sampling(JsonNode) | Elicitation(JsonNode)
+
+    public func toValue(): JsonNode {
+        match (this) {
+            case Roots(value) => value
+            case Sampling(value) => value
+            case Elicitation(value) => value
+        }
+    }
+}
+
+public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
+    if (value.unifiedKind != UnifiedJsonKind.Object) {
+        return invalidMcp<McpInputRequest>("mcp.input_request_invalid", "MCP input request must be an object")
+    }
+    let method = mcpText(value, "method")
+    let params = match (value.field("params")) {
+        case Some(found) => if (found.unifiedKind == UnifiedJsonKind.Object) { found } else {
+            return invalidMcp<McpInputRequest>("mcp.input_request_params_invalid", "MCP input request params must be an object")
+        }
+        case None => if (method == MCP_METHOD_ROOTS_LIST) { jsonObject([]) } else {
+            return invalidMcp<McpInputRequest>("mcp.input_request_params_missing", "MCP input request requires params")
+        }
+    }
+    if (method == MCP_METHOD_ROOTS_LIST) { return McpResult.Ok(McpInputRequest.Roots(params)) }
+    if (method == MCP_METHOD_SAMPLING_CREATE_MESSAGE) {
+        let messages = match (params.field("messages")) {
+            case Some(found) => found
+            case None => return invalidMcp<McpInputRequest>("mcp.sampling_messages_missing", "sampling/createMessage requires messages")
+        }
+        if (messages.unifiedKind != UnifiedJsonKind.List || mcpInteger(params, "maxTokens") <= 0) {
+            return invalidMcp<McpInputRequest>("mcp.sampling_params_invalid", "sampling/createMessage requires an array of messages and positive maxTokens")
+        }
+        let includeContext = mcpText(params, "includeContext")
+        if (includeContext != "" && includeContext != "none" && includeContext != "thisServer" && includeContext != "allServers") {
+            return invalidMcp<McpInputRequest>("mcp.sampling_context_invalid", "sampling includeContext is invalid")
+        }
+        return McpResult.Ok(McpInputRequest.Sampling(params))
+    }
+    if (method == MCP_METHOD_ELICITATION_CREATE) {
+        if (mcpText(params, "message") == "") {
+            return invalidMcp<McpInputRequest>("mcp.elicitation_message_missing", "elicitation/create requires a message")
+        }
+        let mode = mcpText(params, "mode")
+        if (mode == "url") {
+            if (mcpText(params, "url") == "") {
+                return invalidMcp<McpInputRequest>("mcp.elicitation_url_missing", "URL elicitation requires url")
+            }
+        } else if (mode == "" || mode == "form") {
+            let schema = mcpObject(params, "requestedSchema")
+            if (mcpText(schema, "type") != "object" || schema.field("properties").isNone()) {
+                return invalidMcp<McpInputRequest>("mcp.elicitation_schema_invalid", "form elicitation requires an object requestedSchema")
+            }
+        } else {
+            return invalidMcp<McpInputRequest>("mcp.elicitation_mode_invalid", "elicitation mode is invalid")
+        }
+        return McpResult.Ok(McpInputRequest.Elicitation(params))
+    }
+    invalidMcp<McpInputRequest>("mcp.input_request_method_invalid", "unsupported MCP input request method: " + method)
+}
+
+public func decodeMcpInputResponse(request: McpInputRequest, value: JsonNode): McpResult<McpInputResponse> {
+    if (value.unifiedKind != UnifiedJsonKind.Object) {
+        return invalidMcp<McpInputResponse>("mcp.input_response_invalid", "MCP input response must be an object")
+    }
+    match (request) {
+        case McpInputRequest.Roots(_) => match (value.field("roots")) {
+            case Some(roots) => if (roots.unifiedKind == UnifiedJsonKind.List) {
+                for (root in roots.items where root.unifiedKind != UnifiedJsonKind.Object || !mcpText(root, "uri").startsWith("file://")) {
+                    return invalidMcp<McpInputResponse>("mcp.roots_result_invalid", "roots/list results require file:// root URIs")
+                }
+                McpResult.Ok(McpInputResponse.Roots(value))
+            } else { invalidMcp<McpInputResponse>("mcp.roots_result_invalid", "roots must be an array") }
+            case None => invalidMcp<McpInputResponse>("mcp.roots_result_invalid", "roots/list result requires roots")
+        }
+        case McpInputRequest.Sampling(_) =>
+            if (mcpText(value, "role") == "assistant" && value.field("content").isSome() && mcpText(value, "model") != "") {
+                McpResult.Ok(McpInputResponse.Sampling(value))
+            } else { invalidMcp<McpInputResponse>("mcp.sampling_result_invalid", "sampling result requires assistant role, content, and model") }
+        case McpInputRequest.Elicitation(_) =>
+            let action = mcpText(value, "action")
+            if (action == "accept" || action == "decline" || action == "cancel") {
+                McpResult.Ok(McpInputResponse.Elicitation(value))
+            } else { invalidMcp<McpInputResponse>("mcp.elicitation_result_invalid", "elicitation result action is invalid") }
+    }
+}
+
+public class McpSubscriptionFilter {
+    public let toolsListChanged: Bool
+    public let promptsListChanged: Bool
+    public let resourcesListChanged: Bool
+    public let resourceSubscriptions: Array<String>
+    public let taskIds: Array<String>
+    public init(
+        toolsListChanged!: Bool = false,
+        promptsListChanged!: Bool = false,
+        resourcesListChanged!: Bool = false,
+        resourceSubscriptions!: Array<String> = [],
+        taskIds!: Array<String> = []
+    ) {
+        for (uri in resourceSubscriptions where uri.trimAscii() == "") {
+            throw IllegalArgumentException("MCP resource subscription URI must not be empty")
+        }
+        for (id in taskIds where id.trimAscii() == "") {
+            throw IllegalArgumentException("MCP task subscription ID must not be empty")
+        }
+        this.toolsListChanged = toolsListChanged; this.promptsListChanged = promptsListChanged
+        this.resourcesListChanged = resourcesListChanged
+        this.resourceSubscriptions = resourceSubscriptions; this.taskIds = taskIds
+    }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        if (toolsListChanged) { fields.add(JsonObjectEntry("toolsListChanged", jsonBool(true))) }
+        if (promptsListChanged) { fields.add(JsonObjectEntry("promptsListChanged", jsonBool(true))) }
+        if (resourcesListChanged) { fields.add(JsonObjectEntry("resourcesListChanged", jsonBool(true))) }
+        if (!resourceSubscriptions.isEmpty()) {
+            let values = ArrayList<JsonNode>(); for (value in resourceSubscriptions) { values.add(jsonString(value)) }
+            fields.add(JsonObjectEntry("resourceSubscriptions", jsonArray(values.toArray())))
+        }
+        if (!taskIds.isEmpty()) {
+            let values = ArrayList<JsonNode>(); for (value in taskIds) { values.add(jsonString(value)) }
+            fields.add(JsonObjectEntry("taskIds", jsonArray(values.toArray())))
+        }
+        jsonObject([JsonObjectEntry("notifications", jsonObject(fields.toArray()))])
+    }
+}
+
+public interface McpSubscriptionSource {
+    func acknowledged(): McpSubscriptionFilter
+    func next(): McpResult<?JsonRpcNotification>
+    func close(): McpResult<Unit>
+}
+
+public interface McpSubscriptionHandle {
+    func subscriptionId(): JsonRpcId
+    func acknowledged(): McpSubscriptionFilter
+    func next(): McpResult<?JsonRpcNotification>
+    func close(): McpResult<Unit>
+}
 
 public class McpCapabilityFeature {
     public let listChanged: Bool
@@ -46,17 +216,48 @@ public class McpCapabilityFeature {
     }
 }
 
+public class McpRootsCapability {
+    public init() {}
+    public func toValue(): JsonNode { jsonObject([]) }
+}
+
+public class McpSamplingCapability {
+    public let context: Bool
+    public let tools: Bool
+    public init(context!: Bool = false, tools!: Bool = false) {
+        this.context = context; this.tools = tools
+    }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        if (context) { fields.add(JsonObjectEntry("context", jsonObject([]))) }
+        if (tools) { fields.add(JsonObjectEntry("tools", jsonObject([]))) }
+        jsonObject(fields.toArray())
+    }
+}
+
+public class McpElicitationCapability {
+    public let form: Bool
+    public let url: Bool
+    public init(form!: Bool = true, url!: Bool = false) { this.form = form; this.url = url }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        if (form) { fields.add(JsonObjectEntry("form", jsonObject([]))) }
+        if (url) { fields.add(JsonObjectEntry("url", jsonObject([]))) }
+        jsonObject(fields.toArray())
+    }
+}
+
 public class McpClientCapabilities {
-    public let roots: ?McpCapabilityFeature
-    public let sampling: Bool
-    public let elicitation: Bool
+    public let roots: ?McpRootsCapability
+    public let sampling: ?McpSamplingCapability
+    public let elicitation: ?McpElicitationCapability
     public let experimental: JsonNode
     public let extensions: JsonNode
 
     public init(
-        roots!: ?McpCapabilityFeature = None,
-        sampling!: Bool = false,
-        elicitation!: Bool = false,
+        roots!: ?McpRootsCapability = None,
+        sampling!: ?McpSamplingCapability = None,
+        elicitation!: ?McpElicitationCapability = None,
         experimental!: JsonNode = jsonObject([]),
         extensions!: JsonNode = jsonObject([])
     ) {
@@ -72,15 +273,15 @@ public class McpClientCapabilities {
     public func toValue(): JsonNode {
         let fields = ArrayList<JsonObjectEntry>()
         match (roots) { case Some(value) => fields.add(JsonObjectEntry("roots", value.toValue())); case None => () }
-        if (sampling) { fields.add(JsonObjectEntry("sampling", jsonObject([]))) }
-        if (elicitation) { fields.add(JsonObjectEntry("elicitation", jsonObject([]))) }
+        match (sampling) { case Some(value) => fields.add(JsonObjectEntry("sampling", value.toValue())); case None => () }
+        match (elicitation) { case Some(value) => fields.add(JsonObjectEntry("elicitation", value.toValue())); case None => () }
         if (!experimental.fields.isEmpty()) { fields.add(JsonObjectEntry("experimental", experimental)) }
-        appendMcpExtensionFields(fields, extensions)
+        if (!extensions.fields.isEmpty()) { fields.add(JsonObjectEntry("extensions", extensions)) }
         jsonObject(fields.toArray())
     }
 }
 
-public class McpServerCapabilities2026 {
+public class McpServerCapabilities {
     public let completion: Bool
     public let logging: Bool
     public let prompts: ?McpCapabilityFeature
@@ -117,7 +318,7 @@ public class McpServerCapabilities2026 {
         match (resources) { case Some(value) => fields.add(JsonObjectEntry("resources", value.toValue())); case None => () }
         match (tools) { case Some(value) => fields.add(JsonObjectEntry("tools", value.toValue())); case None => () }
         if (!experimental.fields.isEmpty()) { fields.add(JsonObjectEntry("experimental", experimental)) }
-        appendMcpExtensionFields(fields, extensions)
+        if (!extensions.fields.isEmpty()) { fields.add(JsonObjectEntry("extensions", extensions)) }
         jsonObject(fields.toArray())
     }
 }
@@ -261,8 +462,86 @@ public class McpPage {
     }
 }
 
+public class McpCompletionResult {
+    public let completion: JsonNode
+    public let meta: JsonNode
+    public init(completion: JsonNode, meta!: JsonNode = jsonObject([])) {
+        requireObject(completion, "MCP completion")
+        requireObject(meta, "MCP completion metadata")
+        this.completion = completion; this.meta = meta
+    }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)))
+        fields.add(JsonObjectEntry("completion", completion))
+        if (!meta.fields.isEmpty()) { fields.add(JsonObjectEntry("_meta", meta)) }
+        jsonObject(fields.toArray())
+    }
+}
+
+public class McpPromptResult {
+    public let description: String
+    public let messages: Array<JsonNode>
+    public let meta: JsonNode
+    public init(messages: Array<JsonNode>, description!: String = "", meta!: JsonNode = jsonObject([])) {
+        for (message in messages where message.unifiedKind != UnifiedJsonKind.Object) {
+            throw IllegalArgumentException("MCP prompt messages must be objects")
+        }
+        requireObject(meta, "MCP prompt result metadata")
+        this.description = description; this.messages = messages; this.meta = meta
+    }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)))
+        if (description != "") { fields.add(JsonObjectEntry("description", jsonString(description))) }
+        fields.add(JsonObjectEntry("messages", jsonArray(messages)))
+        if (!meta.fields.isEmpty()) { fields.add(JsonObjectEntry("_meta", meta)) }
+        jsonObject(fields.toArray())
+    }
+}
+
+public class McpReadResourceResult {
+    public let contents: Array<JsonNode>
+    public let ttlMillis: Int64
+    public let cacheScope: String
+    public let meta: JsonNode
+    public init(
+        contents: Array<JsonNode>, ttlMillis!: Int64 = 300000,
+        cacheScope!: String = "private", meta!: JsonNode = jsonObject([])
+    ) {
+        for (content in contents where content.unifiedKind != UnifiedJsonKind.Object) {
+            throw IllegalArgumentException("MCP resource contents must be objects")
+        }
+        if (ttlMillis < 0 || !validMcpCacheScope(cacheScope)) {
+            throw IllegalArgumentException("invalid MCP resource cache metadata")
+        }
+        requireObject(meta, "MCP resource result metadata")
+        this.contents = contents; this.ttlMillis = ttlMillis; this.cacheScope = cacheScope; this.meta = meta
+    }
+    public func toValue(): JsonNode {
+        let fields = ArrayList<JsonObjectEntry>()
+        fields.add(JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)))
+        fields.add(JsonObjectEntry("contents", jsonArray(contents)))
+        fields.add(JsonObjectEntry("ttlMs", jsonNumber(ttlMillis.toString())))
+        fields.add(JsonObjectEntry("cacheScope", jsonString(cacheScope)))
+        if (!meta.fields.isEmpty()) { fields.add(JsonObjectEntry("_meta", meta)) }
+        jsonObject(fields.toArray())
+    }
+}
+
 public enum McpOperationOutcome<T> {
-    Complete(T) | InputRequired(McpInputRequiredResult) | Extension(String, JsonNode)
+    Complete(T) | InputRequired(McpInputRequiredResult) | Task(McpTask) | Extension(String, JsonNode)
+}
+
+public func mcpOperationOutcomeValue<T>(
+    outcome: McpOperationOutcome<T>, encode: (T) -> JsonNode
+): JsonNode {
+    match (outcome) {
+        case McpOperationOutcome.Complete(value) => encode(value)
+        case McpOperationOutcome.InputRequired(value) => value.toValue()
+        case McpOperationOutcome.Task(value) => value.toValue(resultType: MCP_RESULT_TASK)
+        case McpOperationOutcome.Extension(_, value) => value
+    }
 }
 
 public interface McpInputResolver {

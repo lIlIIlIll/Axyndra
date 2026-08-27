@@ -2,8 +2,6 @@ package agent_mcp
 
 import yjson_support.*
 
-import yjson.*
-
 import agent_domain.*
 import agent_protocol.*
 import mcp4cj as library
@@ -22,7 +20,6 @@ public class McpClient {
     public func state(): McpLifecycleState { primitive.state() }
 
     public func discover(): Result<McpDiscoverResult> { mapMcpResult(primitive.discover()) }
-    public func ping(): Result<Unit> { mapMcpResult(primitive.ping()) }
     public func listTools(cursor!: String = ""): Result<McpToolListPage> {
         mapMcpResult(primitive.listTools(cursor: cursor))
     }
@@ -33,6 +30,45 @@ public class McpClient {
         mapMcpResult(primitive.toolDirectory(nowMillis, forceRefresh: forceRefresh))
     }
     public func invalidateToolDirectory(): Unit { primitive.invalidateToolDirectory() }
+
+    public func complete(
+        reference: AgentValue, argument: AgentValue,
+        continuation!: McpToolCallContinuation = McpToolCallContinuation(), runId!: String = ""
+    ): Result<McpOperationOutcome<McpCompletionResult>> {
+        mapMcpResult(primitive.complete(reference, argument, continuation: continuation, owner: runId))
+    }
+    public func listPrompts(cursor!: String = ""): Result<McpPage> {
+        mapMcpResult(primitive.listPrompts(cursor: cursor))
+    }
+    public func getPrompt(
+        name: String, arguments!: AgentValue = objectValue([]),
+        continuation!: McpToolCallContinuation = McpToolCallContinuation(), runId!: String = ""
+    ): Result<McpOperationOutcome<McpPromptResult>> {
+        mapMcpResult(primitive.getPrompt(name, arguments: arguments, continuation: continuation, owner: runId))
+    }
+    public func listResources(cursor!: String = ""): Result<McpPage> {
+        mapMcpResult(primitive.listResources(cursor: cursor))
+    }
+    public func listResourceTemplates(cursor!: String = ""): Result<McpPage> {
+        mapMcpResult(primitive.listResourceTemplates(cursor: cursor))
+    }
+    public func readResource(
+        uri: String, continuation!: McpToolCallContinuation = McpToolCallContinuation(), runId!: String = ""
+    ): Result<McpOperationOutcome<McpReadResourceResult>> {
+        mapMcpResult(primitive.readResource(uri, continuation: continuation, owner: runId))
+    }
+    public func listen(filter: McpSubscriptionFilter): Result<McpSubscriptionHandle> {
+        mapMcpResult(primitive.listen(filter))
+    }
+    public func getTask(taskId: String, runId!: String = ""): Result<McpTask> {
+        mapMcpResult(primitive.getTask(taskId, owner: runId))
+    }
+    public func updateTask(taskId: String, responses: AgentValue, runId!: String = ""): Result<Unit> {
+        mapMcpResult(primitive.updateTask(taskId, responses, owner: runId))
+    }
+    public func cancelTask(taskId: String, runId!: String = ""): Result<Unit> {
+        mapMcpResult(primitive.cancelTask(taskId, owner: runId))
+    }
 
     public func callTool(
         name: String,
@@ -72,14 +108,20 @@ class McpTransportBridge <: library.McpTransport {
     public func request(request: JsonRpcRequest): library.McpResult<JsonRpcResponse> {
         unmapMcpResult(product.request(request))
     }
+    public func openSubscription(request: JsonRpcRequest): library.McpResult<library.McpSubscriptionHandle> {
+        unmapMcpResult(product.openSubscription(request))
+    }
     public func notify(notification: JsonRpcNotification): library.McpResult<Unit> {
         unmapMcpResult(product.notify(notification))
     }
     public func cancel(requestId: JsonRpcId, reason: String): library.McpResult<Unit> {
         unmapMcpResult(product.cancel(
             requestId, reason,
-            McpRequestMeta(McpImplementationInfo("Axyndra-adapter", "1"))
+            McpRequestMeta(clientInfo: McpImplementationInfo("Axyndra-adapter", "1"))
         ))
+    }
+    public func registerTools(tools: Array<McpTool>): library.McpResult<Unit> {
+        unmapMcpResult(product.registerTools(tools))
     }
     public func close(): library.McpResult<Unit> { unmapMcpResult(product.close()) }
 }

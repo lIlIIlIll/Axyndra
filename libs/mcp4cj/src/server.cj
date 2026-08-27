@@ -18,23 +18,72 @@ public interface McpToolHost {
     func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
 }
 
+public interface McpCompletionProvider {
+    func complete(
+        requestId: JsonRpcId, reference: JsonNode, argument: JsonNode,
+        continuation: McpToolCallContinuation
+    ): McpResult<McpOperationOutcome<McpCompletionResult>>
+}
+
+public interface McpPromptProvider {
+    func listPrompts(cursor: String): McpResult<McpPage>
+    func getPrompt(
+        requestId: JsonRpcId, name: String, arguments: JsonNode,
+        continuation: McpToolCallContinuation
+    ): McpResult<McpOperationOutcome<McpPromptResult>>
+}
+
+public interface McpResourceProvider {
+    func listResources(cursor: String): McpResult<McpPage>
+    func listResourceTemplates(cursor: String): McpResult<McpPage>
+    func readResource(
+        requestId: JsonRpcId, uri: String, continuation: McpToolCallContinuation
+    ): McpResult<McpOperationOutcome<McpReadResourceResult>>
+}
+
+public interface McpNotificationProvider {
+    func open(requestId: JsonRpcId, filter: McpSubscriptionFilter): McpResult<McpSubscriptionSource>
+    func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
+}
+
 // Generic MCP protocol dispatcher. The host callback is the sole execution
 // boundary; this class has no knowledge of product tools or authorization.
 public class McpServer {
     private let discovery: McpDiscoverResult
-    private let host: McpToolHost
+    private let host: ?McpToolHost
+    private let completions: ?McpCompletionProvider
+    private let prompts: ?McpPromptProvider
+    private let resources: ?McpResourceProvider
+    private let notifications: ?McpNotificationProvider
+    private let tasks: ?McpTaskProvider
     private let lifecycle = McpLifecycle()
 
-    public init(discovery: McpDiscoverResult, host: McpToolHost) {
+    public init(
+        discovery: McpDiscoverResult,
+        host!: ?McpToolHost = None,
+        completions!: ?McpCompletionProvider = None,
+        prompts!: ?McpPromptProvider = None,
+        resources!: ?McpResourceProvider = None,
+        notifications!: ?McpNotificationProvider = None,
+        tasks!: ?McpTaskProvider = None
+    ) {
         this.discovery = discovery
         this.host = host
+        this.completions = completions
+        this.prompts = prompts
+        this.resources = resources
+        this.notifications = notifications
+        this.tasks = tasks
         let _ = lifecycle.transition(McpLifecycleState.Starting)
         let _ = lifecycle.transition(McpLifecycleState.Ready)
     }
 
     public func state(): McpLifecycleState { lifecycle.state() }
 
-    public func handleRequest(request: JsonRpcRequest): JsonRpcResponse {
+    public func handleRequest(
+        request: JsonRpcRequest,
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
+    ): JsonRpcResponse {
         if (state() != McpLifecycleState.Ready) {
             return mcpFailureResponse(request.id, JSON_RPC_INTERNAL_ERROR, "MCP server is closed")
         }
@@ -43,24 +92,47 @@ public class McpServer {
             case McpResult.Err(error) => return mcpFailureResponse(
                 request.id,
                 if (error.code == "mcp.version_unsupported") { MCP_UNSUPPORTED_PROTOCOL_VERSION } else { JSON_RPC_INVALID_PARAMS },
-                error.message
+                error.message,
+                data: if (error.code == "mcp.version_unsupported") {
+                    jsonObject([
+                        JsonObjectEntry("supported", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
+                        JsonObjectEntry("requested", jsonString(mcpRequestedProtocolVersion(request.params)))
+                    ])
+                } else { jsonNull() }
             )
         }
         if (request.method == MCP_METHOD_DISCOVER) {
             mcpSuccessResponse(request.id, discovery.toValue(), discovery.serverInfo)
-        } else if (request.method == MCP_METHOD_PING) {
-            mcpSuccessResponse(
-                request.id,
-                jsonObject([JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE))]),
-                discovery.serverInfo
-            )
         } else if (request.method == MCP_METHOD_TOOLS_LIST) {
-            match (host.listTools(mcpText(request.params, "cursor"))) {
-                case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue(), discovery.serverInfo)
-                case McpResult.Err(error) => mcpHostFailure(request.id, error)
+            match (host) {
+                case Some(provider) => match (provider.listTools(mcpText(request.params, "cursor"))) {
+                    case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue(), discovery.serverInfo)
+                    case McpResult.Err(error) => mcpHostFailure(request.id, error)
+                }
+                case None => mcpFailureResponse(request.id, JSON_RPC_METHOD_NOT_FOUND, "MCP method not available: tools/list")
             }
         } else if (request.method == MCP_METHOD_TOOLS_CALL) {
-            handleToolCall(request)
+            handleToolCall(request, notificationSink)
+        } else if (request.method == MCP_METHOD_COMPLETION_COMPLETE) {
+            handleCompletion(request, notificationSink)
+        } else if (request.method == MCP_METHOD_PROMPTS_LIST) {
+            handlePromptList(request)
+        } else if (request.method == MCP_METHOD_PROMPTS_GET) {
+            handlePromptGet(request, notificationSink)
+        } else if (request.method == MCP_METHOD_RESOURCES_LIST) {
+            handleResourceList(request)
+        } else if (request.method == MCP_METHOD_RESOURCE_TEMPLATES_LIST) {
+            handleResourceTemplateList(request)
+        } else if (request.method == MCP_METHOD_RESOURCES_READ) {
+            handleResourceRead(request, notificationSink)
+        } else if (request.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+            handleListen(request)
+        } else if (request.method == MCP_METHOD_TASKS_GET) {
+            handleTaskGet(request)
+        } else if (request.method == MCP_METHOD_TASKS_UPDATE) {
+            handleTaskUpdate(request)
+        } else if (request.method == MCP_METHOD_TASKS_CANCEL) {
+            handleTaskCancel(request)
         } else {
             mcpFailureResponse(request.id, JSON_RPC_METHOD_NOT_FOUND, "MCP method not found: " + request.method)
         }
@@ -81,7 +153,14 @@ public class McpServer {
             }
             case None => return invalidMcp<Unit>("mcp.cancel_id_missing", "cancellation requires requestId")
         }
-        host.cancel(id, mcpText(notification.params, "reason"))
+        let reason = mcpText(notification.params, "reason")
+        match (notifications) {
+            case Some(provider) => provider.cancel(id, reason)
+            case None => match (host) {
+                case Some(provider) => provider.cancel(id, reason)
+                case None => McpResult.Ok(())
+            }
+        }
     }
 
     public func handle(envelope: JsonRpcEnvelope): McpResult<?JsonRpcEnvelope> {
@@ -99,6 +178,29 @@ public class McpServer {
 
     public func tool(name: String): McpResult<?McpTool> { findTool(name) }
 
+    public func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionSource> {
+        if (request.method != MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+            return invalidMcp<McpSubscriptionSource>("mcp.subscription_method_invalid", "subscription request method is invalid")
+        }
+        match (validateMcpRequestMeta(request.params)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        let filter = match (decodeMcpSubscriptionFilter(request.params)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        if (!filter.taskIds.isEmpty() && !mcpRequestSupportsTasks(request.params)) {
+            return invalidMcp<McpSubscriptionSource>(
+                "mcp.subscription_tasks_capability_missing", "task subscriptions require the Tasks extension"
+            )
+        }
+        match (notifications) {
+            case Some(provider) => provider.open(request.id, filter)
+            case None => invalidMcp<McpSubscriptionSource>("mcp.subscription_unavailable", "subscriptions/listen is not available")
+        }
+    }
+
     public func close(): McpResult<Unit> {
         let current = state()
         if (current == McpLifecycleState.Stopped) { return McpResult.Ok(()) }
@@ -107,14 +209,16 @@ public class McpServer {
         McpResult.Ok(())
     }
 
-    private func handleToolCall(request: JsonRpcRequest): JsonRpcResponse {
+    private func handleToolCall(
+        request: JsonRpcRequest, notificationSink: (JsonRpcNotification) -> Unit
+    ): JsonRpcResponse {
         let name = mcpText(request.params, "name")
         if (name == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tools/call requires name") }
         let arguments = mcpField(request.params, "arguments", jsonObject([]))
         if (arguments.unifiedKind != UnifiedJsonKind.Object) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tools/call arguments must be an object")
         }
-        let continuation = match (decodeMcpContinuation(request.params)) {
+        let continuation = match (decodeMcpContinuation(request.params, notificationSink)) {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return mcpHostFailure(request.id, error)
         }
@@ -125,6 +229,16 @@ public class McpServer {
                 data: jsonObject([JsonObjectEntry("tool", jsonString(name))])
             )
             case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
+        match (tool.execution) {
+            case Some(execution) => if (execution.taskSupport == McpTaskSupport.Required &&
+                !mcpRequestSupportsTasks(request.params)) {
+                return mcpFailureResponse(
+                    request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
+                    "Missing required client capability", data: mcpTasksRequiredCapability()
+                )
+            }
+            case None => ()
         }
         match (validateUnifiedJsonSchema(tool.inputSchema, arguments)) {
             case Some(error) => return mcpFailureResponse(
@@ -137,20 +251,193 @@ public class McpServer {
             )
             case None => ()
         }
-        match (host.callTool(request.id, name, arguments, continuation)) {
-            case McpResult.Ok(outcome) => mcpSuccessResponse(
-                request.id, mcpCallToolOutcomeValue(outcome), discovery.serverInfo
+        let provider = match (host) {
+            case Some(value) => value
+            case None => return mcpFailureResponse(request.id, JSON_RPC_METHOD_NOT_FOUND, "MCP method not available: tools/call")
+        }
+        match (provider.callTool(request.id, name, arguments, continuation)) {
+            case McpResult.Ok(outcome) => match (outcome) {
+                case McpCallToolOutcome.Task(_) => if (!mcpRequestSupportsTasks(request.params)) {
+                    mcpFailureResponse(
+                        request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
+                        "Missing required client capability", data: mcpTasksRequiredCapability()
+                    )
+                } else { mcpCheckedOperationResponse(request, mcpCallToolOutcomeValue(outcome), discovery.serverInfo) }
+                case _ => mcpCheckedOperationResponse(request, mcpCallToolOutcomeValue(outcome), discovery.serverInfo)
+            }
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func handleCompletion(
+        request: JsonRpcRequest, notificationSink: (JsonRpcNotification) -> Unit
+    ): JsonRpcResponse {
+        let provider = match (completions) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_COMPLETION_COMPLETE)
+        }
+        let reference = mcpField(request.params, "ref", jsonNull())
+        let argument = mcpField(request.params, "argument", jsonNull())
+        if (reference.unifiedKind != UnifiedJsonKind.Object || argument.unifiedKind != UnifiedJsonKind.Object) {
+            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "completion/complete requires object ref and argument")
+        }
+        let continuation = match (decodeMcpContinuation(request.params, notificationSink)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
+        match (provider.complete(request.id, reference, argument, continuation)) {
+            case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
             )
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
         }
     }
 
+    private func handlePromptList(request: JsonRpcRequest): JsonRpcResponse {
+        match (prompts) {
+            case Some(provider) => match (provider.listPrompts(mcpText(request.params, "cursor"))) {
+                case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("prompts"), discovery.serverInfo)
+                case McpResult.Err(error) => mcpHostFailure(request.id, error)
+            }
+            case None => unavailableMcpMethod(request, MCP_METHOD_PROMPTS_LIST)
+        }
+    }
+
+    private func handlePromptGet(
+        request: JsonRpcRequest, notificationSink: (JsonRpcNotification) -> Unit
+    ): JsonRpcResponse {
+        let provider = match (prompts) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_PROMPTS_GET)
+        }
+        let name = mcpText(request.params, "name")
+        let arguments = mcpObject(request.params, "arguments")
+        if (name == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "prompts/get requires name") }
+        let continuation = match (decodeMcpContinuation(request.params, notificationSink)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
+        match (provider.getPrompt(request.id, name, arguments, continuation)) {
+            case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
+            )
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func handleResourceList(request: JsonRpcRequest): JsonRpcResponse {
+        match (resources) {
+            case Some(provider) => match (provider.listResources(mcpText(request.params, "cursor"))) {
+                case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("resources"), discovery.serverInfo)
+                case McpResult.Err(error) => mcpHostFailure(request.id, error)
+            }
+            case None => unavailableMcpMethod(request, MCP_METHOD_RESOURCES_LIST)
+        }
+    }
+
+    private func handleResourceTemplateList(request: JsonRpcRequest): JsonRpcResponse {
+        match (resources) {
+            case Some(provider) => match (provider.listResourceTemplates(mcpText(request.params, "cursor"))) {
+                case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("resourceTemplates"), discovery.serverInfo)
+                case McpResult.Err(error) => mcpHostFailure(request.id, error)
+            }
+            case None => unavailableMcpMethod(request, MCP_METHOD_RESOURCE_TEMPLATES_LIST)
+        }
+    }
+
+    private func handleResourceRead(
+        request: JsonRpcRequest, notificationSink: (JsonRpcNotification) -> Unit
+    ): JsonRpcResponse {
+        let provider = match (resources) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_RESOURCES_READ)
+        }
+        let uri = mcpText(request.params, "uri")
+        if (uri == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "resources/read requires uri") }
+        let continuation = match (decodeMcpContinuation(request.params, notificationSink)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
+        match (provider.readResource(request.id, uri, continuation)) {
+            case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
+            )
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func handleListen(request: JsonRpcRequest): JsonRpcResponse {
+        match (notifications) {
+            case Some(_) => mcpFailureResponse(
+                request.id, JSON_RPC_INTERNAL_ERROR,
+                "subscriptions/listen must be opened through a streaming transport"
+            )
+            case None => unavailableMcpMethod(request, MCP_METHOD_SUBSCRIPTIONS_LISTEN)
+        }
+    }
+
+    private func handleTaskGet(request: JsonRpcRequest): JsonRpcResponse {
+        if (!mcpRequestSupportsTasks(request.params)) { return mcpMissingTasksCapability(request.id) }
+        let provider = match (tasks) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_TASKS_GET)
+        }
+        let taskId = mcpText(request.params, "taskId")
+        if (taskId == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/get requires taskId") }
+        match (provider.getTask(taskId)) {
+            case McpResult.Ok(task) => mcpSuccessResponse(request.id, task.toValue(), discovery.serverInfo)
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func handleTaskUpdate(request: JsonRpcRequest): JsonRpcResponse {
+        if (!mcpRequestSupportsTasks(request.params)) { return mcpMissingTasksCapability(request.id) }
+        let provider = match (tasks) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_TASKS_UPDATE)
+        }
+        let taskId = mcpText(request.params, "taskId")
+        let responses = mcpField(request.params, "inputResponses", jsonNull())
+        if (taskId == "" || responses.unifiedKind != UnifiedJsonKind.Object) {
+            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires taskId and object inputResponses")
+        }
+        for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
+            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "task input responses must be objects")
+        }
+        match (provider.updateTask(taskId, responses)) {
+            case McpResult.Ok(_) => mcpSuccessResponse(request.id, jsonObject([]), discovery.serverInfo)
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func handleTaskCancel(request: JsonRpcRequest): JsonRpcResponse {
+        if (!mcpRequestSupportsTasks(request.params)) { return mcpMissingTasksCapability(request.id) }
+        let provider = match (tasks) {
+            case Some(value) => value
+            case None => return unavailableMcpMethod(request, MCP_METHOD_TASKS_CANCEL)
+        }
+        let taskId = mcpText(request.params, "taskId")
+        if (taskId == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/cancel requires taskId") }
+        match (provider.cancelTask(taskId)) {
+            case McpResult.Ok(_) => mcpSuccessResponse(request.id, jsonObject([]), discovery.serverInfo)
+            case McpResult.Err(error) => mcpHostFailure(request.id, error)
+        }
+    }
+
+    private func unavailableMcpMethod(request: JsonRpcRequest, method: String): JsonRpcResponse {
+        mcpFailureResponse(request.id, JSON_RPC_METHOD_NOT_FOUND, "MCP method not available: " + method)
+    }
+
     private func findTool(name: String): McpResult<?McpTool> {
+        let provider = match (host) {
+            case Some(value) => value
+            case None => return McpResult.Ok(None)
+        }
         let cursors = ArrayList<String>(); var cursor = ""; var pages: Int64 = 0
         while (true) {
             pages++
             if (pages > 1024) { return invalidMcp<?McpTool>("mcp.tool_directory_page_limit", "tool directory exceeded page limit") }
-            let page = match (host.listTools(cursor)) {
+            let page = match (provider.listTools(cursor)) {
                 case McpResult.Ok(value) => value
                 case McpResult.Err(error) => return McpResult.Err(error)
             }
@@ -162,6 +449,71 @@ public class McpServer {
             cursors.add(page.nextCursor); cursor = page.nextCursor
         }
         McpResult.Ok(None)
+    }
+}
+
+public class McpServerBuilder {
+    private let serverInfo: ?McpImplementationInfo
+    private let instructions: String
+    private var tools: ?McpToolHost = None
+    private var completions: ?McpCompletionProvider = None
+    private var prompts: ?McpPromptProvider = None
+    private var resources: ?McpResourceProvider = None
+    private var notifications: ?McpNotificationProvider = None
+    private var tasks: ?McpTaskProvider = None
+    private var experimental = jsonObject([])
+    private var extensions = jsonObject([])
+
+    public init(
+        serverInfo!: ?McpImplementationInfo = None,
+        instructions!: String = ""
+    ) {
+        this.serverInfo = serverInfo; this.instructions = instructions
+    }
+
+    public func toolProvider(value: McpToolHost): McpServerBuilder {
+        tools = Some(value); this
+    }
+    public func completionProvider(value: McpCompletionProvider): McpServerBuilder {
+        completions = Some(value); this
+    }
+    public func promptProvider(value: McpPromptProvider): McpServerBuilder {
+        prompts = Some(value); this
+    }
+    public func resourceProvider(value: McpResourceProvider): McpServerBuilder {
+        resources = Some(value); this
+    }
+    public func notificationProvider(value: McpNotificationProvider): McpServerBuilder {
+        notifications = Some(value); this
+    }
+    public func taskProvider(value: McpTaskProvider): McpServerBuilder {
+        tasks = Some(value); this
+    }
+    public func experimentalCapabilities(value: JsonNode): McpServerBuilder {
+        requireObject(value, "MCP experimental server capabilities")
+        experimental = value; this
+    }
+    public func extensionCapabilities(value: JsonNode): McpServerBuilder {
+        requireObject(value, "MCP server capability extensions")
+        extensions = value; this
+    }
+
+    public func build(): McpServer {
+        let capabilities = McpServerCapabilities(
+            completion: completions.isSome(),
+            prompts: if (prompts.isSome()) { Some(McpCapabilityFeature()) } else { None },
+            resources: if (resources.isSome()) { Some(McpCapabilityFeature(subscribe: notifications.isSome())) } else { None },
+            tools: if (tools.isSome()) { Some(McpCapabilityFeature()) } else { None },
+            experimental: experimental,
+            extensions: if (tasks.isSome()) { withMcpTasksExtension(extensions) } else { extensions }
+        )
+        McpServer(
+            McpDiscoverResult(
+                serverInfo: serverInfo, capabilities: capabilities, instructions: instructions
+            ),
+            host: tools, completions: completions, prompts: prompts,
+            resources: resources, notifications: notifications, tasks: tasks
+        )
     }
 }
 
@@ -232,8 +584,19 @@ func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
         }
         case None => return invalidMcp<Unit>("mcp.meta_missing", "MCP request requires _meta")
     }
-    if (mcpText(meta, MCP_META_PROTOCOL_VERSION) != MCP_PROTOCOL_VERSION) {
+    let protocolVersion = mcpText(meta, MCP_META_PROTOCOL_VERSION)
+    if (protocolVersion == "") {
+        return invalidMcp<Unit>("mcp.protocol_version_missing", "request requires protocolVersion")
+    }
+    if (protocolVersion != MCP_PROTOCOL_VERSION) {
         return invalidMcp<Unit>("mcp.version_unsupported", "unsupported MCP protocol version")
+    }
+    match (meta.field(MCP_META_CLIENT_INFO)) {
+        case Some(value) => match (decodeMcpImplementationInfo(value)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        case None => ()
     }
     match (meta.field(MCP_META_CLIENT_CAPABILITIES)) {
         case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { McpResult.Ok(()) } else {
@@ -243,11 +606,143 @@ func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
     }
 }
 
-func mcpSuccessResponse(id: JsonRpcId, value: JsonNode, serverInfo: McpImplementationInfo): JsonRpcResponse {
+func mcpRequestSupportsTasks(params: JsonNode): Bool {
+    let meta = mcpObject(params, "_meta")
+    let capabilities = mcpObject(meta, MCP_META_CLIENT_CAPABILITIES)
+    let extensions = mcpObject(capabilities, "extensions")
+    match (extensions.field(MCP_TASKS_EXTENSION)) {
+        case Some(value) => value.unifiedKind == UnifiedJsonKind.Object
+        case None => false
+    }
+}
+
+func mcpRequestedProtocolVersion(params: JsonNode): String {
+    mcpText(mcpObject(params, "_meta"), MCP_META_PROTOCOL_VERSION)
+}
+
+func mcpTasksRequiredCapability(): JsonNode {
+    jsonObject([JsonObjectEntry("requiredCapabilities", jsonObject([
+        JsonObjectEntry("extensions", jsonObject([
+            JsonObjectEntry(MCP_TASKS_EXTENSION, jsonObject([]))
+        ]))
+    ]))])
+}
+
+func mcpMissingTasksCapability(id: JsonRpcId): JsonRpcResponse {
+    mcpFailureResponse(
+        id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
+        "Missing required client capability", data: mcpTasksRequiredCapability()
+    )
+}
+
+func decodeMcpSubscriptionFilter(params: JsonNode): McpResult<McpSubscriptionFilter> {
+    let notifications = match (params.field("notifications")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<McpSubscriptionFilter>("mcp.subscription_filter_invalid", "notifications must be an object")
+        }
+        case None => return invalidMcp<McpSubscriptionFilter>("mcp.subscription_filter_missing", "subscriptions/listen requires notifications")
+    }
+    let resources = ArrayList<String>(); let tasks = ArrayList<String>()
+    match (decodeMcpStringArray(notifications, "resourceSubscriptions", resources)) {
+        case McpResult.Ok(_) => ()
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
+    match (decodeMcpStringArray(notifications, "taskIds", tasks)) {
+        case McpResult.Ok(_) => ()
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
+    McpResult.Ok(McpSubscriptionFilter(
+        toolsListChanged: mcpBool(notifications, "toolsListChanged", false),
+        promptsListChanged: mcpBool(notifications, "promptsListChanged", false),
+        resourcesListChanged: mcpBool(notifications, "resourcesListChanged", false),
+        resourceSubscriptions: resources.toArray(), taskIds: tasks.toArray()
+    ))
+}
+
+func decodeMcpStringArray(source: JsonNode, name: String, output: ArrayList<String>): McpResult<Unit> {
+    match (source.field(name)) {
+        case Some(value) =>
+            if (value.unifiedKind != UnifiedJsonKind.List) {
+                return invalidMcp<Unit>("mcp.subscription_filter_invalid", name + " must be an array")
+            }
+            for (item in value.items) {
+                if (item.unifiedKind != UnifiedJsonKind.Text || item.text.trimAscii() == "") {
+                    return invalidMcp<Unit>("mcp.subscription_filter_invalid", name + " entries must be non-empty strings")
+                }
+                output.add(item.text)
+            }
+        case None => ()
+    }
+    McpResult.Ok(())
+}
+
+func mcpSuccessResponse(id: JsonRpcId, value: JsonNode, serverInfo: ?McpImplementationInfo): JsonRpcResponse {
     JsonRpcResponse(id, JsonRpcResponsePayload.Success(withMcpServerMeta(value, serverInfo)))
 }
 
-func withMcpServerMeta(value: JsonNode, serverInfo: McpImplementationInfo): JsonNode {
+func mcpCheckedOperationResponse(
+    request: JsonRpcRequest, value: JsonNode, serverInfo: ?McpImplementationInfo
+): JsonRpcResponse {
+    if (mcpText(value, "resultType") == MCP_RESULT_INPUT_REQUIRED) {
+        let required = missingMcpInputCapabilities(request.params, mcpObject(value, "inputRequests"))
+        if (!required.fields.isEmpty()) {
+            return mcpFailureResponse(
+                request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
+                "Missing required client capability",
+                data: jsonObject([JsonObjectEntry("requiredCapabilities", required)])
+            )
+        }
+    }
+    mcpSuccessResponse(request.id, value, serverInfo)
+}
+
+func missingMcpInputCapabilities(params: JsonNode, requests: JsonNode): JsonNode {
+    let capabilities = mcpObject(mcpObject(params, "_meta"), MCP_META_CLIENT_CAPABILITIES)
+    var roots = false; var sampling = false; var samplingTools = false; var samplingContext = false
+    var elicitation = false; var elicitationUrl = false
+    for (entry in requests.fields) {
+        let request = match (decodeMcpInputRequest(entry.value)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(_) => continue
+        }
+        match (request) {
+            case McpInputRequest.Roots(_) =>
+                if (capabilities.field("roots").isNone()) { roots = true }
+            case McpInputRequest.Sampling(value) =>
+                let declared = match (capabilities.field("sampling")) {
+                    case Some(found) => if (found.unifiedKind == UnifiedJsonKind.Object) { found } else { jsonObject([]) }
+                    case None => jsonObject([])
+                }
+                if (capabilities.field("sampling").isNone()) { sampling = true }
+                if (value.field("tools").isSome() && declared.field("tools").isNone()) { samplingTools = true }
+                let context = mcpText(value, "includeContext")
+                if (context != "" && context != "none" && declared.field("context").isNone()) { samplingContext = true }
+            case McpInputRequest.Elicitation(value) =>
+                let declared = match (capabilities.field("elicitation")) {
+                    case Some(found) => if (found.unifiedKind == UnifiedJsonKind.Object) { found } else { jsonObject([]) }
+                    case None => jsonObject([])
+                }
+                if (capabilities.field("elicitation").isNone()) { elicitation = true }
+                if (mcpText(value, "mode") == "url" && declared.field("url").isNone()) { elicitationUrl = true }
+        }
+    }
+    let required = ArrayList<JsonObjectEntry>()
+    if (roots) { required.add(JsonObjectEntry("roots", jsonObject([]))) }
+    if (sampling || samplingTools || samplingContext) {
+        let details = ArrayList<JsonObjectEntry>()
+        if (samplingTools) { details.add(JsonObjectEntry("tools", jsonObject([]))) }
+        if (samplingContext) { details.add(JsonObjectEntry("context", jsonObject([]))) }
+        required.add(JsonObjectEntry("sampling", jsonObject(details.toArray())))
+    }
+    if (elicitation || elicitationUrl) {
+        let details = ArrayList<JsonObjectEntry>()
+        if (elicitationUrl) { details.add(JsonObjectEntry("url", jsonObject([]))) }
+        required.add(JsonObjectEntry("elicitation", jsonObject(details.toArray())))
+    }
+    jsonObject(required.toArray())
+}
+
+func withMcpServerMeta(value: JsonNode, serverInfo: ?McpImplementationInfo): JsonNode {
     let fields = ArrayList<JsonObjectEntry>(); var meta = jsonObject([]); var resultType = false
     if (value.unifiedKind == UnifiedJsonKind.Object) { for (field in value.fields) {
         if (field.name == "_meta") { if (field.value.unifiedKind == UnifiedJsonKind.Object) { meta = field.value } }
@@ -256,8 +751,11 @@ func withMcpServerMeta(value: JsonNode, serverInfo: McpImplementationInfo): Json
     if (!resultType) { fields.add(JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE))) }
     let metadata = ArrayList<JsonObjectEntry>()
     for (field in meta.fields where field.name != MCP_META_SERVER_INFO) { metadata.add(field) }
-    metadata.add(JsonObjectEntry(MCP_META_SERVER_INFO, serverInfo.toValue()))
-    fields.add(JsonObjectEntry("_meta", jsonObject(metadata.toArray())))
+    match (serverInfo) {
+        case Some(info) => metadata.add(JsonObjectEntry(MCP_META_SERVER_INFO, info.toValue()))
+        case None => ()
+    }
+    if (!metadata.isEmpty()) { fields.add(JsonObjectEntry("_meta", jsonObject(metadata.toArray()))) }
     jsonObject(fields.toArray())
 }
 
@@ -278,12 +776,19 @@ func mcpHostFailure(id: JsonRpcId, error: McpError): JsonRpcResponse {
     mcpFailureResponse(id, code, error.message, data: jsonObject(fields.toArray()))
 }
 
-func decodeMcpContinuation(params: JsonNode): McpResult<McpToolCallContinuation> {
+func decodeMcpContinuation(
+    params: JsonNode, notificationSink: (JsonRpcNotification) -> Unit
+): McpResult<McpToolCallContinuation> {
     let responses = mcpObject(params, "inputResponses")
     for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpToolCallContinuation>("mcp.input_response_invalid", "input response must be an object")
     }
-    McpResult.Ok(McpToolCallContinuation(inputResponses: responses, requestState: mcpText(params, "requestState")))
+    McpResult.Ok(McpToolCallContinuation(
+        inputResponses: responses, requestState: mcpText(params, "requestState"),
+        tasksSupported: mcpRequestSupportsTasks(params),
+        progressToken: mcpField(mcpObject(params, "_meta"), "progressToken", jsonNull()),
+        notificationSink: notificationSink
+    ))
 }
 
 func decodeMcpRequestId(value: JsonNode): McpResult<JsonRpcId> {

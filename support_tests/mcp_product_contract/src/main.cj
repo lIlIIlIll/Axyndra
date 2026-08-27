@@ -578,7 +578,7 @@ func fixtureMcpServer(
         }
     )
     McpServer(
-        McpDiscoverResult(McpImplementationInfo(name, "1.0.0")),
+        McpDiscoverResult(serverInfo: McpImplementationInfo(name, "1.0.0")),
         host
     )
 }
