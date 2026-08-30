@@ -643,11 +643,22 @@ const BASE_RETRY_DELAY_MILLIS: Int64 = 500
 const MAX_RETRY_DELAY_MILLIS: Int64 = 8000
 
 func extractRetryAfterHeader(headers: String): Int64 {
-    min(extractRetryAfterMillis(headers), MAX_RETRY_DELAY_MILLIS)
+    clampRetryDelay(extractRetryAfterMillis(headers, 0))
 }
 
 func parseRetryAfter(value: String): Int64 {
-    min(parseRetryAfterMillis(value), MAX_RETRY_DELAY_MILLIS)
+    clampRetryDelay(parseRetryAfterMillis(value, 0))
+}
+
+func clampRetryDelay(value: ?Int64): Int64 {
+    match (value) {
+        case Some(found) => if (found > MAX_RETRY_DELAY_MILLIS) {
+            MAX_RETRY_DELAY_MILLIS
+        } else {
+            found
+        }
+        case None => 0
+    }
 }
 
 func curlSeconds(milliseconds: Int64): String {
@@ -717,25 +728,6 @@ func executeStreaming(
     (code, output.toArray(), errors)
 }
 
-func forwardEventChunk(
-    chunk: String,
-    protocol: ProviderProtocol,
-    events: domain.ModelEventSink
-): Unit {
-    try {
-        let payload = match (sseDataLine(chunk.trimAscii())) { case Some(value) => value; case None => return }
-        let projected = decodeLlmWireEventFrame(
-            match (protocol) {
-                case ProviderProtocol.Messages => LlmWireProtocol.Messages
-                case ProviderProtocol.Responses => LlmWireProtocol.Responses
-                case ProviderProtocol.Completions => LlmWireProtocol.ChatCompletions
-            },
-            payload
-        )
-        for (event in projected) { emitLlmWireEvent(event, protocol, events) }
-    } catch (_: Exception) {}
-}
-
 func providerProtocolName(protocol: ProviderProtocol): String {
     match (protocol) {
         case ProviderProtocol.Messages => "messages"
@@ -749,61 +741,129 @@ func emitLlmWireEvent(
     protocol: ProviderProtocol,
     events: domain.ModelEventSink
 ): Unit {
-    match (event.kind) {
-        case LlmWireEventKind.StreamStarted => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.StreamStarted(event.terminalEventKind)
+    match (event) {
+        case LlmWireEvent.StreamStarted(responseId, _) => events(domain.ModelEvent.ProviderProgress(
+            domain.ProviderStreamEvent.StreamStarted(responseId)
         ))
-        case LlmWireEventKind.ContentBlockStarted => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.ContentBlockStarted(event.blockIndex, event.blockKind)
+        case LlmWireEvent.ContentBlockStarted(kind, identity) => events(domain.ModelEvent.ProviderProgress(
+            domain.ProviderStreamEvent.ContentBlockStarted(
+                streamIdentityIndex(identity),
+                streamBlockKindName(kind)
+            )
         ))
-        case LlmWireEventKind.TextDelta => events(domain.ModelEvent.TextDelta(event.text))
-        case LlmWireEventKind.ReasoningDelta => events(domain.ModelEvent.ReasoningDelta(event.text))
-        case LlmWireEventKind.ToolCallStarted => events(domain.ModelEvent.ToolCallStarted(event.callId, event.text))
-        case LlmWireEventKind.ToolArgumentsDelta => events(domain.ModelEvent.ToolArgumentsDelta(event.callId, event.text))
-        case LlmWireEventKind.ContentBlockCompleted =>
+        case LlmWireEvent.TextDelta(text, _) => events(domain.ModelEvent.TextDelta(text))
+        case LlmWireEvent.ReasoningDelta(text, _) => events(domain.ModelEvent.ReasoningDelta(text))
+        case LlmWireEvent.RefusalDelta(text, _) => events(domain.ModelEvent.TextDelta(text))
+        case LlmWireEvent.CitationAdded(_, _) => ()
+        case LlmWireEvent.RefusalObserved(_) => ()
+        case LlmWireEvent.ToolCallStarted(identity) =>
+            events(domain.ModelEvent.ToolCallStarted(identity.callId, identity.name))
+        case LlmWireEvent.ToolArgumentsDelta(text, identity) =>
+            events(domain.ModelEvent.ToolArgumentsDelta(identity.callId, text))
+        case LlmWireEvent.ContentBlockCompleted(kind, identity) =>
             events(domain.ModelEvent.ProviderProgress(
                 domain.ProviderStreamEvent.ContentBlockCompleted(
-                    event.blockIndex,
-                    event.blockKind
+                    streamIdentityIndex(identity),
+                    streamBlockKindName(kind)
                 )
             ))
-            if (event.callId != "") {
-                events(domain.ModelEvent.ToolCallCompleted(event.callId))
+            if (kind == LlmWireStreamBlockKind.ToolCall && identity.itemId != "") {
+                events(domain.ModelEvent.ToolCallCompleted(identity.itemId))
             }
-        case LlmWireEventKind.MessageTerminalObserved =>
+        case LlmWireEvent.UsageUpdated(usage) =>
+            let input = optionalUsageValue(usage.inputTokens)
+            let output = optionalUsageValue(usage.outputTokens)
+            events(domain.ModelEvent.UsageUpdated(input, output))
+            events(domain.ModelEvent.ProviderProgress(
+                domain.ProviderStreamEvent.UsageDelta(input, output)
+            ))
+        case LlmWireEvent.ChoiceCompleted(_, _) => ()
+        case LlmWireEvent.TerminalObserved(terminal) =>
             events(domain.ModelEvent.ProviderProgress(
                 domain.ProviderStreamEvent.MessageTerminalObserved(
                     domain.TerminalEvidence(
                         providerProtocolName(protocol),
-                        event.terminalEventKind,
-                        rawStopReason: event.rawStopReason,
+                        terminalEventKind(protocol),
+                        rawStopReason: terminalRawStopReason(terminal),
                         messageTerminalObserved: true,
                         adapterVersion: "llm4cj-wire-v2"
                     )
                 )
             ))
-        case LlmWireEventKind.UsageDelta =>
-            events(domain.ModelEvent.ProviderProgress(
-                domain.ProviderStreamEvent.UsageDelta(
-                    event.inputTokens,
-                    event.outputTokens
-                )
-            ))
-        case LlmWireEventKind.UsageCompleted =>
-            events(domain.ModelEvent.UsageUpdated(event.inputTokens, event.outputTokens))
-            events(domain.ModelEvent.ProviderProgress(
-                domain.ProviderStreamEvent.UsageCompleted(
-                    event.inputTokens,
-                    event.outputTokens
-                )
-            ))
-        case LlmWireEventKind.ProviderError => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.ProviderError(event.text)
+        case LlmWireEvent.ProviderFailure(failure) => events(domain.ModelEvent.ProviderProgress(
+            domain.ProviderStreamEvent.ProviderError(failure.message)
         ))
-        case LlmWireEventKind.StreamTransportClosed => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.StreamTransportClosed
-        ))
-        case LlmWireEventKind.Completed => events(domain.ModelEvent.Completed)
+    }
+}
+
+func streamIdentityIndex(value: LlmWireEventIdentity): Int64 {
+    match (value.blockIndex) {
+        case Some(index) => index
+        case None => match (value.outputIndex) {
+            case Some(index) => index
+            case None => 0
+        }
+    }
+}
+
+func streamBlockKindName(value: LlmWireStreamBlockKind): String {
+    match (value) {
+        case LlmWireStreamBlockKind.Text => "text"
+        case LlmWireStreamBlockKind.Reasoning => "reasoning"
+        case LlmWireStreamBlockKind.Refusal => "refusal"
+        case LlmWireStreamBlockKind.ToolCall => "tool_call"
+    }
+}
+
+func terminalEventKind(protocol: ProviderProtocol): String {
+    match (protocol) {
+        case ProviderProtocol.Messages => "message_stop"
+        case ProviderProtocol.Responses => "response.completed"
+        case ProviderProtocol.Completions => "finish_reason"
+    }
+}
+
+func terminalRawStopReason(value: LlmWireTerminal): String {
+    match (value) {
+        case LlmWireTerminal.Completed(reply) => reply.rawStopReason
+        case LlmWireTerminal.ProviderFailed(_) => "failed"
+        case LlmWireTerminal.Cancelled(_) => "cancelled"
+    }
+}
+
+// A request owns one incremental decoder for the whole SSE byte stream.
+// Errors are retained locally and normalized from the complete response body
+// by decodeProviderReply, so a callback cannot escape across transport code.
+class ProviderStreamProjection {
+    private let decoder: LlmWireStreamDecoder
+    private let protocol: ProviderProtocol
+    private let events: domain.ModelEventSink
+    private var failed: Bool = false
+
+    init(codec: LlmWireCodec, protocol: ProviderProtocol, events: domain.ModelEventSink) {
+        this.decoder = codec.newStreamDecoder()
+        this.protocol = protocol
+        this.events = events
+    }
+
+    func push(chunk: String): Unit {
+        if (failed) { return }
+        match (decoder.push(chunk)) {
+            case LlmWireResult.Ok(update) => emit(update)
+            case LlmWireResult.Err(_) => failed = true
+        }
+    }
+
+    func finish(): Unit {
+        if (failed) { return }
+        match (decoder.finish()) {
+            case LlmWireResult.Ok(update) => emit(update)
+            case LlmWireResult.Err(_) => failed = true
+        }
+    }
+
+    private func emit(update: LlmWireStreamUpdate): Unit {
+        for (event in update.events) { emitLlmWireEvent(event, protocol, events) }
     }
 }
 
@@ -870,15 +930,17 @@ public class ProviderModelPort <: ports.ModelPort {
             case domain.Result.Ok(_) => ()
             case domain.Result.Err(error) => return domain.Result.Err(error)
         }
-        let payload = match (provider.dialect) {
-            case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
-                encodeMessagesRequest(normalized)
-            case ProviderDialect.DeepSeekMessages => encodeDeepSeekMessagesRequest(normalized)
-            case ProviderDialect.OpenAiResponses => encodeResponsesRequest(normalized)
-            case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat =>
-                encodeCompletionsRequest(normalized)
-            case ProviderDialect.DeepSeekChat => encodeDeepSeekChatRequest(normalized)
-        }
+        let codec = codecForDialect(
+            provider.dialect,
+            normalized.model,
+            provider.provider,
+            llmWireCapabilities(
+                provider.capabilities,
+                request: Some(normalized),
+                dialect: Some(provider.dialect)
+            )
+        )
+        let encoded = materializeProviderRequest(codec, normalized, messagesFast)
         // A streaming Core request with no attempt hard deadline is governed
         // by Core's idle watchdog and Run wall budget. Non-streaming/direct
         // callers retain the configured provider timeout.
@@ -888,34 +950,43 @@ public class ProviderModelPort <: ports.ModelPort {
         } else {
             max(provider.timeoutMillis, request.transportHardTimeoutMillis)
         }
-        let wireProvider = if (messagesFast || transportTimeout != provider.timeoutMillis) {
-            ProviderSpec(
-                provider.id,
-                provider.protocol,
-                provider.model,
-                provider.baseUrl,
-                provider.apiKeyEnv,
-                credentialFile: provider.credentialFile,
-                timeoutMillis: transportTimeout,
-                provider: provider.provider,
-                messagesFastMode: messagesFast,
-                dialect: Some(provider.dialect),
-                endpointMaxOutputTokens: provider.endpointMaxOutputTokens,
-                capabilities: provider.capabilities
-            )
+        let requestHeaders = ArrayList<ProviderHeader>()
+        for (header in provider.modelHeaders) { addOrReplaceProviderHeader(requestHeaders, header) }
+        for (header in encoded.headers) { addOrReplaceProviderHeader(requestHeaders, header) }
+        let wireProvider = ProviderSpec(
+            provider.id,
+            provider.protocol,
+            provider.model,
+            provider.baseUrl,
+            provider.apiKeyEnv,
+            credentialFile: provider.credentialFile,
+            timeoutMillis: transportTimeout,
+            provider: provider.provider,
+            messagesFastMode: messagesFast,
+            dialect: Some(provider.dialect),
+            endpointMaxOutputTokens: provider.endpointMaxOutputTokens,
+            capabilities: provider.capabilities,
+            profileHeaders: provider.profileHeaders,
+            modelHeaders: requestHeaders.toArray()
+        )
+        let projection: ?ProviderStreamProjection = if (request.streaming) {
+            Some(ProviderStreamProjection(codec, provider.protocol, events))
         } else {
-            provider
+            None
         }
         let streamEvents = if (request.streaming) {
             {
-                chunk: String => forwardEventChunk(chunk, provider.protocol, events)
+                chunk: String => match (projection) {
+                    case Some(value) => value.push(chunk)
+                    case None => ()
+                }
             }
         } else {
             {_: String => ()}
         }
         match (transport.post(
             wireProvider,
-            payload,
+            encoded.body,
             request.streaming,
             request.requestId,
             streamEvents
@@ -925,6 +996,10 @@ public class ProviderModelPort <: ports.ModelPort {
             )
             case domain.Result.Ok(body) =>
                 if (request.streaming) {
+                    match (projection) {
+                        case Some(value) => value.finish()
+                        case None => ()
+                    }
                     events(domain.ModelEvent.ProviderProgress(
                         domain.ProviderStreamEvent.StreamTransportClosed
                     ))
@@ -2726,101 +2801,189 @@ public func decodeAgentValue(
     }
 }
 
-func toLlmWireThinkingLevel(level: domain.ThinkingLevel): LlmWireThinkingLevel {
+func toLlmWireReasoningEffort(level: domain.ThinkingLevel): LlmWireReasoningEffort {
     match (level) {
-        case domain.ThinkingLevel.Off => LlmWireThinkingLevel.Off
-        case domain.ThinkingLevel.Minimal => LlmWireThinkingLevel.Minimal
-        case domain.ThinkingLevel.Low => LlmWireThinkingLevel.Low
-        case domain.ThinkingLevel.Medium => LlmWireThinkingLevel.Medium
-        case domain.ThinkingLevel.High => LlmWireThinkingLevel.High
-        case domain.ThinkingLevel.XHigh => LlmWireThinkingLevel.XHigh
-        case domain.ThinkingLevel.Max => LlmWireThinkingLevel.Max
+        case domain.ThinkingLevel.Off => LlmWireReasoningEffort.ProviderDefault
+        case domain.ThinkingLevel.Minimal => LlmWireReasoningEffort.Minimal
+        case domain.ThinkingLevel.Low => LlmWireReasoningEffort.Low
+        case domain.ThinkingLevel.Medium => LlmWireReasoningEffort.Medium
+        case domain.ThinkingLevel.High => LlmWireReasoningEffort.High
+        case domain.ThinkingLevel.XHigh => LlmWireReasoningEffort.XHigh
+        case domain.ThinkingLevel.Max => LlmWireReasoningEffort.Max
     }
 }
 
-func toLlmWireThinkingControl(
+class WireThinkingSelection {
+    let mode: LlmWireThinkingMode
+    let effort: LlmWireReasoningEffort
+    init(mode: LlmWireThinkingMode, effort!: LlmWireReasoningEffort = LlmWireReasoningEffort.ProviderDefault) {
+        this.mode = mode
+        this.effort = effort
+    }
+}
+
+func disabledThinkingSelection(dialect: ProviderDialect): WireThinkingSelection {
+    match (dialect) {
+        // OpenAI Responses represents the absence of reasoning controls by
+        // omitting both fields; it has no explicit disabled mode.
+        case ProviderDialect.OpenAiResponses =>
+            WireThinkingSelection(LlmWireThinkingMode.ProviderDefault)
+        case _ => WireThinkingSelection(LlmWireThinkingMode.Disabled)
+    }
+}
+
+func effortThinkingSelection(
+    level: domain.ThinkingLevel,
+    dialect: ProviderDialect
+): WireThinkingSelection {
+    let effort = toLlmWireReasoningEffort(level)
+    match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
+            WireThinkingSelection(LlmWireThinkingMode.Adaptive, effort: effort)
+        case ProviderDialect.OpenAiResponses =>
+            WireThinkingSelection(LlmWireThinkingMode.ProviderDefault, effort: effort)
+        case _ => WireThinkingSelection(LlmWireThinkingMode.Enabled, effort: effort)
+    }
+}
+
+func legacyThinkingBudget(request: domain.ModelRequest): Int64 {
+    let desired = domain.defaultThinkingBudget(request.thinking)
+    if (desired < request.wireMaxOutputTokens) {
+        return desired
+    }
+    if (request.wireMaxOutputTokens <= 1024) {
+        throw IllegalArgumentException(
+            "Anthropic thinking requires maxOutputTokens greater than 1024"
+        )
+    }
+    request.wireMaxOutputTokens - 1
+}
+
+func toLlmWireThinking(
     request: domain.ModelRequest,
-    protocol: ProviderProtocol
-): LlmWireThinkingControl {
+    dialect: ProviderDialect
+): WireThinkingSelection {
     match (request.resolvedPolicy) {
         case Some(policy) =>
             if (let domain.ThinkingLevel.Off <- policy.thinking.effective) {
-                LlmWireThinkingControl.Disabled
-            } else {
-                match (policy.thinking.mode) {
-                    case domain.ThinkingControlMode.NoThinking => LlmWireThinkingControl.Disabled
-                    case domain.ThinkingControlMode.Toggle => LlmWireThinkingControl.Toggle(true)
-                    case domain.ThinkingControlMode.Effort =>
-                        LlmWireThinkingControl.Effort(toLlmWireThinkingLevel(policy.thinking.effective))
-                    case domain.ThinkingControlMode.Budget => match (policy.thinking.budgetTokens) {
-                        case Some(value) => LlmWireThinkingControl.Budget(value)
-                        case None => throw IllegalArgumentException("resolved budget thinking has no token budget")
-                    }
-                    case domain.ThinkingControlMode.Adaptive => match (policy.thinking.adaptiveEffort) {
-                        case Some(value) => LlmWireThinkingControl.Adaptive(Some(toLlmWireThinkingLevel(value)))
-                        case None => LlmWireThinkingControl.Adaptive(None)
-                    }
+                return disabledThinkingSelection(dialect)
+            }
+            match (policy.thinking.mode) {
+                case domain.ThinkingControlMode.NoThinking => disabledThinkingSelection(dialect)
+                case domain.ThinkingControlMode.Toggle => WireThinkingSelection(LlmWireThinkingMode.Enabled)
+                case domain.ThinkingControlMode.Effort => effortThinkingSelection(policy.thinking.effective, dialect)
+                case domain.ThinkingControlMode.Budget => match (policy.thinking.budgetTokens) {
+                    case Some(value) => WireThinkingSelection(LlmWireThinkingMode.Budget(value))
+                    case None => throw IllegalArgumentException("resolved budget thinking has no token budget")
                 }
+                case domain.ThinkingControlMode.Adaptive => WireThinkingSelection(
+                    LlmWireThinkingMode.Adaptive,
+                    effort: match (policy.thinking.adaptiveEffort) {
+                        case Some(value) => toLlmWireReasoningEffort(value)
+                        case None => LlmWireReasoningEffort.ProviderDefault
+                    }
+                )
             }
         case None =>
             if (let domain.ThinkingLevel.Off <- request.thinking) {
-                LlmWireThinkingControl.Disabled
+                disabledThinkingSelection(dialect)
             } else {
-                match (protocol) {
-                    case ProviderProtocol.Messages =>
-                        LlmWireThinkingControl.Budget(domain.defaultThinkingBudget(request.thinking))
-                    case _ => LlmWireThinkingControl.Effort(toLlmWireThinkingLevel(request.thinking))
+                match (dialect) {
+                    case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
+                        WireThinkingSelection(LlmWireThinkingMode.Budget(legacyThinkingBudget(request)))
+                    case _ => effortThinkingSelection(request.thinking, dialect)
                 }
             }
     }
 }
 
-func toLlmWireRequest(request: domain.ModelRequest, protocol: ProviderProtocol): LlmWireRequest {
+func parseLlmWireJson(source: String): LlmWireJson {
+    match (LlmWireJson.parse(source)) {
+        case LlmWireResult.Ok(value) => value
+        case LlmWireResult.Err(error) => throw error
+    }
+}
+
+func agentValueLlmJson(value: domain.AgentValue): LlmWireJson {
+    parseLlmWireJson(encodeAgentValue(value))
+}
+
+func restoreNativeReplay(state: domain.OpaqueProviderState): LlmWireNativeReplayBlock {
+    LlmWireNativeReplayBlock.restore(state.payload)
+}
+
+func toLlmWireBlock(block: domain.ModelBlock): LlmWireBlock {
+    match (block.opaqueState) {
+        case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
+        case None => ()
+    }
+    match (block.kind) {
+        case domain.ModelBlockKind.Text => LlmWireBlock.Text(LlmWireTextBlock(block.text))
+        case domain.ModelBlockKind.Image => match (block.image) {
+            case Some(value) => LlmWireBlock.Image(LlmWireImageBlock(
+                match (value.sourceKind) {
+                    case domain.ModelImageSourceKind.Url => LlmWireImageSourceKind.Url
+                    case domain.ModelImageSourceKind.Base64 => LlmWireImageSourceKind.Base64
+                },
+                value.data,
+                mediaType: value.mediaType,
+                detail: match (value.detail) {
+                    case domain.ModelImageDetail.Auto => LlmWireImageDetail.Auto
+                    case domain.ModelImageDetail.Low => LlmWireImageDetail.Low
+                    case domain.ModelImageDetail.High => LlmWireImageDetail.High
+                }
+            ))
+            case None => throw IllegalArgumentException("image model block is missing image content")
+        }
+        case domain.ModelBlockKind.Reasoning =>
+            LlmWireBlock.Reasoning(LlmWireReasoningBlock(block.text))
+        case domain.ModelBlockKind.ToolCall => LlmWireBlock.ToolCall(LlmWireToolCallBlock(
+            block.callId,
+            block.name,
+            LlmWireToolArguments.Complete(agentValueLlmJson(block.arguments))
+        ))
+        case domain.ModelBlockKind.ToolResult => LlmWireBlock.ToolResult(LlmWireToolResultBlock(
+            block.callId,
+            [LlmWireToolResultContent.Text(LlmWireTextBlock(
+                if (block.text == "") { encodeAgentValue(block.arguments) } else { block.text }
+            ))],
+            isError: block.isError
+        ))
+        case domain.ModelBlockKind.Refusal =>
+            LlmWireBlock.Refusal(LlmWireRefusalBlock(block.text))
+        case domain.ModelBlockKind.Error | domain.ModelBlockKind.Unknown =>
+            throw IllegalArgumentException("model block cannot be represented safely by llm4cj v0.2")
+    }
+}
+
+func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServiceTier {
+    if (match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages => true
+        case _ => false
+    }) {
+        return match (value.toAsciiLower()) {
+            case "auto" => LlmWireServiceTier.Auto
+            case "standard" | "standard_only" => LlmWireServiceTier.StandardOnly
+            case _ => LlmWireServiceTier.ProviderDefault
+        }
+    }
+    match (value.toAsciiLower()) {
+        case "auto" => LlmWireServiceTier.Auto
+        case "default" => LlmWireServiceTier.Default
+        case "flex" => LlmWireServiceTier.Flex
+        case "priority" => LlmWireServiceTier.Priority
+        case "fast" => LlmWireServiceTier.Fast
+        case "ultrafast" => LlmWireServiceTier.Ultrafast
+        case _ => LlmWireServiceTier.ProviderDefault
+    }
+}
+
+func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): LlmWireRequest {
     let messages = ArrayList<LlmWireMessage>()
     for (message in request.messages) {
         let blocks = ArrayList<LlmWireBlock>()
         for (block in message.blocks) {
-            let image: ?LlmWireImage = match (block.image) {
-                case Some(value) => Some(LlmWireImage(
-                    match (value.sourceKind) {
-                        case domain.ModelImageSourceKind.Url => LlmWireImageSourceKind.Url
-                        case domain.ModelImageSourceKind.Base64 => LlmWireImageSourceKind.Base64
-                    },
-                    value.data,
-                    mediaType: value.mediaType,
-                    detail: match (value.detail) {
-                        case domain.ModelImageDetail.Auto => LlmWireImageDetail.Auto
-                        case domain.ModelImageDetail.Low => LlmWireImageDetail.Low
-                        case domain.ModelImageDetail.High => LlmWireImageDetail.High
-                    }
-                ))
-                case None => None
-            }
-            let state: ?LlmWireOpaqueState = match (block.opaqueState) {
-                case Some(value) => Some(LlmWireOpaqueState(
-                    value.protocol, value.payload, itemId: value.itemId
-                ))
-                case None => None
-            }
-            blocks.add(LlmWireBlock(
-                match (block.kind) {
-                    case domain.ModelBlockKind.Text => LlmWireBlockKind.Text
-                    case domain.ModelBlockKind.Image => LlmWireBlockKind.Image
-                    case domain.ModelBlockKind.Reasoning => LlmWireBlockKind.Reasoning
-                    case domain.ModelBlockKind.ToolCall => LlmWireBlockKind.ToolCall
-                    case domain.ModelBlockKind.ToolResult => LlmWireBlockKind.ToolResult
-                    case domain.ModelBlockKind.Refusal => LlmWireBlockKind.Refusal
-                    case domain.ModelBlockKind.Error => LlmWireBlockKind.Error
-                    case domain.ModelBlockKind.Unknown => LlmWireBlockKind.Unknown
-                },
-                text: block.text,
-                callId: block.callId,
-                name: block.name,
-                arguments: block.arguments,
-                isError: block.isError,
-                image: image,
-                opaqueState: state
-            ))
+            blocks.add(toLlmWireBlock(block))
         }
         messages.add(LlmWireMessage(
             match (message.role) {
@@ -2831,30 +2994,67 @@ func toLlmWireRequest(request: domain.ModelRequest, protocol: ProviderProtocol):
         ))
     }
     let tools = ArrayList<LlmWireTool>()
-    for (tool in request.tools) { tools.add(LlmWireTool(tool.name, tool.description, tool.inputSchema)) }
-    let structured: ?LlmWireStructuredOutput = match (request.structuredOutput) {
-        case Some(value) => Some(LlmWireStructuredOutput(
-            value.name, value.schema, description: value.description, strict: value.strict
-        ))
-        case None => None
+    for (tool in request.tools) {
+        tools.add(LlmWireTool(tool.name, tool.description, agentValueLlmJson(tool.inputSchema)))
+    }
+    let structured = match (request.structuredOutput) {
+        case Some(value) => match (dialect) {
+            case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
+                LlmWireStructuredOutput.JsonSchemaDocument(agentValueLlmJson(value.schema))
+            case _ => LlmWireStructuredOutput.JsonSchema(LlmWireJsonSchema(
+                value.name,
+                agentValueLlmJson(value.schema),
+                description: value.description,
+                strict: value.strict
+            ))
+        }
+        case None => LlmWireStructuredOutput.ProviderDefault
+    }
+    let thinking = toLlmWireThinking(request, dialect)
+    let instructions = if (request.system.trimAscii() == "") {
+        Array<LlmWireInstruction>()
+    } else {
+        [LlmWireInstruction(LlmWireInstructionRole.System, request.system)]
     }
     LlmWireRequest(
         request.model,
         messages.toArray(),
-        system: request.system,
+        instructions: instructions,
         tools: tools.toArray(),
-        thinking: toLlmWireThinkingControl(request, protocol),
+        thinkingMode: thinking.mode,
+        reasoningEffort: thinking.effort,
         maxOutputTokens: request.wireMaxOutputTokens,
-        streaming: request.streaming,
-        parallelToolCalls: request.parallelToolCalls,
-        serviceTier: request.serviceTier,
-        cachePolicy: match (request.cachePolicy) {
-            case domain.ModelCachePolicy.Default => LlmWireCachePolicy.Default
-            case domain.ModelCachePolicy.StablePrefix => LlmWireCachePolicy.StablePrefix
+        parallelToolCalls: if (request.tools.isEmpty()) {
+            None
+        } else {
+            Some(request.parallelToolCalls)
         },
-        cacheKey: request.cacheKey,
+        serviceTier: toLlmWireServiceTier(request.serviceTier, dialect),
+        generationSpeed: match ((dialect, request.serviceTier.toAsciiLower())) {
+            case (ProviderDialect.AnthropicMessages, "priority") |
+                (ProviderDialect.GenericMessages, "priority") => LlmWireGenerationSpeed.Fast
+            case _ => LlmWireGenerationSpeed.ProviderDefault
+        },
+        promptCache: match (request.cachePolicy) {
+            case domain.ModelCachePolicy.Default => LlmWirePromptCache.ProviderDefault
+            case domain.ModelCachePolicy.StablePrefix =>
+                LlmWirePromptCache.Automatic(LlmWirePromptCacheLifetime.ProviderDefault)
+        },
+        promptCacheRoutingKey: match (dialect) {
+            case ProviderDialect.OpenAiResponses | ProviderDialect.OpenAiChat |
+                ProviderDialect.GenericChat => if (request.cacheKey == "") {
+                    None
+                } else {
+                    Some(request.cacheKey)
+                }
+            case _ => None
+        },
         toolChoice: match (request.toolChoice) {
-            case domain.ModelToolChoice.Auto => LlmWireToolChoice.Auto
+            case domain.ModelToolChoice.Auto => if (request.tools.isEmpty()) {
+                LlmWireToolChoice.ProviderDefault
+            } else {
+                LlmWireToolChoice.Auto
+            }
             case domain.ModelToolChoice.NoTools => LlmWireToolChoice.NoTools
             case domain.ModelToolChoice.Required => LlmWireToolChoice.Required
         },
@@ -2862,24 +3062,209 @@ func toLlmWireRequest(request: domain.ModelRequest, protocol: ProviderProtocol):
     )
 }
 
+func toLlmWireThinkingCapabilities(value: domain.ThinkingCapabilities): LlmWireThinkingCapabilities {
+    let modes = match (value.mode) {
+        case domain.ThinkingControlMode.NoThinking => [LlmWireThinkingMode.Disabled]
+        case domain.ThinkingControlMode.Toggle =>
+            [LlmWireThinkingMode.Disabled, LlmWireThinkingMode.Enabled]
+        case domain.ThinkingControlMode.Effort =>
+            [LlmWireThinkingMode.Disabled, LlmWireThinkingMode.Enabled,
+                LlmWireThinkingMode.Budget(1024), LlmWireThinkingMode.Adaptive]
+        case domain.ThinkingControlMode.Budget =>
+            [LlmWireThinkingMode.Disabled, LlmWireThinkingMode.Budget(1024)]
+        case domain.ThinkingControlMode.Adaptive =>
+            [LlmWireThinkingMode.Disabled, LlmWireThinkingMode.Adaptive]
+    }
+    let efforts = ArrayList<LlmWireReasoningEffort>()
+    if (match (value.mode) {
+        case domain.ThinkingControlMode.Effort | domain.ThinkingControlMode.Adaptive => true
+        case _ => false
+    }) {
+        for (level in value.supportedLevels) {
+            let effort = toLlmWireReasoningEffort(level)
+            if (effort != LlmWireReasoningEffort.ProviderDefault) { efforts.add(effort) }
+        }
+    }
+    LlmWireThinkingCapabilities(modes: modes, efforts: efforts.toArray())
+}
+
+func llmWireCapabilities(
+    value: domain.ModelCapabilities,
+    request!: ?domain.ModelRequest = None,
+    dialect!: ?ProviderDialect = None
+): LlmWireCapabilities {
+    let modalities = if (value.vision) {
+        [LlmWireInputModality.Text, LlmWireInputModality.Image]
+    } else {
+        [LlmWireInputModality.Text]
+    }
+    let structuredModes = if (value.structuredOutput) {
+        [LlmWireStructuredOutputMode.Text, LlmWireStructuredOutputMode.JsonObject,
+            LlmWireStructuredOutputMode.JsonSchema]
+    } else {
+        Array<LlmWireStructuredOutputMode>()
+    }
+    let tiers = ArrayList<LlmWireServiceTier>()
+    let speeds = ArrayList<LlmWireGenerationSpeed>()
+    match ((request, dialect)) {
+        case (Some(wireRequest), Some(wireDialect)) =>
+            let tier = toLlmWireServiceTier(wireRequest.serviceTier, wireDialect)
+            if (tier != LlmWireServiceTier.ProviderDefault) { tiers.add(tier) }
+            match ((wireDialect, wireRequest.serviceTier.toAsciiLower())) {
+                case (ProviderDialect.AnthropicMessages, "priority") |
+                    (ProviderDialect.GenericMessages, "priority") => speeds.add(LlmWireGenerationSpeed.Fast)
+                case _ => ()
+            }
+        case _ => ()
+    }
+    LlmWireCapabilities(
+        input: LlmWireInputCapabilities(modalities: modalities),
+        thinking: toLlmWireThinkingCapabilities(value.thinking),
+        tools: LlmWireToolCapabilities(
+            enabled: value.toolCalling,
+            parallelCalls: value.parallelToolCalling
+        ),
+        output: LlmWireOutputCapabilities(
+            structuredModes: structuredModes,
+            serviceTiers: tiers.toArray(),
+            generationSpeeds: speeds.toArray()
+        ),
+        cache: LlmWireCacheCapabilities(lifetimes: if (value.promptCache) {
+            [LlmWirePromptCacheLifetime.ProviderDefault]
+        } else { [] })
+    )
+}
+
+func codecForDialect(
+    dialect: ProviderDialect,
+    model: String,
+    provider: String,
+    capabilities: LlmWireCapabilities
+): LlmWireCodec {
+    match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
+            anthropicMessagesCodec(anthropicMessagesModelProfile(model, capabilities: capabilities), provider: provider)
+        case ProviderDialect.DeepSeekMessages =>
+            deepSeekMessagesCodec(deepSeekMessagesModelProfile(model, capabilities: capabilities), provider: provider)
+        case ProviderDialect.OpenAiResponses =>
+            openAiResponsesCodec(openAiResponsesModelProfile(model, capabilities: capabilities), provider: provider)
+        case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat =>
+            openAiChatCodec(openAiChatModelProfile(model, capabilities: capabilities), provider: provider)
+        case ProviderDialect.DeepSeekChat =>
+            deepSeekChatCodec(deepSeekChatModelProfile(model, capabilities: capabilities), provider: provider)
+    }
+}
+
+class ProviderRequirementResolver <: LlmWireRequirementResolver {
+    private let fastMode: Bool
+    init(fastMode: Bool) { this.fastMode = fastMode }
+    public func resolve(requirement: LlmWireFeatureRequirement): LlmWireRequirementState {
+        match (requirement.featureId) {
+            case "anthropic.fast_mode" => if (fastMode) {
+                LlmWireRequirementState.Satisfied
+            } else {
+                LlmWireRequirementState.Unsatisfied("Anthropic fast mode is not enabled for this provider")
+            }
+            case _ => requirement.state
+        }
+    }
+}
+
+class EncodedProviderRequest {
+    let body: String
+    let headers: Array<ProviderHeader>
+    let codec: LlmWireCodec
+    init(body: String, headers: Array<ProviderHeader>, codec: LlmWireCodec) {
+        this.body = body
+        this.headers = headers
+        this.codec = codec
+    }
+}
+
+func materializeProviderRequest(
+    codec: LlmWireCodec,
+    request: domain.ModelRequest,
+    fastMode: Bool
+): EncodedProviderRequest {
+    let materialized = match (codec.encodeRequest(
+        toLlmWireRequest(request, match (codec.dialect.compatibilityId) {
+            case "anthropic.messages.v1" => ProviderDialect.AnthropicMessages
+            case "deepseek.messages.v1" => ProviderDialect.DeepSeekMessages
+            case "openai.responses.v1" => ProviderDialect.OpenAiResponses
+            case "deepseek.responses.v1" => ProviderDialect.OpenAiResponses
+            case "deepseek.chat.v1" => ProviderDialect.DeepSeekChat
+            case _ => ProviderDialect.OpenAiChat
+        }),
+        streaming: request.streaming
+    ).materialize(resolver: Some(ProviderRequirementResolver(fastMode)))) {
+        case LlmWireResult.Ok(value) => value
+        case LlmWireResult.Err(error) => throw error
+    }
+    let headers = ArrayList<ProviderHeader>()
+    for (header in materialized.headers) {
+        headers.add(ProviderHeader(header.name, header.value))
+    }
+    EncodedProviderRequest(String.fromUtf8(materialized.body), headers.toArray(), codec)
+}
+
+func encodeStandaloneRequest(request: domain.ModelRequest, dialect: ProviderDialect): String {
+    var hasImage = false
+    var usesTools = !request.tools.isEmpty()
+    for (message in request.messages) {
+        for (block in message.blocks) {
+            if (let domain.ModelBlockKind.Image <- block.kind) { hasImage = true }
+            match (block.kind) {
+                case domain.ModelBlockKind.ToolCall | domain.ModelBlockKind.ToolResult => usesTools = true
+                case _ => ()
+            }
+        }
+    }
+    let capabilities = domain.ModelCapabilities(
+        toolCalling: usesTools,
+        parallelToolCalling: !request.tools.isEmpty() && request.parallelToolCalls,
+        // Standalone encoder helpers must be able to represent an explicit
+        // disabled-thinking request as well as enabled levels.
+        reasoning: true,
+        vision: hasImage,
+        structuredOutput: request.structuredOutput.isSome(),
+        promptCache: match (request.cachePolicy) {
+            case domain.ModelCachePolicy.StablePrefix => true
+            case domain.ModelCachePolicy.Default => false
+        },
+        contextWindowTokens: 1000000,
+        maxOutputTokens: 200000
+    )
+    let codec = codecForDialect(
+        dialect,
+        request.model,
+        "standalone",
+        llmWireCapabilities(capabilities, request: Some(request), dialect: Some(dialect))
+    )
+    materializeProviderRequest(
+        codec,
+        request,
+        request.serviceTier.toAsciiLower() == "priority"
+    ).body
+}
+
 public func encodeMessagesRequest(request: domain.ModelRequest): String {
-    encodeMessagesWireRequest(toLlmWireRequest(request, ProviderProtocol.Messages))
+    encodeStandaloneRequest(request, ProviderDialect.AnthropicMessages)
 }
 
 public func encodeDeepSeekMessagesRequest(request: domain.ModelRequest): String {
-    encodeDeepSeekMessagesWireRequest(toLlmWireRequest(request, ProviderProtocol.Messages))
+    encodeStandaloneRequest(request, ProviderDialect.DeepSeekMessages)
 }
 
 public func encodeResponsesRequest(request: domain.ModelRequest): String {
-    encodeResponsesWireRequest(toLlmWireRequest(request, ProviderProtocol.Responses))
+    encodeStandaloneRequest(request, ProviderDialect.OpenAiResponses)
 }
 
 public func encodeCompletionsRequest(request: domain.ModelRequest): String {
-    encodeChatCompletionsWireRequest(toLlmWireRequest(request, ProviderProtocol.Completions))
+    encodeStandaloneRequest(request, ProviderDialect.OpenAiChat)
 }
 
 public func encodeDeepSeekChatRequest(request: domain.ModelRequest): String {
-    encodeDeepSeekChatWireRequest(toLlmWireRequest(request, ProviderProtocol.Completions))
+    encodeStandaloneRequest(request, ProviderDialect.DeepSeekChat)
 }
 
 func decodeProviderReply(
@@ -2890,22 +3275,22 @@ func decodeProviderReply(
     structuredOutput: ?domain.StructuredOutputSpec
 ): domain.Result<domain.ModelReply> {
     try {
-        let terminal = if (streaming) {
-            decodeEventStream(body, provider.protocol, events).terminalSource
+        let wireReply = if (streaming) {
+            decodeEventStream(body, provider, events)
         } else {
-            body
-        }
-        let reply = match (provider.protocol) {
-            case ProviderProtocol.Messages => decodeMessagesReply(
-                terminal, provider.id, streaming: streaming
-            )
-            case ProviderProtocol.Responses => decodeResponsesReply(
-                terminal, provider.id, streaming: streaming
-            )
-            case ProviderProtocol.Completions => decodeCompletionsReply(
-                terminal, provider.id, streaming: streaming
+            decodeFixedWireReply(
+                body,
+                provider.dialect,
+                provider.id,
+                model: provider.model
             )
         }
+        let reply = fromLlmWireReply(
+            wireReply,
+            provider.id,
+            provider.protocol,
+            streaming
+        )
         match (reply.completionDisposition) {
             case domain.CompletionDisposition.Complete |
                  domain.CompletionDisposition.ToolUse => ()
@@ -2943,19 +3328,24 @@ func decodeProviderReply(
             )
         }
         attachStructuredOutput(reply, structuredOutput)
-    } catch (error: LlmTransportError) {
+    } catch (error: LlmWireError) {
         let fields = ArrayList<domain.ErrorField>()
         fields.add(domain.ErrorField("provider_id", provider.id))
-        fields.add(domain.ErrorField("llm_error_kind", llmTransportErrorKindName(error.kind)))
+        fields.add(domain.ErrorField("llm_error_kind", llmWireErrorKindName(error.kind)))
         if (error.providerErrorCode != "") { fields.add(domain.ErrorField("provider_error_code", error.providerErrorCode)) }
         if (error.providerErrorType != "") { fields.add(domain.ErrorField("provider_error_type", error.providerErrorType)) }
         match (error.httpStatus) { case Some(value) => fields.add(domain.ErrorField("http_status", value.toString())); case None => () }
-        if (error.retryAfterMillis > 0) { fields.add(domain.ErrorField("retry_after_millis", error.retryAfterMillis.toString())) }
+        match (error.retryAfterMillis) {
+            case Some(value) => if (value > 0) {
+                fields.add(domain.ErrorField("retry_after_millis", value.toString()))
+            }
+            case None => ()
+        }
         domain.Result.Err(domain.AgentError(
             match (error.kind) {
-                case LlmTransportErrorKind.Cancelled => domain.AgentErrorKind.Cancelled
-                case LlmTransportErrorKind.Deadline => domain.AgentErrorKind.Timeout
-                case LlmTransportErrorKind.Http | LlmTransportErrorKind.Transport => domain.AgentErrorKind.Transport
+                case LlmWireErrorKind.Cancelled => domain.AgentErrorKind.Cancelled
+                case LlmWireErrorKind.Deadline => domain.AgentErrorKind.Timeout
+                case LlmWireErrorKind.Http | LlmWireErrorKind.Transport => domain.AgentErrorKind.Transport
                 case _ => domain.AgentErrorKind.Protocol
             },
             error.code,
@@ -2976,15 +3366,19 @@ func decodeProviderReply(
     }
 }
 
-func llmTransportErrorKindName(kind: LlmTransportErrorKind): String {
+func llmWireErrorKindName(kind: LlmWireErrorKind): String {
     match (kind) {
-        case LlmTransportErrorKind.InvalidWire => "invalid_wire"
-        case LlmTransportErrorKind.Http => "http"
-        case LlmTransportErrorKind.BodyLimit => "body_limit"
-        case LlmTransportErrorKind.Sse => "sse"
-        case LlmTransportErrorKind.Cancelled => "cancelled"
-        case LlmTransportErrorKind.Deadline => "deadline"
-        case LlmTransportErrorKind.Transport => "transport"
+        case LlmWireErrorKind.InvalidWire => "invalid_wire"
+        case LlmWireErrorKind.InvalidRequest => "invalid_request"
+        case LlmWireErrorKind.Unsupported => "unsupported"
+        case LlmWireErrorKind.InvalidState => "invalid_state"
+        case LlmWireErrorKind.Http => "http"
+        case LlmWireErrorKind.BodyLimit => "body_limit"
+        case LlmWireErrorKind.LimitExceeded => "limit_exceeded"
+        case LlmWireErrorKind.Sse => "sse"
+        case LlmWireErrorKind.Cancelled => "cancelled"
+        case LlmWireErrorKind.Deadline => "deadline"
+        case LlmWireErrorKind.Transport => "transport"
     }
 }
 
@@ -3074,38 +3468,67 @@ func fromLlmWireReply(
     streaming: Bool
 ): domain.ModelReply {
     let blocks = ArrayList<domain.ModelBlock>()
+    let outputLimited = match (completionDispositionFrom(
+        protocol,
+        reply.rawStopReason,
+        domain.DecisionOutcome.Response
+    )) {
+        case domain.CompletionDisposition.OutputLimited => true
+        case _ => false
+    }
     for (block in reply.blocks) {
-        let state: ?domain.OpaqueProviderState = match (block.opaqueState) {
-            case Some(value) => Some(domain.OpaqueProviderState(
-                providerId,
-                value.protocol,
-                value.payload,
-                itemId: value.itemId,
-                replayRequired: true
+        match (block) {
+            case LlmWireOutputBlock.Text(value) => blocks.add(domain.ModelBlock(
+                domain.ModelBlockKind.Text,
+                text: value.text
             ))
-            case None => None
+            case LlmWireOutputBlock.Reasoning(value) => blocks.add(domain.ModelBlock(
+                domain.ModelBlockKind.Reasoning,
+                text: value.text
+            ))
+            case LlmWireOutputBlock.ToolCall(value) => if (outputLimited) {
+                ()
+            } else { match (value.arguments) {
+                case LlmWireToolArguments.Complete(json) =>
+                    let arguments = match (decodeAgentValue(json.stringify())) {
+                        case domain.Result.Ok(parsed) => parsed
+                        case domain.Result.Err(error) => throw IllegalArgumentException(error.message)
+                    }
+                    blocks.add(domain.ModelBlock(
+                        domain.ModelBlockKind.ToolCall,
+                        callId: value.callId,
+                        name: value.name,
+                        arguments: arguments
+                    ))
+                // Preserve the terminal response, especially OutputLimited,
+                // but never promote partial or invalid arguments into an
+                // executable domain tool call.
+                case LlmWireToolArguments.InvalidJson(_) |
+                    LlmWireToolArguments.InvalidShape(_) |
+                    LlmWireToolArguments.Partial(_) => ()
+            } }
+            case LlmWireOutputBlock.Refusal(value) => blocks.add(domain.ModelBlock(
+                domain.ModelBlockKind.Refusal,
+                text: value.text
+            ))
+            case LlmWireOutputBlock.NativeReplay(value) => blocks.add(domain.ModelBlock(
+                domain.ModelBlockKind.Reasoning,
+                text: match (value.displayReasoning) {
+                    case Some(text) => text
+                    case None => ""
+                },
+                opaqueState: Some(domain.OpaqueProviderState(
+                    providerId,
+                    providerProtocolName(protocol),
+                    value.snapshot(),
+                    itemId: value.nativeType,
+                    replayRequired: true
+                ))
+            ))
         }
-        blocks.add(domain.ModelBlock(
-            match (block.kind) {
-                case LlmWireBlockKind.Text => domain.ModelBlockKind.Text
-                case LlmWireBlockKind.Image => domain.ModelBlockKind.Image
-                case LlmWireBlockKind.Reasoning => domain.ModelBlockKind.Reasoning
-                case LlmWireBlockKind.ToolCall => domain.ModelBlockKind.ToolCall
-                case LlmWireBlockKind.ToolResult => domain.ModelBlockKind.ToolResult
-                case LlmWireBlockKind.Refusal => domain.ModelBlockKind.Refusal
-                case LlmWireBlockKind.Error => domain.ModelBlockKind.Error
-                case LlmWireBlockKind.Unknown => domain.ModelBlockKind.Unknown
-            },
-            text: block.text,
-            callId: block.callId,
-            name: block.name,
-            arguments: block.arguments,
-            isError: block.isError,
-            opaqueState: state
-        ))
     }
     let outcome = decisionOutcomeFrom(blocks.toArray())
-    let disposition = completionDispositionFrom(protocol, reply.stopReason, outcome)
+    let disposition = completionDispositionFrom(protocol, reply.rawStopReason, outcome)
     let usageEventKind = if (streaming) {
         match (protocol) {
             case ProviderProtocol.Messages => "message_stop"
@@ -3117,13 +3540,13 @@ func fromLlmWireReply(
     }
     domain.ModelReply(
         blocks.toArray(),
-        stopReason: reply.stopReason,
+        stopReason: reply.rawStopReason,
         usage: Some(domain.ModelUsage(
-            inputTokens: reply.usage.inputTokens,
-            outputTokens: reply.usage.outputTokens,
-            reasoningTokens: reply.usage.reasoningTokens,
-            cacheReadTokens: reply.usage.cacheReadTokens,
-            cacheWriteTokens: reply.usage.cacheWriteTokens,
+            inputTokens: optionalUsageValue(reply.usage.inputTokens),
+            outputTokens: optionalUsageValue(reply.usage.outputTokens),
+            reasoningTokens: optionalUsageValue(reply.usage.reasoningTokens),
+            cacheReadTokens: optionalUsageValue(reply.usage.cacheReadTokens),
+            cacheWriteTokens: optionalUsageValue(reply.usage.cacheWriteTokens),
             source: if (streaming) {
                 domain.ModelUsageSource.ProviderStreamFinal
             } else {
@@ -3145,7 +3568,7 @@ func fromLlmWireReply(
         terminalEvidence: Some(domain.TerminalEvidence(
             providerProtocolName(protocol),
             usageEventKind,
-            rawStopReason: reply.stopReason,
+            rawStopReason: reply.rawStopReason,
             messageTerminalObserved: true,
             streamEofObserved: true,
             adapterVersion: "llm4cj-wire-v2"
@@ -3154,6 +3577,10 @@ func fromLlmWireReply(
         decisionOutcome: outcome,
         validationVersion: 1
     )
+}
+
+func optionalUsageValue(value: ?Int64): Int64 {
+    match (value) { case Some(found) => found; case None => 0 }
 }
 
 func decisionOutcomeFrom(blocks: Array<domain.ModelBlock>): domain.DecisionOutcome {
@@ -3215,60 +3642,91 @@ func completionDispositionName(value: domain.CompletionDisposition): String {
     }
 }
 
-func decodeMessagesReply(
+func decodeFixedWireReply(
     source: String,
+    dialect: ProviderDialect,
     providerId: String,
-    streaming!: Bool = false
-): domain.ModelReply {
-    fromLlmWireReply(
-        decodeMessagesWireReply(source, provider: providerId),
+    model!: String = "response-model"
+): LlmWireReply {
+    let codec = codecForDialect(
+        dialect,
+        model,
         providerId,
-        ProviderProtocol.Messages,
-        streaming
+        llmWireCapabilities(defaultProviderCapabilities())
     )
+    completedWireReply(codec.decodeResponse(source))
 }
 
-func decodeResponsesReply(
-    source: String,
-    providerId: String,
-    streaming!: Bool = false
-): domain.ModelReply {
-    fromLlmWireReply(
-        decodeResponsesWireReply(source, provider: providerId),
-        providerId,
-        ProviderProtocol.Responses,
-        streaming
-    )
+func completedWireReply(value: LlmWireResponseState): LlmWireReply {
+    match (value) {
+        case LlmWireResponseState.Terminal(terminal) => completedWireReply(terminal)
+        case LlmWireResponseState.Pending(_) => throw LlmWireError(
+            LlmWireErrorKind.InvalidWire,
+            "llm.pending_response_unaccepted",
+            "provider returned a non-terminal response"
+        )
+    }
 }
 
-func decodeCompletionsReply(
-    source: String,
-    providerId: String,
-    streaming!: Bool = false
-): domain.ModelReply {
-    fromLlmWireReply(
-        decodeChatCompletionsWireReply(source, provider: providerId),
-        providerId,
-        ProviderProtocol.Completions,
-        streaming
-    )
+func completedWireReply(value: LlmWireTerminal): LlmWireReply {
+    match (value) {
+        case LlmWireTerminal.Completed(reply) => reply
+        case LlmWireTerminal.ProviderFailed(failure) => throw LlmWireError(
+            LlmWireErrorKind.Http,
+            "llm.provider_failed",
+            failure.message,
+            retryable: failure.retryable,
+            httpStatus: failure.httpStatus,
+            retryAfterMillis: failure.retryAfterMillis,
+            provider: failure.provider,
+            providerErrorCode: failure.providerErrorCode,
+            providerErrorType: failure.providerErrorType,
+            providerRequestId: failure.providerRequestId
+        )
+        case LlmWireTerminal.Cancelled(failure) => throw LlmWireError(
+            LlmWireErrorKind.Cancelled,
+            "llm.provider_cancelled",
+            failure.message,
+            provider: failure.provider,
+            providerRequestId: failure.providerRequestId
+        )
+    }
 }
 
 func decodeEventStream(
     source: String,
-    protocol: ProviderProtocol,
+    provider: ProviderSpec,
     events: domain.ModelEventSink
-): LlmWireStreamResult {
-    let result = decodeLlmWireEventStream(
-        match (protocol) {
-            case ProviderProtocol.Messages => LlmWireProtocol.Messages
-            case ProviderProtocol.Responses => LlmWireProtocol.Responses
-            case ProviderProtocol.Completions => LlmWireProtocol.ChatCompletions
-        },
-        source
+): LlmWireReply {
+    let codec = codecForDialect(
+        provider.dialect,
+        provider.model,
+        provider.provider,
+        llmWireCapabilities(provider.capabilities)
     )
-    for (event in result.events) { emitLlmWireEvent(event, protocol, events) }
-    result
+    let decoder = codec.newStreamDecoder()
+    let pushed = match (decoder.push(source)) {
+        case LlmWireResult.Ok(value) => value
+        case LlmWireResult.Err(error) => throw error
+    }
+    for (event in pushed.events) { emitLlmWireEvent(event, provider.protocol, events) }
+    let finished = match (decoder.finish()) {
+        case LlmWireResult.Ok(value) => value
+        case LlmWireResult.Err(error) => throw error
+    }
+    for (event in finished.events) { emitLlmWireEvent(event, provider.protocol, events) }
+    let terminal = match (finished.terminal) {
+        case Some(value) => value
+        case None => match (pushed.terminal) {
+            case Some(value) => value
+            case None => throw LlmWireError(
+                LlmWireErrorKind.InvalidWire,
+                "llm.stream_terminal_missing",
+                "provider stream ended without a terminal response"
+            )
+        }
+    }
+    completedWireReply(terminal)
 }
 
 func validateModelRequestContent(request: domain.ModelRequest): domain.Result<Unit> {
