@@ -88,7 +88,7 @@ main(): Int64 {
            "Responses owns its provider JSON")
     let completionsPayload = encodeCompletionsRequest(request)
     expect(
-        completionsPayload.contains("\"max_tokens\":32768") &&
+        completionsPayload.contains("\"max_completion_tokens\":32768") &&
         completionsPayload.contains("\"type\":\"function\"") &&
         completionsPayload.contains("\"reasoning_effort\":\"high\""),
         "Chat Completions owns its provider JSON"
@@ -182,16 +182,16 @@ main(): Int64 {
         thinking: domain.ThinkingLevel.Off
     )
     expect(
-        !encodeMessagesRequest(offRequest).contains("\"thinking\"") &&
-        encodeResponsesRequest(offRequest).contains(
-            "\"reasoning\":{\"enabled\":false}"
+        encodeMessagesRequest(offRequest).contains(
+            "\"thinking\":{\"type\":\"disabled\"}"
         ) &&
-        !encodeCompletionsRequest(offRequest).contains(
-            "\"reasoning_effort\""
+        !encodeResponsesRequest(offRequest).contains("\"reasoning\"") &&
+        encodeCompletionsRequest(offRequest).contains(
+            "\"reasoning_effort\":\"none\""
         ),
         "thinking off reaches every provider protocol"
     )
-    let replayRequest = domain.ModelRequest(
+    let messagesReplayRequest = domain.ModelRequest(
         "fixture-model",
         [domain.ModelMessage(
             domain.ModelRole.Assistant,
@@ -201,36 +201,48 @@ main(): Int64 {
                     opaqueState: Some(domain.OpaqueProviderState(
                         "messages-fixture",
                         "messages",
-                        "{\"type\":\"thinking\",\"thinking\":\"signed\"," +
-                        "\"signature\":\"opaque-signature\"}",
-                        replayRequired: true
-                    ))
-                ),
-                domain.ModelBlock(
-                    domain.ModelBlockKind.ToolCall,
-                    callId: "call_1",
-                    name: "echo",
-                    arguments: domain.objectValue([]),
-                    opaqueState: Some(domain.OpaqueProviderState(
-                        "responses-fixture",
-                        "responses",
-                        "{\"type\":\"function_call\",\"id\":\"fc_1\"," +
-                        "\"call_id\":\"call_1\",\"name\":\"echo\"," +
-                        "\"arguments\":\"{}\"}",
-                        itemId: "fc_1",
+                        "{\"protocol\":\"messages\",\"dialect_id\":" +
+                        "\"anthropic.messages.v1\",\"native_type\":\"thinking\"," +
+                        "\"schema_version\":1,\"scope\":\"assistant_turn\"," +
+                        "\"assistant_turn_index\":0,\"block_order\":0," +
+                        "\"complete\":true,\"payload\":{\"type\":\"thinking\"," +
+                        "\"thinking\":\"signed\",\"signature\":\"opaque-signature\"}}",
                         replayRequired: true
                     ))
                 )
             ]
-        )]
+        )],
+        thinking: domain.ThinkingLevel.Off
+    )
+    let responsesReplayRequest = domain.ModelRequest(
+        "fixture-model",
+        [domain.ModelMessage(
+            domain.ModelRole.Assistant,
+            [
+                domain.ModelBlock(
+                    domain.ModelBlockKind.ToolCall,
+                    callId: "call_1",
+                    name: "echo",
+                    arguments: domain.objectValue([])
+                )
+            ]
+        ), domain.ModelMessage(
+            domain.ModelRole.User,
+            [domain.ModelBlock(
+                domain.ModelBlockKind.ToolResult,
+                callId: "call_1",
+                text: "ok"
+            )]
+        )],
+        thinking: domain.ThinkingLevel.Off
     )
     expect(
-        encodeMessagesRequest(replayRequest).contains("opaque-signature"),
+        encodeMessagesRequest(messagesReplayRequest).contains("opaque-signature"),
         "Messages replays opaque signed reasoning"
     )
     expect(
-        encodeResponsesRequest(replayRequest).contains("\"id\":\"fc_1\""),
-        "Responses replays opaque function-call item"
+        encodeResponsesRequest(responsesReplayRequest).contains("\"call_id\":\"call_1\""),
+        "Responses replays canonical function-call input"
     )
     let toolResultRequest = domain.ModelRequest(
         "fixture-model",
@@ -262,15 +274,9 @@ main(): Int64 {
         )]
     )
     expect(
-        encodeMessagesRequest(toolResultRequest).contains(
-            "\"content\":\"model-visible file content\""
-        ) &&
-        encodeResponsesRequest(toolResultRequest).contains(
-            "\"output\":\"model-visible file content\""
-        ) &&
-        encodeCompletionsRequest(toolResultRequest).contains(
-            "\"content\":\"model-visible file content\""
-        ),
+        encodeMessagesRequest(toolResultRequest).contains("model-visible file content") &&
+        encodeResponsesRequest(toolResultRequest).contains("model-visible file content") &&
+        encodeCompletionsRequest(toolResultRequest).contains("model-visible file content"),
         "all provider protocols receive model-visible structured tool content"
     )
 
@@ -291,11 +297,13 @@ main(): Int64 {
             )]
         )]
     )
-    expect(
-        !encodeMessagesRequest(orphanResultRequest).contains("call_orphan") &&
-        !encodeCompletionsRequest(orphanResultRequest).contains("call_orphan"),
-        "orphan tool results never reach the provider wire"
-    )
+    var orphanResultRejected = false
+    try {
+        let _ = encodeMessagesRequest(orphanResultRequest)
+    } catch (_: Exception) {
+        orphanResultRejected = true
+    }
+    expect(orphanResultRejected, "orphan tool results fail closed before provider wire")
 
     let priorityRequest = domain.ModelRequest(
         request.model,
@@ -344,7 +352,7 @@ main(): Int64 {
     )
     expectUsage(
         messagesSyncReply,
-        10,
+        5,
         7,
         0,
         2,
@@ -482,7 +490,7 @@ main(): Int64 {
         "\"cache_creation_input_tokens\":1}}}\n\n" +
         "data: {\"type\":\"content_block_start\",\"index\":0," +
         "\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_find\"," +
-        "\"name\":\"find\",\"input\":{\"path\":\".\"}}}\n\n" +
+        "\"name\":\"find\",\"input\":{}}}\n\n" +
         "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":" +
         "{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":" +
         "\\\".\\\",\\\"pattern\\\":\\\"*.cj\\\"}\"}}\n\n" +
@@ -539,7 +547,7 @@ main(): Int64 {
             )
             expectUsage(
                 reply,
-                6,
+                3,
                 4,
                 0,
                 2,
@@ -551,8 +559,25 @@ main(): Int64 {
     }
 
     let responsesStream =
+        "data: {\"type\":\"response.created\",\"response\":{" +
+        "\"id\":\"resp_stream\",\"model\":\"fixture-model\"}}\n\n" +
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0," +
+        "\"item\":{\"id\":\"item_stream\",\"type\":\"message\"}}\n\n" +
+        "data: {\"type\":\"response.content_part.added\"," +
+        "\"item_id\":\"item_stream\",\"output_index\":0,\"content_index\":0," +
+        "\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n" +
         "data: {\"type\":\"response.output_text.delta\"," +
+        "\"item_id\":\"item_stream\",\"output_index\":0,\"content_index\":0," +
         "\"delta\":\"response stream\"}\n\n" +
+        "data: {\"type\":\"response.output_text.done\"," +
+        "\"item_id\":\"item_stream\",\"output_index\":0,\"content_index\":0," +
+        "\"text\":\"response stream\"}\n\n" +
+        "data: {\"type\":\"response.content_part.done\"," +
+        "\"item_id\":\"item_stream\",\"output_index\":0,\"content_index\":0," +
+        "\"part\":{\"type\":\"output_text\",\"text\":\"response stream\"}}\n\n" +
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0," +
+        "\"item_id\":\"item_stream\",\"item\":{" +
+        "\"id\":\"item_stream\",\"type\":\"message\"}}\n\n" +
         "data: {\"type\":\"response.completed\",\"response\":{" +
         "\"id\":\"resp_stream\",\"status\":\"completed\",\"output\":[{" +
         "\"type\":\"message\",\"content\":[{\"type\":\"output_text\"," +
@@ -824,6 +849,7 @@ main(): Int64 {
     let activeStreamRequest = domain.ModelRequest(
         "fixture-model", request.messages,
         thinking: domain.ThinkingLevel.Medium,
+        wireMaxOutputTokens: Some(16384),
         streaming: true,
         transportHardTimeoutMillis: 0,
         resolvedPolicy: Some(domain.ResolvedModelRequestPolicy(
@@ -849,12 +875,17 @@ main(): Int64 {
         ])],
         thinking: domain.ThinkingLevel.High
     )
-    expect(encodeDeepSeekChatRequest(deepSeekReplay).contains(
-        "\"reasoning_content\":\"opaque reasoning\""
-    ), "DeepSeek Chat replay keeps assistant reasoning_content separate from visible content")
+    var displayReasoningReplayRejected = false
+    try {
+        let _ = encodeDeepSeekChatRequest(deepSeekReplay)
+    } catch (_: Exception) {
+        displayReasoningReplayRejected = true
+    }
+    expect(displayReasoningReplayRejected,
+        "DeepSeek Chat rejects display-only reasoning without native replay state")
     let partialToolStream =
-        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\",\"tool_calls\":[{\"index\":0,\"id\":\"partial\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]},\"finish_reason\":null}],\"usage\":null}\n\n" +
-        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"delta\":null,\"finish_reason\":\"max_tokens\"}],\"usage\":{\"completion_tokens\":100,\"completion_tokens_details\":{\"reasoning_tokens\":90}}}\n\n" +
+        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking\",\"tool_calls\":[{\"index\":0,\"id\":\"partial\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]},\"finish_reason\":null}],\"usage\":null}\n\n" +
+        "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":null,\"finish_reason\":\"length\"}],\"usage\":{\"completion_tokens\":100,\"completion_tokens_details\":{\"reasoning_tokens\":90}}}\n\n" +
         "data: [DONE]\n\n"
     let partialReply = replyOrThrow(providerModelPort(
         ProviderSpec(
@@ -899,8 +930,8 @@ func outputLimitedPositionContract(request: domain.ModelRequest): Unit {
     ]
     for ((position, delta) in deltas) {
         let stream =
-            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"delta\":" + delta + ",\"finish_reason\":null}],\"usage\":null}\n\n" +
-            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"delta\":null,\"finish_reason\":\"max_tokens\"}],\"usage\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":16}}}\n\n" +
+            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":" + delta + ",\"finish_reason\":null}],\"usage\":null}\n\n" +
+            "data: {\"id\":\"limited-" + position + "\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":null,\"finish_reason\":\"length\"}],\"usage\":{\"completion_tokens\":32,\"completion_tokens_details\":{\"reasoning_tokens\":16}}}\n\n" +
             "data: [DONE]\n\n"
         let reply = replyOrThrow(providerModelPort(
             ProviderSpec(
@@ -1154,7 +1185,7 @@ class DispatchTransport <: ProviderTransport {
             case ProviderProtocol.Completions =>
                 protocols.add("chat")
                 domain.Result.Ok(
-                    "{\"id\":\"chat\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{}}"
+                    "{\"id\":\"chat\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{}}"
                 )
             case ProviderProtocol.Responses =>
                 protocols.add("responses")

@@ -486,7 +486,7 @@ def consumer_manifest(name: str, version: str, stage_root: Path, dependencies: l
         if dependency == "yjson":
             lines.append(
                 '  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", '
-                f'commitId = "{YJSON_COMMIT}", branch = "main", output-type = "static" }}'
+                f'commitId = "{YJSON_COMMIT}", output-type = "static" }}'
             )
             continue
         dependency_manifest = load_toml(next(stage_root.glob(f"{dependency}-*/cjpm.toml")))

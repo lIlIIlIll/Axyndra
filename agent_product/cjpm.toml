@@ -25,7 +25,7 @@
   "agent_extension_runtime" = { path = "../agent_extension_runtime", output-type = "static" }
   "agent_skills" = { path = "../agent_skills", output-type = "static" }
   "agent_store" = { path = "../agent_store", output-type = "static" }
-  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", branch = "main", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }
   "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
   "lsp4cj" = { path = "../libs/lsp4cj", output-type = "static" }
   "dap4cj" = { path = "../libs/dap4cj", output-type = "static" }
