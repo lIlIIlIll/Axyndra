@@ -123,7 +123,7 @@ public class McpOAuthClient {
                     match (exchange.refresh(metadata, client, tokens.refreshToken, resource, scopes)) {
                         case McpResult.Ok(refreshed) =>
                             let effective = mergeMcpOAuthTokenDefaults(refreshed, tokens.refreshToken, tokens.scope)
-                            if (effective.covers(scopes)) {
+                            if (!effective.expired(nowMillis) && effective.covers(scopes)) {
                                 match (store.save(resource, metadata.issuer, client.clientId, effective)) {
                                     case McpResult.Ok(_) => return McpResult.Ok(effective)
                                     case McpResult.Err(error) => return McpResult.Err(error)

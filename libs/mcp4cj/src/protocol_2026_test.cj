@@ -77,6 +77,29 @@ class McpProtocol2026Tests {
     }
 
     @TestCase
+    func rejectsExpiredRefreshResultBeforeCaching(): Unit {
+        let resource = "https://mcp.example"
+        let issuer = "https://auth.example"
+        let clientMetadata = McpOAuthClientMetadata("client", ["http://127.0.0.1/callback"])
+        let store = MemoryMcpOAuthTokenStore()
+        @Expect(store.save(resource, issuer, clientMetadata.clientId, McpOAuthTokenSet(
+            "expired-current", expiresAtMillis: Some(1000),
+            refreshToken: "refresh-token", scope: ["tools:read"]
+        )).isOk(), true)
+        let client = McpOAuthClient(
+            FixtureOAuthMetadataFetcher(resource, issuer),
+            FixtureOAuthRegistration(clientMetadata),
+            FixtureOAuthInteraction(),
+            FixtureExpiredRefreshExchange(),
+            store: store
+        )
+        match (client.accessToken(resource, ["tools:read"], 1000)) {
+            case McpResult.Ok(tokens) => @Expect(tokens.accessToken, "authorized-token")
+            case McpResult.Err(error) => @Fail(error.message)
+        }
+    }
+
+    @TestCase
     func rejectsInsecureOAuthAndAppMetadata() {
         let _ = @ExpectThrows[IllegalArgumentException](McpOAuthClientMetadata("client", ["http://localhost.evil.example/callback"]))
         let _ = @ExpectThrows[IllegalArgumentException](McpProtectedResourceMetadata(
@@ -105,6 +128,22 @@ class McpProtocol2026Tests {
         ).toResourceContent()
         @Expect(validateMcpAppResourceContent(resource).isOk(), true)
         @Expect(resource.field("_meta").getOrThrow().field("ui").isSome(), true)
+        @Expect(validateMcpAppResourceContent(jsonObject([
+            JsonObjectEntry("uri", jsonString("ui://example/app")),
+            JsonObjectEntry("mimeType", jsonString(MCP_APPS_MIME_TYPE)),
+            JsonObjectEntry("text", jsonString("<html></html>")),
+            JsonObjectEntry("_meta", jsonObject([JsonObjectEntry("ui", jsonObject([
+                JsonObjectEntry("domain", jsonString("https://invalid.example"))
+            ]))]))
+        ])).isOk(), false)
+        @Expect(validateMcpAppResourceContent(jsonObject([
+            JsonObjectEntry("uri", jsonString("ui://example/app")),
+            JsonObjectEntry("mimeType", jsonString(MCP_APPS_MIME_TYPE)),
+            JsonObjectEntry("text", jsonString("<html></html>")),
+            JsonObjectEntry("_meta", jsonObject([JsonObjectEntry("ui", jsonObject([
+                JsonObjectEntry("prefersBorder", jsonString("yes"))
+            ]))]))
+        ])).isOk(), false)
     }
 
     @TestCase
@@ -142,6 +181,14 @@ class McpProtocol2026Tests {
         ).toValue()
         @Expect(pending.field("ttlMs").getOrThrow().unifiedKind == UnifiedJsonKind.Null, true)
         @Expect(decodeMcpTask(pending).isOk(), true)
+        @Expect(decodeMcpTask(jsonObject([
+            JsonObjectEntry("taskId", jsonString("task-input")),
+            JsonObjectEntry("status", jsonString("input_required")),
+            JsonObjectEntry("createdAt", jsonString("2026-08-27T00:00:00Z")),
+            JsonObjectEntry("lastUpdatedAt", jsonString("2026-08-27T00:01:00Z")),
+            JsonObjectEntry("ttlMs", jsonNull()),
+            JsonObjectEntry("inputRequests", jsonString("malformed"))
+        ])).isOk(), false)
         let _ = @ExpectThrows[IllegalArgumentException](McpTask(
             "task-bad", McpTaskStatus.Completed,
             "2026-08-27T00:00:00Z", "2026-08-27T00:01:00Z", None
@@ -157,6 +204,20 @@ class McpProtocol2026Tests {
         @Expect(McpResolutionPolicy().maxRounds, 10)
         let _ = @ExpectThrows[IllegalArgumentException](McpResolutionPolicy(maxRounds: 0))
         let _ = @ExpectThrows[IllegalArgumentException](McpResolutionPolicy(maxRounds: 11))
+    }
+
+    @TestCase
+    func rejectsMalformedStandardServerCapabilities() {
+        let value = jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("supportedVersions", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
+            JsonObjectEntry("capabilities", jsonObject([
+                JsonObjectEntry("tools", jsonBool(true))
+            ])),
+            JsonObjectEntry("ttlMs", jsonNumber("300000")),
+            JsonObjectEntry("cacheScope", jsonString("private"))
+        ])
+        @Expect(decodeMcpDiscover(value).isOk(), false)
     }
 
     @TestCase
@@ -230,6 +291,75 @@ func requireMcpInputRequest(value: McpResult<McpInputRequest>): McpInputRequest 
     match (value) {
         case McpResult.Ok(found) => found
         case McpResult.Err(error) => throw error
+    }
+}
+
+class FixtureOAuthMetadataFetcher <: McpOAuthMetadataFetcher {
+    let resource: String
+    let issuer: String
+    init(resource: String, issuer: String) { this.resource = resource; this.issuer = issuer }
+    public func protectedResource(resource: String): McpResult<McpProtectedResourceMetadata> {
+        McpResult.Ok(McpProtectedResourceMetadata(resource, [issuer]))
+    }
+    public func authorizationServer(issuer: String): McpResult<McpAuthorizationServerMetadata> {
+        McpResult.Ok(McpAuthorizationServerMetadata(
+            issuer, issuer + "/authorize", issuer + "/token",
+            codeChallengeMethodsSupported: ["S256"]
+        ))
+    }
+}
+
+class FixtureOAuthRegistration <: McpOAuthClientRegistration {
+    let client: McpOAuthClientMetadata
+    init(client: McpOAuthClientMetadata) { this.client = client }
+    public func clientMetadataDocument(_: String): McpResult<?McpOAuthClientMetadata> {
+        McpResult.Ok(None)
+    }
+    public func preRegistered(_: String): McpResult<?McpOAuthClientMetadata> {
+        McpResult.Ok(Some(client))
+    }
+    public func dynamicRegister(_: McpAuthorizationServerMetadata): McpResult<McpOAuthClientMetadata> {
+        McpResult.Ok(client)
+    }
+}
+
+class FixtureOAuthInteraction <: McpOAuthAuthorizationInteraction {
+    public func authorize(
+        _: McpAuthorizationServerMetadata,
+        client: McpOAuthClientMetadata,
+        _: String,
+        _: Array<String>
+    ): McpResult<McpPkceAuthorizationGrant> {
+        McpResult.Ok(McpPkceAuthorizationGrant(
+            "authorization-code", client.redirectUris[0],
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ", ""
+        ))
+    }
+}
+
+class FixtureExpiredRefreshExchange <: McpOAuthTokenExchange {
+    public func exchangeAuthorizationCode(
+        _: McpAuthorizationServerMetadata,
+        _: McpOAuthClientMetadata,
+        _: String,
+        _: String,
+        _: String,
+        _: String
+    ): McpResult<McpOAuthTokenSet> {
+        McpResult.Ok(McpOAuthTokenSet(
+            "authorized-token", expiresAtMillis: Some(100000), scope: ["tools:read"]
+        ))
+    }
+    public func refresh(
+        _: McpAuthorizationServerMetadata,
+        _: McpOAuthClientMetadata,
+        _: String,
+        _: String,
+        _: Array<String>
+    ): McpResult<McpOAuthTokenSet> {
+        McpResult.Ok(McpOAuthTokenSet(
+            "expired-refresh", expiresAtMillis: Some(1010), scope: ["tools:read"]
+        ))
     }
 }
 
