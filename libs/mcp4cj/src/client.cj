@@ -409,7 +409,7 @@ func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToo
                 case None => ()
             }
             McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
-                content.items, structuredContent: structured,
+                content.items.toArray(), structuredContent: structured,
                 isError: mcpBool(value, "isError", false), meta: mcpObject(value, "_meta")
             )))
     } else if (resultType == MCP_RESULT_INPUT_REQUIRED) {
