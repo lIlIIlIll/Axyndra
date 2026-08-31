@@ -352,12 +352,12 @@ main(): Int64 {
     )
     expectUsage(
         messagesSyncReply,
-        5,
+        10,
         7,
         0,
         2,
         3,
-        "Messages sync usage normalizes base and cache buckets"
+        "Messages sync usage totals cache buckets without losing their breakdown"
     )
 
     let provider = ProviderSpec(
@@ -547,12 +547,12 @@ main(): Int64 {
             )
             expectUsage(
                 reply,
-                3,
+                6,
                 4,
                 0,
                 2,
                 1,
-                "Messages stream usage normalizes base and cache buckets"
+                "Messages stream usage totals cache buckets without losing their breakdown"
             )
         case domain.Result.Err(error) =>
             throw IllegalStateException(error.message)
@@ -1350,7 +1350,9 @@ func expectUsage(
         reply.reasoningTokens == reasoningTokens &&
         reply.cacheReadTokens == cacheReadTokens &&
         reply.cacheWriteTokens == cacheWriteTokens,
-        message
+        message + ": actual=" + reply.inputTokens.toString() + "," +
+            reply.outputTokens.toString() + "," + reply.reasoningTokens.toString() + "," +
+            reply.cacheReadTokens.toString() + "," + reply.cacheWriteTokens.toString()
     )
 }
 
