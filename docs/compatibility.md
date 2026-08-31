@@ -1,10 +1,10 @@
 # SDK, manifest, and extension compatibility
 
-Local canonical verification is pinned to Cangjie daily
-`1.3.0-alpha.20260831010012` with cjpm `1.3.0-alpha.03`. Hosted workflows resolve the
-latest complete official nightly at the start of each run and install its
-matching stdx component; the scheduled full release gate runs once per week.
-The PR gate is capped at 60 minutes and runs policy checks and a clean type check.
+Local canonical verification and the PR and release workflows use Cangjie
+`1.1.0-alpha.20260611020029` with cjpm `1.2.0-alpha.21`. The scheduled nightly
+workflow resolves the latest complete official nightly and installs its matching
+stdx component. The scheduled full release gate runs once per week.
+The PR gate is capped at 120 minutes and runs policy checks and a clean type check.
 It also runs isolated package and external-consumer tests, the product build,
 and focused vNext contracts. Full-workspace tests, black-box checks, TUI gates,
 and provider smoke remain release-gate responsibilities.
