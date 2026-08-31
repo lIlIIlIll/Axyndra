@@ -383,6 +383,7 @@ public class McpToolCallContinuation {
     }
     public func isRetry(): Bool { !inputResponses.fields.isEmpty() || requestState != "" }
     public func hasProgressToken(): Bool { progressToken.unifiedKind != UnifiedJsonKind.Null }
+    func requestProgressToken(): JsonNode { progressToken }
     public func reportProgress(progress: Float64, total!: ?Float64 = None, message!: String = ""): Unit {
         if (!hasProgressToken()) { return }
         let fields = ArrayList<JsonObjectEntry>()

@@ -1,6 +1,7 @@
 package mcp4cj
 
 import std.sync.*
+import std.collection.*
 
 public class McpPkceAuthorizationGrant {
     public let code: String
@@ -34,29 +35,54 @@ public interface McpOAuthTokenStore {
 
 public class MemoryMcpOAuthTokenStore <: McpOAuthTokenStore {
     private let lock = Mutex()
-    private var resource = ""
-    private var issuer = ""
-    private var clientId = ""
-    private var tokens: ?McpOAuthTokenSet = None
+    private let entries = ArrayList<MemoryMcpOAuthTokenEntry>()
     public init() {}
     public func load(resource: String, issuer: String, clientId: String): McpResult<?McpOAuthTokenSet> {
         lock.lock(); try {
-            if (this.resource == resource && this.issuer == issuer && this.clientId == clientId) { McpResult.Ok(tokens) }
-            else { McpResult.Ok(None) }
+            for (entry in entries where entry.matches(resource, issuer, clientId)) {
+                return McpResult.Ok(Some(entry.tokens))
+            }
+            McpResult.Ok(None)
         } finally { lock.unlock() }
     }
     public func save(resource: String, issuer: String, clientId: String, tokens: McpOAuthTokenSet): McpResult<Unit> {
         lock.lock(); try {
-            this.resource = resource; this.issuer = issuer; this.clientId = clientId; this.tokens = Some(tokens)
+            for (entry in entries where entry.matches(resource, issuer, clientId)) {
+                entry.tokens = tokens
+                return McpResult.Ok(())
+            }
+            entries.add(MemoryMcpOAuthTokenEntry(resource, issuer, clientId, tokens))
             McpResult.Ok(())
         } finally { lock.unlock() }
     }
     public func clear(resource: String, issuer: String, clientId: String): McpResult<Unit> {
         lock.lock(); try {
-            if (this.resource == resource && this.issuer == issuer && this.clientId == clientId) { tokens = None }
+            for (index in 0..entries.size where entries[index].matches(resource, issuer, clientId)) {
+                entries.remove(at: index)
+                break
+            }
             McpResult.Ok(())
         } finally { lock.unlock() }
     }
+}
+
+private class MemoryMcpOAuthTokenEntry {
+    private let resource: String
+    private let issuer: String
+    private let clientId: String
+    var tokens: McpOAuthTokenSet
+    init(resource: String, issuer: String, clientId: String, tokens: McpOAuthTokenSet) {
+        this.resource = resource; this.issuer = issuer; this.clientId = clientId; this.tokens = tokens
+    }
+    func matches(resource: String, issuer: String, clientId: String): Bool {
+        this.resource == resource && this.issuer == issuer && this.clientId == clientId
+    }
+}
+
+private class CachedMcpOAuthClientRegistration {
+    let issuer: String
+    let client: McpOAuthClientMetadata
+    init(issuer: String, client: McpOAuthClientMetadata) { this.issuer = issuer; this.client = client }
 }
 
 public class McpOAuthClient {
@@ -65,6 +91,8 @@ public class McpOAuthClient {
     private let interaction: McpOAuthAuthorizationInteraction
     private let exchange: McpOAuthTokenExchange
     private let store: McpOAuthTokenStore
+    private let registrationLock = Mutex()
+    private let registeredClients = ArrayList<CachedMcpOAuthClientRegistration>()
 
     public init(
         metadataFetcher: McpOAuthMetadataFetcher,
@@ -94,12 +122,15 @@ public class McpOAuthClient {
                 if (tokens.refreshToken != "") {
                     match (exchange.refresh(metadata, client, tokens.refreshToken, resource, scopes)) {
                         case McpResult.Ok(refreshed) =>
-                            if (!refreshed.covers(scopes)) { return authorizationMcpFailure<McpOAuthTokenSet>("mcp.oauth_scope_required", "refreshed access token did not grant requested scopes") }
-                            match (store.save(resource, metadata.issuer, client.clientId, refreshed)) {
-                                case McpResult.Ok(_) => return McpResult.Ok(refreshed)
-                                case McpResult.Err(error) => return McpResult.Err(error)
+                            let effective = mergeMcpOAuthTokenDefaults(refreshed, tokens.refreshToken, tokens.scope)
+                            if (effective.covers(scopes)) {
+                                match (store.save(resource, metadata.issuer, client.clientId, effective)) {
+                                    case McpResult.Ok(_) => return McpResult.Ok(effective)
+                                    case McpResult.Err(error) => return McpResult.Err(error)
+                                }
                             }
-                        case McpResult.Err(_) => ()
+                        case McpResult.Err(error) =>
+                            if (!refreshRequiresMcpAuthorization(error)) { return McpResult.Err(error) }
                     }
                 }
             case None => ()
@@ -137,7 +168,7 @@ public class McpOAuthClient {
             case McpResult.Ok(Some(value)) => value
             case McpResult.Ok(None) => match (registration.preRegistered(metadata.issuer)) {
                 case McpResult.Ok(Some(value)) => value
-                case McpResult.Ok(None) => match (registration.dynamicRegister(metadata)) {
+                case McpResult.Ok(None) => match (dynamicClient(metadata)) {
                     case McpResult.Ok(value) => value
                     case McpResult.Err(error) => return McpResult.Err(error)
                 }
@@ -146,6 +177,20 @@ public class McpOAuthClient {
             case McpResult.Err(error) => return McpResult.Err(error)
         }
         McpResult.Ok((metadata, client))
+    }
+
+    private func dynamicClient(metadata: McpAuthorizationServerMetadata): McpResult<McpOAuthClientMetadata> {
+        registrationLock.lock(); try {
+            for (entry in registeredClients where entry.issuer == metadata.issuer) {
+                return McpResult.Ok(entry.client)
+            }
+            match (registration.dynamicRegister(metadata)) {
+                case McpResult.Ok(value) =>
+                    registeredClients.add(CachedMcpOAuthClientRegistration(metadata.issuer, value))
+                    McpResult.Ok(value)
+                case McpResult.Err(error) => McpResult.Err(error)
+            }
+        } finally { registrationLock.unlock() }
     }
 
     private func authorize(
@@ -169,12 +214,13 @@ public class McpOAuthClient {
         if (!redirectAllowed) {
             return authenticationMcpFailure<McpOAuthTokenSet>("mcp.oauth_redirect_mismatch", "authorization response used an unregistered redirect URI")
         }
-        let tokens = match (exchange.exchangeAuthorizationCode(
+        let exchanged = match (exchange.exchangeAuthorizationCode(
             metadata, client, grant.code, grant.redirectUri, grant.codeVerifier, resource
         )) {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
+        let tokens = mergeMcpOAuthTokenDefaults(exchanged, "", scopes)
         if (!tokens.covers(scopes)) {
             return authorizationMcpFailure<McpOAuthTokenSet>("mcp.oauth_scope_required", "authorization server did not grant requested scopes")
         }
@@ -183,6 +229,24 @@ public class McpOAuthClient {
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
+}
+
+private func mergeMcpOAuthTokenDefaults(
+    tokens: McpOAuthTokenSet,
+    refreshToken: String,
+    scopes: Array<String>
+): McpOAuthTokenSet {
+    McpOAuthTokenSet(
+        tokens.accessToken,
+        tokenType: tokens.tokenType,
+        expiresAtMillis: tokens.expiresAtMillis,
+        refreshToken: if (tokens.refreshToken == "") { refreshToken } else { tokens.refreshToken },
+        scope: if (tokens.scope.isEmpty()) { scopes } else { tokens.scope }
+    )
+}
+
+private func refreshRequiresMcpAuthorization(error: McpError): Bool {
+    error.kind == McpErrorKind.Authentication || error.kind == McpErrorKind.Authorization
 }
 
 public func validateMcpAuthorizationResponseIssuer(

@@ -221,6 +221,7 @@ class Mcp4CjTests {
         let client = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(
             "http://127.0.0.1:" + server.port().toString() + "/mcp"
         )), McpRequestMeta())
+        @Expect(client.listTools().isOk(), true)
         match (client.callTool("fail", jsonObject([]))) {
             case McpResult.Err(error) =>
                 @Expect(error.code, "fixture.remote_error")
@@ -341,7 +342,10 @@ class Mcp4CjTests {
             ]))])
         )
         let host = MemoryMcpToolHost([
-            McpTool("async", "async", jsonObject([JsonObjectEntry("type", jsonString("object"))]))
+            McpTool(
+                "async", "async", jsonObject([JsonObjectEntry("type", jsonString("object"))]),
+                execution: Some(McpToolExecution(taskSupport: McpTaskSupport.Optional))
+            )
         ], { _: String, _: JsonNode, _: McpToolCallContinuation =>
             McpResult.Ok(McpCallToolOutcome.Task(task))
         })
@@ -402,7 +406,13 @@ class InMemoryMcpTransport <: McpTransport {
         }
     }
     public func notify(notification: JsonRpcNotification): McpResult<Unit> { server.handleNotification(notification) }
-    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> { server.handleNotification(mcpCancellationNotification(requestId, reason)) }
+    public func cancel(
+        requestId: JsonRpcId,
+        reason: String,
+        meta: McpRequestMeta
+    ): McpResult<Unit> {
+        server.handleNotification(mcpCancellationNotification(requestId, reason, meta: meta))
+    }
     public func registerTools(tools: Array<McpTool>): McpResult<Unit> { let _ = tools; McpResult.Ok(()) }
     public func close(): McpResult<Unit> { closed = true; McpResult.Ok(()) }
 }
@@ -425,7 +435,8 @@ class FixtureMcpResolver <: McpInputResolver {
         let responses = ArrayList<JsonObjectEntry>()
         for (request in requests.fields) {
             responses.add(JsonObjectEntry(request.name, jsonObject([
-                JsonObjectEntry("action", jsonString("accept"))
+                JsonObjectEntry("action", jsonString("accept")),
+                JsonObjectEntry("content", jsonObject([]))
             ])))
         }
         McpResult.Ok(jsonObject(responses.toArray()))

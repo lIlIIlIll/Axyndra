@@ -130,11 +130,25 @@ public func decodeMcpInputResponse(request: McpInputRequest, value: JsonNode): M
             if (mcpText(value, "role") == "assistant" && value.field("content").isSome() && mcpText(value, "model") != "") {
                 McpResult.Ok(McpInputResponse.Sampling(value))
             } else { invalidMcp<McpInputResponse>("mcp.sampling_result_invalid", "sampling result requires assistant role, content, and model") }
-        case McpInputRequest.Elicitation(_) =>
+        case McpInputRequest.Elicitation(requestValue) =>
             let action = mcpText(value, "action")
-            if (action == "accept" || action == "decline" || action == "cancel") {
-                McpResult.Ok(McpInputResponse.Elicitation(value))
-            } else { invalidMcp<McpInputResponse>("mcp.elicitation_result_invalid", "elicitation result action is invalid") }
+            if (action != "accept" && action != "decline" && action != "cancel") {
+                return invalidMcp<McpInputResponse>("mcp.elicitation_result_invalid", "elicitation result action is invalid")
+            }
+            if (action == "accept" && mcpText(requestValue, "mode") != "url") {
+                let content = mcpField(value, "content", jsonNull())
+                if (content.unifiedKind != UnifiedJsonKind.Object) {
+                    return invalidMcp<McpInputResponse>("mcp.elicitation_content_invalid", "accepted form elicitation requires object content")
+                }
+                match (validateUnifiedJsonSchema(mcpObject(requestValue, "requestedSchema"), content)) {
+                    case Some(error) => return invalidMcp<McpInputResponse>(
+                        "mcp.elicitation_content_invalid",
+                        "accepted elicitation content violates requestedSchema: " + error.message
+                    )
+                    case None => ()
+                }
+            }
+            McpResult.Ok(McpInputResponse.Elicitation(value))
     }
 }
 
@@ -451,7 +465,10 @@ public class McpPage {
         this.values = values; this.nextCursor = nextCursor; this.ttlMillis = ttlMillis; this.cacheScope = cacheScope
     }
     public func toValue(fieldName: String): JsonNode {
-        if (fieldName.trimAscii() == "") { throw IllegalArgumentException("MCP page field name must not be empty") }
+        if (fieldName.trimAscii() == "" || fieldName == "resultType" || fieldName == "nextCursor" ||
+            fieldName == "ttlMs" || fieldName == "cacheScope") {
+            throw IllegalArgumentException("MCP page field name must not be empty or reserved")
+        }
         let fields = ArrayList<JsonObjectEntry>()
         fields.add(JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)))
         fields.add(JsonObjectEntry(fieldName, jsonArray(values)))

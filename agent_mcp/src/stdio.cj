@@ -49,8 +49,7 @@ public class StdioMcpTransport <: McpTransport {
     }
 
     public func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit> {
-        let _ = meta
-        match (primitive.cancel(requestId, reason)) {
+        match (primitive.cancel(requestId, reason, meta)) {
             case library.McpResult.Ok(_) => Result.Ok(())
             case library.McpResult.Err(error) => Result.Err(mcpLibraryError(error))
         }

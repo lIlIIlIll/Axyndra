@@ -23,8 +23,7 @@ public class StreamableHttpMcpTransport <: McpTransport {
         mapMcpResult(primitive.notify(notification))
     }
     public func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit> {
-        let _ = meta
-        mapMcpResult(primitive.cancel(requestId, reason))
+        mapMcpResult(primitive.cancel(requestId, reason, meta))
     }
     public func registerTools(tools: Array<McpTool>): Result<Unit> {
         mapMcpResult(primitive.registerTools(tools))

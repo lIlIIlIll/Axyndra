@@ -400,7 +400,7 @@ public class McpClient {
         match (activeRequestId(owner)) {
             case Some(id) =>
                 let _ = correlation.cancel(id)
-                transport.cancel(id, reason)
+                transport.cancel(id, reason, meta)
             case None => McpResult.Ok(())
         }
     }
@@ -512,10 +512,19 @@ public class McpClient {
 
 func withMcpRequestMeta(params: JsonNode, meta: McpRequestMeta): JsonNode {
     let fields = ArrayList<JsonObjectEntry>()
+    var requestMeta = jsonObject([])
     if (params.unifiedKind == UnifiedJsonKind.Object) {
-        for (field in params.fields where field.name != "_meta") { fields.add(field) }
+        for (field in params.fields) {
+            if (field.name == "_meta" && field.value.unifiedKind == UnifiedJsonKind.Object) {
+                requestMeta = field.value
+            } else if (field.name != "_meta") { fields.add(field) }
+        }
     }
-    fields.add(JsonObjectEntry("_meta", meta.toValue()))
+    let standard = meta.toValue()
+    let merged = ArrayList<JsonObjectEntry>()
+    for (field in requestMeta.fields where standard.field(field.name).isNone()) { merged.add(field) }
+    for (field in standard.fields) { merged.add(field) }
+    fields.add(JsonObjectEntry("_meta", jsonObject(merged.toArray())))
     jsonObject(fields.toArray())
 }
 
@@ -528,6 +537,11 @@ func mcpOperationParams(
     }
     if (continuation.requestState != "") {
         fields.add(JsonObjectEntry("requestState", jsonString(continuation.requestState)))
+    }
+    if (continuation.hasProgressToken()) {
+        fields.add(JsonObjectEntry("_meta", jsonObject([
+            JsonObjectEntry("progressToken", continuation.requestProgressToken())
+        ])))
     }
     jsonObject(fields.toArray())
 }
@@ -546,7 +560,7 @@ func decodeMcpPage(value: JsonNode, fieldName: String): McpResult<McpPage> {
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
     try {
         McpResult.Ok(McpPage(
-            source.items, nextCursor: mcpText(value, "nextCursor"),
+            source.items.toArray(), nextCursor: mcpText(value, "nextCursor"),
             ttlMillis: ttl, cacheScope: scope
         ))
     } catch (error: Exception) { invalidMcp<McpPage>("mcp.page_result_invalid", error.message) }
@@ -566,6 +580,7 @@ func decodeMcpInputRequired<T>(value: JsonNode): McpResult<McpOperationOutcome<T
 func decodeMcpCompletionOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpCompletionResult>> {
     let kind = mcpText(value, "resultType")
     if (kind == MCP_RESULT_INPUT_REQUIRED) { return decodeMcpInputRequired<McpCompletionResult>(value) }
+    if (kind == MCP_RESULT_TASK) { return decodeMcpTaskOutcome<McpCompletionResult>(value) }
     if (kind != MCP_RESULT_COMPLETE) {
         return McpResult.Ok(McpOperationOutcome.Extension(kind, value))
     }
@@ -583,6 +598,7 @@ func decodeMcpCompletionOutcome(value: JsonNode): McpResult<McpOperationOutcome<
 func decodeMcpPromptOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpPromptResult>> {
     let kind = mcpText(value, "resultType")
     if (kind == MCP_RESULT_INPUT_REQUIRED) { return decodeMcpInputRequired<McpPromptResult>(value) }
+    if (kind == MCP_RESULT_TASK) { return decodeMcpTaskOutcome<McpPromptResult>(value) }
     if (kind != MCP_RESULT_COMPLETE) { return McpResult.Ok(McpOperationOutcome.Extension(kind, value)) }
     let messages = mcpField(value, "messages", jsonNull())
     if (messages.unifiedKind != UnifiedJsonKind.List) {
@@ -591,7 +607,7 @@ func decodeMcpPromptOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpP
         )
     }
     try { McpResult.Ok(McpOperationOutcome.Complete(McpPromptResult(
-        messages.items, description: mcpText(value, "description"), meta: mcpObject(value, "_meta")
+        messages.items.toArray(), description: mcpText(value, "description"), meta: mcpObject(value, "_meta")
     ))) } catch (error: Exception) {
         invalidMcp<McpOperationOutcome<McpPromptResult>>("mcp.prompt_result_invalid", error.message)
     }
@@ -600,6 +616,7 @@ func decodeMcpPromptOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpP
 func decodeMcpReadResourceOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpReadResourceResult>> {
     let kind = mcpText(value, "resultType")
     if (kind == MCP_RESULT_INPUT_REQUIRED) { return decodeMcpInputRequired<McpReadResourceResult>(value) }
+    if (kind == MCP_RESULT_TASK) { return decodeMcpTaskOutcome<McpReadResourceResult>(value) }
     if (kind != MCP_RESULT_COMPLETE) { return McpResult.Ok(McpOperationOutcome.Extension(kind, value)) }
     let contents = mcpField(value, "contents", jsonNull())
     if (contents.unifiedKind != UnifiedJsonKind.List) {
@@ -608,10 +625,17 @@ func decodeMcpReadResourceOutcome(value: JsonNode): McpResult<McpOperationOutcom
         )
     }
     try { McpResult.Ok(McpOperationOutcome.Complete(McpReadResourceResult(
-        contents.items, ttlMillis: mcpInteger(value, "ttlMs"),
+        contents.items.toArray(), ttlMillis: mcpInteger(value, "ttlMs"),
         cacheScope: mcpText(value, "cacheScope"), meta: mcpObject(value, "_meta")
     ))) } catch (error: Exception) {
         invalidMcp<McpOperationOutcome<McpReadResourceResult>>("mcp.resource_result_invalid", error.message)
+    }
+}
+
+func decodeMcpTaskOutcome<T>(value: JsonNode): McpResult<McpOperationOutcome<T>> {
+    match (decodeMcpTask(value)) {
+        case McpResult.Ok(task) => McpResult.Ok(McpOperationOutcome.Task(task))
+        case McpResult.Err(error) => McpResult.Err(error)
     }
 }
 
