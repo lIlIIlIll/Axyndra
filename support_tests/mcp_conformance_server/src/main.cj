@@ -49,6 +49,14 @@ func conformanceTools(): Array<McpTool> {
     ]
     let tools = ArrayList<McpTool>()
     for (name in names) { tools.add(McpTool(name, "MCP conformance fixture", schema)) }
+    tools.add(McpTool(
+        "json_schema_2020_12_tool", "Tool with JSON Schema 2020-12 features",
+        jsonSchema2020_12ToolSchema()
+    ))
+    tools.add(McpTool(
+        "custom_header_tool", "Tool with a custom MCP parameter header",
+        customHeaderToolSchema()
+    ))
     tools.add(McpTool("greet", "Synchronous greeting", schema))
     for (name in ["slow_compute", "confirm_delete", "multi_input", "protocol_error_job"]) {
         tools.add(McpTool(
@@ -63,6 +71,55 @@ func conformanceTools(): Array<McpTool> {
         ))
     }
     tools.toArray()
+}
+
+func jsonSchema2020_12ToolSchema(): JsonNode {
+    jsonObject([
+        JsonObjectEntry("$schema", jsonString("https://json-schema.org/draft/2020-12/schema")),
+        JsonObjectEntry("type", jsonString("object")),
+        JsonObjectEntry("$defs", jsonObject([JsonObjectEntry("address", jsonObject([
+            JsonObjectEntry("$anchor", jsonString("addressDef")),
+            JsonObjectEntry("type", jsonString("object")),
+            JsonObjectEntry("properties", jsonObject([
+                JsonObjectEntry("street", jsonObject([JsonObjectEntry("type", jsonString("string"))])),
+                JsonObjectEntry("city", jsonObject([JsonObjectEntry("type", jsonString("string"))]))
+            ]))
+        ]))])),
+        JsonObjectEntry("properties", jsonObject([
+            JsonObjectEntry("name", jsonObject([JsonObjectEntry("type", jsonString("string"))])),
+            JsonObjectEntry("address", jsonObject([JsonObjectEntry("$ref", jsonString("#/$defs/address"))])),
+            JsonObjectEntry("contactMethod", jsonObject([
+                JsonObjectEntry("type", jsonString("string")),
+                JsonObjectEntry("enum", jsonArray([jsonString("phone"), jsonString("email")]))
+            ])),
+            JsonObjectEntry("phone", jsonObject([JsonObjectEntry("type", jsonString("string"))])),
+            JsonObjectEntry("email", jsonObject([JsonObjectEntry("type", jsonString("string"))]))
+        ])),
+        JsonObjectEntry("allOf", jsonArray([jsonObject([JsonObjectEntry("anyOf", jsonArray([
+            jsonObject([JsonObjectEntry("required", jsonArray([jsonString("phone")]))]),
+            jsonObject([JsonObjectEntry("required", jsonArray([jsonString("email")]))])
+        ]))])])),
+        JsonObjectEntry("if", jsonObject([
+            JsonObjectEntry("properties", jsonObject([JsonObjectEntry("contactMethod", jsonObject([
+                JsonObjectEntry("const", jsonString("phone"))
+            ]))])),
+            JsonObjectEntry("required", jsonArray([jsonString("contactMethod")]))
+        ])),
+        JsonObjectEntry("then", jsonObject([JsonObjectEntry("required", jsonArray([jsonString("phone")]))])),
+        JsonObjectEntry("else", jsonObject([JsonObjectEntry("required", jsonArray([jsonString("email")]))])),
+        JsonObjectEntry("additionalProperties", jsonBool(false))
+    ])
+}
+
+func customHeaderToolSchema(): JsonNode {
+    jsonObject([
+        JsonObjectEntry("type", jsonString("object")),
+        JsonObjectEntry("properties", jsonObject([JsonObjectEntry("message", jsonObject([
+            JsonObjectEntry("type", jsonString("string")),
+            JsonObjectEntry("x-mcp-header", jsonString("message"))
+        ]))])),
+        JsonObjectEntry("required", jsonArray([jsonString("message")]))
+    ])
 }
 
 class ConformanceProviders <: McpCompletionProvider & McpPromptProvider & McpResourceProvider & McpNotificationProvider & McpTaskProvider {
@@ -415,7 +472,7 @@ func inputOutcome(
     key: String, method: String, params: JsonNode,
     continuation: McpToolCallContinuation, state: String
 ): McpResult<McpCallToolOutcome> {
-    if (!continuation.inputResponses.fields.isEmpty()) { return completeText("input complete") }
+    if (continuation.inputResponses.field(key).isSome()) { return completeText("input complete") }
     McpResult.Ok(McpCallToolOutcome.InputRequired(McpInputRequiredResult(
         inputRequests: jsonObject([JsonObjectEntry(key, inputRequest(method, params))]),
         requestState: state

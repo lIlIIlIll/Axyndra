@@ -2985,10 +2985,23 @@ func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServi
 
 func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): LlmWireRequest {
     let messages = ArrayList<LlmWireMessage>()
+    let pendingToolCalls = HashSet<String>()
+    let consumedToolCalls = HashSet<String>()
     for (message in request.messages) {
         let blocks = ArrayList<LlmWireBlock>()
         for (block in message.blocks) {
-            blocks.add(toLlmWireBlock(block))
+            match (block.kind) {
+                case domain.ModelBlockKind.ToolCall =>
+                    pendingToolCalls.add(block.callId)
+                    blocks.add(toLlmWireBlock(block))
+                case domain.ModelBlockKind.ToolResult =>
+                    if (pendingToolCalls.contains(block.callId) &&
+                        !consumedToolCalls.contains(block.callId)) {
+                        consumedToolCalls.add(block.callId)
+                        blocks.add(toLlmWireBlock(block))
+                    }
+                case _ => blocks.add(toLlmWireBlock(block))
+            }
         }
         messages.add(LlmWireMessage(
             match (message.role) {
@@ -3029,7 +3042,12 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
         thinkingMode: thinking.mode,
         reasoningEffort: thinking.effort,
         maxOutputTokens: request.wireMaxOutputTokens,
-        parallelToolCalls: if (request.tools.isEmpty()) {
+        parallelToolCalls: if (request.tools.isEmpty() || match (
+            (dialect, request.parallelToolCalls)
+        ) {
+            case (ProviderDialect.DeepSeekMessages, false) => true
+            case _ => false
+        }) {
             None
         } else {
             Some(request.parallelToolCalls)

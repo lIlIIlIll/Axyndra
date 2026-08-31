@@ -13,6 +13,7 @@ import agent_rpc.*
 import agent_embed.*
 import agent_tui.*
 import model_adapters.*
+import process4cj.*
 import std.collection.*
 import std.convert.*
 import std.env.*
@@ -1873,6 +1874,71 @@ func approvalRoutingModeValue(value: String): ?ApprovalRoutingMode {
     }
 }
 
+class ProtocolInputPoll {
+    let line: ?String
+    let eof: Bool
+
+    init(line!: ?String = None, eof!: Bool = false) {
+        this.line = line
+        this.eof = eof
+    }
+}
+
+class PollingJsonlInput {
+    private let maxLineBytes: Int64 = 8388608
+    private var pending = ArrayList<Byte>()
+    private var ready: Array<String> = []
+    private var readyIndex: Int64 = 0
+
+    func poll(timeoutMillis: Int32): ProtocolInputPoll {
+        if (readyIndex < ready.size) {
+            let line = ready[readyIndex]
+            readyIndex += 1
+            return ProtocolInputPoll(line: Some(line))
+        }
+        if (!waitReadableFd(0, timeoutMillis)) { return ProtocolInputPoll() }
+        match (readFdChunk(0)) {
+            case None =>
+                if (!pending.isEmpty()) {
+                    throw ProcessError(
+                        ProcessErrorKind.Frame,
+                        "protocol stream ended inside a line frame"
+                    )
+                }
+                ProtocolInputPoll(eof: true)
+            case Some(chunk) =>
+                let frames = ArrayList<String>()
+                for (byte in chunk) {
+                    if (byte == b'\n') {
+                        let bytes = pending.toArray()
+                        let end = if (!bytes.isEmpty() && bytes[bytes.size - 1] == b'\r') {
+                            bytes.size - 1
+                        } else {
+                            bytes.size
+                        }
+                        frames.add(String.fromUtf8(bytes[..end]))
+                        pending = ArrayList<Byte>()
+                    } else {
+                        if (pending.size >= maxLineBytes) {
+                            pending = ArrayList<Byte>()
+                            throw ProcessError(
+                                ProcessErrorKind.Frame,
+                                "line frame exceeds configured byte limit"
+                            )
+                        }
+                        pending.add(byte)
+                    }
+                }
+                ready = frames.toArray()
+                readyIndex = 0
+                if (ready.isEmpty()) { return ProtocolInputPoll() }
+                let line = ready[0]
+                readyIndex = 1
+                ProtocolInputPoll(line: Some(line))
+        }
+    }
+}
+
 func serveRpc(product: ProductRuntime, once: Bool): Int64 {
     let output = RpcOutput()
     let session = product.applicationSession()
@@ -1887,10 +1953,13 @@ func serveRpc(product: ProductRuntime, once: Bool): Int64 {
             return 1
     }
     output.write(server.ready())
+    let input = PollingJsonlInput()
     while (true) {
-        let line = match (getStdIn().readln()) {
+        let polled = input.poll(50)
+        if (polled.eof) { return 0 }
+        let line = match (polled.line) {
             case Some(value) => value
-            case None => return 0
+            case None => continue
         }
         let response = server.handle(line)
         if (response != "") {
@@ -1921,11 +1990,14 @@ func serveAcp(
         let _ = server.close()
     })
     var status: Int64 = 0
+    let input = PollingJsonlInput()
     try {
         while (true) {
-            let line = match (getStdIn().readln()) {
+            let polled = input.poll(50)
+            if (polled.eof) { break }
+            let line = match (polled.line) {
                 case Some(value) => value
-                case None => break
+                case None => continue
             }
             let response = server.handle(line)
             if (response != "") {

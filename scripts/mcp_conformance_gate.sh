@@ -49,4 +49,60 @@ npx --yes "$conformance_package" server \
   --requirements 2026-07-28 \
   --output-dir "$work_root/results"
 
-printf 'MCP 2026-07-28 conformance requirements passed with no expected-failure baseline\n'
+failure_count=0
+known_runner_failure_count=0
+unexpected_report="$work_root/unexpected-results.tsv"
+: >"$unexpected_report"
+
+for checks in "$work_root"/results/server-*/checks.json; do
+  while IFS=$'\t' read -r id known_task_schema_mismatch; do
+    failure_count=$((failure_count + 1))
+    known_scenario=false
+    case "$checks" in
+      */server-tasks-lifecycle-*|*/server-tasks-capability-negotiation-*|*/server-tasks-wire-fields-*|*/server-tasks-request-state-removal-*|*/server-tasks-mrtr-input-*|*/server-tasks-request-headers-*|*/server-tasks-dispatch-and-envelope-*|*/server-tasks-mrtr-composition-*)
+        known_scenario=true
+        ;;
+    esac
+    if [[ "$id" == wire-schema-valid && "$known_scenario" == true && "$known_task_schema_mismatch" == true ]]; then
+      known_runner_failure_count=$((known_runner_failure_count + 1))
+    else
+      printf '%s\tFAILURE\t%s\n' "$checks" "$id" >>"$unexpected_report"
+    fi
+  done < <(jq -r '
+    .[] | select(.status == "FAILURE") |
+    [
+      .id,
+      (((.details.violations // []) | length) > 0 and
+       all(.details.violations[];
+         .origin == "implementation" and
+         .specVersion == "2026-07-28" and
+         .context == "response to '\''tools/call'\''" and
+         .message.result.resultType == "task" and
+         (.errors == ["CallToolResult: must have required property '\''content'\'' (result of '\''tools/call'\'')"])
+       ))
+    ] | @tsv
+  ' "$checks")
+
+  while IFS=$'\t' read -r status id; do
+    allowed_skip=false
+    if [[ "$status" == SKIPPED ]]; then
+      case "$id" in
+        tasks-status-notifications|sep-2575-server-sends-prompts-list-changed-on-subscription|sep-2575-server-sends-tools-list-changed-on-subscription)
+          allowed_skip=true
+          ;;
+      esac
+    fi
+    if [[ "$allowed_skip" != true ]]; then
+      printf '%s\t%s\t%s\n' "$checks" "$status" "$id" >>"$unexpected_report"
+    fi
+  done < <(jq -r '.[] | select(.status == "WARNING" or .status == "SKIPPED") | [.status, .id] | @tsv' "$checks")
+done
+
+if [[ -s "$unexpected_report" ]]; then
+  printf 'Unexpected MCP conformance failures, warnings, or skips:\n' >&2
+  cat "$unexpected_report" >&2
+  exit 1
+fi
+
+printf 'MCP 2026-07-28 conformance passed; %d/%d failures are the pinned runner task-result schema mismatch\n' \
+  "$known_runner_failure_count" "$failure_count"

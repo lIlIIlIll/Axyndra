@@ -546,6 +546,7 @@ def messages_task_arguments(spec: Provider) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--approval-only", action="store_true")
     parser.add_argument("--messages-tool-only", action="store_true")
     parser.add_argument("--messages-task-only", action="store_true")
     args = parser.parse_args()
@@ -578,6 +579,11 @@ def main() -> None:
         ).strip(),
         credential,
     )
+    if args.approval_only:
+        with provider_workspace(openai) as (home, workspace):
+            rpc_approval_continue(openai, home, workspace)
+        print("real provider smoke passed: approval continuation")
+        return
     if args.messages_tool_only:
         messages_tool_arguments(anthropic)
         print(

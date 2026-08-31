@@ -3863,7 +3863,12 @@ public func configuredProfileModelPort(
                     entry,
                     protocol: profile.protocol,
                     provider: profile.provider,
-                    baseUrl: profile.baseUrl
+                    baseUrl: profile.baseUrl,
+                    dialect: if (entry.dialect != "") {
+                        entry.dialect
+                    } else {
+                        profile.dialect
+                    }
                 ),
                 defaultHeaders: runtimeProviderHeaders(entry.defaultHeaders)
             ))
@@ -3944,7 +3949,8 @@ func productModelCapabilities(
     entry: ModelCatalogEntry,
     protocol!: String = "",
     provider!: String = "",
-    baseUrl!: String = ""
+    baseUrl!: String = "",
+    dialect!: String = ""
 ): ModelCapabilities {
     let _ = protocol
     let _ = provider
@@ -3967,7 +3973,9 @@ func productModelCapabilities(
     }
     ModelCapabilities(
         toolCalling: true,
-        parallelToolCalling: true,
+        // This is an explicit dialect contract, not provider/model-name
+        // inference. DeepSeek's Messages API rejects parallel_tool_calls.
+        parallelToolCalling: dialect != "deepseek_messages",
         reasoning: match (productThinkingCapabilities(entry).mode) {
             case ThinkingControlMode.NoThinking => false
             case _ => true
@@ -4006,7 +4014,12 @@ func configuredProductModelCapabilities(
             entry,
             protocol: profile.protocol,
             provider: profile.provider,
-            baseUrl: profile.baseUrl
+            baseUrl: profile.baseUrl,
+            dialect: if (entry.dialect != "") {
+                entry.dialect
+            } else {
+                profile.dialect
+            }
         )
     }
     productModelCapabilities(entry)

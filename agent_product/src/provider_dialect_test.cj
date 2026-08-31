@@ -7,6 +7,35 @@ import std.unittest.testmacro.*
 @Test
 class ProviderDialectTests {
     @TestCase
+    func deepSeekMessagesDisablesParallelToolCalling(): Unit {
+        let capabilities = productModelCapabilities(
+            ModelCatalogEntry(
+                "deepseek-v4-flash",
+                providerProfile: "DEEPSEEK",
+                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
+            ),
+            dialect: "deepseek_messages"
+        )
+
+        @Expect(capabilities.toolCalling, true)
+        @Expect(capabilities.parallelToolCalling, false)
+    }
+
+    @TestCase
+    func openAiResponsesKeepsParallelToolCalling(): Unit {
+        let capabilities = productModelCapabilities(
+            ModelCatalogEntry(
+                "gpt-5",
+                providerProfile: "OPENAI",
+                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
+            ),
+            dialect: "openai_responses"
+        )
+
+        @Expect(capabilities.parallelToolCalling, true)
+    }
+
+    @TestCase
     func unspecifiedLimitsUseConservativeDefaults(): Unit {
         let capabilities = productModelCapabilities(
             ModelCatalogEntry(
