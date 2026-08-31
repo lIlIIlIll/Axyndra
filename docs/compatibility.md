@@ -1,7 +1,7 @@
 # SDK, manifest, and extension compatibility
 
 Local canonical verification is pinned to Cangjie daily
-`1.1.0-alpha.20260817040003` with cjpm `1.1.3`. Hosted workflows resolve the
+`1.3.0-alpha.20260831010012` with cjpm `1.3.0-alpha.02`. Hosted workflows resolve the
 latest complete official nightly at the start of each run and install its
 matching stdx component; the scheduled full release gate runs once per week.
 The PR gate is capped at 20 minutes and runs policy checks, a clean type check,
