@@ -205,6 +205,20 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         approval.argumentHash,
         ApprovalDecision.Approve
     )).isOk(), "approved continuation persists its decision receipt before model dispatch")
+    expect(repository.saveContinuation(RunContinuation(
+        runId, sessionId, "drifted-model", "resume current continuation",
+        ApprovalRequest(
+            OperationId("migration-next-operation"), "migration-next-call", "write",
+            Capability(CapabilityKind.WorkspaceWrite),
+            sessionId: sessionId.value, argumentHash: "migration-next-arguments"
+        ),
+        thinking: ThinkingLevel.High,
+        budget: ResourceBudget(maxOutputTokens: 8192),
+        requestedPolicy: requested,
+        modelCapabilitiesSnapshot: capabilities,
+        cacheKey: "updated",
+        executionLaneId: LaneId("review")
+    )).isError(), "an approval receipt cannot authorize a drifted next approval request")
 
     let semanticId = SemanticModelRequestId("migration-semantic")
     let attemptId = ModelAttemptId("migration-attempt")

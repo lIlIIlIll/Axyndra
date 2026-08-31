@@ -113,6 +113,18 @@ func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuatio
     true
 }
 
+func continuationAcceptsDecision(
+    continuation: RunContinuation,
+    receipt: ApprovalDecisionReceipt
+): Bool {
+    continuation.runId.value == receipt.runId.value &&
+        continuation.sessionId.value == receipt.sessionId.value &&
+        continuation.approval.operationId.value == receipt.operationId.value &&
+        continuation.approval.callId == receipt.callId &&
+        continuation.approval.sessionId == receipt.sessionId.value &&
+        continuation.approval.argumentHash == receipt.argumentHash
+}
+
 func sameToolContextBinding(left: AgentValue, right: AgentValue): Bool {
     if (textOr(left, "workspace_root") != textOr(right, "workspace_root") ||
         textOr(left, "cwd") != textOr(right, "cwd")) { return false }

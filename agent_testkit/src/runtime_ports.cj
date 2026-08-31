@@ -99,8 +99,7 @@ public class MemoryRunRepository <: RunRepository {
                         return memoryConflict<Unit>("pending approval continuation binding is incomplete")
                     }
                     match (item.continuationValue) {
-                        case Some(existing) => if (sameContinuationBinding(existing, value) ||
-                            approvalRequestBindingsEqual(existing.approval, value.approval)) {
+                        case Some(existing) => if (sameContinuationBinding(existing, value)) {
                             Result.Ok(())
                         } else if (approvedContinuationTransition(existing, value, decisionRecord(
                             existing.approval.operationId.value
@@ -706,6 +705,12 @@ func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
 }
 
 func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Bool {
+    sameContinuationRequestBinding(left, right) &&
+        approvalRequestBindingsEqual(left.approval, right.approval) &&
+        sameRunningCheckpoint(left.runningModel, right.runningModel)
+}
+
+func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuation): Bool {
     left.kind == right.kind &&
         left.runId.value == right.runId.value && left.sessionId.value == right.sessionId.value &&
         left.model == right.model && left.prompt == right.prompt && left.system == right.system &&
@@ -718,7 +723,6 @@ func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Boo
         capabilitySetsEqual(left.capabilities, right.capabilities) &&
         resourceBudgetsEqual(left.budget, right.budget) &&
         modelPricingEqual(left.pricing, right.pricing) &&
-        approvalRequestBindingsEqual(left.approval, right.approval) &&
         left.resolverVersion == right.resolverVersion &&
         left.contextWindow == right.contextWindow &&
         left.providerSafetyMargin == right.providerSafetyMargin &&
@@ -727,7 +731,7 @@ func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Boo
         sameRequestedPolicy(left.requestedPolicy, right.requestedPolicy) &&
         sameCapabilitiesSnapshot(
             left.modelCapabilitiesSnapshot, right.modelCapabilitiesSnapshot
-        ) && sameRunningCheckpoint(left.runningModel, right.runningModel)
+        )
 }
 
 func approvedContinuationTransition(
@@ -741,10 +745,8 @@ func approvedContinuationTransition(
     }
     match (decision) {
         case Some(receipt) =>
-            receipt.runId.value == next.runId.value &&
-                receipt.sessionId.value == next.sessionId.value &&
-                previous.runId.value == next.runId.value &&
-                previous.sessionId.value == next.sessionId.value
+            continuationAcceptsDecision(previous, receipt) &&
+                sameContinuationRequestBinding(previous, next)
         case None => false
     }
 }
