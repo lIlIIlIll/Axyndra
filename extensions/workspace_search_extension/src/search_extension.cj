@@ -15,7 +15,7 @@ public func workspaceSearchExtensionManifest(): String {
       "name": "Workspace Search",
       "version": "1.0.0",
       "description": "Search workspace text without granting process authority to the extension.",
-      "sdk": {"min": "1.0.0", "maxExclusive": "2.0.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["grep"],
       "capabilities": ["workspace.read"],
       "requirements": {"executables": ["rg"]}

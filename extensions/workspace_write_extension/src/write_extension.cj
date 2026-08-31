@@ -12,7 +12,7 @@ public func workspaceWriteExtensionManifest(): String {
       "name": "Workspace Write",
       "version": "1.0.0",
       "description": "Describe workspace writes for host authorization and execution.",
-      "sdk": {"min": "1.0.0", "maxExclusive": "2.0.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["write"],
       "capabilities": ["workspace.write"],
       "requirements": {"executables": []}

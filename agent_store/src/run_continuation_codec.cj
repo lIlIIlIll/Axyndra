@@ -279,5 +279,5 @@ func continuationList(value: AgentValue, name: String): Array<AgentValue> {
     if (field.unifiedKind != ValueKind.List) {
         throw IllegalStateException("durable continuation list expected: " + name)
     }
-    field.items
+    field.items.toArray()
 }

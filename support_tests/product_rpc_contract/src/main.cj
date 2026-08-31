@@ -118,14 +118,15 @@ main(): Int64 {
                 "{\"id\":\"commands\",\"type\":\"get_available_commands\"}"
             )
         ).value().getOrThrow().field("data").getOrThrow().field("commands").getOrThrow()
+        let discoveryItems = discovery.items.toArray()
         expect(
             discovery.unifiedKind == ValueKind.List &&
-                discovery.items.size == slashCommandDefinitions().size &&
-                allSlashDescriptorsPresent(discovery.items) &&
-                !hasSlashDescriptor(discovery.items, "negotiate_protocol"),
+                discoveryItems.size == slashCommandDefinitions().size &&
+                allSlashDescriptorsPresent(discoveryItems) &&
+                !hasSlashDescriptor(discoveryItems, "negotiate_protocol"),
             "RPC discovers typed slash descriptors independently from its protocol inventory"
         )
-        let helpDescriptor = slashDescriptor(discovery.items, "help").getOrThrow()
+        let helpDescriptor = slashDescriptor(discoveryItems, "help").getOrThrow()
         expect(
             helpDescriptor.field("description").isSome() &&
                 helpDescriptor.field("aliases").isNone() &&
@@ -134,7 +135,7 @@ main(): Int64 {
                 helpDescriptor.field("subcommands").isNone(),
             "RPC omits absent optional fields for a no-argument slash command"
         )
-        let todoDescriptor = slashDescriptor(discovery.items, "todo").getOrThrow()
+        let todoDescriptor = slashDescriptor(discoveryItems, "todo").getOrThrow()
         expect(
             todoDescriptor.field("usage").isNone() &&
                 todoDescriptor.field("input").getOrThrow().field("hint").getOrThrow().text == "[subcommand]" &&

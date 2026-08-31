@@ -634,7 +634,7 @@ func taskPersistList(value: AgentValue, name: String): Array<AgentValue> {
     if (item.unifiedKind != ValueKind.List) {
         throw IllegalArgumentException("task persistence field is not a list: " + name)
     }
-    item.items
+    item.items.toArray()
 }
 
 func taskPersistKnownStatus(value: String, allowed: Array<String>, label: String): String {

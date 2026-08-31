@@ -525,7 +525,7 @@ func webSearchFailure(
 func jsonArrayItems(value: JsonNode, name: String): Array<JsonNode> {
     match (value.field(name)) {
         case Some(array) =>
-            if (array.unifiedKind == UnifiedJsonKind.List) { array.items } else { [] }
+            if (array.unifiedKind == UnifiedJsonKind.List) { array.items.toArray() } else { [] }
         case None => []
     }
 }

@@ -177,13 +177,13 @@ func migratedFirstPartyContracts(): Unit {
     expect(astManifest.tools == ["ast_grep", "ast_edit"] &&
         astManifest.capabilities == ["workspace.read", "workspace.write"] &&
         astManifest.requirements.executables == ["ast-grep"] &&
-        astManifest.sdk.minimum == SemanticVersion(1, 1, 0) &&
-        astManifest.sdk.maximumExclusive == SemanticVersion(1, 2, 0),
+        astManifest.sdk.minimum == SemanticVersion(2, 0, 0) &&
+        astManifest.sdk.maximumExclusive == SemanticVersion(3, 0, 0),
         "AST manifest declares static tools, authority requirements, and executable")
     expect(webManifest.tools == ["web_search"] && webManifest.capabilities == ["network.http"] &&
         webManifest.requirements.executables == ["curl"] &&
-        webManifest.sdk.minimum == SemanticVersion(1, 1, 0) &&
-        webManifest.sdk.maximumExclusive == SemanticVersion(1, 2, 0),
+        webManifest.sdk.minimum == SemanticVersion(2, 0, 0) &&
+        webManifest.sdk.maximumExclusive == SemanticVersion(3, 0, 0),
         "web manifest declares network without granting it")
 
     let probe = FakeProbe()
@@ -214,7 +214,7 @@ func manifestContracts(): Unit {
     let valid = workspaceSearchExtensionManifest()
     let parsed = mustManifest(valid)
     expect(parsed.schemaVersion == 1 && parsed.id == "axyndra.workspace-search", "valid manifest parses")
-    expect(parsed.sdk.includes(SemanticVersion(1, 1, 0)), "current SDK is compatible")
+    expect(parsed.sdk.includes(SemanticVersion(2, 0, 0)), "current SDK is compatible")
     expect(parseExtensionManifest(valid.replace(
         "\"requirements\":", "\"futureOptional\": true, \"requirements\":"
     )).isOk(), "unknown optional top-level fields are tolerated")
@@ -243,7 +243,7 @@ func manifestContracts(): Unit {
         ExtensionRuntimeErrorKind.ExtensionVersionMalformed, "ambiguous version whitespace is rejected")
     expectManifestKind(valid.replace("\"version\": \"1.0.0\"", "\"version\": \"9223372036854775808.0.0\""),
         ExtensionRuntimeErrorKind.ExtensionVersionMalformed, "overflowing version is rejected")
-    expectManifestKind(valid.replace("\"min\": \"1.0.0\"", "\"min\": \"2.0.0\""),
+    expectManifestKind(valid.replace("\"min\": \"2.0.0\"", "\"min\": \"3.0.0\""),
         ExtensionRuntimeErrorKind.SdkRangeMalformed, "empty SDK range is rejected")
     expectManifestFailure(valid.replace("\"tools\": [\"grep\"]", "\"tools\": [\"grep\", \"grep\"]"), "duplicate tool declaration")
     expectManifestFailure(valid.replace("\"capabilities\": [\"workspace.read\"]", "\"capabilities\": [\"workspace.read\", \"workspace.read\"]"), "duplicate capability declaration")
@@ -312,8 +312,8 @@ func runtimeContracts(): Unit {
     expect(optional.diagnostics()[0].state == ExtensionLifecycleState.Failed && optional.diagnostics()[1].state == ExtensionLifecycleState.Inactive, "optional failure and disabled reasons remain diagnostic")
 
     let futureManifest = workspaceWriteExtensionManifest().replace(
-        "\"min\": \"1.0.0\"", "\"min\": \"2.0.0\""
-    ).replace("\"maxExclusive\": \"2.0.0\"", "\"maxExclusive\": \"3.0.0\"")
+        "\"min\": \"2.0.0\"", "\"min\": \"3.0.0\""
+    ).replace("\"maxExclusive\": \"3.0.0\"", "\"maxExclusive\": \"4.0.0\"")
     let incompatible = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (incompatible.start(
         [CompiledExtensionProvider("axyndra.workspace-write", "future", futureManifest, { => WorkspaceWriteExtension() })],
@@ -324,13 +324,13 @@ func runtimeContracts(): Unit {
             error.phase == ExtensionRuntimePhase.Compatibility &&
             error.extensionId == "axyndra.workspace-write" &&
             error.extensionVersion == "1.0.0" &&
-            error.sdkMinimum == "2.0.0" && error.sdkMaximumExclusive == "3.0.0" &&
+            error.sdkMinimum == "3.0.0" && error.sdkMaximumExclusive == "4.0.0" &&
             error.hostSdkVersion == AGENT_SDK_VERSION
         case _ => false
     }, "future SDK range is rejected before activation with structured context")
     let exactMaxManifest = workspaceWriteExtensionManifest().replace(
-        "\"maxExclusive\": \"2.0.0\"", "\"maxExclusive\": \"1.1.0\""
-    )
+        "\"min\": \"2.0.0\"", "\"min\": \"1.0.0\""
+    ).replace("\"maxExclusive\": \"3.0.0\"", "\"maxExclusive\": \"2.0.0\"")
     let exactMax = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (exactMax.start(
         [CompiledExtensionProvider("axyndra.workspace-write", "old-range", exactMaxManifest, { => WorkspaceWriteExtension() })],
@@ -483,8 +483,8 @@ func manifest(id: String, name: String, description: String, tools: Array<String
         JsonObjectEntry("version", jsonString("1.0.0")),
         JsonObjectEntry("description", jsonString(description)),
         JsonObjectEntry("sdk", jsonObject([
-            JsonObjectEntry("min", jsonString("1.0.0")),
-            JsonObjectEntry("maxExclusive", jsonString("2.0.0"))
+            JsonObjectEntry("min", jsonString("2.0.0")),
+            JsonObjectEntry("maxExclusive", jsonString("3.0.0"))
         ])),
         JsonObjectEntry("tools", jsonArray(toolValues.toArray())),
         JsonObjectEntry("capabilities", jsonArray([jsonString("workspace.read")])),

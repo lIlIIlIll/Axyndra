@@ -12,7 +12,7 @@ public func fixtureExtensionManifest(): String {
       "name": "Third Party Fixture",
       "version": "1.0.0",
       "description": "Independent compile-time extension consumer.",
-      "sdk": {"min": "1.0.0", "maxExclusive": "2.0.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["fixture_echo"],
       "capabilities": ["workspace.read"],
       "requirements": {"executables": []}

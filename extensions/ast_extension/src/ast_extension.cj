@@ -14,7 +14,7 @@ public func astExtensionManifest(): String {
       "name": "AST Tools",
       "version": "1.0.0",
       "description": "Describe structural searches and staged rewrites for trusted host execution.",
-      "sdk": {"min": "1.1.0", "maxExclusive": "1.2.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["ast_grep", "ast_edit"],
       "capabilities": ["workspace.read", "workspace.write"],
       "requirements": {"executables": ["ast-grep"]}

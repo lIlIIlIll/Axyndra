@@ -467,7 +467,7 @@ class LspClient {
             params.field("diagnostics")
         ) {
             case Some(value) =>
-                if (value.unifiedKind == UnifiedJsonKind.List) { value.items } else { [] }
+                if (value.unifiedKind == UnifiedJsonKind.List) { value.items.toArray() } else { [] }
             case None => []
         }
         stateLock.lock()

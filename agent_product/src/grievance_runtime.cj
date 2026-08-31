@@ -161,7 +161,7 @@ class ProductGrievanceRuntime {
                         path
                     )
                 }
-                value.items
+                value.items.toArray()
             case None => []
         }
         let rows = ArrayList<ProductGrievance>()

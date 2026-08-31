@@ -4965,7 +4965,7 @@ func requiredCoreTextField(value: AgentValue, name: String): String {
 
 func requiredCoreListField(value: AgentValue, name: String): Array<AgentValue> {
     match (value.field(name)) {
-        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items }
+        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items.toArray() }
             else { throw IllegalArgumentException("durable field is not a list: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }

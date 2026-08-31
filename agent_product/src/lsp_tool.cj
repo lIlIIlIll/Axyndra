@@ -792,7 +792,7 @@ func executeLspCodeActions(
     let actions: Array<JsonNode> = if (
         response.unifiedKind == UnifiedJsonKind.List
     ) {
-        response.items
+        response.items.toArray()
     } else {
         []
     }
@@ -2367,7 +2367,7 @@ func normalizeLspLocations(
     let source: Array<JsonNode> = if (
         value.unifiedKind == UnifiedJsonKind.List
     ) {
-        value.items
+        value.items.toArray()
     } else if (value.unifiedKind == UnifiedJsonKind.Object) {
         [value]
     } else {
@@ -2454,7 +2454,7 @@ func appendLspSymbols(
     let items: Array<JsonNode> = if (
         value.unifiedKind == UnifiedJsonKind.List
     ) {
-        value.items
+        value.items.toArray()
     } else {
         []
     }
