@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_version='1.1.0-alpha.20260817040003'
+expected_version='1.3.0-alpha.20260831010012'
 expected_cjpm_version='1.1.3'
 if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJC_VERSION:-}" ]]; then
   expected_version=$AXYNDRA_CI_EXPECTED_CJC_VERSION
