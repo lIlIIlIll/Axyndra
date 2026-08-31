@@ -259,12 +259,12 @@ public class SqliteRunRepository <: RunRepository {
                             let approvedTransition =
                                 existing.kind == RunContinuationKind.WaitingApproval &&
                                 value.kind == RunContinuationKind.WaitingApproval &&
+                                sameContinuationRequestBinding(existing, value) &&
                                 priorDecision.size == 1 && match (decodeDecisionReceipt(
                                     priorDecision[0].required(0)
                                 )) {
                                     case Result.Ok(receipt) =>
-                                        receipt.runId.value == value.runId.value &&
-                                            receipt.sessionId.value == value.sessionId.value
+                                        continuationAcceptsDecision(existing, receipt)
                                     case Result.Err(_) => false
                                 }
                             if (!sameContinuationBinding(existing, value) && !approvedTransition) {
@@ -465,12 +465,12 @@ public class SqliteRunRepository <: RunRepository {
                             let approvedTransition =
                                 existing.kind == RunContinuationKind.WaitingApproval &&
                                 continuation.kind == RunContinuationKind.RunningModel &&
+                                sameContinuationRequestBinding(existing, continuation) &&
                                 priorDecision.size == 1 && match (decodeDecisionReceipt(
                                     priorDecision[0].required(0)
                                 )) {
                                     case Result.Ok(receipt) =>
-                                        receipt.runId.value == continuation.runId.value &&
-                                            receipt.sessionId.value == continuation.sessionId.value
+                                        continuationAcceptsDecision(existing, receipt)
                                     case Result.Err(_) => false
                                 }
                             let retryRequestMatch =
