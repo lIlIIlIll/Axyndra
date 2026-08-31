@@ -249,7 +249,7 @@ public class SqliteRunRepository <: RunRepository {
                                 existing.approval.sessionId == value.approval.sessionId &&
                                 existing.approval.callId == value.approval.callId &&
                                 existing.approval.argumentHash == value.approval.argumentHash
-                            if (sameApprovalBinding) {
+                            if (sameApprovalBinding && sameContinuationBinding(existing, value)) {
                                 return Result.Ok(())
                             }
                             let priorDecision = transaction.query(

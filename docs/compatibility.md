@@ -25,7 +25,7 @@ invariants. A matching range is necessary, but never overrides authorization.
 | Dimension | Owner | Baseline | Meaning |
 |---|---|---:|---|
 | Manifest schema | `agent_extension_runtime.EXTENSION_MANIFEST_SCHEMA_VERSION` | `1` | JSON syntax and field semantics |
-| Agent SDK API | `agent_sdk.AGENT_SDK_VERSION` | `1.1.0` | extension author source and semantic contract |
+| Agent SDK API | `agent_sdk.AGENT_SDK_VERSION` | `2.0.0` | extension author source and semantic contract |
 | Extension | each manifest and `ExtensionMetadata` | extension-owned | release of one extension identity |
 
 `axyndra_agent_testkit` is a companion source package with a checked public API
@@ -46,10 +46,10 @@ from a shared major and never attempts best-effort activation.
 
 | Extension range | Host | Result |
 |---|---:|---|
-| `[1.0.0, 2.0.0)` | `1.0.0` | compatible |
-| `[1.0.0, 2.0.0)` | `1.5.0` | compatible |
 | `[1.0.0, 2.0.0)` | `2.0.0` | reject (`SdkTooNew`) |
-| `[2.0.0, 3.0.0)` | `1.1.0` | reject (`SdkTooOld`) |
+| `[2.0.0, 3.0.0)` | `2.0.0` | compatible |
+| `[2.0.0, 3.0.0)` | `2.5.0` | compatible |
+| `[2.0.0, 3.0.0)` | `3.0.0` | reject (`SdkTooNew`) |
 
 ## Stability and SDK releases
 
@@ -71,7 +71,9 @@ major release. Security hardening is the deliberate exception: patch/minor may
 reject behavior that endangered host authority, but rejection and diagnostics
 must be explicit and tested.
 
-Machine-readable surfaces live in `compat/agent-sdk-v1.api.json` and
+The SDK 1 reference surface remains in `compat/agent-sdk-v1.api.json`; the
+current surface is compared against it to verify that the declared major bump
+permits the reviewed breaking migration. The companion testkit surface lives in
 `compat/axyndra-agent-testkit-v1.api.json`. `scripts/check_sdk_compatibility.py`
 fails stable removal, signature change, or demotion while the major is
 unchanged, and self-tests additive/breaking classification. Gates never rewrite
@@ -119,9 +121,10 @@ activation. Required incompatibility aborts startup; optional incompatibility
 remains failed with structured diagnostics and exposes zero tools. Built-ins and
 third parties use the same path.
 
-Workspace Search/Write use stable API and `[1.0.0, 2.0.0)`. AST/Web Search use
-experimental `HostOperationIntent`, so their lockstep built-in range is
-`[1.1.0, 1.2.0)`.
+All bundled extensions declare `[2.0.0, 3.0.0)`. SDK 1 manifests are rejected
+instead of being loaded through a best-effort JSON compatibility shim. AST/Web
+Search still use experimental `HostOperationIntent`; the major range does not
+promote that API to stable.
 
 ## Semantic and security compatibility
 

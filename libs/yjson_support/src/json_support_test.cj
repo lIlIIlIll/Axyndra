@@ -15,13 +15,22 @@ class YJsonSupportTests {
     }
 
     @TestCase
-    func fieldsAreSortedByName() {
+    func fieldsPreserveDocumentOrder() {
         let value = parseUnifiedJson("{\"z\":1,\"a\":2,\"m\":3}")
         let fields = value.fields
         @Expect(fields.size, 3)
-        @Expect(fields[0].name, "a")
-        @Expect(fields[1].name, "m")
-        @Expect(fields[2].name, "z")
+        @Expect(fields[0].name, "z")
+        @Expect(fields[1].name, "a")
+        @Expect(fields[2].name, "m")
+    }
+
+    @TestCase
+    func exposesStableArrayStorage() {
+        let value = parseUnifiedJson("[1,2]")
+        let items = value.items
+        value.add(jsonNumber("3"))
+        @Expect(items.size, 3)
+        @Expect(items[2].number, "3")
     }
 
     @TestCase
@@ -65,6 +74,12 @@ class YJsonSupportTests {
         ).getOrThrow()
         @Expect(wrongType.path, "$[\"name\"]")
         @Expect(wrongType.keyword, "type")
+
+        let malformed = validateUnifiedJsonSchema(
+            parseUnifiedJson("{\"type\":\"object\",\"required\":\"name\"}"),
+            parseUnifiedJson("{}")
+        ).getOrThrow()
+        @Expect(malformed.keyword, "schema")
     }
 }
 

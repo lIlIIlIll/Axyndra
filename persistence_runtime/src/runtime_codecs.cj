@@ -125,7 +125,7 @@ func sameToolContextBinding(left: AgentValue, right: AgentValue): Bool {
 
 func valueListOrEmpty(value: AgentValue, name: String): Array<AgentValue> {
     match (value.field(name)) {
-        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items } else { [] }
+        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items.toArray() } else { [] }
         case None => []
     }
 }
@@ -2737,7 +2737,7 @@ func requiredList(value: AgentValue, name: String): Result<Array<AgentValue>> {
     match (value.field(name)) {
         case Some(item) =>
             if (item.unifiedKind == ValueKind.List) {
-                Result.Ok(item.items)
+                Result.Ok(item.items.toArray())
             } else {
                 codecError("field is not a list: " + name)
             }

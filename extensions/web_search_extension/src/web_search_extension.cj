@@ -13,7 +13,7 @@ public func webSearchExtensionManifest(): String {
       "name": "Web Search",
       "version": "1.0.0",
       "description": "Describe bounded web searches for host network policy and execution.",
-      "sdk": {"min": "1.1.0", "maxExclusive": "1.2.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["web_search"],
       "capabilities": ["network.http"],
       "requirements": {"executables": ["curl"]}

@@ -7,7 +7,7 @@ import std.deriving.*
 
 // STABLE: version of the cooperative extension authoring contract. It is
 // intentionally independent from the Axyndra product/package version.
-public let AGENT_SDK_VERSION = "1.1.0"
+public let AGENT_SDK_VERSION = "2.0.0"
 
 // STABLE: the cooperative extension contract. It deliberately contains no
 // Agent runtime, approval, executor, receipt, audit, or persistence authority.

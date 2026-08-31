@@ -42,7 +42,7 @@ public interface UnifiedJsonAccess {
     prop text: String
     prop boolean: Bool
     prop number: String
-    prop items: Array<JsonNode>
+    prop items: ArrayList<JsonNode>
     prop fields: Array<JsonObjectEntry>
     func field(name: String): ?JsonNode
     func put(name: String, value: JsonNode): Unit
@@ -74,11 +74,11 @@ extend JsonNode <: UnifiedJsonAccess {
     }
     public prop boolean: Bool { get() { bool } }
     public prop number: String { get() { numberText } }
-    public prop items: Array<JsonNode> {
+    public prop items: ArrayList<JsonNode> {
         get() {
             match (kind()) {
-                case JsonKind.JsArray => asArray().values().toArray()
-                case _ => []
+                case JsonKind.JsArray => asArray().values()
+                case _ => ArrayList<JsonNode>()
             }
         }
     }
@@ -90,25 +90,7 @@ extend JsonNode <: UnifiedJsonAccess {
             for ((name, value) in asObject().entries()) {
                 result.add(JsonObjectEntry(name, value))
             }
-            let entries = result.toArray()
-            var index = 0
-            while (index < entries.size) {
-                var smallest = index
-                var candidate = index + 1
-                while (candidate < entries.size) {
-                    if (entries[candidate].name < entries[smallest].name) {
-                        smallest = candidate
-                    }
-                    candidate++
-                }
-                if (smallest != index) {
-                    let current = entries[index]
-                    entries[index] = entries[smallest]
-                    entries[smallest] = current
-                }
-                index++
-            }
-            entries
+            result.toArray()
         }
     }
 
@@ -174,20 +156,24 @@ public func validateUnifiedJsonSchema(
     schema: JsonNode,
     value: JsonNode
 ): ?UnifiedJsonSchemaViolation {
-    let errors = JsonSchema.fromValue(schema).validate(value)
-    if (errors.isEmpty()) {
-        None
-    } else {
-        let error = errors[0]
-        Some(UnifiedJsonSchemaViolation(
-            error.jsonPath,
-            if (error.code == "schema_validation") {
-                unifiedJsonSchemaKeyword(error.schemaPath)
-            } else {
-                error.code
-            },
-            error.message
-        ))
+    try {
+        let errors = JsonSchema.fromValue(schema).validate(value)
+        if (errors.isEmpty()) {
+            None
+        } else {
+            let error = errors[0]
+            Some(UnifiedJsonSchemaViolation(
+                error.jsonPath,
+                if (error.code == "schema_validation") {
+                    unifiedJsonSchemaKeyword(error.schemaPath)
+                } else {
+                    error.code
+                },
+                error.message
+            ))
+        }
+    } catch (error: Exception) {
+        Some(UnifiedJsonSchemaViolation("", "schema", error.message))
     }
 }
 

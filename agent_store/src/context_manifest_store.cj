@@ -470,7 +470,7 @@ func manifestStoreList(value: AgentValue, name: String): Array<AgentValue> {
     if (field.unifiedKind != ValueKind.List) {
         throw IllegalStateException("Context Manifest field is not a list: " + name)
     }
-    field.items
+    field.items.toArray()
 }
 
 func manifestStoreStrings(value: AgentValue, name: String): Array<String> {

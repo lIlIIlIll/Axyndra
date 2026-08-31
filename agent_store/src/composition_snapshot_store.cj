@@ -220,7 +220,7 @@ func compositionInt(value: AgentValue, name: String): Int64 {
 func compositionList(value: AgentValue, name: String): Array<AgentValue> {
     let field = compositionField(value, name)
     if (field.unifiedKind != ValueKind.List) { throw IllegalStateException("Composition list expected") }
-    field.items
+    field.items.toArray()
 }
 
 func storeRealmName(value: RealmKind): String {
