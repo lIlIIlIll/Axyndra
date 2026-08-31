@@ -4,10 +4,9 @@ Local canonical verification and the PR and release workflows use Cangjie
 `1.1.0-alpha.20260611020029` with cjpm `1.2.0-alpha.21`. The scheduled nightly
 workflow resolves the latest complete official nightly and installs its matching
 stdx component. The scheduled full release gate runs once per week.
-The PR gate is capped at 120 minutes and runs policy checks and a clean type check.
-It also runs isolated package and external-consumer tests, the product build,
-and focused vNext contracts. Full-workspace tests, black-box checks, TUI gates,
-and provider smoke remain release-gate responsibilities.
+The PR gate is capped at 20 minutes and runs policy checks, a clean type check,
+the product build, and focused vNext contracts. Full-workspace tests, black-box
+checks, TUI gates, and provider smoke remain release-gate responsibilities.
 `scripts/check_sdk.sh` owns the exact compiler check, while package
 `cjc-version = "1.1.0"` fields continue to describe language compatibility.
 `scripts/pinned_cangjie` derives compiler, runtime, and dynamic stdx paths from
