@@ -140,6 +140,8 @@ class McpStdioPendingResponse {
     init(id: JsonRpcId) { this.id = id }
 }
 
+let MCP_SUBSCRIPTION_QUEUE_LIMIT: Int64 = 256
+
 class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
     private let id: JsonRpcId
     private let cancelAction: (JsonRpcId) -> McpResult<Unit>
@@ -184,7 +186,18 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
         lock.lock(); try { if (!stopped) { accepted = Some(value) } } finally { lock.unlock() }
     }
     func push(value: JsonRpcNotification): Unit {
-        lock.lock(); try { if (!stopped) { queued.add(value) } } finally { lock.unlock() }
+        lock.lock(); try {
+            if (!stopped) {
+                if (queued.size >= MCP_SUBSCRIPTION_QUEUE_LIMIT) {
+                    queued.clear()
+                    failure = Some(McpError(
+                        McpErrorKind.Protocol, "mcp.subscription_queue_overflow",
+                        "MCP subscription consumer did not keep up with notifications"
+                    ))
+                    stopped = true
+                } else { queued.add(value) }
+            }
+        } finally { lock.unlock() }
     }
     func complete(): Unit { lock.lock(); try { stopped = true } finally { lock.unlock() } }
     func fail(error: McpError): Unit { lock.lock(); try { failure = Some(error); stopped = true } finally { lock.unlock() } }

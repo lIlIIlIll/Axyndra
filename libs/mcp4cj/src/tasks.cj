@@ -189,12 +189,18 @@ public func decodeMcpTask(value: JsonNode): McpResult<McpTask> {
         } else { return invalidMcp<McpTask>("mcp.tasks.poll_invalid", "MCP task pollIntervalMs must be an integer") }
         case None => None
     }
+    let inputRequests = match (value.field("inputRequests")) {
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Object) { item } else {
+            return invalidMcp<McpTask>("mcp.tasks.input_requests_invalid", "MCP task inputRequests must be an object")
+        }
+        case None => jsonObject([])
+    }
     try {
         McpResult.Ok(McpTask(
             mcpText(value, "taskId"), status, mcpText(value, "createdAt"),
             mcpText(value, "lastUpdatedAt"), ttl,
             statusMessage: mcpText(value, "statusMessage"), pollIntervalMillis: poll,
-            inputRequests: mcpObject(value, "inputRequests"),
+            inputRequests: inputRequests,
             result: mcpField(value, "result", jsonNull()), error: mcpField(value, "error", jsonNull())
         ))
     } catch (exception: Exception) { invalidMcp<McpTask>("mcp.tasks.invalid", exception.message) }

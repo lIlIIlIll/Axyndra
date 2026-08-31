@@ -69,6 +69,40 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func boundsStdioSubscriptionNotifications() {
+        let handle = StdioMcpSubscriptionHandle(jsonRpcNumberId(1), { _ => McpResult.Ok(()) })
+        for (_ in 0..257) {
+            handle.push(JsonRpcNotification(MCP_NOTIFICATION_TOOLS_LIST_CHANGED))
+        }
+        match (handle.next()) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.subscription_queue_overflow")
+            case _ => @Fail("subscription queue overflow was not rejected")
+        }
+    }
+
+    @TestCase
+    func resolvedToolCallPreservesProgressToken() {
+        let progressObservations = ArrayList<Bool>()
+        let tool = McpTool("echo", "echo", jsonObject([
+            JsonObjectEntry("type", jsonString("object"))
+        ]))
+        let host = MemoryMcpToolHost([tool], {
+            _: String, _: JsonNode, continuation: McpToolCallContinuation =>
+                progressObservations.add(continuation.hasProgressToken())
+                McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult([])))
+        })
+        let client = McpClient(InMemoryMcpTransport(McpServer(
+            McpDiscoverResult(), host: host
+        )), McpRequestMeta())
+        @Expect(client.callToolResolved(
+            "echo", jsonObject([]), FixtureMcpResolver(),
+            progressToken: jsonString("progress-1")
+        ).isOk(), true)
+        @Expect(progressObservations.size, 1)
+        @Expect(progressObservations[0], true)
+    }
+
+    @TestCase
     func stdioTransportFramesAndCorrelatesResponse() {
         let script = "IFS= read -r line; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}'"
         let transport = match (openStdioMcpTransport(McpStdioConfig(

@@ -152,6 +152,19 @@ public func validateMcpAppResourceContent(content: JsonNode): McpResult<Unit> {
         }
         case None => jsonObject([])
     }
+    match (ui.field("domain")) {
+        case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Text ||
+            !validMcpAppDomain(value.text)) {
+            return invalidMcp<Unit>("mcp.apps.domain_invalid", "MCP App domain must be a valid host name")
+        }
+        case None => ()
+    }
+    match (ui.field("prefersBorder")) {
+        case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Boolean) {
+            return invalidMcp<Unit>("mcp.apps.prefers_border_invalid", "MCP App prefersBorder must be a boolean")
+        }
+        case None => ()
+    }
     match (validateMcpAppCsp(csp)) {
         case McpResult.Ok(_) => validateMcpAppPermissions(permissions)
         case McpResult.Err(error) => McpResult.Err(error)

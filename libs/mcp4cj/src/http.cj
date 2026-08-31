@@ -470,7 +470,26 @@ class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
                             "subscription notification omitted or changed subscriptionId"
                         ))); return
                     }
-                    lock.lock(); try { if (!stopped) { queued.add(notification) } } finally { lock.unlock() }
+                    var overflow = false
+                    lock.lock(); try {
+                        if (!stopped) {
+                            if (queued.size >= MCP_SUBSCRIPTION_QUEUE_LIMIT) {
+                                queued.clear()
+                                failure = Some(McpError(
+                                    McpErrorKind.Protocol, "mcp.subscription_queue_overflow",
+                                    "MCP subscription consumer did not keep up with notifications"
+                                ))
+                                stopped = true
+                                overflow = true
+                            } else { queued.add(notification) }
+                        }
+                    } finally { lock.unlock() }
+                    if (overflow) {
+                        onDone()
+                        try { response.close() } catch (_: Exception) {}
+                        try { client.close() } catch (_: Exception) {}
+                        return
+                    }
                 case JsonRpcEnvelope.Response(value) =>
                     if (sameJsonRpcId(value.id, id)) {
                         match (value.payload) {

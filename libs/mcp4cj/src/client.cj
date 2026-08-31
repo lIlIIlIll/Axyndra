@@ -135,6 +135,11 @@ public class McpClient {
         if (continuation.requestState != "") {
             fields.add(JsonObjectEntry("requestState", jsonString(continuation.requestState)))
         }
+        if (continuation.hasProgressToken()) {
+            fields.add(JsonObjectEntry("_meta", jsonObject([
+                JsonObjectEntry("progressToken", continuation.requestProgressToken())
+            ])))
+        }
         match (send(MCP_METHOD_TOOLS_CALL, jsonObject(fields.toArray()), owner: owner)) {
             case McpResult.Ok(value) => decodeMcpCallOutcome(value, knownTool(name))
             case McpResult.Err(error) => McpResult.Err(error)
@@ -165,9 +170,10 @@ public class McpClient {
         arguments: JsonNode,
         resolver: McpInputResolver,
         policy!: McpResolutionPolicy = McpResolutionPolicy(),
+        progressToken!: JsonNode = jsonNull(),
         owner!: String = ""
     ): McpResult<McpCallToolOutcome> {
-        var continuation = McpToolCallContinuation()
+        var continuation = McpToolCallContinuation(progressToken: progressToken)
         var rounds: Int64 = 0
         while (true) {
             let outcome = match (callTool(name, arguments, continuation: continuation, owner: owner)) {
@@ -189,7 +195,8 @@ public class McpClient {
                     }
                     match (validateMcpInputResponses(pending, responses)) {
                         case McpResult.Ok(_) => continuation = McpToolCallContinuation(
-                            inputResponses: responses, requestState: pending.requestState
+                            inputResponses: responses, requestState: pending.requestState,
+                            progressToken: progressToken
                         )
                         case McpResult.Err(error) => return McpResult.Err(error)
                     }
@@ -694,6 +701,16 @@ func decodeMcpDiscover(value: JsonNode): McpResult<McpDiscoverResult> {
     }
     if (capabilities.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpDiscoverResult>("mcp.capabilities_invalid", "server capabilities must be an object")
+    }
+    for (name in ["completions", "logging", "prompts", "resources", "tools", "tasks"]) {
+        match (capabilities.field(name)) {
+            case Some(feature) => if (feature.unifiedKind != UnifiedJsonKind.Object) {
+                return invalidMcp<McpDiscoverResult>(
+                    "mcp.capability_invalid", "server capability " + name + " must be an object"
+                )
+            }
+            case None => ()
+        }
     }
     let prompts = decodeMcpCapabilityFeature(capabilities, "prompts")
     let resources = decodeMcpCapabilityFeature(capabilities, "resources")
