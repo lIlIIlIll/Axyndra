@@ -1900,10 +1900,14 @@ class PollingJsonlInput {
         match (readFdChunk(0)) {
             case None =>
                 if (!pending.isEmpty()) {
-                    throw ProcessError(
-                        ProcessErrorKind.Frame,
-                        "protocol stream ended inside a line frame"
-                    )
+                    let bytes = pending.toArray()
+                    pending = ArrayList<Byte>()
+                    let end = if (!bytes.isEmpty() && bytes[bytes.size - 1] == b'\r') {
+                        bytes.size - 1
+                    } else {
+                        bytes.size
+                    }
+                    return ProtocolInputPoll(line: Some(String.fromUtf8(bytes[..end])))
                 }
                 ProtocolInputPoll(eof: true)
             case Some(chunk) =>

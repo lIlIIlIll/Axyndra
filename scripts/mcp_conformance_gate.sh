@@ -55,6 +55,25 @@ unexpected_report="$work_root/unexpected-results.tsv"
 : >"$unexpected_report"
 
 for checks in "$work_root"/results/server-*/checks.json; do
+  failure_rows="$work_root/failure-rows.tsv"
+  warning_rows="$work_root/warning-rows.tsv"
+  if ! jq -r '
+    .[] | select(.status == "FAILURE") |
+    [
+      .id,
+      (((.details.violations // []) | length) > 0 and
+       all(.details.violations[];
+         .origin == "implementation" and
+         .specVersion == "2026-07-28" and
+         .context == "response to '\''tools/call'\''" and
+         .message.result.resultType == "task" and
+         (.errors == ["CallToolResult: must have required property '\''content'\'' (result of '\''tools/call'\'')"])
+       ))
+    ] | @tsv
+  ' "$checks" >"$failure_rows"; then
+    printf 'Unable to parse MCP conformance failure rows: %s\n' "$checks" >&2
+    exit 1
+  fi
   while IFS=$'\t' read -r id known_task_schema_mismatch; do
     failure_count=$((failure_count + 1))
     known_scenario=false
@@ -68,21 +87,13 @@ for checks in "$work_root"/results/server-*/checks.json; do
     else
       printf '%s\tFAILURE\t%s\n' "$checks" "$id" >>"$unexpected_report"
     fi
-  done < <(jq -r '
-    .[] | select(.status == "FAILURE") |
-    [
-      .id,
-      (((.details.violations // []) | length) > 0 and
-       all(.details.violations[];
-         .origin == "implementation" and
-         .specVersion == "2026-07-28" and
-         .context == "response to '\''tools/call'\''" and
-         .message.result.resultType == "task" and
-         (.errors == ["CallToolResult: must have required property '\''content'\'' (result of '\''tools/call'\'')"])
-       ))
-    ] | @tsv
-  ' "$checks")
+  done <"$failure_rows"
 
+  if ! jq -r '.[] | select(.status == "WARNING" or .status == "SKIPPED") | [.status, .id] | @tsv' \
+    "$checks" >"$warning_rows"; then
+    printf 'Unable to parse MCP conformance warning rows: %s\n' "$checks" >&2
+    exit 1
+  fi
   while IFS=$'\t' read -r status id; do
     allowed_skip=false
     if [[ "$status" == SKIPPED ]]; then
@@ -95,7 +106,7 @@ for checks in "$work_root"/results/server-*/checks.json; do
     if [[ "$allowed_skip" != true ]]; then
       printf '%s\t%s\t%s\n' "$checks" "$status" "$id" >>"$unexpected_report"
     fi
-  done < <(jq -r '.[] | select(.status == "WARNING" or .status == "SKIPPED") | [.status, .id] | @tsv' "$checks")
+  done <"$warning_rows"
 done
 
 if [[ -s "$unexpected_report" ]]; then
