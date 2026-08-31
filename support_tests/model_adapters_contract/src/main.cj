@@ -240,6 +240,18 @@ main(): Int64 {
         encodeMessagesRequest(messagesReplayRequest).contains("opaque-signature"),
         "Messages replays opaque signed reasoning"
     )
+    let unknownReplayRequest = domain.ModelRequest(
+        "fixture-model",
+        [domain.ModelMessage(domain.ModelRole.Assistant, [domain.ModelBlock(
+            domain.ModelBlockKind.Unknown,
+            opaqueState: messagesReplayRequest.messages[0].blocks[0].opaqueState
+        )])],
+        thinking: domain.ThinkingLevel.Off
+    )
+    expect(
+        encodeMessagesRequest(unknownReplayRequest).contains("opaque-signature"),
+        "Messages replays opaque provider blocks whose display kind is unknown"
+    )
     expect(
         encodeResponsesRequest(responsesReplayRequest).contains("\"call_id\":\"call_1\""),
         "Responses replays canonical function-call input"

@@ -1,9 +1,38 @@
 package model_adapters
 
 import agent_domain as domain
+import llm4cj.*
 import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*
+
+@Test
+class UsageProjectionTests {
+    @TestCase
+    func messagesTerminalUsageIncludesCacheBuckets(): Unit {
+        let projected = ArrayList<domain.ModelEvent>()
+        emitLlmWireEvent(
+            LlmWireEvent.TerminalObserved(LlmWireTerminal.Completed(LlmWireReply(
+                usage: LlmWireUsage(
+                    inputTokens: Some(3), outputTokens: Some(4),
+                    cacheReadTokens: Some(2), cacheWriteTokens: Some(1)
+                )
+            ))),
+            ProviderProtocol.Messages,
+            { event => projected.add(event) }
+        )
+        var completedInput: Int64 = -1
+        for (event in projected) {
+            match (event) {
+                case domain.ModelEvent.ProviderProgress(
+                    domain.ProviderStreamEvent.UsageCompleted(input, _)
+                ) => completedInput = input
+                case _ => ()
+            }
+        }
+        @Expect(completedInput, 6)
+    }
+}
 
 @Test
 class CurlResponseCaptureTests {

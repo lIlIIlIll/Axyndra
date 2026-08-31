@@ -811,7 +811,7 @@ func emitLlmWireEvent(
         case LlmWireEvent.ChoiceCompleted(_, _) => ()
         case LlmWireEvent.TerminalObserved(terminal) => match (terminal) {
             case LlmWireTerminal.Completed(reply) =>
-                let input = optionalUsageValue(reply.usage.inputTokens)
+                let input = providerInputUsageTotal(protocol, reply.usage)
                 let output = optionalUsageValue(reply.usage.outputTokens)
                 events(domain.ModelEvent.ProviderProgress(
                     domain.ProviderStreamEvent.UsageCompleted(input, output)
@@ -3009,11 +3009,13 @@ func restoreNativeReplay(state: domain.OpaqueProviderState): LlmWireNativeReplay
 }
 
 func toLlmWireBlock(block: domain.ModelBlock): LlmWireBlock {
-    if (let domain.ModelBlockKind.Reasoning <- block.kind) {
-        match (block.opaqueState) {
-            case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
-            case None => ()
-        }
+    match (block.kind) {
+        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
+            match (block.opaqueState) {
+                case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
+                case None => ()
+            }
+        case _ => ()
     }
     match (block.kind) {
         case domain.ModelBlockKind.Text => LlmWireBlock.Text(LlmWireTextBlock(block.text))
