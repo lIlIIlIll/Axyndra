@@ -13,6 +13,7 @@ import std.fs.*
 import std.io.*
 import std.process.*
 import std.sync.*
+import std.time.*
 
 public enum ProviderProtocol {
     Messages | Responses | Completions
@@ -181,6 +182,21 @@ func addOrReplaceProviderHeader(
     headers.add(value)
 }
 
+func addOrMergeProviderHeader(
+    headers: ArrayList<ProviderHeader>,
+    value: ProviderHeader
+): Unit {
+    for (index in 0..headers.size) {
+        if (headers[index].name == value.name) {
+            let merged = ProviderHeader(value.name, headers[index].value + "," + value.value)
+            headers.remove(at: index)
+            headers.add(merged)
+            return
+        }
+    }
+    headers.add(value)
+}
+
 // Precedence is profile < model < adapter request headers. Auth is appended
 // by the transport after this merge and is never configurable.
 public func effectiveProviderHeaders(
@@ -200,7 +216,7 @@ public func effectiveProviderHeaders(
             for (header in providerBetaHeaders(provider)) {
                 match (header.indexOf(":")) {
                     case Some(separator) => if (separator > 0) {
-                        addOrReplaceProviderHeader(headers, ProviderHeader(
+                        addOrMergeProviderHeader(headers, ProviderHeader(
                             header[..separator], header[separator + 1..]
                         ))
                     }
@@ -643,11 +659,15 @@ const BASE_RETRY_DELAY_MILLIS: Int64 = 500
 const MAX_RETRY_DELAY_MILLIS: Int64 = 8000
 
 func extractRetryAfterHeader(headers: String): Int64 {
-    clampRetryDelay(extractRetryAfterMillis(headers, 0))
+    clampRetryDelay(extractRetryAfterMillis(headers, currentEpochMillis()))
 }
 
 func parseRetryAfter(value: String): Int64 {
-    clampRetryDelay(parseRetryAfterMillis(value, 0))
+    clampRetryDelay(parseRetryAfterMillis(value, currentEpochMillis()))
+}
+
+func currentEpochMillis(): Int64 {
+    DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }
 
 func clampRetryDelay(value: ?Int64): Int64 {
@@ -739,11 +759,12 @@ func providerProtocolName(protocol: ProviderProtocol): String {
 func emitLlmWireEvent(
     event: LlmWireEvent,
     protocol: ProviderProtocol,
-    events: domain.ModelEventSink
+    events: domain.ModelEventSink,
+    toolCallIds!: ?HashMap<String, String> = None
 ): Unit {
     match (event) {
-        case LlmWireEvent.StreamStarted(responseId, _) => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.StreamStarted(responseId)
+        case LlmWireEvent.StreamStarted(_, _) => events(domain.ModelEvent.ProviderProgress(
+            domain.ProviderStreamEvent.StreamStarted(terminalEventKind(protocol))
         ))
         case LlmWireEvent.ContentBlockStarted(kind, identity) => events(domain.ModelEvent.ProviderProgress(
             domain.ProviderStreamEvent.ContentBlockStarted(
@@ -757,6 +778,10 @@ func emitLlmWireEvent(
         case LlmWireEvent.CitationAdded(_, _) => ()
         case LlmWireEvent.RefusalObserved(_) => ()
         case LlmWireEvent.ToolCallStarted(identity) =>
+            match (toolCallIds) {
+                case Some(values) => values[streamIdentityKey(identity.location)] = identity.callId
+                case None => ()
+            }
             events(domain.ModelEvent.ToolCallStarted(identity.callId, identity.name))
         case LlmWireEvent.ToolArgumentsDelta(text, identity) =>
             events(domain.ModelEvent.ToolArgumentsDelta(identity.callId, text))
@@ -767,8 +792,14 @@ func emitLlmWireEvent(
                     streamBlockKindName(kind)
                 )
             ))
-            if (kind == LlmWireStreamBlockKind.ToolCall && identity.itemId != "") {
-                events(domain.ModelEvent.ToolCallCompleted(identity.itemId))
+            if (let LlmWireStreamBlockKind.ToolCall <- kind) {
+                match (toolCallIds) {
+                    case Some(values) => match (values.get(streamIdentityKey(identity))) {
+                        case Some(callId) => events(domain.ModelEvent.ToolCallCompleted(callId))
+                        case None => ()
+                    }
+                    case None => ()
+                }
             }
         case LlmWireEvent.UsageUpdated(usage) =>
             let input = optionalUsageValue(usage.inputTokens)
@@ -778,22 +809,46 @@ func emitLlmWireEvent(
                 domain.ProviderStreamEvent.UsageDelta(input, output)
             ))
         case LlmWireEvent.ChoiceCompleted(_, _) => ()
-        case LlmWireEvent.TerminalObserved(terminal) =>
-            events(domain.ModelEvent.ProviderProgress(
-                domain.ProviderStreamEvent.MessageTerminalObserved(
-                    domain.TerminalEvidence(
-                        providerProtocolName(protocol),
-                        terminalEventKind(protocol),
-                        rawStopReason: terminalRawStopReason(terminal),
-                        messageTerminalObserved: true,
-                        adapterVersion: "llm4cj-wire-v2"
+        case LlmWireEvent.TerminalObserved(terminal) => match (terminal) {
+            case LlmWireTerminal.Completed(reply) =>
+                let input = optionalUsageValue(reply.usage.inputTokens)
+                let output = optionalUsageValue(reply.usage.outputTokens)
+                events(domain.ModelEvent.ProviderProgress(
+                    domain.ProviderStreamEvent.UsageCompleted(input, output)
+                ))
+                events(domain.ModelEvent.ProviderProgress(
+                    domain.ProviderStreamEvent.MessageTerminalObserved(
+                        domain.TerminalEvidence(
+                            providerProtocolName(protocol),
+                            terminalEventKind(protocol),
+                            rawStopReason: reply.rawStopReason,
+                            messageTerminalObserved: true,
+                            adapterVersion: "llm4cj-wire-v2"
+                        )
                     )
-                )
+                ))
+            case LlmWireTerminal.ProviderFailed(failure) => events(domain.ModelEvent.ProviderProgress(
+                domain.ProviderStreamEvent.ProviderError(failure.message)
             ))
+            case LlmWireTerminal.Cancelled(_) => ()
+        }
         case LlmWireEvent.ProviderFailure(failure) => events(domain.ModelEvent.ProviderProgress(
             domain.ProviderStreamEvent.ProviderError(failure.message)
         ))
     }
+}
+
+func streamIdentityKey(value: LlmWireEventIdentity): String {
+    optionalIdentityIndex(value.blockIndex) + ":" +
+        optionalIdentityIndex(value.choiceIndex) + ":" +
+        optionalIdentityIndex(value.toolCallIndex) + ":" +
+        optionalIdentityIndex(value.outputIndex) + ":" +
+        optionalIdentityIndex(value.contentIndex) + ":" +
+        optionalIdentityIndex(value.summaryIndex)
+}
+
+func optionalIdentityIndex(value: ?Int64): String {
+    match (value) { case Some(index) => index.toString(); case None => "" }
 }
 
 func streamIdentityIndex(value: LlmWireEventIdentity): Int64 {
@@ -823,14 +878,6 @@ func terminalEventKind(protocol: ProviderProtocol): String {
     }
 }
 
-func terminalRawStopReason(value: LlmWireTerminal): String {
-    match (value) {
-        case LlmWireTerminal.Completed(reply) => reply.rawStopReason
-        case LlmWireTerminal.ProviderFailed(_) => "failed"
-        case LlmWireTerminal.Cancelled(_) => "cancelled"
-    }
-}
-
 // A request owns one incremental decoder for the whole SSE byte stream.
 // Errors are retained locally and normalized from the complete response body
 // by decodeProviderReply, so a callback cannot escape across transport code.
@@ -838,6 +885,7 @@ class ProviderStreamProjection {
     private let decoder: LlmWireStreamDecoder
     private let protocol: ProviderProtocol
     private let events: domain.ModelEventSink
+    private let toolCallIds = HashMap<String, String>()
     private var failed: Bool = false
 
     init(codec: LlmWireCodec, protocol: ProviderProtocol, events: domain.ModelEventSink) {
@@ -863,7 +911,9 @@ class ProviderStreamProjection {
     }
 
     private func emit(update: LlmWireStreamUpdate): Unit {
-        for (event in update.events) { emitLlmWireEvent(event, protocol, events) }
+        for (event in update.events) {
+            emitLlmWireEvent(event, protocol, events, toolCallIds: Some(toolCallIds))
+        }
     }
 }
 
@@ -940,7 +990,23 @@ public class ProviderModelPort <: ports.ModelPort {
                 dialect: Some(provider.dialect)
             )
         )
-        let encoded = materializeProviderRequest(codec, normalized, messagesFast)
+        let encoded = try {
+            materializeProviderRequest(
+                codec,
+                normalized,
+                messagesFast,
+                dialect: provider.dialect
+            )
+        } catch (error: Exception) {
+            return domain.Result.Err(domain.AgentError(
+                domain.AgentErrorKind.InvalidInput,
+                "model.request_materialization_failed",
+                error.message,
+                retryable: false,
+                fallbackAllowed: false,
+                fields: [domain.ErrorField("provider_id", provider.id)]
+            ))
+        }
         // A streaming Core request with no attempt hard deadline is governed
         // by Core's idle watchdog and Run wall budget. Non-streaming/direct
         // callers retain the configured provider timeout.
@@ -2826,7 +2892,7 @@ func disabledThinkingSelection(dialect: ProviderDialect): WireThinkingSelection 
     match (dialect) {
         // OpenAI Responses represents the absence of reasoning controls by
         // omitting both fields; it has no explicit disabled mode.
-        case ProviderDialect.OpenAiResponses =>
+        case ProviderDialect.OpenAiResponses | ProviderDialect.GenericChat =>
             WireThinkingSelection(LlmWireThinkingMode.ProviderDefault)
         case _ => WireThinkingSelection(LlmWireThinkingMode.Disabled)
     }
@@ -2909,13 +2975,45 @@ func agentValueLlmJson(value: domain.AgentValue): LlmWireJson {
 }
 
 func restoreNativeReplay(state: domain.OpaqueProviderState): LlmWireNativeReplayBlock {
-    LlmWireNativeReplayBlock.restore(state.payload)
+    try {
+        LlmWireNativeReplayBlock.restore(state.payload)
+    } catch (_: Exception) {
+        let protocol = state.protocol.toAsciiLower()
+        let provider = state.providerId.toAsciiLower()
+        let dialect = match (protocol) {
+            case "messages" => if (provider.contains("deepseek")) {
+                "deepseek.messages.v1"
+            } else {
+                "anthropic.messages.v1"
+            }
+            case "responses" => if (provider.contains("deepseek")) {
+                "deepseek.responses.v1"
+            } else {
+                "openai.responses.v1"
+            }
+            case "chat_completions" => "deepseek.chat.v1"
+            case _ => throw IllegalArgumentException("legacy native replay protocol is unsupported")
+        }
+        LlmWireNativeReplayBlock.restore(jsonObject([
+            JsonObjectEntry("protocol", jsonString(protocol)),
+            JsonObjectEntry("dialect_id", jsonString(dialect)),
+            JsonObjectEntry("native_type", jsonString(state.itemId)),
+            JsonObjectEntry("schema_version", jsonNumber("1")),
+            JsonObjectEntry("scope", jsonString("assistant_turn")),
+            JsonObjectEntry("assistant_turn_index", jsonNumber("0")),
+            JsonObjectEntry("block_order", jsonNumber("0")),
+            JsonObjectEntry("complete", jsonBool(true)),
+            JsonObjectEntry("payload", parseUnifiedJson(state.payload))
+        ]).stringify())
+    }
 }
 
 func toLlmWireBlock(block: domain.ModelBlock): LlmWireBlock {
-    match (block.opaqueState) {
-        case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
-        case None => ()
+    if (let domain.ModelBlockKind.Reasoning <- block.kind) {
+        match (block.opaqueState) {
+            case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
+            case None => ()
+        }
     }
     match (block.kind) {
         case domain.ModelBlockKind.Text => LlmWireBlock.Text(LlmWireTextBlock(block.text))
@@ -2989,7 +3087,15 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
     let consumedToolCalls = HashSet<String>()
     for (message in request.messages) {
         let blocks = ArrayList<LlmWireBlock>()
-        for (block in message.blocks) {
+        for (index in 0..message.blocks.size) {
+            let block = message.blocks[index]
+            if (let domain.ModelBlockKind.Reasoning <- block.kind) {
+                if (block.opaqueState.isNone() && index + 1 < message.blocks.size) {
+                    if (let domain.ModelBlockKind.Reasoning <- message.blocks[index + 1].kind) {
+                        if (message.blocks[index + 1].opaqueState.isSome()) { continue }
+                    }
+                }
+            }
             match (block.kind) {
                 case domain.ModelBlockKind.ToolCall =>
                     pendingToolCalls.add(block.callId)
@@ -3003,13 +3109,15 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
                 case _ => blocks.add(toLlmWireBlock(block))
             }
         }
-        messages.add(LlmWireMessage(
-            match (message.role) {
-                case domain.ModelRole.User => LlmWireRole.User
-                case domain.ModelRole.Assistant => LlmWireRole.Assistant
-            },
-            blocks.toArray()
-        ))
+        if (!blocks.isEmpty()) {
+            messages.add(LlmWireMessage(
+                match (message.role) {
+                    case domain.ModelRole.User => LlmWireRole.User
+                    case domain.ModelRole.Assistant => LlmWireRole.Assistant
+                },
+                blocks.toArray()
+            ))
+        }
     }
     let tools = ArrayList<LlmWireTool>()
     for (tool in request.tools) {
@@ -3207,17 +3315,22 @@ class EncodedProviderRequest {
 func materializeProviderRequest(
     codec: LlmWireCodec,
     request: domain.ModelRequest,
-    fastMode: Bool
+    fastMode: Bool,
+    dialect!: ?ProviderDialect = None
 ): EncodedProviderRequest {
-    let materialized = match (codec.encodeRequest(
-        toLlmWireRequest(request, match (codec.dialect.compatibilityId) {
+    let selectedDialect = match (dialect) {
+        case Some(value) => value
+        case None => match (codec.dialect.compatibilityId) {
             case "anthropic.messages.v1" => ProviderDialect.AnthropicMessages
             case "deepseek.messages.v1" => ProviderDialect.DeepSeekMessages
             case "openai.responses.v1" => ProviderDialect.OpenAiResponses
             case "deepseek.responses.v1" => ProviderDialect.OpenAiResponses
             case "deepseek.chat.v1" => ProviderDialect.DeepSeekChat
             case _ => ProviderDialect.OpenAiChat
-        }),
+        }
+    }
+    let materialized = match (codec.encodeRequest(
+        toLlmWireRequest(request, selectedDialect),
         streaming: request.streaming
     ).materialize(resolver: Some(ProviderRequirementResolver(fastMode)))) {
         case LlmWireResult.Ok(value) => value
@@ -3227,7 +3340,47 @@ func materializeProviderRequest(
     for (header in materialized.headers) {
         headers.add(ProviderHeader(header.name, header.value))
     }
-    EncodedProviderRequest(String.fromUtf8(materialized.body), headers.toArray(), codec)
+    EncodedProviderRequest(
+        normalizeMaterializedBody(String.fromUtf8(materialized.body), selectedDialect),
+        headers.toArray(),
+        codec
+    )
+}
+
+func normalizeMaterializedBody(body: String, dialect: ProviderDialect): String {
+    let genericChat = match (dialect) {
+        case ProviderDialect.GenericChat => true
+        case _ => false
+    }
+    let deepSeekMessages = match (dialect) {
+        case ProviderDialect.DeepSeekMessages => true
+        case _ => false
+    }
+    if (!genericChat && !deepSeekMessages) {
+        return body
+    }
+    let root = parseUnifiedJson(body)
+    if (root.unifiedKind != UnifiedJsonKind.Object) { return body }
+    let fields = ArrayList<JsonObjectEntry>()
+    var genericMaxTokens: ?JsonNode = None
+    var hasMaxTokens = false
+    for (field in root.fields) {
+        if (genericChat && field.name == "max_completion_tokens") {
+            genericMaxTokens = Some(field.value)
+        } else if (deepSeekMessages && field.name == "parallel_tool_calls") {
+            ()
+        } else {
+            if (field.name == "max_tokens") { hasMaxTokens = true }
+            fields.add(field)
+        }
+    }
+    if (genericChat && !hasMaxTokens) {
+        match (genericMaxTokens) {
+            case Some(value) => fields.add(JsonObjectEntry("max_tokens", value))
+            case None => ()
+        }
+    }
+    jsonObject(fields.toArray()).stringify()
 }
 
 func encodeStandaloneRequest(request: domain.ModelRequest, dialect: ProviderDialect): String {
@@ -3266,7 +3419,8 @@ func encodeStandaloneRequest(request: domain.ModelRequest, dialect: ProviderDial
     materializeProviderRequest(
         codec,
         request,
-        request.serviceTier.toAsciiLower() == "priority"
+        request.serviceTier.toAsciiLower() == "priority",
+        dialect: dialect
     ).body
 }
 
@@ -3528,7 +3682,9 @@ func fromLlmWireReply(
                 // executable domain tool call.
                 case LlmWireToolArguments.InvalidJson(_) |
                     LlmWireToolArguments.InvalidShape(_) |
-                    LlmWireToolArguments.Partial(_) => ()
+                    LlmWireToolArguments.Partial(_) => throw IllegalArgumentException(
+                        "provider returned an incomplete or invalid terminal tool call"
+                    )
             } }
             case LlmWireOutputBlock.Refusal(value) => blocks.add(domain.ModelBlock(
                 domain.ModelBlockKind.Refusal,
@@ -3565,7 +3721,7 @@ func fromLlmWireReply(
         blocks.toArray(),
         stopReason: reply.rawStopReason,
         usage: Some(domain.ModelUsage(
-            inputTokens: optionalUsageValue(reply.usage.inputTokens),
+            inputTokens: providerInputUsageTotal(protocol, reply.usage),
             outputTokens: optionalUsageValue(reply.usage.outputTokens),
             reasoningTokens: optionalUsageValue(reply.usage.reasoningTokens),
             cacheReadTokens: optionalUsageValue(reply.usage.cacheReadTokens),
@@ -3604,6 +3760,19 @@ func fromLlmWireReply(
 
 func optionalUsageValue(value: ?Int64): Int64 {
     match (value) { case Some(found) => found; case None => 0 }
+}
+
+func providerInputUsageTotal(protocol: ProviderProtocol, usage: LlmWireUsage): Int64 {
+    var total = optionalUsageValue(usage.inputTokens)
+    if (let ProviderProtocol.Messages <- protocol) {
+        for (value in [
+            optionalUsageValue(usage.cacheReadTokens),
+            optionalUsageValue(usage.cacheWriteTokens)
+        ]) {
+            total = if (value > 0 && total > Int64.Max - value) { Int64.Max } else { total + value }
+        }
+    }
+    total
 }
 
 func decisionOutcomeFrom(blocks: Array<domain.ModelBlock>): domain.DecisionOutcome {
@@ -3732,12 +3901,17 @@ func decodeEventStream(
         case LlmWireResult.Ok(value) => value
         case LlmWireResult.Err(error) => throw error
     }
-    for (event in pushed.events) { emitLlmWireEvent(event, provider.protocol, events) }
+    let toolCallIds = HashMap<String, String>()
+    for (event in pushed.events) {
+        emitLlmWireEvent(event, provider.protocol, events, toolCallIds: Some(toolCallIds))
+    }
     let finished = match (decoder.finish()) {
         case LlmWireResult.Ok(value) => value
         case LlmWireResult.Err(error) => throw error
     }
-    for (event in finished.events) { emitLlmWireEvent(event, provider.protocol, events) }
+    for (event in finished.events) {
+        emitLlmWireEvent(event, provider.protocol, events, toolCallIds: Some(toolCallIds))
+    }
     let terminal = match (finished.terminal) {
         case Some(value) => value
         case None => match (pushed.terminal) {
