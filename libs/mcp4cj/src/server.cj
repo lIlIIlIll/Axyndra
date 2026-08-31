@@ -154,12 +154,16 @@ public class McpServer {
             case None => return invalidMcp<Unit>("mcp.cancel_id_missing", "cancellation requires requestId")
         }
         let reason = mcpText(notification.params, "reason")
+        match (host) {
+            case Some(provider) => match (provider.cancel(id, reason)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => return McpResult.Err(error)
+            }
+            case None => ()
+        }
         match (notifications) {
             case Some(provider) => provider.cancel(id, reason)
-            case None => match (host) {
-                case Some(provider) => provider.cancel(id, reason)
-                case None => McpResult.Ok(())
-            }
+            case None => McpResult.Ok(())
         }
     }
 
@@ -179,6 +183,9 @@ public class McpServer {
     public func tool(name: String): McpResult<?McpTool> { findTool(name) }
 
     public func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionSource> {
+        if (state() != McpLifecycleState.Ready) {
+            return invalidMcp<McpSubscriptionSource>("mcp.server_not_ready", "MCP server is not ready")
+        }
         if (request.method != MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
             return invalidMcp<McpSubscriptionSource>("mcp.subscription_method_invalid", "subscription request method is invalid")
         }
@@ -262,6 +269,12 @@ public class McpServer {
                         request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
                         "Missing required client capability", data: mcpTasksRequiredCapability()
                     )
+                } else if (tool.execution.isNone() ||
+                    tool.execution.getOrThrow().taskSupport == McpTaskSupport.Forbidden) {
+                    mcpFailureResponse(
+                        request.id, JSON_RPC_INTERNAL_ERROR,
+                        "tool returned a task despite declaring task support forbidden"
+                    )
                 } else { mcpCheckedOperationResponse(request, mcpCallToolOutcomeValue(outcome), discovery.serverInfo) }
                 case _ => mcpCheckedOperationResponse(request, mcpCallToolOutcomeValue(outcome), discovery.serverInfo)
             }
@@ -311,7 +324,12 @@ public class McpServer {
             case None => return unavailableMcpMethod(request, MCP_METHOD_PROMPTS_GET)
         }
         let name = mcpText(request.params, "name")
-        let arguments = mcpObject(request.params, "arguments")
+        let arguments = match (request.params.field("arguments")) {
+            case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+                return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "prompts/get arguments must be an object")
+            }
+            case None => jsonObject([])
+        }
         if (name == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "prompts/get requires name") }
         let continuation = match (decodeMcpContinuation(request.params, notificationSink)) {
             case McpResult.Ok(value) => value
@@ -692,6 +710,12 @@ func mcpCheckedOperationResponse(
                 data: jsonObject([JsonObjectEntry("requiredCapabilities", required)])
             )
         }
+    }
+    if (mcpText(value, "resultType") == MCP_RESULT_TASK && !mcpRequestSupportsTasks(request.params)) {
+        return mcpFailureResponse(
+            request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Missing required client capability", data: mcpTasksRequiredCapability()
+        )
     }
     mcpSuccessResponse(request.id, value, serverInfo)
 }

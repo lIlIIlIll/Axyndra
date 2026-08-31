@@ -991,12 +991,12 @@ func runHttpLoopbackContract(): Unit {
     )
     match (sseClient.callTool("explode", objectValue([]))) {
         case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.RecoveryRequired &&
-            error.code == "mcp.http_call_response_lost" &&
-            error.field("retry_safe") == Some("false"),
-            "tools/call HTTP response loss is recovery-required and never replay-safe"
+            error.kind == AgentErrorKind.Provider &&
+            error.code == "mcp.remote_protocol_error" &&
+            error.message == "fixture loses the response after dispatch",
+            "SSE tools/call emits a terminal JSON-RPC failure when host execution throws"
         )
-        case _ => throw IllegalStateException("ambiguous HTTP tools/call loss was accepted")
+        case _ => throw IllegalStateException("SSE tools/call host failure was accepted")
     }
 
     let slow = spawn { sseClient.callTool("slow", objectValue([]), runId: "http-slow") }
@@ -1005,6 +1005,7 @@ func runHttpLoopbackContract(): Unit {
         sleep(Duration.millisecond * 5)
         waited += 5
     }
+    let slowRequestId = sseClient.activeRequestId("http-slow").getOrThrow()
     waited = 0
     while (!slowStarted.load() && waited < 1000) {
         sleep(Duration.millisecond * 5)
@@ -1012,7 +1013,7 @@ func runHttpLoopbackContract(): Unit {
     }
     expect(slowStarted.load(), "HTTP cancellation fixture reached host execution")
     expect(sseClient.cancel("http-slow").isOk(),
-           "HTTP cancellation closes the active request without posting a notification")
+           "HTTP cancellation posts notifications/cancelled and closes the active request")
     match (slow.get()) {
         case Result.Err(error) => expect(
             error.kind == AgentErrorKind.Cancelled,
@@ -1020,8 +1021,8 @@ func runHttpLoopbackContract(): Unit {
         )
         case _ => throw IllegalStateException("cancelled HTTP tool call completed normally")
     }
-    expect(host.cancellations().isEmpty(),
-           "HTTP cancellation does not POST notifications/cancelled")
+    expect(host.cancellations() == [slowRequestId.display()],
+           "HTTP cancellation reaches the remote host with the active request identity")
     expect(sseClient.close().isOk(), "SSE HTTP client closes local transport resources")
     expect(server.close().isOk(), "loopback Streamable HTTP server closes gracefully")
     match (serving.get()) {

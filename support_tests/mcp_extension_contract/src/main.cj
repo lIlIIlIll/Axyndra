@@ -106,7 +106,8 @@ main(): Int64 {
         taskError.kind == AgentErrorKind.Conflict &&
             taskError.code == "mcp.tool_task_pending" &&
             errorField(taskError, "task_id") == "task-1",
-        "generic MCP extension executor preserves task identity without claiming completion"
+        "generic MCP extension executor preserves task identity without claiming completion: " +
+            taskError.describe()
     )
 
     let extensionError = executeOutcome(McpCallToolOutcome.Extension(
@@ -133,7 +134,8 @@ func executeOutcome(
         objectValue([
             ValueField("type", textValue("object")),
             ValueField("properties", objectValue([]))
-        ])
+        ]),
+        execution: Some(McpToolExecution(taskSupport: McpTaskSupport.Optional))
     )
     let client = McpClient(
         FakeMcpTransport(McpServer(

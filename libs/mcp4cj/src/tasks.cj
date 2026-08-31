@@ -109,11 +109,9 @@ public class McpTask {
             case Some(value) => fields.add(JsonObjectEntry("pollIntervalMs", jsonNumber(value.toString())))
             case None => ()
         }
-        if (resultType == MCP_RESULT_COMPLETE) {
-            if (!inputRequests.fields.isEmpty()) { fields.add(JsonObjectEntry("inputRequests", inputRequests)) }
-            if (result.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("result", result)) }
-            if (error.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("error", error)) }
-        }
+        if (!inputRequests.fields.isEmpty()) { fields.add(JsonObjectEntry("inputRequests", inputRequests)) }
+        if (result.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("result", result)) }
+        if (error.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("error", error)) }
         jsonObject(fields.toArray())
     }
 }

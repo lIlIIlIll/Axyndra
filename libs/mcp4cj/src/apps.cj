@@ -3,6 +3,7 @@ package mcp4cj
 import yjson.*
 import yjson_support.*
 import std.collection.*
+import std.convert.*
 
 public let MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui"
 public let MCP_APPS_PROTOCOL_VERSION = "2026-01-26"
@@ -127,9 +128,32 @@ public func validateMcpAppResourceContent(content: JsonNode): McpResult<Unit> {
         mcpText(content, "mimeType") != MCP_APPS_MIME_TYPE || mcpText(content, "text") == "") {
         return invalidMcp<Unit>("mcp.apps.resource_invalid", "invalid MCP App HTML resource content")
     }
-    let ui = mcpObject(mcpObject(content, "_meta"), MCP_APPS_UI_META)
-    match (validateMcpAppCsp(mcpObject(ui, "csp"))) {
-        case McpResult.Ok(_) => validateMcpAppPermissions(mcpObject(ui, "permissions"))
+    let metadata = match (content.field("_meta")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<Unit>("mcp.apps.meta_invalid", "MCP App resource _meta must be an object")
+        }
+        case None => jsonObject([])
+    }
+    let ui = match (metadata.field(MCP_APPS_UI_META)) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<Unit>("mcp.apps.ui_invalid", "MCP App resource ui metadata must be an object")
+        }
+        case None => jsonObject([])
+    }
+    let csp = match (ui.field("csp")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<Unit>("mcp.apps.csp_invalid", "MCP App CSP must be an object")
+        }
+        case None => jsonObject([])
+    }
+    let permissions = match (ui.field("permissions")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<Unit>("mcp.apps.permissions_invalid", "MCP App permissions must be an object")
+        }
+        case None => jsonObject([])
+    }
+    match (validateMcpAppCsp(csp)) {
+        case McpResult.Ok(_) => validateMcpAppPermissions(permissions)
         case McpResult.Err(error) => McpResult.Err(error)
     }
 }
@@ -179,11 +203,29 @@ func validMcpAppResourceUri(value: String): Bool {
 }
 
 func validMcpAppOrigin(value: String): Bool {
-    if (value.startsWith("https://") || value.startsWith("wss://")) {
-        let rest = value[value.indexOf("//").getOrThrow() + 2..]
-        return rest != "" && rest.indexOf(" ").isNone() && rest.indexOf("/").isNone()
+    let authority = if (value.startsWith("https://")) { value[8..] }
+        else if (value.startsWith("wss://")) { value[6..] }
+        else { return false }
+    if (authority == "" || authority.indexOf("@").isSome() || authority.indexOf("/").isSome() ||
+        authority.indexOf("?").isSome() || authority.indexOf("#").isSome() ||
+        authority.indexOf(" ").isSome()) { return false }
+    if (authority.startsWith("[")) {
+        let close = match (authority.indexOf("]")) { case Some(value) => value; case None => return false }
+        if (close <= 1) { return false }
+        let remainder = authority[close + 1..]
+        return remainder == "" || (remainder.startsWith(":") && validMcpAppPort(remainder[1..]))
     }
-    false
+    let parts = authority.split(":")
+    if (parts.isEmpty() || parts[0] == "" || parts.size > 2) { return false }
+    parts.size == 1 || validMcpAppPort(parts[1])
+}
+
+func validMcpAppPort(value: String): Bool {
+    if (value == "") { return false }
+    try {
+        let port = Int64.parse(value)
+        port > 0 && port <= 65535 && port.toString() == value
+    } catch (_: Exception) { false }
 }
 
 func validMcpAppDomain(value: String): Bool {

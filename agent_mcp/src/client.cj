@@ -114,11 +114,12 @@ class McpTransportBridge <: library.McpTransport {
     public func notify(notification: JsonRpcNotification): library.McpResult<Unit> {
         unmapMcpResult(product.notify(notification))
     }
-    public func cancel(requestId: JsonRpcId, reason: String): library.McpResult<Unit> {
-        unmapMcpResult(product.cancel(
-            requestId, reason,
-            McpRequestMeta(clientInfo: McpImplementationInfo("Axyndra-adapter", "1"))
-        ))
+    public func cancel(
+        requestId: JsonRpcId,
+        reason: String,
+        meta: McpRequestMeta
+    ): library.McpResult<Unit> {
+        unmapMcpResult(product.cancel(requestId, reason, meta))
     }
     public func registerTools(tools: Array<McpTool>): library.McpResult<Unit> {
         unmapMcpResult(product.registerTools(tools))
