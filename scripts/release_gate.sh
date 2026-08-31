@@ -41,6 +41,11 @@ python3 scripts/docs_gate.py
 sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
 source "$root/scripts/sdk_paths.sh"
 stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
+# Freeze the already validated, canonical SDK root for every nested
+# pinned_cangjie invocation. The user-facing SDK selector may be a mutable
+# symlink (for example daily) and a full gate can run across a rotation.
+export AXYNDRA_SDK_ROOT="$sdk_root"
+export CANGJIE_SDK_ROOT="$sdk_root"
 export CANGJIE_STDX_PATH="$stdx_root"
 export LD_LIBRARY_PATH="$root/libs/process4cj/native:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
@@ -60,6 +65,7 @@ python3 scripts/vnext_contract_gate.py --sdk-root "$sdk_root"
 AXYNDRA_PACKAGE_TECHNICAL_ONLY=1 \
 AXYNDRA_SDK_ROOT="$sdk_root" \
   bash scripts/package_readiness_gate.sh
+bash scripts/mcp_conformance_gate.sh
 
 for contract in "${contracts[@]}"; do
   printf 'release contract: %s\n' "$contract"

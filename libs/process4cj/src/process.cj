@@ -18,11 +18,47 @@ foreign func process4cj_spawn(
     stderrFd: CPointer<Int32>
 ): Int32
 foreign func process4cj_read(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int64
+foreign func process4cj_wait_readable(fd: Int32, timeoutMillis: Int32): Int32
 foreign func process4cj_write_all(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int32
 foreign func process4cj_close(fd: Int32): Int32
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
 foreign func process4cj_is_alive(pid: Int64): Int32
+
+// Bound blocking reads in protocol hosts so every Cangjie mutator regularly
+// returns from native code and remains available to the stop-the-world GC.
+public func waitReadableFd(fd: Int32, timeoutMillis: Int32): Bool {
+    if (fd < 0 || timeoutMillis < 0) {
+        throw IllegalArgumentException("file descriptor and timeout must not be negative")
+    }
+    let result = unsafe { process4cj_wait_readable(fd, timeoutMillis) }
+    if (result < 0) {
+        throw ProcessError(
+            ProcessErrorKind.Io,
+            "file descriptor readiness poll failed errno=" + (-result).toString()
+        )
+    }
+    result > 0
+}
+
+public func readFdChunk(fd: Int32, maxBytes!: Int64 = 8192): ?Array<Byte> {
+    if (fd < 0 || maxBytes < 1) {
+        throw IllegalArgumentException("file descriptor must not be negative and byte limit must be positive")
+    }
+    let buffer = Array<Byte>(maxBytes, repeat: 0)
+    let count = unsafe {
+        let raw = acquireArrayRawData(buffer)
+        try { process4cj_read(fd, raw.pointer, buffer.size) } finally { releaseArrayRawData(raw) }
+    }
+    if (count < 0) {
+        throw ProcessError(
+            ProcessErrorKind.Io,
+            "file descriptor read failed errno=" + (-count).toString()
+        )
+    }
+    if (count == 0) { return None }
+    Some(buffer[..count])
+}
 
 public enum ProcessErrorKind {
     Spawn | Io | BrokenPipe | Frame | OutputLimit | DeadlineExceeded | Cancelled | Exit

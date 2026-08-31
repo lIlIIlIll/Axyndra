@@ -26,7 +26,9 @@ class RetryAfterParsingTests {
         @Expect(parseRetryAfter("5"), 5000)
         @Expect(parseRetryAfter("9"), 8000)
         @Expect(parseRetryAfter("9223372036854775807"), 8000)
-        @Expect(parseRetryAfter("9223372036854775808"), 0)
+        // llm4cj saturates numeric overflow before the adapter applies its
+        // bounded retry policy.
+        @Expect(parseRetryAfter("9223372036854775808"), 8000)
         @Expect(parseRetryAfter("-1"), 0)
         @Expect(extractRetryAfterHeader(
             "Retry-After: 9223372036854775807\n"
@@ -106,6 +108,26 @@ class ProviderDialectContractTests {
             @Expect(true, true)
         }
     }
+
+    @TestCase
+    func deepSeekMessagesOmitsDisabledParallelToolCalls(): Unit {
+        let encoded = encodeDeepSeekMessagesRequest(domain.ModelRequest(
+            "deepseek-chat",
+            [domain.ModelMessage(
+                domain.ModelRole.User,
+                [domain.ModelBlock(domain.ModelBlockKind.Text, text: "hello")]
+            )],
+            tools: [domain.ModelToolDefinition(
+                "read",
+                "Read a file",
+                domain.objectValue([])
+            )],
+            thinking: domain.ThinkingLevel.Off,
+            parallelToolCalls: false
+        ))
+
+        @Expect(encoded.contains("parallel_tool_calls"), false)
+    }
 }
 
 @Test
@@ -143,9 +165,13 @@ class OrphanToolResultEncodingTests {
         let encoded = encodeMessagesRequest(request([
             domain.ModelMessage(
                 domain.ModelRole.User,
-                [resultBlock("call_orphan", "orphan output")]
+                [
+                    domain.ModelBlock(domain.ModelBlockKind.Text, text: "keep"),
+                    resultBlock("call_orphan", "orphan output")
+                ]
             )
         ]))
+        @Expect(encoded.contains("keep"), true)
         @Expect(encoded.contains("call_orphan"), false)
         @Expect(encoded.contains("orphan output"), false)
     }
@@ -187,9 +213,13 @@ class OrphanToolResultEncodingTests {
         let encoded = encodeCompletionsRequest(request([
             domain.ModelMessage(
                 domain.ModelRole.User,
-                [resultBlock("call_orphan", "orphan output")]
+                [
+                    domain.ModelBlock(domain.ModelBlockKind.Text, text: "keep"),
+                    resultBlock("call_orphan", "orphan output")
+                ]
             )
         ]))
+        @Expect(encoded.contains("keep"), true)
         @Expect(encoded.contains("call_orphan"), false)
         @Expect(encoded.contains("orphan output"), false)
     }

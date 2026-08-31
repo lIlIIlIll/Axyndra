@@ -8,6 +8,14 @@ import std.unittest.testmacro.*
 @Test
 class Process4CjTests {
     @TestCase
+    func rejectsInvalidReadinessPollArguments() {
+        @ExpectThrows[IllegalArgumentException](waitReadableFd(-1, 0))
+        @ExpectThrows[IllegalArgumentException](waitReadableFd(0, -1))
+        @ExpectThrows[IllegalArgumentException](readFdChunk(-1))
+        @ExpectThrows[IllegalArgumentException](readFdChunk(0, maxBytes: 0))
+    }
+
+    @TestCase
     func framesFragmentedLinesAndContentLengthBodies() {
         let lines = LineFramer(maxFrameBytes: 16)
         @Expect(lines.push("one\r").size, 0)
