@@ -64,8 +64,10 @@ jobs:
         run: |
           scripts/pinned_cangjie cjpm clean
           scripts/pinned_cangjie cjpm check
-      - name: Workspace Cangjie tests
-        run: scripts/pinned_cangjie cjpm test
+      - name: Isolated package and consumer tests
+        run: |
+          AXYNDRA_PACKAGE_TECHNICAL_ONLY=1 \
+            bash scripts/package_readiness_gate.sh
       - name: Build product executable
         run: |
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
