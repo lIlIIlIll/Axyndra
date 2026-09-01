@@ -137,6 +137,22 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func httpOperationCapacityReleasesOnlyAfterCancelledWorkerStops() {
+        let probe = SseWorkerLifecycleProbe()
+        let stream = McpOperationSseInput(
+            jsonRpcNumberId(1), 8388608,
+            { _ => probe.run() },
+            cancelAction: { => probe.cancel() },
+            releaseAction: { => probe.release() }
+        )
+        stream.close()
+        probe.waitUntilReleased()
+        @Expect(probe.wasCancelled(), true)
+        @Expect(probe.wasReleased(), true)
+        @Expect(probe.wasReleasedBeforeDone(), false)
+    }
+
+    @TestCase
     func rejectsOversizedHttpOperationProgressNotification() {
         let stream = McpOperationSseInput(jsonRpcNumberId(1), 1024, { sink =>
             sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([
@@ -904,6 +920,48 @@ class HoldingToolOperation {
         lock.lock(); try { failure = message } finally { lock.unlock() }
     }
     func release(): Unit { lock.lock(); try { released = true } finally { lock.unlock() } }
+}
+
+class SseWorkerLifecycleProbe {
+    private let lock = Mutex()
+    private var cancelled = false
+    private var operationDone = false
+    private var released = false
+    private var releasedBeforeDone = false
+    func run(): JsonRpcEnvelope {
+        while (true) {
+            lock.lock(); let stop = try { cancelled } finally { lock.unlock() }
+            if (stop) { break }
+            sleep(Duration.millisecond * 5)
+        }
+        lock.lock(); try { operationDone = true } finally { lock.unlock() }
+        JsonRpcEnvelope.Response(JsonRpcResponse(
+            jsonRpcNumberId(1), JsonRpcResponsePayload.Success(jsonObject([]))
+        ))
+    }
+    func cancel(): Unit {
+        lock.lock(); try { cancelled = true } finally { lock.unlock() }
+    }
+    func release(): Unit {
+        lock.lock(); try {
+            releasedBeforeDone = !operationDone
+            released = true
+        } finally { lock.unlock() }
+    }
+    func waitUntilReleased(): Unit {
+        var waited: Int64 = 0
+        while (waited < 3000) {
+            lock.lock(); let done = try { released } finally { lock.unlock() }
+            if (done) { return }
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        throw IllegalStateException("SSE worker reservation was not released")
+    }
+    func wasCancelled(): Bool { lock.lock(); try { cancelled } finally { lock.unlock() } }
+    func wasReleased(): Bool { lock.lock(); try { released } finally { lock.unlock() } }
+    func wasReleasedBeforeDone(): Bool {
+        lock.lock(); try { releasedBeforeDone } finally { lock.unlock() }
+    }
 }
 
 func fixtureElicitationParams(): JsonNode {

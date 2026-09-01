@@ -768,6 +768,11 @@ public class StreamableHttpMcpServer {
                                     ))
                                 )
                             },
+                            cancelAction: { =>
+                                let _ = mcp.handleNotification(mcpCancellationNotification(
+                                    value.id, "HTTP SSE client disconnected"
+                                ))
+                            },
                             releaseAction: { => releaseStream(value.id) }
                         ))
                     return
@@ -855,18 +860,21 @@ class McpOperationSseInput <: InputStream & Resource {
     private var closed = false
     private var overflowed = false
     private var worker: ?Future<Unit> = None
+    private let cancelAction: () -> Unit
     private let releaseAction: () -> Unit
 
     init(
         id: JsonRpcId,
         maxFrameBytes: Int64,
         operation: ((JsonRpcNotification) -> Unit) -> JsonRpcEnvelope,
+        cancelAction!: () -> Unit = { => },
         releaseAction!: () -> Unit = { => }
     ) {
         this.id = id
         this.maxFrameBytes = maxFrameBytes
+        this.cancelAction = cancelAction
         this.releaseAction = releaseAction
-        worker = Some(spawn {
+        let running = spawn {
             let response = try {
                 operation({ notification => enqueueProgress(JsonRpcEnvelope.Notification(notification)) })
             } catch (error: Exception) {
@@ -875,7 +883,11 @@ class McpOperationSseInput <: InputStream & Resource {
                 ))
             }
             enqueueFinal(response)
-        })
+        }
+        worker = Some(running)
+        spawn {
+            try { let _ = running.get() } finally { releaseAction() }
+        }
     }
 
     public func read(buffer: Array<Byte>): Int64 {
@@ -903,11 +915,14 @@ class McpOperationSseInput <: InputStream & Resource {
     }
 
     public func close(): Unit {
-        var release = false
+        var cancel = false
         lock.lock(); try {
-            if (!closed) { closed = true; queued.clear(); pending = []; release = true }
+            if (!closed) {
+                closed = true; queued.clear(); pending = []
+                cancel = !done
+            }
         } finally { lock.unlock() }
-        if (release) { releaseAction() }
+        if (cancel) { cancelAction() }
     }
     public func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
 
