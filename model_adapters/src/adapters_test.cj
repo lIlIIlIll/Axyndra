@@ -116,6 +116,19 @@ class NativeReplayRegressionTests {
     }
 
     @TestCase
+    func currentReplayRequiresCompatibleDialect(): Unit {
+        @Expect(nativeReplayMatches(
+            domain.OpaqueProviderState(
+                "messages-fixture", "messages",
+                "{\"protocol\":\"messages\",\"dialect_id\":\"deepseek.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"payload\":{}}",
+                itemId: "thinking", replayRequired: true
+            ),
+            ProviderDialect.AnthropicMessages,
+            ""
+        ), false)
+    }
+
+    @TestCase
     func malformedCurrentReplayEnvelopeDoesNotFallBackToLegacy(): Unit {
         try {
             let _ = restoreNativeReplay(domain.OpaqueProviderState(
