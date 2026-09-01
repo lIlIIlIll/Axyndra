@@ -3481,8 +3481,7 @@ func fromLlmWireReply(
         case domain.CompletionDisposition.OutputLimited => true
         case _ => false
     }
-    for (index in 0..reply.blocks.size) {
-        let block = reply.blocks[index]
+    for (block in reply.blocks) {
         match (block) {
             case LlmWireOutputBlock.Text(value) => blocks.add(domain.ModelBlock(
                 domain.ModelBlockKind.Text,
@@ -3504,21 +3503,7 @@ func fromLlmWireReply(
                         domain.ModelBlockKind.ToolCall,
                         callId: value.callId,
                         name: value.name,
-                        arguments: arguments,
-                        opaqueState: if (index > 0) {
-                            match (reply.blocks[index - 1]) {
-                                case LlmWireOutputBlock.NativeReplay(replay) => Some(
-                                    domain.OpaqueProviderState(
-                                        providerId,
-                                        providerProtocolName(protocol),
-                                        replay.snapshot(),
-                                        itemId: replay.nativeType,
-                                        replayRequired: true
-                                    )
-                                )
-                                case _ => None
-                            }
-                        } else { None }
+                        arguments: arguments
                     ))
                 // Preserve the terminal response, especially OutputLimited,
                 // but never promote partial or invalid arguments into an
@@ -3531,34 +3516,20 @@ func fromLlmWireReply(
                 domain.ModelBlockKind.Refusal,
                 text: value.text
             ))
-            case LlmWireOutputBlock.NativeReplay(value) =>
-                let followedByToolCall = !outputLimited && index + 1 < reply.blocks.size && match (
-                    reply.blocks[index + 1]
-                ) {
-                    case LlmWireOutputBlock.ToolCall(_) => true
-                    case _ => false
-                }
-                let reasoning = match (value.displayReasoning) {
+            case LlmWireOutputBlock.NativeReplay(value) => blocks.add(domain.ModelBlock(
+                domain.ModelBlockKind.Reasoning,
+                text: match (value.displayReasoning) {
                     case Some(text) => text
                     case None => ""
-                }
-                if (followedByToolCall) {
-                    if (reasoning != "") { blocks.add(domain.ModelBlock(
-                        domain.ModelBlockKind.Reasoning, text: reasoning
-                    )) }
-                } else {
-                    blocks.add(domain.ModelBlock(
-                        domain.ModelBlockKind.Reasoning,
-                        text: reasoning,
-                        opaqueState: Some(domain.OpaqueProviderState(
-                            providerId,
-                            providerProtocolName(protocol),
-                            value.snapshot(),
-                            itemId: value.nativeType,
-                            replayRequired: true
-                        ))
-                    ))
-                }
+                },
+                opaqueState: Some(domain.OpaqueProviderState(
+                    providerId,
+                    providerProtocolName(protocol),
+                    value.snapshot(),
+                    itemId: value.nativeType,
+                    replayRequired: true
+                ))
+            ))
         }
     }
     let outcome = decisionOutcomeFrom(blocks.toArray())
