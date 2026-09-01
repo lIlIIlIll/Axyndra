@@ -1115,7 +1115,8 @@ func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonN
 }
 
 func validateMcpInputResponses(
-    inputRequests: JsonNode, responses: JsonNode, requireAll!: Bool = true
+    inputRequests: JsonNode, responses: JsonNode,
+    requireAll!: Bool = true, rejectUnknown!: Bool = true
 ): McpResult<Unit> {
     if (responses.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.input_responses_invalid", "inputResponses must be an object") }
     for (request in inputRequests.fields) { match (responses.field(request.name)) {
@@ -1132,8 +1133,10 @@ func validateMcpInputResponses(
             return invalidMcp<Unit>("mcp.input_response_missing", "retry must answer every input request")
         }
     } }
-    for (response in responses.fields where inputRequests.field(response.name).isNone()) {
-        return invalidMcp<Unit>("mcp.input_response_unknown", "retry contains an unknown input response")
+    if (rejectUnknown) {
+        for (response in responses.fields where inputRequests.field(response.name).isNone()) {
+            return invalidMcp<Unit>("mcp.input_response_unknown", "retry contains an unknown input response")
+        }
     }
     McpResult.Ok(())
 }
