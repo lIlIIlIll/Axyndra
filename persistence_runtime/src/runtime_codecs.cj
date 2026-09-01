@@ -971,7 +971,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    let serviceTier = match (value.field("service_tier")) {
+    let persistedServiceTier = match (value.field("service_tier")) {
         case Some(raw) =>
             if (raw.unifiedKind == ValueKind.Text) {
                 raw.text
@@ -980,9 +980,14 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             }
         case None => ""
     }
+    // OpenAI replaced the legacy scale tier with priority. Persisted v4
+    // continuations must remain resumable across that catalog migration.
+    let serviceTier = if (persistedServiceTier == "scale") {
+        "priority"
+    } else { persistedServiceTier }
     if (serviceTier != "" && serviceTier != "auto" &&
         serviceTier != "default" && serviceTier != "flex" &&
-        serviceTier != "scale" && serviceTier != "priority") {
+        serviceTier != "priority") {
         return codecError("unknown run continuation service tier")
     }
     let pricing: ?ModelPricing = match (value.field("pricing")) {

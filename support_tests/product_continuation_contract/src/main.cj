@@ -66,6 +66,7 @@ main(): Int64 {
             structuredOutput: Some(schema),
             cachePolicy: ModelCachePolicy.StablePrefix,
             cacheKey: "product-stable-prefix",
+            serviceTier: "priority",
             parallelToolCalls: true
         )
         let database = SqliteDatabase(root + "/state/state.db")
@@ -118,6 +119,21 @@ main(): Int64 {
         database.execute(
             "UPDATE legacy_run_continuation_imports SET payload=" +
                 sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"
+        )
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET " +
+                "payload=json_set(payload,'$.service_tier','scale') " +
+                "WHERE run_id='product-restart-run'"
+        )
+        let scaleMigrated = continuationRepository.continuation(runId)
+            .value().getOrThrow()
+        expect(scaleMigrated.serviceTier == "priority" && database.scalarInt(
+            "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                "WHERE run_id='product-restart-run'"
+        ) == 0, "legacy scale tier migrates to priority during durable recovery")
+        database.execute(
+            "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
+                "'product-restart-run'," + sqliteText(encodedContinuation) + ")"
         )
         expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
             "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
