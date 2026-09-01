@@ -88,6 +88,21 @@ class McpHttpActiveRequest {
     init(id: JsonRpcId, client: Client) { this.id = id; this.client = client }
 }
 
+class McpHttpServerReservation {
+    let owner: String
+    let id: JsonRpcId
+    init(owner: String, id: JsonRpcId) { this.owner = owner; this.id = id }
+}
+
+class McpHttpServerSubscription {
+    let owner: String
+    let id: JsonRpcId
+    let stream: McpSubscriptionSseInput
+    init(owner: String, id: JsonRpcId, stream: McpSubscriptionSseInput) {
+        this.owner = owner; this.id = id; this.stream = stream
+    }
+}
+
 // MCP 2026-07-28 transport used by the project is request-scoped and
 // stateless: every message is a POST and SSE is a response representation.
 public class StreamableHttpMcpTransport <: McpTransport {
@@ -658,8 +673,8 @@ public class StreamableHttpMcpServer {
     private let native: Server
     private let lifecycle = McpLifecycle()
     private let requestLock = Mutex()
-    private let activeStreams = ArrayList<JsonRpcId>()
-    private let activeSubscriptions = ArrayList<JsonRpcId>()
+    private let activeStreams = ArrayList<McpHttpServerReservation>()
+    private let activeSubscriptions = ArrayList<McpHttpServerSubscription>()
 
     init(config: McpStreamableHttpServerConfig, mcp: McpServer, native: Server) {
         this.config = config; this.mcp = mcp; this.native = native
@@ -715,7 +730,7 @@ public class StreamableHttpMcpServer {
             return
         }
         match (envelope) {
-            case JsonRpcEnvelope.Request(value) => if (!reserveStream(value.id)) {
+            case JsonRpcEnvelope.Request(value) => if (!reserveStream(requestOwner, value.id)) {
                 writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
                 return
             }
@@ -725,7 +740,7 @@ public class StreamableHttpMcpServer {
             case McpResult.Ok(_) => ()
             case McpResult.Err(error) =>
                 match (envelope) {
-                    case JsonRpcEnvelope.Request(value) => releaseStream(value.id)
+                    case JsonRpcEnvelope.Request(value) => releaseStream(requestOwner, value.id)
                     case _ => ()
                 }
                 writeMcpHttpEnvelope(
@@ -753,17 +768,18 @@ public class StreamableHttpMcpServer {
             case JsonRpcEnvelope.Request(value) => if (value.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
                 match (mcp.openSubscription(value)) {
                     case McpResult.Ok(source) =>
-                        markSubscription(value.id)
+                        let stream = McpSubscriptionSseInput(
+                            value.id, source, config.framing.maxFrameBytes,
+                            releaseAction: { => releaseStream(requestOwner, value.id) }
+                        )
+                        markSubscription(requestOwner, value.id, stream)
                         context.responseBuilder.status(200)
                             .header("Content-Type", "text/event-stream; charset=utf-8")
                             .header("Cache-Control", "no-store")
                             .header("Transfer-Encoding", "chunked")
-                            .body(McpSubscriptionSseInput(
-                                value.id, source, config.framing.maxFrameBytes,
-                                releaseAction: { => releaseStream(value.id) }
-                            ))
+                            .body(stream)
                     case McpResult.Err(error) =>
-                        releaseStream(value.id)
+                        releaseStream(requestOwner, value.id)
                         writeMcpHttpEnvelope(
                             context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(
                                 value.id,
@@ -803,7 +819,7 @@ public class StreamableHttpMcpServer {
                                     value.id, "HTTP SSE client disconnected"
                                 ), requestOwner: requestOwner)
                             },
-                            releaseAction: { => releaseStream(value.id) }
+                            releaseAction: { => releaseStream(requestOwner, value.id) }
                         ))
                     return
                 }
@@ -844,7 +860,7 @@ public class StreamableHttpMcpServer {
             }
         } finally {
             match (envelope) {
-                case JsonRpcEnvelope.Request(value) => releaseStream(value.id)
+                case JsonRpcEnvelope.Request(value) => releaseStream(requestOwner, value.id)
                 case _ => ()
             }
         }
@@ -854,40 +870,40 @@ public class StreamableHttpMcpServer {
         notification: JsonRpcNotification,
         requestOwner: String
     ): McpResult<?JsonRpcEnvelope> {
-        let cancelledSubscription: ?JsonRpcId = if (notification.method == MCP_METHOD_CANCELLED) {
+        let cancelledSubscription = if (notification.method == MCP_METHOD_CANCELLED) {
             match (notification.params.field("requestId")) {
                 case Some(rawId) => match (decodeMcpRequestId(rawId)) {
-                    case McpResult.Ok(id) => if (isActiveSubscription(id)) { Some(id) } else { None }
-                    case McpResult.Err(_) => None
+                    case McpResult.Ok(id) => cancelSubscription(requestOwner, id)
+                    case McpResult.Err(_) => false
                 }
-                case None => None
+                case None => false
             }
-        } else { None }
+        } else { false }
         match (mcp.handleNotification(notification, requestOwner: requestOwner)) {
             case McpResult.Ok(_) =>
-                match (cancelledSubscription) {
-                    case Some(id) => releaseStream(id)
-                    case None => ()
-                }
+                let _ = cancelledSubscription
                 McpResult.Ok(None)
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
 
-    private func reserveStream(id: JsonRpcId): Bool {
+    private func reserveStream(owner: String, id: JsonRpcId): Bool {
         requestLock.lock(); try {
             if (activeStreams.size >= config.maxConcurrentRequests) { false }
-            else { activeStreams.add(id); true }
+            else { activeStreams.add(McpHttpServerReservation(owner, id)); true }
         } finally { requestLock.unlock() }
     }
 
-    private func releaseStream(id: JsonRpcId): Unit {
+    private func releaseStream(owner: String, id: JsonRpcId): Unit {
         requestLock.lock(); try {
-            for (index in 0..activeSubscriptions.size where sameJsonRpcId(activeSubscriptions[index], id)) {
+            for (index in 0..activeSubscriptions.size where
+                activeSubscriptions[index].owner == owner &&
+                sameJsonRpcId(activeSubscriptions[index].id, id)) {
                 activeSubscriptions.remove(at: index)
                 break
             }
-            for (index in 0..activeStreams.size where sameJsonRpcId(activeStreams[index], id)) {
+            for (index in 0..activeStreams.size where
+                activeStreams[index].owner == owner && sameJsonRpcId(activeStreams[index].id, id)) {
                 activeStreams.remove(at: index)
                 return
             }
@@ -895,15 +911,29 @@ public class StreamableHttpMcpServer {
         finally { requestLock.unlock() }
     }
 
-    private func markSubscription(id: JsonRpcId): Unit {
-        requestLock.lock(); try { activeSubscriptions.add(id) } finally { requestLock.unlock() }
+    private func markSubscription(
+        owner: String, id: JsonRpcId, stream: McpSubscriptionSseInput
+    ): Unit {
+        requestLock.lock()
+        try { activeSubscriptions.add(McpHttpServerSubscription(owner, id, stream)) }
+        finally { requestLock.unlock() }
     }
 
-    private func isActiveSubscription(id: JsonRpcId): Bool {
-        requestLock.lock(); try {
-            for (active in activeSubscriptions where sameJsonRpcId(active, id)) { return true }
-            false
+    private func cancelSubscription(owner: String, id: JsonRpcId): Bool {
+        if (owner == "") { return false }
+        var stream: ?McpSubscriptionSseInput = None
+        requestLock.lock()
+        try {
+            for (active in activeSubscriptions where
+                active.owner == owner && sameJsonRpcId(active.id, id)) {
+                stream = Some(active.stream)
+                break
+            }
         } finally { requestLock.unlock() }
+        match (stream) {
+            case Some(value) => value.close(); true
+            case None => false
+        }
     }
 }
 
@@ -1037,6 +1067,7 @@ class McpSubscriptionSseInput <: InputStream & Resource {
     private let source: McpSubscriptionSource
     private let maxFrameBytes: Int64
     private let releaseAction: () -> Unit
+    private let lock = Mutex()
     private var pending: Array<Byte> = []
     private var offset: Int64 = 0
     private var first = true
@@ -1051,7 +1082,7 @@ class McpSubscriptionSseInput <: InputStream & Resource {
     }
 
     public func read(buffer: Array<Byte>): Int64 {
-        if (closed || buffer.isEmpty()) { return 0 }
+        if (isClosed() || buffer.isEmpty()) { return 0 }
         while (offset >= pending.size) {
             if (finishAfterPending) { close(); return 0 }
             let envelope: JsonRpcEnvelope = if (first) {
@@ -1073,6 +1104,7 @@ class McpSubscriptionSseInput <: InputStream & Resource {
                         JsonRpcEnvelope.Response(mcpHostFailure(id, error))
                 }
             }
+            if (isClosed()) { return 0 }
             let bytes = ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
             if (bytes.size > maxFrameBytes) {
                 pending = ("event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Response(
@@ -1087,10 +1119,13 @@ class McpSubscriptionSseInput <: InputStream & Resource {
         offset += count; count
     }
     public func close(): Unit {
-        if (closed) { return }
-        closed = true; let _ = source.close(); releaseAction()
+        var shouldClose = false
+        lock.lock()
+        try { if (!closed) { closed = true; shouldClose = true } }
+        finally { lock.unlock() }
+        if (shouldClose) { let _ = source.close(); releaseAction() }
     }
-    public func isClosed(): Bool { closed }
+    public func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
 }
 
 func tagMcpSubscriptionNotification(

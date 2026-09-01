@@ -499,7 +499,8 @@ class Mcp4CjTests {
 
     @TestCase
     func httpServerBoundsConcurrentSubscriptionStreams() {
-        let protocol = McpServerBuilder().notificationProvider(HoldingNotificationProvider()).build()
+        let notifications = HoldingNotificationProvider()
+        let protocol = McpServerBuilder().notificationProvider(notifications).build()
         let server = match (openStreamableHttpMcpServer(
             McpStreamableHttpServerConfig(port: 0, maxConcurrentRequests: 1), protocol
         )) {
@@ -519,12 +520,19 @@ class Mcp4CjTests {
             case McpResult.Err(error) => throw error
         }
         @Expect(client.listen(McpSubscriptionFilter(toolsListChanged: true)).isOk(), false)
-        @Expect(first.close().isOk(), true)
+        @Expect(client.notify(
+            MCP_METHOD_CANCELLED,
+            params: mcpCancellationNotification(
+                first.subscriptionId(), "cancel active subscription"
+            ).params
+        ).isOk(), true)
         sleep(Duration.millisecond * 100)
+        @Expect(notifications.closedSources(), 1)
         let reopened = match (client.listen(McpSubscriptionFilter(toolsListChanged: true))) {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => throw error
         }
+        @Expect(first.close().isOk(), true)
         @Expect(reopened.close().isOk(), true)
         @Expect(client.close().isOk(), true)
         @Expect(server.close().isOk(), true)
@@ -1238,13 +1246,25 @@ class FixtureMcpSubscriptionSource <: McpSubscriptionSource {
 }
 
 class HoldingNotificationProvider <: McpNotificationProvider {
+    private let lock = Mutex()
+    private let sources = ArrayList<HoldingSubscriptionSource>()
     public func open(requestId: JsonRpcId, filter: McpSubscriptionFilter): McpResult<McpSubscriptionSource> {
         let _ = requestId
-        McpResult.Ok(HoldingSubscriptionSource(filter))
+        let source = HoldingSubscriptionSource(filter)
+        lock.lock(); try { sources.add(source) } finally { lock.unlock() }
+        McpResult.Ok(source)
     }
     public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
         let _ = requestId; let _ = reason
         McpResult.Ok(())
+    }
+    func closedSources(): Int64 {
+        lock.lock()
+        try {
+            var count: Int64 = 0
+            for (source in sources where source.isClosed()) { count++ }
+            count
+        } finally { lock.unlock() }
     }
 }
 
@@ -1266,6 +1286,7 @@ class HoldingSubscriptionSource <: McpSubscriptionSource {
         lock.lock(); try { closed = true } finally { lock.unlock() }
         McpResult.Ok(())
     }
+    func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
 }
 
 class FixtureMcpTaskProvider <: McpTaskProvider {
