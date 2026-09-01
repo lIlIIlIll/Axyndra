@@ -155,6 +155,13 @@ class Mcp4CjTests {
             case McpResult.Err(error) => @Expect(error.code, "mcp.input_required_invalid")
             case _ => @Fail("non-object inputRequests was accepted")
         }
+        @Expect(decodeMcpInputRequest(jsonObject([
+            JsonObjectEntry("method", jsonString(MCP_METHOD_SAMPLING_CREATE_MESSAGE)),
+            JsonObjectEntry("params", jsonObject([
+                JsonObjectEntry("messages", jsonArray([jsonBool(true)])),
+                JsonObjectEntry("maxTokens", jsonNumber("32"))
+            ]))
+        ])).isOk(), false)
     }
 
     @TestCase
@@ -506,6 +513,17 @@ class Mcp4CjTests {
                 @Expect(handle.close().isOk(), true)
             case McpResult.Err(error) => @Fail(error.message)
         }
+    }
+
+    @TestCase
+    func rejectsMalformedListDescriptors() {
+        let page = jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("prompts", jsonArray([jsonObject([])])),
+            JsonObjectEntry("ttlMs", jsonNumber("300000")),
+            JsonObjectEntry("cacheScope", jsonString("private"))
+        ])
+        @Expect(decodeMcpPage(page, "prompts").isOk(), false)
     }
 
     @TestCase

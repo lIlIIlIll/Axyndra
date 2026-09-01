@@ -84,6 +84,28 @@ public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
         if (messages.unifiedKind != UnifiedJsonKind.List || mcpInteger(params, "maxTokens") <= 0) {
             return invalidMcp<McpInputRequest>("mcp.sampling_params_invalid", "sampling/createMessage requires an array of messages and positive maxTokens")
         }
+        for (message in messages.items) {
+            if (message.unifiedKind != UnifiedJsonKind.Object) {
+                return invalidMcp<McpInputRequest>("mcp.sampling_message_invalid", "sampling messages must be objects")
+            }
+            let role = mcpText(message, "role")
+            let content = mcpField(message, "content", jsonNull())
+            if ((role != "user" && role != "assistant") || content.unifiedKind != UnifiedJsonKind.Object) {
+                return invalidMcp<McpInputRequest>("mcp.sampling_message_invalid", "sampling messages require a valid role and object content")
+            }
+            let contentType = mcpText(content, "type")
+            let validContent = match (contentType) {
+                case "text" => match (content.field("text")) {
+                    case Some(value) => value.unifiedKind == UnifiedJsonKind.Text
+                    case None => false
+                }
+                case "image" | "audio" => mcpText(content, "data") != "" && mcpText(content, "mimeType") != ""
+                case _ => false
+            }
+            if (!validContent) {
+                return invalidMcp<McpInputRequest>("mcp.sampling_message_invalid", "sampling message content is invalid")
+            }
+        }
         let includeContext = mcpText(params, "includeContext")
         if (includeContext != "" && includeContext != "none" && includeContext != "thisServer" && includeContext != "allServers") {
             return invalidMcp<McpInputRequest>("mcp.sampling_context_invalid", "sampling includeContext is invalid")
