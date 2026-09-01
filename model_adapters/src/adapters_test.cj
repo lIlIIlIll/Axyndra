@@ -35,6 +35,34 @@ class UsageProjectionTests {
 }
 
 @Test
+class NativeReplayRegressionTests {
+    @TestCase
+    func legacyReplayUsesConfiguredDialectInsteadOfProfileName(): Unit {
+        let replay = restoreNativeReplay(domain.OpaqueProviderState(
+            "primary", "messages",
+            "{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"}",
+            itemId: "thinking", replayRequired: true
+        ), ProviderDialect.DeepSeekMessages)
+        @Expect(replay.dialectId, "deepseek.messages.v1")
+    }
+
+    @TestCase
+    func opaqueReplaySuppressesCanonicalReasoningCounterpart(): Unit {
+        let blocks = [
+            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "why"),
+            domain.ModelBlock(
+                domain.ModelBlockKind.Unknown,
+                opaqueState: Some(domain.OpaqueProviderState(
+                    "primary", "messages", "{}", itemId: "thinking", replayRequired: true
+                ))
+            )
+        ]
+        @Expect(canonicalReasoningHasReplayCounterpart(blocks, 0), true)
+    }
+
+}
+
+@Test
 class CurlResponseCaptureTests {
     @TestCase
     func responseHeadersNeverShareModelBodyStdout(): Unit {

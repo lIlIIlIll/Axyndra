@@ -2974,29 +2974,43 @@ func agentValueLlmJson(value: domain.AgentValue): LlmWireJson {
     parseLlmWireJson(encodeAgentValue(value))
 }
 
-func restoreNativeReplay(state: domain.OpaqueProviderState): LlmWireNativeReplayBlock {
+func legacyReplayDialectId(dialect: ProviderDialect): String {
+    match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
+            "anthropic.messages.v1"
+        case ProviderDialect.DeepSeekMessages => "deepseek.messages.v1"
+        case ProviderDialect.OpenAiResponses => "openai.responses.v1"
+        case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat => "openai.chat.v1"
+        case ProviderDialect.DeepSeekChat => "deepseek.chat.v1"
+    }
+}
+
+func legacyReplayProtocol(dialect: ProviderDialect): String {
+    match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.DeepSeekMessages |
+            ProviderDialect.GenericMessages => "messages"
+        case ProviderDialect.OpenAiResponses => "responses"
+        case ProviderDialect.OpenAiChat | ProviderDialect.DeepSeekChat |
+            ProviderDialect.GenericChat => "chat_completions"
+    }
+}
+
+func restoreNativeReplay(
+    state: domain.OpaqueProviderState,
+    dialect: ProviderDialect
+): LlmWireNativeReplayBlock {
     try {
         LlmWireNativeReplayBlock.restore(state.payload)
     } catch (_: Exception) {
         let protocol = state.protocol.toAsciiLower()
-        let provider = state.providerId.toAsciiLower()
-        let dialect = match (protocol) {
-            case "messages" => if (provider.contains("deepseek")) {
-                "deepseek.messages.v1"
-            } else {
-                "anthropic.messages.v1"
-            }
-            case "responses" => if (provider.contains("deepseek")) {
-                "deepseek.responses.v1"
-            } else {
-                "openai.responses.v1"
-            }
-            case "chat_completions" => "deepseek.chat.v1"
-            case _ => throw IllegalArgumentException("legacy native replay protocol is unsupported")
+        if (protocol != legacyReplayProtocol(dialect)) {
+            throw IllegalArgumentException(
+                "legacy native replay protocol does not match configured provider dialect"
+            )
         }
         LlmWireNativeReplayBlock.restore(jsonObject([
             JsonObjectEntry("protocol", jsonString(protocol)),
-            JsonObjectEntry("dialect_id", jsonString(dialect)),
+            JsonObjectEntry("dialect_id", jsonString(legacyReplayDialectId(dialect))),
             JsonObjectEntry("native_type", jsonString(state.itemId)),
             JsonObjectEntry("schema_version", jsonNumber("1")),
             JsonObjectEntry("scope", jsonString("assistant_turn")),
@@ -3008,11 +3022,11 @@ func restoreNativeReplay(state: domain.OpaqueProviderState): LlmWireNativeReplay
     }
 }
 
-func toLlmWireBlock(block: domain.ModelBlock): LlmWireBlock {
+func toLlmWireBlock(block: domain.ModelBlock, dialect: ProviderDialect): LlmWireBlock {
     match (block.kind) {
         case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
             match (block.opaqueState) {
-                case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value))
+                case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value, dialect))
                 case None => ()
             }
         case _ => ()
@@ -3092,23 +3106,22 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
         for (index in 0..message.blocks.size) {
             let block = message.blocks[index]
             if (let domain.ModelBlockKind.Reasoning <- block.kind) {
-                if (block.opaqueState.isNone() && index + 1 < message.blocks.size) {
-                    if (let domain.ModelBlockKind.Reasoning <- message.blocks[index + 1].kind) {
-                        if (message.blocks[index + 1].opaqueState.isSome()) { continue }
-                    }
+                if (block.opaqueState.isNone() &&
+                    canonicalReasoningHasReplayCounterpart(message.blocks, index)) {
+                    continue
                 }
             }
             match (block.kind) {
                 case domain.ModelBlockKind.ToolCall =>
                     pendingToolCalls.add(block.callId)
-                    blocks.add(toLlmWireBlock(block))
+                    blocks.add(toLlmWireBlock(block, dialect))
                 case domain.ModelBlockKind.ToolResult =>
                     if (pendingToolCalls.contains(block.callId) &&
                         !consumedToolCalls.contains(block.callId)) {
                         consumedToolCalls.add(block.callId)
-                        blocks.add(toLlmWireBlock(block))
+                        blocks.add(toLlmWireBlock(block, dialect))
                     }
-                case _ => blocks.add(toLlmWireBlock(block))
+                case _ => blocks.add(toLlmWireBlock(block, dialect))
             }
         }
         if (!blocks.isEmpty()) {
@@ -3193,6 +3206,19 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
         },
         structuredOutput: structured
     )
+}
+
+func canonicalReasoningHasReplayCounterpart(
+    blocks: Array<domain.ModelBlock>,
+    index: Int64
+): Bool {
+    if (index + 1 >= blocks.size) { return false }
+    let next = blocks[index + 1]
+    if (next.opaqueState.isNone()) { return false }
+    match (next.kind) {
+        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown => true
+        case _ => false
+    }
 }
 
 func toLlmWireThinkingCapabilities(value: domain.ThinkingCapabilities): LlmWireThinkingCapabilities {
