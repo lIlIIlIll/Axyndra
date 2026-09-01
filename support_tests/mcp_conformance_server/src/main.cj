@@ -143,7 +143,7 @@ class ConformanceProviders <: McpCompletionProvider & McpPromptProvider & McpRes
         if (name == "confirm_delete") {
             if (!continuation.tasksSupported) { return completeText("Delete confirmation complete") }
             return createInputTask("confirm", jsonObject([JsonObjectEntry(
-                "confirm-delete", inputRequest("elicitation/create", elicitationParams("Confirm delete"))
+                "confirm-delete", inputRequest("elicitation/create", confirmationParams("Confirm delete"))
             )]))
         }
         if (name == "multi_input") {
@@ -491,6 +491,18 @@ func elicitationParams(message: String): JsonNode {
             JsonObjectEntry("properties", jsonObject([JsonObjectEntry("name", jsonObject([
                 JsonObjectEntry("type", jsonString("string"))
             ]))])), JsonObjectEntry("required", jsonArray([jsonString("name")]))
+        ]))
+    ])
+}
+
+func confirmationParams(message: String): JsonNode {
+    jsonObject([
+        JsonObjectEntry("message", jsonString(message)),
+        JsonObjectEntry("requestedSchema", jsonObject([
+            JsonObjectEntry("type", jsonString("object")),
+            JsonObjectEntry("properties", jsonObject([JsonObjectEntry("confirm", jsonObject([
+                JsonObjectEntry("type", jsonString("boolean"))
+            ]))])), JsonObjectEntry("required", jsonArray([jsonString("confirm")]))
         ]))
     ])
 }
