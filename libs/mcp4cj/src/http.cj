@@ -362,16 +362,8 @@ public class StreamableHttpMcpTransport <: McpTransport {
             }
             case Some(id) =>
                 let contentType = (response.headers.getFirst("content-type") ?? "").toAsciiLower()
-                let body = match (readMcpHttpBody(response.body, response.bodySize, config.framing.maxFrameBytes)) {
-                    case McpResult.Ok(value) => value
-                    case McpResult.Err(error) => return if (!successful) {
-                        httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
-                    } else if (operation == MCP_METHOD_TOOLS_CALL) {
-                        ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message)
-                    } else { McpResult.Err(error) }
-                }
                 let envelope = if (contentType.startsWith("text/event-stream")) {
-                    match (decodeMcpSseResponse(body, id, config.framing.maxFrameBytes)) {
+                    match (readMcpSseResponse(response.body, id, config.framing.maxFrameBytes)) {
                         case McpResult.Ok(value) => JsonRpcEnvelope.Response(value)
                         case McpResult.Err(error) => return if (!successful) {
                             httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
@@ -380,6 +372,14 @@ public class StreamableHttpMcpTransport <: McpTransport {
                         } else { McpResult.Err(error) }
                     }
                 } else if (contentType.startsWith("application/json")) {
+                    let body = match (readMcpHttpBody(response.body, response.bodySize, config.framing.maxFrameBytes)) {
+                        case McpResult.Ok(value) => value
+                        case McpResult.Err(error) => return if (!successful) {
+                            httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+                        } else if (operation == MCP_METHOD_TOOLS_CALL) {
+                            ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message)
+                        } else { McpResult.Err(error) }
+                    }
                     match (decodeJsonRpc(body, maxBytes: config.framing.maxFrameBytes)) {
                         case JsonRpcResult.Ok(value) => value
                         case JsonRpcResult.Err(error) => return if (successful) {
@@ -558,6 +558,35 @@ func readMcpSseEnvelope(stream: InputStream, maxEventBytes: Int64): McpResult<?J
         }
     }
     McpResult.Ok(None)
+}
+
+func readMcpSseResponse(
+    stream: InputStream,
+    expectedId: JsonRpcId,
+    maxEventBytes: Int64
+): McpResult<JsonRpcResponse> {
+    if (maxEventBytes < 1) {
+        return invalidMcp<JsonRpcResponse>(
+            "mcp.http_sse_limit_invalid", "MCP SSE event limit must be positive"
+        )
+    }
+    while (true) {
+        match (readMcpSseEnvelope(stream, maxEventBytes)) {
+            case McpResult.Err(error) => return McpResult.Err(error)
+            case McpResult.Ok(None) => return invalidMcp<JsonRpcResponse>(
+                "mcp.http_sse_response_missing",
+                "MCP SSE stream ended without the matching JSON-RPC response"
+            )
+            case McpResult.Ok(Some(JsonRpcEnvelope.Response(response))) =>
+                if (sameJsonRpcId(response.id, expectedId)) { return McpResult.Ok(response) }
+            case McpResult.Ok(Some(JsonRpcEnvelope.Notification(_))) => ()
+            case McpResult.Ok(Some(JsonRpcEnvelope.Request(_))) => return invalidMcp<JsonRpcResponse>(
+                "mcp.http_sse_reverse_request_unsupported",
+                "MCP SSE response contained an unsupported reverse request"
+            )
+        }
+    }
+    invalidMcp<JsonRpcResponse>("mcp.http_sse_response_missing", "MCP SSE response was not found")
 }
 
 func notificationBelongsToSubscription(notification: JsonRpcNotification, id: JsonRpcId): Bool {

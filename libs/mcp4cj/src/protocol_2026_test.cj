@@ -176,7 +176,7 @@ class McpProtocol2026Tests {
             "task-input", McpTaskStatus.InputRequired,
             "2026-08-27T00:00:00Z", "2026-08-27T00:01:00Z", None,
             inputRequests: jsonObject([JsonObjectEntry("name", jsonObject([
-                JsonObjectEntry("method", jsonString("elicitation/create"))
+                JsonObjectEntry("method", jsonString(MCP_METHOD_ROOTS_LIST))
             ]))])
         ).toValue()
         @Expect(pending.field("ttlMs").getOrThrow().unifiedKind == UnifiedJsonKind.Null, true)
@@ -188,6 +188,16 @@ class McpProtocol2026Tests {
             JsonObjectEntry("lastUpdatedAt", jsonString("2026-08-27T00:01:00Z")),
             JsonObjectEntry("ttlMs", jsonNull()),
             JsonObjectEntry("inputRequests", jsonString("malformed"))
+        ])).isOk(), false)
+        @Expect(decodeMcpTask(jsonObject([
+            JsonObjectEntry("taskId", jsonString("task-input")),
+            JsonObjectEntry("status", jsonString("input_required")),
+            JsonObjectEntry("createdAt", jsonString("2026-08-27T00:00:00Z")),
+            JsonObjectEntry("lastUpdatedAt", jsonString("2026-08-27T00:01:00Z")),
+            JsonObjectEntry("ttlMs", jsonNull()),
+            JsonObjectEntry("inputRequests", jsonObject([
+                JsonObjectEntry("bad", jsonObject([JsonObjectEntry("method", jsonString("unknown"))]))
+            ]))
         ])).isOk(), false)
         let _ = @ExpectThrows[IllegalArgumentException](McpTask(
             "task-bad", McpTaskStatus.Completed,
