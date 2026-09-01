@@ -266,6 +266,23 @@ class OrphanToolResultEncodingTests {
     }
 
     @TestCase
+    func messagesProtocolPairsReusedToolCallIdsByOccurrence(): Unit {
+        let wire = toLlmWireRequest(request([
+            domain.ModelMessage(domain.ModelRole.Assistant, [callBlock("call_reused")]),
+            domain.ModelMessage(domain.ModelRole.User, [resultBlock("call_reused", "first output")]),
+            domain.ModelMessage(domain.ModelRole.Assistant, [callBlock("call_reused")]),
+            domain.ModelMessage(domain.ModelRole.User, [resultBlock("call_reused", "second output")])
+        ]), ProviderDialect.AnthropicMessages)
+        var resultCount = 0
+        for (message in wire.messages) {
+            for (block in message.blocks) {
+                if (let LlmWireBlock.ToolResult(_) <- block) { resultCount++ }
+            }
+        }
+        @Expect(resultCount, 2)
+    }
+
+    @TestCase
     func completionsProtocolDropsOrphanToolMessages(): Unit {
         let encoded = encodeCompletionsRequest(request([
             domain.ModelMessage(
