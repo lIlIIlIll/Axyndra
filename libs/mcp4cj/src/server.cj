@@ -458,7 +458,14 @@ public class McpServer {
         let taskId = mcpText(request.params, "taskId")
         if (taskId == "") { return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/get requires taskId") }
         match (provider.getTask(taskId)) {
-            case McpResult.Ok(task) => mcpSuccessResponse(request.id, task.toValue(), discovery.serverInfo)
+            case McpResult.Ok(task) => if (task.taskId == taskId) {
+                mcpSuccessResponse(request.id, task.toValue(), discovery.serverInfo)
+            } else {
+                mcpFailureResponse(
+                    request.id, JSON_RPC_INTERNAL_ERROR,
+                    "task provider returned a different taskId"
+                )
+            }
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
         }
     }
@@ -585,9 +592,17 @@ public class McpServerBuilder {
     public func build(): McpServer {
         let capabilities = McpServerCapabilities(
             completion: completions.isSome(),
-            prompts: if (prompts.isSome()) { Some(McpCapabilityFeature()) } else { None },
-            resources: if (resources.isSome()) { Some(McpCapabilityFeature(subscribe: notifications.isSome())) } else { None },
-            tools: if (tools.isSome()) { Some(McpCapabilityFeature()) } else { None },
+            prompts: if (prompts.isSome()) {
+                Some(McpCapabilityFeature(listChanged: notifications.isSome()))
+            } else { None },
+            resources: if (resources.isSome()) {
+                Some(McpCapabilityFeature(
+                    subscribe: notifications.isSome(), listChanged: notifications.isSome()
+                ))
+            } else { None },
+            tools: if (tools.isSome()) {
+                Some(McpCapabilityFeature(listChanged: notifications.isSome()))
+            } else { None },
             experimental: experimental,
             extensions: if (tasks.isSome()) { withMcpTasksExtension(extensions) } else { extensions }
         )

@@ -677,6 +677,9 @@ class Mcp4CjTests {
         @Expect(discovery.serverInfo.isSome(), true)
         @Expect(discovery.capabilities.prompts.isSome(), true)
         @Expect(discovery.capabilities.resources.isSome(), true)
+        @Expect(discovery.capabilities.prompts.getOrThrow().listChanged, true)
+        @Expect(discovery.capabilities.resources.getOrThrow().listChanged, true)
+        @Expect(discovery.capabilities.resources.getOrThrow().subscribe, true)
         @Expect(discovery.capabilities.completion, true)
         @Expect(McpRequestMeta().toValue().field(MCP_META_CLIENT_INFO).isNone(), true)
 
@@ -875,7 +878,9 @@ class Mcp4CjTests {
             McpRequestMeta(clientCapabilities: capabilities)
         )
         match (mismatched.getTask("task-1")) {
-            case McpResult.Err(error) => @Expect(error.code, "mcp.tasks.id_mismatch")
+            case McpResult.Err(error) => @Expect(
+                error.message, "task provider returned a different taskId"
+            )
             case _ => @Fail("tasks/get accepted a mismatched taskId")
         }
 
