@@ -3716,8 +3716,11 @@ func fromLlmWireReply(
                 // executable domain tool call.
                 case LlmWireToolArguments.InvalidJson(_) |
                     LlmWireToolArguments.InvalidShape(_) |
-                    LlmWireToolArguments.Partial(_) => throw IllegalArgumentException(
-                        "provider returned an incomplete or invalid terminal tool call"
+                    LlmWireToolArguments.Partial(_) => throw LlmWireError(
+                        LlmWireErrorKind.InvalidWire,
+                        "model.output_rejected",
+                        "provider returned an incomplete or invalid terminal tool call",
+                        retryable: true
                     )
             } }
             case LlmWireOutputBlock.Refusal(value) => blocks.add(domain.ModelBlock(
