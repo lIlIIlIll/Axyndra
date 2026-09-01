@@ -3047,8 +3047,14 @@ func nativeReplayMatches(
     dialect: ProviderDialect,
     providerId: String
 ): Bool {
-    (providerId == "" || state.providerId == providerId) &&
-        state.protocol.toAsciiLower() == legacyReplayProtocol(dialect)
+    if ((providerId != "" && state.providerId != providerId) ||
+        state.protocol.toAsciiLower() != legacyReplayProtocol(dialect)) {
+        return false
+    }
+    try {
+        if (!resemblesNativeReplayEnvelope(parseUnifiedJson(state.payload))) { return true }
+        restoreNativeReplay(state, dialect).dialectId == legacyReplayDialectId(dialect)
+    } catch (_: Exception) { false }
 }
 
 func toLlmWireBlock(
