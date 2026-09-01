@@ -211,6 +211,17 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
     }
     func complete(): Unit { lock.lock(); try { stopped = true } finally { lock.unlock() } }
     func fail(error: McpError): Unit { lock.lock(); try { failure = Some(error); stopped = true } finally { lock.unlock() } }
+    func failAndCancel(error: McpError): Unit {
+        var cancel = false
+        lock.lock(); try {
+            if (!stopped) {
+                failure = Some(error)
+                stopped = true
+                cancel = true
+            }
+        } finally { lock.unlock() }
+        if (cancel) { let _ = cancelAction(id) }
+    }
     func ready(): Bool { lock.lock(); try { accepted.isSome() || stopped } finally { lock.unlock() } }
     func failureSnapshot(): ?McpError { lock.lock(); try { failure } finally { lock.unlock() } }
     func acknowledgedSnapshot(): Bool { lock.lock(); try { accepted.isSome() } finally { lock.unlock() } }
@@ -447,7 +458,7 @@ public class StdioMcpTransport <: McpTransport {
                     case Some(item) => if (notification.method == MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED) {
                         match (decodeMcpSubscriptionFilter(notification.params)) {
                             case McpResult.Ok(filter) => item.acknowledge(filter)
-                            case McpResult.Err(error) => item.fail(error)
+                            case McpResult.Err(error) => item.failAndCancel(error)
                         }
                     } else { item.push(notification) }
                     case None => ()
