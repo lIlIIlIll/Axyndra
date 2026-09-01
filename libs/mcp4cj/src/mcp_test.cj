@@ -259,28 +259,43 @@ class Mcp4CjTests {
     }
 
     @TestCase
-    func cancellationReachesSubscriptionsAfterToolHostErrors() {
-        let notifications = CancellationTrackingProvider()
-        let server = McpServer(
-            McpDiscoverResult(), host: FailingCancellationHost(), notifications: notifications
-        )
-        let result = server.handleNotification(mcpCancellationNotification(jsonRpcNumberId(41), "done"))
-        @Expect(result.isOk(), false)
-        @Expect(notifications.cancelled, true)
-    }
-
-    @TestCase
-    func cancellationReachesEveryRequestProvider() {
+    func cancellationRoutesOnlyToTheOwningClientAndProvider() {
+        let operation = HoldingToolOperation()
+        let host = MemoryMcpToolHost([
+            McpTool("slow", "slow", jsonObject([JsonObjectEntry("type", jsonString("object"))]))
+        ], { name, arguments, continuation => operation.execute(name, arguments, continuation) })
         let provider = FixtureMcpProviders()
         let server = McpServerBuilder()
+            .toolProvider(host)
             .completionProvider(provider)
             .promptProvider(provider)
             .resourceProvider(provider)
             .build()
+        let requestId = jsonRpcNumberId(42)
+        let running = spawn {
+            server.handleRequest(JsonRpcRequest(
+                requestId,
+                MCP_METHOD_TOOLS_CALL,
+                params: withMcpRequestMeta(jsonObject([
+                    JsonObjectEntry("name", jsonString("slow")),
+                    JsonObjectEntry("arguments", jsonObject([]))
+                ]), McpRequestMeta())
+            ), requestOwner: "client-a")
+        }
+        operation.waitUntilStarted()
         @Expect(server.handleNotification(
-            mcpCancellationNotification(jsonRpcNumberId(42), "done")
+            mcpCancellationNotification(requestId, "wrong client"),
+            requestOwner: "client-b"
         ).isOk(), true)
-        @Expect(provider.cancellationCalls, 3)
+        @Expect(host.cancellations().size, 0)
+        @Expect(server.handleNotification(
+            mcpCancellationNotification(requestId, "owning client"),
+            requestOwner: "client-a"
+        ).isOk(), true)
+        @Expect(host.cancellations().size, 1)
+        @Expect(provider.cancellationCalls, 0)
+        operation.release()
+        let _ = running.get()
     }
 
     @TestCase
@@ -938,6 +953,14 @@ class Mcp4CjTests {
             )
             case _ => @Fail("tasks/get accepted a mismatched taskId")
         }
+        match (mismatched.updateTask("task-1", jsonObject([JsonObjectEntry(
+            "confirm", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
+        )]))) {
+            case McpResult.Err(error) => @Expect(
+                error.message, "task provider returned a different taskId"
+            )
+            case _ => @Fail("tasks/update accepted a mismatched taskId")
+        }
 
         let taskValue = task.toValue(resultType: MCP_RESULT_TASK)
         let forbiddenTool = McpTool(
@@ -1027,7 +1050,7 @@ class InMemoryMcpTransport <: McpTransport {
         requestIds.add(request.id.display())
         requests.add(request)
         if (closed) { McpResult.Err(McpError(McpErrorKind.Lifecycle, "closed", "closed")) }
-        else { McpResult.Ok(server.handleRequest(request)) }
+        else { McpResult.Ok(server.handleRequest(request, requestOwner: "in-memory")) }
     }
     public func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle> {
         match (server.openSubscription(request)) {
@@ -1035,13 +1058,18 @@ class InMemoryMcpTransport <: McpTransport {
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
-    public func notify(notification: JsonRpcNotification): McpResult<Unit> { server.handleNotification(notification) }
+    public func notify(notification: JsonRpcNotification): McpResult<Unit> {
+        server.handleNotification(notification, requestOwner: "in-memory")
+    }
     public func cancel(
         requestId: JsonRpcId,
         reason: String,
         meta: McpRequestMeta
     ): McpResult<Unit> {
-        server.handleNotification(mcpCancellationNotification(requestId, reason, meta: meta))
+        server.handleNotification(
+            mcpCancellationNotification(requestId, reason, meta: meta),
+            requestOwner: "in-memory"
+        )
     }
     public func registerTools(tools: Array<McpTool>): McpResult<Unit> { let _ = tools; McpResult.Ok(()) }
     public func close(): McpResult<Unit> { closed = true; McpResult.Ok(()) }

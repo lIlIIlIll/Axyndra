@@ -49,6 +49,15 @@ public interface McpNotificationProvider {
     func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
 }
 
+class McpActiveOperation {
+    let owner: String
+    let id: JsonRpcId
+    let method: String
+    init(owner: String, id: JsonRpcId, method: String) {
+        this.owner = owner; this.id = id; this.method = method
+    }
+}
+
 // Generic MCP protocol dispatcher. The host callback is the sole execution
 // boundary; this class has no knowledge of product tools or authorization.
 public class McpServer {
@@ -60,6 +69,8 @@ public class McpServer {
     private let notifications: ?McpNotificationProvider
     private let tasks: ?McpTaskProvider
     private let lifecycle = McpLifecycle()
+    private let activeOperationLock = Mutex()
+    private let activeOperations = ArrayList<McpActiveOperation>()
 
     public init(
         discovery: McpDiscoverResult,
@@ -85,7 +96,8 @@ public class McpServer {
 
     public func handleRequest(
         request: JsonRpcRequest,
-        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => },
+        requestOwner!: String = ""
     ): JsonRpcResponse {
         if (state() != McpLifecycleState.Ready) {
             return mcpFailureResponse(request.id, JSON_RPC_INTERNAL_ERROR, "MCP server is closed")
@@ -104,7 +116,11 @@ public class McpServer {
                 } else { jsonNull() }
             )
         }
-        if (request.method == MCP_METHOD_DISCOVER) {
+        let tracked = cancellableMcpMethod(request.method)
+        if (tracked && requestOwner != "") {
+            addActiveOperation(requestOwner, request.id, request.method)
+        }
+        try { if (request.method == MCP_METHOD_DISCOVER) {
             mcpSuccessResponse(request.id, discovery.toValue(), discovery.serverInfo)
         } else if (request.method == MCP_METHOD_TOOLS_LIST) {
             match (host) {
@@ -143,10 +159,15 @@ public class McpServer {
             handleTaskCancel(request)
         } else {
             mcpFailureResponse(request.id, JSON_RPC_METHOD_NOT_FOUND, "MCP method not found: " + request.method)
+        } } finally {
+            if (tracked && requestOwner != "") { removeActiveOperation(requestOwner, request.id) }
         }
     }
 
-    public func handleNotification(notification: JsonRpcNotification): McpResult<Unit> {
+    public func handleNotification(
+        notification: JsonRpcNotification,
+        requestOwner!: String = ""
+    ): McpResult<Unit> {
         if (state() != McpLifecycleState.Ready) {
             return lifecycleFailure<Unit>("mcp.server_closed", "MCP server is closed")
         }
@@ -162,54 +183,56 @@ public class McpServer {
             case None => return invalidMcp<Unit>("mcp.cancel_id_missing", "cancellation requires requestId")
         }
         let reason = mcpText(notification.params, "reason")
-        var cancellationError: ?McpError = None
-        match (host) {
-            case Some(provider) => match (provider.cancel(id, reason)) {
-                case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => cancellationError = Some(error)
-            }
-            case None => ()
+        match (activeOperationMethod(requestOwner, id)) {
+            case Some(method) => if (method == MCP_METHOD_TOOLS_CALL) {
+                match (host) {
+                    case Some(provider) => provider.cancel(id, reason)
+                    case None => McpResult.Ok(())
+                }
+            } else if (method == MCP_METHOD_COMPLETION_COMPLETE) {
+                match (completions) {
+                    case Some(provider) => provider.cancel(id, reason)
+                    case None => McpResult.Ok(())
+                }
+            } else if (method == MCP_METHOD_PROMPTS_GET) {
+                match (prompts) {
+                    case Some(provider) => provider.cancel(id, reason)
+                    case None => McpResult.Ok(())
+                }
+            } else if (method == MCP_METHOD_RESOURCES_READ) {
+                match (resources) {
+                    case Some(provider) => provider.cancel(id, reason)
+                    case None => McpResult.Ok(())
+                }
+            } else { McpResult.Ok(()) }
+            case _ => McpResult.Ok(())
         }
-        match (completions) {
-            case Some(provider) => match (provider.cancel(id, reason)) {
-                case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => if (cancellationError.isNone()) {
-                    cancellationError = Some(error)
+    }
+
+    private func addActiveOperation(owner: String, id: JsonRpcId, method: String): Unit {
+        activeOperationLock.lock()
+        try { activeOperations.add(McpActiveOperation(owner, id, method)) }
+        finally { activeOperationLock.unlock() }
+    }
+    private func removeActiveOperation(owner: String, id: JsonRpcId): Unit {
+        activeOperationLock.lock()
+        try {
+            for (index in 0..activeOperations.size) {
+                let item = activeOperations[index]
+                if (item.owner == owner && sameJsonRpcId(item.id, id)) {
+                    activeOperations.remove(at: index); return
                 }
             }
-            case None => ()
-        }
-        match (prompts) {
-            case Some(provider) => match (provider.cancel(id, reason)) {
-                case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => if (cancellationError.isNone()) {
-                    cancellationError = Some(error)
-                }
+        } finally { activeOperationLock.unlock() }
+    }
+    private func activeOperationMethod(owner: String, id: JsonRpcId): ?String {
+        activeOperationLock.lock()
+        try {
+            for (item in activeOperations where item.owner == owner && sameJsonRpcId(item.id, id)) {
+                return Some(item.method)
             }
-            case None => ()
-        }
-        match (resources) {
-            case Some(provider) => match (provider.cancel(id, reason)) {
-                case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => if (cancellationError.isNone()) {
-                    cancellationError = Some(error)
-                }
-            }
-            case None => ()
-        }
-        match (notifications) {
-            case Some(provider) => match (provider.cancel(id, reason)) {
-                case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => if (cancellationError.isNone()) {
-                    cancellationError = Some(error)
-                }
-            }
-            case None => ()
-        }
-        match (cancellationError) {
-            case Some(error) => McpResult.Err(error)
-            case None => McpResult.Ok(())
-        }
+            None
+        } finally { activeOperationLock.unlock() }
     }
 
     public func handle(envelope: JsonRpcEnvelope): McpResult<?JsonRpcEnvelope> {
@@ -508,6 +531,12 @@ public class McpServer {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return mcpHostFailure(request.id, error)
         }
+        if (task.taskId != taskId) {
+            return mcpFailureResponse(
+                request.id, JSON_RPC_INTERNAL_ERROR,
+                "task provider returned a different taskId"
+            )
+        }
         if (task.status != McpTaskStatus.InputRequired) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires an input_required task")
         }
@@ -563,6 +592,11 @@ public class McpServer {
         }
         McpResult.Ok(None)
     }
+}
+
+func cancellableMcpMethod(method: String): Bool {
+    method == MCP_METHOD_TOOLS_CALL || method == MCP_METHOD_COMPLETION_COMPLETE ||
+        method == MCP_METHOD_PROMPTS_GET || method == MCP_METHOD_RESOURCES_READ
 }
 
 public class McpServerBuilder {

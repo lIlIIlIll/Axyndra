@@ -573,7 +573,7 @@ public class StdioMcpServer {
                 case JsonRpcEnvelope.Request(request) => dispatchRequest(request)
                 case JsonRpcEnvelope.Notification(notification) =>
                     if (notification.method == MCP_METHOD_CANCELLED) { closeServerSubscription(notification) }
-                    let _ = server.handleNotification(notification)
+                    let _ = server.handleNotification(notification, requestOwner: "stdio")
                 case JsonRpcEnvelope.Response(_) => ()
             }
         }
@@ -615,7 +615,8 @@ public class StdioMcpServer {
                             if (mcpEnvelopeWithinFrame(envelope, framing.maxFrameBytes)) {
                                 writeConsoleEnvelope(envelope)
                             } else if (progressOverflow.isEmpty()) { progressOverflow.add(()) }
-                        }
+                        },
+                        requestOwner: "stdio"
                     )
                     if (!progressOverflow.isEmpty()) {
                         writeConsole(mcpFailureResponse(
@@ -736,7 +737,7 @@ public class StdioMcpServer {
         waitForActiveRequests(); let active = activeSnapshot()
         for (id in active) { let _ = server.handleNotification(JsonRpcNotification(MCP_METHOD_CANCELLED, params: jsonObject([
             JsonObjectEntry("requestId", requestIdValue(id)), JsonObjectEntry("reason", jsonString("MCP stdio server is closing"))
-        ]))) }
+        ])), requestOwner: "stdio") }
         waitForActiveRequests()
         let remaining = activeSnapshot()
         if (!remaining.isEmpty()) {
