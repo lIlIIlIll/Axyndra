@@ -534,7 +534,7 @@ class Mcp4CjTests {
         @Expect(first.listTools().isOk(), true)
         @Expect(second.listTools().isOk(), true)
         let running = spawn {
-            let result = first.callTool("slow", jsonObject([]))
+            let result = first.callTool("slow", jsonObject([]), owner: "slow-owner")
             match (result) {
                 case McpResult.Err(error) => operation.recordFailure(error.code + ":" + error.message)
                 case McpResult.Ok(_) => ()
@@ -542,6 +542,11 @@ class Mcp4CjTests {
             result
         }
         operation.waitUntilStarted()
+        let activeId = first.activeRequestId("slow-owner").getOrThrow()
+        @Expect(first.notify(
+            MCP_METHOD_CANCELLED,
+            params: mcpCancellationNotification(activeId, "test cancellation").params
+        ).isOk(), true)
         @Expect(second.callTool("slow", jsonObject([])).isOk(), false)
         operation.release()
         @Expect(running.get().isOk(), true)
@@ -581,8 +586,9 @@ class Mcp4CjTests {
         @Expect(client.listTools().isOk(), true)
         match (client.callTool("fail", jsonObject([]))) {
             case McpResult.Err(error) =>
-                @Expect(error.code, "fixture.remote_error")
-                @Expect(error.message, "structured remote error")
+                @Expect(error.kind == McpErrorKind.Protocol, true)
+                @Expect(error.code, "mcp.http_status_error")
+                @Expect(error.httpStatus.getOrThrow(), 400)
             case _ => @Fail("HTTP client discarded a structured JSON-RPC error response")
         }
         @Expect(client.close().isOk(), true)
