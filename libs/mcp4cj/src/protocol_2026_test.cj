@@ -321,7 +321,9 @@ class McpProtocol2026Tests {
             McpEnterpriseIdentity("https://idp.example", "id-token"), metadata, client,
             "https://mcp.example", ["tools:read"], 1000
         )) {
-            case McpResult.Ok(tokens) => @Expect(tokens.accessToken, "access-token")
+            case McpResult.Ok(tokens) =>
+                @Expect(tokens.accessToken, "access-token")
+                @Expect(tokens.scope, ["tools:read"])
             case McpResult.Err(error) => @Fail(error.message)
         }
         let unsupported = McpAuthorizationServerMetadata(
@@ -461,7 +463,7 @@ class FixtureResourceExchange <: McpEnterpriseResourceExchange {
     ): McpResult<McpOAuthTokenSet> {
         let _ = metadata; let _ = client
         if (assertion != "id-jag") { return authenticationMcpFailure<McpOAuthTokenSet>("fixture", "bad assertion") }
-        McpResult.Ok(McpOAuthTokenSet("access-token", scope: ["tools:read"]))
+        McpResult.Ok(McpOAuthTokenSet("access-token"))
     }
 }
 

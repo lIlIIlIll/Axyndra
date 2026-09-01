@@ -102,10 +102,19 @@ public class McpEnterpriseManagedAuthorization {
                 "mcp.ema.assertion_invalid", "ID-JAG claims do not match the enterprise authorization request"
             )
         }
-        let tokens = match (resourceExchange.exchangeAssertion(metadata, client, grant.assertion)) {
+        let exchanged = match (resourceExchange.exchangeAssertion(metadata, client, grant.assertion)) {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
+        let tokens = if (exchanged.scope.isEmpty()) {
+            McpOAuthTokenSet(
+                exchanged.accessToken,
+                tokenType: exchanged.tokenType,
+                expiresAtMillis: exchanged.expiresAtMillis,
+                refreshToken: exchanged.refreshToken,
+                scope: grant.scopes
+            )
+        } else { exchanged }
         if (tokens.expired(nowMillis)) {
             return authenticationMcpFailure<McpOAuthTokenSet>(
                 "mcp.ema.token_expired", "enterprise access token is already expired"
