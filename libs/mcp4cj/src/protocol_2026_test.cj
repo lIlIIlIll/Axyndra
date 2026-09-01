@@ -296,6 +296,15 @@ class McpProtocol2026Tests {
             McpEnterpriseIdentity("https://idp.example", "id-token"), unsupported, client,
             "https://mcp.example", ["tools:read"], 1000
         ).isOk(), false)
+        match (McpEnterpriseManagedAuthorization(
+            FixtureIdentityExchange(), FixtureExpiredResourceExchange()
+        ).accessToken(
+            McpEnterpriseIdentity("https://idp.example", "id-token"), metadata, client,
+            "https://mcp.example", ["tools:read"], 1000
+        )) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.ema.token_expired")
+            case McpResult.Ok(_) => @Fail("expired enterprise access token was accepted")
+        }
     }
 }
 
@@ -394,5 +403,18 @@ class FixtureResourceExchange <: McpEnterpriseResourceExchange {
         let _ = metadata; let _ = client
         if (assertion != "id-jag") { return authenticationMcpFailure<McpOAuthTokenSet>("fixture", "bad assertion") }
         McpResult.Ok(McpOAuthTokenSet("access-token", scope: ["tools:read"]))
+    }
+}
+
+class FixtureExpiredResourceExchange <: McpEnterpriseResourceExchange {
+    public func exchangeAssertion(
+        metadata: McpAuthorizationServerMetadata,
+        client: McpOAuthClientMetadata,
+        assertion: String
+    ): McpResult<McpOAuthTokenSet> {
+        let _ = metadata; let _ = client; let _ = assertion
+        McpResult.Ok(McpOAuthTokenSet(
+            "expired-access-token", expiresAtMillis: Some(1000), scope: ["tools:read"]
+        ))
     }
 }

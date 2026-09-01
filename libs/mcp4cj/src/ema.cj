@@ -106,6 +106,11 @@ public class McpEnterpriseManagedAuthorization {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
+        if (tokens.expired(nowMillis)) {
+            return authenticationMcpFailure<McpOAuthTokenSet>(
+                "mcp.ema.token_expired", "enterprise access token is already expired"
+            )
+        }
         if (!tokens.covers(scopes)) {
             return authorizationMcpFailure<McpOAuthTokenSet>(
                 "mcp.ema.scope_required", "enterprise access token omitted a requested scope"

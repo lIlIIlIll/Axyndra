@@ -460,6 +460,39 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func httpSubscriptionNaturalEndReleasesStreamCapacity() {
+        let protocol = McpServerBuilder().notificationProvider(FixtureMcpProviders()).build()
+        let server = match (openStreamableHttpMcpServer(
+            McpStreamableHttpServerConfig(port: 0, maxConcurrentRequests: 1), protocol
+        )) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        let serving = spawn { server.serve() }
+        var waited: Int64 = 0
+        while (server.state() != McpLifecycleState.Ready && waited < 3000) {
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        let client = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+            "http://127.0.0.1:" + server.port().toString() + "/mcp", preferSse: true
+        )), McpRequestMeta())
+        for (_ in 0..2) {
+            let handle = match (client.listen(McpSubscriptionFilter(toolsListChanged: true))) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => throw error
+            }
+            @Expect(handle.next().isOk(), true)
+            match (handle.next()) {
+                case McpResult.Ok(None) => @Expect(true, true)
+                case _ => @Fail("HTTP subscription did not terminate naturally")
+            }
+        }
+        @Expect(client.close().isOk(), true)
+        @Expect(server.close().isOk(), true)
+        let _ = serving.get()
+    }
+
+    @TestCase
     func httpClientDecodesStructuredJsonRpcErrorsFromNonSuccessStatus() {
         let host = MemoryMcpToolHost([
             McpTool("fail", "fail", jsonObject([JsonObjectEntry("type", jsonString("object"))]))

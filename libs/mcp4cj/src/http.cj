@@ -449,6 +449,7 @@ class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
     private var failure: ?McpError = None
     private var reader: ?Future<Unit> = None
     private var closeRequested = false
+    private var resourcesClosed = false
 
     init(
         id: JsonRpcId, accepted: McpSubscriptionFilter,
@@ -484,8 +485,6 @@ class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
         } finally { lock.unlock() }
         if (notify) { closeAction() }
         finish(None)
-        try { response.close() } catch (_: Exception) {}
-        try { client.close() } catch (_: Exception) {}
         McpResult.Ok(())
     }
 
@@ -509,19 +508,15 @@ class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
                         if (!stopped) {
                             if (queued.size >= MCP_SUBSCRIPTION_QUEUE_LIMIT) {
                                 queued.clear()
-                                failure = Some(McpError(
-                                    McpErrorKind.Protocol, "mcp.subscription_queue_overflow",
-                                    "MCP subscription consumer did not keep up with notifications"
-                                ))
-                                stopped = true
                                 overflow = true
                             } else { queued.add(notification) }
                         }
                     } finally { lock.unlock() }
                     if (overflow) {
-                        onDone()
-                        try { response.close() } catch (_: Exception) {}
-                        try { client.close() } catch (_: Exception) {}
+                        finish(Some(McpError(
+                            McpErrorKind.Protocol, "mcp.subscription_queue_overflow",
+                            "MCP subscription consumer did not keep up with notifications"
+                        )))
                         return
                     }
                 case JsonRpcEnvelope.Response(value) =>
@@ -547,10 +542,16 @@ class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
 
     private func finish(error: ?McpError): Unit {
         var notify = false
+        var cleanup = false
         lock.lock(); try {
             if (!stopped) { stopped = true; failure = error; notify = true }
+            if (!resourcesClosed) { resourcesClosed = true; cleanup = true }
         } finally { lock.unlock() }
         if (notify) { onDone() }
+        if (cleanup) {
+            try { response.close() } catch (_: Exception) {}
+            try { client.close() } catch (_: Exception) {}
+        }
     }
 }
 

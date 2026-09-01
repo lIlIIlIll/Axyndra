@@ -13,8 +13,14 @@ import std.convert.*
 public class McpClient {
     private let primitive: library.McpClient
 
-    public init(transport: McpTransport, meta: McpRequestMeta) {
-        primitive = library.McpClient(McpTransportBridge(transport), meta)
+    public init(
+        transport: McpTransport,
+        meta: McpRequestMeta,
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
+    ) {
+        primitive = library.McpClient(
+            McpTransportBridge(transport), meta, notificationSink: notificationSink
+        )
     }
 
     public func state(): McpLifecycleState { primitive.state() }
@@ -107,6 +113,12 @@ class McpTransportBridge <: library.McpTransport {
     public func state(): McpLifecycleState { product.state() }
     public func request(request: JsonRpcRequest): library.McpResult<JsonRpcResponse> {
         unmapMcpResult(product.request(request))
+    }
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): library.McpResult<JsonRpcResponse> {
+        unmapMcpResult(product.requestWithNotifications(request, notificationSink))
     }
     public func openSubscription(request: JsonRpcRequest): library.McpResult<library.McpSubscriptionHandle> {
         unmapMcpResult(product.openSubscription(request))

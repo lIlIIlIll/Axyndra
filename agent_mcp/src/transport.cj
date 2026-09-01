@@ -7,6 +7,10 @@ public interface McpTransport {
     func kind(): McpTransportKind
     func state(): McpLifecycleState
     func request(request: JsonRpcRequest): Result<JsonRpcResponse>
+    func requestWithNotifications(
+        rpcRequest: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): Result<JsonRpcResponse> { let _ = notificationSink; request(rpcRequest) }
     func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle>
     func notify(notification: JsonRpcNotification): Result<Unit>
     func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit>
