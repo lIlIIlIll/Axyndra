@@ -60,6 +60,15 @@ class Mcp4CjTests {
             case McpResult.Err(error) => @Expect(error.code, "mcp.protocol_version_missing")
             case _ => @Fail("missing protocolVersion was accepted")
         }
+        match (validateMcpRequestMeta(jsonObject([JsonObjectEntry("_meta", jsonObject([
+            JsonObjectEntry(MCP_META_PROTOCOL_VERSION, jsonString(MCP_PROTOCOL_VERSION)),
+            JsonObjectEntry(MCP_META_CLIENT_CAPABILITIES, jsonObject([
+                JsonObjectEntry("sampling", jsonBool(true))
+            ]))
+        ]))]))) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.client_capabilities_invalid")
+            case _ => @Fail("non-object sampling capability was accepted")
+        }
 
         let notifications = ArrayList<JsonRpcNotification>()
         let continuation = McpToolCallContinuation(
@@ -187,6 +196,17 @@ class Mcp4CjTests {
             case McpResult.Err(error) => @Fail(error.message)
         }
         @Expect(transport.close().isOk(), true)
+    }
+
+    @TestCase
+    func cancellationReachesSubscriptionsAfterToolHostErrors() {
+        let notifications = CancellationTrackingProvider()
+        let server = McpServer(
+            McpDiscoverResult(), host: FailingCancellationHost(), notifications: notifications
+        )
+        let result = server.handleNotification(mcpCancellationNotification(jsonRpcNumberId(41), "done"))
+        @Expect(result.isOk(), false)
+        @Expect(notifications.cancelled, true)
     }
 
     @TestCase
@@ -614,6 +634,37 @@ class FixtureMcpSubscriptionHandle <: McpSubscriptionHandle {
     public func acknowledged(): McpSubscriptionFilter { source.acknowledged() }
     public func next(): McpResult<?JsonRpcNotification> { source.next() }
     public func close(): McpResult<Unit> { source.close() }
+}
+
+class FailingCancellationHost <: McpToolHost {
+    public func listTools(cursor: String): McpResult<McpToolListPage> {
+        let _ = cursor
+        McpResult.Ok(McpToolListPage([]))
+    }
+    public func callTool(
+        requestId: JsonRpcId, name: String, arguments: JsonNode,
+        continuation: McpToolCallContinuation
+    ): McpResult<McpCallToolOutcome> {
+        let _ = requestId; let _ = name; let _ = arguments; let _ = continuation
+        invalidMcp<McpCallToolOutcome>("fixture.unknown_id", "unknown request id")
+    }
+    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
+        let _ = requestId; let _ = reason
+        invalidMcp<Unit>("fixture.unknown_id", "unknown request id")
+    }
+}
+
+class CancellationTrackingProvider <: McpNotificationProvider {
+    var cancelled = false
+    public func open(requestId: JsonRpcId, filter: McpSubscriptionFilter): McpResult<McpSubscriptionSource> {
+        let _ = requestId; let _ = filter
+        invalidMcp<McpSubscriptionSource>("fixture.unavailable", "not used")
+    }
+    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
+        let _ = requestId; let _ = reason
+        cancelled = true
+        McpResult.Ok(())
+    }
 }
 
 class FixtureMcpSubscriptionSource <: McpSubscriptionSource {

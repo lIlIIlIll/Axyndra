@@ -154,15 +154,25 @@ public class McpServer {
             case None => return invalidMcp<Unit>("mcp.cancel_id_missing", "cancellation requires requestId")
         }
         let reason = mcpText(notification.params, "reason")
+        var cancellationError: ?McpError = None
         match (host) {
             case Some(provider) => match (provider.cancel(id, reason)) {
                 case McpResult.Ok(_) => ()
-                case McpResult.Err(error) => return McpResult.Err(error)
+                case McpResult.Err(error) => cancellationError = Some(error)
             }
             case None => ()
         }
         match (notifications) {
-            case Some(provider) => provider.cancel(id, reason)
+            case Some(provider) => match (provider.cancel(id, reason)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => if (cancellationError.isNone()) {
+                    cancellationError = Some(error)
+                }
+            }
+            case None => ()
+        }
+        match (cancellationError) {
+            case Some(error) => McpResult.Err(error)
             case None => McpResult.Ok(())
         }
     }
@@ -628,8 +638,21 @@ func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
         case None => ()
     }
     match (meta.field(MCP_META_CLIENT_CAPABILITIES)) {
-        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { McpResult.Ok(()) } else {
+        case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Object) {
             invalidMcp<Unit>("mcp.client_capabilities_invalid", "clientCapabilities must be an object")
+        } else {
+            for (name in ["roots", "sampling", "elicitation", "experimental", "extensions"]) {
+                match (value.field(name)) {
+                    case Some(capability) => if (capability.unifiedKind != UnifiedJsonKind.Object) {
+                        return invalidMcp<Unit>(
+                            "mcp.client_capabilities_invalid",
+                            "client capability " + name + " must be an object"
+                        )
+                    }
+                    case None => ()
+                }
+            }
+            McpResult.Ok(())
         }
         case None => invalidMcp<Unit>("mcp.client_capabilities_missing", "request requires clientCapabilities")
     }
