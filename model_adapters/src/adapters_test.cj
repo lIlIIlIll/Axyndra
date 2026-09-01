@@ -179,6 +179,33 @@ class NativeReplayRegressionTests {
         ))
     }
 
+    @TestCase
+    func nativeReplayBeforeToolCallAttachesToCanonicalCall(): Unit {
+        let replay = restoreNativeReplay(domain.OpaqueProviderState(
+            "primary", "messages",
+            "{\"protocol\":\"messages\",\"dialect_id\":\"anthropic.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"payload\":{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"},\"display_reasoning\":\"why\"}",
+            itemId: "thinking", replayRequired: true
+        ), ProviderDialect.AnthropicMessages)
+        let reply = fromLlmWireReply(LlmWireReply(
+            blocks: [
+                LlmWireOutputBlock.NativeReplay(replay),
+                LlmWireOutputBlock.ToolCall(LlmWireToolCallBlock(
+                    "call-1", "read", LlmWireToolArguments.Complete(parseLlmWireJson("{}"))
+                ))
+            ],
+            rawStopReason: "tool_use"
+        ), "primary", ProviderProtocol.Messages, false)
+        @Expect(reply.blocks.size, 2)
+        @Expect(match (reply.blocks[1].kind) {
+            case domain.ModelBlockKind.ToolCall => true
+            case _ => false
+        }, true)
+        @Expect(reply.blocks[1].opaqueState.isSome(), true)
+        @Expect(canonicalReasoningHasReplayCounterpart(
+            reply.blocks, 0, ProviderDialect.AnthropicMessages, "primary"
+        ), true)
+    }
+
 }
 
 @Test

@@ -3267,7 +3267,8 @@ func canonicalReasoningHasReplayCounterpart(
     let next = blocks[index + 1]
     match (next.opaqueState) {
         case Some(state) => match (next.kind) {
-            case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
+            case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.ToolCall |
+                domain.ModelBlockKind.Unknown =>
                 nativeReplayMatches(state, dialect, providerId)
             case _ => false
         }
