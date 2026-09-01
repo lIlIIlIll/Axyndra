@@ -5,6 +5,7 @@ import yjson_support.*
 import jsonrpc4cj.*
 import std.io.*
 import std.collection.*
+import std.sync.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -372,6 +373,18 @@ class Mcp4CjTests {
         ).toArray())
         @Expect(readMcpSseResponse(incremental, expected, 64).isOk(), true)
 
+        let progressStream = ByteBuffer()
+        progressStream.write((
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n" +
+            "data: {\"jsonrpc\":\"2.0\",\"id\":\"wanted\",\"result\":{}}\n\n"
+        ).toArray())
+        let progress = ArrayList<JsonRpcNotification>()
+        @Expect(readMcpSseResponse(
+            progressStream, expected, 4096,
+            notificationSink: { notification => progress.add(notification) }
+        ).isOk(), true)
+        @Expect(progress.size, 1)
+
         let body = ByteBuffer()
         body.write("12345".toArray())
         @Expect(readMcpHttpBody(body, Some(5), 4).isOk(), false)
@@ -407,6 +420,40 @@ class Mcp4CjTests {
             case _ => @Fail("HTTP subscription notification was not routed")
         }
         @Expect(handle.close().isOk(), true)
+        @Expect(client.close().isOk(), true)
+        @Expect(server.close().isOk(), true)
+        let _ = serving.get()
+    }
+
+    @TestCase
+    func httpServerBoundsConcurrentSubscriptionStreams() {
+        let protocol = McpServerBuilder().notificationProvider(HoldingNotificationProvider()).build()
+        let server = match (openStreamableHttpMcpServer(
+            McpStreamableHttpServerConfig(port: 0, maxConcurrentRequests: 1), protocol
+        )) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        let serving = spawn { server.serve() }
+        var waited: Int64 = 0
+        while (server.state() != McpLifecycleState.Ready && waited < 3000) {
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        let client = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+            "http://127.0.0.1:" + server.port().toString() + "/mcp", preferSse: true
+        )), McpRequestMeta())
+        let first = match (client.listen(McpSubscriptionFilter(toolsListChanged: true))) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        @Expect(client.listen(McpSubscriptionFilter(toolsListChanged: true)).isOk(), false)
+        @Expect(first.close().isOk(), true)
+        sleep(Duration.millisecond * 100)
+        let reopened = match (client.listen(McpSubscriptionFilter(toolsListChanged: true))) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        @Expect(reopened.close().isOk(), true)
         @Expect(client.close().isOk(), true)
         @Expect(server.close().isOk(), true)
         let _ = serving.get()
@@ -759,6 +806,37 @@ class FixtureMcpSubscriptionSource <: McpSubscriptionSource {
         McpResult.Ok(Some(JsonRpcNotification(MCP_NOTIFICATION_TOOLS_LIST_CHANGED, params: jsonObject([]))))
     }
     public func close(): McpResult<Unit> { McpResult.Ok(()) }
+}
+
+class HoldingNotificationProvider <: McpNotificationProvider {
+    public func open(requestId: JsonRpcId, filter: McpSubscriptionFilter): McpResult<McpSubscriptionSource> {
+        let _ = requestId
+        McpResult.Ok(HoldingSubscriptionSource(filter))
+    }
+    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
+        let _ = requestId; let _ = reason
+        McpResult.Ok(())
+    }
+}
+
+class HoldingSubscriptionSource <: McpSubscriptionSource {
+    private let filter: McpSubscriptionFilter
+    private let lock = Mutex()
+    private var closed = false
+    init(filter: McpSubscriptionFilter) { this.filter = filter }
+    public func acknowledged(): McpSubscriptionFilter { filter }
+    public func next(): McpResult<?JsonRpcNotification> {
+        sleep(Duration.millisecond * 10)
+        lock.lock(); let done = try { closed } finally { lock.unlock() }
+        if (done) { McpResult.Ok(None) }
+        else { McpResult.Ok(Some(JsonRpcNotification(
+            MCP_NOTIFICATION_TOOLS_LIST_CHANGED, params: jsonObject([])
+        ))) }
+    }
+    public func close(): McpResult<Unit> {
+        lock.lock(); try { closed = true } finally { lock.unlock() }
+        McpResult.Ok(())
+    }
 }
 
 class FixtureMcpTaskProvider <: McpTaskProvider {

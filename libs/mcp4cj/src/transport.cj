@@ -122,6 +122,10 @@ public interface McpTransport {
     func kind(): McpTransportKind
     func state(): McpLifecycleState
     func request(request: JsonRpcRequest): McpResult<JsonRpcResponse>
+    func requestWithNotifications(
+        rpcRequest: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> { let _ = notificationSink; request(rpcRequest) }
     func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle>
     func notify(notification: JsonRpcNotification): McpResult<Unit>
     func cancel(
@@ -135,9 +139,12 @@ public interface McpTransport {
 
 class McpStdioPendingResponse {
     let id: JsonRpcId
+    let notificationSink: (JsonRpcNotification) -> Unit
     var response: ?JsonRpcResponse = None
     var error: ?McpError = None
-    init(id: JsonRpcId) { this.id = id }
+    init(id: JsonRpcId, notificationSink!: (JsonRpcNotification) -> Unit = { _ => }) {
+        this.id = id; this.notificationSink = notificationSink
+    }
 }
 
 let MCP_SUBSCRIPTION_QUEUE_LIMIT: Int64 = 256
@@ -244,12 +251,19 @@ public class StdioMcpTransport <: McpTransport {
     public func state(): McpLifecycleState { lifecycle.state() }
 
     public func request(request: JsonRpcRequest): McpResult<JsonRpcResponse> {
+        requestWithNotifications(request, {_ =>})
+    }
+
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> {
         requestLock.lock()
         try {
             if (state() != McpLifecycleState.Ready) {
                 return mcpFailure<JsonRpcResponse>(McpErrorKind.Transport, "mcp.stdio_not_ready", "MCP stdio transport is not ready")
             }
-            let waiting = McpStdioPendingResponse(request.id)
+            let waiting = McpStdioPendingResponse(request.id, notificationSink: notificationSink)
             pendingLock.lock(); try { pending.add(waiting) } finally { pendingLock.unlock() }
             match (write(JsonRpcEnvelope.Request(request))) {
                 case McpResult.Ok(_) => ()
@@ -438,7 +452,13 @@ public class StdioMcpTransport <: McpTransport {
                     } else { item.push(notification) }
                     case None => ()
                 }
-            case None => ()
+            case None => if (notification.method == MCP_NOTIFICATION_PROGRESS) {
+                var sink: ?((JsonRpcNotification) -> Unit) = None
+                pendingLock.lock(); try {
+                    if (!pending.isEmpty()) { sink = Some(pending[0].notificationSink) }
+                } finally { pendingLock.unlock() }
+                match (sink) { case Some(deliver) => deliver(notification); case None => () }
+            }
         }
     }
 
@@ -624,13 +644,31 @@ public class StdioMcpServer {
             MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED,
             params: source.acknowledged().toValue()
         ), request.id)
-        writeConsoleEnvelope(JsonRpcEnvelope.Notification(acknowledgement))
+        let acknowledgementEnvelope = JsonRpcEnvelope.Notification(acknowledgement)
+        if (!mcpEnvelopeWithinFrame(acknowledgementEnvelope, framing.maxFrameBytes)) {
+            writeConsole(mcpFailureResponse(
+                request.id, JSON_RPC_INTERNAL_ERROR,
+                "MCP stdio subscription acknowledgement exceeded the frame limit"
+            ))
+            let _ = source.close(); removeServerSubscription(active); removeActive(request.id)
+            return
+        }
+        writeConsoleEnvelope(acknowledgementEnvelope)
         try {
             while (!active.closed) {
                 match (source.next()) {
-                    case McpResult.Ok(Some(notification)) => writeConsoleEnvelope(JsonRpcEnvelope.Notification(
-                        tagMcpSubscriptionNotification(notification, request.id)
-                    ))
+                    case McpResult.Ok(Some(notification)) =>
+                        let envelope = JsonRpcEnvelope.Notification(
+                            tagMcpSubscriptionNotification(notification, request.id)
+                        )
+                        if (!mcpEnvelopeWithinFrame(envelope, framing.maxFrameBytes)) {
+                            writeConsole(mcpFailureResponse(
+                                request.id, JSON_RPC_INTERNAL_ERROR,
+                                "MCP stdio subscription event exceeded the frame limit"
+                            ))
+                            return
+                        }
+                        writeConsoleEnvelope(envelope)
                     case McpResult.Ok(None) =>
                         writeConsole(mcpSuccessResponse(request.id, jsonObject([]), None)); return
                     case McpResult.Err(error) =>
