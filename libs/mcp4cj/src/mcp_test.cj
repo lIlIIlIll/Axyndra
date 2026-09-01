@@ -709,6 +709,39 @@ class Mcp4CjTests {
                 JsonObjectEntry("uri", jsonString("file:///missing-content"))
             ])]))
         ])).isOk(), false)
+        @Expect(decodeMcpCompletionOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("completion", jsonObject([]))
+        ])).isOk(), false)
+        @Expect(decodeMcpCompletionOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("completion", jsonObject([
+                JsonObjectEntry("values", jsonArray([jsonString("one"), jsonString("two")])),
+                JsonObjectEntry("total", jsonNumber("1")),
+                JsonObjectEntry("hasMore", jsonString("false"))
+            ]))
+        ])).isOk(), false)
+        @Expect(decodeMcpPromptOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("messages", jsonArray([jsonObject([])]))
+        ])).isOk(), false)
+        @Expect(decodeMcpPromptOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("messages", jsonArray([jsonObject([
+                JsonObjectEntry("role", jsonString("system")),
+                JsonObjectEntry("content", jsonObject([
+                    JsonObjectEntry("type", jsonString("text")),
+                    JsonObjectEntry("text", jsonString("invalid role"))
+                ]))
+            ])]))
+        ])).isOk(), false)
+        @Expect(decodeMcpDiscover(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("supportedVersions", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
+            JsonObjectEntry("capabilities", jsonObject([
+                JsonObjectEntry("extensions", jsonBool(true))
+            ]))
+        ])).isOk(), false)
     }
 
     @TestCase

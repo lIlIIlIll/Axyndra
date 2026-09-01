@@ -748,6 +748,36 @@ func decodeMcpCompletionOutcome(value: JsonNode): McpResult<McpOperationOutcome<
             "mcp.completion_result_invalid", "completion/complete omitted completion"
         )
     }
+    let values = match (completion.field("values")) {
+        case Some(item) => item
+        case None => return invalidMcp<McpOperationOutcome<McpCompletionResult>>(
+            "mcp.completion_result_invalid", "completion omitted values"
+        )
+    }
+    if (values.unifiedKind != UnifiedJsonKind.List) {
+        return invalidMcp<McpOperationOutcome<McpCompletionResult>>(
+            "mcp.completion_result_invalid", "completion values must be an array"
+        )
+    }
+    for (item in values.items where item.unifiedKind != UnifiedJsonKind.Text) {
+        return invalidMcp<McpOperationOutcome<McpCompletionResult>>(
+            "mcp.completion_result_invalid", "completion values must contain strings"
+        )
+    }
+    match (completion.field("total")) {
+        case Some(total) => if (total.unifiedKind != UnifiedJsonKind.Number ||
+            mcpInteger(completion, "total") < values.items.size) {
+            return invalidMcp<McpOperationOutcome<McpCompletionResult>>(
+                "mcp.completion_result_invalid", "completion total must cover the returned values"
+            )
+        }
+        case None => ()
+    }
+    if (!validOptionalMcpField(completion, "hasMore", UnifiedJsonKind.Boolean)) {
+        return invalidMcp<McpOperationOutcome<McpCompletionResult>>(
+            "mcp.completion_result_invalid", "completion hasMore must be a boolean"
+        )
+    }
     McpResult.Ok(McpOperationOutcome.Complete(McpCompletionResult(
         completion, meta: mcpObject(value, "_meta")
     )))
@@ -763,6 +793,16 @@ func decodeMcpPromptOutcome(value: JsonNode): McpResult<McpOperationOutcome<McpP
         return invalidMcp<McpOperationOutcome<McpPromptResult>>(
             "mcp.prompt_result_invalid", "prompts/get omitted messages"
         )
+    }
+    for (message in messages.items) {
+        let role = mcpText(message, "role")
+        let content = mcpField(message, "content", jsonNull())
+        if (message.unifiedKind != UnifiedJsonKind.Object ||
+            (role != "user" && role != "assistant") || !validMcpContentBlock(content)) {
+            return invalidMcp<McpOperationOutcome<McpPromptResult>>(
+                "mcp.prompt_result_invalid", "prompts/get contained an invalid message"
+            )
+        }
     }
     try { McpResult.Ok(McpOperationOutcome.Complete(McpPromptResult(
         messages.items.toArray(), description: mcpText(value, "description"), meta: mcpObject(value, "_meta")
@@ -858,7 +898,8 @@ func decodeMcpDiscover(value: JsonNode): McpResult<McpDiscoverResult> {
     if (capabilities.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpDiscoverResult>("mcp.capabilities_invalid", "server capabilities must be an object")
     }
-    for (name in ["completions", "logging", "prompts", "resources", "tools", "tasks"]) {
+    for (name in ["completions", "logging", "prompts", "resources", "tools", "tasks",
+        "experimental", "extensions"]) {
         match (capabilities.field(name)) {
             case Some(feature) => if (feature.unifiedKind != UnifiedJsonKind.Object) {
                 return invalidMcp<McpDiscoverResult>(
