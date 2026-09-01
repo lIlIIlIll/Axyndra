@@ -804,7 +804,6 @@ func emitLlmWireEvent(
         case LlmWireEvent.UsageUpdated(usage) =>
             let input = providerInputUsageTotal(protocol, usage)
             let output = optionalUsageValue(usage.outputTokens)
-            events(domain.ModelEvent.UsageUpdated(input, output))
             events(domain.ModelEvent.ProviderProgress(
                 domain.ProviderStreamEvent.UsageDelta(input, output)
             ))
@@ -813,6 +812,7 @@ func emitLlmWireEvent(
             case LlmWireTerminal.Completed(reply) =>
                 let input = providerInputUsageTotal(protocol, reply.usage)
                 let output = optionalUsageValue(reply.usage.outputTokens)
+                events(domain.ModelEvent.UsageUpdated(input, output))
                 events(domain.ModelEvent.ProviderProgress(
                     domain.ProviderStreamEvent.UsageCompleted(input, output)
                 ))
@@ -3051,10 +3051,8 @@ func nativeReplayMatches(
         state.protocol.toAsciiLower() != legacyReplayProtocol(dialect)) {
         return false
     }
-    try {
-        if (!resemblesNativeReplayEnvelope(parseUnifiedJson(state.payload))) { return true }
-        restoreNativeReplay(state, dialect).dialectId == legacyReplayDialectId(dialect)
-    } catch (_: Exception) { false }
+    if (!resemblesNativeReplayEnvelope(parseUnifiedJson(state.payload))) { return true }
+    restoreNativeReplay(state, dialect).dialectId == legacyReplayDialectId(dialect)
 }
 
 func toLlmWireBlock(

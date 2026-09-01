@@ -23,8 +23,10 @@ class UsageProjectionTests {
         )
         var completedInput: Int64 = -1
         var completed = false
+        var durableInput: Int64 = -1
         for (event in projected) {
             match (event) {
+                case domain.ModelEvent.UsageUpdated(input, _) => durableInput = input
                 case domain.ModelEvent.ProviderProgress(
                     domain.ProviderStreamEvent.UsageCompleted(input, _)
                 ) => completedInput = input
@@ -33,7 +35,33 @@ class UsageProjectionTests {
             }
         }
         @Expect(completedInput, 6)
+        @Expect(durableInput, 6)
         @Expect(completed, false)
+    }
+
+    @TestCase
+    func intermediateUsageIsProviderProgressOnly(): Unit {
+        let projected = ArrayList<domain.ModelEvent>()
+        emitLlmWireEvent(
+            LlmWireEvent.UsageUpdated(LlmWireUsage(
+                inputTokens: Some(3), outputTokens: Some(4), cacheReadTokens: Some(2)
+            )),
+            ProviderProtocol.Messages,
+            { event => projected.add(event) }
+        )
+        var durable = false
+        var deltaInput: Int64 = -1
+        for (event in projected) {
+            match (event) {
+                case domain.ModelEvent.UsageUpdated(_, _) => durable = true
+                case domain.ModelEvent.ProviderProgress(
+                    domain.ProviderStreamEvent.UsageDelta(input, _)
+                ) => deltaInput = input
+                case _ => ()
+            }
+        }
+        @Expect(durable, false)
+        @Expect(deltaInput, 5)
     }
 }
 
@@ -120,7 +148,7 @@ class NativeReplayRegressionTests {
         @Expect(nativeReplayMatches(
             domain.OpaqueProviderState(
                 "messages-fixture", "messages",
-                "{\"protocol\":\"messages\",\"dialect_id\":\"deepseek.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"payload\":{}}",
+                "{\"protocol\":\"messages\",\"dialect_id\":\"deepseek.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"payload\":{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"}}",
                 itemId: "thinking", replayRequired: true
             ),
             ProviderDialect.AnthropicMessages,
@@ -140,6 +168,15 @@ class NativeReplayRegressionTests {
         } catch (_: Exception) {
             @Expect(true, true)
         }
+        let _ = @ExpectThrows[Exception](nativeReplayMatches(
+            domain.OpaqueProviderState(
+                "primary", "messages",
+                "{\"protocol\":\"messages\",\"schema_version\":99,\"payload\":{}}",
+                itemId: "thinking", replayRequired: true
+            ),
+            ProviderDialect.AnthropicMessages,
+            "primary"
+        ))
     }
 
 }
