@@ -19,7 +19,14 @@ public class StdioMcpTransport <: McpTransport {
     public func state(): McpLifecycleState { primitive.state() }
 
     public func request(request: JsonRpcRequest): Result<JsonRpcResponse> {
-        match (primitive.request(request)) {
+        requestWithNotifications(request, {_ =>})
+    }
+
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): Result<JsonRpcResponse> {
+        match (primitive.requestWithNotifications(request, notificationSink)) {
             case library.McpResult.Ok(value) => Result.Ok(value)
             case library.McpResult.Err(error) =>
                 if (error.code == "mcp.stdio_timeout" && request.method == MCP_METHOD_TOOLS_CALL) {

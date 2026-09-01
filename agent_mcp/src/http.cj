@@ -16,6 +16,12 @@ public class StreamableHttpMcpTransport <: McpTransport {
     public func request(request: JsonRpcRequest): Result<JsonRpcResponse> {
         mapMcpResult(primitive.request(request))
     }
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): Result<JsonRpcResponse> {
+        mapMcpResult(primitive.requestWithNotifications(request, notificationSink))
+    }
     public func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle> {
         mapMcpResult(primitive.openSubscription(request))
     }
