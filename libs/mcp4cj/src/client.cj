@@ -228,9 +228,10 @@ public class McpClient {
 
     public func completeResolved(
         reference: JsonNode, argument: JsonNode, resolver: McpInputResolver,
-        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = ""
+        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = "",
+        progressToken!: JsonNode = jsonNull()
     ): McpResult<McpOperationOutcome<McpCompletionResult>> {
-        var continuation = McpToolCallContinuation(); var rounds: Int64 = 0
+        var continuation = McpToolCallContinuation(progressToken: progressToken); var rounds: Int64 = 0
         while (true) {
             let outcome = match (complete(reference, argument, continuation: continuation, owner: owner)) {
                 case McpResult.Ok(value) => value
@@ -277,9 +278,10 @@ public class McpClient {
     public func getPromptResolved(
         name: String, resolver: McpInputResolver,
         arguments!: JsonNode = jsonObject([]),
-        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = ""
+        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = "",
+        progressToken!: JsonNode = jsonNull()
     ): McpResult<McpOperationOutcome<McpPromptResult>> {
-        var continuation = McpToolCallContinuation(); var rounds: Int64 = 0
+        var continuation = McpToolCallContinuation(progressToken: progressToken); var rounds: Int64 = 0
         while (true) {
             let outcome = match (getPrompt(
                 name, arguments: arguments, continuation: continuation, owner: owner
@@ -327,9 +329,10 @@ public class McpClient {
 
     public func readResourceResolved(
         uri: String, resolver: McpInputResolver,
-        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = ""
+        policy!: McpResolutionPolicy = McpResolutionPolicy(), owner!: String = "",
+        progressToken!: JsonNode = jsonNull()
     ): McpResult<McpOperationOutcome<McpReadResourceResult>> {
-        var continuation = McpToolCallContinuation(); var rounds: Int64 = 0
+        var continuation = McpToolCallContinuation(progressToken: progressToken); var rounds: Int64 = 0
         while (true) {
             let outcome = match (readResource(uri, continuation: continuation, owner: owner)) {
                 case McpResult.Ok(value) => value
@@ -574,13 +577,28 @@ func decodeMcpPage(value: JsonNode, fieldName: String): McpResult<McpPage> {
 }
 
 func decodeMcpInputRequired<T>(value: JsonNode): McpResult<McpOperationOutcome<T>> {
+    let inputRequests = match (validatedMcpInputRequests(value)) {
+        case McpResult.Ok(requests) => requests
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
     try {
         McpResult.Ok(McpOperationOutcome.InputRequired(McpInputRequiredResult(
-            inputRequests: mcpObject(value, "inputRequests"),
+            inputRequests: inputRequests,
             requestState: mcpText(value, "requestState"), meta: mcpObject(value, "_meta")
         )))
     } catch (error: Exception) {
         invalidMcp<McpOperationOutcome<T>>("mcp.input_required_invalid", error.message)
+    }
+}
+
+func validatedMcpInputRequests(value: JsonNode): McpResult<JsonNode> {
+    match (value.field("inputRequests")) {
+        case Some(requests) => if (requests.unifiedKind != UnifiedJsonKind.Object) {
+            invalidMcp<JsonNode>(
+                "mcp.input_required_invalid", "inputRequests must be an object when present"
+            )
+        } else { McpResult.Ok(requests) }
+        case None => McpResult.Ok(jsonObject([]))
     }
 }
 
@@ -823,8 +841,12 @@ func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToo
                 isError: mcpBool(value, "isError", false), meta: mcpObject(value, "_meta")
             )))
     } else if (resultType == MCP_RESULT_INPUT_REQUIRED) {
+        let inputRequests = match (validatedMcpInputRequests(value)) {
+            case McpResult.Ok(requests) => requests
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
         try { McpResult.Ok(McpCallToolOutcome.InputRequired(McpInputRequiredResult(
-            inputRequests: mcpObject(value, "inputRequests"),
+            inputRequests: inputRequests,
             requestState: mcpText(value, "requestState"), meta: mcpObject(value, "_meta")
         ))) } catch (error: Exception) { invalidMcp<McpCallToolOutcome>("mcp.input_required_invalid", error.message) }
     } else if (resultType == MCP_RESULT_TASK) {

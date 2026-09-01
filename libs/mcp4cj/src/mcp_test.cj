@@ -70,13 +70,54 @@ class Mcp4CjTests {
 
     @TestCase
     func boundsStdioSubscriptionNotifications() {
-        let handle = StdioMcpSubscriptionHandle(jsonRpcNumberId(1), { _ => McpResult.Ok(()) })
+        let cancellations = ArrayList<Unit>()
+        let handle = StdioMcpSubscriptionHandle(jsonRpcNumberId(1), { _ =>
+            cancellations.add(())
+            McpResult.Ok(())
+        })
         for (_ in 0..257) {
             handle.push(JsonRpcNotification(MCP_NOTIFICATION_TOOLS_LIST_CHANGED))
         }
         match (handle.next()) {
             case McpResult.Err(error) => @Expect(error.code, "mcp.subscription_queue_overflow")
             case _ => @Fail("subscription queue overflow was not rejected")
+        }
+        @Expect(cancellations.size, 1)
+    }
+
+    @TestCase
+    func boundsHttpOperationProgressNotifications() {
+        let stream = McpOperationSseInput(jsonRpcNumberId(1), { sink =>
+            for (_ in 0..257) {
+                sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([])))
+            }
+            JsonRpcEnvelope.Response(JsonRpcResponse(
+                jsonRpcNumberId(1), JsonRpcResponsePayload.Success(jsonObject([]))
+            ))
+        })
+        sleep(Duration.millisecond * 20)
+        let output = ArrayList<Byte>()
+        let buffer = Array<Byte>(4096, repeat: 0)
+        while (true) {
+            let count = stream.read(buffer)
+            if (count <= 0) { break }
+            for (index in 0..count) { output.add(buffer[index]) }
+        }
+        @Expect(
+            String.fromUtf8(output.toArray()).contains(
+                "MCP operation progress consumer did not keep up with notifications"
+            ),
+            true
+        )
+    }
+
+    @TestCase
+    func rejectsMalformedInputRequiredRequestMaps() {
+        match (validatedMcpInputRequests(jsonObject([
+            JsonObjectEntry("inputRequests", jsonString("invalid"))
+        ]))) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.input_required_invalid")
+            case _ => @Fail("non-object inputRequests was accepted")
         }
     }
 
