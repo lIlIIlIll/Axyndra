@@ -788,6 +788,9 @@ class Mcp4CjTests {
             inputRequests: jsonObject([JsonObjectEntry("confirm", jsonObject([
                 JsonObjectEntry("method", jsonString("elicitation/create")),
                 JsonObjectEntry("params", fixtureElicitationParams())
+            ])), JsonObjectEntry("later", jsonObject([
+                JsonObjectEntry("method", jsonString("elicitation/create")),
+                JsonObjectEntry("params", fixtureElicitationParams())
             ]))])
         )
         let host = MemoryMcpToolHost([
@@ -844,11 +847,25 @@ class Mcp4CjTests {
             ])
         )])).isOk(), true)
         @Expect(tasks.updated, true)
+        @Expect(client.updateTask("task-1", jsonObject([])).isOk(), false)
         @Expect(client.updateTask("task-1", jsonObject([JsonObjectEntry(
             "unknown", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
         )])).isOk(), false)
         @Expect(client.cancelTask("task-1").isOk(), true)
         @Expect(tasks.cancelled, true)
+        let mismatched = McpClient(
+            InMemoryMcpTransport(McpServerBuilder().taskProvider(
+                MismatchedMcpTaskProvider(McpTask(
+                    "task-2", McpTaskStatus.Working,
+                    "2026-08-27T00:00:00Z", "2026-08-27T00:01:00Z", Some(60000)
+                ))
+            ).build()),
+            McpRequestMeta(clientCapabilities: capabilities)
+        )
+        match (mismatched.getTask("task-1")) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.tasks.id_mismatch")
+            case _ => @Fail("tasks/get accepted a mismatched taskId")
+        }
 
         let taskValue = task.toValue(resultType: MCP_RESULT_TASK)
         let forbiddenTool = McpTool(
@@ -1123,6 +1140,23 @@ class FixtureMcpTaskProvider <: McpTaskProvider {
     public func cancelTask(taskId: String): McpResult<Unit> {
         if (taskId != task.taskId) { return invalidMcp<Unit>("mcp.tasks.not_found", "MCP task was not found") }
         cancelled = true; McpResult.Ok(())
+    }
+}
+
+class MismatchedMcpTaskProvider <: McpTaskProvider {
+    let task: McpTask
+    init(task: McpTask) { this.task = task }
+    public func getTask(taskId: String): McpResult<McpTask> {
+        let _ = taskId
+        McpResult.Ok(task)
+    }
+    public func updateTask(taskId: String, inputResponses: JsonNode): McpResult<Unit> {
+        let _ = taskId; let _ = inputResponses
+        McpResult.Ok(())
+    }
+    public func cancelTask(taskId: String): McpResult<Unit> {
+        let _ = taskId
+        McpResult.Ok(())
     }
 }
 

@@ -384,7 +384,16 @@ public class McpClient {
             JsonObjectEntry("taskId", jsonString(taskId))
         ]), owner: owner)) {
             case McpResult.Ok(value) => if (mcpText(value, "resultType") == MCP_RESULT_COMPLETE) {
-                decodeMcpTask(value)
+                match (decodeMcpTask(value)) {
+                    case McpResult.Ok(task) => if (task.taskId == taskId) {
+                        McpResult.Ok(task)
+                    } else {
+                        invalidMcp<McpTask>(
+                            "mcp.tasks.id_mismatch", "tasks/get returned a different taskId"
+                        )
+                    }
+                    case McpResult.Err(error) => McpResult.Err(error)
+                }
             } else { invalidMcp<McpTask>("mcp.tasks.result_invalid", "tasks/get result must be complete") }
             case McpResult.Err(error) => McpResult.Err(error)
         }
@@ -1099,7 +1108,9 @@ func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonN
     validateMcpInputResponses(pending.inputRequests, responses)
 }
 
-func validateMcpInputResponses(inputRequests: JsonNode, responses: JsonNode): McpResult<Unit> {
+func validateMcpInputResponses(
+    inputRequests: JsonNode, responses: JsonNode, requireAll!: Bool = true
+): McpResult<Unit> {
     if (responses.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.input_responses_invalid", "inputResponses must be an object") }
     for (request in inputRequests.fields) { match (responses.field(request.name)) {
         case Some(value) =>
@@ -1111,7 +1122,9 @@ func validateMcpInputResponses(inputRequests: JsonNode, responses: JsonNode): Mc
                 case McpResult.Ok(_) => ()
                 case McpResult.Err(error) => return McpResult.Err(error)
             }
-        case None => return invalidMcp<Unit>("mcp.input_response_missing", "retry must answer every input request")
+        case None => if (requireAll) {
+            return invalidMcp<Unit>("mcp.input_response_missing", "retry must answer every input request")
+        }
     } }
     for (response in responses.fields where inputRequests.field(response.name).isNone()) {
         return invalidMcp<Unit>("mcp.input_response_unknown", "retry contains an unknown input response")
