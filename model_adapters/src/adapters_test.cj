@@ -82,6 +82,15 @@ class ProviderDialectContractTests {
     }
 
     @TestCase
+    func anthropicPriorityUsesFastModeWithoutAServiceTier(): Unit {
+        @Expect(
+            toLlmWireServiceTier("priority", ProviderDialect.AnthropicMessages) ==
+                LlmWireServiceTier.ProviderDefault,
+            true
+        )
+    }
+
+    @TestCase
     func rejectsDialectProtocolMismatch(): Unit {
         try {
             let _ = ProviderSpec(

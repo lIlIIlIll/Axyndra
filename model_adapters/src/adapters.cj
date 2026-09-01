@@ -2965,6 +2965,7 @@ func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServi
             case "" => LlmWireServiceTier.ProviderDefault
             case "auto" => LlmWireServiceTier.Auto
             case "standard" | "standard_only" => LlmWireServiceTier.StandardOnly
+            case "priority" => LlmWireServiceTier.ProviderDefault
             case _ => throw IllegalArgumentException(
                 "service tier is unsupported by the configured provider dialect"
             )
