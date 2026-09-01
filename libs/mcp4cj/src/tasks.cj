@@ -71,6 +71,9 @@ public class McpTask {
         }
         match (status) {
             case McpTaskStatus.InputRequired =>
+                if (inputRequests.fields.isEmpty()) {
+                    throw IllegalArgumentException("input_required MCP task requires inputRequests")
+                }
                 if (result.unifiedKind != UnifiedJsonKind.Null || error.unifiedKind != UnifiedJsonKind.Null) {
                     throw IllegalArgumentException("input_required MCP task must not include result or error")
                 }
