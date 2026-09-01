@@ -544,7 +544,7 @@ public class ModelCatalogEntry {
         validateModelModalities(outputModalities, "output")
         if (fastServiceTier != "" && fastServiceTier != "auto" &&
             fastServiceTier != "default" && fastServiceTier != "flex" &&
-            fastServiceTier != "scale" && fastServiceTier != "priority") {
+            fastServiceTier != "priority") {
             throw IllegalArgumentException("model fast service tier is invalid")
         }
         this.id = id
