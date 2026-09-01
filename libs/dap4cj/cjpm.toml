@@ -3,7 +3,7 @@
   name = "dap4cj"
   organization = ""
   description = "Agent-independent DAP codec, framing and request correlation"
-  version = "1.0.0"
+  version = "2.0.0"
   output-type = "static"
 
 [dependencies]
