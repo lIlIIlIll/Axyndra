@@ -14,4 +14,15 @@ if bash "$root/scripts/mcp_conformance_manifest_gate.sh" "$work_root" >/dev/null
   exit 1
 fi
 
+rm -rf -- "$work_root"/*
+while read -r _ scenario; do
+  report="$work_root/server-$scenario-2026-09-01"
+  mkdir -p -- "$report"
+  printf '[{"id":"anything","status":"SUCCESS"}]\n' >"$report/checks.json"
+done <"$root/scripts/mcp_conformance_2026_07_28_checks.sha256"
+if bash "$root/scripts/mcp_conformance_manifest_gate.sh" "$work_root" >/dev/null 2>&1; then
+  printf 'complete scenario set with arbitrary check IDs was accepted\n' >&2
+  exit 1
+fi
+
 printf 'MCP conformance manifest regression passed\n'

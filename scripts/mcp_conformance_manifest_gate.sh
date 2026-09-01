@@ -2,6 +2,8 @@
 set -euo pipefail
 
 results=${1:?usage: mcp_conformance_manifest_gate.sh RESULTS_DIR}
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+check_manifest="$root/scripts/mcp_conformance_2026_07_28_checks.sha256"
 
 # Frozen by @modelcontextprotocol/conformance@0.2.0-alpha.11 for the
 # 2026-07-28 server requirement set. Keep this list explicit so a successful
@@ -79,10 +81,15 @@ for scenario in "${expected_scenarios[@]}"; do
     all(.[];
       type == "object" and (.id | type == "string" and length > 0) and
       (.status == "SUCCESS" or .status == "FAILURE" or .status == "WARNING" or .status == "SKIPPED")
-    ) and
-    ([.[].id] | length == (unique | length))
+    )
   ' "${reports[0]}" >/dev/null; then
     printf 'Invalid MCP conformance check manifest: %s\n' "${reports[0]}" >&2
+    exit 1
+  fi
+  expected_digest=$(awk -v scenario="$scenario" '$2 == scenario { print $1 }' "$check_manifest")
+  actual_digest=$(jq -r '.[].id' "${reports[0]}" | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+  if [[ -z "$expected_digest" || "$actual_digest" != "$expected_digest" ]]; then
+    printf 'MCP conformance check-ID manifest mismatch for scenario %s\n' "$scenario" >&2
     exit 1
   fi
 done
