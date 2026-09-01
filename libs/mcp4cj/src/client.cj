@@ -18,6 +18,7 @@ class McpActiveRequest {
 public class McpClient {
     private let transport: McpTransport
     private let meta: McpRequestMeta
+    private let notificationSink: (JsonRpcNotification) -> Unit
     private let correlation = JsonRpcCorrelation()
     private let directoryCache = McpToolDirectoryCache()
     private let lifecycle = McpLifecycle()
@@ -26,9 +27,14 @@ public class McpClient {
     private let knownTools = ArrayList<McpTool>()
     private var sequence: Int64 = 0
 
-    public init(transport: McpTransport, meta: McpRequestMeta) {
+    public init(
+        transport: McpTransport,
+        meta: McpRequestMeta,
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
+    ) {
         this.transport = transport
         this.meta = meta
+        this.notificationSink = notificationSink
         let _ = lifecycle.transition(McpLifecycleState.Starting)
         let _ = lifecycle.transition(McpLifecycleState.Ready)
     }
@@ -450,7 +456,10 @@ public class McpClient {
             case JsonRpcResult.Err(error) => return invalidMcp<JsonNode>(error.code, error.message)
         }
         if (owner != "") { addActive(owner, id) }
-        let response = transport.request(JsonRpcRequest(id, method, params: withMcpRequestMeta(params, meta)))
+        let response = transport.requestWithNotifications(
+            JsonRpcRequest(id, method, params: withMcpRequestMeta(params, meta)),
+            notificationSink
+        )
         if (owner != "") { removeActive(owner, id) }
         match (response) {
             case McpResult.Err(error) =>
