@@ -22,15 +22,18 @@ class UsageProjectionTests {
             { event => projected.add(event) }
         )
         var completedInput: Int64 = -1
+        var completed = false
         for (event in projected) {
             match (event) {
                 case domain.ModelEvent.ProviderProgress(
                     domain.ProviderStreamEvent.UsageCompleted(input, _)
                 ) => completedInput = input
+                case domain.ModelEvent.Completed => completed = true
                 case _ => ()
             }
         }
         @Expect(completedInput, 6)
+        @Expect(completed, true)
     }
 }
 
@@ -57,7 +60,9 @@ class NativeReplayRegressionTests {
                 ))
             )
         ]
-        @Expect(canonicalReasoningHasReplayCounterpart(blocks, 0), true)
+        @Expect(canonicalReasoningHasReplayCounterpart(
+            blocks, 0, ProviderDialect.AnthropicMessages, "primary"
+        ), true)
     }
 
     @TestCase
@@ -71,9 +76,44 @@ class NativeReplayRegressionTests {
                 itemId: "thinking", replayRequired: true
             ))
         )
-        match (toLlmWireBlock(block, ProviderDialect.DeepSeekMessages)) {
+        match (toLlmWireBlock(block, ProviderDialect.DeepSeekMessages, "primary")) {
             case LlmWireBlock.NativeReplay(value) => @Expect(value.dialectId, "deepseek.messages.v1")
             case _ => @Fail("opaque tool call did not restore native replay")
+        }
+    }
+
+    @TestCase
+    func providerSwitchRetainsCanonicalReasoningAndDropsForeignReplay(): Unit {
+        let blocks = [
+            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "portable summary"),
+            domain.ModelBlock(
+                domain.ModelBlockKind.Unknown,
+                opaqueState: Some(domain.OpaqueProviderState(
+                    "anthropic", "messages", "{}", itemId: "thinking", replayRequired: true
+                ))
+            )
+        ]
+        @Expect(canonicalReasoningHasReplayCounterpart(
+            blocks, 0, ProviderDialect.OpenAiResponses, "openai"
+        ), false)
+        let request = toLlmWireRequest(domain.ModelRequest(
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, blocks)]
+        ), ProviderDialect.OpenAiResponses, "openai")
+        @Expect(request.messages.size, 1)
+        @Expect(request.messages[0].blocks.size, 1)
+    }
+
+    @TestCase
+    func malformedCurrentReplayEnvelopeDoesNotFallBackToLegacy(): Unit {
+        try {
+            let _ = restoreNativeReplay(domain.OpaqueProviderState(
+                "primary", "messages",
+                "{\"protocol\":\"messages\",\"schema_version\":99,\"payload\":{}}",
+                itemId: "thinking", replayRequired: true
+            ), ProviderDialect.AnthropicMessages)
+            @Fail("malformed current replay envelope was accepted as legacy")
+        } catch (_: Exception) {
+            @Expect(true, true)
         }
     }
 
@@ -304,7 +344,7 @@ class OrphanToolResultEncodingTests {
             domain.ModelMessage(domain.ModelRole.User, [resultBlock("call_reused", "first output")]),
             domain.ModelMessage(domain.ModelRole.Assistant, [callBlock("call_reused")]),
             domain.ModelMessage(domain.ModelRole.User, [resultBlock("call_reused", "second output")])
-        ]), ProviderDialect.AnthropicMessages)
+        ]), ProviderDialect.AnthropicMessages, "standalone")
         var resultCount = 0
         for (message in wire.messages) {
             for (block in message.blocks) {
