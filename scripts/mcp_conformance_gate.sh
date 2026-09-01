@@ -54,19 +54,11 @@ known_runner_failure_count=0
 unexpected_report="$work_root/unexpected-results.tsv"
 : >"$unexpected_report"
 
+bash "$root/scripts/mcp_conformance_manifest_gate.sh" "$work_root/results"
+
 for checks in "$work_root"/results/server-*/checks.json; do
   failure_rows="$work_root/failure-rows.tsv"
   warning_rows="$work_root/warning-rows.tsv"
-  if ! jq -e '
-    type == "array" and length > 0 and
-    all(.[];
-      type == "object" and (.id | type == "string") and
-      (.status == "SUCCESS" or .status == "FAILURE" or .status == "WARNING" or .status == "SKIPPED")
-    )
-  ' "$checks" >/dev/null; then
-    printf 'Invalid or empty MCP conformance report: %s\n' "$checks" >&2
-    exit 1
-  fi
   if ! jq -r '
     .[] | select(.status == "FAILURE") |
     [
