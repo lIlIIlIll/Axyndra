@@ -100,6 +100,29 @@ class McpProtocol2026Tests {
     }
 
     @TestCase
+    func rejectsExpiredAuthorizationCodeResultBeforeCaching(): Unit {
+        let resource = "https://mcp.example"
+        let issuer = "https://auth.example"
+        let clientMetadata = McpOAuthClientMetadata("client", ["http://127.0.0.1/callback"])
+        let store = MemoryMcpOAuthTokenStore()
+        let client = McpOAuthClient(
+            FixtureOAuthMetadataFetcher(resource, issuer),
+            FixtureOAuthRegistration(clientMetadata),
+            FixtureOAuthInteraction(),
+            FixtureExpiredAuthorizationExchange(),
+            store: store
+        )
+        match (client.accessToken(resource, ["tools:read"], 1000)) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.oauth_token_expired")
+            case _ => @Fail("expired authorization-code token was accepted")
+        }
+        match (store.load(resource, issuer, clientMetadata.clientId)) {
+            case McpResult.Ok(None) => @Expect(true, true)
+            case _ => @Fail("expired authorization-code token was cached")
+        }
+    }
+
+    @TestCase
     func rejectsInsecureOAuthAndAppMetadata() {
         let _ = @ExpectThrows[IllegalArgumentException](McpOAuthClientMetadata("client", ["http://localhost.evil.example/callback"]))
         let _ = @ExpectThrows[IllegalArgumentException](McpProtectedResourceMetadata(
@@ -393,6 +416,30 @@ class FixtureExpiredRefreshExchange <: McpOAuthTokenExchange {
         McpResult.Ok(McpOAuthTokenSet(
             "expired-refresh", expiresAtMillis: Some(1010), scope: ["tools:read"]
         ))
+    }
+}
+
+class FixtureExpiredAuthorizationExchange <: McpOAuthTokenExchange {
+    public func exchangeAuthorizationCode(
+        _: McpAuthorizationServerMetadata,
+        _: McpOAuthClientMetadata,
+        _: String,
+        _: String,
+        _: String,
+        _: String
+    ): McpResult<McpOAuthTokenSet> {
+        McpResult.Ok(McpOAuthTokenSet(
+            "expired-authorization", expiresAtMillis: Some(1010), scope: ["tools:read"]
+        ))
+    }
+    public func refresh(
+        _: McpAuthorizationServerMetadata,
+        _: McpOAuthClientMetadata,
+        _: String,
+        _: String,
+        _: Array<String>
+    ): McpResult<McpOAuthTokenSet> {
+        invalidMcp<McpOAuthTokenSet>("fixture.refresh_unexpected", "refresh was not expected")
     }
 }
 
