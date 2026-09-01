@@ -913,6 +913,14 @@ class Mcp4CjTests {
         @Expect(client.updateTask("task-1", jsonObject([JsonObjectEntry(
             "unknown", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
         )])).isOk(), false)
+        @Expect(validateMcpInputResponses(
+            task.inputRequests,
+            jsonObject([JsonObjectEntry(
+                "unknown", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
+            )]),
+            requireAll: false,
+            rejectUnknown: false
+        ).isOk(), true)
         @Expect(client.cancelTask("task-1").isOk(), true)
         @Expect(tasks.cancelled, true)
         let mismatched = McpClient(
@@ -958,6 +966,24 @@ class Mcp4CjTests {
         @Expect(
             requiredCapabilities.field("elicitation").getOrThrow().field("form").isSome(), true
         )
+        let genericParams = jsonObject([JsonObjectEntry("_meta", McpRequestMeta(
+            clientCapabilities: McpClientCapabilities(
+                elicitation: Some(McpElicitationCapability())
+            )
+        ).toValue())])
+        let genericElicitation = jsonObject([
+            JsonObjectEntry("message", jsonString("Continue?")),
+            JsonObjectEntry("requestedSchema", jsonObject([
+                JsonObjectEntry("type", jsonString("object")),
+                JsonObjectEntry("properties", jsonObject([]))
+            ]))
+        ])
+        @Expect(missingMcpInputCapabilities(genericParams, jsonObject([JsonObjectEntry(
+            "confirm", jsonObject([
+                JsonObjectEntry("method", jsonString(MCP_METHOD_ELICITATION_CREATE)),
+                JsonObjectEntry("params", genericElicitation)
+            ])
+        )])).fields.isEmpty(), true)
     }
 
     @TestCase

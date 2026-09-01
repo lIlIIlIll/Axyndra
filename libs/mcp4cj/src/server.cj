@@ -511,7 +511,9 @@ public class McpServer {
         if (task.status != McpTaskStatus.InputRequired) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires an input_required task")
         }
-        match (validateMcpInputResponses(task.inputRequests, responses, requireAll: false)) {
+        match (validateMcpInputResponses(
+            task.inputRequests, responses, requireAll: false, rejectUnknown: false
+        )) {
             case McpResult.Ok(_) => ()
             case McpResult.Err(error) => return mcpHostFailure(request.id, error)
         }
@@ -906,9 +908,10 @@ func missingMcpInputCapabilities(params: JsonNode, requests: JsonNode): JsonNode
                     case None => jsonObject([])
                 }
                 if (capabilities.field("elicitation").isNone()) { elicitation = true }
-                if (mcpText(value, "mode") == "url") {
+                let mode = mcpText(value, "mode")
+                if (mode == "url") {
                     if (declared.field("url").isNone()) { elicitationUrl = true }
-                } else if (declared.field("form").isNone()) { elicitationForm = true }
+                } else if (mode == "form" && declared.field("form").isNone()) { elicitationForm = true }
         }
     }
     let required = ArrayList<JsonObjectEntry>()
