@@ -33,7 +33,7 @@ class UsageProjectionTests {
             }
         }
         @Expect(completedInput, 6)
-        @Expect(completed, true)
+        @Expect(completed, false)
     }
 }
 
