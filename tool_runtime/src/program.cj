@@ -510,7 +510,11 @@ func truthy(value: AgentValue): Bool {
 }
 
 func programValueBytes(value: AgentValue): UInt64 {
-    var size: UInt64 = 8u64 + UInt64(value.text.size)
+    var size: UInt64 = 8u64
+    match (value.unifiedKind) {
+        case ValueKind.List | ValueKind.Object => ()
+        case _ => size += UInt64(value.text.size)
+    }
     for (item in value.items) { size += programValueBytes(item) }
     for (field in value.fields) { size += UInt64(field.name.size) + programValueBytes(field.value) }
     size
