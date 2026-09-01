@@ -415,6 +415,9 @@ public class StreamableHttpMcpTransport <: McpTransport {
                 } else { return if (successful) {
                     httpMcpFailure<?JsonRpcResponse>(McpErrorKind.Protocol, "mcp.http_content_type_invalid", "response must be JSON or SSE", retrySafe: false)
                 } else { httpStatusMcpFailure<?JsonRpcResponse>(operation, status) } }
+                if (!successful) {
+                    return httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+                }
                 match (envelope) {
                     case JsonRpcEnvelope.Response(value) => if (sameJsonRpcId(value.id, id)) { McpResult.Ok(Some(value)) } else { invalidMcp<?JsonRpcResponse>("mcp.http_response_id_mismatch", "response id mismatch") }
                     case _ => invalidMcp<?JsonRpcResponse>("mcp.http_response_envelope_invalid", "response envelope is not JSON-RPC response")
@@ -643,6 +646,7 @@ public class StreamableHttpMcpServer {
     private let lifecycle = McpLifecycle()
     private let requestLock = Mutex()
     private let activeStreams = ArrayList<JsonRpcId>()
+    private let activeSubscriptions = ArrayList<JsonRpcId>()
 
     init(config: McpStreamableHttpServerConfig, mcp: McpServer, native: Server) {
         this.config = config; this.mcp = mcp; this.native = native
@@ -692,28 +696,6 @@ public class StreamableHttpMcpServer {
             case JsonRpcResult.Ok(value) => value
             case JsonRpcResult.Err(error) => writeMcpHttpEnvelope(context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(jsonRpcNullId(), error.rpcCode, error.message))); return
         }
-        match (validateHttpMetadata(request, envelope, mcp)) {
-            case McpResult.Ok(_) => ()
-            case McpResult.Err(error) => writeMcpHttpEnvelope(
-                context,
-                400,
-                JsonRpcEnvelope.Response(mcpFailureResponse(
-                    envelopeId(envelope),
-                    if (error.code == "mcp.version_unsupported") {
-                        MCP_UNSUPPORTED_PROTOCOL_VERSION
-                    } else {
-                        MCP_HEADER_MISMATCH
-                    },
-                    error.message,
-                    data: if (error.code == "mcp.version_unsupported") {
-                        jsonObject([
-                            JsonObjectEntry("supported", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
-                            JsonObjectEntry("requested", jsonString(request.headers.getFirst(MCP_HEADER_PROTOCOL_VERSION) ?? ""))
-                        ])
-                    } else { jsonNull() }
-                ))
-            ); return
-        }
         match (envelope) {
             case JsonRpcEnvelope.Request(value) => if (!reserveStream(value.id)) {
                 writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
@@ -721,10 +703,39 @@ public class StreamableHttpMcpServer {
             }
             case _ => ()
         }
+        match (validateHttpMetadata(request, envelope, mcp)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) =>
+                match (envelope) {
+                    case JsonRpcEnvelope.Request(value) => releaseStream(value.id)
+                    case _ => ()
+                }
+                writeMcpHttpEnvelope(
+                    context,
+                    400,
+                    JsonRpcEnvelope.Response(mcpFailureResponse(
+                        envelopeId(envelope),
+                        if (error.code == "mcp.version_unsupported") {
+                            MCP_UNSUPPORTED_PROTOCOL_VERSION
+                        } else {
+                            MCP_HEADER_MISMATCH
+                        },
+                        error.message,
+                        data: if (error.code == "mcp.version_unsupported") {
+                            jsonObject([
+                                JsonObjectEntry("supported", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
+                                JsonObjectEntry("requested", jsonString(request.headers.getFirst(MCP_HEADER_PROTOCOL_VERSION) ?? ""))
+                            ])
+                        } else { jsonNull() }
+                    ))
+                )
+                return
+        }
         match (envelope) {
             case JsonRpcEnvelope.Request(value) => if (value.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
                 match (mcp.openSubscription(value)) {
                     case McpResult.Ok(source) =>
+                        markSubscription(value.id)
                         context.responseBuilder.status(200)
                             .header("Content-Type", "text/event-stream; charset=utf-8")
                             .header("Cache-Control", "no-store")
@@ -814,17 +825,22 @@ public class StreamableHttpMcpServer {
     private func handleHttpNotification(
         notification: JsonRpcNotification
     ): McpResult<?JsonRpcEnvelope> {
-        if (notification.method == MCP_METHOD_CANCELLED) {
+        let cancelledSubscription: ?JsonRpcId = if (notification.method == MCP_METHOD_CANCELLED) {
             match (notification.params.field("requestId")) {
                 case Some(rawId) => match (decodeMcpRequestId(rawId)) {
-                    case McpResult.Ok(id) => releaseStream(id)
-                    case McpResult.Err(_) => ()
+                    case McpResult.Ok(id) => if (isActiveSubscription(id)) { Some(id) } else { None }
+                    case McpResult.Err(_) => None
                 }
-                case None => ()
+                case None => None
             }
-        }
+        } else { None }
         match (mcp.handleNotification(notification)) {
-            case McpResult.Ok(_) => McpResult.Ok(None)
+            case McpResult.Ok(_) =>
+                match (cancelledSubscription) {
+                    case Some(id) => releaseStream(id)
+                    case None => ()
+                }
+                McpResult.Ok(None)
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
@@ -838,12 +854,27 @@ public class StreamableHttpMcpServer {
 
     private func releaseStream(id: JsonRpcId): Unit {
         requestLock.lock(); try {
+            for (index in 0..activeSubscriptions.size where sameJsonRpcId(activeSubscriptions[index], id)) {
+                activeSubscriptions.remove(at: index)
+                break
+            }
             for (index in 0..activeStreams.size where sameJsonRpcId(activeStreams[index], id)) {
                 activeStreams.remove(at: index)
                 return
             }
         }
         finally { requestLock.unlock() }
+    }
+
+    private func markSubscription(id: JsonRpcId): Unit {
+        requestLock.lock(); try { activeSubscriptions.add(id) } finally { requestLock.unlock() }
+    }
+
+    private func isActiveSubscription(id: JsonRpcId): Bool {
+        requestLock.lock(); try {
+            for (active in activeSubscriptions where sameJsonRpcId(active, id)) { return true }
+            false
+        } finally { requestLock.unlock() }
     }
 }
 
