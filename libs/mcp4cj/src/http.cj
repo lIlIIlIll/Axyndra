@@ -6,6 +6,7 @@ import jsonrpc4cj.*
 import process4cj.*
 import std.collection.*
 import std.io.*
+import std.random.*
 import std.sync.*
 import stdx.log.NoopLogger
 import stdx.net.http.*
@@ -96,6 +97,7 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private let active = ArrayList<McpHttpActiveRequest>()
     private let toolLock = Mutex()
     private let tools = ArrayList<McpTool>()
+    private let clientInstanceId = newMcpHttpClientInstanceId()
 
     public init(config: McpStreamableHttpClientConfig) {
         this.config = config
@@ -329,6 +331,7 @@ public class StreamableHttpMcpTransport <: McpTransport {
                 .header("Accept", if (preferSse) { "text/event-stream, application/json" } else { "application/json, text/event-stream" })
                 .header(MCP_HEADER_PROTOCOL_VERSION, protocolVersion)
                 .header(MCP_HEADER_METHOD, operation)
+                .header(MCP_HEADER_CLIENT_INSTANCE_ID, clientInstanceId)
                 .body(encodeJsonRpc(envelope))
             let name = mcpStandardName(operation, params)
             if (mcpMethodRequiresName(operation)) {
@@ -706,6 +709,11 @@ public class StreamableHttpMcpServer {
             case JsonRpcResult.Ok(value) => value
             case JsonRpcResult.Err(error) => writeMcpHttpEnvelope(context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(jsonRpcNullId(), error.rpcCode, error.message))); return
         }
+        let requestOwner = request.headers.getFirst(MCP_HEADER_CLIENT_INSTANCE_ID) ?? ""
+        if (requestOwner != "" && !validMcpHttpClientInstanceId(requestOwner)) {
+            writeHttpProblem(context, 400, "MCP client instance identifier is invalid")
+            return
+        }
         match (envelope) {
             case JsonRpcEnvelope.Request(value) => if (!reserveStream(value.id)) {
                 writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
@@ -785,14 +793,15 @@ public class StreamableHttpMcpServer {
                                 projectMcpHttpResponse(
                                     envelope,
                                     JsonRpcEnvelope.Response(mcp.handleRequest(
-                                        value, notificationSink: notificationSink
+                                        value, notificationSink: notificationSink,
+                                        requestOwner: requestOwner
                                     ))
                                 )
                             },
                             cancelAction: { =>
                                 let _ = mcp.handleNotification(mcpCancellationNotification(
                                     value.id, "HTTP SSE client disconnected"
-                                ))
+                                ), requestOwner: requestOwner)
                             },
                             releaseAction: { => releaseStream(value.id) }
                         ))
@@ -803,9 +812,13 @@ public class StreamableHttpMcpServer {
         let progressNotifications = ArrayList<JsonRpcNotification>()
         let handled: McpResult<?JsonRpcEnvelope> = match (envelope) {
             case JsonRpcEnvelope.Request(value) => McpResult.Ok(Some(JsonRpcEnvelope.Response(
-                mcp.handleRequest(value, notificationSink: { notification => progressNotifications.add(notification) })
+                mcp.handleRequest(
+                    value,
+                    notificationSink: { notification => progressNotifications.add(notification) },
+                    requestOwner: requestOwner
+                )
             )))
-            case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value)
+            case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value, requestOwner)
             case JsonRpcEnvelope.Response(_) => mcp.handle(envelope)
         }
         try {
@@ -838,7 +851,8 @@ public class StreamableHttpMcpServer {
     }
 
     private func handleHttpNotification(
-        notification: JsonRpcNotification
+        notification: JsonRpcNotification,
+        requestOwner: String
     ): McpResult<?JsonRpcEnvelope> {
         let cancelledSubscription: ?JsonRpcId = if (notification.method == MCP_METHOD_CANCELLED) {
             match (notification.params.field("requestId")) {
@@ -849,7 +863,7 @@ public class StreamableHttpMcpServer {
                 case None => None
             }
         } else { None }
-        match (mcp.handleNotification(notification)) {
+        match (mcp.handleNotification(notification, requestOwner: requestOwner)) {
             case McpResult.Ok(_) =>
                 match (cancelledSubscription) {
                     case Some(id) => releaseStream(id)
@@ -1258,7 +1272,17 @@ func reservedMcpHeader(value: String): Bool {
     lower == "authorization" || lower == "content-type" || lower == "accept" ||
         lower == "origin" || lower == MCP_HEADER_PROTOCOL_VERSION.toAsciiLower() ||
         lower == MCP_HEADER_METHOD.toAsciiLower() || lower == MCP_HEADER_NAME.toAsciiLower() ||
+        lower == MCP_HEADER_CLIENT_INSTANCE_ID.toAsciiLower() ||
         lower.startsWith(MCP_HEADER_PARAM_PREFIX.toAsciiLower())
+}
+func validMcpHttpClientInstanceId(value: String): Bool {
+    if (value.size < 16 || value.size > 200) { return false }
+    validHttpToken(value)
+}
+func newMcpHttpClientInstanceId(): String {
+    let random = Random()
+    "mcp4cj-" + random.nextInt64().toString() + "-" + random.nextInt64().toString() +
+        "-" + random.nextInt64().toString() + "-" + random.nextInt64().toString()
 }
 func loopbackMcpHost(value: String): Bool { value == "127.0.0.1" || value == "localhost" || value == "::1" }
 func secureMcpHttpUrl(value: String): Bool {
