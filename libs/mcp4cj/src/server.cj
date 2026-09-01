@@ -108,7 +108,12 @@ public class McpServer {
             mcpSuccessResponse(request.id, discovery.toValue(), discovery.serverInfo)
         } else if (request.method == MCP_METHOD_TOOLS_LIST) {
             match (host) {
-                case Some(provider) => match (provider.listTools(mcpText(request.params, "cursor"))) {
+                case Some(provider) =>
+                let cursor = match (decodeMcpOptionalText(request.params, "cursor")) {
+                    case McpResult.Ok(value) => value
+                    case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+                }
+                match (provider.listTools(cursor)) {
                     case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue(), discovery.serverInfo)
                     case McpResult.Err(error) => mcpHostFailure(request.id, error)
                 }
@@ -361,7 +366,12 @@ public class McpServer {
 
     private func handlePromptList(request: JsonRpcRequest): JsonRpcResponse {
         match (prompts) {
-            case Some(provider) => match (provider.listPrompts(mcpText(request.params, "cursor"))) {
+            case Some(provider) =>
+            let cursor = match (decodeMcpOptionalText(request.params, "cursor")) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+            }
+            match (provider.listPrompts(cursor)) {
                 case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("prompts"), discovery.serverInfo)
                 case McpResult.Err(error) => mcpHostFailure(request.id, error)
             }
@@ -399,7 +409,12 @@ public class McpServer {
 
     private func handleResourceList(request: JsonRpcRequest): JsonRpcResponse {
         match (resources) {
-            case Some(provider) => match (provider.listResources(mcpText(request.params, "cursor"))) {
+            case Some(provider) =>
+            let cursor = match (decodeMcpOptionalText(request.params, "cursor")) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+            }
+            match (provider.listResources(cursor)) {
                 case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("resources"), discovery.serverInfo)
                 case McpResult.Err(error) => mcpHostFailure(request.id, error)
             }
@@ -409,7 +424,12 @@ public class McpServer {
 
     private func handleResourceTemplateList(request: JsonRpcRequest): JsonRpcResponse {
         match (resources) {
-            case Some(provider) => match (provider.listResourceTemplates(mcpText(request.params, "cursor"))) {
+            case Some(provider) =>
+            let cursor = match (decodeMcpOptionalText(request.params, "cursor")) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+            }
+            match (provider.listResourceTemplates(cursor)) {
                 case McpResult.Ok(page) => mcpSuccessResponse(request.id, page.toValue("resourceTemplates"), discovery.serverInfo)
                 case McpResult.Err(error) => mcpHostFailure(request.id, error)
             }
@@ -956,12 +976,27 @@ func decodeMcpContinuation(
     for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpToolCallContinuation>("mcp.input_response_invalid", "input response must be an object")
     }
+    let requestState = match (decodeMcpOptionalText(params, "requestState")) {
+        case McpResult.Ok(value) => value
+        case McpResult.Err(_) => return invalidMcp<McpToolCallContinuation>(
+            "mcp.request_state_invalid", "requestState must be a string"
+        )
+    }
     McpResult.Ok(McpToolCallContinuation(
-        inputResponses: responses, requestState: mcpText(params, "requestState"),
+        inputResponses: responses, requestState: requestState,
         tasksSupported: mcpRequestSupportsTasks(params),
         progressToken: mcpField(mcpObject(params, "_meta"), "progressToken", jsonNull()),
         notificationSink: notificationSink
     ))
+}
+
+func decodeMcpOptionalText(value: JsonNode, name: String): McpResult<String> {
+    match (value.field(name)) {
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Text) {
+            McpResult.Ok(item.text)
+        } else { invalidMcp<String>("mcp.text_field_invalid", name + " must be a string") }
+        case None => McpResult.Ok("")
+    }
 }
 
 func decodeMcpRequestId(value: JsonNode): McpResult<JsonRpcId> {

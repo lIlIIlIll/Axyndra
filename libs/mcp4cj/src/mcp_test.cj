@@ -373,6 +373,13 @@ class Mcp4CjTests {
         @Expect(decodeMcpContinuation(jsonObject([
             JsonObjectEntry("inputResponses", jsonString("malformed"))
         ]), { _ => }).isOk(), false)
+        @Expect(decodeMcpContinuation(jsonObject([
+            JsonObjectEntry("inputResponses", jsonObject([])),
+            JsonObjectEntry("requestState", jsonNumber("1"))
+        ]), { _ => }).isOk(), false)
+        @Expect(decodeMcpOptionalText(jsonObject([
+            JsonObjectEntry("cursor", jsonBool(true))
+        ]), "cursor").isOk(), false)
     }
 
     @TestCase
@@ -763,6 +770,12 @@ class Mcp4CjTests {
             JsonObjectEntry("ttlMs", jsonNumber("300000")),
             JsonObjectEntry("cacheScope", jsonString("private"))
         ])).isOk(), false)
+        for (coreKind in [MCP_RESULT_COMPLETE, MCP_RESULT_INPUT_REQUIRED, MCP_RESULT_TASK]) {
+            try {
+                let _ = mcpExtensionOutcomeValue(coreKind, jsonObject([]))
+                @Fail("core resultType was accepted as an extension")
+            } catch (_: IllegalArgumentException) {}
+        }
         @Expect(decodeMcpCallOutcome(jsonObject([
             JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
             JsonObjectEntry("content", jsonArray([jsonObject([])]))
