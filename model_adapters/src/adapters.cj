@@ -802,7 +802,7 @@ func emitLlmWireEvent(
                 }
             }
         case LlmWireEvent.UsageUpdated(usage) =>
-            let input = optionalUsageValue(usage.inputTokens)
+            let input = providerInputUsageTotal(protocol, usage)
             let output = optionalUsageValue(usage.outputTokens)
             events(domain.ModelEvent.UsageUpdated(input, output))
             events(domain.ModelEvent.ProviderProgress(
@@ -3047,7 +3047,7 @@ func nativeReplayMatches(
     dialect: ProviderDialect,
     providerId: String
 ): Bool {
-    state.providerId == providerId &&
+    (providerId == "" || state.providerId == providerId) &&
         state.protocol.toAsciiLower() == legacyReplayProtocol(dialect)
 }
 
@@ -3499,7 +3499,7 @@ func encodeStandaloneRequest(request: domain.ModelRequest, dialect: ProviderDial
         codec,
         request,
         request.serviceTier.toAsciiLower() == "priority",
-        "standalone",
+        "",
         dialect: dialect
     ).body
 }

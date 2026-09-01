@@ -104,6 +104,18 @@ class NativeReplayRegressionTests {
     }
 
     @TestCase
+    func standaloneReplayMatchesCompatibleProtocolWithoutProfileIdentity(): Unit {
+        @Expect(nativeReplayMatches(
+            domain.OpaqueProviderState(
+                "messages-fixture", "messages", "{}",
+                itemId: "thinking", replayRequired: true
+            ),
+            ProviderDialect.AnthropicMessages,
+            ""
+        ), true)
+    }
+
+    @TestCase
     func malformedCurrentReplayEnvelopeDoesNotFallBackToLegacy(): Unit {
         try {
             let _ = restoreNativeReplay(domain.OpaqueProviderState(
