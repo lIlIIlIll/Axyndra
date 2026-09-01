@@ -69,6 +69,15 @@ class Mcp4CjTests {
             case McpResult.Err(error) => @Expect(error.code, "mcp.client_capabilities_invalid")
             case _ => @Fail("non-object sampling capability was accepted")
         }
+        match (validateMcpRequestMeta(jsonObject([JsonObjectEntry("_meta", jsonObject([
+            JsonObjectEntry(MCP_META_PROTOCOL_VERSION, jsonString(MCP_PROTOCOL_VERSION)),
+            JsonObjectEntry(MCP_META_CLIENT_CAPABILITIES, jsonObject([
+                JsonObjectEntry("sampling", jsonObject([JsonObjectEntry("tools", jsonBool(false))]))
+            ]))
+        ]))]))) {
+            case McpResult.Err(error) => @Expect(error.code, "mcp.client_capabilities_invalid")
+            case _ => @Fail("non-object nested sampling capability was accepted")
+        }
 
         let notifications = ArrayList<JsonRpcNotification>()
         let continuation = McpToolCallContinuation(
@@ -145,6 +154,20 @@ class Mcp4CjTests {
             for (index in 0..count) { output.add(buffer[index]) }
         }
         @Expect(String.fromUtf8(output.toArray()).contains("exceeded the frame limit"), true)
+
+        let terminal = McpOperationSseInput(jsonRpcNumberId(2), 1024, { _ =>
+            JsonRpcEnvelope.Response(JsonRpcResponse(jsonRpcNumberId(2), JsonRpcResponsePayload.Success(
+                jsonObject([JsonObjectEntry("value", jsonString(String.fromUtf8(Array<Byte>(2048, repeat: 120))))])
+            )))
+        })
+        sleep(Duration.millisecond * 20)
+        let terminalOutput = ArrayList<Byte>()
+        while (true) {
+            let count = terminal.read(buffer)
+            if (count <= 0) { break }
+            for (index in 0..count) { terminalOutput.add(buffer[index]) }
+        }
+        @Expect(String.fromUtf8(terminalOutput.toArray()).contains("response exceeded the frame limit"), true)
     }
 
     @TestCase
@@ -161,6 +184,18 @@ class Mcp4CjTests {
                 JsonObjectEntry("messages", jsonArray([jsonBool(true)])),
                 JsonObjectEntry("maxTokens", jsonNumber("32"))
             ]))
+        ])).isOk(), false)
+        let sampling = requireMcpInputRequest(decodeMcpInputRequest(jsonObject([
+            JsonObjectEntry("method", jsonString(MCP_METHOD_SAMPLING_CREATE_MESSAGE)),
+            JsonObjectEntry("params", jsonObject([
+                JsonObjectEntry("messages", jsonArray([])),
+                JsonObjectEntry("maxTokens", jsonNumber("32"))
+            ]))
+        ])))
+        @Expect(decodeMcpInputResponse(sampling, jsonObject([
+            JsonObjectEntry("role", jsonString("assistant")),
+            JsonObjectEntry("content", jsonBool(true)),
+            JsonObjectEntry("model", jsonString("fixture"))
         ])).isOk(), false)
     }
 

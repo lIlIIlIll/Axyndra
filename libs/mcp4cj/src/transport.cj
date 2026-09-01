@@ -576,12 +576,22 @@ public class StdioMcpServer {
         } else {
             let _ = spawn {
                 try {
-                    writeConsole(server.handleRequest(
+                    let progressOverflow = ArrayList<Unit>()
+                    let response = server.handleRequest(
                         request,
                         notificationSink: { notification =>
-                            writeConsoleEnvelope(JsonRpcEnvelope.Notification(notification))
+                            let envelope = JsonRpcEnvelope.Notification(notification)
+                            if (mcpEnvelopeWithinFrame(envelope, framing.maxFrameBytes)) {
+                                writeConsoleEnvelope(envelope)
+                            } else if (progressOverflow.isEmpty()) { progressOverflow.add(()) }
                         }
-                    ))
+                    )
+                    if (!progressOverflow.isEmpty()) {
+                        writeConsole(mcpFailureResponse(
+                            request.id, JSON_RPC_INTERNAL_ERROR,
+                            "MCP stdio progress notification exceeded the frame limit"
+                        ))
+                    } else { writeConsole(response) }
                 } finally { removeActive(request.id) }
             }
         }
@@ -596,6 +606,10 @@ public class StdioMcpServer {
                 case None => ()
             }
         } finally { writerLock.unlock() }
+    }
+
+    private func mcpEnvelopeWithinFrame(envelope: JsonRpcEnvelope, maxFrameBytes: Int64): Bool {
+        (encodeJsonRpc(envelope) + "\n").toArray().size <= maxFrameBytes
     }
     private func serveSubscription(request: JsonRpcRequest): Unit {
         let source = match (server.openSubscription(request)) {
