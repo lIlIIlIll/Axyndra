@@ -2962,19 +2962,23 @@ func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServi
         case _ => false
     }) {
         return match (value.toAsciiLower()) {
+            case "" => LlmWireServiceTier.ProviderDefault
             case "auto" => LlmWireServiceTier.Auto
             case "standard" | "standard_only" => LlmWireServiceTier.StandardOnly
-            case _ => LlmWireServiceTier.ProviderDefault
+            case _ => throw IllegalArgumentException(
+                "service tier is unsupported by the configured provider dialect"
+            )
         }
     }
     match (value.toAsciiLower()) {
+        case "" => LlmWireServiceTier.ProviderDefault
         case "auto" => LlmWireServiceTier.Auto
         case "default" => LlmWireServiceTier.Default
         case "flex" => LlmWireServiceTier.Flex
         case "priority" => LlmWireServiceTier.Priority
         case "fast" => LlmWireServiceTier.Fast
         case "ultrafast" => LlmWireServiceTier.Ultrafast
-        case _ => LlmWireServiceTier.ProviderDefault
+        case _ => throw IllegalArgumentException("service tier is unsupported by the configured provider dialect")
     }
 }
 

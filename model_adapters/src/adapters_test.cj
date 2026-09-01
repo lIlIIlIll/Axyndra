@@ -72,6 +72,16 @@ class NativeProviderTlsConfigurationTests {
 @Test
 class ProviderDialectContractTests {
     @TestCase
+    func unsupportedScaleTierFailsClosed(): Unit {
+        try {
+            let _ = toLlmWireServiceTier("scale", ProviderDialect.OpenAiResponses)
+            @Fail("scale must not be silently dropped")
+        } catch (_: IllegalArgumentException) {
+            @Expect(true, true)
+        }
+    }
+
+    @TestCase
     func rejectsDialectProtocolMismatch(): Unit {
         try {
             let _ = ProviderSpec(
