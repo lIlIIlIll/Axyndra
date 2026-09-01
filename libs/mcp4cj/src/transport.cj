@@ -611,7 +611,16 @@ public class StdioMcpServer {
                             request.id, JSON_RPC_INTERNAL_ERROR,
                             "MCP stdio progress notification exceeded the frame limit"
                         ))
-                    } else { writeConsole(response) }
+                    } else if (mcpEnvelopeWithinFrame(
+                        JsonRpcEnvelope.Response(response), framing.maxFrameBytes
+                    )) {
+                        writeConsole(response)
+                    } else {
+                        writeConsole(mcpFailureResponse(
+                            request.id, JSON_RPC_INTERNAL_ERROR,
+                            "MCP stdio operation response exceeded the frame limit"
+                        ))
+                    }
                 } finally { removeActive(request.id) }
             }
         }

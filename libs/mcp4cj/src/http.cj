@@ -812,7 +812,12 @@ public class StreamableHttpMcpServer {
                         }
                         body += "event: message\ndata: " + encodeJsonRpc(response) + "\n\n"
                         context.responseBuilder.status(200).header("Content-Type", "text/event-stream; charset=utf-8").header("Cache-Control", "no-store").body(body)
-                    } else { writeMcpHttpEnvelope(context, responseStatus(response), response) }
+                    } else {
+                        let bounded = boundedMcpHttpOperationResponse(
+                            response, envelopeId(envelope), config.framing.maxFrameBytes
+                        )
+                        writeMcpHttpEnvelope(context, responseStatus(bounded), bounded)
+                    }
             }
         } finally {
             match (envelope) {
@@ -1219,6 +1224,14 @@ func responseStatus(envelope: JsonRpcEnvelope): UInt16 { match (envelope) {
 } }
 func writeHttpProblem(context: HttpContext, status: UInt16, message: String): Unit { context.responseBuilder.status(status).header("Content-Type", "text/plain; charset=utf-8").header("Cache-Control", "no-store").body(message) }
 func writeMcpHttpEnvelope(context: HttpContext, status: UInt16, envelope: JsonRpcEnvelope): Unit { context.responseBuilder.status(status).header("Content-Type", "application/json; charset=utf-8").header("Cache-Control", "no-store").body(encodeJsonRpc(envelope)) }
+func boundedMcpHttpOperationResponse(
+    envelope: JsonRpcEnvelope, id: JsonRpcId, maxFrameBytes: Int64
+): JsonRpcEnvelope {
+    if (encodeJsonRpc(envelope).toArray().size <= maxFrameBytes) { return envelope }
+    JsonRpcEnvelope.Response(mcpFailureResponse(
+        id, JSON_RPC_INTERNAL_ERROR, "MCP HTTP operation response exceeded the frame limit"
+    ))
+}
 func originAllowed(allowed: Array<String>, origin: String): Bool {
     if (origin == "") { return true }
     for (value in allowed where value == origin) { return true }

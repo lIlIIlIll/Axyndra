@@ -135,7 +135,7 @@ public class McpOAuthClient {
                 }
             case None => ()
         }
-        authorize(resource, scopes, metadata, client)
+        authorize(resource, scopes, metadata, client, nowMillis)
     }
 
     public func clear(resource: String): McpResult<Unit> {
@@ -197,7 +197,8 @@ public class McpOAuthClient {
         resource: String,
         scopes: Array<String>,
         metadata: McpAuthorizationServerMetadata,
-        client: McpOAuthClientMetadata
+        client: McpOAuthClientMetadata,
+        nowMillis: Int64
     ): McpResult<McpOAuthTokenSet> {
         let grant = match (interaction.authorize(metadata, client, resource, scopes)) {
             case McpResult.Ok(value) => value
@@ -221,6 +222,11 @@ public class McpOAuthClient {
             case McpResult.Err(error) => return McpResult.Err(error)
         }
         let tokens = mergeMcpOAuthTokenDefaults(exchanged, "", scopes)
+        if (tokens.expired(nowMillis)) {
+            return authenticationMcpFailure<McpOAuthTokenSet>(
+                "mcp.oauth_token_expired", "authorization server returned an expired access token"
+            )
+        }
         if (!tokens.covers(scopes)) {
             return authorizationMcpFailure<McpOAuthTokenSet>("mcp.oauth_scope_required", "authorization server did not grant requested scopes")
         }

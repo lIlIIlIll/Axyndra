@@ -922,6 +922,18 @@ class Mcp4CjTests {
                 JsonObjectEntry("x-mcp-header", jsonString("Region"))
             ]))
         ])), false)
+        let oversized = JsonRpcEnvelope.Response(mcpSuccessResponse(
+            jsonRpcNumberId(7), jsonObject([JsonObjectEntry("value", jsonString("oversized"))]), None
+        ))
+        match (boundedMcpHttpOperationResponse(oversized, jsonRpcNumberId(7), 32)) {
+            case JsonRpcEnvelope.Response(response) => match (response.payload) {
+                case JsonRpcResponsePayload.Failure(error) => @Expect(
+                    error.message, "MCP HTTP operation response exceeded the frame limit"
+                )
+                case _ => @Fail("oversized HTTP operation response was retained")
+            }
+            case _ => @Fail("bounded HTTP operation response was not a response")
+        }
     }
 }
 
