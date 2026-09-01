@@ -57,6 +57,13 @@ unexpected_report="$work_root/unexpected-results.tsv"
 for checks in "$work_root"/results/server-*/checks.json; do
   failure_rows="$work_root/failure-rows.tsv"
   warning_rows="$work_root/warning-rows.tsv"
+  if ! jq -e '
+    type == "array" and length > 0 and
+    all(.[]; type == "object" and (.id | type == "string") and (.status | type == "string"))
+  ' "$checks" >/dev/null; then
+    printf 'Invalid or empty MCP conformance report: %s\n' "$checks" >&2
+    exit 1
+  fi
   if ! jq -r '
     .[] | select(.status == "FAILURE") |
     [
