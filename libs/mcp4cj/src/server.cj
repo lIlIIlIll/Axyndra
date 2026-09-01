@@ -468,8 +468,8 @@ public class McpServer {
         }
         let taskId = mcpText(request.params, "taskId")
         let responses = mcpField(request.params, "inputResponses", jsonNull())
-        if (taskId == "" || responses.unifiedKind != UnifiedJsonKind.Object) {
-            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires taskId and object inputResponses")
+        if (taskId == "" || responses.unifiedKind != UnifiedJsonKind.Object || responses.fields.isEmpty()) {
+            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires taskId and non-empty object inputResponses")
         }
         for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "task input responses must be objects")
@@ -481,7 +481,7 @@ public class McpServer {
         if (task.status != McpTaskStatus.InputRequired) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires an input_required task")
         }
-        match (validateMcpInputResponses(task.inputRequests, responses)) {
+        match (validateMcpInputResponses(task.inputRequests, responses, requireAll: false)) {
             case McpResult.Ok(_) => ()
             case McpResult.Err(error) => return mcpHostFailure(request.id, error)
         }
