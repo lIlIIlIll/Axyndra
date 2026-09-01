@@ -31,14 +31,23 @@ trap cleanup EXIT
 server_pid=$!
 
 http_code=000
+ready_line="mcp4cj conformance server: http://127.0.0.1:$port/mcp"
 for _ in {1..40}; do
-  http_code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/mcp" || true)
-  if [[ "$http_code" != 000 ]]; then
-    break
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    wait "$server_pid" 2>/dev/null || true
+    cat "$server_log" >&2
+    printf 'MCP conformance fixture exited before readiness\n' >&2
+    exit 1
+  fi
+  if grep -Fxq -- "$ready_line" "$server_log"; then
+    http_code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/mcp" || true)
+    if [[ "$http_code" != 000 ]]; then
+      break
+    fi
   fi
   sleep 0.25
 done
-if [[ "$http_code" == 000 ]]; then
+if [[ "$http_code" == 000 ]] || ! kill -0 "$server_pid" 2>/dev/null; then
   cat "$server_log" >&2
   printf 'MCP conformance fixture did not become ready\n' >&2
   exit 1
