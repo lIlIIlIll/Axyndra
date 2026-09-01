@@ -796,6 +796,16 @@ class Mcp4CjTests {
         let capabilities = McpClientCapabilities(extensions: jsonObject([
             JsonObjectEntry(MCP_TASKS_EXTENSION, jsonObject([]))
         ]))
+        let missingTaskProvider = McpClient(
+            InMemoryMcpTransport(McpServerBuilder().toolProvider(host).build()),
+            McpRequestMeta(clientCapabilities: capabilities)
+        )
+        match (missingTaskProvider.callTool("async", jsonObject([]))) {
+            case McpResult.Err(error) => @Expect(
+                error.message, "tool returned a task but the server has no task provider"
+            )
+            case _ => @Fail("server returned a task without a task provider")
+        }
         let client = McpClient(InMemoryMcpTransport(server), McpRequestMeta(
             clientCapabilities: capabilities
         ))
