@@ -3100,7 +3100,6 @@ func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServi
 func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): LlmWireRequest {
     let messages = ArrayList<LlmWireMessage>()
     let pendingToolCalls = HashSet<String>()
-    let consumedToolCalls = HashSet<String>()
     for (message in request.messages) {
         let blocks = ArrayList<LlmWireBlock>()
         for (index in 0..message.blocks.size) {
@@ -3116,9 +3115,8 @@ func toLlmWireRequest(request: domain.ModelRequest, dialect: ProviderDialect): L
                     pendingToolCalls.add(block.callId)
                     blocks.add(toLlmWireBlock(block, dialect))
                 case domain.ModelBlockKind.ToolResult =>
-                    if (pendingToolCalls.contains(block.callId) &&
-                        !consumedToolCalls.contains(block.callId)) {
-                        consumedToolCalls.add(block.callId)
+                    if (pendingToolCalls.contains(block.callId)) {
+                        pendingToolCalls.remove(block.callId)
                         blocks.add(toLlmWireBlock(block, dialect))
                     }
                 case _ => blocks.add(toLlmWireBlock(block, dialect))
