@@ -896,17 +896,25 @@ class ProviderStreamProjection {
 
     func push(chunk: String): Unit {
         if (failed) { return }
-        match (decoder.push(chunk)) {
-            case LlmWireResult.Ok(update) => emit(update)
-            case LlmWireResult.Err(_) => failed = true
+        try {
+            match (decoder.push(chunk)) {
+                case LlmWireResult.Ok(update) => emit(update)
+                case LlmWireResult.Err(_) => failed = true
+            }
+        } catch (_: Exception) {
+            failed = true
         }
     }
 
     func finish(): Unit {
         if (failed) { return }
-        match (decoder.finish()) {
-            case LlmWireResult.Ok(update) => emit(update)
-            case LlmWireResult.Err(_) => failed = true
+        try {
+            match (decoder.finish()) {
+                case LlmWireResult.Ok(update) => emit(update)
+                case LlmWireResult.Err(_) => failed = true
+            }
+        } catch (_: Exception) {
+            failed = true
         }
     }
 
@@ -1066,9 +1074,9 @@ public class ProviderModelPort <: ports.ModelPort {
                         case Some(value) => value.finish()
                         case None => ()
                     }
-                    events(domain.ModelEvent.ProviderProgress(
+                    try { events(domain.ModelEvent.ProviderProgress(
                         domain.ProviderStreamEvent.StreamTransportClosed
-                    ))
+                    )) } catch (_: Exception) {}
                 }
                 let reply = decodeProviderReply(
                     provider,
