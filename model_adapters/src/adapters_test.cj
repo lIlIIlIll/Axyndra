@@ -151,6 +151,21 @@ class OrphanToolResultEncodingTests {
     }
 
     @TestCase
+    func messagesProtocolRejectsOrphanOnlyMessages(): Unit {
+        try {
+            let _ = encodeMessagesRequest(request([
+                domain.ModelMessage(
+                    domain.ModelRole.User,
+                    [resultBlock("call_orphan", "orphan output")]
+                )
+            ]))
+            @Fail("orphan-only messages must fail closed")
+        } catch (_: Exception) {
+            @Expect(true, true)
+        }
+    }
+
+    @TestCase
     func messagesProtocolKeepsPairedToolResultBlocks(): Unit {
         let encoded = encodeMessagesRequest(request([
             domain.ModelMessage(
