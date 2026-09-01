@@ -273,6 +273,16 @@ func runToolProgramContracts(): Unit {
     expect(bounded.status == ToolProgramStatus.Failed && bounded.errorCode == "tool_program.parallel_limit",
         "bounded scheduler rejects parallel groups over the declared limit")
 
+    let nestedResult = runtime.execute(ToolProgramIR(
+        "program-result-size", "return ['12345678901234567890'];", [
+            ToolProgramStatement.Return(ToolProgramExpression.Literal(listValue([
+                textValue("12345678901234567890")
+            ])))
+        ]
+    ), context, limits: ToolProgramLimits(maxResultBytes: 40u64))
+    expect(nestedResult.status == ToolProgramStatus.Completed,
+        "result accounting visits nested containers once without serializing each container")
+
     let forbidden = runtime.execute(ToolProgramIR(
         "program-forbidden", "import fs from 'fs'; return fs;", [
             ToolProgramStatement.Return(ToolProgramExpression.Literal(nullValue()))
