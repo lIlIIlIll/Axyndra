@@ -675,6 +675,8 @@ public class StreamableHttpMcpServer {
     private let requestLock = Mutex()
     private let activeStreams = ArrayList<McpHttpServerReservation>()
     private let activeSubscriptions = ArrayList<McpHttpServerSubscription>()
+    private let notificationLock = Mutex()
+    private var activeNotifications: Int64 = 0
 
     init(config: McpStreamableHttpServerConfig, mcp: McpServer, native: Server) {
         this.config = config; this.mcp = mcp; this.native = native
@@ -825,19 +827,26 @@ public class StreamableHttpMcpServer {
                 }
             case _ => ()
         }
-        let progressNotifications = ArrayList<JsonRpcNotification>()
-        let handled: McpResult<?JsonRpcEnvelope> = match (envelope) {
-            case JsonRpcEnvelope.Request(value) => McpResult.Ok(Some(JsonRpcEnvelope.Response(
-                mcp.handleRequest(
-                    value,
-                    notificationSink: { notification => progressNotifications.add(notification) },
-                    requestOwner: requestOwner
-                )
-            )))
-            case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value, requestOwner)
-            case JsonRpcEnvelope.Response(_) => mcp.handle(envelope)
+        let notificationReserved = match (envelope) {
+            case JsonRpcEnvelope.Notification(_) => if (reserveNotification()) { true } else {
+                writeHttpProblem(context, 503, "MCP HTTP notification limit reached")
+                return
+            }
+            case _ => false
         }
+        let progressNotifications = ArrayList<JsonRpcNotification>()
         try {
+            let handled: McpResult<?JsonRpcEnvelope> = match (envelope) {
+                case JsonRpcEnvelope.Request(value) => McpResult.Ok(Some(JsonRpcEnvelope.Response(
+                    mcp.handleRequest(
+                        value,
+                        notificationSink: { notification => progressNotifications.add(notification) },
+                        requestOwner: requestOwner
+                    )
+                )))
+                case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value, requestOwner)
+                case JsonRpcEnvelope.Response(_) => mcp.handle(envelope)
+            }
             match (handled) {
                 case McpResult.Err(error) => writeMcpHttpEnvelope(context, 500, JsonRpcEnvelope.Response(mcpFailureResponse(envelopeId(envelope), JSON_RPC_INTERNAL_ERROR, error.message)))
                 case McpResult.Ok(None) => context.responseBuilder.status(202)
@@ -859,6 +868,7 @@ public class StreamableHttpMcpServer {
                     }
             }
         } finally {
+            if (notificationReserved) { releaseNotification() }
             match (envelope) {
                 case JsonRpcEnvelope.Request(value) => releaseStream(requestOwner, value.id)
                 case _ => ()
@@ -892,6 +902,20 @@ public class StreamableHttpMcpServer {
             if (activeStreams.size >= config.maxConcurrentRequests) { false }
             else { activeStreams.add(McpHttpServerReservation(owner, id)); true }
         } finally { requestLock.unlock() }
+    }
+
+    private func reserveNotification(): Bool {
+        notificationLock.lock()
+        try {
+            if (activeNotifications >= config.maxConcurrentRequests) { false }
+            else { activeNotifications++; true }
+        } finally { notificationLock.unlock() }
+    }
+
+    private func releaseNotification(): Unit {
+        notificationLock.lock()
+        try { if (activeNotifications > 0) { activeNotifications-- } }
+        finally { notificationLock.unlock() }
     }
 
     private func releaseStream(owner: String, id: JsonRpcId): Unit {
@@ -949,6 +973,7 @@ class McpOperationSseInput <: InputStream & Resource {
     private var done = false
     private var closed = false
     private var overflowed = false
+    private var cancellationRequested = false
     private var worker: ?Future<Unit> = None
     private let cancelAction: () -> Unit
     private let releaseAction: () -> Unit
@@ -1009,7 +1034,8 @@ class McpOperationSseInput <: InputStream & Resource {
         lock.lock(); try {
             if (!closed) {
                 closed = true; queued.clear(); pending = []
-                cancel = !done
+                cancel = !done && !cancellationRequested
+                if (cancel) { cancellationRequested = true }
             }
         } finally { lock.unlock() }
         if (cancel) { cancelAction() }
@@ -1022,6 +1048,7 @@ class McpOperationSseInput <: InputStream & Resource {
 
     private func enqueueProgress(envelope: JsonRpcEnvelope): Unit {
         let bytes = encodedEnvelope(envelope)
+        var cancel = false
         lock.lock(); try {
             if (!closed && !overflowed) {
                 if (bytes.size > maxFrameBytes) {
@@ -1032,6 +1059,7 @@ class McpOperationSseInput <: InputStream & Resource {
                     ))))
                     overflowed = true
                     done = true
+                    if (!cancellationRequested) { cancellationRequested = true; cancel = true }
                 } else if (queued.size >= MCP_OPERATION_PROGRESS_QUEUE_LIMIT) {
                     queued.clear()
                     queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
@@ -1040,9 +1068,11 @@ class McpOperationSseInput <: InputStream & Resource {
                     ))))
                     overflowed = true
                     done = true
+                    if (!cancellationRequested) { cancellationRequested = true; cancel = true }
                 } else { queued.add(bytes) }
             }
         } finally { lock.unlock() }
+        if (cancel) { cancelAction() }
     }
 
     private func enqueueFinal(envelope: JsonRpcEnvelope): Unit {
