@@ -669,6 +669,16 @@ func decodeMcpSubscriptionFilter(params: JsonNode): McpResult<McpSubscriptionFil
         case McpResult.Ok(_) => ()
         case McpResult.Err(error) => return McpResult.Err(error)
     }
+    for (name in ["toolsListChanged", "promptsListChanged", "resourcesListChanged"]) {
+        match (notifications.field(name)) {
+            case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Boolean) {
+                return invalidMcp<McpSubscriptionFilter>(
+                    "mcp.subscription_filter_invalid", name + " must be a boolean"
+                )
+            }
+            case None => ()
+        }
+    }
     McpResult.Ok(McpSubscriptionFilter(
         toolsListChanged: mcpBool(notifications, "toolsListChanged", false),
         promptsListChanged: mcpBool(notifications, "promptsListChanged", false),

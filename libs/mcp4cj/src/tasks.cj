@@ -63,6 +63,12 @@ public class McpTask {
             case None => ()
         }
         requireObject(inputRequests, "MCP task inputRequests")
+        for (field in inputRequests.fields) {
+            match (decodeMcpInputRequest(field.value)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => throw IllegalArgumentException(error.message)
+            }
+        }
         match (status) {
             case McpTaskStatus.InputRequired =>
                 if (result.unifiedKind != UnifiedJsonKind.Null || error.unifiedKind != UnifiedJsonKind.Null) {

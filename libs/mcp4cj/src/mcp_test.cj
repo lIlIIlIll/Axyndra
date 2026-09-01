@@ -229,6 +229,13 @@ class Mcp4CjTests {
         }
         @Expect(decodeMcpSseResponse("data: not-json\n\n", expected, 4096).isOk(), false)
 
+        let incremental = ByteBuffer()
+        incremental.write((
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"progress\"}\n\n" +
+            "data: {\"jsonrpc\":\"2.0\",\"id\":\"wanted\",\"result\":{}}\n\n"
+        ).toArray())
+        @Expect(readMcpSseResponse(incremental, expected, 64).isOk(), true)
+
         let body = ByteBuffer()
         body.write("12345".toArray())
         @Expect(readMcpHttpBody(body, Some(5), 4).isOk(), false)
