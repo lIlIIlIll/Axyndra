@@ -80,6 +80,21 @@ class NativeReplayRegressionTests {
 }
 
 @Test
+class StreamProjectionSafetyTests {
+    @TestCase
+    func streamSinkExceptionsDoNotEscapeProjection(): Unit {
+        let projection = ProviderStreamProjection(
+            openAiChatCodec(openAiChatModelProfile("fixture"), provider: "fixture"),
+            ProviderProtocol.Completions,
+            {_ => throw IllegalStateException("sink failed")}
+        )
+        projection.push("data: [DONE]\n\n")
+        projection.finish()
+        @Expect(true, true)
+    }
+}
+
+@Test
 class CurlResponseCaptureTests {
     @TestCase
     func responseHeadersNeverShareModelBodyStdout(): Unit {
