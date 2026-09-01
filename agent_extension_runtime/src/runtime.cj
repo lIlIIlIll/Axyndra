@@ -1,7 +1,8 @@
 package agent_extension_runtime
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.convert.*
 import std.deriving.*
@@ -182,8 +183,8 @@ public func parseExtensionManifest(
     source!: String = "embedded"
 ): ExtensionRuntimeResult<ExtensionManifest> {
     let value = try {
-        parseJson(document, maxBytes: 262144, maxDepth: 16)
-    } catch (error: JsonError) {
+        parseUnifiedJson(document, maxBytes: 262144, maxDepth: 16)
+    } catch (error: JsonException) {
         return runtimeError(
             ExtensionRuntimeErrorKind.ManifestParse,
             ExtensionRuntimePhase.Parse,
@@ -192,7 +193,7 @@ public func parseExtensionManifest(
             error.message
         )
     }
-    if (value.kind != JsonKind.Object) {
+    if (value.unifiedKind != UnifiedJsonKind.Object) {
         return validationError("", source, "", "manifest root must be an object")
     }
     let schemaVersion = match (requiredInteger(value, "schemaVersion")) {
@@ -239,7 +240,7 @@ public func parseExtensionManifest(
         case Some(candidate) => candidate
         case None => return validationError(id, source, "sdk", "SDK compatibility is required")
     }
-    if (sdkValue.kind != JsonKind.Object) {
+    if (sdkValue.unifiedKind != UnifiedJsonKind.Object) {
         return validationError(id, source, "sdk", "SDK compatibility must be an object")
     }
     let minimum = match (requiredVersion(
@@ -282,7 +283,7 @@ public func parseExtensionManifest(
     let executables = match (value.field("requirements")) {
         case None => Array<String>()
         case Some(requirements) =>
-            if (requirements.kind != JsonKind.Object) {
+            if (requirements.unifiedKind != UnifiedJsonKind.Object) {
                 return validationError(id, source, "requirements", "requirements must be an object")
             } else {
                 match (optionalUniqueStrings(requirements, "executables", id, source)) {
@@ -728,14 +729,14 @@ func parseVersionUnchecked(value: String): SemanticVersion {
 }
 
 func requiredVersion(
-    value: JsonValue,
+    value: JsonNode,
     name: String,
     id: String,
     source: String,
     errorKind!: ExtensionRuntimeErrorKind = ExtensionRuntimeErrorKind.ExtensionVersionMalformed
 ): ExtensionRuntimeResult<SemanticVersion> {
     let text = match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Text && field.text != "" &&
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Text && field.text != "" &&
             field.text == field.text.trimAscii()) {
             field.text
         } else {
@@ -799,10 +800,10 @@ func sdkCompatibilityError(
     )
 }
 
-func requiredText(value: JsonValue, name: String): ExtensionRuntimeResult<String> {
+func requiredText(value: JsonNode, name: String): ExtensionRuntimeResult<String> {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Text && field.text.trimAscii() != "") {
+            if (field.unifiedKind == UnifiedJsonKind.Text && field.text.trimAscii() != "") {
                 ExtensionRuntimeResult.Ok(field.text.trimAscii())
             } else {
                 validationError("", "", name, "${name} must be a non-empty string")
@@ -811,10 +812,10 @@ func requiredText(value: JsonValue, name: String): ExtensionRuntimeResult<String
     }
 }
 
-func requiredInteger(value: JsonValue, name: String): ExtensionRuntimeResult<Int64> {
+func requiredInteger(value: JsonNode, name: String): ExtensionRuntimeResult<Int64> {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind != JsonKind.Number) {
+            if (field.unifiedKind != UnifiedJsonKind.Number) {
                 validationError("", "", name, "${name} must be an integer")
             } else {
                 try { ExtensionRuntimeResult.Ok(Int64.parse(field.number)) }
@@ -824,25 +825,25 @@ func requiredInteger(value: JsonValue, name: String): ExtensionRuntimeResult<Int
     }
 }
 
-func requiredUniqueStrings(value: JsonValue, name: String, id: String, source: String, allowEmpty: Bool): ExtensionRuntimeResult<Array<String>> {
+func requiredUniqueStrings(value: JsonNode, name: String, id: String, source: String, allowEmpty: Bool): ExtensionRuntimeResult<Array<String>> {
     match (value.field(name)) {
         case None => validationError(id, source, name, "${name} is required")
         case Some(field) => parseUniqueStrings(field, name, id, source, allowEmpty)
     }
 }
 
-func optionalUniqueStrings(value: JsonValue, name: String, id: String, source: String): ExtensionRuntimeResult<Array<String>> {
+func optionalUniqueStrings(value: JsonNode, name: String, id: String, source: String): ExtensionRuntimeResult<Array<String>> {
     match (value.field(name)) {
         case None => ExtensionRuntimeResult.Ok([])
         case Some(field) => parseUniqueStrings(field, name, id, source, true)
     }
 }
 
-func parseUniqueStrings(value: JsonValue, name: String, id: String, source: String, allowEmpty: Bool): ExtensionRuntimeResult<Array<String>> {
-    if (value.kind != JsonKind.List) { return validationError(id, source, name, "${name} must be an array") }
+func parseUniqueStrings(value: JsonNode, name: String, id: String, source: String, allowEmpty: Bool): ExtensionRuntimeResult<Array<String>> {
+    if (value.unifiedKind != UnifiedJsonKind.List) { return validationError(id, source, name, "${name} must be an array") }
     let values = ArrayList<String>()
     for (item in value.items) {
-        if (item.kind != JsonKind.Text || item.text.trimAscii() == "") {
+        if (item.unifiedKind != UnifiedJsonKind.Text || item.text.trimAscii() == "") {
             return validationError(id, source, name, "${name} must contain non-empty strings")
         }
         if (item.text.contains("\u{0000}")) {

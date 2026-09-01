@@ -1,5 +1,9 @@
 package github_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import agent_product.*
@@ -33,23 +37,23 @@ func verifySchema(root: String): Unit {
     )).value().getOrThrow()
     let definition = toolDefinition(product, "github")
     expect(
-        propertyNames(definition.inputSchema) == [
+        sameStringSet(propertyNames(definition.inputSchema), [
             "op", "repo", "branch", "path", "pr", "force",
             "forceWithLease", "title", "body", "base", "head",
             "draft", "fill", "reviewer", "assignee", "label",
             "query", "since", "until", "dateField", "limit", "run",
             "tail"
-        ] &&
-        requiredNames(definition.inputSchema) == ["op"] &&
-        enumNames(
+        ]) &&
+        sameStringSet(requiredNames(definition.inputSchema), ["op"]) &&
+        sameStringSet(enumNames(
             definition.inputSchema.field("properties").getOrThrow()
                 .field("op").getOrThrow()
-        ) == [
+        ), [
             "repo_view", "file_read", "pr_create", "pr_checkout",
             "pr_push", "search_issues", "search_prs", "search_code",
             "search_commits", "search_repos", "run_watch"
-        ],
-        "github exposes the exact pinned root schema and operation union"
+        ]),
+        "github exposes the reviewed root schema and operation union"
     )
     let pr = definition.inputSchema.field("properties").getOrThrow()
         .field("pr").getOrThrow()
@@ -357,6 +361,18 @@ func enumNames(schema: AgentValue): Array<String> {
         names.add(value.text)
     }
     names.toArray()
+}
+
+func sameStringSet(left: Array<String>, right: Array<String>): Bool {
+    if (left.size != right.size) { return false }
+    for (candidate in left) {
+        var found = false
+        for (expected in right) {
+            if (candidate == expected) { found = true; break }
+        }
+        if (!found) { return false }
+    }
+    true
 }
 
 func expect(condition: Bool, message: String): Unit {

@@ -1,5 +1,9 @@
 package tool_runtime_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import std.collection.*
@@ -223,7 +227,7 @@ func runToolProgramContracts(): Unit {
         ]
     )
     let completed = runtime.execute(program, context)
-    expect(completed.status == ToolProgramStatus.Completed && completed.value.kind == ValueKind.List &&
+    expect(completed.status == ToolProgramStatus.Completed && completed.value.unifiedKind == ValueKind.List &&
         completed.value.items.size == 2 && completed.value.items[0].text == "read" &&
         completed.subOperations.size == 3 && operations.executions == 3,
         "restricted program executes let/if/bounded-for/map/filter/reduce/parallel/try-catch/return")
@@ -268,6 +272,16 @@ func runToolProgramContracts(): Unit {
     ), context, limits: ToolProgramLimits(maxParallelCalls: 1u64))
     expect(bounded.status == ToolProgramStatus.Failed && bounded.errorCode == "tool_program.parallel_limit",
         "bounded scheduler rejects parallel groups over the declared limit")
+
+    let nestedResult = runtime.execute(ToolProgramIR(
+        "program-result-size", "return ['12345678901234567890'];", [
+            ToolProgramStatement.Return(ToolProgramExpression.Literal(listValue([
+                textValue("12345678901234567890")
+            ])))
+        ]
+    ), context, limits: ToolProgramLimits(maxResultBytes: 40u64))
+    expect(nestedResult.status == ToolProgramStatus.Completed,
+        "result accounting visits nested containers once without serializing each container")
 
     let forbidden = runtime.execute(ToolProgramIR(
         "program-forbidden", "import fs from 'fs'; return fs;", [
@@ -338,8 +352,10 @@ func runSchemaValidationContracts(): Unit {
                     ]))
                 ])),
                 ValueField("alias", objectValue([
-                    ValueField("type", textValue("string")),
-                    ValueField("nullable", boolValue(true))
+                    ValueField("type", listValue([
+                        textValue("string"),
+                        textValue("null")
+                    ]))
                 ])),
                 ValueField("labels", objectValue([
                     ValueField("type", textValue("object")),
@@ -363,15 +379,15 @@ func runSchemaValidationContracts(): Unit {
     )
     expect(
         validator.validate(valid, definition).isOk(),
-        "schema validator accepts nested objects, arrays, all primitive types, anyOf, and nullable"
+        "schema validator accepts nested objects, arrays, all primitive types, anyOf, and null unions"
     )
     expectSchemaViolation(
         validator,
         definition,
         objectValue([]),
-        "$[\"profile\"]",
+        "$",
         "required",
-        "required schema errors carry the missing property's JSON path"
+        "required schema errors identify the containing object"
     )
     expectSchemaViolation(
         validator,

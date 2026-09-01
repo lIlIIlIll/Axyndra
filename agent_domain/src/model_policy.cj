@@ -1,5 +1,9 @@
 package agent_domain
 
+import yjson.*
+
+import yjson_support.*
+
 import std.collection.*
 import std.deriving.*
 import std.overflow.*

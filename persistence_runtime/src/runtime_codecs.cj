@@ -1,5 +1,9 @@
 package persistence_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
@@ -93,8 +97,62 @@ func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Boo
 }
 
 func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuation): Bool {
-    encodeAgentValue(continuationRequestBindingValue(left)) ==
-        encodeAgentValue(continuationRequestBindingValue(right))
+    let leftValue = continuationRequestBindingValue(left)
+    let rightValue = continuationRequestBindingValue(right)
+    if (leftValue.fields.size != rightValue.fields.size) { return false }
+    for (field in leftValue.fields) {
+        match (rightValue.field(field.name)) {
+            case Some(value) => if (field.name == "tool_context") {
+                if (!sameToolContextBinding(field.value, value)) { return false }
+            } else if (encodeAgentValue(field.value) != encodeAgentValue(value)) {
+                return false
+            }
+            case None => return false
+        }
+    }
+    true
+}
+
+func continuationAcceptsDecision(
+    continuation: RunContinuation,
+    receipt: ApprovalDecisionReceipt
+): Bool {
+    continuation.runId.value == receipt.runId.value &&
+        continuation.sessionId.value == receipt.sessionId.value &&
+        continuation.approval.operationId.value == receipt.operationId.value &&
+        continuation.approval.callId == receipt.callId &&
+        continuation.approval.sessionId == receipt.sessionId.value &&
+        continuation.approval.argumentHash == receipt.argumentHash
+}
+
+func sameToolContextBinding(left: AgentValue, right: AgentValue): Bool {
+    if (textOr(left, "workspace_root") != textOr(right, "workspace_root") ||
+        textOr(left, "cwd") != textOr(right, "cwd")) { return false }
+    sameUnorderedValueList(
+        valueListOrEmpty(left, "environment"), valueListOrEmpty(right, "environment")
+    ) && sameUnorderedValueList(
+        valueListOrEmpty(left, "services"), valueListOrEmpty(right, "services")
+    )
+}
+
+func valueListOrEmpty(value: AgentValue, name: String): Array<AgentValue> {
+    match (value.field(name)) {
+        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items.toArray() } else { [] }
+        case None => []
+    }
+}
+
+func sameUnorderedValueList(left: Array<AgentValue>, right: Array<AgentValue>): Bool {
+    if (left.size != right.size) { return false }
+    for (leftValue in left) {
+        var found = false
+        for (rightValue in right where encodeAgentValue(leftValue) == encodeAgentValue(rightValue)) {
+            found = true
+            break
+        }
+        if (!found) { return false }
+    }
+    true
 }
 
 func continuationRequestBindingValue(value: RunContinuation): AgentValue {
@@ -161,15 +219,15 @@ func storedApprovalGrantAllows(value: AgentValue, requested: ApprovalGrantScope)
     let pathPrefix = value.field("path_prefix")
     let toolName = value.field("tool_name")
     let host = value.field("host")
-    if (capability.isNone() || capability.getOrThrow().kind != ValueKind.Text ||
+    if (capability.isNone() || capability.getOrThrow().unifiedKind != ValueKind.Text ||
         capability.getOrThrow().text != requested.capability) { return false }
-    let storedTool = if (toolName.isSome() && toolName.getOrThrow().kind == ValueKind.Text) {
+    let storedTool = if (toolName.isSome() && toolName.getOrThrow().unifiedKind == ValueKind.Text) {
         toolName.getOrThrow().text
     } else { "" }
-    let storedHost = if (host.isSome() && host.getOrThrow().kind == ValueKind.Text) {
+    let storedHost = if (host.isSome() && host.getOrThrow().unifiedKind == ValueKind.Text) {
         host.getOrThrow().text
     } else { "" }
-    let storedPath = if (pathPrefix.isSome() && pathPrefix.getOrThrow().kind == ValueKind.Text) {
+    let storedPath = if (pathPrefix.isSome() && pathPrefix.getOrThrow().unifiedKind == ValueKind.Text) {
         pathPrefix.getOrThrow().text
     } else { "" }
     if (storedTool != "" && storedTool != requested.toolName) { return false }
@@ -245,7 +303,7 @@ func modelImageValue(value: ModelImage): AgentValue {
 }
 
 func modelImageFromValue(value: AgentValue): Result<ModelImage> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("model image must be an object")
     }
     let sourceKind = match (requiredText(value, "source_kind")) {
@@ -320,7 +378,7 @@ func decodeSnapshot(source: String): Result<RunSnapshot> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("run snapshot must be an object")
     }
     let formatVersion = match (requiredInteger(value, "format_version")) {
@@ -414,12 +472,12 @@ func decodeSnapshot(source: String): Result<RunSnapshot> {
         case Result.Err(error) => return Result.Err(error)
     }
     let structuredOutput: ?AgentValue = match (value.field("structured_output")) {
-        case Some(raw) => if (raw.kind == ValueKind.Null) { None } else { Some(raw) }
+        case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else { Some(raw) }
         case None => return codecError("missing field: structured_output")
     }
     let snapshotError: ?AgentError = match (value.field("error")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 match (strictErrorFrom(raw)) {
@@ -463,9 +521,9 @@ func requiredOptionalInteger(
 ): Result<?Int64> {
     match (value.field(name)) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 Result.Ok(None)
-            } else if (raw.kind == ValueKind.Number) {
+            } else if (raw.unifiedKind == ValueKind.Number) {
                 try {
                     Result.Ok(Some(Int64.parse(raw.number)))
                 } catch (_: Exception) {
@@ -615,13 +673,13 @@ func runningModelCheckpointValue(value: RunningModelCheckpoint): AgentValue {
 }
 
 func requestedModelPolicyFromValue(value: AgentValue): Result<RequestedModelPolicy> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("requested model policy must be an object")
     }
     let userRequested: ?ThinkingLevel = match (value.field("user_requested_thinking")) {
-        case Some(raw) => if (raw.kind == ValueKind.Null) {
+        case Some(raw) => if (raw.unifiedKind == ValueKind.Null) {
             None
-        } else if (raw.kind == ValueKind.Text) {
+        } else if (raw.unifiedKind == ValueKind.Text) {
             match (thinkingFromName(raw.text)) {
                 case Result.Ok(level) => Some(level)
                 case Result.Err(error) => return Result.Err(error)
@@ -665,7 +723,7 @@ func requestedModelPolicyFromValue(value: AgentValue): Result<RequestedModelPoli
 func modelCapabilitiesSnapshotFromValue(
     value: AgentValue
 ): Result<ModelExecutionCapabilitiesSnapshot> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("model capabilities snapshot must be an object")
     }
     let version = match (requiredInteger(value, "snapshot_schema_version")) {
@@ -689,7 +747,7 @@ func modelCapabilitiesSnapshotFromValue(
         case Result.Ok(items) => items
         case Result.Err(error) => return Result.Err(error)
     }) {
-        if (raw.kind != ValueKind.Text) {
+        if (raw.unifiedKind != ValueKind.Text) {
             return codecError("supported thinking level must be text")
         }
         match (thinkingFromName(raw.text)) {
@@ -747,7 +805,7 @@ func modelCapabilitiesSnapshotFromValue(
 }
 
 func runningModelCheckpointFromValue(value: AgentValue): Result<RunningModelCheckpoint> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("running model checkpoint must be an object")
     }
     let canonicalRequest = match (value.field("canonical_request")) {
@@ -822,7 +880,7 @@ func structuredOutputSpecValue(value: StructuredOutputSpec): AgentValue {
 func structuredOutputSpecFromValue(
     value: AgentValue
 ): Result<StructuredOutputSpec> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("structured output specification must be an object")
     }
     let name = match (requiredNonEmptyText(value, "name")) {
@@ -865,7 +923,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("run continuation must be an object")
     }
     let version = match (requiredInteger(value, "version")) {
@@ -913,23 +971,30 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    let serviceTier = match (value.field("service_tier")) {
+    let persistedServiceTier = match (value.field("service_tier")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Text) {
+            if (raw.unifiedKind == ValueKind.Text) {
                 raw.text
             } else {
                 return codecError("field is not text: service_tier")
             }
         case None => ""
     }
+    if (persistedServiceTier == "scale") {
+        return codecError(
+            "legacy scale service tier cannot be resumed without changing request semantics; " +
+                "start a new run with an explicitly supported service tier"
+        )
+    }
+    let serviceTier = persistedServiceTier
     if (serviceTier != "" && serviceTier != "auto" &&
         serviceTier != "default" && serviceTier != "flex" &&
-        serviceTier != "scale" && serviceTier != "priority") {
+        serviceTier != "priority") {
         return codecError("unknown run continuation service tier")
     }
     let pricing: ?ModelPricing = match (value.field("pricing")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 match (strictPricingFromValue(raw)) {
@@ -951,7 +1016,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
     }
     let structuredOutput: ?StructuredOutputSpec = match (value.field("structured_output")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 match (structuredOutputSpecFromValue(raw)) {
@@ -1005,7 +1070,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             return codecError("run continuation approval binding is incomplete")
         }
         let requestedPolicy: ?RequestedModelPolicy = match (value.field("requested_policy")) {
-            case Some(raw) => if (raw.kind == ValueKind.Null) { None } else {
+            case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else {
                 match (requestedModelPolicyFromValue(raw)) {
                     case Result.Ok(item) => Some(item)
                     case Result.Err(error) => return Result.Err(error)
@@ -1016,7 +1081,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         let snapshot: ?ModelExecutionCapabilitiesSnapshot = match (
             value.field("model_capabilities_snapshot")
         ) {
-            case Some(raw) => if (raw.kind == ValueKind.Null) { None } else {
+            case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else {
                 match (modelCapabilitiesSnapshotFromValue(raw)) {
                     case Result.Ok(item) => Some(item)
                     case Result.Err(error) => return Result.Err(error)
@@ -1050,7 +1115,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         // v4 payloads written before execution Lane enclosure was introduced
         // are canonically main-Lane continuations.
         let executionLaneId = match (value.field("execution_lane_id")) {
-            case Some(item) => if (item.kind == ValueKind.Text && item.text.trimAscii() != "") {
+            case Some(item) => if (item.unifiedKind == ValueKind.Text && item.text.trimAscii() != "") {
                 item.text
             } else {
                 return codecError("field is not non-empty text: execution_lane_id")
@@ -1058,7 +1123,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             case None => "main"
         }
         let runningModel: ?RunningModelCheckpoint = match (value.field("running_model")) {
-            case Some(raw) => if (raw.kind == ValueKind.Null) { None } else {
+            case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else {
                 match (runningModelCheckpointFromValue(raw)) {
                     case Result.Ok(item) => Some(item)
                     case Result.Err(error) => return Result.Err(error)
@@ -1147,7 +1212,7 @@ func decodeDecisionReceipt(source: String): Result<ApprovalDecisionReceipt> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval decision receipt must be an object")
     }
     let version = match (requiredInteger(value, "version")) {
@@ -1231,7 +1296,7 @@ func optionalIntegerValue(value: ?Int64): AgentValue {
 }
 
 func strictPricingFromValue(value: AgentValue): Result<ModelPricing> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("field is not an object: pricing")
     }
     let input = match (strictOptionalInteger(value, "input_micros_per_million")) {
@@ -1267,7 +1332,7 @@ func strictOptionalInteger(
     name: String
 ): Result<?Int64> {
     match (value.field(name)) {
-        case Some(raw) => match (raw.kind) {
+        case Some(raw) => match (raw.unifiedKind) {
             case ValueKind.Null => Result.Ok(None)
             case ValueKind.Number => try {
                 Result.Ok(Some(Int64.parse(raw.number)))
@@ -1281,7 +1346,7 @@ func strictOptionalInteger(
 }
 
 func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("field is not an object: budget")
     }
     let input = match (requiredInteger(value, "max_input_tokens")) {
@@ -1386,7 +1451,7 @@ func approvalRequestBindingValue(value: ApprovalRequest): AgentValue {
 func strictApprovalRequestFromValue(
     value: AgentValue
 ): Result<ApprovalRequest> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval request must be an object")
     }
     let operationId = match (requiredNonEmptyText(value, "operation_id")) {
@@ -1426,7 +1491,7 @@ func strictApprovalRequestFromValue(
     }
     let review: ?ApprovalReview = match (value.field("review")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 match (validateStrictApprovalReview(raw)) {
@@ -1466,7 +1531,7 @@ func strictApprovalRequestFromValue(
 }
 
 func validateStrictApprovalReview(value: AgentValue): Result<Unit> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval review must be an object")
     }
     let decision = match (requiredText(value, "decision")) {
@@ -1504,7 +1569,7 @@ func validateStrictApprovalReview(value: AgentValue): Result<Unit> {
 }
 
 func validateStrictApprovalMetadata(value: AgentValue): Result<Unit> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval metadata must be an object")
     }
     match (requiredText(value, "capability_label")) {
@@ -1547,7 +1612,7 @@ func validateStrictApprovalMetadata(value: AgentValue): Result<Unit> {
     }
     match (value.field("write_summary")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 Result.Ok(())
             } else {
                 validateStrictWriteSummary(raw)
@@ -1557,7 +1622,7 @@ func validateStrictApprovalMetadata(value: AgentValue): Result<Unit> {
 }
 
 func validateStrictWriteSummary(value: AgentValue): Result<Unit> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval write summary must be an object")
     }
     for (name in ["path", "action", "language", "content_hash"]) {
@@ -1659,7 +1724,7 @@ func approvalMetadataFromValue(value: AgentValue, capability: Capability): ToolA
         case None => fallback.grantScope
     }
     let summary: ?WriteApprovalSummary = match (value.field("write_summary")) {
-        case Some(raw) => if (raw.kind == ValueKind.Null) {
+        case Some(raw) => if (raw.unifiedKind == ValueKind.Null) {
             None
         } else {
             Some(writeSummaryFromValue(raw))
@@ -1753,7 +1818,7 @@ func stringListValue(values: Array<String>): AgentValue {
 func stringListFrom(value: AgentValue, name: String): Array<String> {
     let result = ArrayList<String>()
     match (value.field(name)) {
-        case Some(raw) => for (item in raw.items where item.kind == ValueKind.Text) {
+        case Some(raw) => for (item in raw.items where item.unifiedKind == ValueKind.Text) {
             result.add(item.text)
         }
         case None => ()
@@ -1881,7 +1946,7 @@ func decodeOperation(source: String): Result<OperationRecord> {
     }
     let call: ?ToolCall = match (value.field("call")) {
         case Some(raw) =>
-            if (raw.kind == ValueKind.Null) {
+            if (raw.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 Some(toolCallFrom(raw))
@@ -1972,7 +2037,7 @@ func capabilityFrom(value: AgentValue): Capability {
 }
 
 func strictCapabilityFrom(value: AgentValue): Result<Capability> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("capability must be an object")
     }
     let kind = match (requiredText(value, "kind")) {
@@ -2015,7 +2080,7 @@ func decodeEventLines(source: String): Result<Array<AgentEvent>> {
 }
 
 func decodeCurrentEvent(value: AgentValue): Result<AgentEvent> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("run event must be an object")
     }
     let formatVersion = match (requiredInteger(value, "format_version")) {
@@ -2124,9 +2189,9 @@ func requiredOptionalEventText(
 ): Result<?String> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Null) {
+            if (item.unifiedKind == ValueKind.Null) {
                 Result.Ok(None)
-            } else if (item.kind == ValueKind.Text &&
+            } else if (item.unifiedKind == ValueKind.Text &&
                 item.text.trimAscii() != "") {
                 Result.Ok(Some(item.text))
             } else {
@@ -2347,7 +2412,7 @@ func requiredModelUsage(value: AgentValue): Result<ModelUsage> {
     }
     let source = match (value.field("source")) {
         case Some(item) =>
-            if (item.kind != ValueKind.Text) {
+            if (item.unifiedKind != ValueKind.Text) {
                 return codecError("field is not text: source")
             }
             modelUsageSourceFromName(item.text)
@@ -2356,9 +2421,9 @@ func requiredModelUsage(value: AgentValue): Result<ModelUsage> {
     let evidence: ?ModelUsageEvidence = match (value.field("evidence")) {
         case None => None
         case Some(item) =>
-            if (item.kind == ValueKind.Null) {
+            if (item.unifiedKind == ValueKind.Null) {
                 None
-            } else if (item.kind == ValueKind.Object) {
+            } else if (item.unifiedKind == ValueKind.Object) {
                 let protocol = match (requiredText(item, "protocol")) {
                     case Result.Ok(entry) => entry
                     case Result.Err(error) => return Result.Err(error)
@@ -2416,7 +2481,7 @@ func requiredModelRequestAttempt(
     }
     let usage: ?ModelUsage = match (value.field("usage")) {
         case Some(item) =>
-            if (item.kind == ValueKind.Null) {
+            if (item.unifiedKind == ValueKind.Null) {
                 None
             } else {
                 match (requiredModelUsage(item)) {
@@ -2508,7 +2573,7 @@ func errorValue(error: AgentError): AgentValue {
 }
 
 func strictErrorFrom(value: AgentValue): Result<AgentError> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return codecError("run snapshot error must be an object or null")
     }
     let rawKind = match (requiredText(value, "kind")) {
@@ -2554,7 +2619,7 @@ func strictErrorFrom(value: AgentValue): Result<AgentError> {
     }
     let fields = ArrayList<ErrorField>()
     for (field in rawFields) {
-        if (field.kind != ValueKind.Object) {
+        if (field.unifiedKind != ValueKind.Object) {
             return codecError("run snapshot error field must be an object")
         }
         let name = match (requiredText(field, "name")) {
@@ -2584,7 +2649,7 @@ func strictErrorFrom(value: AgentValue): Result<AgentError> {
 func requiredText(value: AgentValue, name: String): Result<String> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 Result.Ok(item.text)
             } else {
                 codecError("field is not text: " + name)
@@ -2611,7 +2676,7 @@ func requiredNonEmptyText(
 func requiredBoolean(value: AgentValue, name: String): Result<Bool> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Boolean) {
+            if (item.unifiedKind == ValueKind.Boolean) {
                 Result.Ok(item.boolean)
             } else {
                 codecError("field is not boolean: " + name)
@@ -2623,7 +2688,7 @@ func requiredBoolean(value: AgentValue, name: String): Result<Bool> {
 func requiredInteger(value: AgentValue, name: String): Result<Int64> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind != ValueKind.Number) {
+            if (item.unifiedKind != ValueKind.Number) {
                 return codecError("field is not an integer: " + name)
             }
             try {
@@ -2690,8 +2755,8 @@ func requiredDecisionSource(
 func requiredList(value: AgentValue, name: String): Result<Array<AgentValue>> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.List) {
-                Result.Ok(item.items)
+            if (item.unifiedKind == ValueKind.List) {
+                Result.Ok(item.items.toArray())
             } else {
                 codecError("field is not a list: " + name)
             }
@@ -2702,7 +2767,7 @@ func requiredList(value: AgentValue, name: String): Result<Array<AgentValue>> {
 func requiredObject(value: AgentValue, name: String): Result<AgentValue> {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Object) {
+            if (item.unifiedKind == ValueKind.Object) {
                 Result.Ok(item)
             } else {
                 codecError("field is not an object: " + name)
@@ -2721,7 +2786,7 @@ func requiredStringList(
     }
     let result = ArrayList<String>()
     for (item in raw) {
-        if (item.kind != ValueKind.Text) {
+        if (item.unifiedKind != ValueKind.Text) {
             return codecError("list field contains non-text value: " + name)
         }
         result.add(item.text)
@@ -2732,7 +2797,7 @@ func requiredStringList(
 func textOr(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -2743,14 +2808,14 @@ func textOr(value: AgentValue, name: String): String {
 
 func boolOr(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => item.kind == ValueKind.Boolean && item.boolean
+        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.boolean
         case None => false
     }
 }
 
 func boolOrDefault(value: AgentValue, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Boolean) {
+        case Some(item) => if (item.unifiedKind == ValueKind.Boolean) {
             item.boolean
         } else {
             fallback
@@ -2762,7 +2827,7 @@ func boolOrDefault(value: AgentValue, name: String, fallback: Bool): Bool {
 func integerOr(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Number) {
+            if (item.unifiedKind == ValueKind.Number) {
                 try {
                     Int64.parse(item.number)
                 } catch (_: Exception) {

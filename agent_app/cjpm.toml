@@ -8,6 +8,8 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }
   "agent_cli" = { path = "../agent_cli", output-type = "static" }
   "agent_app_protocol" = { path = "../agent_app_protocol", output-type = "static" }
   "agent_client" = { path = "../agent_client", output-type = "static" }
@@ -20,4 +22,5 @@
   "agent_tui" = { path = "../agent_tui", output-type = "static" }
   "core" = { path = "../vendor/cj_tui/packages/core", output-type = "static" }
   "model_adapters" = { path = "../model_adapters", output-type = "static" }
+  "process4cj" = { path = "../libs/process4cj", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }

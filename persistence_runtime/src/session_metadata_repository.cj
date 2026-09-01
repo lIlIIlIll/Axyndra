@@ -1,5 +1,9 @@
 package persistence_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import model_adapters.*
@@ -169,7 +173,7 @@ public class SqliteSessionMetadataRepository <: SessionMetadataRepository {
     }
 
     public func setTodoPhases(sessionId: SessionId, phases: AgentValue): Result<Unit> {
-        if (phases.kind != ValueKind.List) {
+        if (phases.unifiedKind != ValueKind.List) {
             return metadataInvalid("persistence.todo_phases_not_list", "todo phases must be a list")
         }
         setTextField(sessionId, "todo_payload", encodeAgentValue(phases))
@@ -180,7 +184,7 @@ public class SqliteSessionMetadataRepository <: SessionMetadataRepository {
     }
 
     public func setGoalState(sessionId: SessionId, state: AgentValue): Result<Unit> {
-        if (state.kind != ValueKind.Object) {
+        if (state.unifiedKind != ValueKind.Object) {
             return metadataInvalid("persistence.goal_state_not_object", "goal state must be an object")
         }
         setTextField(sessionId, "goal_payload", encodeAgentValue(state))

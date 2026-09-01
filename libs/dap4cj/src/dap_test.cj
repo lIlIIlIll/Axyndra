@@ -1,6 +1,7 @@
 package dap4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import process4cj.*
 import std.io.*
 import std.sync.*
@@ -11,17 +12,17 @@ import std.unittest.testmacro.*
 class Dap4CjTests {
     @TestCase
     func framesAndValidatesEnvelope() {
-        let request = JsonValue.objectValue([
-            JsonField("seq", JsonValue.numberValue("1")),
-            JsonField("type", JsonValue.stringValue("request")),
-            JsonField("command", JsonValue.stringValue("initialize"))
+        let request = jsonObject([
+            JsonObjectEntry("seq", jsonNumber("1")),
+            JsonObjectEntry("type", jsonString("request")),
+            JsonObjectEntry("command", jsonString("initialize"))
         ])
         let stream = ByteBuffer()
         stream.write(encodeDapMessage(request))
         @Expect(readDapMessage(stream).isOk(), true)
 
         let invalid = ByteBuffer()
-        invalid.write(encodeDapMessage(JsonValue.objectValue([])))
+        invalid.write(encodeDapMessage(jsonObject([])))
         @Expect(readDapMessage(invalid).isOk(), false)
     }
 
@@ -41,23 +42,23 @@ class Dap4CjTests {
         let reverseSeen = AtomicBool(false)
         let client = match (DapClient.`spawn`(
             ProcessCommand("/usr/bin/python3", arguments: ["-u", "-c", dapFixtureScript()]),
-            eventHandler: { event: String, _: JsonValue => if (event == "initialized") { eventSeen.store(true) } },
-            reverseRequestHandler: { command: String, _: JsonValue =>
-                if (command == "runInTerminal") { reverseSeen.store(true); DapResult.Ok(JsonValue.objectValue([])) }
+            eventHandler: { event: String, _: JsonNode => if (event == "initialized") { eventSeen.store(true) } },
+            reverseRequestHandler: { command: String, _: JsonNode =>
+                if (command == "runInTerminal") { reverseSeen.store(true); DapResult.Ok(jsonObject([])) }
                 else { DapResult.Err(DapError(DapErrorKind.Protocol, "unsupported", "unsupported")) }
             },
             maxFrameBytes: 65536
         )) { case DapResult.Ok(value) => value; case DapResult.Err(error) => throw error }
-        @Expect(client.initialize(JsonValue.objectValue([])).isOk(), true)
-        let first = spawn { client.request("echo", JsonValue.objectValue([JsonField("value", JsonValue.stringValue("one"))])) }
-        let second = spawn { client.request("echo", JsonValue.objectValue([JsonField("value", JsonValue.stringValue("two"))])) }
+        @Expect(client.initialize(jsonObject([])).isOk(), true)
+        let first = spawn { client.request("echo", jsonObject([JsonObjectEntry("value", jsonString("one"))])) }
+        let second = spawn { client.request("echo", jsonObject([JsonObjectEntry("value", jsonString("two"))])) }
         @Expect(first.get().isOk(), true)
         @Expect(second.get().isOk(), true)
         var waited: Int64 = 0
         while ((!eventSeen.load() || !reverseSeen.load()) && waited < 1000) { sleep(Duration.millisecond * 5); waited += 5 }
         @Expect(eventSeen.load(), true)
         @Expect(reverseSeen.load(), true)
-        let pending = client.beginRequest("hang", JsonValue.objectValue([]))
+        let pending = client.beginRequest("hang", jsonObject([]))
         let sequence = match (pending) { case DapResult.Ok(value) => value; case DapResult.Err(error) => throw error }
         @Expect(client.cancel(sequence).isOk(), true)
         @Expect(client.pendingCount(), 1)
@@ -69,7 +70,7 @@ class Dap4CjTests {
             case _ => @Fail("cancelled request must fail")
         }
         @Expect(client.pendingCount(), 0)
-        match (client.request("hang", JsonValue.objectValue([]), timeoutMillis: 20)) {
+        match (client.request("hang", jsonObject([]), timeoutMillis: 20)) {
             case DapResult.Err(error) => match (error.kind) {
                 case DapErrorKind.Deadline => ()
                 case _ => @Fail("expected deadline")

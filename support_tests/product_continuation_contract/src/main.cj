@@ -1,5 +1,9 @@
 package product_continuation_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_core.*
 import agent_domain.*
 import agent_product.*
@@ -62,6 +66,7 @@ main(): Int64 {
             structuredOutput: Some(schema),
             cachePolicy: ModelCachePolicy.StablePrefix,
             cacheKey: "product-stable-prefix",
+            serviceTier: "priority",
             parallelToolCalls: true
         )
         let database = SqliteDatabase(root + "/state/state.db")
@@ -111,6 +116,20 @@ main(): Int64 {
         )
         expect(continuationRepository.continuation(runId).isError(),
             "legacy migration source rejects divergence from the canonical projection")
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET payload=" +
+                sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"
+        )
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET " +
+                "payload=json_set(payload,'$.service_tier','scale') " +
+                "WHERE run_id='product-restart-run'"
+        )
+        let scaleRejected = continuationRepository.continuation(runId)
+        expect(scaleRejected.isError() && database.scalarInt(
+            "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                "WHERE run_id='product-restart-run'"
+        ) == 1, "legacy scale tier fails closed without changing request semantics")
         database.execute(
             "UPDATE legacy_run_continuation_imports SET payload=" +
                 sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"

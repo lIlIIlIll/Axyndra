@@ -1,5 +1,9 @@
 package persistence_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import agent_store.*
@@ -238,7 +242,32 @@ public class SqliteRunRepository <: RunRepository {
                 }
                 match (canonicalContinuationFromRow(rows[0], value.runId, 1)) {
                     case Result.Ok(Some(existing)) =>
-                            if (!sameContinuationBinding(existing, value)) {
+                            let sameApprovalBinding =
+                                existing.kind == RunContinuationKind.WaitingApproval &&
+                                value.kind == RunContinuationKind.WaitingApproval &&
+                                existing.approval.operationId.value == value.approval.operationId.value &&
+                                existing.approval.sessionId == value.approval.sessionId &&
+                                existing.approval.callId == value.approval.callId &&
+                                existing.approval.argumentHash == value.approval.argumentHash
+                            if (sameApprovalBinding && sameContinuationBinding(existing, value)) {
+                                return Result.Ok(())
+                            }
+                            let priorDecision = transaction.query(
+                                "SELECT payload FROM approval_decisions WHERE operation_id=" +
+                                    sqliteText(existing.approval.operationId.value)
+                            )
+                            let approvedTransition =
+                                existing.kind == RunContinuationKind.WaitingApproval &&
+                                value.kind == RunContinuationKind.WaitingApproval &&
+                                sameContinuationRequestBinding(existing, value) &&
+                                priorDecision.size == 1 && match (decodeDecisionReceipt(
+                                    priorDecision[0].required(0)
+                                )) {
+                                    case Result.Ok(receipt) =>
+                                        continuationAcceptsDecision(existing, receipt)
+                                    case Result.Err(_) => false
+                                }
+                            if (!sameContinuationBinding(existing, value) && !approvedTransition) {
                                 return operationConflict<Unit>("pending approval continuation binding cannot be changed")
                             }
                             if (encodeContinuation(existing) == encodeContinuation(value)) {
@@ -429,14 +458,27 @@ public class SqliteRunRepository <: RunRepository {
                 match (canonicalContinuationFromRow(rows[0], attempt.runId, 0)) {
                     case Result.Ok(Some(existing)) =>
                             let exactMatch = sameContinuationBinding(existing, continuation)
+                            let priorDecision = transaction.query(
+                                "SELECT payload FROM approval_decisions WHERE operation_id=" +
+                                    sqliteText(existing.approval.operationId.value)
+                            )
                             let approvedTransition =
                                 existing.kind == RunContinuationKind.WaitingApproval &&
                                 continuation.kind == RunContinuationKind.RunningModel &&
+                                sameContinuationRequestBinding(existing, continuation) &&
+                                priorDecision.size == 1 && match (decodeDecisionReceipt(
+                                    priorDecision[0].required(0)
+                                )) {
+                                    case Result.Ok(receipt) =>
+                                        continuationAcceptsDecision(existing, receipt)
+                                    case Result.Err(_) => false
+                                }
+                            let retryRequestMatch =
                                 sameContinuationRequestBinding(existing, continuation)
                             let retryTransition =
                                 existing.kind == RunContinuationKind.RunningModel &&
                                 continuation.kind == RunContinuationKind.RunningModel &&
-                                sameContinuationRequestBinding(existing, continuation) &&
+                                retryRequestMatch &&
                                 match ((existing.runningModel, continuation.runningModel,
                                     attempt.parentAttemptId)) {
                                     case (Some(previous), Some(next), Some(parentId)) =>
@@ -1036,7 +1078,7 @@ func updateRunEventHeadAndPrune(
 
 func runEventFieldText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }

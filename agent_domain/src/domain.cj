@@ -1,6 +1,7 @@
 package agent_domain
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.deriving.*
 
 public enum Result<T> {
@@ -117,16 +118,16 @@ public class AgentError {
 
 // Agent payloads use the canonical JSON value tree. These aliases preserve the
 // product vocabulary without maintaining a second AST or parser.
-public type ValueKind = JsonKind
-public type ValueField = JsonField
-public type AgentValue = JsonValue
+public type ValueKind = UnifiedJsonKind
+public type ValueField = JsonObjectEntry
+public type AgentValue = JsonNode
 
 public func nullValue(): AgentValue {
-    AgentValue(ValueKind.Null)
+    jsonNull()
 }
 
 public func boolValue(value: Bool): AgentValue {
-    AgentValue(ValueKind.Boolean, boolean: value)
+    jsonBool(value)
 }
 
 public func integerValue(value: Int64): AgentValue {
@@ -137,19 +138,19 @@ public func numberValue(value: String): AgentValue {
     if (value.trimAscii() == "") {
         throw IllegalArgumentException("number value must not be empty")
     }
-    AgentValue(ValueKind.Number, number: value)
+    jsonNumber(value)
 }
 
 public func textValue(value: String): AgentValue {
-    AgentValue(ValueKind.Text, text: value)
+    jsonString(value)
 }
 
 public func listValue(values: Array<AgentValue>): AgentValue {
-    AgentValue(ValueKind.List, items: values)
+    jsonArray(values)
 }
 
 public func objectValue(fields: Array<ValueField>): AgentValue {
-    AgentValue(ValueKind.Object, fields: fields)
+    jsonObject(fields)
 }
 
 public class RunId {
@@ -313,7 +314,7 @@ public class ModelBlock {
         text!: String = "",
         callId!: String = "",
         name!: String = "",
-        arguments!: AgentValue = AgentValue(ValueKind.Object),
+        arguments!: AgentValue = objectValue([]),
         isError!: Bool = false,
         image!: ?ModelImage = None,
         receiptId!: String = "",
@@ -368,7 +369,7 @@ public class StructuredOutputSpec {
                 )
             }
         }
-        if (schema.kind != ValueKind.Object) {
+        if (schema.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("structured output schema must be an object")
         }
         this.name = normalized
@@ -397,7 +398,7 @@ public class ModelToolDefinition {
         if (name.trimAscii() == "") {
             throw IllegalArgumentException("tool name must not be empty")
         }
-        if (inputSchema.kind != ValueKind.Object) {
+        if (inputSchema.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("tool schema must be an object")
         }
         this.name = name
@@ -1110,7 +1111,7 @@ public class ApprovalRequest {
         callId: String,
         toolName: String,
         capability: Capability,
-        preview!: AgentValue = AgentValue(ValueKind.Object),
+        preview!: AgentValue = objectValue([]),
         sessionId!: String = "",
         argumentHash!: String = "",
         riskFlags!: Array<String> = [],
@@ -1190,7 +1191,7 @@ public class RunningModelCheckpoint {
         consecutiveCapabilityDenials!: Int64 = 0,
         lastCapabilityDeniedTool!: String = ""
     ) {
-        if (canonicalRequest.kind != ValueKind.Object ||
+        if (canonicalRequest.unifiedKind != ValueKind.Object ||
             semanticRequestDigest.trimAscii() == "" || wirePolicyDigest.trimAscii() == "" ||
             stableTurnId.trimAscii() == "" || stableRequestId.trimAscii() == "" ||
             requestStartedAtMillis < 0 || modelRequests < 0 || inputTokens < 0 ||
@@ -1283,10 +1284,10 @@ public class RunContinuation {
         requestedPolicy!: ?RequestedModelPolicy = None,
         modelCapabilitiesSnapshot!: ?ModelExecutionCapabilitiesSnapshot = None,
         resolverVersion!: UInt32 = MODEL_POLICY_RESOLUTION_VERSION,
-        skillStackPayload!: AgentValue = AgentValue(ValueKind.Object),
+        skillStackPayload!: AgentValue = objectValue([]),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
-        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object),
+        toolContextPayload!: AgentValue = objectValue([]),
         executionLaneId!: LaneId = LaneId("main")
     ) {
         if (model.trimAscii() == "" || prompt.trimAscii() == "") {
@@ -1345,10 +1346,10 @@ public class RunContinuation {
         cacheKey!: String = "",
         parallelToolCalls!: Bool = false,
         resolverVersion!: UInt32 = MODEL_POLICY_RESOLUTION_VERSION,
-        skillStackPayload!: AgentValue = AgentValue(ValueKind.Object),
+        skillStackPayload!: AgentValue = objectValue([]),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
-        toolContextPayload!: AgentValue = AgentValue(ValueKind.Object),
+        toolContextPayload!: AgentValue = objectValue([]),
         executionLaneId!: LaneId = LaneId("main")
     ) {
         if (kind != RunContinuationKind.RunningModel || model.trimAscii() == "" ||

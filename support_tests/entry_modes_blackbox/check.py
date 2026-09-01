@@ -710,6 +710,31 @@ def main() -> None:
             rpc.stdin.close()
             rpc.wait(timeout=5)
 
+        eof_rpc = subprocess.Popen(
+            [str(BINARY), "--fixture", "--mode", mode],
+            cwd=ROOT,
+            env=os.environ.copy(),
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+        )
+        assert eof_rpc.stdin is not None
+        assert eof_rpc.stdout is not None
+        readable, _, _ = select.select([eof_rpc.stdout], [], [], 3)
+        assert readable, f"{mode} EOF fixture did not emit its ready frame"
+        assert json.loads(eof_rpc.stdout.readline())["type"] == "ready"
+        eof_rpc.stdin.write('{"id":"eof","type":"get_state"}')
+        eof_rpc.stdin.close()
+        readable, _, _ = select.select([eof_rpc.stdout], [], [], 3)
+        assert readable, f"{mode} discarded a complete JSON frame at EOF"
+        eof_response = json.loads(eof_rpc.stdout.readline())
+        assert eof_response["type"] == "response"
+        assert eof_response["id"] == "eof"
+        assert eof_response["success"] is True
+        eof_rpc.wait(timeout=5)
+
     print("entry modes blackbox passed")
 
 

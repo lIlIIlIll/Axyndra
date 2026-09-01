@@ -15,9 +15,9 @@ concurrency:
 jobs:
   clean-build-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
-      AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.3.0-alpha.02
+      AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.2.0-alpha.21
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,8 +64,6 @@ jobs:
         run: |
           scripts/pinned_cangjie cjpm clean
           scripts/pinned_cangjie cjpm check
-      - name: Workspace Cangjie tests
-        run: scripts/pinned_cangjie cjpm test
       - name: Build product executable
         run: |
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app

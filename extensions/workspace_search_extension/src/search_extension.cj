@@ -1,7 +1,8 @@
 package workspace_search_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.convert.*
 
 // Package-level canonical manifest, embedded by the host compiled catalog.
@@ -14,7 +15,7 @@ public func workspaceSearchExtensionManifest(): String {
       "name": "Workspace Search",
       "version": "1.0.0",
       "description": "Search workspace text without granting process authority to the extension.",
-      "sdk": {"min": "1.0.0", "maxExclusive": "2.0.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["grep"],
       "capabilities": ["workspace.read"],
       "requirements": {"executables": ["rg"]}
@@ -52,7 +53,7 @@ public class WorkspaceSearchTool <: ExtensionTool {
         )
     }
 
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         let pattern = textField(input, "pattern")
         if (pattern == "") {
             return invalid("grep.pattern_required", "grep requires a non-empty pattern")
@@ -93,7 +94,7 @@ public class WorkspaceSearchTool <: ExtensionTool {
         result: ExecutionResult
     ): SdkResult<ToolOutput> {
         let _ = _invocation
-        if (result.value.kind != JsonKind.Object) {
+        if (result.value.unifiedKind != UnifiedJsonKind.Object) {
             return SdkResult.Err(SdkError(
                 SdkErrorKind.Decode,
                 "grep.result_not_object",
@@ -104,57 +105,57 @@ public class WorkspaceSearchTool <: ExtensionTool {
     }
 }
 
-func objectSchema(): JsonValue {
-    JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("object")),
-        JsonField("properties", JsonValue.objectValue([
-            JsonField("pattern", stringSchema()),
-            JsonField("path", stringSchema()),
-            JsonField("case", booleanSchema()),
-            JsonField("gitignore", booleanSchema()),
-            JsonField("skip", numberSchema()),
-            JsonField("count", booleanSchema())
+func objectSchema(): JsonNode {
+    jsonObject([
+        JsonObjectEntry("type", jsonString("object")),
+        JsonObjectEntry("properties", jsonObject([
+            JsonObjectEntry("pattern", stringSchema()),
+            JsonObjectEntry("path", stringSchema()),
+            JsonObjectEntry("case", booleanSchema()),
+            JsonObjectEntry("gitignore", booleanSchema()),
+            JsonObjectEntry("skip", numberSchema()),
+            JsonObjectEntry("count", booleanSchema())
         ])),
-        JsonField("required", JsonValue.arrayValue([
-            JsonValue.stringValue("pattern")
+        JsonObjectEntry("required", jsonArray([
+            jsonString("pattern")
         ])),
-        JsonField("additionalProperties", JsonValue.boolValue(false))
+        JsonObjectEntry("additionalProperties", jsonBool(false))
     ])
 }
 
-func stringSchema(): JsonValue {
-    JsonValue.objectValue([JsonField("type", JsonValue.stringValue("string"))])
+func stringSchema(): JsonNode {
+    jsonObject([JsonObjectEntry("type", jsonString("string"))])
 }
 
-func booleanSchema(): JsonValue {
-    JsonValue.objectValue([JsonField("type", JsonValue.stringValue("boolean"))])
+func booleanSchema(): JsonNode {
+    jsonObject([JsonObjectEntry("type", jsonString("boolean"))])
 }
 
-func numberSchema(): JsonValue {
-    JsonValue.objectValue([JsonField("type", JsonValue.stringValue("number"))])
+func numberSchema(): JsonNode {
+    jsonObject([JsonObjectEntry("type", jsonString("number"))])
 }
 
 func invalid<T>(code: String, message: String): SdkResult<T> {
     SdkResult.Err(SdkError(SdkErrorKind.Validation, code, message))
 }
 
-func textField(value: JsonValue, name: String, fallback!: String = ""): String {
+func textField(value: JsonNode, name: String, fallback!: String = ""): String {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Text) { field.text } else { fallback }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { fallback }
         case None => fallback
     }
 }
 
-func boolField(value: JsonValue, name: String, fallback: Bool): Bool {
+func boolField(value: JsonNode, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Boolean) { field.boolean } else { fallback }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Boolean) { field.boolean } else { fallback }
         case None => fallback
     }
 }
 
-func integerField(value: JsonValue, name: String, fallback: Int64): Int64 {
+func integerField(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Number) {
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Number) {
             try { Int64.parse(field.number) } catch (_: Exception) { fallback }
         } else { fallback }
         case None => fallback

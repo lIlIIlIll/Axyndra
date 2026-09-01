@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import persistence_runtime.*
 import tool_runtime.*
@@ -617,7 +621,7 @@ public class ProductGoalRuntime {
     ): Result<?ProductGoalState> {
         match (repository.goalState(sessionId)) {
             case Result.Ok(value) =>
-                if (value.kind == ValueKind.Null) {
+                if (value.unifiedKind == ValueKind.Null) {
                     Result.Ok(None)
                 } else {
                     match (decodeGoalState(value)) {
@@ -696,7 +700,7 @@ func encodeGoalState(goal: ProductGoalState): AgentValue {
 }
 
 func decodeGoalState(value: AgentValue): Result<ProductGoalState> {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return goalError<ProductGoalState>(
             "tool.goal_state_invalid",
             "persisted goal state is not an object"
@@ -825,7 +829,7 @@ func goalOperation(call: ToolCall): Result<String> {
     }
     let op = match (call.arguments.field("op")) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 value.text.trimAscii()
             } else {
                 return goalError<String>(
@@ -852,7 +856,7 @@ func goalRequiredText(
 ): Result<String> {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind != ValueKind.Text) {
+            if (value.unifiedKind != ValueKind.Text) {
                 return goalError<String>(
                     "tool.goal_argument_type",
                     name + " must be a string"
@@ -881,7 +885,7 @@ func goalOptionalPositiveInteger(
 ): Result<?Int64> {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind != ValueKind.Number) {
+            if (value.unifiedKind != ValueKind.Number) {
                 return goalError<?Int64>(
                     "tool.goal_argument_type",
                     name + " must be a positive integer when provided"
@@ -951,7 +955,7 @@ func goalBudgetPrompt(goal: ProductGoalState): String {
 func goalStateText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
@@ -959,7 +963,7 @@ func goalStateText(value: AgentValue, name: String): String {
 func goalStateInteger(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Number) {
+            if (field.unifiedKind == ValueKind.Number) {
                 try { Int64.parse(field.number) } catch (_: Exception) { 0 }
             } else {
                 0
@@ -974,7 +978,7 @@ func goalStateOptionalInteger(
 ): ?Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Number) {
+            if (field.unifiedKind == ValueKind.Number) {
                 try {
                     Some(Int64.parse(field.number))
                 } catch (_: Exception) {
@@ -990,7 +994,7 @@ func goalStateOptionalInteger(
 func goalStateBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            field.kind == ValueKind.Boolean && field.boolean
+            field.unifiedKind == ValueKind.Boolean && field.boolean
         case None => false
     }
 }

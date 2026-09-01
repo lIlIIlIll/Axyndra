@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import agent_domain.*
 import tool_runtime.*
 import std.collection.*
@@ -300,9 +301,9 @@ class LspTool <: ToolExecutor {
                     context.runId,
                     "workspace/symbol",
                     lspObject([
-                        JsonField(
+                        JsonObjectEntry(
                             "query",
-                            JsonValue.stringValue(query)
+                            jsonString(query)
                         )
                     ]),
                     timeoutMillis
@@ -395,12 +396,12 @@ class LspPosition {
         this.character = character
     }
 
-    func json(): JsonValue {
+    func json(): JsonNode {
         lspObject([
-            JsonField("line", JsonValue.numberValue(line.toString())),
-            JsonField(
+            JsonObjectEntry("line", jsonNumber(line.toString())),
+            JsonObjectEntry(
                 "character",
-                JsonValue.numberValue(character.toString())
+                jsonNumber(character.toString())
             )
         ])
     }
@@ -460,7 +461,7 @@ func executeReferences(
 ): Result<ToolResult> {
     let params = lspTextPositionParams(path, position)
     params.put("context", lspObject([
-        JsonField("includeDeclaration", JsonValue.boolValue(true))
+        JsonObjectEntry("includeDeclaration", jsonBool(true))
     ]))
     let value = match (client.request(
         context.runId,
@@ -534,12 +535,12 @@ func executeDocumentSymbols(
         context.runId,
         "textDocument/documentSymbol",
         lspObject([
-            JsonField(
+            JsonObjectEntry(
                 "textDocument",
                 lspObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "uri",
-                        JsonValue.stringValue(lspFileUri(path))
+                        jsonString(lspFileUri(path))
                     )
                 ])
             )
@@ -632,7 +633,7 @@ func executeRawLspRequest(
     let payload = optionalString(call, "payload", "")
     let params = if (payload != "") {
         try {
-            parseJson(payload, maxBytes: 1048576, maxDepth: 64)
+            parseUnifiedJson(payload, maxBytes: 1048576, maxDepth: 64)
         } catch (error: Exception) {
             return invalidArgument(
                 call,
@@ -642,12 +643,12 @@ func executeRawLspRequest(
         }
     } else {
         lspObject([
-            JsonField(
+            JsonObjectEntry(
                 "textDocument",
                 lspObject([
-                    JsonField(
+                    JsonObjectEntry(
                         "uri",
-                        JsonValue.stringValue(lspFileUri(path))
+                        jsonString(lspFileUri(path))
                     )
                 ])
             )
@@ -697,7 +698,7 @@ func executeLspRename(
         case Result.Err(error) => return Result.Err(error)
     }
     let params = lspTextPositionParams(path, position)
-    params.put("newName", JsonValue.stringValue(newName))
+    params.put("newName", jsonString(newName))
     let edit = match (client.request(
         context.runId,
         "textDocument/rename",
@@ -749,32 +750,32 @@ func executeLspCodeActions(
     timeoutMillis: Int64
 ): Result<ToolResult> {
     let params = lspObject([
-        JsonField(
+        JsonObjectEntry(
             "textDocument",
             lspObject([
-                JsonField(
+                JsonObjectEntry(
                     "uri",
-                    JsonValue.stringValue(lspFileUri(path))
+                    jsonString(lspFileUri(path))
                 )
             ])
         ),
-        JsonField(
+        JsonObjectEntry(
             "range",
             lspObject([
-                JsonField("start", position.json()),
-                JsonField("end", position.json())
+                JsonObjectEntry("start", position.json()),
+                JsonObjectEntry("end", position.json())
             ])
         ),
-        JsonField(
+        JsonObjectEntry(
             "context",
             lspObject([
-                JsonField(
+                JsonObjectEntry(
                     "diagnostics",
-                    JsonValue.arrayValue(
+                    jsonArray(
                         client.diagnosticSnapshot(lspFileUri(path))
                     )
                 ),
-                JsonField("triggerKind", JsonValue.numberValue("1"))
+                JsonObjectEntry("triggerKind", jsonNumber("1"))
             ])
         )
     ])
@@ -788,10 +789,10 @@ func executeLspCodeActions(
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    let actions: Array<JsonValue> = if (
-        response.kind == JsonKind.List
+    let actions: Array<JsonNode> = if (
+        response.unifiedKind == UnifiedJsonKind.List
     ) {
-        response.items
+        response.items.toArray()
     } else {
         []
     }
@@ -831,7 +832,7 @@ func executeLspCodeActions(
             "query parameter required when apply=true for code_actions"
         )
     }
-    var selected: ?JsonValue = None
+    var selected: ?JsonNode = None
     try {
         let index = Int64.parse(query)
         if (index >= 0 && index < actions.size) {
@@ -890,7 +891,7 @@ func executeLspCodeActions(
     }
     match (resolved.field("command")) {
         case Some(commandValue) =>
-            let command = if (commandValue.kind == JsonKind.Text) {
+            let command = if (commandValue.unifiedKind == UnifiedJsonKind.Text) {
                 commandValue.text
             } else {
                 lspJsonText(commandValue, "command")
@@ -898,17 +899,17 @@ func executeLspCodeActions(
             if (command != "") {
                 let arguments = match (commandValue.field("arguments")) {
                     case Some(value) => value
-                    case None => JsonValue.arrayValue([])
+                    case None => jsonArray([])
                 }
                 let _ = match (client.request(
                     context.runId,
                     "workspace/executeCommand",
                     lspObject([
-                        JsonField(
+                        JsonObjectEntry(
                             "command",
-                            JsonValue.stringValue(command)
+                            jsonString(command)
                         ),
-                        JsonField("arguments", arguments)
+                        JsonObjectEntry("arguments", arguments)
                     ]),
                     timeoutMillis,
                     allowServerEdits: true
@@ -1008,21 +1009,21 @@ func executeLspRenameFile(
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    let encodedPairs = ArrayList<JsonValue>()
+    let encodedPairs = ArrayList<JsonNode>()
     for (pair in pairs) {
         encodedPairs.add(lspObject([
-            JsonField(
+            JsonObjectEntry(
                 "oldUri",
-                JsonValue.stringValue(lspFileUri(pair.source))
+                jsonString(lspFileUri(pair.source))
             ),
-            JsonField(
+            JsonObjectEntry(
                 "newUri",
-                JsonValue.stringValue(lspFileUri(pair.destination))
+                jsonString(lspFileUri(pair.destination))
             )
         ]))
     }
     let params = lspObject([
-        JsonField("files", JsonValue.arrayValue(encodedPairs.toArray()))
+        JsonObjectEntry("files", jsonArray(encodedPairs.toArray()))
     ])
     let edit = match (client.request(
         context.runId,
@@ -1034,7 +1035,7 @@ func executeLspRenameFile(
         case Result.Err(error) =>
             if (error.kind == AgentErrorKind.Protocol &&
                 error.message.contains("-32601")) {
-                JsonValue.nullValue()
+                jsonNull()
             } else {
                 return Result.Err(error)
             }
@@ -1179,7 +1180,7 @@ class LspEditOperation {
     let kind: String
     let path: String
     let destination: String
-    let edits: JsonValue
+    let edits: JsonNode
     let overwrite: Bool
     let ignoreIfExists: Bool
     let recursive: Bool
@@ -1189,7 +1190,7 @@ class LspEditOperation {
         kind: String,
         path: String,
         destination: String,
-        edits: JsonValue,
+        edits: JsonNode,
         overwrite: Bool,
         ignoreIfExists: Bool,
         recursive: Bool,
@@ -1245,15 +1246,15 @@ class LspEditPlan {
 
 func planLspWorkspaceEdit(
     workspace: LocalWorkspace,
-    value: JsonValue
+    value: JsonNode
 ): Result<LspEditPlan> {
-    if (value.kind == JsonKind.Null) {
+    if (value.unifiedKind == UnifiedJsonKind.Null) {
         return Result.Ok(LspEditPlan([]))
     }
     let operations = ArrayList<LspEditOperation>()
     match (value.field("documentChanges")) {
         case Some(changes) =>
-            if (changes.kind != JsonKind.List) {
+            if (changes.unifiedKind != UnifiedJsonKind.List) {
                 return lspError<LspEditPlan>(
                     AgentErrorKind.Protocol,
                     "tool.lsp_edit_shape",
@@ -1268,7 +1269,7 @@ func planLspWorkspaceEdit(
                             lspJsonText(textDocument, "uri"),
                             match (change.field("edits")) {
                                 case Some(entry) => entry
-                                case None => JsonValue.arrayValue([])
+                                case None => jsonArray([])
                             }
                         )) {
                             case Result.Ok(value) => value
@@ -1289,14 +1290,14 @@ func planLspWorkspaceEdit(
         case None =>
             match (value.field("changes")) {
                 case Some(changes) =>
-                    if (changes.kind != JsonKind.Object) {
+                    if (changes.unifiedKind != UnifiedJsonKind.Object) {
                         return lspError<LspEditPlan>(
                             AgentErrorKind.Protocol,
                             "tool.lsp_edit_shape",
                             "changes must be an object"
                         )
                     }
-                    for (member in changes.members) {
+                    for (member in changes.fields) {
                         let operation = match (lspTextOperation(
                             workspace,
                             member.name,
@@ -1317,13 +1318,13 @@ func planLspWorkspaceEdit(
 func lspTextOperation(
     workspace: LocalWorkspace,
     uri: String,
-    edits: JsonValue
+    edits: JsonNode
 ): Result<LspEditOperation> {
     let relative = match (lspWorkspaceRelativeUri(workspace, uri)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    if (edits.kind != JsonKind.List) {
+    if (edits.unifiedKind != UnifiedJsonKind.List) {
         return lspError<LspEditOperation>(
             AgentErrorKind.Protocol,
             "tool.lsp_edit_shape",
@@ -1342,7 +1343,7 @@ func lspTextOperation(
         }
         match (edit.field("newText")) {
             case Some(value) =>
-                if (value.kind != JsonKind.Text) {
+                if (value.unifiedKind != UnifiedJsonKind.Text) {
                     return lspError<LspEditOperation>(
                         AgentErrorKind.Protocol,
                         "tool.lsp_edit_shape",
@@ -1371,12 +1372,12 @@ func lspTextOperation(
 
 func lspResourceOperation(
     workspace: LocalWorkspace,
-    value: JsonValue
+    value: JsonNode
 ): Result<LspEditOperation> {
     let kind = lspJsonText(value, "kind")
     let options = match (value.field("options")) {
         case Some(entry) => entry
-        case None => JsonValue.objectValue([])
+        case None => jsonObject([])
     }
     if (kind == "create") {
         let path = match (lspWorkspaceRelativeUri(
@@ -1390,7 +1391,7 @@ func lspResourceOperation(
             kind,
             path,
             "",
-            JsonValue.arrayValue([]),
+            jsonArray([]),
             lspJsonBoolean(options, "overwrite", false),
             lspJsonBoolean(options, "ignoreIfExists", false),
             false,
@@ -1416,7 +1417,7 @@ func lspResourceOperation(
             kind,
             source,
             destination,
-            JsonValue.arrayValue([]),
+            jsonArray([]),
             lspJsonBoolean(options, "overwrite", false),
             lspJsonBoolean(options, "ignoreIfExists", false),
             false,
@@ -1435,7 +1436,7 @@ func lspResourceOperation(
             kind,
             path,
             "",
-            JsonValue.arrayValue([]),
+            jsonArray([]),
             false,
             false,
             lspJsonBoolean(options, "recursive", false),
@@ -2026,7 +2027,7 @@ func finalizeLspEditPlan(plan: LspEditPlan): Unit {
 
 func applyLspTextEditsInMemory(
     content: String,
-    edits: JsonValue,
+    edits: JsonNode,
     path: String
 ): Result<String> {
     let planned = ArrayList<LspTextEdit>()
@@ -2042,11 +2043,11 @@ func applyLspTextEditsInMemory(
         }
         let startPosition = match (range.field("start")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let endPosition = match (range.field("end")) {
             case Some(value) => value
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let start = match (lspByteOffset(
             content,
@@ -2220,13 +2221,13 @@ func lspNoopApplied(): LspAppliedOperation {
 }
 
 func lspJsonBoolean(
-    value: JsonValue,
+    value: JsonNode,
     name: String,
     fallback: Bool
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Boolean) {
+            if (field.unifiedKind == UnifiedJsonKind.Boolean) {
                 field.boolean
             } else {
                 fallback
@@ -2333,18 +2334,18 @@ func lspPosition(call: ToolCall, path: String): Result<LspPosition> {
 func lspTextPositionParams(
     path: String,
     position: LspPosition
-): JsonValue {
+): JsonNode {
     lspObject([
-        JsonField(
+        JsonObjectEntry(
             "textDocument",
             lspObject([
-                JsonField(
+                JsonObjectEntry(
                     "uri",
-                    JsonValue.stringValue(lspFileUri(path))
+                    jsonString(lspFileUri(path))
                 )
             ])
         ),
-        JsonField("position", position.json())
+        JsonObjectEntry("position", position.json())
     ])
 }
 
@@ -2361,13 +2362,13 @@ class NormalizedLspLocation {
 }
 
 func normalizeLspLocations(
-    value: JsonValue
+    value: JsonNode
 ): Array<NormalizedLspLocation> {
-    let source: Array<JsonValue> = if (
-        value.kind == JsonKind.List
+    let source: Array<JsonNode> = if (
+        value.unifiedKind == UnifiedJsonKind.List
     ) {
-        value.items
-    } else if (value.kind == JsonKind.Object) {
+        value.items.toArray()
+    } else if (value.unifiedKind == UnifiedJsonKind.Object) {
         [value]
     } else {
         []
@@ -2384,12 +2385,12 @@ func normalizeLspLocations(
             case None =>
                 match (item.field("targetSelectionRange")) {
                     case Some(entry) => entry
-                    case None => JsonValue.objectValue([])
+                    case None => jsonObject([])
                 }
         }
         let start = match (range.field("start")) {
             case Some(entry) => entry
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         if (uri != "") {
             result.add(NormalizedLspLocation(
@@ -2420,7 +2421,7 @@ func formatLspLocation(
         value.column.toString() + context
 }
 
-func lspHoverText(value: JsonValue): String {
+func lspHoverText(value: JsonNode): String {
     let contents = match (value.field("contents")) {
         case Some(entry) => entry
         case None => return ""
@@ -2428,17 +2429,17 @@ func lspHoverText(value: JsonValue): String {
     lspMarkedText(contents)
 }
 
-func lspMarkedText(value: JsonValue): String {
-    match (value.kind) {
-        case JsonKind.Text => value.text
-        case JsonKind.List =>
+func lspMarkedText(value: JsonNode): String {
+    match (value.unifiedKind) {
+        case UnifiedJsonKind.Text => value.text
+        case UnifiedJsonKind.List =>
             let values = ArrayList<String>()
             for (item in value.items) {
                 let rendered = lspMarkedText(item)
                 if (rendered != "") { values.add(rendered) }
             }
             joinLspStrings(values.toArray(), "\n\n")
-        case JsonKind.Object =>
+        case UnifiedJsonKind.Object =>
             let content = lspJsonText(value, "value")
             if (content != "") { content } else { value.stringify() }
         case _ => ""
@@ -2447,13 +2448,13 @@ func lspMarkedText(value: JsonValue): String {
 
 func appendLspSymbols(
     output: ArrayList<String>,
-    value: JsonValue,
+    value: JsonNode,
     depth: Int64
 ): Unit {
-    let items: Array<JsonValue> = if (
-        value.kind == JsonKind.List
+    let items: Array<JsonNode> = if (
+        value.unifiedKind == UnifiedJsonKind.List
     ) {
-        value.items
+        value.items.toArray()
     } else {
         []
     }
@@ -2465,14 +2466,14 @@ func appendLspSymbols(
                     case Some(location) =>
                         match (location.field("range")) {
                             case Some(entry) => entry
-                            case None => JsonValue.objectValue([])
+                            case None => jsonObject([])
                         }
-                    case None => JsonValue.objectValue([])
+                    case None => jsonObject([])
                 }
         }
         let start = match (range.field("start")) {
             case Some(entry) => entry
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         output.add(
             lspIndent(depth) + lspJsonText(item, "name") +
@@ -2489,10 +2490,10 @@ func appendLspSymbols(
 
 func appendWorkspaceLspSymbols(
     output: ArrayList<String>,
-    value: JsonValue,
+    value: JsonNode,
     root: String
 ): Unit {
-    if (value.kind != JsonKind.List) { return }
+    if (value.unifiedKind != UnifiedJsonKind.List) { return }
     for (item in value.items) {
         let location = match (item.field("location")) {
             case Some(entry) => entry
@@ -2501,11 +2502,11 @@ func appendWorkspaceLspSymbols(
         let uri = lspJsonText(location, "uri")
         let range = match (location.field("range")) {
             case Some(entry) => entry
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         let start = match (range.field("start")) {
             case Some(entry) => entry
-            case None => JsonValue.objectValue([])
+            case None => jsonObject([])
         }
         output.add(
             "  " + lspJsonText(item, "name") + " — " +
@@ -2517,14 +2518,14 @@ func appendWorkspaceLspSymbols(
     }
 }
 
-func formatLspDiagnostic(value: JsonValue, path: String): String {
+func formatLspDiagnostic(value: JsonNode, path: String): String {
     let range = match (value.field("range")) {
         case Some(entry) => entry
-        case None => JsonValue.objectValue([])
+        case None => jsonObject([])
     }
     let start = match (range.field("start")) {
         case Some(entry) => entry
-        case None => JsonValue.objectValue([])
+        case None => jsonObject([])
     }
     let severity = match (lspJsonInteger(value, "severity", 1)) {
         case 1 => "error"

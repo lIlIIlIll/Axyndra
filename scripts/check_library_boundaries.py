@@ -37,8 +37,8 @@ EXTENSION_FORBIDDEN = SDK_FORBIDDEN | {
     "agent_domain", "agent_extensions", "agent_extension_runtime",
 }
 REQUIRED = {
-    "json4cj", "jsonrpc4cj", "process4cj", "mcp4cj", "sandbox4cj",
-    "llm4cj", "lsp4cj", "dap4cj", "skill_runtime",
+    "yjson_support", "jsonrpc4cj", "process4cj", "mcp4cj", "sandbox4cj",
+    "lsp4cj", "dap4cj", "skill_runtime",
 }
 IMPORT = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 DECLARATION = re.compile(
@@ -98,9 +98,9 @@ if not PUBLIC_TESTKIT.is_dir():
 else:
     testkit_manifest = tomllib.loads((PUBLIC_TESTKIT / "cjpm.toml").read_text(encoding="utf-8"))
     testkit_dependencies = set(testkit_manifest.get("dependencies", {}))
-    if testkit_dependencies != {"agent_sdk", "json4cj"}:
+    if testkit_dependencies != {"agent_sdk", "yjson", "yjson_support"}:
         errors.append(
-            "axyndra_agent_testkit must depend only on agent_sdk and json4cj; got "
+            "axyndra_agent_testkit dependency surface drifted; got "
             + ", ".join(sorted(testkit_dependencies))
         )
     for source in sorted((PUBLIC_TESTKIT / "src").glob("**/*.cj")):
@@ -138,7 +138,9 @@ if not consumer_root.is_dir():
 else:
     consumer_manifest = tomllib.loads((consumer_root / "cjpm.toml").read_text(encoding="utf-8"))
     consumer_dependencies = set(consumer_manifest.get("dependencies", {}))
-    expected_consumer_dependencies = {"agent_sdk", "json4cj", "axyndra_agent_testkit"}
+    expected_consumer_dependencies = {
+        "agent_sdk", "yjson", "yjson_support", "axyndra_agent_testkit"
+    }
     if consumer_dependencies != expected_consumer_dependencies:
         errors.append(
             "testkit consumer dependency surface drifted; got "
@@ -177,9 +179,9 @@ if not runtime_root.is_dir():
 else:
     runtime_manifest = tomllib.loads((runtime_root / "cjpm.toml").read_text(encoding="utf-8"))
     runtime_dependencies = set(runtime_manifest.get("dependencies", {}))
-    if runtime_dependencies != {"agent_sdk", "json4cj"}:
+    if runtime_dependencies != {"agent_sdk", "yjson", "yjson_support"}:
         errors.append(
-            "agent_extension_runtime must depend only on agent_sdk and json4cj; got "
+            "agent_extension_runtime dependency surface drifted; got "
             + ", ".join(sorted(runtime_dependencies))
         )
     runtime_text = "\n".join(
@@ -215,13 +217,11 @@ for source in sorted(ROOT.glob("**/*.cj")):
     relative = source.relative_to(ROOT)
     if "target" in relative.parts or ".git" in relative.parts:
         continue
-    canonical_json = relative.parts[:2] == ("libs", "json4cj")
     canonical_process = relative.parts[:2] == ("libs", "process4cj")
     for match in DECLARATION.finditer(source.read_text(encoding="utf-8")):
         name = match.group(1) or match.group(2)
         if name in {"JsonValue", "JsonParser", "JsonEncoder", "parseJson", "encodeJson"}:
-            if not canonical_json:
-                errors.append(f"duplicate canonical JSON declaration {name}: {relative}")
+            errors.append(f"legacy in-tree JSON declaration {name}: {relative}")
         elif not canonical_process:
             errors.append(f"duplicate canonical process/framing declaration {name}: {relative}")
 

@@ -1,5 +1,9 @@
 package agent_testkit
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import std.collection.*
@@ -96,6 +100,11 @@ public class MemoryRunRepository <: RunRepository {
                     }
                     match (item.continuationValue) {
                         case Some(existing) => if (sameContinuationBinding(existing, value)) {
+                            Result.Ok(())
+                        } else if (approvedContinuationTransition(existing, value, decisionRecord(
+                            existing.approval.operationId.value
+                        ))) {
+                            item.continuationValue = Some(value)
                             Result.Ok(())
                         } else {
                             memoryConflict<Unit>("pending approval continuation binding cannot be changed")
@@ -223,18 +232,29 @@ public class MemoryRunRepository <: RunRepository {
             if (value.continuationValue.isSome() &&
                 !sameContinuationBinding(value.continuationValue.getOrThrow(), continuation)) {
                 let previous = value.continuationValue.getOrThrow()
-                let previousCheckpoint = match (previous.runningModel) {
-                    case Some(item) => item
-                    case None => return memoryConflict<Unit>("model continuation changed concurrently")
-                }
-                if (match (attempt.parentAttemptId) {
-                    case Some(parent) => parent.value != previousCheckpoint.activeAttemptId.value
-                    case None => true
-                } || previousCheckpoint.semanticRequestId.value !=
-                    continuation.runningModel.getOrThrow().semanticRequestId.value ||
-                    previousCheckpoint.semanticRequestDigest !=
-                    continuation.runningModel.getOrThrow().semanticRequestDigest) {
-                    return memoryConflict<Unit>("model continuation changed concurrently")
+                let approvedTransition = previous.kind == RunContinuationKind.WaitingApproval &&
+                    continuation.kind == RunContinuationKind.RunningModel &&
+                    sameContinuationRequestBinding(previous, continuation) && match (decisionRecord(
+                        previous.approval.operationId.value
+                    )) {
+                        case Some(receipt) =>
+                            continuationAcceptsDecision(previous, receipt)
+                        case None => false
+                    }
+                if (!approvedTransition) {
+                    let previousCheckpoint = match (previous.runningModel) {
+                        case Some(item) => item
+                        case None => return memoryConflict<Unit>("model continuation changed concurrently")
+                    }
+                    if (match (attempt.parentAttemptId) {
+                        case Some(parent) => parent.value != previousCheckpoint.activeAttemptId.value
+                        case None => true
+                    } || previousCheckpoint.semanticRequestId.value !=
+                        continuation.runningModel.getOrThrow().semanticRequestId.value ||
+                        previousCheckpoint.semanticRequestDigest !=
+                        continuation.runningModel.getOrThrow().semanticRequestDigest) {
+                        return memoryConflict<Unit>("model continuation changed concurrently")
+                    }
                 }
             }
             if (!value.eventValues.isEmpty() &&
@@ -660,8 +680,8 @@ public class RecordingAuditPort <: AuditPort {
 }
 
 func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
-    if (left.kind != right.kind) { return false }
-    match (left.kind) {
+    if (left.unifiedKind != right.unifiedKind) { return false }
+    match (left.unifiedKind) {
         case ValueKind.Null => true
         case ValueKind.Boolean => left.boolean == right.boolean
         case ValueKind.Number => left.number == right.number
@@ -685,8 +705,13 @@ func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
 }
 
 func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Bool {
-    left.kind == right.kind &&
-        left.runId.value == right.runId.value && left.sessionId.value == right.sessionId.value &&
+    left.kind == right.kind && sameContinuationRequestBinding(left, right) &&
+        approvalRequestBindingsEqual(left.approval, right.approval) &&
+        sameRunningCheckpoint(left.runningModel, right.runningModel)
+}
+
+func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuation): Bool {
+    left.runId.value == right.runId.value && left.sessionId.value == right.sessionId.value &&
         left.model == right.model && left.prompt == right.prompt && left.system == right.system &&
         left.thinking == right.thinking && left.approvalMode == right.approvalMode &&
         left.autoRetry == right.autoRetry && left.serviceTier == right.serviceTier &&
@@ -697,7 +722,6 @@ func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Boo
         capabilitySetsEqual(left.capabilities, right.capabilities) &&
         resourceBudgetsEqual(left.budget, right.budget) &&
         modelPricingEqual(left.pricing, right.pricing) &&
-        approvalRequestsEqual(left.approval, right.approval) &&
         left.resolverVersion == right.resolverVersion &&
         left.contextWindow == right.contextWindow &&
         left.providerSafetyMargin == right.providerSafetyMargin &&
@@ -706,7 +730,24 @@ func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Boo
         sameRequestedPolicy(left.requestedPolicy, right.requestedPolicy) &&
         sameCapabilitiesSnapshot(
             left.modelCapabilitiesSnapshot, right.modelCapabilitiesSnapshot
-        ) && sameRunningCheckpoint(left.runningModel, right.runningModel)
+        )
+}
+
+func approvedContinuationTransition(
+    previous: RunContinuation,
+    next: RunContinuation,
+    decision: ?ApprovalDecisionReceipt
+): Bool {
+    if (previous.kind != RunContinuationKind.WaitingApproval ||
+        next.kind != RunContinuationKind.WaitingApproval) {
+        return false
+    }
+    match (decision) {
+        case Some(receipt) =>
+            continuationAcceptsDecision(previous, receipt) &&
+                sameContinuationRequestBinding(previous, next)
+        case None => false
+    }
 }
 
 func sameRequestedPolicy(
@@ -931,6 +972,12 @@ func approvalRequestsEqual(left: ApprovalRequest, right: ApprovalRequest): Bool 
         agentValuesEqual(left.preview, right.preview) && left.sessionId == right.sessionId &&
         left.argumentHash == right.argumentHash && stringArraysEqual(left.riskFlags, right.riskFlags) &&
         left.decisionSource == right.decisionSource
+}
+
+func approvalRequestBindingsEqual(left: ApprovalRequest, right: ApprovalRequest): Bool {
+    left.operationId.value == right.operationId.value &&
+        left.sessionId == right.sessionId && left.callId == right.callId &&
+        left.argumentHash == right.argumentHash
 }
 
 func stringArraysEqual(left: Array<String>, right: Array<String>): Bool {

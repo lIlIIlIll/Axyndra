@@ -1,7 +1,8 @@
 package agent_embed
 
 import agent_domain.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.deriving.*
 import std.sync.*
@@ -93,8 +94,8 @@ public class JsonAgentEventSink {
     private func appendEncodedEvent(event: AgentEvent): Unit {
         appendLine(
             "{\"type\":\"agent_event\",\"sequence\":" + event.sequence.toString() +
-                ",\"run_id\":" + jsonQuote(redact(event.runId.value)) +
-                ",\"kind\":" + jsonQuote(eventKindName(event.kind)) +
+                ",\"run_id\":" + quoteUnifiedJson(redact(event.runId.value)) +
+                ",\"kind\":" + quoteUnifiedJson(eventKindName(event.kind)) +
                 ",\"detail\":" + encodeAgentValue(event.detail, redact) + "}"
         )
     }
@@ -159,9 +160,9 @@ public class JsonAgentEventSink {
     public func acceptError(error: AgentError): Unit {
         finish()
         appendLine(
-            "{\"type\":\"error\",\"kind\":" + jsonQuote(errorKindName(error.kind)) +
-                ",\"code\":" + jsonQuote(redact(error.code)) +
-                ",\"message\":" + jsonQuote(redact(error.message)) +
+            "{\"type\":\"error\",\"kind\":" + quoteUnifiedJson(errorKindName(error.kind)) +
+                ",\"code\":" + quoteUnifiedJson(redact(error.code)) +
+                ",\"message\":" + quoteUnifiedJson(redact(error.message)) +
                 ",\"retryable\":" + error.retryable.toString() + "}"
         )
     }
@@ -620,38 +621,38 @@ func errorKindName(kind: AgentErrorKind): String {
 }
 
 func encodeAgentValue(value: AgentValue, redact: JsonTextRedactor): String {
-    encodeJson(redactAgentValue(value, redact))
+    stringifyUnifiedJson(redactAgentValue(value, redact))
 }
 
-func redactAgentValue(value: AgentValue, redact: JsonTextRedactor): JsonValue {
-    match (value.kind) {
-        case ValueKind.Null => JsonValue.nullValue()
-        case ValueKind.Boolean => JsonValue.boolValue(value.boolean)
+func redactAgentValue(value: AgentValue, redact: JsonTextRedactor): JsonNode {
+    match (value.unifiedKind) {
+        case ValueKind.Null => jsonNull()
+        case ValueKind.Boolean => jsonBool(value.boolean)
         case ValueKind.Number => if (validJsonNumber(value.number)) {
-            JsonValue.numberValue(value.number)
+            jsonNumber(value.number)
         } else {
             // AgentValue is an extension boundary and older callers could
             // construct an invalid numeric token. Preserve the payload as a
             // string rather than emitting malformed JSONL.
-            JsonValue.stringValue(redact(value.number))
+            jsonString(redact(value.number))
         }
-        case ValueKind.Text => JsonValue.stringValue(redact(value.text))
+        case ValueKind.Text => jsonString(redact(value.text))
         case ValueKind.List =>
-            let items = ArrayList<JsonValue>()
+            let items = ArrayList<JsonNode>()
             for (item in value.items) { items.add(redactAgentValue(item, redact)) }
-            JsonValue.arrayValue(items.toArray())
+            jsonArray(items.toArray())
         case ValueKind.Object =>
-            let fields = ArrayList<JsonField>()
+            let fields = ArrayList<JsonObjectEntry>()
             for (field in value.fields) {
                 fields.add(
-                    JsonField(field.name, if (jsonSensitiveFieldName(field.name)) {
-                        JsonValue.stringValue("[REDACTED]")
+                    JsonObjectEntry(field.name, if (jsonSensitiveFieldName(field.name)) {
+                        jsonString("[REDACTED]")
                     } else {
                         redactAgentValue(field.value, redact)
                     })
                 )
             }
-            JsonValue.objectValue(fields.toArray())
+            jsonObject(fields.toArray())
     }
 }
 
@@ -736,7 +737,7 @@ public func defaultJsonTextRedaction(value: String): String {
 }
 
 public func redactJsonAgentValue(value: AgentValue): AgentValue {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => nullValue()
         case ValueKind.Boolean => boolValue(value.boolean)
         case ValueKind.Number => numberValue(value.number)
@@ -922,8 +923,8 @@ func redactJsonUrlCredentials(value: String): String {
 
 func validJsonNumber(source: String): Bool {
     try {
-        parseJson(source, maxBytes: 1024, maxDepth: 0).kind == JsonKind.Number
-    } catch (_: JsonError) {
+        parseUnifiedJson(source, maxBytes: 1024, maxDepth: 1).unifiedKind == UnifiedJsonKind.Number
+    } catch (_: JsonException) {
         false
     }
 }

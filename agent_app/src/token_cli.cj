@@ -1,5 +1,9 @@
 package agent_app
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -60,7 +64,7 @@ func runTokenCli(
             case Result.Ok(value) =>
                 match (value.field("token")) {
                     case Some(token) =>
-                        if (token.kind == ValueKind.Text &&
+                        if (token.unifiedKind == ValueKind.Text &&
                             token.text != "") {
                             println(token.text)
                             return 0

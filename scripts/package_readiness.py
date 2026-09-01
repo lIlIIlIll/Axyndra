@@ -22,6 +22,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+YJSON_COMMIT = "92858f75aedc3dd6f7322789117854514549e62c"
 INVENTORY_PATH = ROOT / "packaging" / "public-packages.toml"
 IMPORT = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 PATH_DEPENDENCY = re.compile(
@@ -358,18 +359,18 @@ def normalized_tree(root: Path) -> dict[str, str]:
 
 
 CONSUMER_SOURCES = {
-    "json4cj": '''package json4cj_consumer
+    "yjson_support": '''package yjson_support_consumer
 
-import json4cj.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
 func verify(): Unit {
-    let value = parseJson("{\\\"ok\\\":true}")
-    if (encodeJson(value) != "{\\\"ok\\\":true}") { throw IllegalStateException("json round trip failed") }
+    let value = parseUnifiedJson("{\\\"ok\\\":true}")
+    if (stringifyUnifiedJson(value) != "{\\\"ok\\\":true}") { throw IllegalStateException("json round trip failed") }
 }
 @Test class ConsumerTests { @TestCase func packageWorks() { verify() } }
-main(): Int64 { verify(); println("json4cj external consumer passed"); 0 }
+main(): Int64 { verify(); println("yjson_support external consumer passed"); 0 }
 ''',
     "jsonrpc4cj": '''package jsonrpc4cj_consumer
 
@@ -438,20 +439,6 @@ func verify(): Unit {
 @Test class ConsumerTests { @TestCase func packageWorks() { verify() } }
 main(): Int64 { verify(); println("sandbox4cj external consumer passed"); 0 }
 ''',
-    "llm4cj": '''package llm4cj_consumer
-
-import llm4cj.*
-import std.unittest.*
-import std.unittest.testmacro.*
-
-func verify(): Unit {
-    let decoder = SseDecoder(maxEventBytes: 64)
-    if (!decoder.push("data: ok\\n\\n").isOk()) { throw IllegalStateException("SSE decode failed") }
-    if (parseRetryAfterMillis("2") != 2000) { throw IllegalStateException("retry parse failed") }
-}
-@Test class ConsumerTests { @TestCase func packageWorks() { verify() } }
-main(): Int64 { verify(); println("llm4cj external consumer passed"); 0 }
-''',
     "lsp4cj": '''package lsp4cj_consumer
 
 import lsp4cj.*
@@ -496,6 +483,12 @@ def consumer_manifest(name: str, version: str, stage_root: Path, dependencies: l
         "[dependencies]",
     ]
     for dependency in dependencies:
+        if dependency == "yjson":
+            lines.append(
+                '  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", '
+                f'commitId = "{YJSON_COMMIT}", output-type = "static" }}'
+            )
+            continue
         dependency_manifest = load_toml(next(stage_root.glob(f"{dependency}-*/cjpm.toml")))
         package = dependency_manifest["package"]
         assert isinstance(package, dict)
@@ -526,8 +519,8 @@ def materialize_consumers(stage_root: Path, destination: Path) -> None:
         (root / "cjpm.toml").write_text(consumer_manifest(name, versions[name], stage_root, [name]), encoding="utf-8")
 
     frozen = {
-        "agent_sdk": (ROOT / "support_tests" / "sdk_fixture_extension", ["agent_sdk", "json4cj"]),
-        "axyndra_agent_testkit": (ROOT / "support_tests" / "testkit_consumer", ["agent_sdk", "json4cj", "axyndra_agent_testkit"]),
+        "agent_sdk": (ROOT / "support_tests" / "sdk_fixture_extension", ["agent_sdk", "yjson", "yjson_support"]),
+        "axyndra_agent_testkit": (ROOT / "support_tests" / "testkit_consumer", ["agent_sdk", "yjson", "yjson_support", "axyndra_agent_testkit"]),
     }
     for name, (source_root, dependencies) in frozen.items():
         root = destination / name
@@ -546,12 +539,12 @@ def materialize_consumers(stage_root: Path, destination: Path) -> None:
                 '''package testkit_consumer
 
 import agent_sdk.*
-import json4cj.*
+import yjson_support.*
 import axyndra_agent_testkit.*
 
 main(): Int64 {
     let harness = ExtensionContractHarness(ConsumerExtension())
-    let input = JsonValue.objectValue([JsonField("text", JsonValue.stringValue("package"))])
+    let input = jsonObject([JsonObjectEntry("text", jsonString("package"))])
     let prepared = requireSdkOk(harness.prepare("consumer_echo", input, callId: "package-run"))
     assertCapabilityRequested(prepared.definition, "workspace.read")
     println("axyndra_agent_testkit external consumer passed")

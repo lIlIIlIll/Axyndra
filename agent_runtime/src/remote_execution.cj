@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import std.deriving.*
 

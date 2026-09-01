@@ -1,5 +1,9 @@
 package agent_app
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -63,7 +67,7 @@ func runSearchCli(
     }
     match (result.output.field("error")) {
         case Some(value) =>
-            if (value.kind != ValueKind.Null) { 1 } else { 0 }
+            if (value.unifiedKind != ValueKind.Null) { 1 } else { 0 }
         case None => if (result.isError) { 1 } else { 0 }
     }
 }

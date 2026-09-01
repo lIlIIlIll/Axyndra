@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_core.*
 import agent_runtime.*
@@ -118,7 +122,7 @@ public class CheckpointRuntime {
     ): Result<Unit> {
         let report = match (result.output.field("report")) {
             case Some(value) =>
-                if (value.kind == ValueKind.Text) {
+                if (value.unifiedKind == ValueKind.Text) {
                     value.text.trimAscii()
                 } else {
                     ""
@@ -334,7 +338,7 @@ func checkpointGoal(thread: AgentThreadSnapshot, ordinal: Int64): String {
             case ThreadItemContent.ToolResult(_, _, _, output, _) =>
                 match (output.field("goal")) {
                     case Some(value) =>
-                        if (value.kind == ValueKind.Text) { return value.text.trimAscii() }
+                        if (value.unifiedKind == ValueKind.Text) { return value.text.trimAscii() }
                     case None => ()
                 }
             case _ => ()

@@ -1,5 +1,9 @@
 package child_run_vnext_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_runtime.*
 

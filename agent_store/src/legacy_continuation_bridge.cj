@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.convert.*
 import std.collection.*
 import agent_domain.*
@@ -167,7 +171,7 @@ public func withRunRequestSnapshotProjection(
     value: DurableRunContinuationV1,
     requestSnapshot: AgentValue
 ): DurableRunContinuationV1 {
-    if (requestSnapshot.kind != ValueKind.Object) {
+    if (requestSnapshot.unifiedKind != ValueKind.Object) {
         throw IllegalArgumentException("canonical Run request snapshot must be an object")
     }
     let fields = continuationPayloadWithoutProjection(value)
@@ -345,16 +349,16 @@ public func optionalRunRequestSnapshotFromDurableContinuation(
     value: DurableRunContinuationV1
 ): ?AgentValue {
     let payload = runExecutionPhasePayload(value.phase)
-    if (payload.kind != ValueKind.Object) { return None }
+    if (payload.unifiedKind != ValueKind.Object) { return None }
     let adapter = payload.field("adapter")
-    if (adapter.isNone() || adapter.getOrThrow().kind != ValueKind.Text ||
+    if (adapter.isNone() || adapter.getOrThrow().unifiedKind != ValueKind.Text ||
         adapter.getOrThrow().text != "run-request-snapshot-v1") {
         return None
     }
     let snapshot = payload.field("request_snapshot")
     let digest = payload.field("request_snapshot_digest")
-    if (snapshot.isNone() || snapshot.getOrThrow().kind != ValueKind.Object ||
-        digest.isNone() || digest.getOrThrow().kind != ValueKind.Text ||
+    if (snapshot.isNone() || snapshot.getOrThrow().unifiedKind != ValueKind.Object ||
+        digest.isNone() || digest.getOrThrow().unifiedKind != ValueKind.Text ||
         modelPolicySha256Text(encodeStoredValue(snapshot.getOrThrow())) !=
             digest.getOrThrow().text) {
         throw IllegalStateException("canonical Run request snapshot is corrupt")
@@ -368,7 +372,7 @@ public func hasRunContinuationProjection(value: DurableRunContinuationV1): Bool 
 }
 
 func canonicalRunRequestPhaseState(requestSnapshot: AgentValue): DurablePhaseState {
-    if (requestSnapshot.kind != ValueKind.Object) {
+    if (requestSnapshot.unifiedKind != ValueKind.Object) {
         throw IllegalArgumentException("canonical Run request snapshot must be an object")
     }
     DurablePhaseState(objectValue([
@@ -384,16 +388,16 @@ public func optionalLegacyPayloadFromDurableContinuation(
     value: DurableRunContinuationV1
 ): ?String {
     let payload = runExecutionPhasePayload(value.phase)
-    if (payload.kind != ValueKind.Object) {
+    if (payload.unifiedKind != ValueKind.Object) {
         return None
     }
     var adapter: ?String = None
     var legacy: ?String = None
     for (field in payload.fields) {
-        if (field.name == "adapter" && field.value.kind == ValueKind.Text) {
+        if (field.name == "adapter" && field.value.unifiedKind == ValueKind.Text) {
             adapter = Some(field.value.text)
         }
-        if (field.name == "legacy_payload" && field.value.kind == ValueKind.Text) {
+        if (field.name == "legacy_payload" && field.value.unifiedKind == ValueKind.Text) {
             legacy = Some(field.value.text)
         }
     }

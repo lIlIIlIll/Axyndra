@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.sync.*
 import agent_domain.*
@@ -223,24 +227,24 @@ func sameCommittedSources(
 }
 
 func sameDecisionValue(left: AgentValue, right: AgentValue): Bool {
-    match (left.kind) {
-        case ValueKind.Null => match (right.kind) {
+    match (left.unifiedKind) {
+        case ValueKind.Null => match (right.unifiedKind) {
             case ValueKind.Null => true
             case _ => false
         }
-        case ValueKind.Boolean => match (right.kind) {
+        case ValueKind.Boolean => match (right.unifiedKind) {
             case ValueKind.Boolean => left.boolean == right.boolean
             case _ => false
         }
-        case ValueKind.Number => match (right.kind) {
+        case ValueKind.Number => match (right.unifiedKind) {
             case ValueKind.Number => left.number == right.number
             case _ => false
         }
-        case ValueKind.Text => match (right.kind) {
+        case ValueKind.Text => match (right.unifiedKind) {
             case ValueKind.Text => left.text == right.text
             case _ => false
         }
-        case ValueKind.List => match (right.kind) {
+        case ValueKind.List => match (right.unifiedKind) {
             case ValueKind.List =>
                 if (left.items.size != right.items.size) { return false }
                 for (index in 0..left.items.size where
@@ -250,7 +254,7 @@ func sameDecisionValue(left: AgentValue, right: AgentValue): Bool {
                 true
             case _ => false
         }
-        case ValueKind.Object => match (right.kind) {
+        case ValueKind.Object => match (right.unifiedKind) {
             case ValueKind.Object =>
                 if (left.fields.size != right.fields.size) { return false }
                 for (index in 0..left.fields.size) {

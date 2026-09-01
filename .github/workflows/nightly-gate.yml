@@ -12,8 +12,6 @@ jobs:
   release-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.3.0-alpha.02
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,9 +40,13 @@ jobs:
       - name: Configure pinned SDK
         run: |
           sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
+          cjpm_output=$(cjpm --version 2>&1)
+          expected_cjpm_version=${cjpm_output##* }
           echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
           echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-nightly.outputs.version }}" >> "$GITHUB_ENV"
+          echo "AXYNDRA_CI_EXPECTED_CJPM_VERSION=$expected_cjpm_version" >> "$GITHUB_ENV"
           AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-nightly.outputs.version }}" \
+            AXYNDRA_CI_EXPECTED_CJPM_VERSION="$expected_cjpm_version" \
             AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
       - name: Full local release gate
         env:

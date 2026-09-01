@@ -17,3 +17,6 @@ audit 和 ID generator，然后只组合仓库中的唯一 `AgentCore`。
 CancellationToken 仍由唯一 `AgentCore` 在每次 run/approval resume 时绑定。
 
 测试可直接配合 `agent_testkit` 的 scripted provider、内存仓储和确定性 ID。
+
+当前 SDK 版本是 `2.0.0`。这是迁移到 yjson 后的破坏性版本；扩展 manifest 必须声明
+`[2.0.0, 3.0.0)`。SDK 1 范围不会被运行时自动兼容或隐式升级。

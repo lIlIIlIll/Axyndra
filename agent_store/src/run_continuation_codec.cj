@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.convert.*
 import agent_domain.*
@@ -35,7 +39,7 @@ public func decodeDurableRunContinuation(source: String): DurableRunContinuation
     let phasePayload = DurablePhaseState(continuationField(root, "phase_payload"))
     let phase = decodeRunExecutionPhase(phaseName, phasePayload)
     let toolBatchValue = continuationField(root, "tool_batch")
-    let toolBatch: ?ToolBatchContinuation = if (toolBatchValue.kind == ValueKind.Null) {
+    let toolBatch: ?ToolBatchContinuation = if (toolBatchValue.unifiedKind == ValueKind.Null) {
         None
     } else {
         let operationIds = ArrayList<OperationId>()
@@ -49,7 +53,7 @@ public func decodeDurableRunContinuation(source: String): DurableRunContinuation
         ))
     }
     let externalValue = continuationField(root, "waiting_external")
-    let waitingExternal: ?ExternalWaitState = if (externalValue.kind == ValueKind.Null) {
+    let waitingExternal: ?ExternalWaitState = if (externalValue.unifiedKind == ValueKind.Null) {
         None
     } else {
         Some(ExternalWaitState(
@@ -228,7 +232,7 @@ func idListValue<T>(values: Array<T>, id: (T) -> String): AgentValue {
 
 func optionalText<T>(value: AgentValue, name: String, factory: (String) -> T): ?T {
     let field = continuationField(value, name)
-    if (field.kind == ValueKind.Null) { None } else {
+    if (field.unifiedKind == ValueKind.Null) { None } else {
         Some(factory(continuationTextValue(field, name)))
     }
 }
@@ -242,7 +246,7 @@ func decodeTextList<T>(value: AgentValue, name: String, factory: (String) -> T):
 }
 
 func continuationField(value: AgentValue, name: String): AgentValue {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         throw IllegalStateException("durable continuation object expected")
     }
     for (field in value.fields where field.name == name) { return field.value }
@@ -254,7 +258,7 @@ func continuationText(value: AgentValue, name: String): String {
 }
 
 func continuationTextValue(value: AgentValue, name: String): String {
-    if (value.kind != ValueKind.Text) {
+    if (value.unifiedKind != ValueKind.Text) {
         throw IllegalStateException("durable continuation text expected: " + name)
     }
     value.text
@@ -262,7 +266,7 @@ func continuationTextValue(value: AgentValue, name: String): String {
 
 func continuationInt(value: AgentValue, name: String): Int64 {
     let field = continuationField(value, name)
-    if (field.kind != ValueKind.Number) {
+    if (field.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("durable continuation integer expected: " + name)
     }
     try { Int64.parse(field.number) } catch (_: Exception) {
@@ -272,8 +276,8 @@ func continuationInt(value: AgentValue, name: String): Int64 {
 
 func continuationList(value: AgentValue, name: String): Array<AgentValue> {
     let field = continuationField(value, name)
-    if (field.kind != ValueKind.List) {
+    if (field.unifiedKind != ValueKind.List) {
         throw IllegalStateException("durable continuation list expected: " + name)
     }
-    field.items
+    field.items.toArray()
 }

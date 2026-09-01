@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
@@ -490,7 +494,7 @@ public func runProductProcessBrokerClient(
         case Some(value) => value
         case None => objectValue([])
     }
-    if (op == "" || callId == "" || argumentsValue.kind != ValueKind.Object) {
+    if (op == "" || callId == "" || argumentsValue.unifiedKind != ValueKind.Object) {
         println(encodeAgentValue(brokerErrorValue(AgentError(
             AgentErrorKind.InvalidInput,
             "hub.process_broker_cli_request",
@@ -628,7 +632,7 @@ func handleProcessBrokerConnection(
         case Some(value) => value
         case None => objectValue([])
     }
-    if (callId == "" || tool == "" || arguments.kind != ValueKind.Object) {
+    if (callId == "" || tool == "" || arguments.unifiedKind != ValueKind.Object) {
         writeBrokerResponse(socket, brokerResponseError(requestId, AgentError(
             AgentErrorKind.Protocol,
             "hub.process_broker_execute_invalid",
@@ -658,7 +662,7 @@ func validateBrokerRequest(
     token: String,
     workspace: String
 ): Result<Unit> {
-    if (request.kind != ValueKind.Object ||
+    if (request.unifiedKind != ValueKind.Object ||
         brokerInteger(request, "version", 0) != PROCESS_BROKER_PROTOCOL) {
         return brokerError<Unit>(
             AgentErrorKind.Protocol,
@@ -783,7 +787,7 @@ func brokerOwnerIdentityConfirmedDead(
     value: AgentValue,
     workspace: String
 ): Bool {
-    if (value.kind != ValueKind.Object ||
+    if (value.unifiedKind != ValueKind.Object ||
         brokerText(value, "workspace") != workspace ||
         brokerInteger(value, "protocol", 0) != PROCESS_BROKER_PROTOCOL) {
         return false
@@ -1082,7 +1086,7 @@ func decodeBrokerAgentError(value: AgentValue): AgentError {
     let fields = ArrayList<ErrorField>()
     match (value.field("fields")) {
         case Some(items) =>
-            if (items.kind == ValueKind.List) {
+            if (items.unifiedKind == ValueKind.List) {
                 for (item in items.items) {
                     let name = brokerText(item, "name")
                     if (name != "") {
@@ -1626,7 +1630,7 @@ func brokerCliHasArgument(
 func brokerText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
@@ -1638,7 +1642,7 @@ func brokerInteger(
 ): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind != ValueKind.Number) { return fallback }
+            if (field.unifiedKind != ValueKind.Number) { return fallback }
             try { Int64.parse(field.number) } catch (_: Exception) { fallback }
         case None => fallback
     }
@@ -1651,7 +1655,7 @@ func brokerBoolean(
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Boolean) { field.boolean } else { fallback }
+            if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
         case None => fallback
     }
 }

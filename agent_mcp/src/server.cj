@@ -21,7 +21,7 @@ public class McpServer {
     private let primitive: library.McpServer
 
     public init(discovery: McpDiscoverResult, host: McpToolHost) {
-        primitive = library.McpServer(discovery, McpToolHostBridge(host))
+        primitive = library.McpServer(discovery, host: McpToolHostBridge(host))
     }
 
     public func state(): McpLifecycleState { primitive.state() }
@@ -33,7 +33,7 @@ public class McpServer {
     }
     public func cancelRequest(requestId: JsonRpcId, reason: String): Result<Unit> {
         handleNotification(mcpCancellationNotification(
-            requestId, reason, McpRequestMeta(McpImplementationInfo("Axyndra-adapter", "1"))
+            requestId, reason, McpRequestMeta(clientInfo: McpImplementationInfo("Axyndra-adapter", "1"))
         ))
     }
     public func handle(envelope: JsonRpcEnvelope): Result<?JsonRpcEnvelope> {

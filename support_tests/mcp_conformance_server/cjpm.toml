@@ -1,0 +1,16 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "mcp_conformance_server"
+  organization = ""
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "mcp4cj" = { path = "../../libs/mcp4cj", output-type = "static" }
+  "jsonrpc4cj" = { path = "../../libs/jsonrpc4cj", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

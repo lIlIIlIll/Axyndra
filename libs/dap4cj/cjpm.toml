@@ -3,9 +3,10 @@
   name = "dap4cj"
   organization = ""
   description = "Agent-independent DAP codec, framing and request correlation"
-  version = "1.0.0"
+  version = "2.0.0"
   output-type = "static"
 
 [dependencies]
-  "json4cj" = { path = "../json4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }
+  "yjson_support" = { path = "../yjson_support", output-type = "static" }
   "process4cj" = { path = "../process4cj", output-type = "static" }

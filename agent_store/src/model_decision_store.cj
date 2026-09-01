@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.convert.*
 import agent_domain.*
@@ -727,7 +731,7 @@ func decodeStoredModelBlock(source: String): ModelBlock {
         arguments: storedField(value, "arguments"),
         isError: storedBoolField(value, "is_error"),
         receiptId: storedTextField(value, "receipt_id"),
-        opaqueState: if (opaqueValue.kind == ValueKind.Null) {
+        opaqueState: if (opaqueValue.unifiedKind == ValueKind.Null) {
             None
         } else {
             Some(OpaqueProviderState(
@@ -738,7 +742,7 @@ func decodeStoredModelBlock(source: String): ModelBlock {
                 replayRequired: storedBoolField(opaqueValue, "replay_required")
             ))
         },
-        image: if (imageValue.kind == ValueKind.Null) {
+        image: if (imageValue.unifiedKind == ValueKind.Null) {
             None
         } else {
             Some(ModelImage(
@@ -802,7 +806,7 @@ func decodeStoredModelUsage(source: String): ModelUsage {
     let cost = storedField(value, "cost_micros")
     let usageSource = match (value.field("source")) {
         case Some(item) =>
-            if (item.kind != ValueKind.Text) {
+            if (item.unifiedKind != ValueKind.Text) {
                 throw IllegalStateException("Decision usage source has invalid type")
             }
             modelUsageSourceFromName(item.text)
@@ -811,9 +815,9 @@ func decodeStoredModelUsage(source: String): ModelUsage {
     let usageEvidence: ?ModelUsageEvidence = match (value.field("evidence")) {
         case None => None
         case Some(item) =>
-            if (item.kind == ValueKind.Null) {
+            if (item.unifiedKind == ValueKind.Null) {
                 None
-            } else if (item.kind == ValueKind.Object) {
+            } else if (item.unifiedKind == ValueKind.Object) {
                 Some(ModelUsageEvidence(
                     storedTextField(item, "protocol"),
                     storedTextField(item, "event_kind"),
@@ -829,9 +833,9 @@ func decodeStoredModelUsage(source: String): ModelUsage {
         reasoningTokens: storedIntField(value, "reasoning_tokens"),
         cacheReadTokens: storedIntField(value, "cache_read_tokens"),
         cacheWriteTokens: storedIntField(value, "cache_write_tokens"),
-        costMicros: if (cost.kind == ValueKind.Null) {
+        costMicros: if (cost.unifiedKind == ValueKind.Null) {
             None
-        } else if (cost.kind == ValueKind.Number) {
+        } else if (cost.unifiedKind == ValueKind.Number) {
             Some(parseModelDecisionInt(cost.number, "Decision usage cost"))
         } else {
             throw IllegalStateException("Decision usage cost has invalid type")

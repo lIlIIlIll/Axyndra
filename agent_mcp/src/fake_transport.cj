@@ -2,6 +2,7 @@ package agent_mcp
 
 import agent_domain.*
 import agent_protocol.*
+import mcp4cj as library
 import std.collection.*
 import std.sync.*
 
@@ -46,6 +47,13 @@ public class FakeMcpTransport <: McpTransport {
         Result.Ok(response)
     }
 
+    public func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle> {
+        match (server.libraryServer().openSubscription(request)) {
+            case library.McpResult.Ok(source) => Result.Ok(FakeMcpSubscriptionHandle(request.id, source))
+            case library.McpResult.Err(error) => Result.Err(mcpLibraryError(error))
+        }
+    }
+
     public func notify(notification: JsonRpcNotification): Result<Unit> {
         if (lifecycle.state() != McpLifecycleState.Ready) {
             return mcpFailure<Unit>(
@@ -61,6 +69,10 @@ public class FakeMcpTransport <: McpTransport {
 
     public func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit> {
         notify(mcpCancellationNotification(requestId, reason, meta))
+    }
+
+    public func registerTools(tools: Array<McpTool>): Result<Unit> {
+        let _ = tools; Result.Ok(())
     }
 
     public func close(): Result<Unit> {
@@ -102,4 +114,14 @@ public class FakeMcpTransport <: McpTransport {
             lock.unlock()
         }
     }
+}
+
+class FakeMcpSubscriptionHandle <: library.McpSubscriptionHandle {
+    private let id: JsonRpcId
+    private let source: library.McpSubscriptionSource
+    init(id: JsonRpcId, source: library.McpSubscriptionSource) { this.id = id; this.source = source }
+    public func subscriptionId(): JsonRpcId { id }
+    public func acknowledged(): library.McpSubscriptionFilter { source.acknowledged() }
+    public func next(): library.McpResult<?JsonRpcNotification> { source.next() }
+    public func close(): library.McpResult<Unit> { source.close() }
 }

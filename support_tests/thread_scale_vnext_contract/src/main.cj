@@ -1,5 +1,9 @@
 package thread_scale_vnext_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import std.time.*
 import std.fs.*
 import std.collection.*

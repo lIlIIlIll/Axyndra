@@ -1,7 +1,8 @@
 package ast_extension
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.convert.*
 
@@ -13,7 +14,7 @@ public func astExtensionManifest(): String {
       "name": "AST Tools",
       "version": "1.0.0",
       "description": "Describe structural searches and staged rewrites for trusted host execution.",
-      "sdk": {"min": "1.1.0", "maxExclusive": "1.2.0"},
+      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
       "tools": ["ast_grep", "ast_edit"],
       "capabilities": ["workspace.read", "workspace.write"],
       "requirements": {"executables": ["ast-grep"]}
@@ -44,7 +45,7 @@ public class AstGrepExtensionTool <: ExtensionTool {
             [workspaceRead()]
         )
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         if (textField(input, "pat").trimAscii() == "") {
             return invalid("ast_grep.pattern_required", "ast_grep requires a non-empty pat")
         }
@@ -72,7 +73,7 @@ public class AstEditExtensionTool <: ExtensionTool {
             effect: ExtensionEffect.SideEffect
         )
     }
-    public func validate(input: JsonValue): SdkResult<JsonValue> {
+    public func validate(input: JsonNode): SdkResult<JsonNode> {
         let ops = match (input.field("ops")) {
             case Some(value) => value
             case None => return invalid("ast_edit.ops_required", "ast_edit requires ops")
@@ -81,16 +82,16 @@ public class AstEditExtensionTool <: ExtensionTool {
             case Some(value) => value
             case None => return invalid("ast_edit.paths_required", "ast_edit requires paths")
         }
-        if (ops.kind != JsonKind.List || ops.items.isEmpty() || paths.kind != JsonKind.List || paths.items.isEmpty()) {
+        if (ops.unifiedKind != UnifiedJsonKind.List || ops.items.isEmpty() || paths.unifiedKind != UnifiedJsonKind.List || paths.items.isEmpty()) {
             return invalid("ast_edit.input_invalid", "ast_edit requires non-empty ops and paths arrays")
         }
         for (op in ops.items) {
-            if (op.kind != JsonKind.Object || textField(op, "pat") == "" || op.field("out").isNone()) {
+            if (op.unifiedKind != UnifiedJsonKind.Object || textField(op, "pat") == "" || op.field("out").isNone()) {
                 return invalid("ast_edit.op_invalid", "each ast_edit op requires pat and out strings")
             }
         }
         for (path in paths.items) {
-            if (path.kind != JsonKind.Text || path.text.trimAscii() == "") {
+            if (path.unifiedKind != UnifiedJsonKind.Text || path.text.trimAscii() == "") {
                 return invalid("ast_edit.path_invalid", "ast_edit paths must be non-empty strings")
             }
         }
@@ -117,55 +118,55 @@ func prepareExact(tool: ExtensionTool, invocation: ToolInvocation): SdkResult<Op
 }
 
 func decodeObject(name: String, result: ExecutionResult): SdkResult<ToolOutput> {
-    if (result.value.kind != JsonKind.Object) {
+    if (result.value.unifiedKind != UnifiedJsonKind.Object) {
         return SdkResult.Err(SdkError(SdkErrorKind.Decode, name + ".result_not_object", name + " host returned a non-object result"))
     }
     SdkResult.Ok(ToolOutput(structured: result.value))
 }
 
-func astGrepSchema(): JsonValue {
+func astGrepSchema(): JsonNode {
     objectSchema([
-        JsonField("pat", stringSchema()),
-        JsonField("path", stringSchema()),
-        JsonField("skip", numberSchema())
+        JsonObjectEntry("pat", stringSchema()),
+        JsonObjectEntry("path", stringSchema()),
+        JsonObjectEntry("skip", numberSchema())
     ], ["pat"])
 }
 
-func astEditSchema(): JsonValue {
+func astEditSchema(): JsonNode {
     let op = objectSchema([
-        JsonField("pat", stringSchema()), JsonField("out", stringSchema())
+        JsonObjectEntry("pat", stringSchema()), JsonObjectEntry("out", stringSchema())
     ], ["pat", "out"])
     objectSchema([
-        JsonField("ops", arraySchema(op, 1)),
-        JsonField("paths", arraySchema(stringSchema(), 1))
+        JsonObjectEntry("ops", arraySchema(op, 1)),
+        JsonObjectEntry("paths", arraySchema(stringSchema(), 1))
     ], ["ops", "paths"])
 }
 
-func objectSchema(properties: Array<JsonField>, required: Array<String>): JsonValue {
-    let names = ArrayList<JsonValue>()
-    for (name in required) { names.add(JsonValue.stringValue(name)) }
-    JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("object")),
-        JsonField("properties", JsonValue.objectValue(properties)),
-        JsonField("required", JsonValue.arrayValue(names.toArray())),
-        JsonField("additionalProperties", JsonValue.boolValue(false))
+func objectSchema(properties: Array<JsonObjectEntry>, required: Array<String>): JsonNode {
+    let names = ArrayList<JsonNode>()
+    for (name in required) { names.add(jsonString(name)) }
+    jsonObject([
+        JsonObjectEntry("type", jsonString("object")),
+        JsonObjectEntry("properties", jsonObject(properties)),
+        JsonObjectEntry("required", jsonArray(names.toArray())),
+        JsonObjectEntry("additionalProperties", jsonBool(false))
     ])
 }
-func stringSchema(): JsonValue { JsonValue.objectValue([JsonField("type", JsonValue.stringValue("string"))]) }
-func numberSchema(): JsonValue { JsonValue.objectValue([JsonField("type", JsonValue.stringValue("number"))]) }
-func arraySchema(items: JsonValue, minimum: Int64): JsonValue {
-    JsonValue.objectValue([
-        JsonField("type", JsonValue.stringValue("array")), JsonField("minItems", JsonValue.numberValue(minimum.toString())),
-        JsonField("items", items)
+func stringSchema(): JsonNode { jsonObject([JsonObjectEntry("type", jsonString("string"))]) }
+func numberSchema(): JsonNode { jsonObject([JsonObjectEntry("type", jsonString("number"))]) }
+func arraySchema(items: JsonNode, minimum: Int64): JsonNode {
+    jsonObject([
+        JsonObjectEntry("type", jsonString("array")), JsonObjectEntry("minItems", jsonNumber(minimum.toString())),
+        JsonObjectEntry("items", items)
     ])
 }
 func invalid<T>(code: String, message: String): SdkResult<T> { SdkResult.Err(SdkError(SdkErrorKind.Validation, code, message)) }
-func textField(value: JsonValue, name: String): String {
-    match (value.field(name)) { case Some(field) => if (field.kind == JsonKind.Text) { field.text } else { "" }; case None => "" }
+func textField(value: JsonNode, name: String): String {
+    match (value.field(name)) { case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }; case None => "" }
 }
-func integerField(value: JsonValue, name: String, fallback: Int64): Int64 {
+func integerField(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == JsonKind.Number) { try { Int64.parse(field.number) } catch (_: Exception) { fallback } } else { fallback }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(field.number) } catch (_: Exception) { fallback } } else { fallback }
         case None => fallback
     }
 }

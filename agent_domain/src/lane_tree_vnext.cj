@@ -1,5 +1,9 @@
 package agent_domain
 
+import yjson.*
+
+import yjson_support.*
+
 import std.deriving.*
 
 @Derive[Equatable]
@@ -33,7 +37,7 @@ public class LaneRecord {
         createdAtMillis!: Int64 = 0
     ) {
         let child = kind == LaneKind.SharedHistoryChild
-        if (config.kind != ValueKind.Object || createdAtMillis < 0 ||
+        if (config.unifiedKind != ValueKind.Object || createdAtMillis < 0 ||
             (child && (parentLaneId.isNone() || forkItemId.isNone())) ||
             (!child && (parentLaneId.isSome() || forkItemId.isSome()))) {
             throw IllegalArgumentException("Lane record ancestry is invalid")

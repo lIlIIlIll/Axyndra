@@ -2,7 +2,7 @@
 
 仓颉实现的 MCP `2026-07-28` client/server：
 
-- `server/discover`、分页 `tools/list`、`tools/call`、ping 与 cancellation；
+- `server/discover`、分页 `tools/list`、`tools/call` 与 cancellation；
 - namespaced `_meta`、`resultType`、typed `input-required` 与使用新 request ID 的 MRTR；
 - 真实 child-process stdio transport，stdout 只承载 JSON-RPC；
 - 原生 `stdx.net.http` Streamable HTTP POST，支持 JSON/SSE 响应；

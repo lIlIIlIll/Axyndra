@@ -1,5 +1,9 @@
 package agent_store_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import std.fs.*
 import std.env.*
 import std.process.*
@@ -127,7 +131,7 @@ func runRequestSnapshotProjectionContract(): Unit {
     expect(optionalRunRequestSnapshotFromDurableContinuation(projected).isSome() &&
         optionalLegacyPayloadFromDurableContinuation(projected).isNone(),
         "new Run continuation projections are structured canonical snapshots")
-    snapshot.fields[1] = ValueField("marker", textValue("tampered"))
+    snapshot.put("marker", textValue("tampered"))
     var rejected = false
     try {
         let _ = optionalRunRequestSnapshotFromDurableContinuation(projected)

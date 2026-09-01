@@ -1,5 +1,9 @@
 package chaos_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_core.*
 import agent_domain.*
 import agent_embed.*

@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_extensions.*
 import agent_ports.*
@@ -592,7 +596,7 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
 func sdkInputText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == ValueKind.Text) { field.text } else { "" }
+        case Some(field) => if (field.unifiedKind == ValueKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
@@ -2023,7 +2027,7 @@ class WriteTool <: ToolExecutor {
 func writeArgumentText(value: AgentValue, field: String): String {
     match (value.field(field)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -2783,7 +2787,7 @@ func evalOperationId(runId: RunId): OperationId {
 func requiredString(call: ToolCall, name: String): Result<String> {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 Result.Ok(value.text)
             } else {
                 invalidArgument(call, name, "argument must be a string")
@@ -2795,7 +2799,7 @@ func requiredString(call: ToolCall, name: String): Result<String> {
 func optionalString(call: ToolCall, name: String, fallback: String): String {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Text) {
+            if (value.unifiedKind == ValueKind.Text) {
                 value.text
             } else {
                 fallback
@@ -2807,7 +2811,7 @@ func optionalString(call: ToolCall, name: String, fallback: String): String {
 func optionalInteger(call: ToolCall, name: String, fallback: Int64): Int64 {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Number) {
+            if (value.unifiedKind == ValueKind.Number) {
                 try {
                     Int64.parse(value.number)
                 } catch (_: Exception) {
@@ -2823,7 +2827,7 @@ func optionalInteger(call: ToolCall, name: String, fallback: Int64): Int64 {
 func optionalBoolean(call: ToolCall, name: String, fallback: Bool): Bool {
     match (call.arguments.field(name)) {
         case Some(value) =>
-            if (value.kind == ValueKind.Boolean) {
+            if (value.unifiedKind == ValueKind.Boolean) {
                 value.boolean
             } else {
                 fallback
@@ -2851,7 +2855,7 @@ func prepareShellCommand(
     }
     match (call.arguments.field("env")) {
         case Some(value) =>
-            if (value.kind != ValueKind.Object) {
+            if (value.unifiedKind != ValueKind.Object) {
                 return invalidArgument(
                     call,
                     "env",
@@ -2859,7 +2863,7 @@ func prepareShellCommand(
                 )
             }
             for (field in value.fields) {
-                if (field.value.kind != ValueKind.Text || !validEnvironmentName(field.name)) {
+                if (field.value.unifiedKind != ValueKind.Text || !validEnvironmentName(field.name)) {
                     return invalidArgument(
                         call,
                         "env",

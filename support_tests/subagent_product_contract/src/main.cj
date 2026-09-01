@@ -3,6 +3,8 @@ package subagent_product_contract
 import agent_domain.*
 import agent_product.*
 import tool_runtime.*
+import yjson.JsonNode
+import yjson_support.*
 import std.collection.*
 import std.fs.*
 

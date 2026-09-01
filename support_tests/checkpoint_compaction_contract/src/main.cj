@@ -1,5 +1,9 @@
 package checkpoint_compaction_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import std.collection.*

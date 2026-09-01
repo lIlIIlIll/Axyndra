@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import agent_domain.*
 
@@ -85,8 +89,8 @@ public class ModelContextManifest {
         checkpointId!: String = "",
         digest!: String = ""
     ) {
-        if (threadRevision < 0 || namedFactVersions.kind != ValueKind.Object ||
-            toolCatalogSnapshot.kind != ValueKind.Object || renderedRequest.kind != ValueKind.Object ||
+        if (threadRevision < 0 || namedFactVersions.unifiedKind != ValueKind.Object ||
+            toolCatalogSnapshot.unifiedKind != ValueKind.Object || renderedRequest.unifiedKind != ValueKind.Object ||
             tokenBudget < 1 || estimatedTokens < 0 || estimatedTokens > tokenBudget ||
             compilerVersion.trimAscii() == "" || !uniqueManifestItems(branchItemIds) ||
             !uniqueManifestStrings(activeSkillIds) || !uniqueManifestStrings(memoryReferences) ||
@@ -331,7 +335,7 @@ func manifestCapabilityName(value: CapabilityKind): String {
 }
 
 func manifestValue(value: AgentValue): String {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => "n"
         case ValueKind.Boolean => if (value.boolean) { "t" } else { "f" }
         case ValueKind.Number => "d" + manifestFrame(value.number)

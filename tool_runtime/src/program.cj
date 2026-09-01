@@ -1,7 +1,8 @@
 package tool_runtime
 
 import agent_domain.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.deriving.*
 
@@ -179,11 +180,11 @@ func parseProgramToolInvocation(source: String): Result<ProgramToolInvocation> {
     }
     let argumentsText = value[open + 1..value.size - 1].trimAscii()
     let arguments = try {
-        parseJson(argumentsText, maxBytes: 262144, maxDepth: 16)
-    } catch (error: JsonError) {
+        parseUnifiedJson(argumentsText, maxBytes: 262144, maxDepth: 16)
+    } catch (error: JsonException) {
         return programAgentError<ProgramToolInvocation>("tool_program.arguments", error.message)
     }
-    if (arguments.kind != JsonKind.Object) {
+    if (arguments.unifiedKind != UnifiedJsonKind.Object) {
         return programAgentError<ProgramToolInvocation>("tool_program.arguments", "tool arguments must be a JSON object")
     }
     Result.Ok(ProgramToolInvocation(toolName, ToolProgramExpression.Literal(arguments)))
@@ -348,7 +349,7 @@ func executeStatements(state: ToolProgramExecutionState, statements: Array<ToolP
                     case Some(value) => value
                     case None => return ProgramFlow.Failed(ProgramFailure("tool_program.binding_missing", "unknown binding: ${sourceName}"))
                 }
-                if (source.kind != ValueKind.List || maxItems == 0u64 || UInt64(source.items.size) > maxItems) {
+                if (source.unifiedKind != ValueKind.List || maxItems == 0u64 || UInt64(source.items.size) > maxItems) {
                     return ProgramFlow.Failed(ProgramFailure("tool_program.loop_bound", "for-each input exceeds its declared bound"))
                 }
                 for (item in source.items) {
@@ -412,7 +413,7 @@ func evaluate(state: ToolProgramExecutionState, expression: ToolProgramExpressio
         case ToolProgramExpression.FilterTruthyField(sourceName, fieldName) => filterTruthyField(state, sourceName, fieldName)
         case ToolProgramExpression.ReduceCount(sourceName) =>
             match (binding(state.bindings, sourceName)) {
-                case Some(value) => if (value.kind == ValueKind.List) {
+                case Some(value) => if (value.unifiedKind == ValueKind.List) {
                     ProgramEvalResult.Ok(integerValue(Int64(value.items.size)))
                 } else { ProgramEvalResult.Err(ProgramFailure("tool_program.type", "reduce count requires a list")) }
                 case None => ProgramEvalResult.Err(ProgramFailure("tool_program.binding_missing", "unknown binding: ${sourceName}"))
@@ -452,7 +453,7 @@ func mapField(state: ToolProgramExecutionState, sourceName: String, fieldName: S
         case Some(value) => value
         case None => return ProgramEvalResult.Err(ProgramFailure("tool_program.binding_missing", "unknown binding: ${sourceName}"))
     }
-    if (source.kind != ValueKind.List) { return ProgramEvalResult.Err(ProgramFailure("tool_program.type", "map requires a list")) }
+    if (source.unifiedKind != ValueKind.List) { return ProgramEvalResult.Err(ProgramFailure("tool_program.type", "map requires a list")) }
     let values = ArrayList<AgentValue>()
     for (item in source.items) {
         match (item.field(fieldName)) {
@@ -468,7 +469,7 @@ func filterTruthyField(state: ToolProgramExecutionState, sourceName: String, fie
         case Some(value) => value
         case None => return ProgramEvalResult.Err(ProgramFailure("tool_program.binding_missing", "unknown binding: ${sourceName}"))
     }
-    if (source.kind != ValueKind.List) { return ProgramEvalResult.Err(ProgramFailure("tool_program.type", "filter requires a list")) }
+    if (source.unifiedKind != ValueKind.List) { return ProgramEvalResult.Err(ProgramFailure("tool_program.type", "filter requires a list")) }
     let values = ArrayList<AgentValue>()
     for (item in source.items) {
         match (item.field(fieldName)) {
@@ -499,7 +500,7 @@ func setBinding(values: ArrayList<ProgramBinding>, name: String, value: AgentVal
 }
 
 func truthy(value: AgentValue): Bool {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => false
         case ValueKind.Boolean => value.boolean
         case ValueKind.Text | ValueKind.Number => !value.text.isEmpty() && value.text != "0"
@@ -509,7 +510,11 @@ func truthy(value: AgentValue): Bool {
 }
 
 func programValueBytes(value: AgentValue): UInt64 {
-    var size: UInt64 = 8u64 + UInt64(value.text.size)
+    var size: UInt64 = 8u64
+    match (value.unifiedKind) {
+        case ValueKind.List | ValueKind.Object => ()
+        case _ => size += UInt64(value.text.size)
+    }
     for (item in value.items) { size += programValueBytes(item) }
     for (field in value.fields) { size += UInt64(field.name.size) + programValueBytes(field.value) }
     size

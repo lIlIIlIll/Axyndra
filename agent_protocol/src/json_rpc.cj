@@ -1,5 +1,9 @@
 package agent_protocol
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import jsonrpc4cj as library
 

@@ -2,7 +2,8 @@ package testkit_extension_contract
 
 import agent_sdk.*
 import ast_extension.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import axyndra_agent_testkit.*
 import web_search_extension.*
 import workspace_search_extension.*
@@ -21,7 +22,7 @@ func readOnlyContracts(): Unit {
     let search = ExtensionContractHarness(WorkspaceSearchExtension())
     let prepared = requireSdkOk(search.prepare(
         "grep",
-        JsonValue.objectValue([JsonField("pattern", JsonValue.stringValue("needle"))]),
+        jsonObject([JsonObjectEntry("pattern", jsonString("needle"))]),
         workspaceRoot: "/workspace",
         cwd: "/workspace",
         callId: "search-1"
@@ -35,7 +36,7 @@ func readOnlyContracts(): Unit {
     let ast = ExtensionContractHarness(AstExtension())
     let astPrepared = requireSdkOk(ast.prepare(
         "ast_grep",
-        JsonValue.objectValue([JsonField("pat", JsonValue.stringValue("$X"))]),
+        jsonObject([JsonObjectEntry("pat", jsonString("$X"))]),
         workspaceRoot: "/workspace",
         cwd: "/workspace",
         callId: "ast-1"
@@ -51,9 +52,9 @@ func sideEffectContract(): Unit {
     let write = ExtensionContractHarness(WorkspaceWriteExtension())
     let prepared = requireSdkOk(write.prepare(
         "write",
-        JsonValue.objectValue([
-            JsonField("path", JsonValue.stringValue("notes/testkit.txt")),
-            JsonField("content", JsonValue.stringValue("safe"))
+        jsonObject([
+            JsonObjectEntry("path", jsonString("notes/testkit.txt")),
+            JsonObjectEntry("content", jsonString("safe"))
         ]),
         workspaceRoot: "/workspace",
         cwd: "/workspace",
@@ -72,7 +73,7 @@ func networkContract(): Unit {
     let web = ExtensionContractHarness(WebSearchExtension())
     let prepared = requireSdkOk(web.prepare(
         "web_search",
-        JsonValue.objectValue([JsonField("query", JsonValue.stringValue("cangjie"))]),
+        jsonObject([JsonObjectEntry("query", jsonString("cangjie"))]),
         callId: "web-1"
     ))
     assertCapabilityRequested(prepared.definition, "network.http")
@@ -89,12 +90,12 @@ func cancellationAndDeadlineContract(): Unit {
     let search = ExtensionContractHarness(WorkspaceSearchExtension())
     expect(search.prepare(
         "grep",
-        JsonValue.objectValue([JsonField("pattern", JsonValue.stringValue("x"))]),
+        jsonObject([JsonObjectEntry("pattern", jsonString("x"))]),
         cancellation: cancellation
     ).isOk() == false, "cancelled SDK invocation fails before intent preparation")
     let prepared = requireSdkOk(search.prepare(
         "grep",
-        JsonValue.objectValue([JsonField("pattern", JsonValue.stringValue("x"))]),
+        jsonObject([JsonObjectEntry("pattern", jsonString("x"))]),
         deadline: clock.deadlineAfter(10)
     ))
     expect(!prepared.invocation.deadline.exceeded(clock.nowMillis()), "deadline begins before expiry")

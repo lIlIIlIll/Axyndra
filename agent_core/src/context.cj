@@ -1,5 +1,9 @@
 package agent_core
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import std.collection.*
 
@@ -314,7 +318,7 @@ func estimateImageTokens(image: ModelImage): Int64 {
 }
 
 func estimateAgentValueTokens(value: AgentValue): Int64 {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null | ValueKind.Boolean => 1
         case ValueKind.Number => max(1, estimateTextTokens(value.number, 3))
         case ValueKind.Text => estimateTextTokens(value.text, 3) + 2
@@ -417,7 +421,7 @@ func truncateHistoricalToolPayloads(
 }
 
 func truncateAgentValue(value: AgentValue, byteLimit: Int64): AgentValue {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => textValue(truncateContextText(value.text, byteLimit))
         case ValueKind.List =>
             let items = ArrayList<AgentValue>()
