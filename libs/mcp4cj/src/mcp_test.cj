@@ -269,6 +269,20 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func cancellationReachesEveryRequestProvider() {
+        let provider = FixtureMcpProviders()
+        let server = McpServerBuilder()
+            .completionProvider(provider)
+            .promptProvider(provider)
+            .resourceProvider(provider)
+            .build()
+        @Expect(server.handleNotification(
+            mcpCancellationNotification(jsonRpcNumberId(42), "done")
+        ).isOk(), true)
+        @Expect(provider.cancellationCalls, 3)
+    }
+
+    @TestCase
     func stdioSubscriptionReturnsAcknowledgedHandleAndRoutesNotifications() {
         let script = "IFS= read -r line; " +
             "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\",\"params\":{\"notifications\":{\"toolsListChanged\":true},\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":1}}}'; " +
@@ -1114,6 +1128,7 @@ class FixtureMcpTaskProvider <: McpTaskProvider {
 
 class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpResourceProvider & McpNotificationProvider {
     var promptCalls: Int64 = 0
+    var cancellationCalls: Int64 = 0
 
     public func complete(
         requestId: JsonRpcId, reference: JsonNode, argument: JsonNode,
@@ -1182,6 +1197,8 @@ class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpReso
         McpResult.Ok(FixtureMcpSubscriptionSource(filter))
     }
     public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
-        let _ = requestId; let _ = reason; McpResult.Ok(())
+        let _ = requestId; let _ = reason
+        cancellationCalls++
+        McpResult.Ok(())
     }
 }

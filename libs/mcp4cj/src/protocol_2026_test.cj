@@ -181,6 +181,18 @@ class McpProtocol2026Tests {
         ).toValue()
         @Expect(pending.field("ttlMs").getOrThrow().unifiedKind == UnifiedJsonKind.Null, true)
         @Expect(decodeMcpTask(pending).isOk(), true)
+        let _ = @ExpectThrows[IllegalArgumentException](McpTask(
+            "task-input", McpTaskStatus.InputRequired,
+            "2026-08-27T00:00:00Z", "2026-08-27T00:01:00Z", None
+        ))
+        @Expect(decodeMcpTask(jsonObject([
+            JsonObjectEntry("taskId", jsonString("task-input")),
+            JsonObjectEntry("status", jsonString("input_required")),
+            JsonObjectEntry("createdAt", jsonString("2026-08-27T00:00:00Z")),
+            JsonObjectEntry("lastUpdatedAt", jsonString("2026-08-27T00:01:00Z")),
+            JsonObjectEntry("ttlMs", jsonNull()),
+            JsonObjectEntry("inputRequests", jsonObject([]))
+        ])).isOk(), false)
         @Expect(decodeMcpTask(jsonObject([
             JsonObjectEntry("taskId", jsonString("task-input")),
             JsonObjectEntry("status", jsonString("input_required")),

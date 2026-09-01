@@ -23,6 +23,7 @@ public interface McpCompletionProvider {
         requestId: JsonRpcId, reference: JsonNode, argument: JsonNode,
         continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpCompletionResult>>
+    func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
 }
 
 public interface McpPromptProvider {
@@ -31,6 +32,7 @@ public interface McpPromptProvider {
         requestId: JsonRpcId, name: String, arguments: JsonNode,
         continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpPromptResult>>
+    func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
 }
 
 public interface McpResourceProvider {
@@ -39,6 +41,7 @@ public interface McpResourceProvider {
     func readResource(
         requestId: JsonRpcId, uri: String, continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpReadResourceResult>>
+    func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit>
 }
 
 public interface McpNotificationProvider {
@@ -159,6 +162,33 @@ public class McpServer {
             case Some(provider) => match (provider.cancel(id, reason)) {
                 case McpResult.Ok(_) => ()
                 case McpResult.Err(error) => cancellationError = Some(error)
+            }
+            case None => ()
+        }
+        match (completions) {
+            case Some(provider) => match (provider.cancel(id, reason)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => if (cancellationError.isNone()) {
+                    cancellationError = Some(error)
+                }
+            }
+            case None => ()
+        }
+        match (prompts) {
+            case Some(provider) => match (provider.cancel(id, reason)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => if (cancellationError.isNone()) {
+                    cancellationError = Some(error)
+                }
+            }
+            case None => ()
+        }
+        match (resources) {
+            case Some(provider) => match (provider.cancel(id, reason)) {
+                case McpResult.Ok(_) => ()
+                case McpResult.Err(error) => if (cancellationError.isNone()) {
+                    cancellationError = Some(error)
+                }
             }
             case None => ()
         }
