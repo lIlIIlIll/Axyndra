@@ -573,6 +573,12 @@ func decodeMcpPage(value: JsonNode, fieldName: String): McpResult<McpPage> {
     for (item in source.items where item.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpPage>("mcp.page_value_invalid", fieldName + " entries must be objects")
     }
+    for (item in source.items) {
+        match (validateMcpPageDescriptor(fieldName, item)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+    }
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
     try {
         McpResult.Ok(McpPage(
@@ -580,6 +586,67 @@ func decodeMcpPage(value: JsonNode, fieldName: String): McpResult<McpPage> {
             ttlMillis: ttl, cacheScope: scope
         ))
     } catch (error: Exception) { invalidMcp<McpPage>("mcp.page_result_invalid", error.message) }
+}
+
+func validOptionalMcpField(value: JsonNode, name: String, kind: UnifiedJsonKind): Bool {
+    match (value.field(name)) {
+        case Some(item) => item.unifiedKind == kind
+        case None => true
+    }
+}
+
+func validateMcpPageDescriptor(fieldName: String, value: JsonNode): McpResult<Unit> {
+    if (!validOptionalMcpField(value, "title", UnifiedJsonKind.Text) ||
+        !validOptionalMcpField(value, "description", UnifiedJsonKind.Text) ||
+        !validOptionalMcpField(value, "_meta", UnifiedJsonKind.Object)) {
+        return invalidMcp<Unit>("mcp.page_value_invalid", fieldName + " descriptor has invalid common fields")
+    }
+    if (fieldName == "prompts") {
+        if (mcpText(value, "name") == "") {
+            return invalidMcp<Unit>("mcp.page_value_invalid", "prompt descriptor requires name")
+        }
+        match (value.field("arguments")) {
+            case Some(arguments) => if (arguments.unifiedKind != UnifiedJsonKind.List) {
+                return invalidMcp<Unit>("mcp.page_value_invalid", "prompt arguments must be an array")
+            } else { for (argument in arguments.items) {
+                if (argument.unifiedKind != UnifiedJsonKind.Object || mcpText(argument, "name") == "" ||
+                    !validOptionalMcpField(argument, "description", UnifiedJsonKind.Text) ||
+                    !validOptionalMcpField(argument, "required", UnifiedJsonKind.Boolean)) {
+                    return invalidMcp<Unit>("mcp.page_value_invalid", "prompt argument descriptor is invalid")
+                }
+            } }
+            case None => ()
+        }
+        return McpResult.Ok(())
+    }
+    if (fieldName == "resources") {
+        if (mcpText(value, "uri") == "" || mcpText(value, "name") == "" ||
+            !validOptionalMcpField(value, "mimeType", UnifiedJsonKind.Text) ||
+            !validOptionalMcpField(value, "annotations", UnifiedJsonKind.Object)) {
+            return invalidMcp<Unit>("mcp.page_value_invalid", "resource descriptor is invalid")
+        }
+        match (value.field("size")) {
+            case Some(size) => if (size.unifiedKind != UnifiedJsonKind.Number) {
+                return invalidMcp<Unit>("mcp.page_value_invalid", "resource size must be a non-negative integer")
+            } else { try {
+                if (Int64.parse(size.number) < 0) {
+                    return invalidMcp<Unit>("mcp.page_value_invalid", "resource size must be a non-negative integer")
+                }
+            } catch (_: Exception) {
+                return invalidMcp<Unit>("mcp.page_value_invalid", "resource size must be a non-negative integer")
+            } }
+            case None => ()
+        }
+        return McpResult.Ok(())
+    }
+    if (fieldName == "resourceTemplates") {
+        if (mcpText(value, "uriTemplate") == "" || mcpText(value, "name") == "" ||
+            !validOptionalMcpField(value, "mimeType", UnifiedJsonKind.Text) ||
+            !validOptionalMcpField(value, "annotations", UnifiedJsonKind.Object)) {
+            return invalidMcp<Unit>("mcp.page_value_invalid", "resource template descriptor is invalid")
+        }
+    }
+    McpResult.Ok(())
 }
 
 func decodeMcpInputRequired<T>(value: JsonNode): McpResult<McpOperationOutcome<T>> {

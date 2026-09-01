@@ -256,7 +256,12 @@ public class StdioMcpTransport <: McpTransport {
                 case McpResult.Err(error) => removePending(waiting); return McpResult.Err(error)
             }
             let deadline = MonoTime.now() + Duration.millisecond * config.framing.requestTimeoutMillis
-            while (waiting.response.isNone() && waiting.error.isNone() && MonoTime.now() < deadline) {
+            var completed = false
+            while (MonoTime.now() < deadline) {
+                pendingLock.lock()
+                try { completed = waiting.response.isSome() || waiting.error.isSome() }
+                finally { pendingLock.unlock() }
+                if (completed) { break }
                 sleep(Duration.millisecond * 5)
             }
             removePending(waiting)
