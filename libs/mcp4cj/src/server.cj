@@ -274,6 +274,13 @@ public class McpServer {
         }
         match (provider.callTool(request.id, name, arguments, continuation)) {
             case McpResult.Ok(outcome) => match (outcome) {
+                case McpCallToolOutcome.Complete(_) => if (tool.execution.isSome() &&
+                    tool.execution.getOrThrow().taskSupport == McpTaskSupport.Required) {
+                    mcpFailureResponse(
+                        request.id, JSON_RPC_INTERNAL_ERROR,
+                        "tool returned a complete result despite declaring task support required"
+                    )
+                } else { mcpCheckedOperationResponse(request, mcpCallToolOutcomeValue(outcome), discovery.serverInfo) }
                 case McpCallToolOutcome.Task(_) => if (!mcpRequestSupportsTasks(request.params)) {
                     mcpFailureResponse(
                         request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
@@ -767,7 +774,7 @@ func mcpCheckedOperationResponse(
 func missingMcpInputCapabilities(params: JsonNode, requests: JsonNode): JsonNode {
     let capabilities = mcpObject(mcpObject(params, "_meta"), MCP_META_CLIENT_CAPABILITIES)
     var roots = false; var sampling = false; var samplingTools = false; var samplingContext = false
-    var elicitation = false; var elicitationUrl = false
+    var elicitation = false; var elicitationForm = false; var elicitationUrl = false
     for (entry in requests.fields) {
         let request = match (decodeMcpInputRequest(entry.value)) {
             case McpResult.Ok(value) => value
@@ -791,7 +798,9 @@ func missingMcpInputCapabilities(params: JsonNode, requests: JsonNode): JsonNode
                     case None => jsonObject([])
                 }
                 if (capabilities.field("elicitation").isNone()) { elicitation = true }
-                if (mcpText(value, "mode") == "url" && declared.field("url").isNone()) { elicitationUrl = true }
+                if (mcpText(value, "mode") == "url") {
+                    if (declared.field("url").isNone()) { elicitationUrl = true }
+                } else if (declared.field("form").isNone()) { elicitationForm = true }
         }
     }
     let required = ArrayList<JsonObjectEntry>()
@@ -802,8 +811,9 @@ func missingMcpInputCapabilities(params: JsonNode, requests: JsonNode): JsonNode
         if (samplingContext) { details.add(JsonObjectEntry("context", jsonObject([]))) }
         required.add(JsonObjectEntry("sampling", jsonObject(details.toArray())))
     }
-    if (elicitation || elicitationUrl) {
+    if (elicitation || elicitationForm || elicitationUrl) {
         let details = ArrayList<JsonObjectEntry>()
+        if (elicitationForm) { details.add(JsonObjectEntry("form", jsonObject([]))) }
         if (elicitationUrl) { details.add(JsonObjectEntry("url", jsonObject([]))) }
         required.add(JsonObjectEntry("elicitation", jsonObject(details.toArray())))
     }

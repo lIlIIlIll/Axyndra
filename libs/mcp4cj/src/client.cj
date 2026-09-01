@@ -855,6 +855,16 @@ func decodeMcpTool(value: JsonNode): McpResult<McpTool> {
 func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToolOutcome> {
     let resultType = mcpText(value, "resultType")
     if (resultType == MCP_RESULT_COMPLETE) {
+            match (tool) {
+                case Some(descriptor) => if (descriptor.execution.isSome() &&
+                    descriptor.execution.getOrThrow().taskSupport == McpTaskSupport.Required) {
+                    return invalidMcp<McpCallToolOutcome>(
+                        "mcp.tool_task_policy_invalid",
+                        "task-required tool returned a complete result"
+                    )
+                }
+                case None => ()
+            }
             let content = mcpField(value, "content", jsonNull())
             if (content.unifiedKind != UnifiedJsonKind.List) { return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "tools/call content must be an array") }
             for (block in content.items where block.unifiedKind != UnifiedJsonKind.Object) {
@@ -881,6 +891,16 @@ func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToo
             requestState: mcpText(value, "requestState"), meta: mcpObject(value, "_meta")
         ))) } catch (error: Exception) { invalidMcp<McpCallToolOutcome>("mcp.input_required_invalid", error.message) }
     } else if (resultType == MCP_RESULT_TASK) {
+        match (tool) {
+            case Some(descriptor) => if (descriptor.execution.isNone() ||
+                descriptor.execution.getOrThrow().taskSupport == McpTaskSupport.Forbidden) {
+                return invalidMcp<McpCallToolOutcome>(
+                    "mcp.tool_task_policy_invalid",
+                    "tool returned a task despite declaring task support forbidden"
+                )
+            }
+            case None => ()
+        }
         match (decodeMcpTask(value)) {
             case McpResult.Ok(task) => McpResult.Ok(McpCallToolOutcome.Task(task))
             case McpResult.Err(error) => McpResult.Err(error)

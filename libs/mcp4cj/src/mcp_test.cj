@@ -567,6 +567,34 @@ class Mcp4CjTests {
         )])).isOk(), false)
         @Expect(client.cancelTask("task-1").isOk(), true)
         @Expect(tasks.cancelled, true)
+
+        let taskValue = task.toValue(resultType: MCP_RESULT_TASK)
+        let forbiddenTool = McpTool(
+            "sync", "sync", jsonObject([JsonObjectEntry("type", jsonString("object"))])
+        )
+        @Expect(decodeMcpCallOutcome(taskValue, Some(forbiddenTool)).isOk(), false)
+
+        let requiredTool = McpTool(
+            "required", "required", jsonObject([JsonObjectEntry("type", jsonString("object"))]),
+            execution: Some(McpToolExecution(taskSupport: McpTaskSupport.Required))
+        )
+        let completeValue = McpCallToolResult([]).toValue()
+        @Expect(decodeMcpCallOutcome(completeValue, Some(requiredTool)).isOk(), false)
+
+        let urlOnlyParams = jsonObject([JsonObjectEntry("_meta", McpRequestMeta(
+            clientCapabilities: McpClientCapabilities(
+                elicitation: Some(McpElicitationCapability(form: false, url: true))
+            )
+        ).toValue())])
+        let requiredCapabilities = missingMcpInputCapabilities(urlOnlyParams, jsonObject([
+            JsonObjectEntry("confirm", jsonObject([
+                JsonObjectEntry("method", jsonString(MCP_METHOD_ELICITATION_CREATE)),
+                JsonObjectEntry("params", fixtureElicitationParams())
+            ]))
+        ]))
+        @Expect(
+            requiredCapabilities.field("elicitation").getOrThrow().field("form").isSome(), true
+        )
     }
 }
 
