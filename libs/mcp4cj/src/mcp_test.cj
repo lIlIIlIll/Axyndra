@@ -8,6 +8,7 @@ import std.collection.*
 import std.sync.*
 import std.unittest.*
 import std.unittest.testmacro.*
+import stdx.net.http.*
 
 @Test
 class Mcp4CjTests {
@@ -823,6 +824,17 @@ class Mcp4CjTests {
             )
             case _ => @Fail("server returned a task without a task provider")
         }
+        let operationProvider = FixtureMcpProviders(taskOutcome: Some(task))
+        let operationClient = McpClient(InMemoryMcpTransport(
+            McpServerBuilder()
+                .completionProvider(operationProvider)
+                .promptProvider(operationProvider)
+                .resourceProvider(operationProvider)
+                .build()
+        ), McpRequestMeta(clientCapabilities: capabilities))
+        @Expect(operationClient.complete(jsonObject([]), jsonObject([])).isOk(), false)
+        @Expect(operationClient.getPrompt("review").isOk(), false)
+        @Expect(operationClient.readResource("file:///readme").isOk(), false)
         let client = McpClient(InMemoryMcpTransport(server), McpRequestMeta(
             clientCapabilities: capabilities
         ))
@@ -894,6 +906,22 @@ class Mcp4CjTests {
         @Expect(
             requiredCapabilities.field("elicitation").getOrThrow().field("form").isSome(), true
         )
+    }
+
+    @TestCase
+    func rejectsUndeclaredAndArrayItemParameterHeaders() {
+        let headers = HttpHeaders()
+        headers.add("Mcp-Param-Tenant", encodeMcpHeader("other"))
+        @Expect(validateDeclaredMcpParameterHeaders(headers, [
+            McpHttpHeader("Mcp-Param-Region", encodeMcpHeader("cn"))
+        ]).isOk(), false)
+        @Expect(validMcpHttpSchema(jsonObject([
+            JsonObjectEntry("type", jsonString("array")),
+            JsonObjectEntry("items", jsonObject([
+                JsonObjectEntry("type", jsonString("string")),
+                JsonObjectEntry("x-mcp-header", jsonString("Region"))
+            ]))
+        ])), false)
     }
 }
 
@@ -1163,12 +1191,19 @@ class MismatchedMcpTaskProvider <: McpTaskProvider {
 class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpResourceProvider & McpNotificationProvider {
     var promptCalls: Int64 = 0
     var cancellationCalls: Int64 = 0
+    let taskOutcome: ?McpTask
+
+    init(taskOutcome!: ?McpTask = None) { this.taskOutcome = taskOutcome }
 
     public func complete(
         requestId: JsonRpcId, reference: JsonNode, argument: JsonNode,
         continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpCompletionResult>> {
         let _ = requestId; let _ = reference; let _ = argument; let _ = continuation
+        match (taskOutcome) {
+            case Some(task) => return McpResult.Ok(McpOperationOutcome.Task(task))
+            case None => ()
+        }
         McpResult.Ok(McpOperationOutcome.Extension("com.example/deferred", jsonObject([
             JsonObjectEntry("token", jsonString("later"))
         ])))
@@ -1184,6 +1219,10 @@ class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpReso
         continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpPromptResult>> {
         let _ = requestId; let _ = name; let _ = arguments
+        match (taskOutcome) {
+            case Some(task) => return McpResult.Ok(McpOperationOutcome.Task(task))
+            case None => ()
+        }
         promptCalls++
         if (continuation.requestState == "") {
             McpResult.Ok(McpOperationOutcome.InputRequired(McpInputRequiredResult(
@@ -1219,6 +1258,10 @@ class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpReso
         requestId: JsonRpcId, uri: String, continuation: McpToolCallContinuation
     ): McpResult<McpOperationOutcome<McpReadResourceResult>> {
         let _ = requestId; let _ = continuation
+        match (taskOutcome) {
+            case Some(task) => return McpResult.Ok(McpOperationOutcome.Task(task))
+            case None => ()
+        }
         let content = jsonObject([
             JsonObjectEntry("uri", jsonString(uri)), JsonObjectEntry("text", jsonString("ok"))
         ])

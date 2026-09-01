@@ -1130,6 +1130,10 @@ func validateHttpMetadata(request: HttpRequest, envelope: JsonRpcEnvelope, mcp: 
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
+        match (validateDeclaredMcpParameterHeaders(request.headers, expected)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
         for (header in expected) {
             let actual = request.headers.getFirst(header.name) ?? ""
             let decoded = match (decodeMcpHeader(actual)) {
@@ -1328,10 +1332,47 @@ func validMcpHttpSchema(schema: JsonNode): Bool {
         case None => ()
     }
     match (schema.field("items")) {
-        case Some(items) => if (!validMcpHttpSchema(items)) { return false }
+        case Some(items) => if (!validMcpHttpSchema(items) || containsMcpHttpHeaderAnnotation(items)) {
+            return false
+        }
         case None => ()
     }
     true
+}
+
+func containsMcpHttpHeaderAnnotation(schema: JsonNode): Bool {
+    if (schema.unifiedKind != UnifiedJsonKind.Object) { return false }
+    if (schema.field("x-mcp-header").isSome()) { return true }
+    match (schema.field("properties")) {
+        case Some(properties) => for (field in properties.fields) {
+            if (containsMcpHttpHeaderAnnotation(field.value)) { return true }
+        }
+        case None => ()
+    }
+    match (schema.field("items")) {
+        case Some(items) => containsMcpHttpHeaderAnnotation(items)
+        case None => false
+    }
+}
+
+func validateDeclaredMcpParameterHeaders(
+    headers: HttpHeaders, expected: Array<McpHttpHeader>
+): McpResult<Unit> {
+    let prefix = MCP_HEADER_PARAM_PREFIX.toAsciiLower()
+    for ((name, _) in headers) {
+        let normalized = name.toAsciiLower()
+        if (!normalized.startsWith(prefix)) { continue }
+        var declared = false
+        for (header in expected where header.name.toAsciiLower() == normalized) {
+            declared = true
+        }
+        if (!declared) {
+            return invalidMcp<Unit>(
+                "mcp.http_header_mismatch", name + " is not declared by the tool input schema"
+            )
+        }
+    }
+    McpResult.Ok(())
 }
 
 func projectMcpParameterHeaders(schema: JsonNode, value: JsonNode): McpResult<Array<McpHttpHeader>> {
