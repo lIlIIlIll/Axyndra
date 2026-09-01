@@ -222,7 +222,9 @@ class McpProtocol2026Tests {
             JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
             JsonObjectEntry("supportedVersions", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
             JsonObjectEntry("capabilities", jsonObject([
-                JsonObjectEntry("tools", jsonBool(true))
+                JsonObjectEntry("tools", jsonObject([
+                    JsonObjectEntry("listChanged", jsonString("true"))
+                ]))
             ])),
             JsonObjectEntry("ttlMs", jsonNumber("300000")),
             JsonObjectEntry("cacheScope", jsonString("private"))

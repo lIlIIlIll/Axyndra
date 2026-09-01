@@ -240,7 +240,9 @@ public class McpClient {
             match (outcome) {
                 case McpOperationOutcome.InputRequired(pending) =>
                     rounds++
-                    let next = match (resolveMcpInput(pending, resolver, rounds, policy)) {
+                    let next = match (resolveMcpInput(
+                        pending, resolver, rounds, policy, progressToken
+                    )) {
                         case McpResult.Ok(value) => value
                         case McpResult.Err(error) => return McpResult.Err(error)
                     }
@@ -292,7 +294,9 @@ public class McpClient {
             match (outcome) {
                 case McpOperationOutcome.InputRequired(pending) =>
                     rounds++
-                    continuation = match (resolveMcpInput(pending, resolver, rounds, policy)) {
+                    continuation = match (resolveMcpInput(
+                        pending, resolver, rounds, policy, progressToken
+                    )) {
                         case McpResult.Ok(value) => value
                         case McpResult.Err(error) => return McpResult.Err(error)
                     }
@@ -341,7 +345,9 @@ public class McpClient {
             match (outcome) {
                 case McpOperationOutcome.InputRequired(pending) =>
                     rounds++
-                    continuation = match (resolveMcpInput(pending, resolver, rounds, policy)) {
+                    continuation = match (resolveMcpInput(
+                        pending, resolver, rounds, policy, progressToken
+                    )) {
                         case McpResult.Ok(value) => value
                         case McpResult.Err(error) => return McpResult.Err(error)
                     }
@@ -730,9 +736,18 @@ func decodeMcpDiscover(value: JsonNode): McpResult<McpDiscoverResult> {
             case None => ()
         }
     }
-    let prompts = decodeMcpCapabilityFeature(capabilities, "prompts")
-    let resources = decodeMcpCapabilityFeature(capabilities, "resources")
-    let tools = decodeMcpCapabilityFeature(capabilities, "tools")
+    let prompts = match (decodeMcpCapabilityFeature(capabilities, "prompts")) {
+        case McpResult.Ok(feature) => feature
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
+    let resources = match (decodeMcpCapabilityFeature(capabilities, "resources")) {
+        case McpResult.Ok(feature) => feature
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
+    let tools = match (decodeMcpCapabilityFeature(capabilities, "tools")) {
+        case McpResult.Ok(feature) => feature
+        case McpResult.Err(error) => return McpResult.Err(error)
+    }
     let experimental = mcpObject(capabilities, "experimental")
     let extensions = mcpObject(capabilities, "extensions")
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
@@ -751,21 +766,37 @@ func decodeMcpDiscover(value: JsonNode): McpResult<McpDiscoverResult> {
     )) } catch (error: Exception) { invalidMcp<McpDiscoverResult>("mcp.discover_invalid", error.message) }
 }
 
-func decodeMcpCapabilityFeature(capabilities: JsonNode, name: String): ?McpCapabilityFeature {
+func decodeMcpCapabilityFeature(
+    capabilities: JsonNode, name: String
+): McpResult<?McpCapabilityFeature> {
     let value = match (capabilities.field(name)) {
         case Some(found) => found
-        case None => return None
+        case None => return McpResult.Ok(None)
     }
-    if (value.unifiedKind != UnifiedJsonKind.Object) { return None }
+    if (value.unifiedKind != UnifiedJsonKind.Object) {
+        return invalidMcp<?McpCapabilityFeature>(
+            "mcp.capability_invalid", "server capability " + name + " must be an object"
+        )
+    }
+    for (flag in ["listChanged", "subscribe"]) {
+        match (value.field(flag)) {
+            case Some(found) => if (found.unifiedKind != UnifiedJsonKind.Boolean) {
+                return invalidMcp<?McpCapabilityFeature>(
+                    "mcp.capability_flag_invalid", name + "." + flag + " must be a boolean"
+                )
+            }
+            case None => ()
+        }
+    }
     let extensions = ArrayList<JsonObjectEntry>()
     for (field in value.fields where field.name != "listChanged" && field.name != "subscribe") {
         extensions.add(field)
     }
-    Some(McpCapabilityFeature(
+    McpResult.Ok(Some(McpCapabilityFeature(
         listChanged: mcpBool(value, "listChanged", false),
         subscribe: mcpBool(value, "subscribe", false),
         extensions: jsonObject(extensions.toArray())
-    ))
+    )))
 }
 
 func decodeMcpImplementationInfo(value: JsonNode): McpResult<McpImplementationInfo> {
@@ -893,7 +924,7 @@ func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonN
 
 func resolveMcpInput(
     pending: McpInputRequiredResult, resolver: McpInputResolver,
-    round: Int64, policy: McpResolutionPolicy
+    round: Int64, policy: McpResolutionPolicy, progressToken: JsonNode
 ): McpResult<McpToolCallContinuation> {
     if (round > policy.maxRounds) {
         return invalidMcp<McpToolCallContinuation>(
@@ -906,7 +937,8 @@ func resolveMcpInput(
     }
     match (validateMcpInputResponses(pending, responses)) {
         case McpResult.Ok(_) => McpResult.Ok(McpToolCallContinuation(
-            inputResponses: responses, requestState: pending.requestState
+            inputResponses: responses, requestState: pending.requestState,
+            progressToken: progressToken
         ))
         case McpResult.Err(error) => McpResult.Err(error)
     }
