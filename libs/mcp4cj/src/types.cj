@@ -402,7 +402,7 @@ public func mcpCallToolOutcomeValue(outcome: McpCallToolOutcome): JsonNode {
         case McpCallToolOutcome.Complete(value) => value.toValue()
         case McpCallToolOutcome.InputRequired(value) => value.toValue()
         case McpCallToolOutcome.Task(value) => value.toValue(resultType: MCP_RESULT_TASK)
-        case McpCallToolOutcome.Extension(_, value) => value
+        case McpCallToolOutcome.Extension(resultType, value) => mcpExtensionOutcomeValue(resultType, value)
     }
 }
 

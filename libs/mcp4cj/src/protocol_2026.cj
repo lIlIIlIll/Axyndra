@@ -557,8 +557,19 @@ public func mcpOperationOutcomeValue<T>(
         case McpOperationOutcome.Complete(value) => encode(value)
         case McpOperationOutcome.InputRequired(value) => value.toValue()
         case McpOperationOutcome.Task(value) => value.toValue(resultType: MCP_RESULT_TASK)
-        case McpOperationOutcome.Extension(_, value) => value
+        case McpOperationOutcome.Extension(resultType, value) => mcpExtensionOutcomeValue(resultType, value)
     }
+}
+
+func mcpExtensionOutcomeValue(resultType: String, value: JsonNode): JsonNode {
+    requireObject(value, "MCP extension result")
+    if (resultType.trimAscii() == "") {
+        throw IllegalArgumentException("MCP extension resultType must not be empty")
+    }
+    let fields = ArrayList<JsonObjectEntry>()
+    fields.add(JsonObjectEntry("resultType", jsonString(resultType)))
+    for (field in value.fields where field.name != "resultType") { fields.add(field) }
+    jsonObject(fields.toArray())
 }
 
 public interface McpInputResolver {
