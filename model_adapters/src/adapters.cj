@@ -3024,7 +3024,7 @@ func restoreNativeReplay(
 
 func toLlmWireBlock(block: domain.ModelBlock, dialect: ProviderDialect): LlmWireBlock {
     match (block.kind) {
-        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
+        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.ToolCall | domain.ModelBlockKind.Unknown =>
             match (block.opaqueState) {
                 case Some(value) => return LlmWireBlock.NativeReplay(restoreNativeReplay(value, dialect))
                 case None => ()
