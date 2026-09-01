@@ -827,7 +827,6 @@ func emitLlmWireEvent(
                         )
                     )
                 ))
-                events(domain.ModelEvent.Completed)
             case LlmWireTerminal.ProviderFailed(failure) => events(domain.ModelEvent.ProviderProgress(
                 domain.ProviderStreamEvent.ProviderError(failure.message)
             ))
