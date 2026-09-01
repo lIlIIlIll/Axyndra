@@ -242,6 +242,15 @@ class McpProtocol2026Tests {
             "task-bad", McpTaskStatus.Failed,
             "2026-08-27T00:00:00Z", "2026-08-27T00:01:00Z", None
         ))
+        @Expect(decodeMcpTask(failedTaskValue(jsonObject([]))).isOk(), false)
+        @Expect(decodeMcpTask(failedTaskValue(jsonObject([
+            JsonObjectEntry("code", jsonString("-32603")),
+            JsonObjectEntry("message", jsonString("failed"))
+        ]))).isOk(), false)
+        @Expect(decodeMcpTask(failedTaskValue(jsonObject([
+            JsonObjectEntry("code", jsonNumber("-32603")),
+            JsonObjectEntry("message", jsonString("failed"))
+        ]))).isOk(), true)
     }
 
     @TestCase
@@ -307,6 +316,28 @@ class McpProtocol2026Tests {
             JsonObjectEntry("method", jsonString("ping")),
             JsonObjectEntry("params", jsonObject([]))
         ])).isOk(), false)
+        @Expect(decodeMcpInputRequest(jsonObject([
+            JsonObjectEntry("method", jsonString(MCP_METHOD_ELICITATION_CREATE)),
+            JsonObjectEntry("params", jsonObject([
+                JsonObjectEntry("message", jsonString("Malformed form")),
+                JsonObjectEntry("requestedSchema", jsonObject([
+                    JsonObjectEntry("type", jsonString("object")),
+                    JsonObjectEntry("properties", jsonBool(true))
+                ]))
+            ]))
+        ])).isOk(), false)
+        @Expect(decodeMcpInputRequest(jsonObject([
+            JsonObjectEntry("method", jsonString(MCP_METHOD_ELICITATION_CREATE)),
+            JsonObjectEntry("params", jsonObject([
+                JsonObjectEntry("message", jsonString("Unsupported field")),
+                JsonObjectEntry("requestedSchema", jsonObject([
+                    JsonObjectEntry("type", jsonString("object")),
+                    JsonObjectEntry("properties", jsonObject([JsonObjectEntry(
+                        "nested", jsonObject([JsonObjectEntry("type", jsonString("object"))])
+                    )]))
+                ]))
+            ]))
+        ])).isOk(), false)
     }
 
     @TestCase
@@ -350,6 +381,17 @@ func requireMcpInputRequest(value: McpResult<McpInputRequest>): McpInputRequest 
         case McpResult.Ok(found) => found
         case McpResult.Err(error) => throw error
     }
+}
+
+func failedTaskValue(error: JsonNode): JsonNode {
+    jsonObject([
+        JsonObjectEntry("taskId", jsonString("task-failed")),
+        JsonObjectEntry("status", jsonString("failed")),
+        JsonObjectEntry("createdAt", jsonString("2026-08-27T00:00:00Z")),
+        JsonObjectEntry("lastUpdatedAt", jsonString("2026-08-27T00:01:00Z")),
+        JsonObjectEntry("ttlMs", jsonNull()),
+        JsonObjectEntry("error", error)
+    ])
 }
 
 class FixtureOAuthMetadataFetcher <: McpOAuthMetadataFetcher {

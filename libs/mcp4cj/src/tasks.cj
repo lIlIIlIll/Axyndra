@@ -83,7 +83,7 @@ public class McpTask {
                     throw IllegalArgumentException("completed MCP task must not include inputRequests or error")
                 }
             case McpTaskStatus.Failed =>
-                if (error.unifiedKind != UnifiedJsonKind.Object) { throw IllegalArgumentException("failed MCP task requires object error") }
+                if (!validMcpTaskError(error)) { throw IllegalArgumentException("failed MCP task requires an error with integer code and string message") }
                 if (!inputRequests.fields.isEmpty() || result.unifiedKind != UnifiedJsonKind.Null) {
                     throw IllegalArgumentException("failed MCP task must not include inputRequests or result")
                 }
@@ -122,6 +122,20 @@ public class McpTask {
         if (result.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("result", result)) }
         if (error.unifiedKind != UnifiedJsonKind.Null) { fields.add(JsonObjectEntry("error", error)) }
         jsonObject(fields.toArray())
+    }
+}
+
+func validMcpTaskError(error: JsonNode): Bool {
+    if (error.unifiedKind != UnifiedJsonKind.Object) { return false }
+    match (error.field("code")) {
+        case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Number) { return false } else {
+            try { let _ = Int64.parse(value.number) } catch (_: Exception) { return false }
+        }
+        case None => return false
+    }
+    match (error.field("message")) {
+        case Some(value) => value.unifiedKind == UnifiedJsonKind.Text
+        case None => false
     }
 }
 

@@ -114,7 +114,7 @@ public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
             }
         } else if (mode == "" || mode == "form") {
             let schema = mcpObject(params, "requestedSchema")
-            if (mcpText(schema, "type") != "object" || schema.field("properties").isNone()) {
+            if (!validMcpElicitationSchema(schema)) {
                 return invalidMcp<McpInputRequest>("mcp.elicitation_schema_invalid", "form elicitation requires an object requestedSchema")
             }
         } else {
@@ -123,6 +123,28 @@ public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
         return McpResult.Ok(McpInputRequest.Elicitation(params))
     }
     invalidMcp<McpInputRequest>("mcp.input_request_method_invalid", "unsupported MCP input request method: " + method)
+}
+
+func validMcpElicitationSchema(schema: JsonNode): Bool {
+    if (schema.unifiedKind != UnifiedJsonKind.Object || mcpText(schema, "type") != "object") {
+        return false
+    }
+    let properties = match (schema.field("properties")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else { return false }
+        case None => return false
+    }
+    for (property in properties.fields) {
+        if (property.value.unifiedKind != UnifiedJsonKind.Object) { return false }
+        let kind = mcpText(property.value, "type")
+        if (kind != "string" && kind != "number" && kind != "integer" &&
+            kind != "boolean" && kind != "array") {
+            return false
+        }
+    }
+    match (validateUnifiedJsonSchema(schema, jsonObject([]))) {
+        case Some(error) => error.keyword != "schema"
+        case None => true
+    }
 }
 
 func validMcpSamplingContent(content: JsonNode): Bool {
