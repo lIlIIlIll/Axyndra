@@ -113,14 +113,19 @@ class Mcp4CjTests {
 
     @TestCase
     func boundsHttpOperationProgressNotifications() {
-        let stream = McpOperationSseInput(jsonRpcNumberId(1), 8388608, { sink =>
-            for (_ in 0..257) {
-                sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([])))
-            }
-            JsonRpcEnvelope.Response(JsonRpcResponse(
-                jsonRpcNumberId(1), JsonRpcResponsePayload.Success(jsonObject([]))
-            ))
-        })
+        let cancelled = AtomicBool(false)
+        let stream = McpOperationSseInput(
+            jsonRpcNumberId(1), 8388608,
+            { sink =>
+                for (_ in 0..257) {
+                    sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([])))
+                }
+                JsonRpcEnvelope.Response(JsonRpcResponse(
+                    jsonRpcNumberId(1), JsonRpcResponsePayload.Success(jsonObject([]))
+                ))
+            },
+            cancelAction: { => cancelled.store(true) }
+        )
         sleep(Duration.millisecond * 20)
         let output = ArrayList<Byte>()
         let buffer = Array<Byte>(4096, repeat: 0)
@@ -135,6 +140,7 @@ class Mcp4CjTests {
             ),
             true
         )
+        @Expect(cancelled.load(), true)
     }
 
     @TestCase
@@ -616,6 +622,48 @@ class Mcp4CjTests {
         @Expect(running.get().isOk(), true)
         @Expect(first.close().isOk(), true)
         @Expect(second.close().isOk(), true)
+        @Expect(server.close().isOk(), true)
+        let _ = serving.get()
+    }
+
+    @TestCase
+    func httpServerBoundsConcurrentCancellationNotifications() {
+        let operation = HoldingToolOperation()
+        let cancellation = HoldingCancellationOperation()
+        let host = BlockingCancellationHost(operation, cancellation)
+        let server = match (openStreamableHttpMcpServer(
+            McpStreamableHttpServerConfig(port: 0, maxConcurrentRequests: 1),
+            McpServerBuilder().toolProvider(host).build()
+        )) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        let serving = spawn { server.serve() }
+        var waited: Int64 = 0
+        while (server.state() != McpLifecycleState.Ready && waited < 3000) {
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        let client = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+            "http://127.0.0.1:" + server.port().toString() + "/mcp"
+        )), McpRequestMeta())
+        @Expect(client.listTools().isOk(), true)
+        let running = spawn { client.callTool("slow", jsonObject([]), owner: "slow-owner") }
+        operation.waitUntilStarted()
+        let requestId = client.activeRequestId("slow-owner").getOrThrow()
+        let firstCancellation = spawn { client.notify(
+            MCP_METHOD_CANCELLED,
+            params: mcpCancellationNotification(requestId, "first").params
+        ) }
+        cancellation.waitUntilStarted()
+        @Expect(client.notify(
+            MCP_METHOD_CANCELLED,
+            params: mcpCancellationNotification(requestId, "second").params
+        ).isOk(), false)
+        cancellation.release()
+        @Expect(firstCancellation.get().isOk(), true)
+        operation.release()
+        let _ = running.get()
+        @Expect(client.close().isOk(), true)
         @Expect(server.close().isOk(), true)
         let _ = serving.get()
     }
@@ -1121,6 +1169,56 @@ class HoldingToolOperation {
         lock.lock(); try { failure = message } finally { lock.unlock() }
     }
     func release(): Unit { lock.lock(); try { released = true } finally { lock.unlock() } }
+}
+
+class HoldingCancellationOperation {
+    private let lock = Mutex()
+    private var started = false
+    private var released = false
+    func execute(): Unit {
+        lock.lock(); try { started = true } finally { lock.unlock() }
+        while (true) {
+            lock.lock(); let done = try { released } finally { lock.unlock() }
+            if (done) { return }
+            sleep(Duration.millisecond * 5)
+        }
+    }
+    func waitUntilStarted(): Unit {
+        var waited: Int64 = 0
+        while (waited < 3000) {
+            lock.lock(); let value = try { started } finally { lock.unlock() }
+            if (value) { return }
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        throw IllegalStateException("holding cancellation did not start")
+    }
+    func release(): Unit { lock.lock(); try { released = true } finally { lock.unlock() } }
+}
+
+class BlockingCancellationHost <: McpToolHost {
+    private let operation: HoldingToolOperation
+    private let cancellation: HoldingCancellationOperation
+    init(operation: HoldingToolOperation, cancellation: HoldingCancellationOperation) {
+        this.operation = operation; this.cancellation = cancellation
+    }
+    public func listTools(cursor: String): McpResult<McpToolListPage> {
+        let _ = cursor
+        McpResult.Ok(McpToolListPage([
+            McpTool("slow", "slow", jsonObject([JsonObjectEntry("type", jsonString("object"))]))
+        ]))
+    }
+    public func callTool(
+        requestId: JsonRpcId, name: String, arguments: JsonNode,
+        continuation: McpToolCallContinuation
+    ): McpResult<McpCallToolOutcome> {
+        let _ = requestId
+        operation.execute(name, arguments, continuation)
+    }
+    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
+        let _ = requestId; let _ = reason
+        cancellation.execute()
+        McpResult.Ok(())
+    }
 }
 
 class SseWorkerLifecycleProbe {
