@@ -684,7 +684,7 @@ public class StreamableHttpMcpServer {
                             .header("Content-Type", "text/event-stream; charset=utf-8")
                             .header("Cache-Control", "no-store")
                             .header("Transfer-Encoding", "chunked")
-                            .body(McpSubscriptionSseInput(value.id, source))
+                            .body(McpSubscriptionSseInput(value.id, source, config.framing.maxFrameBytes))
                     case McpResult.Err(error) => writeMcpHttpEnvelope(
                         context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(
                             value.id,
@@ -840,7 +840,15 @@ class McpOperationSseInput <: InputStream & Resource {
     private func enqueueFinal(envelope: JsonRpcEnvelope): Unit {
         let bytes = encodedEnvelope(envelope)
         lock.lock(); try {
-            if (!closed && !overflowed) { queued.add(bytes) }
+            if (!closed && !overflowed) {
+                if (bytes.size > maxFrameBytes) {
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation response exceeded the frame limit"
+                    ))))
+                    overflowed = true
+                } else { queued.add(bytes) }
+            }
             done = true
         } finally { lock.unlock() }
     }
@@ -849,12 +857,15 @@ class McpOperationSseInput <: InputStream & Resource {
 class McpSubscriptionSseInput <: InputStream & Resource {
     private let id: JsonRpcId
     private let source: McpSubscriptionSource
+    private let maxFrameBytes: Int64
     private var pending: Array<Byte> = []
     private var offset: Int64 = 0
     private var first = true
     private var closed = false
     private var finishAfterPending = false
-    init(id: JsonRpcId, source: McpSubscriptionSource) { this.id = id; this.source = source }
+    init(id: JsonRpcId, source: McpSubscriptionSource, maxFrameBytes: Int64) {
+        this.id = id; this.source = source; this.maxFrameBytes = maxFrameBytes
+    }
 
     public func read(buffer: Array<Byte>): Int64 {
         if (closed || buffer.isEmpty()) { return 0 }
@@ -879,7 +890,13 @@ class McpSubscriptionSseInput <: InputStream & Resource {
                         JsonRpcEnvelope.Response(mcpHostFailure(id, error))
                 }
             }
-            pending = ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
+            let bytes = ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
+            if (bytes.size > maxFrameBytes) {
+                pending = ("event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Response(
+                    mcpFailureResponse(id, JSON_RPC_INTERNAL_ERROR, "MCP subscription event exceeded the frame limit")
+                )) + "\n\n").toArray()
+                finishAfterPending = true
+            } else { pending = bytes }
             offset = 0
         }
         let count = min(buffer.size, pending.size - offset)

@@ -93,16 +93,7 @@ public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
             if ((role != "user" && role != "assistant") || content.unifiedKind != UnifiedJsonKind.Object) {
                 return invalidMcp<McpInputRequest>("mcp.sampling_message_invalid", "sampling messages require a valid role and object content")
             }
-            let contentType = mcpText(content, "type")
-            let validContent = match (contentType) {
-                case "text" => match (content.field("text")) {
-                    case Some(value) => value.unifiedKind == UnifiedJsonKind.Text
-                    case None => false
-                }
-                case "image" | "audio" => mcpText(content, "data") != "" && mcpText(content, "mimeType") != ""
-                case _ => false
-            }
-            if (!validContent) {
+            if (!validMcpSamplingContent(content)) {
                 return invalidMcp<McpInputRequest>("mcp.sampling_message_invalid", "sampling message content is invalid")
             }
         }
@@ -134,6 +125,18 @@ public func decodeMcpInputRequest(value: JsonNode): McpResult<McpInputRequest> {
     invalidMcp<McpInputRequest>("mcp.input_request_method_invalid", "unsupported MCP input request method: " + method)
 }
 
+func validMcpSamplingContent(content: JsonNode): Bool {
+    if (content.unifiedKind != UnifiedJsonKind.Object) { return false }
+    match (mcpText(content, "type")) {
+        case "text" => match (content.field("text")) {
+            case Some(value) => value.unifiedKind == UnifiedJsonKind.Text
+            case None => false
+        }
+        case "image" | "audio" => mcpText(content, "data") != "" && mcpText(content, "mimeType") != ""
+        case _ => false
+    }
+}
+
 public func decodeMcpInputResponse(request: McpInputRequest, value: JsonNode): McpResult<McpInputResponse> {
     if (value.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpInputResponse>("mcp.input_response_invalid", "MCP input response must be an object")
@@ -149,7 +152,9 @@ public func decodeMcpInputResponse(request: McpInputRequest, value: JsonNode): M
             case None => invalidMcp<McpInputResponse>("mcp.roots_result_invalid", "roots/list result requires roots")
         }
         case McpInputRequest.Sampling(_) =>
-            if (mcpText(value, "role") == "assistant" && value.field("content").isSome() && mcpText(value, "model") != "") {
+            if (mcpText(value, "role") == "assistant" &&
+                validMcpSamplingContent(mcpField(value, "content", jsonNull())) &&
+                mcpText(value, "model") != "") {
                 McpResult.Ok(McpInputResponse.Sampling(value))
             } else { invalidMcp<McpInputResponse>("mcp.sampling_result_invalid", "sampling result requires assistant role, content, and model") }
         case McpInputRequest.Elicitation(requestValue) =>

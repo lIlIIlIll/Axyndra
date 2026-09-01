@@ -659,6 +659,34 @@ func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
                     case None => ()
                 }
             }
+            match (value.field("sampling")) {
+                case Some(sampling) => for (name in ["tools", "context"]) {
+                    match (sampling.field(name)) {
+                        case Some(feature) => if (feature.unifiedKind != UnifiedJsonKind.Object) {
+                            return invalidMcp<Unit>(
+                                "mcp.client_capabilities_invalid",
+                                "sampling capability " + name + " must be an object"
+                            )
+                        }
+                        case None => ()
+                    }
+                }
+                case None => ()
+            }
+            match (value.field("elicitation")) {
+                case Some(elicitation) => for (name in ["form", "url"]) {
+                    match (elicitation.field(name)) {
+                        case Some(feature) => if (feature.unifiedKind != UnifiedJsonKind.Object) {
+                            return invalidMcp<Unit>(
+                                "mcp.client_capabilities_invalid",
+                                "elicitation capability " + name + " must be an object"
+                            )
+                        }
+                        case None => ()
+                    }
+                }
+                case None => ()
+            }
             McpResult.Ok(())
         }
         case None => invalidMcp<Unit>("mcp.client_capabilities_missing", "request requires clientCapabilities")
