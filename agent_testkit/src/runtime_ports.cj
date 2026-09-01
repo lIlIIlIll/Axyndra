@@ -233,12 +233,12 @@ public class MemoryRunRepository <: RunRepository {
                 !sameContinuationBinding(value.continuationValue.getOrThrow(), continuation)) {
                 let previous = value.continuationValue.getOrThrow()
                 let approvedTransition = previous.kind == RunContinuationKind.WaitingApproval &&
-                    continuation.kind == RunContinuationKind.RunningModel && match (decisionRecord(
+                    continuation.kind == RunContinuationKind.RunningModel &&
+                    sameContinuationRequestBinding(previous, continuation) && match (decisionRecord(
                         previous.approval.operationId.value
                     )) {
                         case Some(receipt) =>
-                            receipt.runId.value == continuation.runId.value &&
-                                receipt.sessionId.value == continuation.sessionId.value
+                            continuationAcceptsDecision(previous, receipt)
                         case None => false
                     }
                 if (!approvedTransition) {
@@ -705,14 +705,13 @@ func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
 }
 
 func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Bool {
-    sameContinuationRequestBinding(left, right) &&
+    left.kind == right.kind && sameContinuationRequestBinding(left, right) &&
         approvalRequestBindingsEqual(left.approval, right.approval) &&
         sameRunningCheckpoint(left.runningModel, right.runningModel)
 }
 
 func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuation): Bool {
-    left.kind == right.kind &&
-        left.runId.value == right.runId.value && left.sessionId.value == right.sessionId.value &&
+    left.runId.value == right.runId.value && left.sessionId.value == right.sessionId.value &&
         left.model == right.model && left.prompt == right.prompt && left.system == right.system &&
         left.thinking == right.thinking && left.approvalMode == right.approvalMode &&
         left.autoRetry == right.autoRetry && left.serviceTier == right.serviceTier &&
