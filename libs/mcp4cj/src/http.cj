@@ -586,7 +586,17 @@ func readMcpSseEnvelope(stream: InputStream, maxEventBytes: Int64): McpResult<?J
             }
         }
         if (line.startsWith(":")) { continue }
-        if (line == "data") { if (data != "") { data += "\n" }; continue }
+        if (line == "data") {
+            if (data != "") {
+                data += "\n"
+                if (utf8ByteSize(data) > maxEventBytes) {
+                    return invalidMcp<?JsonRpcEnvelope>(
+                        "mcp.http_sse_event_too_large", "MCP SSE event exceeds configured limit"
+                    )
+                }
+            }
+            continue
+        }
         if (line.startsWith("data:")) {
             var value = line[5..]; if (value.startsWith(" ")) { value = value[1..] }
             if (data != "") { data += "\n" }; data += value

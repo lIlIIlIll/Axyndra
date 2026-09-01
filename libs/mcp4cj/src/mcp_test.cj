@@ -431,6 +431,10 @@ class Mcp4CjTests {
         ).isOk(), true)
         @Expect(progress.size, 1)
 
+        let emptyDataFields = ByteBuffer()
+        emptyDataFields.write("data: {}\ndata\ndata\ndata\n\n".toArray())
+        @Expect(readMcpSseEnvelope(emptyDataFields, 4).isOk(), false)
+
         let body = ByteBuffer()
         body.write("12345".toArray())
         @Expect(readMcpHttpBody(body, Some(5), 4).isOk(), false)
