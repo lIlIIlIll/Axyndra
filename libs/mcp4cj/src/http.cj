@@ -719,6 +719,8 @@ public class StreamableHttpMcpServer {
     }
 }
 
+let MCP_OPERATION_PROGRESS_QUEUE_LIMIT: Int64 = 256
+
 class McpOperationSseInput <: InputStream & Resource {
     private let id: JsonRpcId
     private let lock = Mutex()
@@ -727,6 +729,7 @@ class McpOperationSseInput <: InputStream & Resource {
     private var offset: Int64 = 0
     private var done = false
     private var closed = false
+    private var overflowed = false
     private var worker: ?Future<Unit> = None
 
     init(
@@ -736,14 +739,13 @@ class McpOperationSseInput <: InputStream & Resource {
         this.id = id
         worker = Some(spawn {
             let response = try {
-                operation({ notification => enqueue(JsonRpcEnvelope.Notification(notification)) })
+                operation({ notification => enqueueProgress(JsonRpcEnvelope.Notification(notification)) })
             } catch (error: Exception) {
                 JsonRpcEnvelope.Response(mcpFailureResponse(
                     id, JSON_RPC_INTERNAL_ERROR, error.message
                 ))
             }
-            enqueue(response)
-            lock.lock(); try { done = true } finally { lock.unlock() }
+            enqueueFinal(response)
         })
     }
 
@@ -774,9 +776,33 @@ class McpOperationSseInput <: InputStream & Resource {
     }
     public func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
 
-    private func enqueue(envelope: JsonRpcEnvelope): Unit {
-        let bytes = ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
-        lock.lock(); try { if (!closed) { queued.add(bytes) } } finally { lock.unlock() }
+    private func encodedEnvelope(envelope: JsonRpcEnvelope): Array<Byte> {
+        ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
+    }
+
+    private func enqueueProgress(envelope: JsonRpcEnvelope): Unit {
+        let bytes = encodedEnvelope(envelope)
+        lock.lock(); try {
+            if (!closed && !overflowed) {
+                if (queued.size >= MCP_OPERATION_PROGRESS_QUEUE_LIMIT) {
+                    queued.clear()
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation progress consumer did not keep up with notifications"
+                    ))))
+                    overflowed = true
+                    done = true
+                } else { queued.add(bytes) }
+            }
+        } finally { lock.unlock() }
+    }
+
+    private func enqueueFinal(envelope: JsonRpcEnvelope): Unit {
+        let bytes = encodedEnvelope(envelope)
+        lock.lock(); try {
+            if (!closed && !overflowed) { queued.add(bytes) }
+            done = true
+        } finally { lock.unlock() }
     }
 }
 

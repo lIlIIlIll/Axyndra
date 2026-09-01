@@ -186,6 +186,7 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
         lock.lock(); try { if (!stopped) { accepted = Some(value) } } finally { lock.unlock() }
     }
     func push(value: JsonRpcNotification): Unit {
+        var overflow = false
         lock.lock(); try {
             if (!stopped) {
                 if (queued.size >= MCP_SUBSCRIPTION_QUEUE_LIMIT) {
@@ -195,9 +196,11 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
                         "MCP subscription consumer did not keep up with notifications"
                     ))
                     stopped = true
+                    overflow = true
                 } else { queued.add(value) }
             }
         } finally { lock.unlock() }
+        if (overflow) { let _ = cancelAction(id) }
     }
     func complete(): Unit { lock.lock(); try { stopped = true } finally { lock.unlock() } }
     func fail(error: McpError): Unit { lock.lock(); try { failure = Some(error); stopped = true } finally { lock.unlock() } }
@@ -409,17 +412,23 @@ public class StdioMcpTransport <: McpTransport {
     private func routeNotification(notification: JsonRpcNotification): Unit {
         let id = subscriptionNotificationId(notification)
         match (id) {
-            case Some(value) => pendingLock.lock(); try {
-                for (item in subscriptions where sameJsonRpcId(item.subscriptionId(), value)) {
-                    if (notification.method == MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED) {
+            case Some(value) =>
+                var target: ?StdioMcpSubscriptionHandle = None
+                pendingLock.lock(); try {
+                    for (item in subscriptions where sameJsonRpcId(item.subscriptionId(), value)) {
+                        target = Some(item)
+                        break
+                    }
+                } finally { pendingLock.unlock() }
+                match (target) {
+                    case Some(item) => if (notification.method == MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED) {
                         match (decodeMcpSubscriptionFilter(notification.params)) {
                             case McpResult.Ok(filter) => item.acknowledge(filter)
                             case McpResult.Err(error) => item.fail(error)
                         }
                     } else { item.push(notification) }
-                    return
+                    case None => ()
                 }
-            } finally { pendingLock.unlock() }
             case None => ()
         }
     }
