@@ -1,5 +1,9 @@
 package sqlite_run_repository_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import persistence_runtime.*
@@ -193,6 +197,28 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
     )
     expect(repository.compareAndSwapContinuation(Some(initial), drifted).isError(),
         "non-equivalent concurrent continuation remains a CAS conflict")
+    expect(repository.saveDecision(ApprovalDecisionReceipt(
+        approval.operationId,
+        runId,
+        sessionId,
+        approval.callId,
+        approval.argumentHash,
+        ApprovalDecision.Approve
+    )).isOk(), "approved continuation persists its decision receipt before model dispatch")
+    expect(repository.saveContinuation(RunContinuation(
+        runId, sessionId, "drifted-model", "resume current continuation",
+        ApprovalRequest(
+            OperationId("migration-next-operation"), "migration-next-call", "write",
+            Capability(CapabilityKind.WorkspaceWrite),
+            sessionId: sessionId.value, argumentHash: "migration-next-arguments"
+        ),
+        thinking: ThinkingLevel.High,
+        budget: ResourceBudget(maxOutputTokens: 8192),
+        requestedPolicy: requested,
+        modelCapabilitiesSnapshot: capabilities,
+        cacheKey: "updated",
+        executionLaneId: LaneId("review")
+    )).isError(), "an approval receipt cannot authorize a drifted next approval request")
 
     let semanticId = SemanticModelRequestId("migration-semantic")
     let attemptId = ModelAttemptId("migration-attempt")
@@ -579,7 +605,7 @@ func telemetryRetentionContract(
 
 func fieldText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }
@@ -620,7 +646,7 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
         repository.workMode(target).value().getOrThrow() == "plan" &&
         repository.draft(target).value().getOrThrow() == "draft" &&
         repository.todoPhases(target).value().getOrThrow().items.size == 1 &&
-        repository.goalState(target).value().getOrThrow().kind == ValueKind.Object,
+        repository.goalState(target).value().getOrThrow().unifiedKind == ValueKind.Object,
         "SQLite Thread metadata copies atomically without file sidecars")
     expect(repository.setWorkMode(source, "unsafe").isError() &&
         repository.setWorkspaceBinding(source, root, "/").isError(),

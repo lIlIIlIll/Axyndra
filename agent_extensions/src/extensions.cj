@@ -1,5 +1,9 @@
 package agent_extensions
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_sdk.*
 import std.collection.*
@@ -206,21 +210,21 @@ func validateIntentBinding(
 
 func sdkFieldText(value: AgentValue, name: String, fallback!: String = ""): String {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == ValueKind.Text) { field.text } else { fallback }
+        case Some(field) => if (field.unifiedKind == ValueKind.Text) { field.text } else { fallback }
         case None => fallback
     }
 }
 
 func sdkFieldBool(value: AgentValue, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == ValueKind.Boolean) { field.boolean } else { fallback }
+        case Some(field) => if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
         case None => fallback
     }
 }
 
 func sdkFieldInteger(value: AgentValue, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(field) => if (field.kind == ValueKind.Number) {
+        case Some(field) => if (field.unifiedKind == ValueKind.Number) {
             try { Int64.parse(field.number) } catch (_: Exception) { fallback }
         } else { fallback }
         case None => fallback
@@ -349,7 +353,7 @@ func sdkDescriptor(tool: ExtensionTool, host: ExtensionOperationHost): ToolDescr
     } else { [] }
     ToolDescriptor(
         ModelToolDefinition(definition.name, definition.description, definition.inputSchema),
-        host.resolveCapability(first, AgentValue(ValueKind.Object)),
+        host.resolveCapability(first, objectValue([])),
         sideEffecting: definition.effect == ExtensionEffect.SideEffect,
         concurrency: if (definition.effect == ExtensionEffect.SideEffect) {
             exclusiveToolConcurrency()

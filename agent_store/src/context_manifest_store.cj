@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.convert.*
 import agent_domain.*
@@ -445,7 +449,7 @@ func manifestStoreText(value: AgentValue, name: String): String {
 }
 
 func manifestStoreTextValue(value: AgentValue, name: String): String {
-    if (value.kind != ValueKind.Text) {
+    if (value.unifiedKind != ValueKind.Text) {
         throw IllegalStateException("Context Manifest field is not text: " + name)
     }
     value.text
@@ -453,7 +457,7 @@ func manifestStoreTextValue(value: AgentValue, name: String): String {
 
 func manifestStoreInt(value: AgentValue, name: String): Int64 {
     let field = manifestStoreField(value, name)
-    if (field.kind != ValueKind.Number) {
+    if (field.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("Context Manifest field is not an integer: " + name)
     }
     try { Int64.parse(field.number) } catch (_: Exception) {
@@ -463,10 +467,10 @@ func manifestStoreInt(value: AgentValue, name: String): Int64 {
 
 func manifestStoreList(value: AgentValue, name: String): Array<AgentValue> {
     let field = manifestStoreField(value, name)
-    if (field.kind != ValueKind.List) {
+    if (field.unifiedKind != ValueKind.List) {
         throw IllegalStateException("Context Manifest field is not a list: " + name)
     }
-    field.items
+    field.items.toArray()
 }
 
 func manifestStoreStrings(value: AgentValue, name: String): Array<String> {

@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_core.*
 import agent_ports.*
@@ -313,7 +317,7 @@ func parseApprovalReview(
             )
         )
     }
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return Result.Err(
             AgentError(
                 AgentErrorKind.Protocol,
@@ -365,12 +369,12 @@ func requiredApprovalStringList(value: AgentValue, name: String): ?Array<String>
         case Some(item) => item
         case None => return None
     }
-    if (field.kind != ValueKind.List) {
+    if (field.unifiedKind != ValueKind.List) {
         return None
     }
     let values = ArrayList<String>()
     for (item in field.items) {
-        if (item.kind != ValueKind.Text || item.text.trimAscii() == "") {
+        if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
             return None
         }
         approvalAddUnique(values, item.text)
@@ -381,7 +385,7 @@ func requiredApprovalStringList(value: AgentValue, name: String): ?Array<String>
 func requiredApprovalText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -549,7 +553,7 @@ func reviewerRiskRank(value: String): Int64 {
 func approvalValueText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -585,7 +589,7 @@ func approvalEnvironmentNames(value: AgentValue): Array<String> {
     let result = ArrayList<String>()
     match (value.field("env")) {
         case Some(environment) =>
-            if (environment.kind == ValueKind.Object) {
+            if (environment.unifiedKind == ValueKind.Object) {
                 for (field in environment.fields) {
                     result.add(field.name)
                 }
@@ -614,7 +618,7 @@ public func redactApprovalValue(value: AgentValue, fieldName: String): AgentValu
     if (approvalSensitiveName(fieldName)) {
         return textValue("[REDACTED]")
     }
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => textValue(redactApprovalText(value.text))
         case ValueKind.List =>
             let items = ArrayList<AgentValue>()

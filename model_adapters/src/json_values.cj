@@ -1,41 +1,42 @@
 package model_adapters
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 
 // Runtime conversions used by the JSON literal macro. Keeping these conversions
 // in the runtime package means the macro only rewrites syntax; escaping, number
 // validation, and serialization still have one implementation.
 
-public func toJsonValue(value: JsonValue): JsonValue {
+public func toJsonNode(value: JsonNode): JsonNode {
     value
 }
 
-public func toJsonValue(value: String): JsonValue {
-    JsonValue.stringValue(value)
+public func toJsonNode(value: String): JsonNode {
+    jsonString(value)
 }
 
-public func toJsonValue(value: Bool): JsonValue {
-    JsonValue.boolValue(value)
+public func toJsonNode(value: Bool): JsonNode {
+    jsonBool(value)
 }
 
-public func toJsonValue(value: Int64): JsonValue {
-    JsonValue.numberValue(value.toString())
+public func toJsonNode(value: Int64): JsonNode {
+    jsonNumber(value.toString())
 }
 
-public func toJsonValue(value: Float64): JsonValue {
+public func toJsonNode(value: Float64): JsonNode {
     // Reuse the parser to reject NaN and infinities, which JSON cannot encode.
-    parseJson(value.toString())
+    parseUnifiedJson(value.toString())
 }
 
-public func rawJson(source: String): JsonValue {
-    parseJson(source)
+public func rawJson(source: String): JsonNode {
+    parseUnifiedJson(source)
 }
 
-public func rawJsonArray(items: Array<String>): JsonValue {
-    let values = ArrayList<JsonValue>()
+public func rawJsonArray(items: Array<String>): JsonNode {
+    let values = ArrayList<JsonNode>()
     for (item in items) {
-        values.add(parseJson(item))
+        values.add(parseUnifiedJson(item))
     }
-    JsonValue.arrayValue(values.toArray())
+    jsonArray(values.toArray())
 }

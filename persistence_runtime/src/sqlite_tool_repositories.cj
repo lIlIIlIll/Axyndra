@@ -1,5 +1,9 @@
 package persistence_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_ports.*
 import agent_store.*

@@ -1,5 +1,9 @@
 package mcp_product_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import agent_product.*
@@ -547,7 +551,7 @@ func fixtureMcpServer(
         [tool],
         {_, arguments, _ =>
             let fail = match (arguments.field("fail_with_secret")) {
-                case Some(value) => value.kind == ValueKind.Boolean && value.boolean
+                case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
                 case None => false
             }
             if (fail) {
@@ -574,7 +578,7 @@ func fixtureMcpServer(
         }
     )
     McpServer(
-        McpDiscoverResult(McpImplementationInfo(name, "1.0.0")),
+        McpDiscoverResult(serverInfo: McpImplementationInfo(name, "1.0.0")),
         host
     )
 }
@@ -609,7 +613,7 @@ func containsAnySecret(value: String, secrets: Array<String>): Bool {
 }
 
 func agentValueContainsSecrets(value: AgentValue, secrets: Array<String>): Bool {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => containsAnySecret(value.text, secrets)
         case ValueKind.Number => containsAnySecret(value.number, secrets)
         case ValueKind.List =>
@@ -630,7 +634,7 @@ func agentValueContainsSecrets(value: AgentValue, secrets: Array<String>): Bool 
 }
 
 func agentValueContainsText(value: AgentValue, expected: String): Bool {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => value.text.contains(expected)
         case ValueKind.Number => value.number.contains(expected)
         case ValueKind.List =>

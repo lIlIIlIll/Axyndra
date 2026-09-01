@@ -1,6 +1,7 @@
 package agent_domain
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.deriving.*
 
 @Derive[Equatable]
@@ -166,7 +167,7 @@ public class NormalizedOperationPlan {
         replayContractVersion!: UInt32 = 1u32
     ) {
         if (toolName.trimAscii() == "" || bindingDigest.trimAscii() == "" ||
-            canonicalArguments.kind != ValueKind.Object ||
+            canonicalArguments.unifiedKind != ValueKind.Object ||
             (requiredCapabilities.isEmpty() &&
                 (effectClass != OperationEffectClass.ReadOnly ||
                 retryDisposition != OperationRetryDisposition.Never))) {

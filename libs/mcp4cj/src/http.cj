@@ -1,8 +1,12 @@
 package mcp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
+import process4cj.*
 import std.collection.*
+import std.io.*
+import std.random.*
 import std.sync.*
 import stdx.log.NoopLogger
 import stdx.net.http.*
@@ -84,6 +88,21 @@ class McpHttpActiveRequest {
     init(id: JsonRpcId, client: Client) { this.id = id; this.client = client }
 }
 
+class McpHttpServerReservation {
+    let owner: String
+    let id: JsonRpcId
+    init(owner: String, id: JsonRpcId) { this.owner = owner; this.id = id }
+}
+
+class McpHttpServerSubscription {
+    let owner: String
+    let id: JsonRpcId
+    let stream: McpSubscriptionSseInput
+    init(owner: String, id: JsonRpcId, stream: McpSubscriptionSseInput) {
+        this.owner = owner; this.id = id; this.stream = stream
+    }
+}
+
 // MCP 2026-07-28 transport used by the project is request-scoped and
 // stateless: every message is a POST and SSE is a response representation.
 public class StreamableHttpMcpTransport <: McpTransport {
@@ -91,6 +110,9 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private let lifecycle = McpLifecycle()
     private let activeLock = Mutex()
     private let active = ArrayList<McpHttpActiveRequest>()
+    private let toolLock = Mutex()
+    private let tools = ArrayList<McpTool>()
+    private let clientInstanceId = newMcpHttpClientInstanceId()
 
     public init(config: McpStreamableHttpClientConfig) {
         this.config = config
@@ -101,13 +123,107 @@ public class StreamableHttpMcpTransport <: McpTransport {
     public func state(): McpLifecycleState { lifecycle.state() }
 
     public func request(request: JsonRpcRequest): McpResult<JsonRpcResponse> {
-        match (post(JsonRpcEnvelope.Request(request), request.method, request.params, Some(request.id))) {
+        requestWithNotifications(request, {_ =>})
+    }
+
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> {
+        match (post(
+            JsonRpcEnvelope.Request(request), request.method, request.params, Some(request.id),
+            notificationSink: notificationSink
+        )) {
             case McpResult.Ok(Some(response)) => McpResult.Ok(response)
             case McpResult.Ok(None) => httpMcpFailure<JsonRpcResponse>(
                 McpErrorKind.Protocol, "mcp.http_response_missing",
                 "MCP HTTP request completed without a response", retrySafe: false
             )
             case McpResult.Err(error) => McpResult.Err(error)
+        }
+    }
+
+    public func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle> {
+        if (request.method != MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+            return invalidMcp<McpSubscriptionHandle>("mcp.subscription_method_invalid", "subscription request method is invalid")
+        }
+        let prepared = match (prepare(
+            JsonRpcEnvelope.Request(request), request.method, request.params,
+            preferSse: true, subscription: true
+        )) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        let (client, nativeRequest) = prepared
+        let activeRequest = McpHttpActiveRequest(request.id, client); addActive(activeRequest)
+        try {
+            let response = client.send(nativeRequest)
+            activeLock.lock(); try { activeRequest.response = Some(response) } finally { activeLock.unlock() }
+            let contentType = (response.headers.getFirst("content-type") ?? "").toAsciiLower()
+            if (Int64(response.status) < 200 || Int64(response.status) >= 300 || !contentType.startsWith("text/event-stream")) {
+                let details = match (readMcpHttpBody(response.body, response.bodySize, config.framing.maxFrameBytes)) {
+                    case McpResult.Ok(value) => value
+                    case McpResult.Err(_) => ""
+                }
+                try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                removeActive(activeRequest)
+                if (contentType.startsWith("application/json") && details != "") {
+                    match (decodeMcpHttpSubscriptionRejection(details, request.id, config.framing.maxFrameBytes)) {
+                        case McpResult.Ok(error) => return McpResult.Err(error)
+                        case McpResult.Err(_) => ()
+                    }
+                }
+                return httpMcpFailure<McpSubscriptionHandle>(
+                    McpErrorKind.Protocol, "mcp.http_subscription_response_invalid",
+                    "subscriptions/listen requires a successful SSE response; status=" +
+                        response.status.toString() + " content-type=" + contentType + " body=" + details,
+                    retrySafe: true
+                )
+            }
+            let first = match (readMcpSseEnvelope(response.body, config.framing.maxFrameBytes)) {
+                case McpResult.Ok(Some(value)) => value
+                case McpResult.Ok(None) =>
+                    try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                    removeActive(activeRequest)
+                    return httpMcpFailure<McpSubscriptionHandle>(McpErrorKind.Transport, "mcp.http_subscription_eof", "subscription closed before acknowledgement", retrySafe: true)
+                case McpResult.Err(error) =>
+                    try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                    removeActive(activeRequest); return McpResult.Err(error)
+            }
+            let acknowledgement = match (first) {
+                case JsonRpcEnvelope.Notification(value) => if (value.method == MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED) {
+                    if (!notificationBelongsToSubscription(value, request.id)) {
+                        try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                        removeActive(activeRequest)
+                        return invalidMcp<McpSubscriptionHandle>(
+                            "mcp.subscription_id_mismatch", "subscription acknowledgement omitted or changed subscriptionId"
+                        )
+                    }
+                    match (decodeMcpSubscriptionFilter(value.params)) {
+                        case McpResult.Ok(filter) => filter
+                        case McpResult.Err(error) =>
+                            try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                            removeActive(activeRequest); return McpResult.Err(error)
+                    }
+                } else {
+                    try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                    removeActive(activeRequest)
+                    return invalidMcp<McpSubscriptionHandle>("mcp.subscription_ack_missing", "first subscription event must be acknowledged")
+                }
+                case _ =>
+                    try { response.close() } catch (_: Exception) {}; try { client.close() } catch (_: Exception) {}
+                    removeActive(activeRequest)
+                    return invalidMcp<McpSubscriptionHandle>("mcp.subscription_ack_missing", "first subscription event must be an acknowledgement notification")
+            }
+            McpResult.Ok(HttpMcpSubscriptionHandle(
+                request.id, acknowledgement, response, client,
+                config.framing.maxFrameBytes,
+                { => removeActive(activeRequest) },
+                { => let _ = closeHttpSubscription(request) }
+            ))
+        } catch (error: Exception) {
+            try { client.close() } catch (_: Exception) {}; removeActive(activeRequest)
+            httpMcpFailure<McpSubscriptionHandle>(McpErrorKind.Transport, "mcp.http_subscription_open_failed", error.message, retrySafe: true)
         }
     }
 
@@ -118,37 +234,42 @@ public class StreamableHttpMcpTransport <: McpTransport {
         }
     }
 
-    public func cancel(requestId: JsonRpcId, reason: String): McpResult<Unit> {
+    private func closeHttpSubscription(request: JsonRpcRequest): McpResult<Unit> {
+        notify(JsonRpcNotification(MCP_METHOD_CANCELLED, params: jsonObject([
+            JsonObjectEntry("requestId", requestIdValue(request.id)),
+            JsonObjectEntry("reason", jsonString("subscription closed by caller")),
+            JsonObjectEntry("_meta", mcpObject(request.params, "_meta"))
+        ])))
+    }
+
+    public func cancel(
+        requestId: JsonRpcId,
+        reason: String,
+        meta: McpRequestMeta
+    ): McpResult<Unit> {
         let matches = ArrayList<McpHttpActiveRequest>()
         activeLock.lock(); try {
             for (item in active where sameJsonRpcId(item.id, requestId)) {
                 item.cancelled = true; matches.add(item)
             }
         } finally { activeLock.unlock() }
+        let notified = notify(mcpCancellationNotification(requestId, reason, meta: meta))
         for (item in matches) { closeHttpActive(item) }
-        // Stream cancellation releases the local response immediately. The
-        // protocol notification gives a synchronous server a deterministic
-        // cancellation signal even when its HTTP stack exposes disconnects
-        // only after the handler returns.
-        let cancelParams = JsonValue.objectValue([
-            JsonField("_meta", JsonValue.objectValue([
-                JsonField(MCP_META_PROTOCOL_VERSION, JsonValue.stringValue(MCP_PROTOCOL_VERSION)),
-                JsonField(MCP_META_CLIENT_CAPABILITIES, JsonValue.objectValue([]))
-            ])),
-            JsonField("requestId", mcpRequestIdJson(requestId)),
-            JsonField("reason", JsonValue.stringValue(reason))
-        ])
-        match (post(
-            JsonRpcEnvelope.Notification(JsonRpcNotification(
-                MCP_METHOD_CANCELLED, params: cancelParams
-            )),
-            MCP_METHOD_CANCELLED,
-            cancelParams,
-            None
-        )) {
-            case McpResult.Ok(_) => McpResult.Ok(())
-            case McpResult.Err(error) => McpResult.Err(error)
-        }
+        notified
+    }
+
+    public func registerTools(values: Array<McpTool>): McpResult<Unit> {
+        toolLock.lock()
+        try {
+            for (tool in values) {
+                var found = false
+                for (index in 0..tools.size where tools[index].name == tool.name) {
+                    tools[index] = tool; found = true; break
+                }
+                if (!found) { tools.add(tool) }
+            }
+            McpResult.Ok(())
+        } finally { toolLock.unlock() }
     }
 
     public func close(): McpResult<Unit> {
@@ -164,8 +285,9 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func post(
         envelope: JsonRpcEnvelope,
         operation: String,
-        params: JsonValue,
-        expectedId: ?JsonRpcId
+        params: JsonNode,
+        expectedId: ?JsonRpcId,
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
     ): McpResult<?JsonRpcResponse> {
         if (state() != McpLifecycleState.Ready) {
             return httpMcpFailure<?JsonRpcResponse>(McpErrorKind.Lifecycle, "mcp.http_not_ready", "MCP HTTP transport is not ready", retrySafe: true)
@@ -185,7 +307,9 @@ public class StreamableHttpMcpTransport <: McpTransport {
                 case Some(item) => activeLock.lock(); try { item.response = Some(response) } finally { activeLock.unlock() }
                 case None => ()
             }
-            let result = try { decodeResponse(response, operation, expectedId) }
+            let result = try { decodeResponse(
+                response, operation, expectedId, notificationSink: notificationSink
+            ) }
                 finally { try { response.close() } catch (_: Exception) {} }
             match (activeRequest) {
                 case Some(item) => if (isHttpCancelled(item)) { cancelledHttpMcp<?JsonRpcResponse>() } else { result }
@@ -206,23 +330,53 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func prepare(
         envelope: JsonRpcEnvelope,
         operation: String,
-        params: JsonValue
+        params: JsonNode,
+        preferSse!: Bool = config.preferSse,
+        subscription!: Bool = false
     ): McpResult<(Client, HttpRequest)> {
         try {
             let timeout = Duration.millisecond * config.framing.requestTimeoutMillis
-            let client = ClientBuilder().autoRedirect(false).readTimeout(timeout).writeTimeout(timeout).logger(NoopLogger()).build()
+            let readTimeout = if (subscription) { Duration.Max } else { timeout }
+            let client = ClientBuilder().autoRedirect(false).readTimeout(readTimeout).writeTimeout(timeout).logger(NoopLogger()).build()
             let protocolVersion = mcpProtocolVersion(params)
             if (protocolVersion == "") { try { client.close() } catch (_: Exception) {}; return httpMcpFailure<(Client, HttpRequest)>(McpErrorKind.Protocol, "mcp.http_protocol_metadata_missing", "request omitted protocolVersion", retrySafe: true) }
             let builder = HttpRequestBuilder()
-                .url(config.url).post().readTimeout(timeout).writeTimeout(timeout)
+                .url(config.url).post().readTimeout(readTimeout).writeTimeout(timeout)
                 .header("Content-Type", "application/json")
-                .header("Accept", if (config.preferSse) { "text/event-stream, application/json" } else { "application/json, text/event-stream" })
+                .header("Accept", if (preferSse) { "text/event-stream, application/json" } else { "application/json, text/event-stream" })
                 .header(MCP_HEADER_PROTOCOL_VERSION, protocolVersion)
                 .header(MCP_HEADER_METHOD, operation)
+                .header(MCP_HEADER_CLIENT_INSTANCE_ID, clientInstanceId)
                 .body(encodeJsonRpc(envelope))
+            let name = mcpStandardName(operation, params)
+            if (mcpMethodRequiresName(operation)) {
+                if (name == "") {
+                    try { client.close() } catch (_: Exception) {}
+                    return httpMcpFailure<(Client, HttpRequest)>(
+                        McpErrorKind.Protocol, "mcp.http_name_missing",
+                        "request omitted the value required for Mcp-Name", retrySafe: true
+                    )
+                }
+                builder.header(MCP_HEADER_NAME, encodeMcpHeader(name))
+            }
             if (operation == MCP_METHOD_TOOLS_CALL) {
-                let name = mcpText(params, "name")
-                if (name != "") { builder.header(MCP_HEADER_NAME, encodeMcpHeader(name)) }
+                let schema = toolSchema(name)
+                if (schema.unifiedKind == UnifiedJsonKind.Null) {
+                    try { client.close() } catch (_: Exception) {}
+                    return httpMcpFailure<(Client, HttpRequest)>(
+                        McpErrorKind.Lifecycle, "mcp.http_tool_schema_missing",
+                        "call listTools or toolDirectory before invoking a Streamable HTTP tool",
+                        retrySafe: true
+                    )
+                }
+                match (projectMcpParameterHeaders(schema, mcpObject(params, "arguments"))) {
+                    case McpResult.Ok(headers) => for (header in headers) {
+                        builder.header(header.name, header.value)
+                    }
+                    case McpResult.Err(error) =>
+                        try { client.close() } catch (_: Exception) {}
+                        return McpResult.Err(error)
+                }
             }
             if (config.origin != "") { builder.header("Origin", config.origin) }
             if (config.bearerToken != "") { builder.header("Authorization", "Bearer " + config.bearerToken) }
@@ -236,31 +390,52 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func decodeResponse(
         response: HttpResponse,
         operation: String,
-        expectedId: ?JsonRpcId
+        expectedId: ?JsonRpcId,
+        notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
     ): McpResult<?JsonRpcResponse> {
         let status = Int64(response.status)
-        if (status < 200 || status >= 300) {
-            return httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
-        }
+        let successful = status >= 200 && status < 300
         match (expectedId) {
-            case None => McpResult.Ok(None)
+            case None => if (successful) {
+                McpResult.Ok(None)
+            } else {
+                httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+            }
             case Some(id) =>
                 let contentType = (response.headers.getFirst("content-type") ?? "").toAsciiLower()
-                let body = match (readMcpHttpBody(response.body, response.bodySize, config.framing.maxFrameBytes)) {
-                    case McpResult.Ok(value) => value
-                    case McpResult.Err(error) => return if (operation == MCP_METHOD_TOOLS_CALL) { ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message) } else { McpResult.Err(error) }
-                }
                 let envelope = if (contentType.startsWith("text/event-stream")) {
-                    match (decodeMcpSseResponse(body, id, config.framing.maxFrameBytes)) {
+                    match (readMcpSseResponse(
+                        response.body, id, config.framing.maxFrameBytes,
+                        notificationSink: notificationSink
+                    )) {
                         case McpResult.Ok(value) => JsonRpcEnvelope.Response(value)
-                        case McpResult.Err(error) => return if (operation == MCP_METHOD_TOOLS_CALL) { ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message) } else { McpResult.Err(error) }
+                        case McpResult.Err(error) => return if (!successful) {
+                            httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+                        } else if (operation == MCP_METHOD_TOOLS_CALL) {
+                            ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message)
+                        } else { McpResult.Err(error) }
                     }
                 } else if (contentType.startsWith("application/json")) {
+                    let body = match (readMcpHttpBody(response.body, response.bodySize, config.framing.maxFrameBytes)) {
+                        case McpResult.Ok(value) => value
+                        case McpResult.Err(error) => return if (!successful) {
+                            httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+                        } else if (operation == MCP_METHOD_TOOLS_CALL) {
+                            ambiguousHttpMcp<?JsonRpcResponse>(operation, error.message)
+                        } else { McpResult.Err(error) }
+                    }
                     match (decodeJsonRpc(body, maxBytes: config.framing.maxFrameBytes)) {
                         case JsonRpcResult.Ok(value) => value
-                        case JsonRpcResult.Err(error) => return invalidMcp<?JsonRpcResponse>(error.code, error.message)
+                        case JsonRpcResult.Err(error) => return if (successful) {
+                            invalidMcp<?JsonRpcResponse>(error.code, error.message)
+                        } else { httpStatusMcpFailure<?JsonRpcResponse>(operation, status) }
                     }
-                } else { return httpMcpFailure<?JsonRpcResponse>(McpErrorKind.Protocol, "mcp.http_content_type_invalid", "response must be JSON or SSE", retrySafe: false) }
+                } else { return if (successful) {
+                    httpMcpFailure<?JsonRpcResponse>(McpErrorKind.Protocol, "mcp.http_content_type_invalid", "response must be JSON or SSE", retrySafe: false)
+                } else { httpStatusMcpFailure<?JsonRpcResponse>(operation, status) } }
+                if (!successful) {
+                    return httpStatusMcpFailure<?JsonRpcResponse>(operation, status)
+                }
                 match (envelope) {
                     case JsonRpcEnvelope.Response(value) => if (sameJsonRpcId(value.id, id)) { McpResult.Ok(Some(value)) } else { invalidMcp<?JsonRpcResponse>("mcp.http_response_id_mismatch", "response id mismatch") }
                     case _ => invalidMcp<?JsonRpcResponse>("mcp.http_response_envelope_invalid", "response envelope is not JSON-RPC response")
@@ -273,6 +448,132 @@ public class StreamableHttpMcpTransport <: McpTransport {
     private func activeSnapshot(): Array<McpHttpActiveRequest> { activeLock.lock(); try { active.toArray() } finally { activeLock.unlock() } }
     private func isHttpCancelled(item: McpHttpActiveRequest): Bool { activeLock.lock(); try { item.cancelled } finally { activeLock.unlock() } }
     private func closeHttpActive(item: McpHttpActiveRequest): Unit { match (item.response) { case Some(response) => try { response.close() } catch (_: Exception) {}; case None => () }; try { item.client.close() } catch (_: Exception) {} }
+    private func toolSchema(name: String): JsonNode {
+        toolLock.lock(); try {
+            for (tool in tools where tool.name == name) { return tool.inputSchema }
+            jsonNull()
+        } finally { toolLock.unlock() }
+    }
+}
+
+class HttpMcpSubscriptionHandle <: McpSubscriptionHandle {
+    private let id: JsonRpcId
+    private let accepted: McpSubscriptionFilter
+    private let response: HttpResponse
+    private let client: Client
+    private let maxEventBytes: Int64
+    private let onDone: () -> Unit
+    private let closeAction: () -> Unit
+    private let lock = Mutex()
+    private let queued = ArrayList<JsonRpcNotification>()
+    private var stopped = false
+    private var failure: ?McpError = None
+    private var reader: ?Future<Unit> = None
+    private var closeRequested = false
+    private var resourcesClosed = false
+
+    init(
+        id: JsonRpcId, accepted: McpSubscriptionFilter,
+        response: HttpResponse, client: Client, maxEventBytes: Int64,
+        onDone: () -> Unit, closeAction: () -> Unit
+    ) {
+        this.id = id; this.accepted = accepted; this.response = response
+        this.client = client; this.maxEventBytes = maxEventBytes; this.onDone = onDone
+        this.closeAction = closeAction
+        reader = Some(spawn { pump() })
+    }
+
+    public func subscriptionId(): JsonRpcId { id }
+    public func acknowledged(): McpSubscriptionFilter { accepted }
+    public func next(): McpResult<?JsonRpcNotification> {
+        while (true) {
+            lock.lock()
+            try {
+                if (!queued.isEmpty()) {
+                    let value = queued[0]; queued.remove(at: 0); return McpResult.Ok(Some(value))
+                }
+                match (failure) { case Some(error) => return McpResult.Err(error); case None => () }
+                if (stopped) { return McpResult.Ok(None) }
+            } finally { lock.unlock() }
+            sleep(Duration.millisecond * 5)
+        }
+        McpResult.Ok(None)
+    }
+    public func close(): McpResult<Unit> {
+        var notify = false
+        lock.lock(); try {
+            if (!closeRequested) { closeRequested = true; notify = true }
+        } finally { lock.unlock() }
+        if (notify) { closeAction() }
+        finish(None)
+        McpResult.Ok(())
+    }
+
+    private func pump(): Unit {
+        while (true) {
+            let envelope = match (readMcpSseEnvelope(response.body, maxEventBytes)) {
+                case McpResult.Ok(Some(value)) => value
+                case McpResult.Ok(None) => finish(None); return
+                case McpResult.Err(error) => finish(Some(error)); return
+            }
+            match (envelope) {
+                case JsonRpcEnvelope.Notification(notification) =>
+                    if (!notificationBelongsToSubscription(notification, id)) {
+                        finish(Some(McpError(
+                            McpErrorKind.Protocol, "mcp.subscription_id_mismatch",
+                            "subscription notification omitted or changed subscriptionId"
+                        ))); return
+                    }
+                    var overflow = false
+                    lock.lock(); try {
+                        if (!stopped) {
+                            if (queued.size >= MCP_SUBSCRIPTION_QUEUE_LIMIT) {
+                                queued.clear()
+                                overflow = true
+                            } else { queued.add(notification) }
+                        }
+                    } finally { lock.unlock() }
+                    if (overflow) {
+                        finish(Some(McpError(
+                            McpErrorKind.Protocol, "mcp.subscription_queue_overflow",
+                            "MCP subscription consumer did not keep up with notifications"
+                        )))
+                        return
+                    }
+                case JsonRpcEnvelope.Response(value) =>
+                    if (sameJsonRpcId(value.id, id)) {
+                        match (value.payload) {
+                            case JsonRpcResponsePayload.Success(_) => finish(None)
+                            case JsonRpcResponsePayload.Failure(error) => match (remoteMcpError<Unit>(error)) {
+                                case McpResult.Err(value) => finish(Some(value))
+                                case McpResult.Ok(_) => finish(Some(McpError(
+                                    McpErrorKind.Protocol, "mcp.http_subscription_terminal_invalid",
+                                    "subscription terminal response did not contain an error"
+                                )))
+                            }
+                        }
+                        return
+                    }
+                    finish(Some(McpError(McpErrorKind.Protocol, "mcp.subscription_response_id_mismatch", "subscription close response id mismatch"))); return
+                case JsonRpcEnvelope.Request(_) =>
+                    finish(Some(McpError(McpErrorKind.Protocol, "mcp.subscription_reverse_request", "subscription stream contained a request"))); return
+            }
+        }
+    }
+
+    private func finish(error: ?McpError): Unit {
+        var notify = false
+        var cleanup = false
+        lock.lock(); try {
+            if (!stopped) { stopped = true; failure = error; notify = true }
+            if (!resourcesClosed) { resourcesClosed = true; cleanup = true }
+        } finally { lock.unlock() }
+        if (notify) { onDone() }
+        if (cleanup) {
+            try { response.close() } catch (_: Exception) {}
+            try { client.close() } catch (_: Exception) {}
+        }
+    }
 }
 
 public func openStreamableHttpMcpTransport(
@@ -282,11 +583,100 @@ public func openStreamableHttpMcpTransport(
     catch (error: Exception) { httpMcpFailure<StreamableHttpMcpTransport>(McpErrorKind.Transport, "mcp.http_prepare_failed", error.message, retrySafe: true) }
 }
 
+func readMcpSseEnvelope(stream: InputStream, maxEventBytes: Int64): McpResult<?JsonRpcEnvelope> {
+    var data = ""
+    while (true) {
+        let line = try {
+            match (readLineBounded(stream, maxEventBytes, allowPartialAtEof: true)) {
+                case Some(value) => value
+                case None => if (data == "") { return McpResult.Ok(None) } else { "" }
+            }
+        } catch (error: Exception) {
+            return McpResult.Err(McpError(McpErrorKind.Transport, "mcp.http_sse_read_failed", error.message))
+        }
+        if (line == "") {
+            if (data == "") { continue }
+            return match (decodeJsonRpc(data, maxBytes: maxEventBytes)) {
+                case JsonRpcResult.Ok(value) => McpResult.Ok(Some(value))
+                case JsonRpcResult.Err(error) => McpResult.Err(McpError(
+                    McpErrorKind.Protocol, error.code, error.message, rpcCode: Some(error.rpcCode)
+                ))
+            }
+        }
+        if (line.startsWith(":")) { continue }
+        if (line == "data") {
+            if (data != "") {
+                data += "\n"
+                if (utf8ByteSize(data) > maxEventBytes) {
+                    return invalidMcp<?JsonRpcEnvelope>(
+                        "mcp.http_sse_event_too_large", "MCP SSE event exceeds configured limit"
+                    )
+                }
+            }
+            continue
+        }
+        if (line.startsWith("data:")) {
+            var value = line[5..]; if (value.startsWith(" ")) { value = value[1..] }
+            if (data != "") { data += "\n" }; data += value
+            if (utf8ByteSize(data) > maxEventBytes) {
+                return invalidMcp<?JsonRpcEnvelope>("mcp.http_sse_event_too_large", "MCP SSE event exceeds configured limit")
+            }
+        }
+    }
+    McpResult.Ok(None)
+}
+
+func readMcpSseResponse(
+    stream: InputStream,
+    expectedId: JsonRpcId,
+    maxEventBytes: Int64,
+    notificationSink!: (JsonRpcNotification) -> Unit = { _ => }
+): McpResult<JsonRpcResponse> {
+    if (maxEventBytes < 1) {
+        return invalidMcp<JsonRpcResponse>(
+            "mcp.http_sse_limit_invalid", "MCP SSE event limit must be positive"
+        )
+    }
+    while (true) {
+        match (readMcpSseEnvelope(stream, maxEventBytes)) {
+            case McpResult.Err(error) => return McpResult.Err(error)
+            case McpResult.Ok(None) => return invalidMcp<JsonRpcResponse>(
+                "mcp.http_sse_response_missing",
+                "MCP SSE stream ended without the matching JSON-RPC response"
+            )
+            case McpResult.Ok(Some(JsonRpcEnvelope.Response(response))) =>
+                if (sameJsonRpcId(response.id, expectedId)) { return McpResult.Ok(response) }
+            case McpResult.Ok(Some(JsonRpcEnvelope.Notification(notification))) => notificationSink(notification)
+            case McpResult.Ok(Some(JsonRpcEnvelope.Request(_))) => return invalidMcp<JsonRpcResponse>(
+                "mcp.http_sse_reverse_request_unsupported",
+                "MCP SSE response contained an unsupported reverse request"
+            )
+        }
+    }
+    invalidMcp<JsonRpcResponse>("mcp.http_sse_response_missing", "MCP SSE response was not found")
+}
+
+func notificationBelongsToSubscription(notification: JsonRpcNotification, id: JsonRpcId): Bool {
+    let meta = mcpObject(notification.params, "_meta")
+    match (meta.field(MCP_META_SUBSCRIPTION_ID)) {
+        case Some(value) => match (decodeMcpRequestId(value)) {
+            case McpResult.Ok(found) => sameJsonRpcId(found, id)
+            case McpResult.Err(_) => false
+        }
+        case None => false
+    }
+}
+
 public class StreamableHttpMcpServer {
     private let config: McpStreamableHttpServerConfig
     private let mcp: McpServer
     private let native: Server
     private let lifecycle = McpLifecycle()
+    private let requestLock = Mutex()
+    private let activeStreams = ArrayList<McpHttpServerReservation>()
+    private let activeSubscriptions = ArrayList<McpHttpServerSubscription>()
+    private let notificationLock = Mutex()
+    private var activeNotifications: Int64 = 0
 
     init(config: McpStreamableHttpServerConfig, mcp: McpServer, native: Server) {
         this.config = config; this.mcp = mcp; this.native = native
@@ -336,34 +726,451 @@ public class StreamableHttpMcpServer {
             case JsonRpcResult.Ok(value) => value
             case JsonRpcResult.Err(error) => writeMcpHttpEnvelope(context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(jsonRpcNullId(), error.rpcCode, error.message))); return
         }
-        match (validateHttpMetadata(request, envelope)) {
-            case McpResult.Ok(_) => ()
-            case McpResult.Err(error) => writeMcpHttpEnvelope(
-                context,
-                400,
-                JsonRpcEnvelope.Response(mcpFailureResponse(
-                    envelopeId(envelope),
-                    if (error.code == "mcp.version_unsupported") {
-                        MCP_UNSUPPORTED_PROTOCOL_VERSION
-                    } else {
-                        MCP_HEADER_MISMATCH
-                    },
-                    error.message
-                ))
-            ); return
+        let requestOwner = request.headers.getFirst(MCP_HEADER_CLIENT_INSTANCE_ID) ?? ""
+        if (requestOwner != "" && !validMcpHttpClientInstanceId(requestOwner)) {
+            writeHttpProblem(context, 400, "MCP client instance identifier is invalid")
+            return
         }
-        let handled = mcp.handle(envelope)
-        match (handled) {
-            case McpResult.Err(error) => writeMcpHttpEnvelope(context, 500, JsonRpcEnvelope.Response(mcpFailureResponse(envelopeId(envelope), JSON_RPC_INTERNAL_ERROR, error.message)))
-            case McpResult.Ok(None) => context.responseBuilder.status(202)
-            case McpResult.Ok(Some(rawResponse)) =>
-                let response = projectMcpHttpResponse(envelope, rawResponse)
-                let asSse = accept.trimAscii().startsWith("text/event-stream")
-                if (asSse) {
-                    context.responseBuilder.status(200).header("Content-Type", "text/event-stream; charset=utf-8").header("Cache-Control", "no-store").body("event: message\ndata: " + encodeJsonRpc(response) + "\n\n")
-                } else { writeMcpHttpEnvelope(context, responseStatus(response), response) }
+        match (envelope) {
+            case JsonRpcEnvelope.Request(value) => if (!reserveStream(requestOwner, value.id)) {
+                writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
+                return
+            }
+            case _ => ()
+        }
+        match (validateHttpMetadata(request, envelope, mcp)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) =>
+                match (envelope) {
+                    case JsonRpcEnvelope.Request(value) => releaseStream(requestOwner, value.id)
+                    case _ => ()
+                }
+                writeMcpHttpEnvelope(
+                    context,
+                    400,
+                    JsonRpcEnvelope.Response(mcpFailureResponse(
+                        envelopeId(envelope),
+                        if (error.code == "mcp.version_unsupported") {
+                            MCP_UNSUPPORTED_PROTOCOL_VERSION
+                        } else {
+                            MCP_HEADER_MISMATCH
+                        },
+                        error.message,
+                        data: if (error.code == "mcp.version_unsupported") {
+                            jsonObject([
+                                JsonObjectEntry("supported", jsonArray([jsonString(MCP_PROTOCOL_VERSION)])),
+                                JsonObjectEntry("requested", jsonString(request.headers.getFirst(MCP_HEADER_PROTOCOL_VERSION) ?? ""))
+                            ])
+                        } else { jsonNull() }
+                    ))
+                )
+                return
+        }
+        match (envelope) {
+            case JsonRpcEnvelope.Request(value) => if (value.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
+                match (mcp.openSubscription(value)) {
+                    case McpResult.Ok(source) =>
+                        let stream = McpSubscriptionSseInput(
+                            value.id, source, config.framing.maxFrameBytes,
+                            releaseAction: { => releaseStream(requestOwner, value.id) }
+                        )
+                        markSubscription(requestOwner, value.id, stream)
+                        context.responseBuilder.status(200)
+                            .header("Content-Type", "text/event-stream; charset=utf-8")
+                            .header("Cache-Control", "no-store")
+                            .header("Transfer-Encoding", "chunked")
+                            .body(stream)
+                    case McpResult.Err(error) =>
+                        releaseStream(requestOwner, value.id)
+                        writeMcpHttpEnvelope(
+                            context, 400, JsonRpcEnvelope.Response(mcpFailureResponse(
+                                value.id,
+                                if (error.code == "mcp.subscription_tasks_capability_missing") {
+                                    MCP_MISSING_REQUIRED_CLIENT_CAPABILITY
+                                } else { JSON_RPC_INVALID_PARAMS },
+                                error.message
+                            ))
+                        )
+                }
+                return
+            }
+            case _ => ()
+        }
+        match (envelope) {
+            case JsonRpcEnvelope.Request(value) =>
+                let progressToken = mcpField(mcpObject(value.params, "_meta"), "progressToken", jsonNull())
+                if (accept.trimAscii().startsWith("text/event-stream") ||
+                    progressToken.unifiedKind != UnifiedJsonKind.Null) {
+                    context.responseBuilder.status(200)
+                        .header("Content-Type", "text/event-stream; charset=utf-8")
+                        .header("Cache-Control", "no-store")
+                        .header("Transfer-Encoding", "chunked")
+                        .body(McpOperationSseInput(
+                            value.id, config.framing.maxFrameBytes,
+                            { notificationSink =>
+                                projectMcpHttpResponse(
+                                    envelope,
+                                    JsonRpcEnvelope.Response(mcp.handleRequest(
+                                        value, notificationSink: notificationSink,
+                                        requestOwner: requestOwner
+                                    ))
+                                )
+                            },
+                            cancelAction: { =>
+                                let _ = mcp.handleNotification(mcpCancellationNotification(
+                                    value.id, "HTTP SSE client disconnected"
+                                ), requestOwner: requestOwner)
+                            },
+                            releaseAction: { => releaseStream(requestOwner, value.id) }
+                        ))
+                    return
+                }
+            case _ => ()
+        }
+        let notificationReserved = match (envelope) {
+            case JsonRpcEnvelope.Notification(_) => if (reserveNotification()) { true } else {
+                writeHttpProblem(context, 503, "MCP HTTP notification limit reached")
+                return
+            }
+            case _ => false
+        }
+        let progressNotifications = ArrayList<JsonRpcNotification>()
+        try {
+            let handled: McpResult<?JsonRpcEnvelope> = match (envelope) {
+                case JsonRpcEnvelope.Request(value) => McpResult.Ok(Some(JsonRpcEnvelope.Response(
+                    mcp.handleRequest(
+                        value,
+                        notificationSink: { notification => progressNotifications.add(notification) },
+                        requestOwner: requestOwner
+                    )
+                )))
+                case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value, requestOwner)
+                case JsonRpcEnvelope.Response(_) => mcp.handle(envelope)
+            }
+            match (handled) {
+                case McpResult.Err(error) => writeMcpHttpEnvelope(context, 500, JsonRpcEnvelope.Response(mcpFailureResponse(envelopeId(envelope), JSON_RPC_INTERNAL_ERROR, error.message)))
+                case McpResult.Ok(None) => context.responseBuilder.status(202)
+                case McpResult.Ok(Some(rawResponse)) =>
+                    let response = projectMcpHttpResponse(envelope, rawResponse)
+                    let asSse = accept.trimAscii().startsWith("text/event-stream") || !progressNotifications.isEmpty()
+                    if (asSse && responseStatus(response) == 200) {
+                        var body = ""
+                        for (notification in progressNotifications) {
+                            body += "event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Notification(notification)) + "\n\n"
+                        }
+                        body += "event: message\ndata: " + encodeJsonRpc(response) + "\n\n"
+                        context.responseBuilder.status(200).header("Content-Type", "text/event-stream; charset=utf-8").header("Cache-Control", "no-store").body(body)
+                    } else {
+                        let bounded = boundedMcpHttpOperationResponse(
+                            response, envelopeId(envelope), config.framing.maxFrameBytes
+                        )
+                        writeMcpHttpEnvelope(context, responseStatus(bounded), bounded)
+                    }
+            }
+        } finally {
+            if (notificationReserved) { releaseNotification() }
+            match (envelope) {
+                case JsonRpcEnvelope.Request(value) => releaseStream(requestOwner, value.id)
+                case _ => ()
+            }
         }
     }
+
+    private func handleHttpNotification(
+        notification: JsonRpcNotification,
+        requestOwner: String
+    ): McpResult<?JsonRpcEnvelope> {
+        let cancelledSubscription = if (notification.method == MCP_METHOD_CANCELLED) {
+            match (notification.params.field("requestId")) {
+                case Some(rawId) => match (decodeMcpRequestId(rawId)) {
+                    case McpResult.Ok(id) => cancelSubscription(requestOwner, id)
+                    case McpResult.Err(_) => false
+                }
+                case None => false
+            }
+        } else { false }
+        match (mcp.handleNotification(notification, requestOwner: requestOwner)) {
+            case McpResult.Ok(_) =>
+                let _ = cancelledSubscription
+                McpResult.Ok(None)
+            case McpResult.Err(error) => McpResult.Err(error)
+        }
+    }
+
+    private func reserveStream(owner: String, id: JsonRpcId): Bool {
+        requestLock.lock(); try {
+            if (activeStreams.size >= config.maxConcurrentRequests) { false }
+            else { activeStreams.add(McpHttpServerReservation(owner, id)); true }
+        } finally { requestLock.unlock() }
+    }
+
+    private func reserveNotification(): Bool {
+        notificationLock.lock()
+        try {
+            if (activeNotifications >= config.maxConcurrentRequests) { false }
+            else { activeNotifications++; true }
+        } finally { notificationLock.unlock() }
+    }
+
+    private func releaseNotification(): Unit {
+        notificationLock.lock()
+        try { if (activeNotifications > 0) { activeNotifications-- } }
+        finally { notificationLock.unlock() }
+    }
+
+    private func releaseStream(owner: String, id: JsonRpcId): Unit {
+        requestLock.lock(); try {
+            for (index in 0..activeSubscriptions.size where
+                activeSubscriptions[index].owner == owner &&
+                sameJsonRpcId(activeSubscriptions[index].id, id)) {
+                activeSubscriptions.remove(at: index)
+                break
+            }
+            for (index in 0..activeStreams.size where
+                activeStreams[index].owner == owner && sameJsonRpcId(activeStreams[index].id, id)) {
+                activeStreams.remove(at: index)
+                return
+            }
+        }
+        finally { requestLock.unlock() }
+    }
+
+    private func markSubscription(
+        owner: String, id: JsonRpcId, stream: McpSubscriptionSseInput
+    ): Unit {
+        requestLock.lock()
+        try { activeSubscriptions.add(McpHttpServerSubscription(owner, id, stream)) }
+        finally { requestLock.unlock() }
+    }
+
+    private func cancelSubscription(owner: String, id: JsonRpcId): Bool {
+        if (owner == "") { return false }
+        var stream: ?McpSubscriptionSseInput = None
+        requestLock.lock()
+        try {
+            for (active in activeSubscriptions where
+                active.owner == owner && sameJsonRpcId(active.id, id)) {
+                stream = Some(active.stream)
+                break
+            }
+        } finally { requestLock.unlock() }
+        match (stream) {
+            case Some(value) => value.close(); true
+            case None => false
+        }
+    }
+}
+
+let MCP_OPERATION_PROGRESS_QUEUE_LIMIT: Int64 = 256
+
+class McpOperationSseInput <: InputStream & Resource {
+    private let id: JsonRpcId
+    private let maxFrameBytes: Int64
+    private let lock = Mutex()
+    private let queued = ArrayList<Array<Byte>>()
+    private var pending: Array<Byte> = []
+    private var offset: Int64 = 0
+    private var done = false
+    private var closed = false
+    private var overflowed = false
+    private var cancellationRequested = false
+    private var worker: ?Future<Unit> = None
+    private let cancelAction: () -> Unit
+    private let releaseAction: () -> Unit
+
+    init(
+        id: JsonRpcId,
+        maxFrameBytes: Int64,
+        operation: ((JsonRpcNotification) -> Unit) -> JsonRpcEnvelope,
+        cancelAction!: () -> Unit = { => },
+        releaseAction!: () -> Unit = { => }
+    ) {
+        this.id = id
+        this.maxFrameBytes = maxFrameBytes
+        this.cancelAction = cancelAction
+        this.releaseAction = releaseAction
+        let running = spawn {
+            let response = try {
+                operation({ notification => enqueueProgress(JsonRpcEnvelope.Notification(notification)) })
+            } catch (error: Exception) {
+                JsonRpcEnvelope.Response(mcpFailureResponse(
+                    id, JSON_RPC_INTERNAL_ERROR, error.message
+                ))
+            }
+            enqueueFinal(response)
+        }
+        worker = Some(running)
+        spawn {
+            try { let _ = running.get() } finally { releaseAction() }
+        }
+    }
+
+    public func read(buffer: Array<Byte>): Int64 {
+        if (buffer.isEmpty()) { return 0 }
+        while (offset >= pending.size) {
+            var finished = false
+            lock.lock()
+            try {
+                if (closed) { return 0 }
+                if (!queued.isEmpty()) {
+                    pending = queued[0]
+                    queued.remove(at: 0)
+                    offset = 0
+                    break
+                }
+                if (done) { finished = true }
+            } finally { lock.unlock() }
+            if (finished) { close(); return 0 }
+            sleep(Duration.millisecond * 5)
+        }
+        let count = min(buffer.size, pending.size - offset)
+        for (index in 0..count) { buffer[index] = pending[offset + index] }
+        offset += count
+        count
+    }
+
+    public func close(): Unit {
+        var cancel = false
+        lock.lock(); try {
+            if (!closed) {
+                closed = true; queued.clear(); pending = []
+                cancel = !done && !cancellationRequested
+                if (cancel) { cancellationRequested = true }
+            }
+        } finally { lock.unlock() }
+        if (cancel) { cancelAction() }
+    }
+    public func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
+
+    private func encodedEnvelope(envelope: JsonRpcEnvelope): Array<Byte> {
+        ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
+    }
+
+    private func enqueueProgress(envelope: JsonRpcEnvelope): Unit {
+        let bytes = encodedEnvelope(envelope)
+        var cancel = false
+        lock.lock(); try {
+            if (!closed && !overflowed) {
+                if (bytes.size > maxFrameBytes) {
+                    queued.clear()
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation progress notification exceeded the frame limit"
+                    ))))
+                    overflowed = true
+                    done = true
+                    if (!cancellationRequested) { cancellationRequested = true; cancel = true }
+                } else if (queued.size >= MCP_OPERATION_PROGRESS_QUEUE_LIMIT) {
+                    queued.clear()
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation progress consumer did not keep up with notifications"
+                    ))))
+                    overflowed = true
+                    done = true
+                    if (!cancellationRequested) { cancellationRequested = true; cancel = true }
+                } else { queued.add(bytes) }
+            }
+        } finally { lock.unlock() }
+        if (cancel) { cancelAction() }
+    }
+
+    private func enqueueFinal(envelope: JsonRpcEnvelope): Unit {
+        let bytes = encodedEnvelope(envelope)
+        lock.lock(); try {
+            if (!closed && !overflowed) {
+                if (bytes.size > maxFrameBytes) {
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation response exceeded the frame limit"
+                    ))))
+                    overflowed = true
+                } else { queued.add(bytes) }
+            }
+            done = true
+        } finally { lock.unlock() }
+    }
+}
+
+class McpSubscriptionSseInput <: InputStream & Resource {
+    private let id: JsonRpcId
+    private let source: McpSubscriptionSource
+    private let maxFrameBytes: Int64
+    private let releaseAction: () -> Unit
+    private let lock = Mutex()
+    private var pending: Array<Byte> = []
+    private var offset: Int64 = 0
+    private var first = true
+    private var closed = false
+    private var finishAfterPending = false
+    init(
+        id: JsonRpcId, source: McpSubscriptionSource, maxFrameBytes: Int64,
+        releaseAction!: () -> Unit = { => }
+    ) {
+        this.id = id; this.source = source; this.maxFrameBytes = maxFrameBytes
+        this.releaseAction = releaseAction
+    }
+
+    public func read(buffer: Array<Byte>): Int64 {
+        if (isClosed() || buffer.isEmpty()) { return 0 }
+        while (offset >= pending.size) {
+            if (finishAfterPending) { close(); return 0 }
+            let envelope: JsonRpcEnvelope = if (first) {
+                first = false
+                JsonRpcEnvelope.Notification(tagMcpSubscriptionNotification(JsonRpcNotification(
+                    MCP_NOTIFICATION_SUBSCRIPTION_ACKNOWLEDGED,
+                    params: source.acknowledged().toValue()
+                ), id))
+            } else {
+                match (source.next()) {
+                    case McpResult.Ok(Some(notification)) => JsonRpcEnvelope.Notification(
+                        tagMcpSubscriptionNotification(notification, id)
+                    )
+                    case McpResult.Ok(None) =>
+                        finishAfterPending = true
+                        JsonRpcEnvelope.Response(mcpSuccessResponse(id, jsonObject([]), None))
+                    case McpResult.Err(error) =>
+                        finishAfterPending = true
+                        JsonRpcEnvelope.Response(mcpHostFailure(id, error))
+                }
+            }
+            if (isClosed()) { return 0 }
+            let bytes = ("event: message\ndata: " + encodeJsonRpc(envelope) + "\n\n").toArray()
+            if (bytes.size > maxFrameBytes) {
+                pending = ("event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Response(
+                    mcpFailureResponse(id, JSON_RPC_INTERNAL_ERROR, "MCP subscription event exceeded the frame limit")
+                )) + "\n\n").toArray()
+                finishAfterPending = true
+            } else { pending = bytes }
+            offset = 0
+        }
+        let count = min(buffer.size, pending.size - offset)
+        for (index in 0..count) { buffer[index] = pending[offset + index] }
+        offset += count; count
+    }
+    public func close(): Unit {
+        var shouldClose = false
+        lock.lock()
+        try { if (!closed) { closed = true; shouldClose = true } }
+        finally { lock.unlock() }
+        if (shouldClose) { let _ = source.close(); releaseAction() }
+    }
+    public func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
+}
+
+func tagMcpSubscriptionNotification(
+    notification: JsonRpcNotification, id: JsonRpcId
+): JsonRpcNotification {
+    let params = ArrayList<JsonObjectEntry>(); var metadata = jsonObject([])
+    for (field in notification.params.fields) {
+        if (field.name == "_meta" && field.value.unifiedKind == UnifiedJsonKind.Object) { metadata = field.value }
+        else { params.add(field) }
+    }
+    let meta = ArrayList<JsonObjectEntry>()
+    for (field in metadata.fields where field.name != MCP_META_SUBSCRIPTION_ID) { meta.add(field) }
+    meta.add(JsonObjectEntry(MCP_META_SUBSCRIPTION_ID, requestIdValue(id)))
+    params.add(JsonObjectEntry("_meta", jsonObject(meta.toArray())))
+    JsonRpcNotification(notification.method, params: jsonObject(params.toArray()))
 }
 
 public func openStreamableHttpMcpServer(
@@ -382,7 +1189,7 @@ public func openStreamableHttpMcpServer(
     }
 }
 
-func validateHttpMetadata(request: HttpRequest, envelope: JsonRpcEnvelope): McpResult<Unit> {
+func validateHttpMetadata(request: HttpRequest, envelope: JsonRpcEnvelope, mcp: McpServer): McpResult<Unit> {
     let method = request.headers.getFirst(MCP_HEADER_METHOD) ?? ""
     let protocol = request.headers.getFirst(MCP_HEADER_PROTOCOL_VERSION) ?? ""
     let (bodyMethod, params) = match (envelope) {
@@ -390,24 +1197,84 @@ func validateHttpMetadata(request: HttpRequest, envelope: JsonRpcEnvelope): McpR
         case JsonRpcEnvelope.Notification(value) => (value.method, value.params)
         case JsonRpcEnvelope.Response(_) => return invalidMcp<Unit>("mcp.http_client_response_unexpected", "server does not accept client responses")
     }
-    if (protocol != MCP_PROTOCOL_VERSION || mcpProtocolVersion(params) != MCP_PROTOCOL_VERSION) {
-        return invalidMcp<Unit>("mcp.version_unsupported", "unsupported MCP protocol version")
-    }
-    if (protocol != mcpProtocolVersion(params) || method != bodyMethod) {
+    let bodyProtocol = mcpProtocolVersion(params)
+    if (protocol == "" || method == "" || (bodyProtocol != "" && protocol != bodyProtocol) || method != bodyMethod) {
         return invalidMcp<Unit>("mcp.http_header_mismatch", "MCP headers do not match request body")
     }
-    if (bodyMethod == MCP_METHOD_TOOLS_CALL) {
+    if (protocol != MCP_PROTOCOL_VERSION) {
+        return invalidMcp<Unit>("mcp.version_unsupported", "unsupported MCP protocol version")
+    }
+    if (mcpMethodRequiresName(bodyMethod)) {
         let name = match (decodeMcpHeader(request.headers.getFirst(MCP_HEADER_NAME) ?? "")) {
             case McpResult.Ok(value) => value
             case McpResult.Err(error) => return McpResult.Err(error)
         }
-        if (name == "" || name != mcpText(params, "name")) { return invalidMcp<Unit>("mcp.http_header_mismatch", "MCP name header does not match tools/call") }
+        if (name == "" || name != mcpStandardName(bodyMethod, params)) {
+            return invalidMcp<Unit>("mcp.http_header_mismatch", "Mcp-Name header does not match request body")
+        }
+    }
+    if (bodyMethod == MCP_METHOD_TOOLS_CALL) {
+        let name = mcpText(params, "name")
+        let tool = match (mcp.tool(name)) {
+            case McpResult.Ok(Some(value)) => value
+            case McpResult.Ok(None) => return invalidMcp<Unit>("mcp.http_header_mismatch", "tool is unavailable for header validation")
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        let expected = match (projectMcpParameterHeaders(tool.inputSchema, mcpObject(params, "arguments"))) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        match (validateDeclaredMcpParameterHeaders(request.headers, expected)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return McpResult.Err(error)
+        }
+        for (header in expected) {
+            let actual = request.headers.getFirst(header.name) ?? ""
+            let decoded = match (decodeMcpHeader(actual)) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => return McpResult.Err(error)
+            }
+            let wanted = match (decodeMcpHeader(header.value)) {
+                case McpResult.Ok(value) => value
+                case McpResult.Err(error) => return McpResult.Err(error)
+            }
+            if (decoded != wanted) {
+                return invalidMcp<Unit>("mcp.http_header_mismatch", header.name + " does not match tools/call arguments")
+            }
+        }
     }
     McpResult.Ok(())
 }
 
 func httpMcpFailure<T>(kind: McpErrorKind, code: String, message: String, retryable!: Bool = false, retrySafe!: Bool = false, status!: ?Int64 = None): McpResult<T> {
     McpResult.Err(McpError(kind, code, message, retryable: retryable, retrySafe: retrySafe, httpStatus: status))
+}
+
+func decodeMcpHttpSubscriptionRejection(
+    body: String, expectedId: JsonRpcId, maxBytes: Int64
+): McpResult<McpError> {
+    let response = match (decodeJsonRpc(body, maxBytes: maxBytes)) {
+        case JsonRpcResult.Ok(JsonRpcEnvelope.Response(value)) => value
+        case _ => return invalidMcp<McpError>(
+            "mcp.http_subscription_rejection_invalid", "subscription rejection was not a JSON-RPC response"
+        )
+    }
+    if (!sameJsonRpcId(response.id, expectedId)) {
+        return invalidMcp<McpError>(
+            "mcp.subscription_response_id_mismatch", "subscription rejection response id mismatch"
+        )
+    }
+    match (response.payload) {
+        case JsonRpcResponsePayload.Failure(error) => match (remoteMcpError<Unit>(error)) {
+            case McpResult.Err(value) => McpResult.Ok(value)
+            case McpResult.Ok(_) => invalidMcp<McpError>(
+                "mcp.http_subscription_rejection_invalid", "subscription rejection did not contain an error"
+            )
+        }
+        case JsonRpcResponsePayload.Success(_) => invalidMcp<McpError>(
+            "mcp.http_subscription_rejection_invalid", "non-SSE subscription response was not an error"
+        )
+    }
 }
 func httpStatusMcpFailure<T>(operation: String, status: Int64): McpResult<T> {
     if (operation == MCP_METHOD_TOOLS_CALL && status >= 500) {
@@ -431,23 +1298,57 @@ func ambiguousHttpMcp<T>(operation: String, message: String): McpResult<T> {
     httpMcpFailure<T>(McpErrorKind.Transport, if (call) { "mcp.http_call_response_lost" } else { "mcp.http_response_lost" }, if (call) { "MCP tools/call may have executed before its response was lost" } else { "MCP HTTP response was lost: " + message }, retrySafe: false)
 }
 func cancelledHttpMcp<T>(): McpResult<T> { httpMcpFailure<T>(McpErrorKind.Cancelled, "mcp.http_request_cancelled", "MCP HTTP request was cancelled", retrySafe: false) }
-func mcpProtocolVersion(params: JsonValue): String { match (params.field("_meta")) { case Some(meta) => if (meta.kind == JsonKind.Object) { mcpText(meta, MCP_META_PROTOCOL_VERSION) } else { "" }; case None => "" } }
+func mcpProtocolVersion(params: JsonNode): String { match (params.field("_meta")) { case Some(meta) => if (meta.unifiedKind == UnifiedJsonKind.Object) { mcpText(meta, MCP_META_PROTOCOL_VERSION) } else { "" }; case None => "" } }
 func envelopeId(envelope: JsonRpcEnvelope): JsonRpcId { match (envelope) { case JsonRpcEnvelope.Request(value) => value.id; case JsonRpcEnvelope.Response(value) => value.id; case JsonRpcEnvelope.Notification(_) => jsonRpcNullId() } }
-func mcpRequestIdJson(id: JsonRpcId): JsonValue {
-    match (id.kind) {
-        case JsonRpcIdKind.Text => JsonValue.stringValue(id.value)
-        case JsonRpcIdKind.Number => JsonValue.numberValue(id.value)
-        case JsonRpcIdKind.Null => JsonValue.nullValue()
+func responseStatus(envelope: JsonRpcEnvelope): UInt16 { match (envelope) {
+    case JsonRpcEnvelope.Response(value) => match (value.payload) {
+        case JsonRpcResponsePayload.Failure(error) =>
+            if (error.code == JSON_RPC_METHOD_NOT_FOUND) { 404 }
+            else if (error.code == JSON_RPC_INVALID_PARAMS || error.code == MCP_HEADER_MISMATCH ||
+                error.code == MCP_MISSING_REQUIRED_CLIENT_CAPABILITY || error.code == MCP_UNSUPPORTED_PROTOCOL_VERSION) { 400 }
+            else { 200 }
+        case _ => 200
     }
-}
-func responseStatus(envelope: JsonRpcEnvelope): UInt16 { match (envelope) { case JsonRpcEnvelope.Response(value) => match (value.payload) { case JsonRpcResponsePayload.Failure(error) => if (error.code == JSON_RPC_METHOD_NOT_FOUND) { 404 } else { 200 }; case _ => 200 }; case _ => 200 } }
+    case _ => 200
+} }
 func writeHttpProblem(context: HttpContext, status: UInt16, message: String): Unit { context.responseBuilder.status(status).header("Content-Type", "text/plain; charset=utf-8").header("Cache-Control", "no-store").body(message) }
 func writeMcpHttpEnvelope(context: HttpContext, status: UInt16, envelope: JsonRpcEnvelope): Unit { context.responseBuilder.status(status).header("Content-Type", "application/json; charset=utf-8").header("Cache-Control", "no-store").body(encodeJsonRpc(envelope)) }
-func originAllowed(allowed: Array<String>, origin: String): Bool { if (origin == "") { return true }; for (value in allowed where value == origin) { return true }; false }
+func boundedMcpHttpOperationResponse(
+    envelope: JsonRpcEnvelope, id: JsonRpcId, maxFrameBytes: Int64
+): JsonRpcEnvelope {
+    if (encodeJsonRpc(envelope).toArray().size <= maxFrameBytes) { return envelope }
+    JsonRpcEnvelope.Response(mcpFailureResponse(
+        id, JSON_RPC_INTERNAL_ERROR, "MCP HTTP operation response exceeded the frame limit"
+    ))
+}
+func originAllowed(allowed: Array<String>, origin: String): Bool {
+    if (origin == "") { return true }
+    for (value in allowed where value == origin) { return true }
+    if (!allowed.isEmpty() || !secureMcpHttpOrigin(origin)) { return false }
+    loopbackMcpAuthority(mcpHttpAuthority(
+        origin, if (origin.startsWith("https://")) { "https://" } else { "http://" }
+    ))
+}
 func bearerAuthorized(value: String, token: String): Bool { if (token == "") { return value == "" }; value == "Bearer " + token }
 func validHttpToken(value: String): Bool { if (value == "") { return false }; for (byte in unsafe { value.rawData() }) { if (!((byte >= b'a' && byte <= b'z') || (byte >= b'A' && byte <= b'Z') || (byte >= b'0' && byte <= b'9') || byte == b'-')) { return false } }; true }
 func validHttpValue(value: String): Bool { for (byte in unsafe { value.rawData() }) { if (byte != b'\t' && (byte < 32 || byte > 126)) { return false } }; true }
-func reservedMcpHeader(value: String): Bool { let lower = value.toAsciiLower(); lower == "authorization" || lower == "content-type" || lower == "accept" || lower == "origin" || lower == MCP_HEADER_PROTOCOL_VERSION.toAsciiLower() || lower == MCP_HEADER_METHOD.toAsciiLower() || lower == MCP_HEADER_NAME.toAsciiLower() }
+func reservedMcpHeader(value: String): Bool {
+    let lower = value.toAsciiLower()
+    lower == "authorization" || lower == "content-type" || lower == "accept" ||
+        lower == "origin" || lower == MCP_HEADER_PROTOCOL_VERSION.toAsciiLower() ||
+        lower == MCP_HEADER_METHOD.toAsciiLower() || lower == MCP_HEADER_NAME.toAsciiLower() ||
+        lower == MCP_HEADER_CLIENT_INSTANCE_ID.toAsciiLower() ||
+        lower.startsWith(MCP_HEADER_PARAM_PREFIX.toAsciiLower())
+}
+func validMcpHttpClientInstanceId(value: String): Bool {
+    if (value.size < 16 || value.size > 200) { return false }
+    validHttpToken(value)
+}
+func newMcpHttpClientInstanceId(): String {
+    let random = Random()
+    "mcp4cj-" + random.nextInt64().toString() + "-" + random.nextInt64().toString() +
+        "-" + random.nextInt64().toString() + "-" + random.nextInt64().toString()
+}
 func loopbackMcpHost(value: String): Bool { value == "127.0.0.1" || value == "localhost" || value == "::1" }
 func secureMcpHttpUrl(value: String): Bool {
     if (value.startsWith("https://")) {
@@ -502,24 +1403,24 @@ func projectMcpHttpResponse(request: JsonRpcEnvelope, response: JsonRpcEnvelope)
                     case Some(candidate) => candidate
                     case None => return response
                 }
-                if (tools.kind != JsonKind.List) { return response }
-                let accepted = ArrayList<JsonValue>()
+                if (tools.unifiedKind != UnifiedJsonKind.List) { return response }
+                let accepted = ArrayList<JsonNode>()
                 for (tool in tools.items) {
                     let schema = match (tool.field("inputSchema")) {
                         case Some(candidate) => candidate
-                        case None => JsonValue.nullValue()
+                        case None => jsonNull()
                     }
                     if (validMcpHttpSchema(schema)) { accepted.add(tool) }
                 }
-                let fields = ArrayList<JsonField>()
+                let fields = ArrayList<JsonObjectEntry>()
                 for (field in result.fields) {
                     fields.add(if (field.name == "tools") {
-                        JsonField("tools", JsonValue.arrayValue(accepted.toArray()))
+                        JsonObjectEntry("tools", jsonArray(accepted.toArray()))
                     } else { field })
                 }
                 JsonRpcEnvelope.Response(JsonRpcResponse(
                     value.id,
-                    JsonRpcResponsePayload.Success(JsonValue.objectValue(fields.toArray()))
+                    JsonRpcResponsePayload.Success(jsonObject(fields.toArray()))
                 ))
             case _ => response
         }
@@ -527,32 +1428,169 @@ func projectMcpHttpResponse(request: JsonRpcEnvelope, response: JsonRpcEnvelope)
     }
 }
 
-func validMcpHttpSchema(schema: JsonValue): Bool {
-    if (schema.kind != JsonKind.Object) { return false }
+func validMcpHttpSchema(schema: JsonNode): Bool {
+    if (schema.unifiedKind != UnifiedJsonKind.Object) { return false }
     match (schema.field("x-mcp-header")) {
         case Some(header) =>
-            if (header.kind != JsonKind.Text || !validHttpToken(header.text)) { return false }
+            if (header.unifiedKind != UnifiedJsonKind.Text || !validHttpToken(header.text)) { return false }
             let kind = mcpText(schema, "type")
-            if (kind != "string" && kind != "boolean") { return false }
+            if (kind != "string" && kind != "integer" && kind != "boolean") { return false }
         case None => ()
     }
     match (schema.field("properties")) {
         case Some(properties) =>
-            if (properties.kind != JsonKind.Object) { return false }
+            if (properties.unifiedKind != UnifiedJsonKind.Object) { return false }
             for (field in properties.fields) { if (!validMcpHttpSchema(field.value)) { return false } }
         case None => ()
     }
     match (schema.field("items")) {
-        case Some(items) => if (!validMcpHttpSchema(items)) { return false }
+        case Some(items) => if (!validMcpHttpSchema(items) || containsMcpHttpHeaderAnnotation(items)) {
+            return false
+        }
         case None => ()
     }
     true
 }
 
-func encodeMcpHeader(value: String): String { "b64:" + mcpBase64(unsafe { value.rawData() }) }
+func containsMcpHttpHeaderAnnotation(schema: JsonNode): Bool {
+    if (schema.unifiedKind != UnifiedJsonKind.Object) { return false }
+    if (schema.field("x-mcp-header").isSome()) { return true }
+    match (schema.field("properties")) {
+        case Some(properties) => for (field in properties.fields) {
+            if (containsMcpHttpHeaderAnnotation(field.value)) { return true }
+        }
+        case None => ()
+    }
+    match (schema.field("items")) {
+        case Some(items) => containsMcpHttpHeaderAnnotation(items)
+        case None => false
+    }
+}
+
+func validateDeclaredMcpParameterHeaders(
+    headers: HttpHeaders, expected: Array<McpHttpHeader>
+): McpResult<Unit> {
+    let prefix = MCP_HEADER_PARAM_PREFIX.toAsciiLower()
+    for ((name, _) in headers) {
+        let normalized = name.toAsciiLower()
+        if (!normalized.startsWith(prefix)) { continue }
+        var declared = false
+        for (header in expected where header.name.toAsciiLower() == normalized) {
+            declared = true
+        }
+        if (!declared) {
+            return invalidMcp<Unit>(
+                "mcp.http_header_mismatch", name + " is not declared by the tool input schema"
+            )
+        }
+    }
+    McpResult.Ok(())
+}
+
+func projectMcpParameterHeaders(schema: JsonNode, value: JsonNode): McpResult<Array<McpHttpHeader>> {
+    let headers = ArrayList<McpHttpHeader>()
+    if (schema.unifiedKind == UnifiedJsonKind.Null) { return McpResult.Ok([]) }
+    match (appendMcpParameterHeaders(schema, value, headers)) {
+        case McpResult.Ok(_) => McpResult.Ok(headers.toArray())
+        case McpResult.Err(error) => McpResult.Err(error)
+    }
+}
+
+func appendMcpParameterHeaders(
+    schema: JsonNode, value: JsonNode, headers: ArrayList<McpHttpHeader>
+): McpResult<Unit> {
+    if (schema.unifiedKind != UnifiedJsonKind.Object) {
+        return invalidMcp<Unit>("mcp.http_schema_invalid", "tool input schema must be an object")
+    }
+    match (schema.field("x-mcp-header")) {
+        case Some(header) =>
+            if (header.unifiedKind != UnifiedJsonKind.Text || !validHttpToken(header.text)) {
+                return invalidMcp<Unit>("mcp.http_schema_invalid", "x-mcp-header must be a valid token")
+            }
+            let encoded = match (mcpHeaderScalar(schema, value)) {
+                case McpResult.Ok(found) => found
+                case McpResult.Err(error) => return McpResult.Err(error)
+            }
+            let fullName = MCP_HEADER_PARAM_PREFIX + header.text
+            for (existing in headers where existing.name.toAsciiLower() == fullName.toAsciiLower()) {
+                return invalidMcp<Unit>("mcp.http_schema_invalid", "duplicate x-mcp-header name")
+            }
+            try { headers.add(McpHttpHeader(fullName, encodeMcpHeader(encoded))) }
+            catch (error: Exception) { return invalidMcp<Unit>("mcp.http_header_invalid", error.message) }
+        case None => ()
+    }
+    match (schema.field("properties")) {
+        case Some(properties) =>
+            if (properties.unifiedKind != UnifiedJsonKind.Object || value.unifiedKind != UnifiedJsonKind.Object) {
+                return McpResult.Ok(())
+            }
+            for (property in properties.fields) {
+                match (value.field(property.name)) {
+                    case Some(child) => match (appendMcpParameterHeaders(property.value, child, headers)) {
+                        case McpResult.Ok(_) => ()
+                        case McpResult.Err(error) => return McpResult.Err(error)
+                    }
+                    case None => ()
+                }
+            }
+        case None => ()
+    }
+    McpResult.Ok(())
+}
+
+func mcpHeaderScalar(schema: JsonNode, value: JsonNode): McpResult<String> {
+    let kind = mcpText(schema, "type")
+    if (kind == "string" && value.unifiedKind == UnifiedJsonKind.Text) { return McpResult.Ok(value.text) }
+    if (kind == "boolean" && value.unifiedKind == UnifiedJsonKind.Boolean) {
+        return McpResult.Ok(if (value.boolean) { "true" } else { "false" })
+    }
+    if (kind == "integer" && value.unifiedKind == UnifiedJsonKind.Number && mcpIntegerText(value.number)) {
+        return McpResult.Ok(value.number)
+    }
+    invalidMcp<String>("mcp.http_header_value_invalid", "x-mcp-header value does not match string, integer, or boolean schema")
+}
+
+func mcpIntegerText(value: String): Bool {
+    if (value == "") { return false }
+    let bytes = unsafe { value.rawData() }; var start: Int64 = 0
+    if (bytes[0] == b'-') { if (bytes.size == 1) { return false }; start = 1 }
+    for (index in start..bytes.size where bytes[index] < b'0' || bytes[index] > b'9') { return false }
+    true
+}
+
+func encodeMcpHeader(value: String): String {
+    if (plainMcpHeaderValue(value) && !(value.startsWith("=?base64?") && value.endsWith("?="))) {
+        return value
+    }
+    "=?base64?" + mcpBase64(unsafe { value.rawData() }) + "?="
+}
 func decodeMcpHeader(value: String): McpResult<String> {
-    if (!value.startsWith("b64:")) { return invalidMcp<String>("mcp.http_header_invalid", "MCP header is not base64 encoded") }
-    decodeMcpBase64(value[4..])
+    if (value.startsWith("=?base64?") && value.endsWith("?=")) {
+        return decodeMcpBase64(value[9..value.size - 2])
+    }
+    if (!plainMcpHeaderValue(value)) {
+        return invalidMcp<String>("mcp.http_header_invalid", "MCP header value is not safe ASCII")
+    }
+    McpResult.Ok(value)
+}
+
+func plainMcpHeaderValue(value: String): Bool {
+    if (value == "" || value.trimAscii() != value) { return false }
+    for (byte in unsafe { value.rawData() } where byte != b'\t' && (byte < 32 || byte > 126)) { return false }
+    true
+}
+
+func mcpMethodRequiresName(method: String): Bool {
+    method == MCP_METHOD_TOOLS_CALL || method == MCP_METHOD_PROMPTS_GET ||
+        method == MCP_METHOD_RESOURCES_READ || method == MCP_METHOD_TASKS_GET ||
+        method == MCP_METHOD_TASKS_UPDATE || method == MCP_METHOD_TASKS_CANCEL
+}
+
+func mcpStandardName(method: String, params: JsonNode): String {
+    if (method == MCP_METHOD_RESOURCES_READ) { mcpText(params, "uri") }
+    else if (method == MCP_METHOD_TASKS_GET || method == MCP_METHOD_TASKS_UPDATE ||
+        method == MCP_METHOD_TASKS_CANCEL) { mcpText(params, "taskId") }
+    else { mcpText(params, "name") }
 }
 
 func mcpBase64(bytes: Array<UInt8>): String {

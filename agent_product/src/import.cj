@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import model_adapters.*
@@ -141,7 +145,7 @@ func importBlocks(
     content: AgentValue,
     role: String
 ): Array<ModelBlock> {
-    if (content.kind == ValueKind.Text) {
+    if (content.unifiedKind == ValueKind.Text) {
         return [ModelBlock(
             if (role == "toolResult" || role == "tool_result") {
                 ModelBlockKind.ToolResult
@@ -151,7 +155,7 @@ func importBlocks(
             text: content.text
         )]
     }
-    if (content.kind != ValueKind.List) { return [] }
+    if (content.unifiedKind != ValueKind.List) { return [] }
     let blocks = ArrayList<ModelBlock>()
     for (item in content.items) {
         let kind = importText(item, "type")
@@ -200,7 +204,7 @@ func importBlocks(
                     ),
                     isError: match (item.field("isError")) {
                         case Some(flag) =>
-                            flag.kind == ValueKind.Boolean && flag.boolean
+                            flag.unifiedKind == ValueKind.Boolean && flag.boolean
                         case None => false
                     }
                 ))
@@ -224,7 +228,7 @@ func importedContentText(value: AgentValue): String {
     if (direct != "") { return direct }
     match (value.field("content")) {
         case Some(content) =>
-            if (content.kind == ValueKind.Text) { content.text } else { "" }
+            if (content.unifiedKind == ValueKind.Text) { content.text } else { "" }
         case None => ""
     }
 }
@@ -232,7 +236,7 @@ func importedContentText(value: AgentValue): String {
 func importText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) { item.text } else { "" }
+            if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }

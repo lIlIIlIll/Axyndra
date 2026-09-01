@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import tool_runtime.*
 
@@ -62,7 +66,7 @@ func registerSkillReferenceTool(
 
 func skillToolString(call: ToolCall, name: String): String {
     match (call.arguments.field(name)) {
-        case Some(value) => if (value.kind == ValueKind.Text) {
+        case Some(value) => if (value.unifiedKind == ValueKind.Text) {
             value.text.trimAscii()
         } else {
             ""

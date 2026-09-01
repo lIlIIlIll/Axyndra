@@ -1,6 +1,7 @@
 package lsp4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import jsonrpc4cj.*
 import process4cj.*
 import std.io.*
@@ -12,9 +13,9 @@ import std.unittest.testmacro.*
 class Lsp4CjTests {
     @TestCase
     func framesAndDecodesMessages() {
-        let source = JsonValue.objectValue([
-            JsonField("jsonrpc", JsonValue.stringValue("2.0")),
-            JsonField("method", JsonValue.stringValue("initialized"))
+        let source = jsonObject([
+            JsonObjectEntry("jsonrpc", jsonString("2.0")),
+            JsonObjectEntry("method", jsonString("initialized"))
         ])
         let stream = ByteBuffer()
         stream.write(encodeLspMessage(source))
@@ -44,27 +45,27 @@ class Lsp4CjTests {
         let serverRequested = AtomicBool(false)
         let client = match (LspClient.`spawn`(
             ProcessCommand("/usr/bin/python3", arguments: ["-u", "-c", lspFixtureScript()]),
-            notificationHandler: { method: String, _: JsonValue => if (method == "window/logMessage") { notified.store(true) } },
-            requestHandler: { method: String, _: JsonValue =>
-                if (method == "workspace/configuration") { serverRequested.store(true); LspResult.Ok(JsonValue.arrayValue([])) }
+            notificationHandler: { method: String, _: JsonNode => if (method == "window/logMessage") { notified.store(true) } },
+            requestHandler: { method: String, _: JsonNode =>
+                if (method == "workspace/configuration") { serverRequested.store(true); LspResult.Ok(jsonArray([])) }
                 else { LspResult.Err(LspError(LspErrorKind.Protocol, "unsupported", "unsupported")) }
             },
             maxFrameBytes: 65536
         )) { case LspResult.Ok(value) => value; case LspResult.Err(error) => throw error }
 
-        match (client.initialize(JsonValue.objectValue([]))) {
+        match (client.initialize(jsonObject([]))) {
             case LspResult.Ok(value) => @Expect(value.field("capabilities").isSome(), true)
             case LspResult.Err(error) => @Fail(error.message)
         }
-        let first = spawn { client.request("echo", JsonValue.objectValue([JsonField("value", JsonValue.stringValue("one"))])) }
-        let second = spawn { client.request("echo", JsonValue.objectValue([JsonField("value", JsonValue.stringValue("two"))])) }
+        let first = spawn { client.request("echo", jsonObject([JsonObjectEntry("value", jsonString("one"))])) }
+        let second = spawn { client.request("echo", jsonObject([JsonObjectEntry("value", jsonString("two"))])) }
         @Expect(first.get().isOk(), true)
         @Expect(second.get().isOk(), true)
         var waited: Int64 = 0
         while ((!notified.load() || !serverRequested.load()) && waited < 1000) { sleep(Duration.millisecond * 5); waited += 5 }
         @Expect(notified.load(), true)
         @Expect(serverRequested.load(), true)
-        match (client.request("hang", JsonValue.objectValue([]), timeoutMillis: 20)) {
+        match (client.request("hang", jsonObject([]), timeoutMillis: 20)) {
             case LspResult.Err(error) => match (error.kind) {
                 case LspErrorKind.Deadline => ()
                 case _ => @Fail("expected deadline error")
@@ -73,7 +74,7 @@ class Lsp4CjTests {
         }
         @Expect(client.shutdown().isOk(), true)
         @Expect(client.close().isOk(), true)
-        @Expect(client.request("echo", JsonValue.objectValue([])).isOk(), false)
+        @Expect(client.request("echo", jsonObject([])).isOk(), false)
     }
 }
 

@@ -77,6 +77,7 @@ def text_events(text, response_id):
         {
             "type": "response.output_item.done",
             "output_index": 0,
+            "item_id": item_id,
             "item": complete_item,
         },
         {
@@ -87,6 +88,49 @@ def text_events(text, response_id):
                 "output": [complete_item],
                 "usage": {
                     "input_tokens": 2,
+                    "output_tokens": 1,
+                },
+            },
+        },
+    ]
+
+
+def tool_events(call, response_id):
+    return [
+        {
+            "type": "response.created",
+            "response": {
+                "id": response_id,
+                "status": "in_progress",
+                "output": [],
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": call,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "output_index": 0,
+            "item_id": call["id"],
+            "name": call["name"],
+            "arguments": call["arguments"],
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item_id": call["id"],
+            "item": call,
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "output": [call],
+                "usage": {
+                    "input_tokens": 3,
                     "output_tokens": 1,
                 },
             },
@@ -231,24 +275,7 @@ class Handler(BaseHTTPRequestHandler):
                             separators=(",", ":"),
                         ),
                     }
-                    events = [
-                        {
-                            "type": "response.output_item.added",
-                            "item": call,
-                        },
-                        {
-                            "type": "response.completed",
-                            "response": {
-                                "id": "resp_tool_call",
-                                "status": "completed",
-                                "output": [call],
-                                "usage": {
-                                    "input_tokens": 3,
-                                    "output_tokens": 1,
-                                },
-                            },
-                        },
-                    ]
+                    events = tool_events(call, "resp_tool_call")
             elif write_approval:
                 if "function_call_output" in serialized:
                     events = text_events(
@@ -266,24 +293,7 @@ class Handler(BaseHTTPRequestHandler):
                             '"content":"approved"}'
                         ),
                     }
-                    events = [
-                        {
-                            "type": "response.output_item.added",
-                            "item": call,
-                        },
-                        {
-                            "type": "response.completed",
-                            "response": {
-                                "id": "resp_approval",
-                                "status": "completed",
-                                "output": [call],
-                                "usage": {
-                                    "input_tokens": 3,
-                                    "output_tokens": 1,
-                                },
-                            },
-                        },
-                    ]
+                    events = tool_events(call, "resp_approval")
             else:
                 response_text = (
                     "axyndra-real-smoke-responses"

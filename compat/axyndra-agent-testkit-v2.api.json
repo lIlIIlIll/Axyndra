@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "package": "omp_agent_testkit",
-  "api_version": "1.0.0",
+  "package": "axyndra_agent_testkit",
+  "api_version": "2.0.0",
   "symbols": [
     {
       "key": "class:ExtensionContractHarness",
@@ -26,7 +26,7 @@
     {
       "key": "class:ExtensionContractHarness.func:prepare",
       "stability": "STABLE",
-      "signature": "public func prepare( toolName: String, input: JsonValue, workspaceRoot!: String = \"\", cwd!: String = \"\", callId!: String = \"test-call\", cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() ): SdkResult<PreparedExtensionCase>"
+      "signature": "public func prepare( toolName: String, input: JsonNode, workspaceRoot!: String = \"\", cwd!: String = \"\", callId!: String = \"test-call\", cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline() ): SdkResult<PreparedExtensionCase>"
     },
     {
       "key": "class:ExtensionContractHarness.func:toolNames",
@@ -190,4 +190,3 @@
     }
   ]
 }
-

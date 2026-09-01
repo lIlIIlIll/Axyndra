@@ -66,9 +66,13 @@ The complete production path is:
     AgentCore -> ModelPort -> UnifiedModelRuntime
               -> RuntimeProviderProfile + RuntimeModelDescriptor
               -> LlmApiAdapterRegistry -> protocol adapter
-              -> ProviderModelPort -> llm4cj HTTP/SSE transport
+              -> ProviderModelPort -> standalone llm4cj HTTP/SSE transport
 
-`agent_core` never sees provider DTOs or HTTP/SSE state. `llm4cj` remains transport-only and does not import Agent domain types. An absent API id, or an API/dialect mismatch, fails before credential resolution or network I/O; the runtime never infers either from a provider name, model name, or URL.
+`agent_core` never sees provider DTOs or HTTP/SSE state. `llm4cj` is consumed from
+`https://github.com/lIlIIlIll/llm4cj` on `main`; it remains transport-only and does
+not import Agent domain types. An absent API id, or an API/dialect mismatch, fails
+before credential resolution or network I/O; the runtime never infers either from
+a provider name, model name, or URL.
 
 ## Configuration and migration
 

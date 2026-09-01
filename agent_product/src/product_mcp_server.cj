@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import agent_protocol.*
@@ -208,7 +212,7 @@ func buildProductMcpServer(
 ): McpServer {
     McpServer(
         McpDiscoverResult(
-            McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
+            serverInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
             instructions: options.instructions
         ),
         ProductMcpToolHost(catalog, pipeline, ids, options, toolContext)

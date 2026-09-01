@@ -1,5 +1,9 @@
 package debug_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import agent_store.*
@@ -386,7 +390,7 @@ func expectDebugSchema(catalog: ToolCatalog): Unit {
         let required = definition.inputSchema
             .field("required").getOrThrow()
         expect(
-            properties.kind == ValueKind.Object &&
+            properties.unifiedKind == ValueKind.Object &&
             properties.fields.size == expected.size &&
             required.items.size == 1 &&
             required.items[0].text == "action",

@@ -952,7 +952,7 @@ func startProductMcp(
         }
         let client = McpClient(
             opened.transport,
-            McpRequestMeta(McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"))
+            McpRequestMeta(clientInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"))
         )
         runtime.attach(record, client)
         let extension = match (discoverMcpExtension(

@@ -1,5 +1,9 @@
 package agent_core
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_runtime.*
 import agent_skills.*
@@ -4766,7 +4770,7 @@ func isProvisionalStreamTelemetry(event: AgentEvent): Bool {
         case AgentEventPayload.TextDelta(_) | AgentEventPayload.ReasoningDelta(_) => true
         case AgentEventPayload.Extension(_, detail) =>
             match (detail.field("code")) {
-                case Some(value) => value.kind == ValueKind.Text &&
+                case Some(value) => value.unifiedKind == ValueKind.Text &&
                     value.text == "model.tool_arguments"
                 case None => false
             }
@@ -4953,7 +4957,7 @@ func toolServiceKindFromName(value: String): ToolServiceKind {
 
 func requiredCoreTextField(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text }
             else { throw IllegalArgumentException("durable field is not text: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -4961,7 +4965,7 @@ func requiredCoreTextField(value: AgentValue, name: String): String {
 
 func requiredCoreListField(value: AgentValue, name: String): Array<AgentValue> {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.List) { item.items }
+        case Some(item) => if (item.unifiedKind == ValueKind.List) { item.items.toArray() }
             else { throw IllegalArgumentException("durable field is not a list: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -4976,7 +4980,7 @@ func requiredCoreValueField(value: AgentValue, name: String): AgentValue {
 
 func requiredCoreBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Boolean) { item.boolean }
+        case Some(item) => if (item.unifiedKind == ValueKind.Boolean) { item.boolean }
             else { throw IllegalArgumentException("durable field is not boolean: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -4984,7 +4988,7 @@ func requiredCoreBoolField(value: AgentValue, name: String): Bool {
 
 func requiredCoreIntegerField(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Number) { Int64.parse(item.number) }
+        case Some(item) => if (item.unifiedKind == ValueKind.Number) { Int64.parse(item.number) }
             else { throw IllegalArgumentException("durable field is not an integer: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -4992,8 +4996,8 @@ func requiredCoreIntegerField(value: AgentValue, name: String): Int64 {
 
 func optionalCoreIntegerField(value: AgentValue, name: String): ?Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Null) { None }
-            else if (item.kind == ValueKind.Number) { Some(Int64.parse(item.number)) }
+        case Some(item) => if (item.unifiedKind == ValueKind.Null) { None }
+            else if (item.unifiedKind == ValueKind.Number) { Some(Int64.parse(item.number)) }
             else { throw IllegalArgumentException("durable field is not an optional integer: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -5001,8 +5005,8 @@ func optionalCoreIntegerField(value: AgentValue, name: String): ?Int64 {
 
 func optionalCoreThinkingField(value: AgentValue, name: String): ?ThinkingLevel {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Null) { None }
-            else if (item.kind == ValueKind.Text) { Some(thinkingLevelFromName(item.text)) }
+        case Some(item) => if (item.unifiedKind == ValueKind.Null) { None }
+            else if (item.unifiedKind == ValueKind.Text) { Some(thinkingLevelFromName(item.text)) }
             else { throw IllegalArgumentException("durable field is not optional thinking: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -5544,7 +5548,7 @@ func modelRequestFromCheckpoint(
             let blocks = ArrayList<ModelBlock>()
             for (blockValue in requiredCoreListField(messageValue, "blocks")) {
                 let image: ?ModelImage = match (blockValue.field("image")) {
-                    case Some(raw) => if (raw.kind == ValueKind.Null) { None } else { Some(ModelImage(
+                    case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else { Some(ModelImage(
                         match (requiredCoreTextField(raw, "source")) {
                             case "url" => ModelImageSourceKind.Url
                             case "base64" => ModelImageSourceKind.Base64
@@ -5562,7 +5566,7 @@ func modelRequestFromCheckpoint(
                     case None => throw IllegalArgumentException("durable image field is missing")
                 }
                 let opaque: ?OpaqueProviderState = match (blockValue.field("opaque_state")) {
-                    case Some(raw) => if (raw.kind == ValueKind.Null) { None } else { Some(OpaqueProviderState(
+                    case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else { Some(OpaqueProviderState(
                         requiredCoreTextField(raw, "provider_id"),
                         requiredCoreTextField(raw, "protocol"),
                         requiredCoreTextField(raw, "payload"),
@@ -5601,7 +5605,7 @@ func modelRequestFromCheckpoint(
             ))
         }
         let structured: ?StructuredOutputSpec = match (value.field("structured_output")) {
-            case Some(raw) => if (raw.kind == ValueKind.Null) { None } else { Some(StructuredOutputSpec(
+            case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else { Some(StructuredOutputSpec(
                 requiredCoreTextField(raw, "name"), requiredCoreValueField(raw, "schema"),
                 description: requiredCoreTextField(raw, "description"),
                 strict: requiredCoreBoolField(raw, "strict")
@@ -5609,7 +5613,7 @@ func modelRequestFromCheckpoint(
             case None => throw IllegalArgumentException("durable structured output field is missing")
         }
         let resolved: ?ResolvedModelRequestPolicy = match (value.field("resolved_policy")) {
-            case Some(raw) => if (raw.kind == ValueKind.Null) { None } else {
+            case Some(raw) => if (raw.unifiedKind == ValueKind.Null) { None } else {
                 let mode = thinkingControlModeFromName(requiredCoreTextField(raw, "thinking_mode"))
                 let requested = thinkingLevelFromName(requiredCoreTextField(raw, "thinking_requested"))
                 let effective = thinkingLevelFromName(requiredCoreTextField(raw, "thinking_effective"))
@@ -5779,7 +5783,7 @@ func resolutionConstraintsValue(values: Array<ResolutionConstraint>): AgentValue
 
 func resolutionConstraintsFromValue(value: AgentValue): Array<ResolutionConstraint> {
     let result = ArrayList<ResolutionConstraint>()
-    if (value.kind != ValueKind.List) {
+    if (value.unifiedKind != ValueKind.List) {
         throw IllegalArgumentException("durable resolution constraints must be a list")
     }
     for (raw in value.items) {
@@ -5813,12 +5817,12 @@ func resolutionValueFromValue(
 ): ResolutionValue {
     match (target) {
         case ResolutionConstraintTarget.OutputLimit =>
-            if (value.kind != ValueKind.Number) {
+            if (value.unifiedKind != ValueKind.Number) {
                 throw IllegalArgumentException("durable output constraint value must be an integer")
             }
             ResolutionValue.TokenLimit(Int64.parse(value.number))
         case ResolutionConstraintTarget.ThinkingLevel =>
-            if (value.kind != ValueKind.Text) {
+            if (value.unifiedKind != ValueKind.Text) {
                 throw IllegalArgumentException("durable thinking constraint value must be text")
             }
             ResolutionValue.ThinkingValue(thinkingLevelFromName(value.text))
@@ -6124,7 +6128,7 @@ func decisionReplayFrame(blocks: Array<DurableDecisionBlock>): String {
 func decisionFrame(value: String): String { value.size.toString() + ":" + value }
 
 func canonicalAgentValue(value: AgentValue): String {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => "null"
         case ValueKind.Boolean => if (value.boolean) { "true" } else { "false" }
         case ValueKind.Number => "n" + decisionFrame(value.number)
@@ -6515,11 +6519,11 @@ func checkpointProjectionText(checkpoint: ContextCheckpoint): String {
     var text = "[Compacted canonical Thread through Item " +
         checkpoint.coversThroughItemOrdinal.toString() + "]"
     match (checkpoint.structuredSummary.field("deterministic_summary")) {
-        case Some(value) => if (value.kind == ValueKind.Text && value.text != "") {
+        case Some(value) => if (value.unifiedKind == ValueKind.Text && value.text != "") {
             text += "\n" + value.text
         }
         case None => match (checkpoint.structuredSummary.field("summary")) {
-            case Some(value) => if (value.kind == ValueKind.Text && value.text != "") {
+            case Some(value) => if (value.unifiedKind == ValueKind.Text && value.text != "") {
                 text += "\n" + value.text
             }
             case None => ()

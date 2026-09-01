@@ -2,7 +2,8 @@ package skill_runtime
 
 import std.collection.*
 import std.sync.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 
 // Experimental: the runtime semantics are reusable, but no ecosystem-wide
 // SKILL.md format is declared stable by this package.
@@ -133,44 +134,44 @@ public class SkillStackSnapshot {
     }
 }
 
-public func skillStackSnapshotValue(snapshot: SkillStackSnapshot): JsonValue {
-    let active = ArrayList<JsonValue>()
+public func skillStackSnapshotValue(snapshot: SkillStackSnapshot): JsonNode {
+    let active = ArrayList<JsonNode>()
     for (activation in snapshot.active) {
-        let references = ArrayList<JsonValue>()
+        let references = ArrayList<JsonNode>()
         for (reference in activation.descriptor.references) {
-            references.add(JsonValue.objectValue([
-                JsonField("id", JsonValue.stringValue(reference.id)),
-                JsonField("description", JsonValue.stringValue(reference.description)),
-                JsonField("content_ref", JsonValue.stringValue(reference.contentRef))
+            references.add(jsonObject([
+                JsonObjectEntry("id", jsonString(reference.id)),
+                JsonObjectEntry("description", jsonString(reference.description)),
+                JsonObjectEntry("content_ref", jsonString(reference.contentRef))
             ]))
         }
-        let triggers = ArrayList<JsonValue>()
-        for (trigger in activation.descriptor.triggers) { triggers.add(JsonValue.stringValue(trigger)) }
-        active.add(JsonValue.objectValue([
-            JsonField("id", JsonValue.stringValue(activation.descriptor.id)),
-            JsonField("name", JsonValue.stringValue(activation.descriptor.name)),
-            JsonField("description", JsonValue.stringValue(activation.descriptor.description)),
-            JsonField("triggers", JsonValue.arrayValue(triggers.toArray())),
-            JsonField("instruction_ref", JsonValue.stringValue(activation.descriptor.instructionRef)),
-            JsonField("instructions", JsonValue.stringValue(activation.instructions)),
-            JsonField("references", JsonValue.arrayValue(references.toArray()))
+        let triggers = ArrayList<JsonNode>()
+        for (trigger in activation.descriptor.triggers) { triggers.add(jsonString(trigger)) }
+        active.add(jsonObject([
+            JsonObjectEntry("id", jsonString(activation.descriptor.id)),
+            JsonObjectEntry("name", jsonString(activation.descriptor.name)),
+            JsonObjectEntry("description", jsonString(activation.descriptor.description)),
+            JsonObjectEntry("triggers", jsonArray(triggers.toArray())),
+            JsonObjectEntry("instruction_ref", jsonString(activation.descriptor.instructionRef)),
+            JsonObjectEntry("instructions", jsonString(activation.instructions)),
+            JsonObjectEntry("references", jsonArray(references.toArray()))
         ]))
     }
-    let loaded = ArrayList<JsonValue>()
+    let loaded = ArrayList<JsonNode>()
     for (reference in snapshot.loadedReferences) {
-        loaded.add(JsonValue.objectValue([
-            JsonField("skill_id", JsonValue.stringValue(reference.skillId)),
-            JsonField("reference_id", JsonValue.stringValue(reference.referenceId)),
-            JsonField("content", JsonValue.stringValue(reference.content))
+        loaded.add(jsonObject([
+            JsonObjectEntry("skill_id", jsonString(reference.skillId)),
+            JsonObjectEntry("reference_id", jsonString(reference.referenceId)),
+            JsonObjectEntry("content", jsonString(reference.content))
         ]))
     }
-    JsonValue.objectValue([
-        JsonField("active", JsonValue.arrayValue(active.toArray())),
-        JsonField("loaded_references", JsonValue.arrayValue(loaded.toArray()))
+    jsonObject([
+        JsonObjectEntry("active", jsonArray(active.toArray())),
+        JsonObjectEntry("loaded_references", jsonArray(loaded.toArray()))
     ])
 }
 
-public func skillStackFromSnapshotValue(value: JsonValue): SkillStackSnapshot {
+public func skillStackFromSnapshotValue(value: JsonNode): SkillStackSnapshot {
     let activeValues = skillListField(value, "active")
     let active = ArrayList<SkillActivation>()
     for (item in activeValues.items) {
@@ -203,32 +204,32 @@ public func skillStackFromSnapshotValue(value: JsonValue): SkillStackSnapshot {
     SkillStackSnapshot(active.toArray(), loaded.toArray())
 }
 
-public class JsonSkillSnapshotCodec <: SkillSnapshotCodec<JsonValue> {
+public class JsonSkillSnapshotCodec <: SkillSnapshotCodec<JsonNode> {
     public init() {}
-    public func encode(snapshot: SkillStackSnapshot): JsonValue { skillStackSnapshotValue(snapshot) }
-    public func decode(value: JsonValue): SkillStackSnapshot { skillStackFromSnapshotValue(value) }
+    public func encode(snapshot: SkillStackSnapshot): JsonNode { skillStackSnapshotValue(snapshot) }
+    public func decode(value: JsonNode): SkillStackSnapshot { skillStackFromSnapshotValue(value) }
 }
 
-func skillListField(value: JsonValue, name: String): JsonValue {
+func skillListField(value: JsonNode, name: String): JsonNode {
     let item = match (value.field(name)) {
         case Some(candidate) => candidate
         case None => throw IllegalStateException("Skill snapshot field is missing: " + name)
     }
-    if (value.kind != JsonKind.Object || item.kind != JsonKind.List) {
+    if (value.unifiedKind != UnifiedJsonKind.Object || item.unifiedKind != UnifiedJsonKind.List) {
         throw IllegalStateException("Skill snapshot field is not a list: " + name)
     }
     item
 }
 
-func skillTextField(value: JsonValue, name: String): String {
+func skillTextField(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(item) => skillText(item, name)
         case None => throw IllegalStateException("Skill snapshot field is missing: " + name)
     }
 }
 
-func skillText(value: JsonValue, name: String): String {
-    if (value.kind != JsonKind.Text) {
+func skillText(value: JsonNode, name: String): String {
+    if (value.unifiedKind != UnifiedJsonKind.Text) {
         throw IllegalStateException("Skill snapshot field is not text: " + name)
     }
     value.text

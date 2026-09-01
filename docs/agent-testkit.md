@@ -17,9 +17,9 @@ prevents an external extension test from pulling the whole product or gaining
 access to internal authority ports.
 
 ```text
-json4cj ─┐
-         ├─> agent_sdk ─> axyndra_agent_testkit ─> external extension tests
-         └────────────────────────────────────────────────────────────
+yjson ─> yjson_support ─┐
+                       ├─> agent_sdk ─> axyndra_agent_testkit ─> external extension tests
+                       └────────────────────────────────────────────────────────────
 
 agent_domain / agent_ports / tool_runtime ─> agent_testkit ─> omp contracts
 

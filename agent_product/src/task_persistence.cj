@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_store.*
 import model_adapters.*
@@ -308,10 +312,10 @@ func taskPersistCollectArtifactRefs(
     depth: Int64
 ): Unit {
     if (depth > 12 || values.size >= 64) { return }
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Object =>
             for (field in value.fields) {
-                if ((field.name == "artifact_ref" || field.name == "ref") && field.value.kind == ValueKind.Text &&
+                if ((field.name == "artifact_ref" || field.name == "ref") && field.value.unifiedKind == ValueKind.Text &&
                     field.value.text.startsWith("blob:sha256:")) {
                     var duplicate = false
                     for (existing in values where existing.text == field.value.text) { duplicate = true }
@@ -532,7 +536,7 @@ func taskPersistDecodeJob(
         startedAt: startedAt,
         status: restoredStatus,
         updatedAt: updatedAt,
-        result: if (resultField.kind == ValueKind.Null) { None } else { Some(resultField) },
+        result: if (resultField.unifiedKind == ValueKind.Null) { None } else { Some(resultField) },
         error: restoredError,
         executing: false,
         settlementReceiptId: receipt,
@@ -561,7 +565,7 @@ func taskPersistDecodeMessage(value: AgentValue, rootSessionId: String): Product
 }
 
 func taskPersistRequireObject(value: AgentValue, label: String): Unit {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         throw IllegalArgumentException(label + " must be an object")
     }
 }
@@ -575,7 +579,7 @@ func taskPersistField(value: AgentValue, name: String): AgentValue {
 
 func taskPersistText(value: AgentValue, name: String): String {
     let item = taskPersistField(value, name)
-    if (item.kind != ValueKind.Text) {
+    if (item.unifiedKind != ValueKind.Text) {
         throw IllegalArgumentException("task persistence field is not text: " + name)
     }
     item.text
@@ -591,7 +595,7 @@ func taskPersistNonEmptyText(value: AgentValue, name: String): String {
 
 func taskPersistInteger(value: AgentValue, name: String): Int64 {
     let item = taskPersistField(value, name)
-    if (item.kind != ValueKind.Number) {
+    if (item.unifiedKind != ValueKind.Number) {
         throw IllegalArgumentException("task persistence field is not an integer: " + name)
     }
     try {
@@ -619,7 +623,7 @@ func taskPersistPositive(value: AgentValue, name: String): Int64 {
 
 func taskPersistBoolean(value: AgentValue, name: String): Bool {
     let item = taskPersistField(value, name)
-    if (item.kind != ValueKind.Boolean) {
+    if (item.unifiedKind != ValueKind.Boolean) {
         throw IllegalArgumentException("task persistence field is not boolean: " + name)
     }
     item.boolean
@@ -627,10 +631,10 @@ func taskPersistBoolean(value: AgentValue, name: String): Bool {
 
 func taskPersistList(value: AgentValue, name: String): Array<AgentValue> {
     let item = taskPersistField(value, name)
-    if (item.kind != ValueKind.List) {
+    if (item.unifiedKind != ValueKind.List) {
         throw IllegalArgumentException("task persistence field is not a list: " + name)
     }
-    item.items
+    item.items.toArray()
 }
 
 func taskPersistKnownStatus(value: String, allowed: Array<String>, label: String): String {

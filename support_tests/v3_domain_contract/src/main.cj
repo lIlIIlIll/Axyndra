@@ -1,5 +1,9 @@
 package v3_domain_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_runtime.*
 

@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import dap4cj as library
 import agent_domain.*
 import process4cj.*
@@ -18,8 +19,8 @@ class DapAdapterSpec {
     let executable: String
     let arguments: Array<String>
     let fileTypes: Array<String>
-    let launchDefaults: JsonValue
-    let attachDefaults: JsonValue
+    let launchDefaults: JsonNode
+    let attachDefaults: JsonNode
     let networkAllowed: Bool
     let environment: Array<DirectEnvironmentBinding>
 
@@ -28,8 +29,8 @@ class DapAdapterSpec {
         executable: String,
         arguments: Array<String>,
         fileTypes: Array<String>,
-        launchDefaults: JsonValue,
-        attachDefaults: JsonValue,
+        launchDefaults: JsonNode,
+        attachDefaults: JsonNode,
         networkAllowed!: Bool = false,
         environment!: Array<DirectEnvironmentBinding> = []
     ) {
@@ -115,7 +116,7 @@ class DapClient {
     private var column: Int64 = 0
     private var instructionPointer = ""
     private var exitCode: ?Int64 = None
-    private var capabilities = JsonValue.objectValue([])
+    private var capabilities = jsonObject([])
     private var output = ""
     private var outputBytes: Int64 = 0
     private var outputTruncated = false
@@ -137,8 +138,8 @@ class DapClient {
         this.allowUnsafeTestBypass = allowUnsafeTestBypass
         this.protocol = Some(library.DapClient(
             process,
-            eventHandler: { event: String, body: JsonValue => handleEvent(event, body) },
-            reverseRequestHandler: { command: String, arguments: JsonValue =>
+            eventHandler: { event: String, body: JsonNode => handleEvent(event, body) },
+            reverseRequestHandler: { command: String, arguments: JsonNode =>
                 handleReverseRequest(command, arguments)
             }
         ))
@@ -156,41 +157,41 @@ class DapClient {
     func initialize(
         runId: RunId,
         timeoutMillis: Int64
-    ): Result<JsonValue> {
+    ): Result<JsonNode> {
         let arguments = dapObject([
-            JsonField("clientID", JsonValue.stringValue("axyndra")),
-            JsonField("clientName", JsonValue.stringValue("axyndra")),
-            JsonField(
+            JsonObjectEntry("clientID", jsonString("axyndra")),
+            JsonObjectEntry("clientName", jsonString("axyndra")),
+            JsonObjectEntry(
                 "adapterID",
-                JsonValue.stringValue(adapter.name)
+                jsonString(adapter.name)
             ),
-            JsonField("locale", JsonValue.stringValue("en-US")),
-            JsonField("linesStartAt1", JsonValue.boolValue(true)),
-            JsonField("columnsStartAt1", JsonValue.boolValue(true)),
-            JsonField("pathFormat", JsonValue.stringValue("path")),
-            JsonField(
+            JsonObjectEntry("locale", jsonString("en-US")),
+            JsonObjectEntry("linesStartAt1", jsonBool(true)),
+            JsonObjectEntry("columnsStartAt1", jsonBool(true)),
+            JsonObjectEntry("pathFormat", jsonString("path")),
+            JsonObjectEntry(
                 "supportsVariableType",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             ),
-            JsonField(
+            JsonObjectEntry(
                 "supportsVariablePaging",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             ),
-            JsonField(
+            JsonObjectEntry(
                 "supportsRunInTerminalRequest",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             ),
-            JsonField(
+            JsonObjectEntry(
                 "supportsMemoryReferences",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             ),
-            JsonField(
+            JsonObjectEntry(
                 "supportsProgressReporting",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             ),
-            JsonField(
+            JsonObjectEntry(
                 "supportsInvalidatedEvent",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             )
         ])
         let _ = runId
@@ -212,9 +213,9 @@ class DapClient {
     func request(
         runId: RunId,
         command: String,
-        arguments: JsonValue,
+        arguments: JsonNode,
         timeoutMillis: Int64
-    ): Result<JsonValue> {
+    ): Result<JsonNode> {
         let _ = runId
         let _ = command
         mapDapResult(protocolClient().request(command, arguments, timeoutMillis: timeoutMillis))
@@ -222,7 +223,7 @@ class DapClient {
 
     func beginRequest(
         command: String,
-        arguments: JsonValue
+        arguments: JsonNode
     ): Result<Int64> {
         mapDapResult(protocolClient().beginRequest(command, arguments))
     }
@@ -232,7 +233,7 @@ class DapClient {
         requestSequence: Int64,
         command: String,
         timeoutMillis: Int64
-    ): Result<JsonValue> {
+    ): Result<JsonNode> {
         let _ = runId
         let _ = command
         mapDapResult(protocolClient().waitResponse(requestSequence, timeoutMillis: timeoutMillis))
@@ -341,7 +342,7 @@ class DapClient {
         }
     }
 
-    func setTopFrame(value: JsonValue): Unit {
+    func setTopFrame(value: JsonNode): Unit {
         stateLock.lock()
         try {
             frameId = dapJsonInteger(value, "id", frameId)
@@ -415,7 +416,7 @@ class DapClient {
         }
     }
 
-    private func handleEvent(event: String, body: JsonValue): Unit {
+    private func handleEvent(event: String, body: JsonNode): Unit {
         stateLock.lock()
         try {
             match (event) {
@@ -458,8 +459,8 @@ class DapClient {
 
     private func handleReverseRequest(
         command: String,
-        arguments: JsonValue
-    ): library.DapResult<JsonValue> {
+        arguments: JsonNode
+    ): library.DapResult<JsonNode> {
         if (command == "runInTerminal") {
             match (runInTerminal(arguments)) {
                 case Result.Ok(body) => library.DapResult.Ok(body)
@@ -477,19 +478,19 @@ class DapClient {
     }
 
     private func runInTerminal(
-        arguments: JsonValue
-    ): Result<JsonValue> {
+        arguments: JsonNode
+    ): Result<JsonNode> {
         let rawArgs = match (arguments.field("args")) {
             case Some(value) => value
             case None =>
-                return dapError<JsonValue>(
+                return dapError<JsonNode>(
                     AgentErrorKind.Protocol,
                     "tool.debug_run_in_terminal_args",
                     "runInTerminal request does not contain args"
                 )
         }
-        if (rawArgs.kind != JsonKind.List || rawArgs.items.isEmpty()) {
-            return dapError<JsonValue>(
+        if (rawArgs.unifiedKind != UnifiedJsonKind.List || rawArgs.items.isEmpty()) {
+            return dapError<JsonNode>(
                 AgentErrorKind.Protocol,
                 "tool.debug_run_in_terminal_args",
                 "runInTerminal args must be a non-empty array"
@@ -497,8 +498,8 @@ class DapClient {
         }
         let values = ArrayList<String>()
         for (value in rawArgs.items) {
-            if (value.kind != JsonKind.Text) {
-                return dapError<JsonValue>(
+            if (value.unifiedKind != UnifiedJsonKind.Text) {
+                return dapError<JsonNode>(
                     AgentErrorKind.Protocol,
                     "tool.debug_run_in_terminal_args",
                     "runInTerminal args must contain strings"
@@ -522,18 +523,18 @@ class DapClient {
         let environment = ArrayList<SandboxEnvironmentEntry>()
         match (arguments.field("env")) {
             case Some(value) =>
-                if (value.kind != JsonKind.Object) {
-                    return dapError<JsonValue>(
+                if (value.unifiedKind != UnifiedJsonKind.Object) {
+                    return dapError<JsonNode>(
                         AgentErrorKind.Protocol,
                         "tool.debug_run_in_terminal_env",
                         "runInTerminal env must be an object of string literals"
                     )
                 }
-                for (member in value.members) {
-                    if (member.value.kind != JsonKind.Text ||
+                for (member in value.fields) {
+                    if (member.value.unifiedKind != UnifiedJsonKind.Text ||
                         !validEnvironmentName(member.name) ||
                         directSecretName(member.name)) {
-                        return dapError<JsonValue>(
+                        return dapError<JsonNode>(
                             AgentErrorKind.PermissionDenied,
                             "tool.debug_run_in_terminal_env",
                             "runInTerminal env contains an invalid or secret-like literal"
@@ -545,7 +546,7 @@ class DapClient {
                             member.value.text
                         ))
                     } catch (error: Exception) {
-                        return dapError<JsonValue>(
+                        return dapError<JsonNode>(
                             AgentErrorKind.Protocol,
                             "tool.debug_run_in_terminal_env",
                             error.message
@@ -588,7 +589,7 @@ class DapClient {
             if (rejected) {
                 try { child.terminate(force: true) } catch (_: Exception) {}
                 try { let _ = child.wait() } catch (_: Exception) {}
-                return dapError<JsonValue>(
+                return dapError<JsonNode>(
                     AgentErrorKind.Cancelled,
                     "tool.debug_run_in_terminal_cancelled",
                     "debug session closed before runInTerminal could start"
@@ -612,17 +613,17 @@ class DapClient {
             }
             let _ = monitor
             Result.Ok(dapObject([
-                JsonField(
+                JsonObjectEntry(
                     "processId",
-                    JsonValue.numberValue(child.pid.toString())
+                    jsonNumber(child.pid.toString())
                 ),
-                JsonField(
+                JsonObjectEntry(
                     "shellProcessId",
-                    JsonValue.numberValue(child.pid.toString())
+                    jsonNumber(child.pid.toString())
                 )
             ]))
         } catch (error: Exception) {
-            dapError<JsonValue>(
+            dapError<JsonNode>(
                 AgentErrorKind.Transport,
                 "tool.debug_run_in_terminal_start",
                 "failed to start debuggee: " + redactor.redact(error.message)
@@ -850,15 +851,15 @@ func loadDapAdapters(root: String): Array<DapAdapterSpec> {
             ".hxx", ".rs"
         ],
         dapObject([
-            JsonField("request", JsonValue.stringValue("launch")),
-            JsonField("stopOnEntry", JsonValue.boolValue(true)),
-            JsonField(
+            JsonObjectEntry("request", jsonString("launch")),
+            JsonObjectEntry("stopOnEntry", jsonBool(true)),
+            JsonObjectEntry(
                 "stopAtBeginningOfMainSubprogram",
-                JsonValue.boolValue(true)
+                jsonBool(true)
             )
         ]),
         dapObject([
-            JsonField("request", JsonValue.stringValue("attach"))
+            JsonObjectEntry("request", jsonString("attach"))
         ])
     )
     addBuiltinDapAdapter(
@@ -871,11 +872,11 @@ func loadDapAdapters(root: String): Array<DapAdapterSpec> {
             ".rs", ".zig"
         ],
         dapObject([
-            JsonField("request", JsonValue.stringValue("launch")),
-            JsonField("stopOnEntry", JsonValue.boolValue(true))
+            JsonObjectEntry("request", jsonString("launch")),
+            JsonObjectEntry("stopOnEntry", jsonBool(true))
         ]),
         dapObject([
-            JsonField("request", JsonValue.stringValue("attach"))
+            JsonObjectEntry("request", jsonString("attach"))
         ])
     )
     let paths = [
@@ -905,8 +906,8 @@ func addBuiltinDapAdapter(
     command: String,
     arguments: Array<String>,
     fileTypes: Array<String>,
-    launchDefaults: JsonValue,
-    attachDefaults: JsonValue
+    launchDefaults: JsonNode,
+    attachDefaults: JsonNode
 ): Unit {
     match (resolveDapExecutable(command)) {
         case Some(executable) =>
@@ -925,7 +926,7 @@ func addBuiltinDapAdapter(
 func loadDapConfig(path: String): Array<DapAdapterSpec> {
     let result = ArrayList<DapAdapterSpec>()
     let document = try {
-        parseJson(
+        parseUnifiedJson(
             String.fromUtf8(File.readFrom(path)),
             maxBytes: 1048576,
             maxDepth: 64
@@ -935,17 +936,17 @@ func loadDapConfig(path: String): Array<DapAdapterSpec> {
     }
     let adapters = match (document.field("adapters")) {
         case Some(value) =>
-            if (value.kind == JsonKind.Object) {
+            if (value.unifiedKind == UnifiedJsonKind.Object) {
                 value
             } else {
                 return []
             }
         case None => document
     }
-    if (adapters.kind != JsonKind.Object) { return [] }
-    for (member in adapters.members) {
+    if (adapters.unifiedKind != UnifiedJsonKind.Object) { return [] }
+    for (member in adapters.fields) {
         let value = member.value
-        if (value.kind != JsonKind.Object) { continue }
+        if (value.unifiedKind != UnifiedJsonKind.Object) { continue }
         let command = dapJsonText(value, "command")
         if (command == "") { continue }
         let executable = match (resolveDapExecutable(command)) {
@@ -963,21 +964,21 @@ func loadDapConfig(path: String): Array<DapAdapterSpec> {
             dapJsonStringArray(value, "fileTypes"),
             match (value.field("launchDefaults")) {
                 case Some(defaults) =>
-                    if (defaults.kind == JsonKind.Object) {
+                    if (defaults.unifiedKind == UnifiedJsonKind.Object) {
                         defaults
                     } else {
-                        JsonValue.objectValue([])
+                        jsonObject([])
                     }
-                case None => JsonValue.objectValue([])
+                case None => jsonObject([])
             },
             match (value.field("attachDefaults")) {
                 case Some(defaults) =>
-                    if (defaults.kind == JsonKind.Object) {
+                    if (defaults.unifiedKind == UnifiedJsonKind.Object) {
                         defaults
                     } else {
-                        JsonValue.objectValue([])
+                        jsonObject([])
                     }
-                case None => JsonValue.objectValue([])
+                case None => jsonObject([])
             },
             networkAllowed: dapJsonBoolean(value, "network", false),
             environment: environment
@@ -987,7 +988,7 @@ func loadDapConfig(path: String): Array<DapAdapterSpec> {
 }
 
 func dapJsonEnvironmentBindings(
-    value: JsonValue
+    value: JsonNode
 ): ?Array<DirectEnvironmentBinding> {
     let result = ArrayList<DirectEnvironmentBinding>()
     let targets = ArrayList<String>()
@@ -995,9 +996,9 @@ func dapJsonEnvironmentBindings(
         match (value.field(section)) {
             case None => ()
             case Some(entries) =>
-                if (entries.kind != JsonKind.Object) { return None }
-                for (member in entries.members) {
-                    if (member.value.kind != JsonKind.Text ||
+                if (entries.unifiedKind != UnifiedJsonKind.Object) { return None }
+                for (member in entries.fields) {
+                    if (member.value.unifiedKind != UnifiedJsonKind.Text ||
                         member.name == "" || member.value.text == "" ||
                         directContains(targets, member.name)) {
                         return None
@@ -1035,15 +1036,15 @@ func resolveDapExecutable(command: String): ?String {
 }
 
 func dapJsonStringArray(
-    value: JsonValue,
+    value: JsonNode,
     name: String
 ): Array<String> {
     let result = ArrayList<String>()
     match (value.field(name)) {
         case Some(items) =>
-            if (items.kind == JsonKind.List) {
+            if (items.unifiedKind == UnifiedJsonKind.List) {
                 for (item in items.items
-                     where item.kind == JsonKind.Text) {
+                     where item.unifiedKind == UnifiedJsonKind.Text) {
                     result.add(item.text)
                 }
             }
@@ -1052,18 +1053,18 @@ func dapJsonStringArray(
     result.toArray()
 }
 
-func dapObject(values: Array<JsonField>): JsonValue {
-    JsonValue.objectValue(values)
+func dapObject(values: Array<JsonObjectEntry>): JsonNode {
+    jsonObject(values)
 }
 
 func dapJsonBoolean(
-    value: JsonValue,
+    value: JsonNode,
     name: String,
     fallback: Bool
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Boolean) {
+            if (field.unifiedKind == UnifiedJsonKind.Boolean) {
                 field.boolean
             } else {
                 fallback
@@ -1072,22 +1073,22 @@ func dapJsonBoolean(
     }
 }
 
-func dapJsonText(value: JsonValue, name: String): String {
+func dapJsonText(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Text) { field.text } else { "" }
+            if (field.unifiedKind == UnifiedJsonKind.Text) { field.text } else { "" }
         case None => ""
     }
 }
 
 func dapJsonInteger(
-    value: JsonValue,
+    value: JsonNode,
     name: String,
     fallback: Int64
 ): Int64 {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == JsonKind.Number) {
+            if (field.unifiedKind == UnifiedJsonKind.Number) {
                 try {
                     Int64.parse(field.text)
                 } catch (_: Exception) {

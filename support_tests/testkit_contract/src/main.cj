@@ -141,6 +141,20 @@ func memoryPortsContract(): Unit {
     )
     expect(runs.recordDecision(decision).isOk() && runs.recordDecision(decision).isOk(),
         "the same approval decision can be replayed atomically")
+    expect(runs.saveContinuation(RunContinuation(
+        approvalRun,
+        session,
+        "drifted-model",
+        "fixture prompt",
+        ApprovalRequest(
+            OperationId("next-approval-operation"),
+            "next-approval-call",
+            "fixture-tool",
+            Capability(CapabilityKind.WorkspaceRead),
+            sessionId: session.value,
+            argumentHash: "next-approval-hash"
+        )
+    )).isError(), "an approval receipt cannot authorize request drift")
     expect(runs.recordDecision(ApprovalDecisionReceipt(
         approvalOperation,
         approvalRun,

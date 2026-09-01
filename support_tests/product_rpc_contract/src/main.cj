@@ -1,5 +1,9 @@
 package product_rpc_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_cli.*
 import agent_core.*
 import agent_domain.*
@@ -114,14 +118,15 @@ main(): Int64 {
                 "{\"id\":\"commands\",\"type\":\"get_available_commands\"}"
             )
         ).value().getOrThrow().field("data").getOrThrow().field("commands").getOrThrow()
+        let discoveryItems = discovery.items.toArray()
         expect(
-            discovery.kind == ValueKind.List &&
-                discovery.items.size == slashCommandDefinitions().size &&
-                allSlashDescriptorsPresent(discovery.items) &&
-                !hasSlashDescriptor(discovery.items, "negotiate_protocol"),
+            discovery.unifiedKind == ValueKind.List &&
+                discoveryItems.size == slashCommandDefinitions().size &&
+                allSlashDescriptorsPresent(discoveryItems) &&
+                !hasSlashDescriptor(discoveryItems, "negotiate_protocol"),
             "RPC discovers typed slash descriptors independently from its protocol inventory"
         )
-        let helpDescriptor = slashDescriptor(discovery.items, "help").getOrThrow()
+        let helpDescriptor = slashDescriptor(discoveryItems, "help").getOrThrow()
         expect(
             helpDescriptor.field("description").isSome() &&
                 helpDescriptor.field("aliases").isNone() &&
@@ -130,7 +135,7 @@ main(): Int64 {
                 helpDescriptor.field("subcommands").isNone(),
             "RPC omits absent optional fields for a no-argument slash command"
         )
-        let todoDescriptor = slashDescriptor(discovery.items, "todo").getOrThrow()
+        let todoDescriptor = slashDescriptor(discoveryItems, "todo").getOrThrow()
         expect(
             todoDescriptor.field("usage").isNone() &&
                 todoDescriptor.field("input").getOrThrow().field("hint").getOrThrow().text == "[subcommand]" &&
@@ -345,14 +350,22 @@ main(): Int64 {
             output.awaitContains("\"type\":\"prompt_result\",\"id\":\"h1\"," + "\"agentInvoked\":false"),
             "local RPC command reports agentInvoked false"
         )
+        let taskAccepted = server
+            .handle("{\"id\":\"task-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
+            .contains("\"success\":true")
+        let lifecycleVisible = output.awaitContains(
+            "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"")
+        let progressVisible = output.awaitContains("\"type\":\"subagent_progress\"")
+        let childEventVisible = output.awaitContains("\"type\":\"subagent_event\"")
+        let taskResultVisible = output.awaitContains(
+            "\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true")
         expect(
-            server
-                .handle("{\"id\":\"task-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
-                .contains("\"success\":true") && output.awaitContains(
-                "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"") && output.awaitContains(
-                "\"type\":\"subagent_progress\"") && output.awaitContains("\"type\":\"subagent_event\"") &&
-                output.awaitContains("\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true"),
-            "RPC streams real task lifecycle, progress, and child events"
+            taskAccepted && lifecycleVisible && progressVisible && childEventVisible && taskResultVisible,
+            "RPC streams real task lifecycle, progress, and child events: accepted=" +
+                taskAccepted.toString() + ", lifecycle=" + lifecycleVisible.toString() +
+                ", progress=" + progressVisible.toString() + ", childEvent=" +
+                childEventVisible.toString() + ", result=" + taskResultVisible.toString() +
+                ", frames=" + output.snapshot()
         )
         expect(
             server.handle("{\"id\":\"sub-finished\",\"type\":\"get_subagents\"}").contains("\"subagents\":[]") &&
@@ -763,11 +776,11 @@ func optionalTextItemsMatch(
 }
 
 func textItemsMatch(actual: AgentValue, expected: Array<String>): Bool {
-    if (actual.kind != ValueKind.List || actual.items.size != expected.size) {
+    if (actual.unifiedKind != ValueKind.List || actual.items.size != expected.size) {
         return false
     }
     for (index in 0..expected.size) {
-        if (actual.items[index].kind != ValueKind.Text ||
+        if (actual.items[index].unifiedKind != ValueKind.Text ||
             actual.items[index].text != expected[index]) {
             return false
         }
@@ -779,7 +792,7 @@ func optionalTextMatch(actual: ?AgentValue, expected: String): Bool {
     if (expected == "") {
         return actual.isNone()
     }
-    actual.isSome() && actual.getOrThrow().kind == ValueKind.Text &&
+    actual.isSome() && actual.getOrThrow().unifiedKind == ValueKind.Text &&
         actual.getOrThrow().text == expected
 }
 
@@ -805,7 +818,7 @@ func optionalSubcommandsMatch(
 }
 
 func subcommandsMatch(actual: AgentValue, expected: Array<String>): Bool {
-    if (actual.kind != ValueKind.List || actual.items.size != expected.size) {
+    if (actual.unifiedKind != ValueKind.List || actual.items.size != expected.size) {
         return false
     }
     for (index in 0..expected.size) {

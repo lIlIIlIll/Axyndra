@@ -1,5 +1,9 @@
 package agent_rpc
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -87,7 +91,7 @@ func acpToolEvent(sequence: Int64, payload: AgentEventPayload): AgentEvent {
 
 func acpTestText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }

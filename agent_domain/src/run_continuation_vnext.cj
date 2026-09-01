@@ -1,5 +1,9 @@
 package agent_domain
 
+import yjson.*
+
+import yjson_support.*
+
 import std.collection.*
 
 public class LaneId {
@@ -64,7 +68,7 @@ public class DurablePhaseState {
     public let payload: AgentValue
 
     public init(payload: AgentValue) {
-        if (payload.kind != ValueKind.Object) {
+        if (payload.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("Run execution phase payload must be an object")
         }
         this.payload = payload
@@ -174,7 +178,7 @@ public class ExternalWaitState {
     public let payload: AgentValue
 
     public init(handleId: ExternalHandleId, kind: String, payload: AgentValue) {
-        if (kind.trimAscii() == "" || payload.kind != ValueKind.Object) {
+        if (kind.trimAscii() == "" || payload.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("external wait state is invalid")
         }
         this.handleId = handleId

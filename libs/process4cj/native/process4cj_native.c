@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
@@ -92,6 +93,21 @@ int64_t process4cj_read(int32_t fd, uint8_t *buffer, int64_t length) {
     ssize_t result;
     do { result = read(fd, buffer, (size_t)length); } while (result < 0 && errno == EINTR);
     return result < 0 ? -(int64_t)errno : (int64_t)result;
+}
+
+int32_t process4cj_wait_readable(int32_t fd, int32_t timeout_millis) {
+    struct pollfd descriptor = {
+        .fd = fd,
+        .events = POLLIN | POLLHUP,
+        .revents = 0,
+    };
+    int result;
+    do { result = poll(&descriptor, 1, timeout_millis); }
+    while (result < 0 && errno == EINTR);
+    if (result < 0) return -errno;
+    if (result == 0) return 0;
+    if ((descriptor.revents & POLLNVAL) != 0) return -EBADF;
+    return 1;
 }
 
 int32_t process4cj_write_all(int32_t fd, const uint8_t *buffer, int64_t length) {

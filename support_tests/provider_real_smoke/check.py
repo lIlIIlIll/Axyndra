@@ -6,9 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import select
+import queue
 import subprocess
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -204,6 +205,17 @@ def rpc_approval_continue(
     assert process.stdin is not None
     assert process.stdout is not None
     frames: list[dict[str, object]] = []
+    received: queue.Queue[dict[str, object] | None] = queue.Queue()
+
+    def read_frames() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            value = json.loads(line)
+            if isinstance(value, dict):
+                received.put(value)
+        received.put(None)
+
+    threading.Thread(target=read_frames, daemon=True).start()
     if spec.base_url.startswith("http://127.0.0.1:"):
         outside = workspace.parent / "outside"
         outside.mkdir()
@@ -232,16 +244,11 @@ def rpc_approval_continue(
                     f"{scenario} timed out; frames="
                     + json.dumps(frames, ensure_ascii=False)
                 )
-            readable, _, _ = select.select(
-                [process.stdout],
-                [],
-                [],
-                remaining,
-            )
-            if not readable:
+            try:
+                value = received.get(timeout=remaining)
+            except queue.Empty:
                 continue
-            line = process.stdout.readline()
-            if not line:
+            if value is None:
                 error = (
                     process.stderr.read()
                     if process.stderr is not None
@@ -250,9 +257,7 @@ def rpc_approval_continue(
                 raise SystemExit(
                     f"{scenario} RPC process ended early: {error}"
                 )
-            value = json.loads(line)
-            if isinstance(value, dict):
-                frames.append(value)
+            frames.append(value)
 
     try:
         wait_for(
@@ -541,6 +546,7 @@ def messages_task_arguments(spec: Provider) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--approval-only", action="store_true")
     parser.add_argument("--messages-tool-only", action="store_true")
     parser.add_argument("--messages-task-only", action="store_true")
     args = parser.parse_args()
@@ -573,6 +579,11 @@ def main() -> None:
         ).strip(),
         credential,
     )
+    if args.approval_only:
+        with provider_workspace(openai) as (home, workspace):
+            rpc_approval_continue(openai, home, workspace)
+        print("real provider smoke passed: approval continuation")
+        return
     if args.messages_tool_only:
         messages_tool_arguments(anthropic)
         print(

@@ -1,5 +1,9 @@
 package agent_ports
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 
 public interface ModelPort {

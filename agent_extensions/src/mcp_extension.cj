@@ -1,5 +1,9 @@
 package agent_extensions
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_mcp.*
 import std.collection.*
@@ -47,6 +51,26 @@ class McpToolExecutor <: ToolExecutor {
                         redact(pending.requestState)
                     )]
                 ))
+            case Result.Ok(McpCallToolOutcome.Task(task)) =>
+                // The generic ToolExecutor contract has no task lifecycle
+                // channel. Preserve the remote task identity for a task-aware
+                // caller instead of treating task creation as completion.
+                Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "mcp.tool_task_pending",
+                    "MCP tool started a task that requires task-aware handling",
+                    fields: [ErrorField("task_id", redact(task.taskId))]
+                ))
+            case Result.Ok(McpCallToolOutcome.Extension(resultType, _)) =>
+                // Product adapters must opt into extension result semantics.
+                // Returning the raw payload here would silently widen the
+                // trusted ToolExecutor contract.
+                Result.Err(AgentError(
+                    AgentErrorKind.Protocol,
+                    "mcp.tool_result_type_unsupported",
+                    "MCP tool returned an unsupported extension result type",
+                    fields: [ErrorField("result_type", redact(resultType))]
+                ))
         }
     }
 
@@ -73,6 +97,11 @@ public class McpAgentExtension <: TrustedAgentExtension {
         this.extensionId = "mcp:" + serverId
         let values = ArrayList<TrustedToolContribution>()
         for (tool in tools) {
+            let taskRequired = match (tool.execution) {
+                case Some(execution) => execution.taskSupport == McpTaskSupport.Required
+                case None => false
+            }
+            if (taskRequired) { continue }
             let alias = match (aliases.register(serverId, redact(tool.name))) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => throw IllegalStateException(
@@ -172,7 +201,7 @@ func redactMcpError(error: AgentError, redact: McpTextRedactor): AgentError {
 }
 
 func redactMcpValue(value: AgentValue, redact: McpTextRedactor): AgentValue {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Text => textValue(redact(value.text))
         case ValueKind.Number =>
             let filtered = redact(value.number)

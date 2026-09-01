@@ -1,5 +1,9 @@
 package tool_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import std.collection.*
 import std.deriving.*

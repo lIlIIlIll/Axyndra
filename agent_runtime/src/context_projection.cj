@@ -1,5 +1,9 @@
 package agent_runtime
 
+import yjson_support.*
+
+import yjson.*
+
 import std.collection.*
 import std.overflow.*
 import agent_domain.*
@@ -32,8 +36,8 @@ public class ContextCheckpoint {
     ) {
         if (id.trimAscii() == "" || coversThroughItemOrdinal < 1 ||
             sourceDigest.trimAscii() == "" || projectorVersion.trimAscii() == "" ||
-            laneCompatibility.trimAscii() == "" || structuredSummary.kind != ValueKind.Object ||
-            activeState.kind != ValueKind.Object) {
+            laneCompatibility.trimAscii() == "" || structuredSummary.unifiedKind != ValueKind.Object ||
+            activeState.unifiedKind != ValueKind.Object) {
             throw IllegalArgumentException("context checkpoint metadata is invalid")
         }
         this.id = id.trimAscii()
@@ -239,7 +243,7 @@ func contextParts(parts: Array<ThreadMessagePart>): String {
 }
 
 func contextValue(value: AgentValue): String {
-    match (value.kind) {
+    match (value.unifiedKind) {
         case ValueKind.Null => "n"
         case ValueKind.Boolean => if (value.boolean) { "t" } else { "f" }
         case ValueKind.Number => "d" + contextFrame(value.number)

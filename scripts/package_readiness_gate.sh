@@ -51,8 +51,8 @@ python3 "$root/scripts/package_readiness.py" materialize-consumers "$work_root/p
 python3 "$root/scripts/package_readiness.py" materialize-validation "$work_root/packages" "$work_root/validation"
 
 public_packages=(
-  json4cj jsonrpc4cj process4cj mcp4cj sandbox4cj
-  llm4cj lsp4cj dap4cj agent_sdk axyndra_agent_testkit
+  yjson_support jsonrpc4cj process4cj mcp4cj sandbox4cj
+  lsp4cj dap4cj agent_sdk axyndra_agent_testkit
 )
 for package in "${public_packages[@]}"; do
   printf '== staged package %s ==\n' "$package"
@@ -109,10 +109,6 @@ if "$GREP" -q 'not found' "$work_root/process-runtime/diagnostics/ldd.txt"; then
   cat "$work_root/process-runtime/diagnostics/ldd.txt" >&2
   exit 1
 fi
-
-cp -a -- "$work_root/packages/json4cj-0.1.0" "$work_root/json4cj-bundle"
-run_cjpm "$work_root/json4cj-bundle" bundle --skip-test --skip-lint
-[[ -f "$work_root/json4cj-bundle/target/json4cj-0.1.0.cjp" ]]
 
 if [[ ${AXYNDRA_PACKAGE_TECHNICAL_ONLY:-0} != 1 ]]; then
   python3 "$root/scripts/package_readiness.py" audit --require-publication-metadata

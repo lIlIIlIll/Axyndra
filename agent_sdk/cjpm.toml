@@ -3,8 +3,9 @@
   name = "agent_sdk"
   organization = ""
   description = "Stable capability-oriented extension contract for Axyndra"
-  version = "1.0.0"
+  version = "2.0.0"
   output-type = "static"
 
 [dependencies]
-  "json4cj" = { path = "../libs/json4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }
+  "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }

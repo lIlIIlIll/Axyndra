@@ -1,5 +1,9 @@
 package agent_rpc
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import model_adapters.*
@@ -44,7 +48,7 @@ public class ProductAcpServer {
             case Result.Ok(item) => item
             case Result.Err(error) => return acpError(nullValue(), -32700, error.message)
         }
-        if (value.kind != ValueKind.Object) {
+        if (value.unifiedKind != ValueKind.Object) {
             return acpError(nullValue(), -32600, "Invalid Request")
         }
         let method = acpText(value, "method")
@@ -1457,7 +1461,7 @@ func acpDeferredValue(): AgentValue {
 func acpText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Text) {
+            if (item.unifiedKind == ValueKind.Text) {
                 item.text
             } else {
                 ""
@@ -1471,7 +1475,7 @@ func acpWithField(
     name: String,
     fieldValue: AgentValue
 ): AgentValue {
-    if (value.kind != ValueKind.Object) {
+    if (value.unifiedKind != ValueKind.Object) {
         return value
     }
     let fields = ArrayList<ValueField>()
@@ -1489,7 +1493,7 @@ func acpBool(
 ): Bool {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind == ValueKind.Boolean) {
+            if (item.unifiedKind == ValueKind.Boolean) {
                 item.boolean
             } else {
                 fallback
@@ -1505,7 +1509,7 @@ func acpInteger(
 ): Int64 {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.kind != ValueKind.Number) {
+            if (item.unifiedKind != ValueKind.Number) {
                 return fallback
             }
             try {
@@ -1526,7 +1530,7 @@ func validateCwdAndMcp(
     }
     match (params.field("mcpServers")) {
         case Some(value) =>
-            if (value.kind == ValueKind.List && !value.items.isEmpty()) {
+            if (value.unifiedKind == ValueKind.List && !value.items.isEmpty()) {
                 return acpInvalid("MCP servers are not supported by this agent")
             }
         case None => ()
@@ -1570,7 +1574,7 @@ func promptText(params: AgentValue): Result<String> {
         case Some(value) => value
         case None => return acpInvalid("prompt is required")
     }
-    if (prompt.kind != ValueKind.List) {
+    if (prompt.unifiedKind != ValueKind.List) {
         return acpInvalid("prompt must be an array")
     }
     var result = ""

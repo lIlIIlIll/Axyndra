@@ -1,5 +1,9 @@
 package artifact_contract
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import agent_product.*
 import agent_store.*
@@ -221,7 +225,7 @@ func runToolContract(root: String): Unit {
         fieldInteger(first.output, "stdout_bytes") > ONE_MIB &&
         fieldInteger(first.output, "stderr_bytes") > ONE_MIB &&
         first.output.field("artifacts").getOrThrow().items.size == 2 &&
-        first.output.field("artifact_error").getOrThrow().kind == ValueKind.Null &&
+        first.output.field("artifact_error").getOrThrow().unifiedKind == ValueKind.Null &&
         fieldText(first.output, "stdout").startsWith("OUT-BEGIN\n") &&
         fieldText(first.output, "stdout").endsWith("OUT-END") &&
         fieldText(first.output, "stderr").startsWith("ERR-BEGIN\n") &&
@@ -533,7 +537,7 @@ func artifactRef(output: AgentValue, stream: String): String {
 
 func firstArtifactErrorCode(output: AgentValue): String {
     let error = output.field("artifact_error").getOrThrow()
-    if (error.kind != ValueKind.Object) {
+    if (error.unifiedKind != ValueKind.Object) {
         return ""
     }
     let errors = error.field("errors").getOrThrow()
@@ -560,14 +564,14 @@ func readAll(store: ProductArtifactStore, reference: String): String {
 
 func fieldText(value: AgentValue, name: String): String {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Text) { item.text } else { "" }
+        case Some(item) => if (item.unifiedKind == ValueKind.Text) { item.text } else { "" }
         case None => ""
     }
 }
 
 func fieldInteger(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.kind == ValueKind.Number) {
+        case Some(item) => if (item.unifiedKind == ValueKind.Number) {
             try { Int64.parse(item.number) } catch (_: Exception) { -1 }
         } else {
             -1
@@ -578,7 +582,7 @@ func fieldInteger(value: AgentValue, name: String): Int64 {
 
 func fieldBool(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => item.kind == ValueKind.Boolean && item.boolean
+        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.boolean
         case None => false
     }
 }

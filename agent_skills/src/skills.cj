@@ -1,5 +1,9 @@
 package agent_skills
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import skill_runtime as library
 

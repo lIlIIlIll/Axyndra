@@ -16,12 +16,23 @@ public class StreamableHttpMcpTransport <: McpTransport {
     public func request(request: JsonRpcRequest): Result<JsonRpcResponse> {
         mapMcpResult(primitive.request(request))
     }
+    public func requestWithNotifications(
+        request: JsonRpcRequest,
+        notificationSink: (JsonRpcNotification) -> Unit
+    ): Result<JsonRpcResponse> {
+        mapMcpResult(primitive.requestWithNotifications(request, notificationSink))
+    }
+    public func openSubscription(request: JsonRpcRequest): Result<McpSubscriptionHandle> {
+        mapMcpResult(primitive.openSubscription(request))
+    }
     public func notify(notification: JsonRpcNotification): Result<Unit> {
         mapMcpResult(primitive.notify(notification))
     }
     public func cancel(requestId: JsonRpcId, reason: String, meta: McpRequestMeta): Result<Unit> {
-        let _ = meta
-        mapMcpResult(primitive.cancel(requestId, reason))
+        mapMcpResult(primitive.cancel(requestId, reason, meta))
+    }
+    public func registerTools(tools: Array<McpTool>): Result<Unit> {
+        mapMcpResult(primitive.registerTools(tools))
     }
     public func close(): Result<Unit> { mapMcpResult(primitive.close()) }
 }

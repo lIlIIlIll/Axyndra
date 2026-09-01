@@ -1,5 +1,9 @@
 package agent_product
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 import tool_runtime.*
 import std.collection.*
@@ -370,7 +374,7 @@ func parseAskQuestions(
                 "required argument is missing"
             )
     }
-    if (raw.kind != ValueKind.List || raw.items.isEmpty()) {
+    if (raw.unifiedKind != ValueKind.List || raw.items.isEmpty()) {
         return invalidArgument(
             call,
             "questions",
@@ -379,7 +383,7 @@ func parseAskQuestions(
     }
     let questions = ArrayList<ProductAskQuestion>()
     for (rawQuestion in raw.items) {
-        if (rawQuestion.kind != ValueKind.Object) {
+        if (rawQuestion.unifiedKind != ValueKind.Object) {
             return invalidArgument(
                 call,
                 "questions",
@@ -415,7 +419,7 @@ func parseAskQuestions(
                     "each question requires an options array"
                 )
         }
-        if (rawOptions.kind != ValueKind.List) {
+        if (rawOptions.unifiedKind != ValueKind.List) {
             return invalidArgument(
                 call,
                 "questions",
@@ -424,7 +428,7 @@ func parseAskQuestions(
         }
         let options = ArrayList<ProductAskOption>()
         for (rawOption in rawOptions.items) {
-            if (rawOption.kind != ValueKind.Object) {
+            if (rawOption.unifiedKind != ValueKind.Object) {
                 return invalidArgument(
                     call,
                     "questions",
@@ -764,7 +768,7 @@ func askQuestionResultValue(
 func requiredAskText(value: AgentValue, name: String): ?String {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) {
+            if (field.unifiedKind == ValueKind.Text) {
                 Some(field.text)
             } else {
                 None
@@ -779,7 +783,7 @@ func optionalAskText(
 ): Result<String> {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Text) {
+            if (field.unifiedKind == ValueKind.Text) {
                 Result.Ok(field.text)
             } else {
                 invalidAskAnswer(name + " must be a string")
@@ -794,7 +798,7 @@ func optionalAskBoolean(
 ): Result<Bool> {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind == ValueKind.Boolean) {
+            if (field.unifiedKind == ValueKind.Boolean) {
                 Result.Ok(field.boolean)
             } else {
                 invalidAskAnswer(name + " must be a boolean")
@@ -809,7 +813,7 @@ func optionalAskInteger(
 ): Result<?Int64> {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.kind != ValueKind.Number) {
+            if (field.unifiedKind != ValueKind.Number) {
                 return invalidAskAnswer(name + " must be a number")
             }
             try {

@@ -1,12 +1,13 @@
 package agent_sdk
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 import std.deriving.*
 
 // STABLE: version of the cooperative extension authoring contract. It is
 // intentionally independent from the Axyndra product/package version.
-public let AGENT_SDK_VERSION = "1.1.0"
+public let AGENT_SDK_VERSION = "2.0.0"
 
 // STABLE: the cooperative extension contract. It deliberately contains no
 // Agent runtime, approval, executor, receipt, audit, or persistence authority.
@@ -27,17 +28,17 @@ public enum SdkErrorKind {
 public class SdkError <: Exception {
     public let kind: SdkErrorKind
     public let code: String
-    public let details: JsonValue
+    public let details: JsonNode
 
     public init(
         kind: SdkErrorKind,
         code: String,
         message: String,
-        details!: JsonValue = JsonValue.objectValue([])
+        details!: JsonNode = jsonObject([])
     ) {
         super(message)
         let normalized = code.trimAscii()
-        if (normalized == "" || details.kind != JsonKind.Object) {
+        if (normalized == "" || details.unifiedKind != UnifiedJsonKind.Object) {
             throw IllegalArgumentException("SDK error code and object details are required")
         }
         this.kind = kind
@@ -112,21 +113,21 @@ public enum ExtensionEffect { ReadOnly | SideEffect }
 public class ExtensionToolDefinition {
     public let name: String
     public let description: String
-    public let inputSchema: JsonValue
-    public let outputSchema: JsonValue
+    public let inputSchema: JsonNode
+    public let outputSchema: JsonNode
     public let capabilities: Array<CapabilityRequirement>
     public let effect: ExtensionEffect
 
     public init(
         name: String,
         description: String,
-        inputSchema: JsonValue,
+        inputSchema: JsonNode,
         capabilities: Array<CapabilityRequirement>,
         effect!: ExtensionEffect = ExtensionEffect.ReadOnly,
-        outputSchema!: JsonValue = JsonValue.objectValue([])
+        outputSchema!: JsonNode = jsonObject([])
     ) {
         if (name.trimAscii() == "" || description.trimAscii() == "" ||
-            inputSchema.kind != JsonKind.Object || outputSchema.kind != JsonKind.Object ||
+            inputSchema.unifiedKind != UnifiedJsonKind.Object || outputSchema.unifiedKind != UnifiedJsonKind.Object ||
             capabilities.isEmpty()) {
             throw IllegalArgumentException("invalid extension tool definition")
         }
@@ -164,7 +165,7 @@ public class InvocationDeadline {
 
 public class ToolInvocation {
     public let callId: String
-    public let input: JsonValue
+    public let input: JsonNode
     public let workspaceRoot: String
     public let cwd: String
     public let cancellation: InvocationCancellation
@@ -172,13 +173,13 @@ public class ToolInvocation {
 
     public init(
         callId: String,
-        input: JsonValue,
+        input: JsonNode,
         workspaceRoot: String,
         cwd: String,
         cancellation!: InvocationCancellation = NeverCancelled(),
         deadline!: InvocationDeadline = InvocationDeadline()
     ) {
-        if (callId.trimAscii() == "" || input.kind != JsonKind.Object ||
+        if (callId.trimAscii() == "" || input.unifiedKind != UnifiedJsonKind.Object ||
             workspaceRoot.contains("\u{0000}") || cwd.contains("\u{0000}")) {
             throw IllegalArgumentException("invalid SDK tool invocation")
         }
@@ -244,11 +245,11 @@ public class WorkspaceWriteIntent {
 // surface. It does not expose a process, filesystem, network, or executor API.
 public class HostOperationIntent {
     public let operation: String
-    public let input: JsonValue
+    public let input: JsonNode
 
-    public init(operation: String, input: JsonValue) {
+    public init(operation: String, input: JsonNode) {
         let normalized = operation.trimAscii()
-        if (normalized == "" || input.kind != JsonKind.Object || normalized.contains("\u{0000}")) {
+        if (normalized == "" || input.unifiedKind != UnifiedJsonKind.Object || normalized.contains("\u{0000}")) {
             throw IllegalArgumentException("invalid host operation intent")
         }
         this.operation = normalized
@@ -263,16 +264,16 @@ public enum OperationIntent {
 }
 
 public class ExecutionResult {
-    public let value: JsonValue
-    public init(value: JsonValue) { this.value = value }
+    public let value: JsonNode
+    public init(value: JsonNode) { this.value = value }
 }
 
 public class ToolOutput {
     public let text: String
-    public let structured: JsonValue
+    public let structured: JsonNode
 
-    public init(text!: String = "", structured!: JsonValue = JsonValue.objectValue([])) {
-        if (structured.kind != JsonKind.Object) {
+    public init(text!: String = "", structured!: JsonNode = jsonObject([])) {
+        if (structured.unifiedKind != UnifiedJsonKind.Object) {
             throw IllegalArgumentException("structured tool output must be an object")
         }
         this.text = text
@@ -285,7 +286,7 @@ public interface ExtensionTool {
 
     // Validation/normalization and preparation are pure. The returned intent
     // is executed only by the host after ToolPipeline authorization.
-    func validate(input: JsonValue): SdkResult<JsonValue>
+    func validate(input: JsonNode): SdkResult<JsonNode>
     func prepare(invocation: ToolInvocation): SdkResult<OperationIntent>
     func decode(
         invocation: ToolInvocation,
@@ -317,8 +318,8 @@ public class ExtensionRegistry {
                 SdkErrorKind.Validation,
                 "sdk.extension_duplicate_id",
                 "extension id is already registered",
-                details: JsonValue.objectValue([
-                    JsonField("extension", JsonValue.stringValue(metadata.id))
+                details: jsonObject([
+                    JsonObjectEntry("extension", jsonString(metadata.id))
                 ])
             ))
         }
@@ -329,8 +330,8 @@ public class ExtensionRegistry {
                     SdkErrorKind.Validation,
                     "sdk.extension_duplicate_tool",
                     "tool name is already registered",
-                    details: JsonValue.objectValue([
-                        JsonField("tool", JsonValue.stringValue(name))
+                    details: jsonObject([
+                        JsonObjectEntry("tool", jsonString(name))
                     ])
                 ))
             }
@@ -360,8 +361,8 @@ public func validateExtension(extension: Extension): SdkResult<Unit> {
                 SdkErrorKind.Validation,
                 "sdk.extension_duplicate_tool",
                 "extension contains duplicate tool name",
-                details: JsonValue.objectValue([
-                    JsonField("tool", JsonValue.stringValue(definition.name))
+                details: jsonObject([
+                    JsonObjectEntry("tool", jsonString(definition.name))
                 ])
             ))
         }

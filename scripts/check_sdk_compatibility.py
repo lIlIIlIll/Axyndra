@@ -13,8 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINES = {
-    "agent_sdk": ROOT / "compat" / "agent-sdk-v1.api.json",
-    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v1.api.json",
+    "agent_sdk": ROOT / "compat" / "agent-sdk-v2.api.json",
+    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v2.api.json",
 }
 SOURCES = {
     "agent_sdk": sorted(
@@ -291,6 +291,17 @@ def sdk_version() -> str:
     return match.group(1)
 
 
+def package_version(package: str) -> str:
+    if package == "agent_sdk":
+        return sdk_version()
+    text = (ROOT / package / "cjpm.toml").read_text(encoding="utf-8")
+    match = re.search(r'^\s*version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if match is None:
+        raise SystemExit(f"{package} package version is missing")
+    parse_version(match.group(1))
+    return match.group(1)
+
+
 def baseline_document(package: str, version: str) -> dict[str, object]:
     return {
         "format": 1,
@@ -312,15 +323,14 @@ def main() -> int:
         self_test()
         print("SDK API diff policy self-test passed")
         return 0
-    version = sdk_version()
     if args.dump:
-        package_version = version if args.dump == "agent_sdk" else "1.0.0"
-        print(json.dumps(baseline_document(args.dump, package_version), indent=2, ensure_ascii=False))
+        version = package_version(args.dump)
+        print(json.dumps(baseline_document(args.dump, version), indent=2, ensure_ascii=False))
         return 0
     errors: list[str] = []
     for package, baseline_path in BASELINES.items():
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-        current_version = version if package == "agent_sdk" else str(baseline["api_version"])
+        current_version = package_version(package)
         errors.extend(f"{package}: {error}" for error in compare_surface(
             baseline, current_surface(package), current_version
         ))

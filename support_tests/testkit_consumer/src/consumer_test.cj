@@ -1,7 +1,8 @@
 package testkit_consumer
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import axyndra_agent_testkit.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -11,8 +12,8 @@ class ExternalTestkitConsumerTests {
     @TestCase
     func preparesAndDecodesThroughPublicSdkHarness() {
         let harness = ExtensionContractHarness(ConsumerExtension())
-        let input = JsonValue.objectValue([
-            JsonField("text", JsonValue.stringValue("hello"))
+        let input = jsonObject([
+            JsonObjectEntry("text", jsonString("hello"))
         ])
         let prepared = requireSdkOk(harness.prepare(
             "consumer_echo",
@@ -20,11 +21,11 @@ class ExternalTestkitConsumerTests {
             callId: SequenceIds(prefix: "external").next(scope: "call")
         ))
         assertCapabilityRequested(prepared.definition, "workspace.read")
-        @Expect(harness.prepare("consumer_echo", JsonValue.objectValue([])).isOk(), false)
+        @Expect(harness.prepare("consumer_echo", jsonObject([])).isOk(), false)
         let output = requireSdkOk(harness.decode(
             prepared,
-            ExecutionResult(JsonValue.objectValue([
-                JsonField("text", JsonValue.stringValue("done"))
+            ExecutionResult(jsonObject([
+                JsonObjectEntry("text", jsonString("done"))
             ]))
         ))
         @Expect(output.structured.field("text").getOrThrow().text, "done")

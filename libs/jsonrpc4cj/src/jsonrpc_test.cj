@@ -1,6 +1,7 @@
 package jsonrpc4cj
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -10,7 +11,7 @@ class JsonRpc4CjTests {
     func requestNotificationAndResponsesRoundTrip() {
         let request = JsonRpcEnvelope.Request(JsonRpcRequest(
             jsonRpcNumberId(7), "tools/call",
-            params: JsonValue.objectValue([JsonField("name", JsonValue.stringValue("read"))])
+            params: jsonObject([JsonObjectEntry("name", jsonString("read"))])
         ))
         match (decodeJsonRpc(encodeJsonRpc(request))) {
             case JsonRpcResult.Ok(JsonRpcEnvelope.Request(value)) =>
@@ -25,7 +26,7 @@ class JsonRpc4CjTests {
         }
 
         let success = JsonRpcEnvelope.Response(JsonRpcResponse(
-            jsonRpcTextId("a"), JsonRpcResponsePayload.Success(JsonValue.boolValue(true))
+            jsonRpcTextId("a"), JsonRpcResponsePayload.Success(jsonBool(true))
         ))
         @Expect(decodeJsonRpc(encodeJsonRpc(success)).isOk(), true)
 

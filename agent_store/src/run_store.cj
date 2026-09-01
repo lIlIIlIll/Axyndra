@@ -1,5 +1,9 @@
 package agent_store
 
+import yjson_support.*
+
+import yjson.*
+
 import std.convert.*
 import agent_domain.*
 import agent_runtime.*
@@ -113,7 +117,7 @@ public class SqliteRunStore {
 }
 
 func emptyStoredObject(value: AgentValue): Bool {
-    value.kind == ValueKind.Object && value.fields.isEmpty()
+    value.unifiedKind == ValueKind.Object && value.fields.isEmpty()
 }
 
 func parseRunStoreInt(value: String, field: String): Int64 {

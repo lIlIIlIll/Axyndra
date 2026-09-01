@@ -1,7 +1,8 @@
 package axyndra_agent_testkit
 
 import agent_sdk.*
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import std.collection.*
 
 // STABLE: result of pure SDK validation/preparation. This is an untrusted
@@ -53,7 +54,7 @@ public class ExtensionContractHarness {
 
     public func prepare(
         toolName: String,
-        input: JsonValue,
+        input: JsonNode,
         workspaceRoot!: String = "",
         cwd!: String = "",
         callId!: String = "test-call",
@@ -137,8 +138,8 @@ func missingTool<T>(name: String): SdkResult<T> {
         SdkErrorKind.Validation,
         "testkit.tool_missing",
         "extension fixture has no requested tool",
-        details: JsonValue.objectValue([
-            JsonField("tool", JsonValue.stringValue(name))
+        details: jsonObject([
+            JsonObjectEntry("tool", jsonString(name))
         ])
     ))
 }

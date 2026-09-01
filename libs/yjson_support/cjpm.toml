@@ -1,0 +1,10 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "yjson_support"
+  organization = ""
+  description = "Axyndra JSON domain helpers backed by yjson"
+  version = "0.1.0"
+  output-type = "static"
+
+[dependencies]
+  yjson = { git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static" }

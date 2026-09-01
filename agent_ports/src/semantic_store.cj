@@ -1,5 +1,9 @@
 package agent_ports
 
+import yjson_support.*
+
+import yjson.*
+
 import agent_domain.*
 
 public class TransactionPreconditions {
@@ -30,7 +34,7 @@ public class SemanticAuditEntry {
     public let observedAtMillis: Int64
 
     public init(kind: String, payload: AgentValue, observedAtMillis: Int64) {
-        if (kind.trimAscii() == "" || payload.kind != ValueKind.Object || observedAtMillis < 0) {
+        if (kind.trimAscii() == "" || payload.unifiedKind != ValueKind.Object || observedAtMillis < 0) {
             throw IllegalArgumentException("semantic audit entry is invalid")
         }
         this.kind = kind.trimAscii()
@@ -47,7 +51,7 @@ public class SemanticAppEvent {
 
     public init(eventId: String, kind: String, payload: AgentValue, createdAtMillis: Int64) {
         if (eventId.trimAscii() == "" || kind.trimAscii() == "" ||
-            payload.kind != ValueKind.Object || createdAtMillis < 0) {
+            payload.unifiedKind != ValueKind.Object || createdAtMillis < 0) {
             throw IllegalArgumentException("semantic App event is invalid")
         }
         this.eventId = eventId.trimAscii()

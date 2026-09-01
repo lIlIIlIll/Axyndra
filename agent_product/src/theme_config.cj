@@ -1,6 +1,7 @@
 package agent_product
 
-import json4cj.*
+import yjson.*
+import yjson_support.*
 import agent_domain.*
 import std.collection.*
 import std.convert.*
@@ -86,8 +87,8 @@ public func loadProductThemes(
 }
 
 func parseProductTheme(source: String, path: String): ProductThemeDefinition {
-    let root = parseJson(source)
-    if (root.kind != JsonKind.Object) {
+    let root = parseUnifiedJson(source)
+    if (root.unifiedKind != UnifiedJsonKind.Object) {
         throw IllegalArgumentException("theme root must be a JSON object: " + path)
     }
     let name = requiredThemeString(root, "name")
@@ -99,11 +100,11 @@ func parseProductTheme(source: String, path: String): ProductThemeDefinition {
     let colors = requiredThemeObject(root, "colors")
     let variables = match (root.field("vars")) {
         case Some(value) =>
-            if (value.kind != JsonKind.Object) {
+            if (value.unifiedKind != UnifiedJsonKind.Object) {
                 throw IllegalArgumentException("theme vars must be a JSON object: " + path)
             }
             value
-        case None => JsonValue.objectValue([])
+        case None => jsonObject([])
     }
     let selected = themeColor(colors, variables, "selectedBg", "")
     let pending = themeColor(colors, variables, "toolPendingBg", selected)
@@ -125,10 +126,10 @@ func parseProductTheme(source: String, path: String): ProductThemeDefinition {
     )
 }
 
-func requiredThemeObject(value: JsonValue, name: String): JsonValue {
+func requiredThemeObject(value: JsonNode, name: String): JsonNode {
     match (value.field(name)) {
         case Some(found) =>
-            if (found.kind != JsonKind.Object) {
+            if (found.unifiedKind != UnifiedJsonKind.Object) {
                 throw IllegalArgumentException("theme field '" + name + "' must be an object")
             }
             found
@@ -136,10 +137,10 @@ func requiredThemeObject(value: JsonValue, name: String): JsonValue {
     }
 }
 
-func requiredThemeString(value: JsonValue, name: String): String {
+func requiredThemeString(value: JsonNode, name: String): String {
     match (value.field(name)) {
         case Some(found) =>
-            if (found.kind != JsonKind.Text || found.text.trimAscii() == "") {
+            if (found.unifiedKind != UnifiedJsonKind.Text || found.text.trimAscii() == "") {
                 throw IllegalArgumentException("theme field '" + name + "' must be a non-empty string")
             }
             found.text.trimAscii().toAsciiLower()
@@ -148,8 +149,8 @@ func requiredThemeString(value: JsonValue, name: String): String {
 }
 
 func themeColor(
-    colors: JsonValue,
-    variables: JsonValue,
+    colors: JsonNode,
+    variables: JsonNode,
     name: String,
     fallback: String
 ): String {
@@ -160,21 +161,21 @@ func themeColor(
 }
 
 func resolveThemeColor(
-    value: JsonValue,
-    variables: JsonValue,
+    value: JsonNode,
+    variables: JsonNode,
     depth: Int64
 ): String {
     if (depth > 16) {
         throw IllegalArgumentException("theme variable reference is cyclic")
     }
-    if (value.kind == JsonKind.Number) {
+    if (value.unifiedKind == UnifiedJsonKind.Number) {
         let index = Int64.parse(value.text)
         if (index < 0 || index > 255) {
             throw IllegalArgumentException("theme palette index must be between 0 and 255")
         }
         return value.text
     }
-    if (value.kind != JsonKind.Text) {
+    if (value.unifiedKind != UnifiedJsonKind.Text) {
         throw IllegalArgumentException("theme colors must be strings or palette indexes")
     }
     let token = value.text.trimAscii()
