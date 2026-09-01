@@ -3,7 +3,7 @@
   name = "axyndra_agent_testkit"
   organization = ""
   description = "Public deterministic test support for cooperative omp-cj extensions"
-  version = "1.0.0"
+  version = "2.0.0"
   output-type = "static"
 
 [dependencies]

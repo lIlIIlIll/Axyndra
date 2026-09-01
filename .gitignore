@@ -31,8 +31,8 @@ perf_results/
 !vendor/cj_tui/PROVENANCE.json
 !vendor/cj_tui/docs/api-contract-v1.txt
 !vendor/cj_tui/packages/core/tests/fixtures/file_picker/notes.txt
-!compat/agent-sdk-v1.api.json
-!compat/axyndra-agent-testkit-v1.api.json
+!compat/agent-sdk-v2.api.json
+!compat/axyndra-agent-testkit-v2.api.json
 !docs/tui-goldens/120x36.txt
 !docs/tui-goldens/60x18.txt
 !docs/tui-goldens/80x24.txt

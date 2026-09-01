@@ -71,10 +71,9 @@ major release. Security hardening is the deliberate exception: patch/minor may
 reject behavior that endangered host authority, but rejection and diagnostics
 must be explicit and tested.
 
-The SDK 1 reference surface remains in `compat/agent-sdk-v1.api.json`; the
-current surface is compared against it to verify that the declared major bump
-permits the reviewed breaking migration. The companion testkit surface lives in
-`compat/axyndra-agent-testkit-v1.api.json`. `scripts/check_sdk_compatibility.py`
+The SDK 2 reference surface lives in `compat/agent-sdk-v2.api.json`. The
+companion testkit 2 surface lives in
+`compat/axyndra-agent-testkit-v2.api.json`. `scripts/check_sdk_compatibility.py`
 fails stable removal, signature change, or demotion while the major is
 unchanged, and self-tests additive/breaking classification. Gates never rewrite
 baselines. A reviewed breaking release updates them explicitly:
