@@ -32,6 +32,12 @@ class Mcp4CjTests {
             ])], isError: false
         ))
         @Expect(mcpCallToolOutcomeValue(outcome).field("resultType").getOrThrow().text, MCP_RESULT_COMPLETE)
+
+        let extension = McpCallToolOutcome.Extension("com.example/result", jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("value", jsonString("extension"))
+        ]))
+        @Expect(mcpCallToolOutcomeValue(extension).field("resultType").getOrThrow().text, "com.example/result")
     }
 
     @TestCase
@@ -87,7 +93,7 @@ class Mcp4CjTests {
 
     @TestCase
     func boundsHttpOperationProgressNotifications() {
-        let stream = McpOperationSseInput(jsonRpcNumberId(1), { sink =>
+        let stream = McpOperationSseInput(jsonRpcNumberId(1), 8388608, { sink =>
             for (_ in 0..257) {
                 sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([])))
             }
@@ -109,6 +115,27 @@ class Mcp4CjTests {
             ),
             true
         )
+    }
+
+    @TestCase
+    func rejectsOversizedHttpOperationProgressNotification() {
+        let stream = McpOperationSseInput(jsonRpcNumberId(1), 1024, { sink =>
+            sink(JsonRpcNotification(MCP_NOTIFICATION_PROGRESS, params: jsonObject([
+                JsonObjectEntry("message", jsonString(String.fromUtf8(Array<Byte>(2048, repeat: 120))))
+            ])))
+            JsonRpcEnvelope.Response(JsonRpcResponse(
+                jsonRpcNumberId(1), JsonRpcResponsePayload.Success(jsonObject([]))
+            ))
+        })
+        sleep(Duration.millisecond * 20)
+        let output = ArrayList<Byte>()
+        let buffer = Array<Byte>(4096, repeat: 0)
+        while (true) {
+            let count = stream.read(buffer)
+            if (count <= 0) { break }
+            for (index in 0..count) { output.add(buffer[index]) }
+        }
+        @Expect(String.fromUtf8(output.toArray()).contains("exceeded the frame limit"), true)
     }
 
     @TestCase
@@ -430,6 +457,7 @@ class Mcp4CjTests {
         )) {
             case McpResult.Ok(McpOperationOutcome.Extension(kind, value)) =>
                 @Expect(kind, "com.example/deferred")
+                @Expect(value.field("resultType").getOrThrow().text, "com.example/deferred")
                 @Expect(value.field("token").getOrThrow().text, "later")
             case _ => @Fail("completion extension result was not preserved")
         }
@@ -508,9 +536,15 @@ class Mcp4CjTests {
             case _ => @Fail("tasks/get failed")
         }
         @Expect(client.updateTask("task-1", jsonObject([JsonObjectEntry(
-            "confirm", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
+            "confirm", jsonObject([
+                JsonObjectEntry("action", jsonString("accept")),
+                JsonObjectEntry("content", jsonObject([]))
+            ])
         )])).isOk(), true)
         @Expect(tasks.updated, true)
+        @Expect(client.updateTask("task-1", jsonObject([JsonObjectEntry(
+            "unknown", jsonObject([JsonObjectEntry("action", jsonString("accept"))])
+        )])).isOk(), false)
         @Expect(client.cancelTask("task-1").isOk(), true)
         @Expect(tasks.cancelled, true)
     }
@@ -625,7 +659,6 @@ class FixtureMcpProviders <: McpCompletionProvider & McpPromptProvider & McpReso
     ): McpResult<McpOperationOutcome<McpCompletionResult>> {
         let _ = requestId; let _ = reference; let _ = argument; let _ = continuation
         McpResult.Ok(McpOperationOutcome.Extension("com.example/deferred", jsonObject([
-            JsonObjectEntry("resultType", jsonString("com.example/deferred")),
             JsonObjectEntry("token", jsonString("later"))
         ])))
     }

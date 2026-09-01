@@ -903,8 +903,12 @@ func decodeMcpEmptyTaskAck(value: McpResult<JsonNode>, method: String): McpResul
 }
 
 func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonNode): McpResult<Unit> {
+    validateMcpInputResponses(pending.inputRequests, responses)
+}
+
+func validateMcpInputResponses(inputRequests: JsonNode, responses: JsonNode): McpResult<Unit> {
     if (responses.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.input_responses_invalid", "inputResponses must be an object") }
-    for (request in pending.inputRequests.fields) { match (responses.field(request.name)) {
+    for (request in inputRequests.fields) { match (responses.field(request.name)) {
         case Some(value) =>
             let typedRequest = match (decodeMcpInputRequest(request.value)) {
                 case McpResult.Ok(found) => found
@@ -916,7 +920,7 @@ func validateMcpInputResponses(pending: McpInputRequiredResult, responses: JsonN
             }
         case None => return invalidMcp<Unit>("mcp.input_response_missing", "retry must answer every input request")
     } }
-    for (response in responses.fields where pending.inputRequests.field(response.name).isNone()) {
+    for (response in responses.fields where inputRequests.field(response.name).isNone()) {
         return invalidMcp<Unit>("mcp.input_response_unknown", "retry contains an unknown input response")
     }
     McpResult.Ok(())

@@ -707,7 +707,7 @@ public class StreamableHttpMcpServer {
                         .header("Content-Type", "text/event-stream; charset=utf-8")
                         .header("Cache-Control", "no-store")
                         .header("Transfer-Encoding", "chunked")
-                        .body(McpOperationSseInput(value.id, { notificationSink =>
+                        .body(McpOperationSseInput(value.id, config.framing.maxFrameBytes, { notificationSink =>
                             projectMcpHttpResponse(
                                 envelope,
                                 JsonRpcEnvelope.Response(mcp.handleRequest(
@@ -752,6 +752,7 @@ let MCP_OPERATION_PROGRESS_QUEUE_LIMIT: Int64 = 256
 
 class McpOperationSseInput <: InputStream & Resource {
     private let id: JsonRpcId
+    private let maxFrameBytes: Int64
     private let lock = Mutex()
     private let queued = ArrayList<Array<Byte>>()
     private var pending: Array<Byte> = []
@@ -763,9 +764,11 @@ class McpOperationSseInput <: InputStream & Resource {
 
     init(
         id: JsonRpcId,
+        maxFrameBytes: Int64,
         operation: ((JsonRpcNotification) -> Unit) -> JsonRpcEnvelope
     ) {
         this.id = id
+        this.maxFrameBytes = maxFrameBytes
         worker = Some(spawn {
             let response = try {
                 operation({ notification => enqueueProgress(JsonRpcEnvelope.Notification(notification)) })
@@ -813,7 +816,15 @@ class McpOperationSseInput <: InputStream & Resource {
         let bytes = encodedEnvelope(envelope)
         lock.lock(); try {
             if (!closed && !overflowed) {
-                if (queued.size >= MCP_OPERATION_PROGRESS_QUEUE_LIMIT) {
+                if (bytes.size > maxFrameBytes) {
+                    queued.clear()
+                    queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
+                        id, JSON_RPC_INTERNAL_ERROR,
+                        "MCP operation progress notification exceeded the frame limit"
+                    ))))
+                    overflowed = true
+                    done = true
+                } else if (queued.size >= MCP_OPERATION_PROGRESS_QUEUE_LIMIT) {
                     queued.clear()
                     queued.add(encodedEnvelope(JsonRpcEnvelope.Response(mcpFailureResponse(
                         id, JSON_RPC_INTERNAL_ERROR,

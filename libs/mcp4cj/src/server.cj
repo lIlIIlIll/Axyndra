@@ -422,6 +422,17 @@ public class McpServer {
         for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
             return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "task input responses must be objects")
         }
+        let task = match (provider.getTask(taskId)) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
+        if (task.status != McpTaskStatus.InputRequired) {
+            return mcpFailureResponse(request.id, JSON_RPC_INVALID_PARAMS, "tasks/update requires an input_required task")
+        }
+        match (validateMcpInputResponses(task.inputRequests, responses)) {
+            case McpResult.Ok(_) => ()
+            case McpResult.Err(error) => return mcpHostFailure(request.id, error)
+        }
         match (provider.updateTask(taskId, responses)) {
             case McpResult.Ok(_) => mcpSuccessResponse(request.id, jsonObject([]), discovery.serverInfo)
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
