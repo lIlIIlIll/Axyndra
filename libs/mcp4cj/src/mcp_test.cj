@@ -493,6 +493,49 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func httpServerBoundsConcurrentJsonRequests() {
+        let operation = HoldingToolOperation()
+        let host = MemoryMcpToolHost([
+            McpTool("slow", "slow", jsonObject([JsonObjectEntry("type", jsonString("object"))]))
+        ], { requestId, arguments, continuation =>
+            operation.execute(requestId, arguments, continuation)
+        })
+        let server = match (openStreamableHttpMcpServer(
+            McpStreamableHttpServerConfig(port: 0, maxConcurrentRequests: 1),
+            McpServerBuilder().toolProvider(host).build()
+        )) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        let serving = spawn { server.serve() }
+        var waited: Int64 = 0
+        while (server.state() != McpLifecycleState.Ready && waited < 3000) {
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        let url = "http://127.0.0.1:" + server.port().toString() + "/mcp"
+        let first = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(url)), McpRequestMeta())
+        let second = McpClient(StreamableHttpMcpTransport(McpStreamableHttpClientConfig(url)), McpRequestMeta())
+        @Expect(first.listTools().isOk(), true)
+        @Expect(second.listTools().isOk(), true)
+        let running = spawn {
+            let result = first.callTool("slow", jsonObject([]))
+            match (result) {
+                case McpResult.Err(error) => operation.recordFailure(error.code + ":" + error.message)
+                case McpResult.Ok(_) => ()
+            }
+            result
+        }
+        operation.waitUntilStarted()
+        @Expect(second.callTool("slow", jsonObject([])).isOk(), false)
+        operation.release()
+        @Expect(running.get().isOk(), true)
+        @Expect(first.close().isOk(), true)
+        @Expect(second.close().isOk(), true)
+        @Expect(server.close().isOk(), true)
+        let _ = serving.get()
+    }
+
+    @TestCase
     func httpClientDecodesStructuredJsonRpcErrorsFromNonSuccessStatus() {
         let host = MemoryMcpToolHost([
             McpTool("fail", "fail", jsonObject([JsonObjectEntry("type", jsonString("object"))]))
@@ -561,6 +604,13 @@ class Mcp4CjTests {
             case _ => @Fail("generic tools/call failed")
         }
         @Expect(client.callTool("echo", jsonObject([])).isOk(), false)
+        let retry = McpInputRequiredResult(requestState: "retry-state")
+        @Expect(client.retryToolCall(
+            "echo", jsonObject([JsonObjectEntry("value", jsonString("retry"))]),
+            retry, jsonObject([]), progressToken: jsonString("retry-progress")
+        ).isOk(), true)
+        let retryMeta = mcpObject(transport.requests[transport.requests.size - 1].params, "_meta")
+        @Expect(retryMeta.field("progressToken").getOrThrow().text, "retry-progress")
         @Expect(client.notify("notifications/test").isOk(), true)
         @Expect(client.close().isOk(), true)
         @Expect(client.close().isOk(), true)
@@ -639,6 +689,26 @@ class Mcp4CjTests {
             JsonObjectEntry("cacheScope", jsonString("private"))
         ])
         @Expect(decodeMcpPage(page, "prompts").isOk(), false)
+        @Expect(decodeMcpCallOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("content", jsonArray([jsonObject([])]))
+        ]), None).isOk(), false)
+        @Expect(decodeMcpCallOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("content", jsonArray([jsonObject([
+                JsonObjectEntry("type", jsonString("text"))
+            ])]))
+        ]), None).isOk(), false)
+        @Expect(decodeMcpReadResourceOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("contents", jsonArray([jsonObject([])]))
+        ])).isOk(), false)
+        @Expect(decodeMcpReadResourceOutcome(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("contents", jsonArray([jsonObject([
+                JsonObjectEntry("uri", jsonString("file:///missing-content"))
+            ])]))
+        ])).isOk(), false)
     }
 
     @TestCase
@@ -734,12 +804,14 @@ class Mcp4CjTests {
 class InMemoryMcpTransport <: McpTransport {
     let server: McpServer
     let requestIds = ArrayList<String>()
+    let requests = ArrayList<JsonRpcRequest>()
     var closed = false
     init(server: McpServer) { this.server = server }
     public func kind(): McpTransportKind { McpTransportKind.Stdio }
     public func state(): McpLifecycleState { if (closed) { McpLifecycleState.Stopped } else { McpLifecycleState.Ready } }
     public func request(request: JsonRpcRequest): McpResult<JsonRpcResponse> {
         requestIds.add(request.id.display())
+        requests.add(request)
         if (closed) { McpResult.Err(McpError(McpErrorKind.Lifecycle, "closed", "closed")) }
         else { McpResult.Ok(server.handleRequest(request)) }
     }
@@ -759,6 +831,46 @@ class InMemoryMcpTransport <: McpTransport {
     }
     public func registerTools(tools: Array<McpTool>): McpResult<Unit> { let _ = tools; McpResult.Ok(()) }
     public func close(): McpResult<Unit> { closed = true; McpResult.Ok(()) }
+}
+
+class HoldingToolOperation {
+    private let lock = Mutex()
+    private var started = false
+    private var released = false
+    private var failure = ""
+    func execute(
+        name: String,
+        arguments: JsonNode,
+        continuation: McpToolCallContinuation
+    ): McpResult<McpCallToolOutcome> {
+        let _ = name; let _ = arguments; let _ = continuation
+        lock.lock(); try { started = true } finally { lock.unlock() }
+        while (true) {
+            lock.lock(); let done = try { released } finally { lock.unlock() }
+            if (done) { break }
+            sleep(Duration.millisecond * 5)
+        }
+        McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult([
+            jsonObject([
+                JsonObjectEntry("type", jsonString("text")),
+                JsonObjectEntry("text", jsonString("done"))
+            ])
+        ])))
+    }
+    func waitUntilStarted(): Unit {
+        var waited: Int64 = 0
+        while (waited < 3000) {
+            lock.lock(); let (value, failed) = try { (started, failure) } finally { lock.unlock() }
+            if (value) { return }
+            if (failed != "") { throw IllegalStateException("holding tool request failed: " + failed) }
+            sleep(Duration.millisecond * 5); waited += 5
+        }
+        throw IllegalStateException("holding tool operation did not start")
+    }
+    func recordFailure(message: String): Unit {
+        lock.lock(); try { failure = message } finally { lock.unlock() }
+    }
+    func release(): Unit { lock.lock(); try { released = true } finally { lock.unlock() } }
 }
 
 func fixtureElicitationParams(): JsonNode {

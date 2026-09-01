@@ -90,10 +90,12 @@ public class McpClient {
         arguments: AgentValue,
         pending: McpInputRequiredResult,
         inputResponses: AgentValue,
+        progressToken!: AgentValue = nullValue(),
         runId!: String = ""
     ): Result<McpCallToolOutcome> {
         mapMcpResult(primitive.retryToolCall(
-            name, arguments, pending, inputResponses, owner: runId
+            name, arguments, pending, inputResponses,
+            progressToken: progressToken, owner: runId
         ))
     }
 

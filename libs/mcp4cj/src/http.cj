@@ -715,11 +715,14 @@ public class StreamableHttpMcpServer {
             ); return
         }
         match (envelope) {
+            case JsonRpcEnvelope.Request(value) => if (!reserveStream(value.id)) {
+                writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
+                return
+            }
+            case _ => ()
+        }
+        match (envelope) {
             case JsonRpcEnvelope.Request(value) => if (value.method == MCP_METHOD_SUBSCRIPTIONS_LISTEN) {
-                if (!reserveStream(value.id)) {
-                    writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
-                    return
-                }
                 match (mcp.openSubscription(value)) {
                     case McpResult.Ok(source) =>
                         context.responseBuilder.status(200)
@@ -751,10 +754,6 @@ public class StreamableHttpMcpServer {
                 let progressToken = mcpField(mcpObject(value.params, "_meta"), "progressToken", jsonNull())
                 if (accept.trimAscii().startsWith("text/event-stream") ||
                     progressToken.unifiedKind != UnifiedJsonKind.Null) {
-                    if (!reserveStream(value.id)) {
-                        writeHttpProblem(context, 503, "MCP HTTP server is at its concurrent request limit")
-                        return
-                    }
                     context.responseBuilder.status(200)
                         .header("Content-Type", "text/event-stream; charset=utf-8")
                         .header("Cache-Control", "no-store")
@@ -783,20 +782,27 @@ public class StreamableHttpMcpServer {
             case JsonRpcEnvelope.Notification(value) => handleHttpNotification(value)
             case JsonRpcEnvelope.Response(_) => mcp.handle(envelope)
         }
-        match (handled) {
-            case McpResult.Err(error) => writeMcpHttpEnvelope(context, 500, JsonRpcEnvelope.Response(mcpFailureResponse(envelopeId(envelope), JSON_RPC_INTERNAL_ERROR, error.message)))
-            case McpResult.Ok(None) => context.responseBuilder.status(202)
-            case McpResult.Ok(Some(rawResponse)) =>
-                let response = projectMcpHttpResponse(envelope, rawResponse)
-                let asSse = accept.trimAscii().startsWith("text/event-stream") || !progressNotifications.isEmpty()
-                if (asSse && responseStatus(response) == 200) {
-                    var body = ""
-                    for (notification in progressNotifications) {
-                        body += "event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Notification(notification)) + "\n\n"
-                    }
-                    body += "event: message\ndata: " + encodeJsonRpc(response) + "\n\n"
-                    context.responseBuilder.status(200).header("Content-Type", "text/event-stream; charset=utf-8").header("Cache-Control", "no-store").body(body)
-                } else { writeMcpHttpEnvelope(context, responseStatus(response), response) }
+        try {
+            match (handled) {
+                case McpResult.Err(error) => writeMcpHttpEnvelope(context, 500, JsonRpcEnvelope.Response(mcpFailureResponse(envelopeId(envelope), JSON_RPC_INTERNAL_ERROR, error.message)))
+                case McpResult.Ok(None) => context.responseBuilder.status(202)
+                case McpResult.Ok(Some(rawResponse)) =>
+                    let response = projectMcpHttpResponse(envelope, rawResponse)
+                    let asSse = accept.trimAscii().startsWith("text/event-stream") || !progressNotifications.isEmpty()
+                    if (asSse && responseStatus(response) == 200) {
+                        var body = ""
+                        for (notification in progressNotifications) {
+                            body += "event: message\ndata: " + encodeJsonRpc(JsonRpcEnvelope.Notification(notification)) + "\n\n"
+                        }
+                        body += "event: message\ndata: " + encodeJsonRpc(response) + "\n\n"
+                        context.responseBuilder.status(200).header("Content-Type", "text/event-stream; charset=utf-8").header("Cache-Control", "no-store").body(body)
+                    } else { writeMcpHttpEnvelope(context, responseStatus(response), response) }
+            }
+        } finally {
+            match (envelope) {
+                case JsonRpcEnvelope.Request(value) => releaseStream(value.id)
+                case _ => ()
+            }
         }
     }
 
