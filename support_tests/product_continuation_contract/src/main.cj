@@ -125,15 +125,14 @@ main(): Int64 {
                 "payload=json_set(payload,'$.service_tier','scale') " +
                 "WHERE run_id='product-restart-run'"
         )
-        let scaleMigrated = continuationRepository.continuation(runId)
-            .value().getOrThrow()
-        expect(scaleMigrated.serviceTier == "priority" && database.scalarInt(
+        let scaleRejected = continuationRepository.continuation(runId)
+        expect(scaleRejected.isError() && database.scalarInt(
             "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
                 "WHERE run_id='product-restart-run'"
-        ) == 0, "legacy scale tier migrates to priority during durable recovery")
+        ) == 1, "legacy scale tier fails closed without changing request semantics")
         database.execute(
-            "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
-                "'product-restart-run'," + sqliteText(encodedContinuation) + ")"
+            "UPDATE legacy_run_continuation_imports SET payload=" +
+                sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"
         )
         expect(continuationRepository.continuation(runId).isOk() && database.scalarInt(
             "SELECT COUNT(*) FROM legacy_run_continuation_imports " +

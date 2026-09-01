@@ -980,11 +980,13 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             }
         case None => ""
     }
-    // OpenAI replaced the legacy scale tier with priority. Persisted v4
-    // continuations must remain resumable across that catalog migration.
-    let serviceTier = if (persistedServiceTier == "scale") {
-        "priority"
-    } else { persistedServiceTier }
+    if (persistedServiceTier == "scale") {
+        return codecError(
+            "legacy scale service tier cannot be resumed without changing request semantics; " +
+                "start a new run with an explicitly supported service tier"
+        )
+    }
+    let serviceTier = persistedServiceTier
     if (serviceTier != "" && serviceTier != "auto" &&
         serviceTier != "default" && serviceTier != "flex" &&
         serviceTier != "priority") {
