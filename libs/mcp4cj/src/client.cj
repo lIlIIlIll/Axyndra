@@ -157,13 +157,15 @@ public class McpClient {
         arguments: JsonNode,
         pending: McpInputRequiredResult,
         inputResponses: JsonNode,
+        progressToken!: JsonNode = jsonNull(),
         owner!: String = ""
     ): McpResult<McpCallToolOutcome> {
         match (validateMcpInputResponses(pending, inputResponses)) {
             case McpResult.Ok(_) => callTool(
                 name, arguments,
                 continuation: McpToolCallContinuation(
-                    inputResponses: inputResponses, requestState: pending.requestState
+                    inputResponses: inputResponses, requestState: pending.requestState,
+                    progressToken: progressToken
                 ),
                 owner: owner
             )
@@ -604,6 +606,55 @@ func validOptionalMcpField(value: JsonNode, name: String, kind: UnifiedJsonKind)
     }
 }
 
+func validMcpResourceContent(value: JsonNode): Bool {
+    if (value.unifiedKind != UnifiedJsonKind.Object || mcpText(value, "uri") == "" ||
+        !validOptionalMcpField(value, "mimeType", UnifiedJsonKind.Text) ||
+        !validOptionalMcpField(value, "_meta", UnifiedJsonKind.Object)) {
+        return false
+    }
+    let hasText = match (value.field("text")) {
+        case Some(item) => item.unifiedKind == UnifiedJsonKind.Text
+        case None => false
+    }
+    let hasBlob = match (value.field("blob")) {
+        case Some(item) => item.unifiedKind == UnifiedJsonKind.Text
+        case None => false
+    }
+    hasText != hasBlob
+}
+
+func validMcpContentBlock(value: JsonNode): Bool {
+    if (value.unifiedKind != UnifiedJsonKind.Object ||
+        !validOptionalMcpField(value, "annotations", UnifiedJsonKind.Object) ||
+        !validOptionalMcpField(value, "_meta", UnifiedJsonKind.Object)) {
+        return false
+    }
+    match (mcpText(value, "type")) {
+        case "text" => match (value.field("text")) {
+            case Some(text) => text.unifiedKind == UnifiedJsonKind.Text
+            case None => false
+        }
+        case "image" | "audio" => mcpText(value, "data") != "" && mcpText(value, "mimeType") != ""
+        case "resource" => match (value.field("resource")) {
+            case Some(resource) => validMcpResourceContent(resource)
+            case None => false
+        }
+        case "resource_link" =>
+            if (mcpText(value, "uri") == "" || mcpText(value, "name") == "" ||
+                !validOptionalMcpField(value, "title", UnifiedJsonKind.Text) ||
+                !validOptionalMcpField(value, "description", UnifiedJsonKind.Text) ||
+                !validOptionalMcpField(value, "mimeType", UnifiedJsonKind.Text)) {
+                false
+            } else {
+                match (value.field("size")) {
+                    case Some(size) => size.unifiedKind == UnifiedJsonKind.Number && mcpInteger(value, "size") >= 0
+                    case None => true
+                }
+            }
+        case _ => false
+    }
+}
+
 func validateMcpPageDescriptor(fieldName: String, value: JsonNode): McpResult<Unit> {
     if (!validOptionalMcpField(value, "title", UnifiedJsonKind.Text) ||
         !validOptionalMcpField(value, "description", UnifiedJsonKind.Text) ||
@@ -729,6 +780,11 @@ func decodeMcpReadResourceOutcome(value: JsonNode): McpResult<McpOperationOutcom
     if (contents.unifiedKind != UnifiedJsonKind.List) {
         return invalidMcp<McpOperationOutcome<McpReadResourceResult>>(
             "mcp.resource_result_invalid", "resources/read omitted contents"
+        )
+    }
+    for (content in contents.items where !validMcpResourceContent(content)) {
+        return invalidMcp<McpOperationOutcome<McpReadResourceResult>>(
+            "mcp.resource_result_invalid", "resources/read contained invalid resource content"
         )
     }
     try { McpResult.Ok(McpOperationOutcome.Complete(McpReadResourceResult(
@@ -943,8 +999,8 @@ func decodeMcpCallOutcome(value: JsonNode, tool: ?McpTool): McpResult<McpCallToo
             }
             let content = mcpField(value, "content", jsonNull())
             if (content.unifiedKind != UnifiedJsonKind.List) { return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "tools/call content must be an array") }
-            for (block in content.items where block.unifiedKind != UnifiedJsonKind.Object) {
-                return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "content block must be an object")
+            for (block in content.items where !validMcpContentBlock(block)) {
+                return invalidMcp<McpCallToolOutcome>("mcp.call_content_invalid", "tools/call contained an invalid content block")
             }
             let structured = mcpField(value, "structuredContent", jsonNull())
             match (tool) {
