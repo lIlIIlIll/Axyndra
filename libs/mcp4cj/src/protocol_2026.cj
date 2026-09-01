@@ -590,8 +590,9 @@ public func mcpOperationOutcomeValue<T>(
 
 func mcpExtensionOutcomeValue(resultType: String, value: JsonNode): JsonNode {
     requireObject(value, "MCP extension result")
-    if (resultType.trimAscii() == "") {
-        throw IllegalArgumentException("MCP extension resultType must not be empty")
+    if (resultType.trimAscii() == "" || resultType == MCP_RESULT_COMPLETE ||
+        resultType == MCP_RESULT_INPUT_REQUIRED || resultType == MCP_RESULT_TASK) {
+        throw IllegalArgumentException("MCP extension resultType must be non-empty and non-core")
     }
     let fields = ArrayList<JsonObjectEntry>()
     fields.add(JsonObjectEntry("resultType", jsonString(resultType)))
