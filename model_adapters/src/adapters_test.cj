@@ -60,6 +60,23 @@ class NativeReplayRegressionTests {
         @Expect(canonicalReasoningHasReplayCounterpart(blocks, 0), true)
     }
 
+    @TestCase
+    func opaqueToolCallRestoresNativeReplay(): Unit {
+        let block = domain.ModelBlock(
+            domain.ModelBlockKind.ToolCall,
+            callId: "call-1", name: "read", arguments: domain.objectValue([]),
+            opaqueState: Some(domain.OpaqueProviderState(
+                "primary", "messages",
+                "{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"}",
+                itemId: "thinking", replayRequired: true
+            ))
+        )
+        match (toLlmWireBlock(block, ProviderDialect.DeepSeekMessages)) {
+            case LlmWireBlock.NativeReplay(value) => @Expect(value.dialectId, "deepseek.messages.v1")
+            case _ => @Fail("opaque tool call did not restore native replay")
+        }
+    }
+
 }
 
 @Test
