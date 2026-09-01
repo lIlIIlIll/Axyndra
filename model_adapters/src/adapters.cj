@@ -3061,7 +3061,7 @@ func toLlmWireBlock(
     providerId: String
 ): LlmWireBlock {
     match (block.kind) {
-        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.ToolCall | domain.ModelBlockKind.Unknown =>
+        case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
             match (block.opaqueState) {
                 case Some(value) => if (nativeReplayMatches(value, dialect, providerId)) {
                     return LlmWireBlock.NativeReplay(restoreNativeReplay(value, dialect))
@@ -3158,6 +3158,12 @@ func toLlmWireRequest(
             match (block.kind) {
                 case domain.ModelBlockKind.ToolCall =>
                     pendingToolCalls.add(block.callId)
+                    match (block.opaqueState) {
+                        case Some(state) => if (nativeReplayMatches(state, dialect, providerId)) {
+                            blocks.add(LlmWireBlock.NativeReplay(restoreNativeReplay(state, dialect)))
+                        }
+                        case None => ()
+                    }
                     blocks.add(toLlmWireBlock(block, dialect, providerId))
                 case domain.ModelBlockKind.ToolResult =>
                     if (pendingToolCalls.contains(block.callId)) {

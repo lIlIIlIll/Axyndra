@@ -94,7 +94,7 @@ class NativeReplayRegressionTests {
     }
 
     @TestCase
-    func opaqueToolCallRestoresNativeReplay(): Unit {
+    func opaqueToolCallProjectsReplayBeforeCanonicalCall(): Unit {
         let block = domain.ModelBlock(
             domain.ModelBlockKind.ToolCall,
             callId: "call-1", name: "read", arguments: domain.objectValue([]),
@@ -104,9 +104,17 @@ class NativeReplayRegressionTests {
                 itemId: "thinking", replayRequired: true
             ))
         )
-        match (toLlmWireBlock(block, ProviderDialect.DeepSeekMessages, "primary")) {
+        let request = toLlmWireRequest(domain.ModelRequest(
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, [block])]
+        ), ProviderDialect.DeepSeekMessages, "primary")
+        @Expect(request.messages[0].blocks.size, 2)
+        match (request.messages[0].blocks[0]) {
             case LlmWireBlock.NativeReplay(value) => @Expect(value.dialectId, "deepseek.messages.v1")
-            case _ => @Fail("opaque tool call did not restore native replay")
+            case _ => @Fail("opaque tool call replay was not restored")
+        }
+        match (request.messages[0].blocks[1]) {
+            case LlmWireBlock.ToolCall(value) => @Expect(value.callId, "call-1")
+            case _ => @Fail("opaque replay replaced the canonical tool call")
         }
     }
 
@@ -180,7 +188,7 @@ class NativeReplayRegressionTests {
     }
 
     @TestCase
-    func nativeReplayBeforeToolCallAttachesToCanonicalCall(): Unit {
+    func nativeReplayAndCanonicalToolCallBothSurviveProjection(): Unit {
         let replay = restoreNativeReplay(domain.OpaqueProviderState(
             "primary", "messages",
             "{\"protocol\":\"messages\",\"dialect_id\":\"anthropic.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"payload\":{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"},\"display_reasoning\":\"why\"}",
@@ -196,14 +204,32 @@ class NativeReplayRegressionTests {
             rawStopReason: "tool_use"
         ), "primary", ProviderProtocol.Messages, false)
         @Expect(reply.blocks.size, 2)
-        @Expect(match (reply.blocks[1].kind) {
-            case domain.ModelBlockKind.ToolCall => true
-            case _ => false
-        }, true)
-        @Expect(reply.blocks[1].opaqueState.isSome(), true)
+        @Expect(reply.blocks[0].opaqueState.isSome(), true)
+        @Expect(reply.blocks[1].opaqueState.isNone(), true)
+        let replayState = reply.blocks[0].opaqueState.getOrThrow()
+        let reconstructed = [
+            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "why"),
+            domain.ModelBlock(
+                domain.ModelBlockKind.ToolCall,
+                callId: "call-1", name: "read", arguments: domain.objectValue([]),
+                opaqueState: Some(replayState)
+            )
+        ]
         @Expect(canonicalReasoningHasReplayCounterpart(
-            reply.blocks, 0, ProviderDialect.AnthropicMessages, "primary"
+            reconstructed, 0, ProviderDialect.AnthropicMessages, "primary"
         ), true)
+        let projected = toLlmWireRequest(domain.ModelRequest(
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, reconstructed)]
+        ), ProviderDialect.AnthropicMessages, "primary")
+        @Expect(projected.messages[0].blocks.size, 2)
+        match (projected.messages[0].blocks[0]) {
+            case LlmWireBlock.NativeReplay(_) => @Expect(true, true)
+            case _ => @Fail("native replay was not retained before the canonical tool call")
+        }
+        match (projected.messages[0].blocks[1]) {
+            case LlmWireBlock.ToolCall(value) => @Expect(value.callId, "call-1")
+            case _ => @Fail("canonical tool call was replaced by native replay")
+        }
     }
 
 }
