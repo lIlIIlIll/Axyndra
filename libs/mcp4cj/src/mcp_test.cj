@@ -314,6 +314,21 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func rejectedSubscriptionAcknowledgementCancelsProviderWork() {
+        let cancellations = ArrayList<JsonRpcId>()
+        let handle = StdioMcpSubscriptionHandle(jsonRpcNumberId(7), { id =>
+            cancellations.add(id)
+            McpResult.Ok(())
+        })
+        handle.failAndCancel(McpError(
+            McpErrorKind.Protocol, "mcp.subscription_filter_invalid", "invalid acknowledgement"
+        ))
+        @Expect(cancellations.size, 1)
+        @Expect(handle.close().isOk(), true)
+        @Expect(cancellations.size, 1)
+    }
+
+    @TestCase
     func stdioTransportRemovesNaturallyTerminatedSubscriptions() {
         let script = "IFS= read -r line; " +
             "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\",\"params\":{\"notifications\":{\"toolsListChanged\":true},\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":1}}}'; " +
@@ -729,6 +744,21 @@ class Mcp4CjTests {
             JsonObjectEntry("cacheScope", jsonString("private"))
         ])
         @Expect(decodeMcpPage(page, "prompts").isOk(), false)
+        let malformedCursorPage = jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("prompts", jsonArray([])),
+            JsonObjectEntry("nextCursor", jsonNumber("1")),
+            JsonObjectEntry("ttlMs", jsonNumber("300000")),
+            JsonObjectEntry("cacheScope", jsonString("private"))
+        ])
+        @Expect(decodeMcpPage(malformedCursorPage, "prompts").isOk(), false)
+        @Expect(decodeMcpToolPage(jsonObject([
+            JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
+            JsonObjectEntry("tools", jsonArray([])),
+            JsonObjectEntry("nextCursor", jsonBool(true)),
+            JsonObjectEntry("ttlMs", jsonNumber("300000")),
+            JsonObjectEntry("cacheScope", jsonString("private"))
+        ])).isOk(), false)
         @Expect(decodeMcpCallOutcome(jsonObject([
             JsonObjectEntry("resultType", jsonString(MCP_RESULT_COMPLETE)),
             JsonObjectEntry("content", jsonArray([jsonObject([])]))

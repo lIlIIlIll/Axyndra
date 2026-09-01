@@ -599,6 +599,9 @@ func decodeMcpPage(value: JsonNode, fieldName: String): McpResult<McpPage> {
             case McpResult.Err(error) => return McpResult.Err(error)
         }
     }
+    if (!validOptionalMcpField(value, "nextCursor", UnifiedJsonKind.Text)) {
+        return invalidMcp<McpPage>("mcp.page_cursor_invalid", "nextCursor must be a string")
+    }
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
     try {
         McpResult.Ok(McpPage(
@@ -1002,6 +1005,9 @@ public func decodeMcpToolPage(value: JsonNode): McpResult<McpToolListPage> {
         case McpResult.Ok(tool) => tools.add(tool)
         case McpResult.Err(error) => return McpResult.Err(error)
     } }
+    if (!validOptionalMcpField(value, "nextCursor", UnifiedJsonKind.Text)) {
+        return invalidMcp<McpToolListPage>("mcp.page_cursor_invalid", "nextCursor must be a string")
+    }
     let ttl = mcpInteger(value, "ttlMs"); let scope = mcpText(value, "cacheScope")
     if (ttl < 0 || !validMcpCacheScope(scope)) { return invalidMcp<McpToolListPage>("mcp.cache_metadata_invalid", "tools/list cache metadata is invalid") }
     McpResult.Ok(McpToolListPage(tools.toArray(), nextCursor: mcpText(value, "nextCursor"), ttlMillis: ttl, cacheScope: scope))
