@@ -286,6 +286,11 @@ public class McpServer {
                         request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
                         "Missing required client capability", data: mcpTasksRequiredCapability()
                     )
+                } else if (tasks.isNone()) {
+                    mcpFailureResponse(
+                        request.id, JSON_RPC_INTERNAL_ERROR,
+                        "tool returned a task but the server has no task provider"
+                    )
                 } else if (tool.execution.isNone() ||
                     tool.execution.getOrThrow().taskSupport == McpTaskSupport.Forbidden) {
                     mcpFailureResponse(

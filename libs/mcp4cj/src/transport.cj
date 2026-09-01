@@ -672,7 +672,18 @@ public class StdioMcpServer {
                     case McpResult.Ok(None) =>
                         writeConsole(mcpSuccessResponse(request.id, jsonObject([]), None)); return
                     case McpResult.Err(error) =>
-                        writeConsole(mcpHostFailure(request.id, error)); return
+                        let response = mcpHostFailure(request.id, error)
+                        if (mcpEnvelopeWithinFrame(
+                            JsonRpcEnvelope.Response(response), framing.maxFrameBytes
+                        )) {
+                            writeConsole(response)
+                        } else {
+                            writeConsole(mcpFailureResponse(
+                                request.id, JSON_RPC_INTERNAL_ERROR,
+                                "MCP stdio subscription error exceeded the frame limit"
+                            ))
+                        }
+                        return
                 }
             }
         } finally {

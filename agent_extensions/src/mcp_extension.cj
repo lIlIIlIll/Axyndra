@@ -97,6 +97,11 @@ public class McpAgentExtension <: TrustedAgentExtension {
         this.extensionId = "mcp:" + serverId
         let values = ArrayList<TrustedToolContribution>()
         for (tool in tools) {
+            let taskRequired = match (tool.execution) {
+                case Some(execution) => execution.taskSupport == McpTaskSupport.Required
+                case None => false
+            }
+            if (taskRequired) { continue }
             let alias = match (aliases.register(serverId, redact(tool.name))) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => throw IllegalStateException(
