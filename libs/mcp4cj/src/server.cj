@@ -813,7 +813,14 @@ func mcpHostFailure(id: JsonRpcId, error: McpError): JsonRpcResponse {
 func decodeMcpContinuation(
     params: JsonNode, notificationSink: (JsonRpcNotification) -> Unit
 ): McpResult<McpToolCallContinuation> {
-    let responses = mcpObject(params, "inputResponses")
+    let responses = match (params.field("inputResponses")) {
+        case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
+            return invalidMcp<McpToolCallContinuation>(
+                "mcp.input_responses_invalid", "inputResponses must be an object"
+            )
+        }
+        case None => jsonObject([])
+    }
     for (field in responses.fields where field.value.unifiedKind != UnifiedJsonKind.Object) {
         return invalidMcp<McpToolCallContinuation>("mcp.input_response_invalid", "input response must be an object")
     }

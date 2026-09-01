@@ -193,6 +193,53 @@ class Mcp4CjTests {
     }
 
     @TestCase
+    func stdioTransportRemovesNaturallyTerminatedSubscriptions() {
+        let script = "IFS= read -r line; " +
+            "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\",\"params\":{\"notifications\":{\"toolsListChanged\":true},\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":1}}}'; " +
+            "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'"
+        let transport = match (openStdioMcpTransport(McpStdioConfig(
+            "/bin/sh", arguments: ["-c", script]
+        ))) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        let handle = match (transport.openSubscription(JsonRpcRequest(
+            jsonRpcNumberId(1), MCP_METHOD_SUBSCRIPTIONS_LISTEN,
+            params: withMcpRequestMeta(
+                McpSubscriptionFilter(toolsListChanged: true).toValue(), McpRequestMeta()
+            )
+        ))) {
+            case McpResult.Ok(value) => value
+            case McpResult.Err(error) => throw error
+        }
+        match (handle.next()) {
+            case McpResult.Ok(None) => ()
+            case _ => @Fail("naturally terminated subscription did not close")
+        }
+        @Expect(transport.activeSubscriptionCount(), 0)
+        @Expect(transport.close().isOk(), true)
+    }
+
+    @TestCase
+    func preservesProgressTokensAndRejectsMalformedContinuationResponses() {
+        let pending = McpInputRequiredResult(inputRequests: jsonObject([
+            JsonObjectEntry("confirm", jsonObject([
+                JsonObjectEntry("method", jsonString(MCP_METHOD_ELICITATION_CREATE)),
+                JsonObjectEntry("params", fixtureElicitationParams())
+            ]))
+        ]))
+        match (resolveMcpInput(
+            pending, FixtureMcpResolver(), 1, McpResolutionPolicy(), jsonString("progress-next")
+        )) {
+            case McpResult.Ok(value) => @Expect(value.requestProgressToken().text, "progress-next")
+            case McpResult.Err(error) => @Fail(error.message)
+        }
+        @Expect(decodeMcpContinuation(jsonObject([
+            JsonObjectEntry("inputResponses", jsonString("malformed"))
+        ]), { _ => }).isOk(), false)
+    }
+
+    @TestCase
     func classifiesMalformedFramesAndSpawnFailures() {
         let malformed = match (openStdioMcpTransport(McpStdioConfig(
             "/bin/sh", arguments: ["-c", "IFS= read -r line; printf 'not-json\\n'"]

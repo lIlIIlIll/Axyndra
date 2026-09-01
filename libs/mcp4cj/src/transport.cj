@@ -393,7 +393,10 @@ public class StdioMcpTransport <: McpTransport {
     private func routeResponse(response: JsonRpcResponse): Unit {
         pendingLock.lock(); try {
             for (item in pending where sameJsonRpcId(item.id, response.id)) { item.response = Some(response); return }
-            for (item in subscriptions where sameJsonRpcId(item.subscriptionId(), response.id)) {
+            for (index in 0..subscriptions.size where sameJsonRpcId(
+                subscriptions[index].subscriptionId(), response.id
+            )) {
+                let item = subscriptions[index]
                 match (response.payload) {
                     case JsonRpcResponsePayload.Success(_) => item.complete()
                     case JsonRpcResponsePayload.Failure(error) => match (remoteMcpError<Unit>(error)) {
@@ -404,6 +407,7 @@ public class StdioMcpTransport <: McpTransport {
                         ))
                     }
                 }
+                subscriptions.remove(at: index)
                 return
             }
         } finally { pendingLock.unlock() }
@@ -442,6 +446,10 @@ public class StdioMcpTransport <: McpTransport {
     }
     private func removePending(item: McpStdioPendingResponse): Unit {
         pendingLock.lock(); try { for (index in 0..pending.size where sameJsonRpcId(pending[index].id, item.id)) { pending.remove(at: index); return } } finally { pendingLock.unlock() }
+    }
+
+    func activeSubscriptionCount(): Int64 {
+        pendingLock.lock(); try { subscriptions.size } finally { pendingLock.unlock() }
     }
     private func removeSubscription(item: StdioMcpSubscriptionHandle): Unit {
         pendingLock.lock(); try { for (index in 0..subscriptions.size where sameJsonRpcId(subscriptions[index].subscriptionId(), item.subscriptionId())) { subscriptions.remove(at: index); return } } finally { pendingLock.unlock() }
