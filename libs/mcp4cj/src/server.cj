@@ -352,7 +352,8 @@ public class McpServer {
         }
         match (provider.complete(request.id, reference, argument, continuation)) {
             case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
-                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo,
+                taskProviderAvailable: tasks.isSome()
             )
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
         }
@@ -389,7 +390,8 @@ public class McpServer {
         }
         match (provider.getPrompt(request.id, name, arguments, continuation)) {
             case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
-                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo,
+                taskProviderAvailable: tasks.isSome()
             )
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
         }
@@ -430,7 +432,8 @@ public class McpServer {
         }
         match (provider.readResource(request.id, uri, continuation)) {
             case McpResult.Ok(outcome) => mcpCheckedOperationResponse(
-                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo
+                request, mcpOperationOutcomeValue(outcome, { value => value.toValue() }), discovery.serverInfo,
+                taskProviderAvailable: tasks.isSome()
             )
             case McpResult.Err(error) => mcpHostFailure(request.id, error)
         }
@@ -813,7 +816,8 @@ func mcpSuccessResponse(id: JsonRpcId, value: JsonNode, serverInfo: ?McpImplemen
 }
 
 func mcpCheckedOperationResponse(
-    request: JsonRpcRequest, value: JsonNode, serverInfo: ?McpImplementationInfo
+    request: JsonRpcRequest, value: JsonNode, serverInfo: ?McpImplementationInfo,
+    taskProviderAvailable!: Bool = true
 ): JsonRpcResponse {
     if (mcpText(value, "resultType") == MCP_RESULT_INPUT_REQUIRED) {
         let required = missingMcpInputCapabilities(request.params, mcpObject(value, "inputRequests"))
@@ -829,6 +833,12 @@ func mcpCheckedOperationResponse(
         return mcpFailureResponse(
             request.id, MCP_MISSING_REQUIRED_CLIENT_CAPABILITY,
             "Missing required client capability", data: mcpTasksRequiredCapability()
+        )
+    }
+    if (mcpText(value, "resultType") == MCP_RESULT_TASK && !taskProviderAvailable) {
+        return mcpFailureResponse(
+            request.id, JSON_RPC_INTERNAL_ERROR,
+            "operation returned a task but the server has no task provider"
         )
     }
     mcpSuccessResponse(request.id, value, serverInfo)
