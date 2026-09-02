@@ -86,6 +86,19 @@ main(): Int64 {
         responsesPayload.contains("\"max_output_tokens\":32768") &&
         responsesPayload.contains("\"reasoning\":{\"effort\":\"high\"}"),
            "Responses owns its provider JSON")
+    let deepSeekResponsesPayload = encodeDeepSeekResponsesRequest(request)
+    expect(
+        deepSeekResponsesPayload.contains("\"max_output_tokens\":32768") &&
+        deepSeekResponsesPayload.contains("\"reasoning\":{\"effort\":\"high\"}") &&
+        !deepSeekResponsesPayload.contains("parallel_tool_calls"),
+        "DeepSeek Responses owns its native thinking and omits unsupported parallel calls")
+    let deepSeekChatPayload = encodeDeepSeekChatRequest(request)
+    expect(
+        deepSeekChatPayload.contains("\"max_tokens\":32768") &&
+        deepSeekChatPayload.contains("\"thinking\":{\"type\":\"enabled\"}") &&
+        deepSeekChatPayload.contains("\"reasoning_effort\":\"high\"") &&
+        !deepSeekChatPayload.contains("parallel_tool_calls"),
+        "DeepSeek Chat owns its native thinking and omits unsupported parallel calls")
     let completionsPayload = encodeCompletionsRequest(request)
     expect(
         completionsPayload.contains("\"max_completion_tokens\":32768") &&
@@ -1092,6 +1105,13 @@ func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
             ), capabilities
         ),
         RuntimeModelDescriptor(
+            "gateway-a/deepseek-responses", "gateway-a", "deepseek-responses",
+            ModelApiBinding(
+                LlmApiId.OpenAiResponses,
+                TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.DeepSeek)
+            ), capabilities
+        ),
+        RuntimeModelDescriptor(
             "gateway-a/messages", "gateway-a", "messages",
             ModelApiBinding(
                 LlmApiId.AnthropicMessages,
@@ -1136,12 +1156,31 @@ func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
         transport.payloads[0].contains("\"max_tokens\":4096") &&
         transport.payloads[0].contains("\"thinking\":{\"type\":\"enabled\"}") &&
         transport.payloads[0].contains("\"reasoning_effort\":\"high\"") &&
+        !transport.payloads[0].contains("parallel_tool_calls") &&
         transport.headers[0].contains("x-profile:a") &&
         transport.headers[0].contains("x-route:model") &&
         transport.headers[0].contains("content-type:application/json") &&
         transport.headers[3].contains("x-profile:b") &&
         !transport.headers[3].contains("x-profile:a"),
         "profiles reuse one API adapter while one profile dispatches mixed APIs with typed DeepSeek lowering"
+    )
+    let deepSeekResponses = models[2]
+    let deepSeekRuntime = UnifiedModelRuntime(
+        profiles, [deepSeekResponses], defaultLlmApiRegistry(transport: transport)
+    )
+    expect(
+        deepSeekRuntime.execute(
+            domain.ModelRequest(
+                "gateway-a/deepseek-responses", request.messages,
+                thinking: domain.ThinkingLevel.High, maxOutputTokens: 4096
+            ),
+            { _ => () }
+        ).isOk() &&
+        transport.protocols.size == 5 &&
+        transport.protocols[4] == "responses" &&
+        transport.payloads[4].contains("\"reasoning\":{\"effort\":\"high\"}") &&
+        !transport.payloads[4].contains("parallel_tool_calls"),
+        "DeepSeek Responses uses its dedicated codec through the Responses adapter"
     )
     var secretHeaderRejected = false
     try {

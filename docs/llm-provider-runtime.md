@@ -5,7 +5,7 @@ Axyndra keeps four different concepts separate below `ModelPort`:
 - A **Provider Profile** is one configured endpoint, credential source, default-header set, and model catalog. `deepseek-openai` and `deepseek-anthropic` are different profiles even when they belong to the same vendor.
 - A **Model Descriptor** binds a stable `profile/model` name to a wire model id, an API id, immutable execution capabilities, and output limits.
 - A **Wire API** is the complete request, response, streaming, tool-call, and terminal contract. The built-in registry contains OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages adapters.
-- A **typed dialect** contains only the compatibility switches relevant to its API. `OpenAiCompletionsDialect.DeepSeek` cannot be attached to an Anthropic Messages binding.
+- A **typed dialect** contains only the compatibility switches relevant to its API. `OpenAiCompletionsDialect.DeepSeek` and `OpenAiResponsesDialect.DeepSeek` cannot be attached to an Anthropic Messages binding.
 
 Their relationship is explicit and orthogonal:
 
@@ -15,9 +15,10 @@ Their relationship is explicit and orthogonal:
         -> Wire API may be parameterized by its own typed dialect
 
 Provider brand is not a protocol. For example, `deepseek-openai/deepseek-v4-flash`
-declares the OpenAI Chat Completions API and a DeepSeek completions dialect. DeepSeek
-does not become a separate Wire API merely because it changes `max_tokens`, thinking
-lowering, or reasoning replay.
+declares the OpenAI Chat Completions API and a DeepSeek Chat dialect. A
+`deepseek_responses` model declares the Responses API and the DeepSeek Responses
+dialect. DeepSeek does not become a separate Wire API merely because it changes
+token fields, thinking lowering, or reasoning replay.
 
 ## Dialect or new adapter?
 
@@ -81,6 +82,11 @@ Existing `providers.yml`, `models.yml`, profile/model identifiers, setup output,
     api: openai_chat_completions
     dialect: deepseek_chat
 
+For a DeepSeek Responses agent loop, use:
+
+    api: openai_responses
+    dialect: deepseek_responses
+
 Other API ids are `openai_responses` and `anthropic_messages`. Ambiguous or incompatible combinations fail closed. Secrets remain credential references or resolved runtime values; they are not copied into model requests, sessions, or diagnostics.
 
 Profiles and models may declare typed `default_headers` entries such as
@@ -95,7 +101,18 @@ To add an OpenAI-compatible profile, reuse `OpenAiChatCompletionsAdapter` and se
 
 ## DeepSeek behavior
 
-The official OpenAI-compatible DeepSeek binding uses the Chat Completions adapter with the DeepSeek typed dialect. It emits `max_tokens`, lowers the explicit thinking toggle and supported reasoning effort, replays assistant `reasoning_content`, and reads `completion_tokens_details.reasoning_tokens`. Reasoning tokens are validated as a subset of completion tokens rather than added to completion usage again. The raw finish reason is retained, while `max_tokens` and `length` normalize to `OutputLimited`.
+Use the DeepSeek Chat or Responses dialect for an agent loop. The Chat dialect uses
+Chat Completions, emits `max_tokens`, lowers the explicit thinking toggle and
+supported reasoning effort, replays assistant `reasoning_content`, and reads
+`completion_tokens_details.reasoning_tokens`. The Responses dialect uses the
+Responses endpoint and DeepSeek's `reasoning.effort` shape. Both dialects preserve
+the canonical tool loop, omit the unsupported OpenAI `parallel_tool_calls` field,
+and avoid the Messages compatibility path, which cannot preserve tool-result error
+semantics.
+
+Reasoning tokens are validated as a subset of completion tokens rather than added
+to completion usage again. The raw finish reason is retained, while `max_tokens`
+and `length` normalize to `OutputLimited`.
 
 Normalized usage records whether it came from a non-stream provider response, a
 stream-final usage event, or an estimate. Provider-final usage carries typed evidence:

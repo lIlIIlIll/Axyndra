@@ -62,12 +62,25 @@ def write_provider(home: Path, spec: Provider, timeout_millis: int) -> None:
         "  policy:\n"
         "    allow_workspace_writes: false\n"
     )
+    dialect = provider_dialect(spec)
+    api = (
+        "openai_responses"
+        if dialect in {"openai_responses", "deepseek_responses"}
+        else "anthropic_messages"
+        if dialect in {"anthropic_messages", "deepseek_messages", "generic_messages"}
+        else "openai_chat_completions"
+    )
+    thinking_levels = (
+        "[low, medium, high, xhigh, max]"
+        if dialect == "deepseek_chat"
+        else "[minimal, low, medium, high, xhigh, max]"
+    )
     (home / "providers.yml").write_text(
         "providers:\n"
         f"  - id: {spec.profile}\n"
         f"    provider: {spec.provider}\n"
         f"    protocol: {spec.protocol}\n"
-        f"    dialect: {provider_dialect(spec)}\n"
+        f"    dialect: {dialect}\n"
         f"    base_url: {spec.base_url}\n"
         "    api_key_env: AXYNDRA_REAL_UNUSED\n"
         f"    timeout_millis: {timeout_millis}\n"
@@ -76,15 +89,22 @@ def write_provider(home: Path, spec: Provider, timeout_millis: int) -> None:
         "models:\n"
         f"  - id: {spec.model}\n"
         f"    provider: {spec.profile}\n"
+        f"    api: {api}\n"
+        f"    dialect: {dialect}\n"
         "    thinking:\n"
         "      mode: effort\n"
-        "      levels: [minimal, low, medium, high, xhigh, max]\n"
+        f"      levels: {thinking_levels}\n"
     )
 
 
 def provider_dialect(spec: Provider) -> str:
     if spec.provider == "anthropic":
         return "deepseek_messages"
+    if spec.provider == "deepseek":
+        if spec.protocol == "responses":
+            return "deepseek_responses"
+        if spec.protocol in {"completions", "chat-completions"}:
+            return "deepseek_chat"
     if spec.protocol == "responses":
         return "openai_responses"
     return "openai_chat"
@@ -405,7 +425,7 @@ def agent_loop_extended(spec: Provider) -> None:
             or "model.text_delta" not in codes
         ):
             raise SystemExit(
-                "OpenAI Responses tool loop missed required events: "
+                "DeepSeek agent-loop tool loop missed required events: "
                 + ",".join(codes)
             )
 
@@ -551,9 +571,9 @@ def main() -> None:
     parser.add_argument("--messages-task-only", action="store_true")
     args = parser.parse_args()
     credential = required("DEEPSEEK_API_KEY")
-    openai = Provider(
+    deepseek = Provider(
         "deepseek-openai",
-        "openai",
+        "deepseek",
         protocol("AXYNDRA_REAL_OPENAI_PROTOCOL", "completions"),
         os.environ.get(
             "AXYNDRA_REAL_OPENAI_BASE_URL",
@@ -580,8 +600,8 @@ def main() -> None:
         credential,
     )
     if args.approval_only:
-        with provider_workspace(openai) as (home, workspace):
-            rpc_approval_continue(openai, home, workspace)
+        with provider_workspace(deepseek) as (home, workspace):
+            rpc_approval_continue(deepseek, home, workspace)
         print("real provider smoke passed: approval continuation")
         return
     if args.messages_tool_only:
@@ -598,13 +618,13 @@ def main() -> None:
             "DeepSeek Anthropic Messages streamed task arguments"
         )
         return
-    openai_chars = normal_output(openai)
+    deepseek_chars = normal_output(deepseek)
     anthropic_chars = normal_output(anthropic)
-    agent_loop_extended(openai)
+    agent_loop_extended(deepseek)
     print(
         "real provider smoke passed: "
-        f"DeepSeek OpenAI {openai.protocol} "
-        f"({openai_chars} chars, tool, approval-continue, "
+        f"DeepSeek {deepseek.protocol} "
+        f"({deepseek_chars} chars, tool, approval-continue, "
         "cancel, timeout, concurrency), "
         f"DeepSeek Anthropic Messages ({anthropic_chars} chars)"
     )
