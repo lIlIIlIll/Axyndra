@@ -81,8 +81,33 @@ compaction:
 目标 token 水位时，压缩无条件回退到结构化摘要。为另一个 Provider 配置 `summary_model` 会把这份确定性
 摘要发送给该 Provider，并产生相应费用和延迟。
 
-多个 Provider 或代理可以同时存在。例如 Anthropic 官方服务和兼容 Anthropic
-Messages 的 DeepSeek 网关会分别写入：
+多个 Provider 或代理可以同时存在。Agent loop 使用 DeepSeek 时，选择 Chat
+Completions 或 Responses 方言。Responses 示例：
+
+```yaml
+# ~/.axyndra/providers.yml
+providers:
+  - id: "deepseek-agent"
+    provider: "deepseek"
+    protocol: "responses"
+    dialect: "deepseek_responses"
+    base_url: "https://api.deepseek.com"
+    api_key_env: "DEEPSEEK_API_KEY"
+```
+
+```yaml
+# ~/.axyndra/models.yml
+models:
+  - id: "deepseek-v4-flash"
+    provider: "deepseek-agent"
+    api: "openai_responses"
+    dialect: "deepseek_responses"
+```
+
+Messages 兼容端点仍可单独配置，但它不会保留工具结果的错误语义。需要工具
+循环时，请使用 `deepseek_chat` 或 `deepseek_responses`。
+
+例如 Anthropic 官方服务和兼容 Anthropic Messages 的 DeepSeek 网关会分别写入：
 
 ```yaml
 # ~/.axyndra/providers.yml

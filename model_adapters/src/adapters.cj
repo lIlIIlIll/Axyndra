@@ -22,6 +22,7 @@ public enum ProviderProtocol {
 public enum ProviderDialect {
     AnthropicMessages
     | DeepSeekMessages
+    | DeepSeekResponses
     | OpenAiResponses
     | OpenAiChat
     | DeepSeekChat
@@ -144,6 +145,7 @@ func providerDialectMatchesProtocol(
         case (ProviderDialect.AnthropicMessages, ProviderProtocol.Messages) |
             (ProviderDialect.DeepSeekMessages, ProviderProtocol.Messages) |
             (ProviderDialect.GenericMessages, ProviderProtocol.Messages) |
+            (ProviderDialect.DeepSeekResponses, ProviderProtocol.Responses) |
             (ProviderDialect.OpenAiResponses, ProviderProtocol.Responses) |
             (ProviderDialect.OpenAiChat, ProviderProtocol.Completions) |
             (ProviderDialect.DeepSeekChat, ProviderProtocol.Completions) |
@@ -2917,6 +2919,8 @@ func effortThinkingSelection(
             WireThinkingSelection(LlmWireThinkingMode.Adaptive, effort: effort)
         case ProviderDialect.OpenAiResponses =>
             WireThinkingSelection(LlmWireThinkingMode.ProviderDefault, effort: effort)
+        case ProviderDialect.DeepSeekResponses =>
+            WireThinkingSelection(LlmWireThinkingMode.Enabled, effort: effort)
         case _ => WireThinkingSelection(LlmWireThinkingMode.Enabled, effort: effort)
     }
 }
@@ -2988,6 +2992,7 @@ func legacyReplayDialectId(dialect: ProviderDialect): String {
         case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
             "anthropic.messages.v1"
         case ProviderDialect.DeepSeekMessages => "deepseek.messages.v1"
+        case ProviderDialect.DeepSeekResponses => "deepseek.responses.v1"
         case ProviderDialect.OpenAiResponses => "openai.responses.v1"
         case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat => "openai.chat.v1"
         case ProviderDialect.DeepSeekChat => "deepseek.chat.v1"
@@ -2998,7 +3003,7 @@ func legacyReplayProtocol(dialect: ProviderDialect): String {
     match (dialect) {
         case ProviderDialect.AnthropicMessages | ProviderDialect.DeepSeekMessages |
             ProviderDialect.GenericMessages => "messages"
-        case ProviderDialect.OpenAiResponses => "responses"
+        case ProviderDialect.OpenAiResponses | ProviderDialect.DeepSeekResponses => "responses"
         case ProviderDialect.OpenAiChat | ProviderDialect.DeepSeekChat |
             ProviderDialect.GenericChat => "chat_completions"
     }
@@ -3223,7 +3228,9 @@ func toLlmWireRequest(
         parallelToolCalls: if (request.tools.isEmpty() || match (
             (dialect, request.parallelToolCalls)
         ) {
-            case (ProviderDialect.DeepSeekMessages, false) => true
+            case (ProviderDialect.DeepSeekMessages, false) |
+                (ProviderDialect.DeepSeekChat, _) |
+                (ProviderDialect.DeepSeekResponses, _) => true
             case _ => false
         }) {
             None
@@ -3250,7 +3257,31 @@ func toLlmWireRequest(
                 }
             case _ => None
         },
-        toolChoice: match (request.toolChoice) {
+        toolChoice: toLlmWireToolChoice(request, dialect, thinking),
+        structuredOutput: structured
+    )
+}
+
+func toLlmWireToolChoice(
+    request: domain.ModelRequest,
+    dialect: ProviderDialect,
+    thinking: WireThinkingSelection
+): LlmWireToolChoice {
+    match ((dialect, thinking.mode)) {
+        // DeepSeek Chat thinking always uses provider-default tool selection.
+        // The native contract rejects even an explicit "auto"; omitting it
+        // preserves the agent-loop default when tools are present.
+        case (ProviderDialect.DeepSeekChat, LlmWireThinkingMode.Enabled) =>
+            match (request.toolChoice) {
+                case domain.ModelToolChoice.Auto => LlmWireToolChoice.ProviderDefault
+                case domain.ModelToolChoice.NoTools => if (request.tools.isEmpty()) {
+                    LlmWireToolChoice.ProviderDefault
+                } else {
+                    LlmWireToolChoice.NoTools
+                }
+                case domain.ModelToolChoice.Required => LlmWireToolChoice.Required
+            }
+        case _ => match (request.toolChoice) {
             case domain.ModelToolChoice.Auto => if (request.tools.isEmpty()) {
                 LlmWireToolChoice.ProviderDefault
             } else {
@@ -3258,9 +3289,8 @@ func toLlmWireRequest(
             }
             case domain.ModelToolChoice.NoTools => LlmWireToolChoice.NoTools
             case domain.ModelToolChoice.Required => LlmWireToolChoice.Required
-        },
-        structuredOutput: structured
-    )
+        }
+    }
 }
 
 func canonicalReasoningHasReplayCounterpart(
@@ -3366,6 +3396,8 @@ func codecForDialect(
             anthropicMessagesCodec(anthropicMessagesModelProfile(model, capabilities: capabilities), provider: provider)
         case ProviderDialect.DeepSeekMessages =>
             deepSeekMessagesCodec(deepSeekMessagesModelProfile(model, capabilities: capabilities), provider: provider)
+        case ProviderDialect.DeepSeekResponses =>
+            deepSeekResponsesCodec(deepSeekResponsesModelProfile(model, capabilities: capabilities), provider: provider)
         case ProviderDialect.OpenAiResponses =>
             openAiResponsesCodec(openAiResponsesModelProfile(model, capabilities: capabilities), provider: provider)
         case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat =>
@@ -3414,7 +3446,7 @@ func materializeProviderRequest(
             case "anthropic.messages.v1" => ProviderDialect.AnthropicMessages
             case "deepseek.messages.v1" => ProviderDialect.DeepSeekMessages
             case "openai.responses.v1" => ProviderDialect.OpenAiResponses
-            case "deepseek.responses.v1" => ProviderDialect.OpenAiResponses
+            case "deepseek.responses.v1" => ProviderDialect.DeepSeekResponses
             case "deepseek.chat.v1" => ProviderDialect.DeepSeekChat
             case _ => ProviderDialect.OpenAiChat
         }
@@ -3521,6 +3553,10 @@ public func encodeMessagesRequest(request: domain.ModelRequest): String {
 
 public func encodeDeepSeekMessagesRequest(request: domain.ModelRequest): String {
     encodeStandaloneRequest(request, ProviderDialect.DeepSeekMessages)
+}
+
+public func encodeDeepSeekResponsesRequest(request: domain.ModelRequest): String {
+    encodeStandaloneRequest(request, ProviderDialect.DeepSeekResponses)
 }
 
 public func encodeResponsesRequest(request: domain.ModelRequest): String {
@@ -3991,13 +4027,28 @@ func decodeEventStream(
         llmWireCapabilities(provider.capabilities)
     )
     let decoder = codec.newStreamDecoder()
-    let pushed = match (decoder.push(source)) {
-        case LlmWireResult.Ok(value) => value
-        case LlmWireResult.Err(error) => throw error
-    }
     let toolCallIds = HashMap<String, String>()
-    for (event in pushed.events) {
-        emitLlmWireEvent(event, provider.protocol, events, toolCallIds: Some(toolCallIds))
+    var pushedTerminal: ?LlmWireTerminal = None
+    // The transport callbacks normally deliver one SSE line at a time, but
+    // this replay path receives the captured body as one String. Feed it with
+    // the same line granularity so llm4cj's bounded per-push event budget is
+    // independent of provider buffering and response size.
+    let line = ArrayList<Byte>()
+    for (byte in source.toArray()) {
+        line.add(byte)
+        if (byte == b'\n' || byte == b'\r') {
+            match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds)) {
+                case Some(value) => pushedTerminal = Some(value)
+                case None => ()
+            }
+            line.clear()
+        }
+    }
+    if (!line.isEmpty()) {
+        match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds)) {
+            case Some(value) => pushedTerminal = Some(value)
+            case None => ()
+        }
     }
     let finished = match (decoder.finish()) {
         case LlmWireResult.Ok(value) => value
@@ -4008,7 +4059,7 @@ func decodeEventStream(
     }
     let terminal = match (finished.terminal) {
         case Some(value) => value
-        case None => match (pushed.terminal) {
+        case None => match (pushedTerminal) {
             case Some(value) => value
             case None => throw LlmWireError(
                 LlmWireErrorKind.InvalidWire,
@@ -4018,6 +4069,23 @@ func decodeEventStream(
         }
     }
     completedWireReply(terminal)
+}
+
+func pushStreamReplayChunk(
+    decoder: LlmWireStreamDecoder,
+    chunk: Array<Byte>,
+    protocol: ProviderProtocol,
+    events: domain.ModelEventSink,
+    toolCallIds: HashMap<String, String>
+): ?LlmWireTerminal {
+    let update = match (decoder.push(chunk)) {
+        case LlmWireResult.Ok(value) => value
+        case LlmWireResult.Err(error) => throw error
+    }
+    for (event in update.events) {
+        emitLlmWireEvent(event, protocol, events, toolCallIds: Some(toolCallIds))
+    }
+    update.terminal
 }
 
 func validateModelRequestContent(request: domain.ModelRequest): domain.Result<Unit> {

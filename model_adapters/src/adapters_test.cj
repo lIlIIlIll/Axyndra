@@ -250,6 +250,31 @@ class StreamProjectionSafetyTests {
 }
 
 @Test
+class StreamBodyReplayTests {
+    @TestCase
+    func largeCapturedSseBodyIsReplayedIncrementally(): Unit {
+        let frame = "data: {\"id\":\"deepseek-replay\",\"model\":\"deepseek-chat\",\"choices\":[]}\n\n"
+        let source = StringBuilder()
+        source.append(frame)
+        for (_ in 0..1024) { source.append(frame) }
+        source.append("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+        source.append("data: [DONE]\n\n")
+
+        let reply = decodeEventStream(
+            source.toString(),
+            ProviderSpec(
+                "deepseek", ProviderProtocol.Completions, "deepseek-chat",
+                "https://provider.example", "DEEPSEEK_API_KEY",
+                provider: "deepseek", dialect: Some(ProviderDialect.DeepSeekChat)
+            ),
+            {_ => ()}
+        )
+        @Expect(reply.rawStopReason, "stop")
+        @Expect(reply.responseId, "deepseek-replay")
+    }
+}
+
+@Test
 class CurlResponseCaptureTests {
     @TestCase
     func responseHeadersNeverShareModelBodyStdout(): Unit {
@@ -370,6 +395,50 @@ class ProviderDialectContractTests {
             parallelToolCalls: false
         ))
 
+        @Expect(encoded.contains("parallel_tool_calls"), false)
+    }
+
+    @TestCase
+    func deepSeekChatOmitsUnsupportedParallelToolCalls(): Unit {
+        let encoded = encodeDeepSeekChatRequest(domain.ModelRequest(
+            "deepseek-v4-flash",
+            [domain.ModelMessage(
+                domain.ModelRole.User,
+                [domain.ModelBlock(domain.ModelBlockKind.Text, text: "hello")]
+            )],
+            tools: [domain.ModelToolDefinition(
+                "read",
+                "Read a file",
+                domain.objectValue([])
+            )],
+            thinking: domain.ThinkingLevel.High
+        ))
+
+        @Expect(encoded.contains("\"max_tokens\""), true)
+        @Expect(encoded.contains("\"thinking\":{\"type\":\"enabled\"}"), true)
+        @Expect(encoded.contains("parallel_tool_calls"), false)
+        @Expect(encoded.contains("tool_choice"), false)
+    }
+
+    @TestCase
+    func deepSeekResponsesUsesNativeResponsesThinking(): Unit {
+        let encoded = encodeDeepSeekResponsesRequest(domain.ModelRequest(
+            "deepseek-v4-flash",
+            [domain.ModelMessage(
+                domain.ModelRole.User,
+                [domain.ModelBlock(domain.ModelBlockKind.Text, text: "hello")]
+            )],
+            tools: [domain.ModelToolDefinition(
+                "read",
+                "Read a file",
+                domain.objectValue([])
+            )],
+            thinking: domain.ThinkingLevel.High,
+            parallelToolCalls: false
+        ))
+
+        @Expect(encoded.contains("\"max_output_tokens\""), true)
+        @Expect(encoded.contains("\"reasoning\":{\"effort\":\"high\"}"), true)
         @Expect(encoded.contains("parallel_tool_calls"), false)
     }
 }

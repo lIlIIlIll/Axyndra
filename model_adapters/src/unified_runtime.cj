@@ -12,7 +12,7 @@ public enum OpenAiCompletionsDialect {
 }
 
 public enum OpenAiResponsesDialect {
-    OpenAi
+    OpenAi | DeepSeek
 }
 
 public enum AnthropicMessagesDialect {
@@ -182,13 +182,14 @@ public class OpenAiResponsesAdapter <: TypedLlmApiAdapter {
         request: domain.ModelRequest,
         events: domain.ModelEventSink
     ): domain.Result<domain.ModelReply> {
-        match (model.apiBinding.dialect) {
-            case TypedProviderDialect.OpenAiResponses(_) => dispatch(
-                profile, model, request, ProviderProtocol.Responses,
-                ProviderDialect.OpenAiResponses, events
-            )
-            case _ => dialectMismatch(profile, model)
+        let dialect = match (model.apiBinding.dialect) {
+            case TypedProviderDialect.OpenAiResponses(value) => match (value) {
+                case OpenAiResponsesDialect.OpenAi => ProviderDialect.OpenAiResponses
+                case OpenAiResponsesDialect.DeepSeek => ProviderDialect.DeepSeekResponses
+            }
+            case _ => return dialectMismatch(profile, model)
         }
+        dispatch(profile, model, request, ProviderProtocol.Responses, dialect, events)
     }
 }
 
