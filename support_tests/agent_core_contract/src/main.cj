@@ -143,6 +143,7 @@ main(): Int64 {
     drainProviderFailureStopsBoundedContract()
     resumeRestoresWorkBudgetContinuityContract()
     drainRespectsRunDeadlineContract()
+    drainPreflightBlocksNearCostBoundaryContract()
     workBudgetStopsAtModelRequestLimitContract()
     workCannotUseDrainHeadroomContract()
     drainBlockedAtCostBoundaryContract()
@@ -3429,6 +3430,38 @@ func drainBlockedAtCostBoundaryContract(): Unit {
             completed.summary == "run drained at hard budget limit without " +
                 "finalization request",
         "a cost-exhausted budget admits no drain finalization request"
+    )
+}
+
+
+func drainPreflightBlocksNearCostBoundaryContract(): Unit {
+    // 240/280 spent after one work turn. The old at-limit probe would pass
+    // (240 < 280) and the drain request could push the run past the cap
+    // before accounting caught it. The worst-case preflight blocks here and
+    // delivers the durable checkpoint instead.
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(usagePerCall: Some(ModelUsage(
+        inputTokens: 200, outputTokens: 20
+    )))
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-preflight-run", "drain-preflight-session",
+        maxTurns: 1, maxCostMicros: 280,
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(2000000)
+        ))
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "near-boundary cost must drain without provider request"
+    )
+    expect(
+        completed.status == RunState.Completed && model.drainWireCalls == 0 &&
+            completed.summary == "run drained at hard budget limit without " +
+                "finalization request" &&
+            completed.costMicros == Some(240),
+        "the drain preflight blocks on worst-case cost before the cap is crossed"
     )
 }
 
