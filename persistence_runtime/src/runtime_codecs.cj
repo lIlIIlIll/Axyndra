@@ -1898,6 +1898,7 @@ func eventPayloadName(payload: AgentEventPayload): String {
         case AgentEventPayload.ToolCompleted(_, _, _) => "tool_completed"
         case AgentEventPayload.ApprovalRequested(_, _) => "approval_requested"
         case AgentEventPayload.BudgetUpdated(_) => "budget_updated"
+        case AgentEventPayload.BudgetSignal(_) => "budget_signal"
         case AgentEventPayload.ContextCompacted(_, _) => "context_compacted"
         case AgentEventPayload.Diagnostic(_) => "diagnostic"
         case AgentEventPayload.Audit(_, _) => "audit"

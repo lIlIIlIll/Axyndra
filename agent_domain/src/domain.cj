@@ -829,6 +829,9 @@ public class ResourceBudget {
     public let maxTotalOutputTokens: Int64
     public let maxModelRequests: Int64
     public let maxTurns: Int64
+    // Control-plane finalization turns allowed after the work-turn budget is
+    // exhausted. Strictly bounded so graceful draining can never loop.
+    public let maxDrainTurns: Int64
     public let maxToolCalls: Int64
     public let maxWallMillis: Int64
     public let maxIdleMillis: Int64
@@ -849,6 +852,7 @@ public class ResourceBudget {
         maxTotalOutputTokens!: Int64 = 0,
         maxModelRequests!: Int64 = 64,
         maxTurns!: Int64 = 32,
+        maxDrainTurns!: Int64 = 2,
         maxToolCalls!: Int64 = 64,
         maxWallMillis!: Int64 = 600000,
         maxIdleMillis!: Int64 = 120000,
@@ -869,7 +873,7 @@ public class ResourceBudget {
         }
         if (maxInputTokens < 1 || effectiveOutputBudget.hardLimit < 1 ||
             effectiveOutputBudget.minVisibleResponseTokens < 0 ||
-            maxModelRequests < 1 || maxTurns < 1 || maxToolCalls < 1 ||
+            maxModelRequests < 1 || maxTurns < 1 || maxDrainTurns < 1 || maxToolCalls < 1 ||
             // maxWallMillis == 0 means no wall-clock limit (a stream that
             // keeps emitting tokens is never cut off; only idle hangs are).
             maxWallMillis < 0 || maxIdleMillis < 1 || maxChildren < 0 || maxDepth < 0 || maxConcurrentChildren < 1 ||
@@ -884,6 +888,7 @@ public class ResourceBudget {
         this.maxTotalOutputTokens = maxTotalOutputTokens
         this.maxModelRequests = maxModelRequests
         this.maxTurns = maxTurns
+        this.maxDrainTurns = maxDrainTurns
         this.maxToolCalls = maxToolCalls
         this.maxWallMillis = maxWallMillis
         this.maxIdleMillis = maxIdleMillis
