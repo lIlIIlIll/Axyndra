@@ -929,7 +929,7 @@ public class AgentCore <: AgentRunner {
         )
         let result = execution.result
         match (recordModelAttempt(
-            durableRequest, modelRequest, attemptNo, result,
+            durableRequest, modelRequest, attemptNo, counter, result,
             context, control, sink
         )) {
             case Result.Ok(_) => ()
@@ -3002,6 +3002,7 @@ public class AgentCore <: AgentRunner {
                 request,
                 effectiveAttemptRequest,
                 1,
+                counter,
                 result,
                 context,
                 control,
@@ -3122,6 +3123,7 @@ public class AgentCore <: AgentRunner {
                 request,
                 effectiveAttemptRequest,
                 attempt,
+                counter,
                 result,
                 context,
                 control,
@@ -3453,6 +3455,7 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         modelRequest: ModelRequest,
         attempt: Int64,
+        counter: BudgetCounter,
         result: Result<ModelReply>,
         context: ToolInvocationContext,
         control: CoreRunControl,
