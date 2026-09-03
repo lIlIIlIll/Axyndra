@@ -2792,8 +2792,33 @@ public class AgentCore <: AgentRunner {
                                 failure.kind == AttemptFailureKind.OutputLimited
                         case None => false
                     }
+                    // A terminal malformed tool-input response is not a
+                    // durable tool decision. The adapter has rejected it
+                    // before projection, so replaying from the last
+                    // canonical context is safe even though provisional tool
+                    // evidence reached the replay barrier. Other failures
+                    // with ToolEvidence remain fail-closed.
+                    let malformedToolArgumentsRecovery = match (error.attemptFailure) {
+                        case Some(failure) =>
+                            failure.kind == AttemptFailureKind.MalformedToolArguments
+                        case None => false
+                    }
+                    // llm4cj has already established that transport EOF
+                    // occurred before any protocol terminal. Its bounded
+                    // diagnostic makes provisional stream evidence safe to
+                    // discard and replay from canonical context.
+                    let providerTerminalMissingRecovery = match (error.attemptFailure) {
+                        case Some(failure) =>
+                            failure.kind == AttemptFailureKind.ProviderTerminalMissing
+                        case None => false
+                    }
                     let replaySafeForRecovery =
                         persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.NoBarrier ||
+                        (malformedToolArgumentsRecovery &&
+                            persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence) ||
+                        (providerTerminalMissingRecovery &&
+                            (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
+                                persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal)) ||
                         (outputLimitedRecovery &&
                             (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
                                 persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal))
@@ -5886,6 +5911,7 @@ func attemptFailureKindName(value: AttemptFailureKind): String {
         case AttemptFailureKind.OutputLimitedBeforeDecision => "output_limited_before_decision"
         case AttemptFailureKind.ProviderTransportError => "provider_transport_error"
         case AttemptFailureKind.ProviderProtocolError => "provider_protocol_error"
+        case AttemptFailureKind.MalformedToolArguments => "malformed_tool_arguments"
         case AttemptFailureKind.UserCancelled => "user_cancelled"
         case AttemptFailureKind.RunDeadlineExceeded => "run_deadline_exceeded"
     }
@@ -6193,7 +6219,8 @@ func invalidAttemptDecision<T>(
         retryable: kind == AttemptFailureKind.OutputLimited ||
             kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
             kind == AttemptFailureKind.ProviderTerminalMissing ||
-            kind == AttemptFailureKind.ProtocolIncomplete,
+            kind == AttemptFailureKind.ProtocolIncomplete ||
+            kind == AttemptFailureKind.MalformedToolArguments,
         fields: fields,
         attemptFailure: Some(AttemptFailure(kind))
     ))

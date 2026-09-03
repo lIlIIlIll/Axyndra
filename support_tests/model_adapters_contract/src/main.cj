@@ -1297,6 +1297,25 @@ class StaticTransport <: ProviderTransport {
     }
 }
 
+class ChunkedStaticTransport <: ProviderTransport {
+    private let response: String
+
+    public init(response: String) {
+        this.response = response
+    }
+
+    public func post(
+        _provider: ProviderSpec,
+        _payload: String,
+        _streaming: Bool,
+        _requestId: String,
+        chunks: (String) -> Unit
+    ): domain.Result<String> {
+        chunks(response)
+        domain.Result.Ok(response)
+    }
+}
+
 class RecordingTransport <: ProviderTransport {
     private let response: String
     var calls: Int64 = 0
