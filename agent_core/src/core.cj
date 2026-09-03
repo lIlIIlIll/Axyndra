@@ -578,6 +578,7 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: request.approvalModeOverride,
             budget: executionBudgetFrom(request.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: request.skillStack
         )
         match (emitTyped(context, control, AgentEventPayload.RunStarted, sink)) {
@@ -671,6 +672,13 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        // A checkpoint taken at or past the work-turn budget means the
+        // pre-crash run was already draining: restore that mode BEFORE any
+        // replay charge so the replayed finalization request lands in the
+        // drain ledger bucket, never in the work bucket.
+        if (checkpoint.turns >= durableRequest.budget.maxTurns) {
+            control.setBudgetMode(BudgetMode.Draining)
+        }
         let context = ToolInvocationContext(
             durableRequest.runId, durableRequest.sessionId,
             durableRequest.capabilities, sequence: resumeSequence,
@@ -678,6 +686,7 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
             budget: executionBudgetFrom(durableRequest.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: durableRequest.skillStack
         )
         let counter = BudgetCounter(
@@ -1083,6 +1092,7 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
             budget: executionBudgetFrom(durableRequest.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: durableRequest.skillStack
         )
         let resumed = match (control.resumeAfterApproval()) {
@@ -2222,26 +2232,37 @@ public class AgentCore <: AgentRunner {
             )
         }
         while (true) {
-            match (control.ledger.checkDeadline()) {
-                case Result.Ok(_) => ()
-                case Result.Err(_) =>
-                    control.setBudgetMode(BudgetMode.Exhausted)
-                    let _ = emitTyped(
-                        context,
-                        control,
-                        AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
-                            BudgetMode.Exhausted,
-                            BudgetDimension.Deadline,
-                            request.budget.deadlineMillis,
-                            request.budget.deadlineMillis,
-                            0
-                        )),
-                        sink
-                    )
-                    return completeDrainedRun(
-                        request, context, control, counter, sink,
-                        "run drained at budget deadline without finalization request"
-                    )
+            let blocked = control.ledger.modelAdmissionBlocked()
+            if (blocked.isSome()) {
+                control.setBudgetMode(BudgetMode.Exhausted)
+                let usageNow = control.ledger.snapshot()
+                let dimension = blocked.getOrThrow()
+                let (limitValue, usedValue): (Int64, Int64) = match (dimension) {
+                    case BudgetDimension.Deadline =>
+                        (request.budget.deadlineMillis, request.budget.deadlineMillis)
+                    case BudgetDimension.InputTokens =>
+                        (request.budget.maxTotalInputTokens, usageNow.inputTokens)
+                    case BudgetDimension.OutputTokens =>
+                        (request.budget.maxTotalOutputTokens, usageNow.outputTokens)
+                    case _ =>
+                        (request.budget.maxCostMicros, usageNow.costMicros)
+                }
+                let _ = emitTyped(
+                    context,
+                    control,
+                    AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                        BudgetMode.Exhausted,
+                        dimension,
+                        limitValue,
+                        usedValue,
+                        0
+                    )),
+                    sink
+                )
+                return completeDrainedRun(
+                    request, context, control, counter, sink,
+                    "run drained at hard budget limit without finalization request"
+                )
             }
             if (control.drainAttempts() >= request.budget.maxDrainTurns) {
                 return fail(

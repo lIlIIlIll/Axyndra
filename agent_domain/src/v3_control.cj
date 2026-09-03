@@ -751,10 +751,20 @@ public func agentUtcMillis(): Int64 {
     DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }
 
+// Separates ordinary work admission from the strictly bounded control-plane
+// drain. A Work charge can never consume drain headroom and a Drain charge
+// can never consume work headroom; cumulative fungible dimensions (tokens,
+// cost) are shared by both classes and keep flowing through the same ledger.
+@Derive[Equatable]
+public enum BudgetChargeClass {
+    Work | Drain
+}
+
 public class ExecutionBudget {
     private let usageLock = Mutex()
     private var usedTurns: Int64 = 0
     private var usedModelRequests: Int64 = 0
+    private var usedDrainModelRequests: Int64 = 0
     private var usedToolCalls: Int64 = 0
     private var activeTools: Int64 = 0
     private var usedInputTokens: Int64 = 0
@@ -762,6 +772,7 @@ public class ExecutionBudget {
     private var usedCostMicros: Int64 = 0
     public let maxTurns: Int64
     public let maxModelRequests: Int64
+    public let maxDrainModelRequests: Int64
     public let maxToolCalls: Int64
     public let maxConcurrentTools: Int64
     public let maxInputTokens: Int64
@@ -779,6 +790,7 @@ public class ExecutionBudget {
     public init(
         maxTurns!: Int64 = 32,
         maxModelRequests!: Int64 = 64,
+        maxDrainModelRequests!: Int64 = 2,
         maxToolCalls!: Int64 = 64,
         maxConcurrentTools!: Int64 = 4,
         maxInputTokens!: Int64 = 100000,
@@ -791,7 +803,7 @@ public class ExecutionBudget {
         maxDepth!: Int64 = 4,
         maxConcurrentChildren!: Int64 = 4
     ) {
-        if (maxTurns < 1 || maxModelRequests < 1 || maxToolCalls < 1 || maxConcurrentTools < 1 ||
+        if (maxTurns < 1 || maxModelRequests < 1 || maxDrainModelRequests < 1 || maxToolCalls < 1 || maxConcurrentTools < 1 ||
             maxInputTokens < 1 || maxOutputTokens < 1 || maxCostMicros < 0 ||
             deadlineMillis < 0 || maxChildren < 0 || maxDepth < 1 ||
             maxTotalInputTokens < 0 || maxTotalOutputTokens < 0 ||
@@ -800,6 +812,7 @@ public class ExecutionBudget {
         }
         this.maxTurns = maxTurns
         this.maxModelRequests = maxModelRequests
+        this.maxDrainModelRequests = maxDrainModelRequests
         this.maxToolCalls = maxToolCalls
         this.maxConcurrentTools = maxConcurrentTools
         this.maxInputTokens = maxInputTokens
@@ -832,10 +845,20 @@ public class ExecutionBudget {
                     "budget.deadline_exceeded"
                 ))
             }
+            let drainClass = charge.chargeClass == BudgetChargeClass.Drain
             let nextTurns = saturatedExecutionBudgetAdd(usedTurns, charge.turns)
-            let nextModelRequests = saturatedExecutionBudgetAdd(
-                usedModelRequests, charge.modelRequests
-            )
+            let nextModelRequests = if (drainClass) {
+                usedModelRequests
+            } else {
+                saturatedExecutionBudgetAdd(usedModelRequests, charge.modelRequests)
+            }
+            let nextDrainModelRequests = if (drainClass) {
+                saturatedExecutionBudgetAdd(
+                    usedDrainModelRequests, charge.modelRequests
+                )
+            } else {
+                usedDrainModelRequests
+            }
             let nextToolCalls = saturatedExecutionBudgetAdd(
                 usedToolCalls, charge.toolCalls
             )
@@ -855,6 +878,7 @@ public class ExecutionBudget {
                 this,
                 nextTurns,
                 nextModelRequests,
+                nextDrainModelRequests,
                 nextToolCalls,
                 nextActiveTools,
                 nextInputTokens,
@@ -866,6 +890,7 @@ public class ExecutionBudget {
             }
             usedTurns = nextTurns
             usedModelRequests = nextModelRequests
+            usedDrainModelRequests = nextDrainModelRequests
             usedToolCalls = nextToolCalls
             activeTools = nextActiveTools
             usedInputTokens = nextInputTokens
@@ -930,6 +955,34 @@ public class ExecutionBudget {
         reserve(BudgetCharge(), nowMillis: nowMillis)
     }
 
+    // Hard fungible-dimension probe for the control-plane drain: returns the
+    // dimension that already blocks one more provider request (deadline
+    // passed, or cumulative token/cost totals at or over their limit), or
+    // None when a finalization request may still be admitted. Charges
+    // nothing and never rejects on per-run turn/tool buckets.
+    public func modelAdmissionBlocked(
+        nowMillis!: Int64 = agentUtcMillis()
+    ): ?BudgetDimension {
+        usageLock.lock()
+        try {
+            if (deadlineMillis > 0 && nowMillis >= deadlineMillis) {
+                return Some(BudgetDimension.Deadline)
+            }
+            if (maxTotalInputTokens > 0 && usedInputTokens >= maxTotalInputTokens) {
+                return Some(BudgetDimension.InputTokens)
+            }
+            if (maxTotalOutputTokens > 0 && usedOutputTokens >= maxTotalOutputTokens) {
+                return Some(BudgetDimension.OutputTokens)
+            }
+            if (maxCostMicros > 0 && usedCostMicros >= maxCostMicros) {
+                return Some(BudgetDimension.Cost)
+            }
+            None
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
     private func usage(): ExecutionUsage {
         ExecutionUsage(
             turns: usedTurns,
@@ -947,6 +1000,7 @@ public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
     ExecutionBudget(
         maxTurns: resource.maxTurns,
         maxModelRequests: resource.maxModelRequests,
+        maxDrainModelRequests: resource.maxDrainModelRequests,
         maxToolCalls: resource.maxToolCalls,
         maxConcurrentTools: resource.maxConcurrentTools,
         maxInputTokens: resource.maxInputTokens,
@@ -996,6 +1050,7 @@ public class ExecutionUsage {
 public class BudgetCharge {
     public let turns: Int64
     public let modelRequests: Int64
+    public let chargeClass: BudgetChargeClass
     public let toolCalls: Int64
     public let toolsStarted: Int64
     public let inputTokens: Int64
@@ -1005,6 +1060,7 @@ public class BudgetCharge {
     public init(
         turns!: Int64 = 0,
         modelRequests!: Int64 = 0,
+        chargeClass!: BudgetChargeClass = BudgetChargeClass.Work,
         toolCalls!: Int64 = 0,
         toolsStarted!: Int64 = 0,
         inputTokens!: Int64 = 0,
@@ -1017,6 +1073,7 @@ public class BudgetCharge {
         }
         this.turns = turns
         this.modelRequests = modelRequests
+        this.chargeClass = chargeClass
         this.toolCalls = toolCalls
         this.toolsStarted = toolsStarted
         this.inputTokens = inputTokens
@@ -1057,6 +1114,7 @@ func executionBudgetViolation(
     budget: ExecutionBudget,
     turns: Int64,
     modelRequests: Int64,
+    drainModelRequests: Int64,
     toolCalls: Int64,
     activeTools: Int64,
     inputTokens: Int64,
@@ -1067,6 +1125,8 @@ func executionBudgetViolation(
         (BudgetDimension.Turns, budget.maxTurns, turns, "budget.turns_exceeded"),
         (BudgetDimension.ModelRequests, budget.maxModelRequests, modelRequests,
             "budget.model_requests_exceeded"),
+        (BudgetDimension.ModelRequests, budget.maxDrainModelRequests, drainModelRequests,
+            "budget.drain_model_requests_exceeded"),
         (BudgetDimension.ToolCalls, budget.maxToolCalls, toolCalls,
             "budget.tool_calls_exceeded"),
         (BudgetDimension.ConcurrentTools, budget.maxConcurrentTools, activeTools,
