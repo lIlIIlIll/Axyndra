@@ -1268,14 +1268,20 @@ func budgetValue(value: ResourceBudget): AgentValue {
         ValueField("max_input_tokens", integerValue(value.maxInputTokens)),
         ValueField("max_output_tokens", integerValue(value.maxOutputTokens)),
         ValueField("max_model_requests", integerValue(value.maxModelRequests)),
+        ValueField("max_drain_model_requests", integerValue(value.maxDrainModelRequests)),
         ValueField("max_turns", integerValue(value.maxTurns)),
+        ValueField("max_drain_turns", integerValue(value.maxDrainTurns)),
         ValueField("max_tool_calls", integerValue(value.maxToolCalls)),
         ValueField("max_wall_millis", integerValue(value.maxWallMillis)),
         ValueField("max_idle_millis", integerValue(value.maxIdleMillis)),
         ValueField("max_children", integerValue(value.maxChildren)),
         ValueField("max_depth", integerValue(value.maxDepth)),
         ValueField("max_concurrent_children", integerValue(value.maxConcurrentChildren)),
-        ValueField("max_context_messages", integerValue(value.maxContextMessages))
+        ValueField("max_context_messages", integerValue(value.maxContextMessages)),
+        ValueField("max_total_input_tokens", integerValue(value.maxTotalInputTokens)),
+        ValueField("max_total_output_tokens", integerValue(value.maxTotalOutputTokens)),
+        ValueField("max_cost_micros", integerValue(value.maxCostMicros)),
+        ValueField("deadline_millis", integerValue(value.deadlineMillis))
     ])
 }
 
@@ -1393,22 +1399,57 @@ func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    // Fields added after the first continuation schema shipped decode
+    // leniently with their documented defaults so pre-existing durable
+    // payloads keep loading across the upgrade.
     try {
+        let drainRequests = lenientBudgetInteger(value, "max_drain_model_requests", 2)
+        let drainTurns = lenientBudgetInteger(value, "max_drain_turns", 2)
+        let totalInput = lenientBudgetInteger(value, "max_total_input_tokens", 0)
+        let totalOutput = lenientBudgetInteger(value, "max_total_output_tokens", 0)
+        let costMicros = lenientBudgetInteger(value, "max_cost_micros", 0)
+        let deadline = lenientBudgetInteger(value, "deadline_millis", 0)
         Result.Ok(ResourceBudget(
             maxInputTokens: input,
             maxOutputTokens: output,
             maxModelRequests: requests,
             maxTurns: turns,
+            maxDrainModelRequests: drainRequests,
+            maxDrainTurns: drainTurns,
             maxToolCalls: tools,
             maxWallMillis: wall,
             maxIdleMillis: idle,
             maxChildren: children,
             maxDepth: depth,
             maxConcurrentChildren: concurrent,
-            maxContextMessages: contextMessages
+            maxContextMessages: contextMessages,
+            maxTotalInputTokens: totalInput,
+            maxTotalOutputTokens: totalOutput,
+            maxCostMicros: costMicros,
+            deadlineMillis: deadline
         ))
     } catch (error: Exception) {
         codecError("invalid run continuation budget: " + error.message)
+    }
+}
+
+func lenientBudgetInteger(
+    value: AgentValue,
+    name: String,
+    fallback: Int64
+): Int64 {
+    match (value.field(name)) {
+        case Some(raw) => match (raw.unifiedKind) {
+            case ValueKind.Number => try {
+                Int64.parse(raw.number)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("field is not an integer: " + name)
+            }
+            case _ => throw IllegalArgumentException(
+                "field is not an integer: " + name
+            )
+        }
+        case None => fallback
     }
 }
 

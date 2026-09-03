@@ -240,7 +240,27 @@ class CoreRunControl {
     // action. A rejected reserve no longer cancels the run — the work-turn
     // loop converts an exhausted work budget into a bounded graceful drain,
     // and only true hard violations reach the failure path.
+    //
+    // Model-request charges issued while the run is Draining are routed
+    // into the drain ledger bucket (BudgetChargeClass.Drain): work can
+    // never consume drain headroom, and the bounded drain never dies on
+    // maxModelRequests. Cumulative token/cost parts of the charge stay in
+    // the shared fungible buckets.
     func reserve(charge: BudgetCharge): Result<ExecutionUsage> {
+        if (budgetMode() == BudgetMode.Draining &&
+            charge.chargeClass == BudgetChargeClass.Work &&
+            charge.modelRequests > 0) {
+            return ledger.reserve(BudgetCharge(
+                turns: charge.turns,
+                modelRequests: charge.modelRequests,
+                chargeClass: BudgetChargeClass.Drain,
+                toolCalls: charge.toolCalls,
+                toolsStarted: charge.toolsStarted,
+                inputTokens: charge.inputTokens,
+                outputTokens: charge.outputTokens,
+                costMicros: charge.costMicros
+            ))
+        }
         ledger.reserve(charge)
     }
 

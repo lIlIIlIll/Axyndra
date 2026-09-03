@@ -145,6 +145,7 @@ main(): Int64 {
     drainRespectsRunDeadlineContract()
     drainPreflightBlocksNearCostBoundaryContract()
     workBudgetStopsAtModelRequestLimitContract()
+    drainChargeRoutedInDrainingModeContract()
     workCannotUseDrainHeadroomContract()
     drainBlockedAtCostBoundaryContract()
     childBudgetPoolSettlesWorkPlusDrainContract()
@@ -3340,15 +3341,39 @@ func workBudgetStopsAtModelRequestLimitContract(): Unit {
     let result = budgetDrainCore(
         model, runs, catalog,
         "drain-request-split-run", "drain-request-split-session",
-        maxTurns: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
+        maxTurns: 2, maxModelRequests: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
     )
     let completed = completedSnapshotOrThrow(result, "split ledger must drain")
     expect(
         completed.status == RunState.Completed && completed.turns == 2 &&
             model.workRequests == 2 && model.drainWireCalls == 1,
-        "exhausted work model requests still admit the bounded drain " +
-            "finalization request"
+        "a work request budget exhausted to the exact cap still admits the " +
+            "drain finalization request from the separate drain bucket"
     )
+}
+
+func drainChargeRoutedInDrainingModeContract(): Unit {
+    // Direct ledger-level proof of the mode routing: the identical charge
+    // lands in the work bucket while Normal and in the drain bucket while
+    // Draining, and a Work charge can never touch drain headroom.
+    let budget = ExecutionBudget(
+        maxModelRequests: 1, maxDrainModelRequests: 1
+    )
+    expect(budget.reserve(BudgetCharge(modelRequests: 1)).isOk(),
+        "work request consumes the work bucket")
+    expect(budget.reserve(BudgetCharge(modelRequests: 1)).isError(),
+        "a second work request is rejected even with drain headroom unused")
+    let routed = budget.reserve(BudgetCharge(
+        modelRequests: 1, chargeClass: BudgetChargeClass.Drain
+    ))
+    expect(routed.isOk(), "drain headroom admits the drain charge")
+    expect(budget.reserve(BudgetCharge(
+        modelRequests: 1, chargeClass: BudgetChargeClass.Drain
+    )).isError(),
+        "drain headroom itself is strictly bounded")
+    let usage = budget.snapshot()
+    expect(usage.modelRequests == 1 && usage.drainModelRequests == 1,
+        "work and drain requests are accounted in separate buckets")
 }
 
 func workCannotUseDrainHeadroomContract(): Unit {
