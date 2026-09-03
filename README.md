@@ -104,8 +104,11 @@ models:
     dialect: "deepseek_responses"
 ```
 
-Messages 兼容端点仍可单独配置，但它不会保留工具结果的错误语义。需要工具
-循环时，请使用 `deepseek_chat` 或 `deepseek_responses`。
+Messages 兼容端点仍可单独配置。DeepSeek 官方说明该端点支持 tools，但会忽略
+`tool_result.is_error`；独立 `llm4cj` 的 DeepSeek Messages dialect 会在失败结果
+内容前加上明确的 `[tool_error]` 标记，同时保留 canonical transcript 中的
+`isError`。这是兼容性降级，不等同于原生错误字段语义；对必须无损表达工具失败的
+agent loop，仍建议使用 `deepseek_chat` 或 `deepseek_responses`。
 
 例如 Anthropic 官方服务和兼容 Anthropic Messages 的 DeepSeek 网关会分别写入：
 

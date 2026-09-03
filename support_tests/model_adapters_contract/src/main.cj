@@ -304,6 +304,33 @@ main(): Int64 {
         encodeCompletionsRequest(toolResultRequest).contains("model-visible file content"),
         "all provider protocols receive model-visible structured tool content"
     )
+    let failedToolResultRequest = domain.ModelRequest(
+        "fixture-model",
+        [domain.ModelMessage(
+            domain.ModelRole.Assistant,
+            [domain.ModelBlock(
+                domain.ModelBlockKind.ToolCall,
+                callId: "call_failed",
+                name: "read",
+                arguments: domain.objectValue([])
+            )]
+        ), domain.ModelMessage(
+            domain.ModelRole.User,
+            [domain.ModelBlock(
+                domain.ModelBlockKind.ToolResult,
+                callId: "call_failed",
+                name: "read",
+                text: "permission denied",
+                isError: true
+            )]
+        )]
+    )
+    expect(
+        encodeDeepSeekMessagesRequest(failedToolResultRequest).contains("[tool_error]") &&
+        !encodeDeepSeekMessagesRequest(failedToolResultRequest).contains("\"is_error\":true") &&
+        encodeMessagesRequest(failedToolResultRequest).contains("\"is_error\":true"),
+        "DeepSeek Messages marks failed tool results without claiming native is_error support"
+    )
 
     let orphanResultRequest = domain.ModelRequest(
         "fixture-model",

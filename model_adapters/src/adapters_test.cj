@@ -570,3 +570,66 @@ class OrphanToolResultEncodingTests {
         @Expect(encoded.contains("paired output"), true)
     }
 }
+
+@Test
+class DeepSeekMessagesToolErrorCompatibilityTests {
+    private func call(callId: String): domain.ModelBlock {
+        domain.ModelBlock(
+            domain.ModelBlockKind.ToolCall,
+            callId: callId,
+            name: "read",
+            arguments: domain.objectValue([])
+        )
+    }
+
+    private func result(callId: String, text: String, isError!: Bool = false): domain.ModelBlock {
+        domain.ModelBlock(
+            domain.ModelBlockKind.ToolResult,
+            text: text,
+            callId: callId,
+            name: "read",
+            isError: isError
+        )
+    }
+
+    private func request(resultBlock: domain.ModelBlock, system!: String = ""): domain.ModelRequest {
+        domain.ModelRequest(
+            "deepseek-v4-flash",
+            [
+                domain.ModelMessage(domain.ModelRole.Assistant, [call("call-read")]),
+                domain.ModelMessage(domain.ModelRole.User, [resultBlock])
+            ],
+            system: system
+        )
+    }
+
+    @TestCase
+    func deepSeekMessagesLowersToolErrorIntoExplicitContentMarker(): Unit {
+        let encoded = encodeDeepSeekMessagesRequest(request(
+            result("call-read", "permission denied", isError: true),
+            system: "Use tools safely."
+        ))
+        @Expect(encoded.contains("\"is_error\":true"), false)
+        @Expect(encoded.contains("[tool_error]"), true)
+        @Expect(encoded.contains("permission denied"), true)
+        @Expect(encoded.contains("Use tools safely."), true)
+    }
+
+    @TestCase
+    func deepSeekMessagesDoesNotMarkSuccessfulToolResultsAsErrors(): Unit {
+        let encoded = encodeDeepSeekMessagesRequest(request(
+            result("call-read", "file contents")
+        ))
+        @Expect(encoded.contains("\"is_error\""), false)
+        @Expect(encoded.contains("[tool_error]"), false)
+    }
+
+    @TestCase
+    func anthropicMessagesKeepsNativeToolErrorField(): Unit {
+        let encoded = encodeMessagesRequest(request(
+            result("call-read", "permission denied", isError: true)
+        ))
+        @Expect(encoded.contains("\"is_error\":true"), true)
+        @Expect(encoded.contains("[tool_error]"), false)
+    }
+}
