@@ -2260,13 +2260,17 @@ public class AgentCore <: AgentRunner {
                     request, context, control, error, sink, counter: Some(counter)
                 )
             }
-            // Ex-ante hard-cap preflight: the drain request is admitted only
-            // if its WORST-CASE cost fits the remaining fungible budget.
-            // Worst case = request-window input estimate at the input rate
-            // (no cache discount) plus the per-request output hard limit at
-            // the output rate. Unlike work requests, a drain request must
-            // never push the run past a cumulative hard cap; if it cannot
-            // fit, the durable checkpoint is the delivered partial result.
+            // Conservative projection-based admission before provider
+            // dispatch, not an absolute physical guarantee: worst case =
+            // request-window input estimate at the input rate (no cache
+            // discount) plus the per-request wire output hard limit at the
+            // output rate, priced through the same priceModelUsage rounding
+            // as accounting. If the projection does not fit the remaining
+            // cumulative budget, no request is sent and the durable
+            // checkpoint is the delivered partial result. Actual replies are
+            // still accounted ex-post; input estimate drift and unobservable
+            // provider consumption from failed transports are outside strict
+            // preflight scope.
             let worstCaseUsage = ExecutionUsage(
                 inputTokens: preparedModelRequest.estimatedInputTokens,
                 outputTokens: request.budget.requestOutputBudget.hardLimit,

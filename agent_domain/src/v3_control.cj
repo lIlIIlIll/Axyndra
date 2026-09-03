@@ -955,16 +955,18 @@ public class ExecutionBudget {
         reserve(BudgetCharge(), nowMillis: nowMillis)
     }
 
-    // Ex-ante admission preflight for one control-plane drain request. The
-    // caller supplies the WORST-CASE incremental usage of the request it is
-    // about to send (request-window input estimate, per-request output hard
-    // limit, priced accordingly); the probe rejects when the deadline passed
-    // or when current usage plus that worst case would exceed a cumulative
-    // hard limit. This is deliberately stricter than the work loop, whose
-    // cumulative token/cost contract stays ex-post (a work request is issued
-    // first and the run terminates at the accounting point that would exceed
-    // the limit). The projection is an estimate: input-token estimate drift
-    // and provider-reported usage beyond it remain ex-post facts.
+    // Conservative projection-based admission for one control-plane drain
+    // request; not a promise of absolute physical cost non-exceedance.
+    // Before provider dispatch the caller supplies the worst-case
+    // incremental usage it projects on top of the currently observed usage
+    // (request-window input estimate, wire output hard limit, priced
+    // accordingly); the probe rejects when the deadline passed or when
+    // observed usage plus that projection would exceed a cumulative hard
+    // limit, and no request is sent in that case. Actual replies are still
+    // accounted ex-post. This is deliberately stricter than the work loop,
+    // whose cumulative token/cost contract stays ex-post. Input estimate
+    // drift and provider consumption that stays unobservable because a
+    // transport failed mid-flight are outside strictly preflightable scope.
     // Charges nothing and never rejects on per-run turn/tool buckets.
     public func projectedAdmissionBlocked(
         projection: ExecutionUsage,
