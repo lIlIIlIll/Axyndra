@@ -3661,6 +3661,18 @@ func decodeProviderReply(
         if (error.eventType != "") { fields.add(domain.ErrorField("llm_event_type", error.eventType)) }
         if (error.blockIndex >= 0) { fields.add(domain.ErrorField("llm_block_index", error.blockIndex.toString())) }
         if (error.providerRequestId != "") { fields.add(domain.ErrorField("provider_request_id", error.providerRequestId)) }
+        match (error.usage) {
+            case Some(usage) =>
+                match (usage.inputTokens) {
+                    case Some(value) => fields.add(domain.ErrorField("usage_input_tokens", value.toString()))
+                    case None => ()
+                }
+                match (usage.outputTokens) {
+                    case Some(value) => fields.add(domain.ErrorField("usage_output_tokens", value.toString()))
+                    case None => ()
+                }
+            case None => ()
+        }
         // A completed provider message with an unexecutable tool argument is
         // recoverable before any canonical Decision/Operation is projected.
         // Keep the strict llm4cj error, but classify this one wire condition

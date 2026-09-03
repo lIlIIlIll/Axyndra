@@ -892,7 +892,7 @@ public class AgentCore <: AgentRunner {
             attemptId, context, control, sink
         )
         match (recordModelAttempt(
-            durableRequest, modelRequest, attemptNo, result,
+            durableRequest, modelRequest, attemptNo, counter, result,
             context, control, sink
         )) {
             case Result.Ok(_) => ()
@@ -2954,6 +2954,7 @@ public class AgentCore <: AgentRunner {
                 request,
                 effectiveAttemptRequest,
                 1,
+                counter,
                 result,
                 context,
                 control,
@@ -3065,6 +3066,7 @@ public class AgentCore <: AgentRunner {
                 request,
                 effectiveAttemptRequest,
                 attempt,
+                counter,
                 result,
                 context,
                 control,
@@ -3339,6 +3341,7 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         modelRequest: ModelRequest,
         attempt: Int64,
+        counter: BudgetCounter,
         result: Result<ModelReply>,
         context: ToolInvocationContext,
         control: CoreRunControl,
@@ -3355,17 +3358,46 @@ public class AgentCore <: AgentRunner {
                     request.pricing
                 ))
             )
-            case Result.Err(error) => ModelRequestAttempt(
-                RequestId(modelRequest.requestId),
-                modelRequest.model,
-                attempt,
-                if (error.kind == AgentErrorKind.Cancelled) {
-                    ModelRequestOutcome.Cancelled
-                } else {
-                    ModelRequestOutcome.Failed
-                },
-                errorCode: error.code
-            )
+            case Result.Err(error) =>
+                // A provider may bill a request whose reply was rejected
+                // (malformed tool arguments) or whose stream died before a
+                // terminal (truncated stream). The adapter surfaces that
+                // observed usage as error fields; charge it so cumulative
+                // token and cost enforcement counts abandoned attempts too.
+                let billed = attemptUsageFromError(error, request.pricing)
+                match (billed) {
+                    case Some(usage) =>
+                        match (control.ledger.reserve(BudgetCharge(
+                            inputTokens: usage.inputTokens,
+                            outputTokens: usage.outputTokens,
+                            costMicros: match (usage.costMicros) {
+                                case Some(value) => value
+                                case None => 0
+                            }
+                        ))) {
+                            case Result.Ok(_) =>
+                                counter.inputTokens += usage.inputTokens
+                                counter.outputTokens += usage.outputTokens
+                                counter.costMicros = match ((counter.costMicros, usage.costMicros)) {
+                                    case (Some(total), Some(value)) => Some(total + value)
+                                    case (cost, None) => cost
+                                    case (None, Some(value)) => Some(value)
+                                }
+                            case Result.Err(_) => ()
+                        }
+                    case None => ()
+                }
+                ModelRequestAttempt(
+                    RequestId(modelRequest.requestId),
+                    modelRequest.model,
+                    attempt,
+                    if (error.kind == AgentErrorKind.Cancelled) {
+                        ModelRequestOutcome.Cancelled
+                    } else {
+                        ModelRequestOutcome.Failed
+                    },
+                    errorCode: error.code
+                )
         }
         emitTyped(
             context,

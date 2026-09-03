@@ -649,6 +649,8 @@ main(): Int64 {
             expect(
                 error.code == "llm.tool_arguments_not_executable" &&
                 error.retryable && malformedEvents.size > 0 &&
+                error.field("usage_input_tokens").getOrThrow() == "3" &&
+                error.field("usage_output_tokens").getOrThrow() == "4" &&
                 match (error.attemptFailure) {
                     case Some(value) => match (value.kind) {
                         case domain.AttemptFailureKind.MalformedToolArguments => true
@@ -688,6 +690,7 @@ main(): Int64 {
             expect(
                 error.code == "llm.stream_terminal_missing" &&
                 error.retryable && truncatedEvents.size > 0 &&
+                error.field("usage_input_tokens").getOrThrow() == "3" &&
                 match (error.attemptFailure) {
                     case Some(value) => match (value.kind) {
                         case domain.AttemptFailureKind.ProviderTerminalMissing => true

@@ -933,3 +933,32 @@ func accountedModelAttemptUsage(
         evidence: reply.usage.evidence
     )
 }
+
+// Usage billed for an attempt whose provider call failed mid-flight or
+// produced a rejected reply. The adapter surfaces what the wire showed
+// before the failure as error fields; cost is priced the same way as a
+// successful reply. None when the failure carried no observable usage.
+func attemptUsageFromError(
+    error: AgentError,
+    pricing: ?ModelPricing
+): ?ModelUsage {
+    let inputTokens = match (error.field("usage_input_tokens")) {
+        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
+        case None => return None
+    }
+    let outputTokens = match (error.field("usage_output_tokens")) {
+        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
+        case None => return None
+    }
+    if (inputTokens < 0 || outputTokens < 0) { return None }
+    Some(ModelUsage(
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        costMicros: match (pricing) {
+            case Some(value) => priceModelUsage(ModelUsage(
+                inputTokens: inputTokens, outputTokens: outputTokens
+            ), value)
+            case None => None
+        }
+    ))
+}

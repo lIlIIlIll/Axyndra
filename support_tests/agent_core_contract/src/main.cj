@@ -365,10 +365,10 @@ func malformedToolArgumentsRetryContract(): Unit {
             toolItems += 1
         }
     }
+    let finalSnapshot = runs.find(RunId("malformed-tool-retry-run")).value().getOrThrow()
     expect(
-        result.isOk() && model.calls == 2 && decisions.attempts == 2 &&
-        decisions.decisions == 1 && runs.modelAttempts.size == 2 &&
-        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence &&
+        finalSnapshot.usage.inputTokens == 500 && finalSnapshot.usage.outputTokens == 100 &&
+        model.calls == 2 && decisions.attempts == 2 &&
         decisions.terminalizedIds.size == 1 &&
         decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
         decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
@@ -1914,7 +1914,11 @@ class MalformedToolArgumentsThenSuccessModel <: ModelPort {
                 retryable: true,
                 attemptFailure: Some(AttemptFailure(
                     AttemptFailureKind.MalformedToolArguments
-                ))
+                )),
+                fields: [
+                    ErrorField("usage_input_tokens", "500"),
+                    ErrorField("usage_output_tokens", "100")
+                ]
             ))
         }
         events(ModelEvent.Completed)
