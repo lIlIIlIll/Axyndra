@@ -2232,7 +2232,57 @@ public class AgentCore <: AgentRunner {
             )
         }
         while (true) {
-            let blocked = control.ledger.modelAdmissionBlocked()
+            if (control.drainAttempts() >= request.budget.maxDrainTurns) {
+                return fail(
+                    request, context, control,
+                    AgentError(
+                        AgentErrorKind.BudgetExceeded,
+                        "budget.drain_exhausted",
+                        "drain turn budget exhausted before finalization completed"
+                    ),
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            let _ = control.incrementDrainAttempts()
+            let projection = match (control.runtime.projectContext()) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let history = modelMessagesFromProjection(projection)
+            let preparedModelRequest = match (buildBoundedModelRequest(
+                request, history, control, drainFinalization: true
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            // Ex-ante hard-cap preflight: the drain request is admitted only
+            // if its WORST-CASE cost fits the remaining fungible budget.
+            // Worst case = request-window input estimate at the input rate
+            // (no cache discount) plus the per-request output hard limit at
+            // the output rate. Unlike work requests, a drain request must
+            // never push the run past a cumulative hard cap; if it cannot
+            // fit, the durable checkpoint is the delivered partial result.
+            let worstCaseUsage = ExecutionUsage(
+                inputTokens: preparedModelRequest.estimatedInputTokens,
+                outputTokens: request.budget.requestOutputBudget.hardLimit,
+                costMicros: match (request.pricing) {
+                    case Some(pricing) =>
+                        match (priceModelUsage(ModelUsage(
+                            inputTokens: preparedModelRequest.estimatedInputTokens,
+                            outputTokens: request.budget.requestOutputBudget.hardLimit
+                        ), pricing)) {
+                            case Some(value) => value
+                            case None => 0
+                        }
+                    case None => 0
+                }
+            )
+            let blocked = control.ledger.projectedAdmissionBlocked(worstCaseUsage)
             if (blocked.isSome()) {
                 control.setBudgetMode(BudgetMode.Exhausted)
                 let usageNow = control.ledger.snapshot()
@@ -2262,34 +2312,6 @@ public class AgentCore <: AgentRunner {
                 return completeDrainedRun(
                     request, context, control, counter, sink,
                     "run drained at hard budget limit without finalization request"
-                )
-            }
-            if (control.drainAttempts() >= request.budget.maxDrainTurns) {
-                return fail(
-                    request, context, control,
-                    AgentError(
-                        AgentErrorKind.BudgetExceeded,
-                        "budget.drain_exhausted",
-                        "drain turn budget exhausted before finalization completed"
-                    ),
-                    sink,
-                    counter: Some(counter)
-                )
-            }
-            let _ = control.incrementDrainAttempts()
-            let projection = match (control.runtime.projectContext()) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return fail(
-                    request, context, control, error, sink, counter: Some(counter)
-                )
-            }
-            let history = modelMessagesFromProjection(projection)
-            let preparedModelRequest = match (buildBoundedModelRequest(
-                request, history, control, drainFinalization: true
-            )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return fail(
-                    request, context, control, error, sink, counter: Some(counter)
                 )
             }
             let turnId = control.nextTurnId()

@@ -955,12 +955,19 @@ public class ExecutionBudget {
         reserve(BudgetCharge(), nowMillis: nowMillis)
     }
 
-    // Hard fungible-dimension probe for the control-plane drain: returns the
-    // dimension that already blocks one more provider request (deadline
-    // passed, or cumulative token/cost totals at or over their limit), or
-    // None when a finalization request may still be admitted. Charges
-    // nothing and never rejects on per-run turn/tool buckets.
-    public func modelAdmissionBlocked(
+    // Ex-ante admission preflight for one control-plane drain request. The
+    // caller supplies the WORST-CASE incremental usage of the request it is
+    // about to send (request-window input estimate, per-request output hard
+    // limit, priced accordingly); the probe rejects when the deadline passed
+    // or when current usage plus that worst case would exceed a cumulative
+    // hard limit. This is deliberately stricter than the work loop, whose
+    // cumulative token/cost contract stays ex-post (a work request is issued
+    // first and the run terminates at the accounting point that would exceed
+    // the limit). The projection is an estimate: input-token estimate drift
+    // and provider-reported usage beyond it remain ex-post facts.
+    // Charges nothing and never rejects on per-run turn/tool buckets.
+    public func projectedAdmissionBlocked(
+        projection: ExecutionUsage,
         nowMillis!: Int64 = agentUtcMillis()
     ): ?BudgetDimension {
         usageLock.lock()
@@ -968,13 +975,19 @@ public class ExecutionBudget {
             if (deadlineMillis > 0 && nowMillis >= deadlineMillis) {
                 return Some(BudgetDimension.Deadline)
             }
-            if (maxTotalInputTokens > 0 && usedInputTokens >= maxTotalInputTokens) {
+            if (maxTotalInputTokens > 0 &&
+                saturatedExecutionBudgetAdd(usedInputTokens, projection.inputTokens) >
+                    maxTotalInputTokens) {
                 return Some(BudgetDimension.InputTokens)
             }
-            if (maxTotalOutputTokens > 0 && usedOutputTokens >= maxTotalOutputTokens) {
+            if (maxTotalOutputTokens > 0 &&
+                saturatedExecutionBudgetAdd(usedOutputTokens, projection.outputTokens) >
+                    maxTotalOutputTokens) {
                 return Some(BudgetDimension.OutputTokens)
             }
-            if (maxCostMicros > 0 && usedCostMicros >= maxCostMicros) {
+            if (maxCostMicros > 0 &&
+                saturatedExecutionBudgetAdd(usedCostMicros, projection.costMicros) >
+                    maxCostMicros) {
                 return Some(BudgetDimension.Cost)
             }
             None
