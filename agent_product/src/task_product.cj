@@ -2803,11 +2803,24 @@ public class ProductTaskRuntime {
         snapshot
     }
 
+    // Authoritative child admission boundary. A parent in Draining or
+    // Exhausted budget mode must not mint new child runs or leases even if a
+    // tool somehow reaches this point; existing children keep their normal
+    // cancel/settle/join lifecycle.
     private func reserveChildBudget(
         context: ToolInvocationContext,
         childId: String,
         child: ExecutionBudget
     ): Result<Unit> {
+        let parentMode = context.currentBudgetMode()
+        if (parentMode == BudgetMode.Draining || parentMode == BudgetMode.Exhausted) {
+            return Result.Err(AgentError(
+                AgentErrorKind.BudgetExceeded,
+                "child.spawn_denied_budget_draining",
+                "parent run is draining or exhausted; new child runs are not admitted",
+                fields: [ErrorField("mode", budgetModeName(parentMode))]
+            ))
+        }
         let pool: ChildBudgetPool
         lock.lock()
         try {

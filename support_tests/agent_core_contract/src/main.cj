@@ -143,6 +143,11 @@ main(): Int64 {
     drainProviderFailureStopsBoundedContract()
     resumeRestoresWorkBudgetContinuityContract()
     drainRespectsRunDeadlineContract()
+    workBudgetStopsAtModelRequestLimitContract()
+    workCannotUseDrainHeadroomContract()
+    drainBlockedAtCostBoundaryContract()
+    childBudgetPoolSettlesWorkPlusDrainContract()
+    childBudgetPoolSchedulingGatesContract()
     budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
     contextCompactionContract()
@@ -3059,15 +3064,18 @@ class BudgetProbeModel <: ModelPort {
     let drainToolCall: Bool
     let drainFailures: Int64
     let sleepMillisPerWorkCall: Int64
+    let usagePerCall: ?ModelUsage
 
     init(
         drainToolCall!: Bool = false,
         drainFailures!: Int64 = 0,
-        sleepMillisPerWorkCall!: Int64 = 0
+        sleepMillisPerWorkCall!: Int64 = 0,
+        usagePerCall!: ?ModelUsage = None
     ) {
         this.drainToolCall = drainToolCall
         this.drainFailures = drainFailures
         this.sleepMillisPerWorkCall = sleepMillisPerWorkCall
+        this.usagePerCall = usagePerCall
     }
 
     public func execute(
@@ -3101,7 +3109,8 @@ class BudgetProbeModel <: ModelPort {
             events(ModelEvent.Completed)
             return Result.Ok(contractModelReply(
                 [ModelBlock(ModelBlockKind.Text, text: "drain report: completed work; next step: resume from checkpoint")],
-                stopReason: "end_turn"
+                stopReason: "end_turn",
+                usage: usagePerCall
             ))
         }
         workRequests += 1
@@ -3113,7 +3122,7 @@ class BudgetProbeModel <: ModelPort {
             callId: "call-" + calls.toString(),
             name: "echo",
             arguments: objectValue([ValueField("text", textValue("t" + calls.toString()))])
-        )]))
+        )], usage: usagePerCall))
     }
 }
 
@@ -3138,8 +3147,12 @@ func budgetDrainCore(
     runId: String,
     sessionId: String,
     maxTurns!: Int64,
+    maxModelRequests!: Int64 = 64,
     maxDrainTurns!: Int64 = 2,
     deadlineMillis!: Int64 = 0,
+    maxDrainModelRequests!: Int64 = 2,
+    maxCostMicros!: Int64 = 0,
+    pricing!: ?ModelPricing = None,
     sleepyTool!: Bool = false
 ): Result<AgentRunOutcome> {
     let executor: ToolExecutor = if (sleepyTool) {
@@ -3164,9 +3177,13 @@ func budgetDrainCore(
         SessionId(sessionId),
         "fixture", "go",
         capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        pricing: pricing,
         budget: ResourceBudget(
             maxTurns: maxTurns,
+            maxModelRequests: maxModelRequests,
+            maxDrainModelRequests: maxDrainModelRequests,
             maxDrainTurns: maxDrainTurns,
+            maxCostMicros: maxCostMicros,
             deadlineMillis: deadlineMillis
         )
     ))
@@ -3350,6 +3367,137 @@ func drainRespectsRunDeadlineContract(): Unit {
     let final = runs.find(RunId("drain-deadline-run"))
     expect(final.isOk() && final.value().getOrThrow().turns == 1,
         "the deadline failure still persists a durable usage checkpoint")
+}
+
+func workBudgetStopsAtModelRequestLimitContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-request-split-run", "drain-request-split-session",
+        maxTurns: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
+    )
+    let completed = completedSnapshotOrThrow(result, "split ledger must drain")
+    expect(
+        completed.status == RunState.Completed && completed.turns == 2 &&
+            model.workRequests == 2 && model.drainWireCalls == 1,
+        "exhausted work model requests still admit the bounded drain " +
+            "finalization request"
+    )
+}
+
+func workCannotUseDrainHeadroomContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-headroom-run", "drain-headroom-session",
+        maxTurns: 4, maxModelRequests: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.kind == AgentErrorKind.BudgetExceeded &&
+                error.code == "budget.model_requests_exceeded" &&
+                model.workRequests == 2 && model.drainWireCalls == 0
+        case None => false
+    }, "work model requests stop at maxModelRequests while drain headroom " +
+        "stays untouched")
+}
+
+func drainBlockedAtCostBoundaryContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(usagePerCall: Some(ModelUsage(
+        inputTokens: 100, outputTokens: 20
+    )))
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-cost-boundary-run", "drain-cost-boundary-session",
+        maxTurns: 2, maxCostMicros: 280,
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(2000000)
+        ))
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "cost boundary must drain without provider request"
+    )
+    expect(
+        completed.status == RunState.Completed && model.drainWireCalls == 0 &&
+            completed.summary == "run drained at hard budget limit without " +
+                "finalization request",
+        "a cost-exhausted budget admits no drain finalization request"
+    )
+}
+
+func childBudgetPoolSettlesWorkPlusDrainContract(): Unit {
+    let parent = ExecutionBudget(
+        maxTotalInputTokens: 1000,
+        maxTotalOutputTokens: 1000,
+        maxCostMicros: 1000
+    )
+    let pool = ChildBudgetPool(parent, 4)
+    let childBudget = ExecutionBudget(
+        maxTotalInputTokens: 800,
+        maxTotalOutputTokens: 800,
+        maxCostMicros: 600
+    )
+    let lease = match (pool.reserve("child-1", childBudget)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(
+            "child reserve failed: " + error.code
+        )
+    }
+    let combined = ExecutionUsage(
+        inputTokens: 130, outputTokens: 70, costMicros: 280
+    )
+    match (lease.settle(combined)) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(
+            "child settle failed: " + error.code
+        )
+    }
+    let snapshot = pool.snapshot()
+    expect(
+        snapshot.activeReservations == 0 &&
+            snapshot.consumed.inputTokens == 130 &&
+            snapshot.consumed.outputTokens == 70 &&
+            snapshot.consumed.costMicros == 280,
+        "child budget settlement covers work plus drain usage without residue"
+    )
+}
+
+func childBudgetPoolSchedulingGatesContract(): Unit {
+    let parent = ExecutionBudget(maxCostMicros: 1000)
+    let childBudget = ExecutionBudget(maxCostMicros: 100)
+    let capped = ChildBudgetPool(parent, 1)
+    let first = capped.reserve("c-1", childBudget)
+    expect(first.isOk(), "first child reserves")
+    let second = capped.reserve("c-2", childBudget)
+    expect(second.isError() && second.error().getOrThrow().code ==
+        "child.max_children_exceeded",
+        "the total children gate still blocks after the cap")
+    let concurrent = ChildBudgetPool(parent, 8, maxConcurrentChildren: 1)
+    let unbounded = concurrent.reserve("d-3", ExecutionBudget())
+    expect(unbounded.isError() && unbounded.error().getOrThrow().code ==
+        "child.unbounded_cost_reservation",
+        "unbounded cost children stay rejected under a bounded parent")
+    let active = concurrent.reserve("d-1", childBudget)
+    expect(active.isOk(), "first concurrent child reserves")
+    let blocked = concurrent.reserve("d-2", childBudget)
+    expect(blocked.isError() && blocked.error().getOrThrow().code ==
+        "child.max_concurrent_children_exceeded",
+        "the concurrency gate still blocks a second live lease")
+    let overSettle = active.value().getOrThrow().settle(ExecutionUsage(costMicros: 101))
+    expect(overSettle.isError() && overSettle.error().getOrThrow().code ==
+        "child.actual_usage_exceeds_reservation",
+        "settling above the reserved child budget stays rejected")
+    expect(active.value().getOrThrow().settle(ExecutionUsage(costMicros: 80)).isOk(),
+        "settling within the reservation releases the concurrency slot")
+    expect(concurrent.reserve("d-4", childBudget).isOk(),
+        "a settled lease frees its concurrency slot for the next child")
 }
 
 func budgetModeOrthogonalToApprovalContract(): Unit {
