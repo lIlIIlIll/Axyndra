@@ -135,6 +135,15 @@ main(): Int64 {
     // recovery before a Thread is resumed.
     singleRequestInputBudgetContract()
     cumulativeInputTripsExecutionBudgetContract()
+    workTurnBudgetDrainsGracefullyContract()
+    drainFinalizationHasNoToolSurfaceContract()
+    budgetPressureSignalsOnceContract()
+    drainPartialReportCompletedContract()
+    drainHardCapStopsBoundedContract()
+    drainProviderFailureStopsBoundedContract()
+    resumeRestoresWorkBudgetContinuityContract()
+    drainRespectsRunDeadlineContract()
+    budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
     contextCompactionContract()
     contextBoundaryContract()
@@ -3041,6 +3050,356 @@ func cumulativeInputTripsExecutionBudgetContract(): Unit {
     }, "cumulative model usage is reserved by the v3 execution budget ledger")
 }
 
+class BudgetProbeModel <: ModelPort {
+    var calls: Int64 = 0
+    var workRequests: Int64 = 0
+    var drainWireCalls: Int64 = 0
+    var lastRequestToolsEmpty: Bool = false
+    var lastRequestToolChoiceNoTools: Bool = false
+    let drainToolCall: Bool
+    let drainFailures: Int64
+    let sleepMillisPerWorkCall: Int64
+
+    init(
+        drainToolCall!: Bool = false,
+        drainFailures!: Int64 = 0,
+        sleepMillisPerWorkCall!: Int64 = 0
+    ) {
+        this.drainToolCall = drainToolCall
+        this.drainFailures = drainFailures
+        this.sleepMillisPerWorkCall = sleepMillisPerWorkCall
+    }
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        calls += 1
+        lastRequestToolsEmpty = request.tools.isEmpty()
+        lastRequestToolChoiceNoTools = match (request.toolChoice) {
+            case ModelToolChoice.NoTools => true
+            case _ => false
+        }
+        if (request.tools.isEmpty()) {
+            drainWireCalls += 1
+            if (drainWireCalls <= drainFailures) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Transport,
+                    "fixture.drain_transport",
+                    "drain transport failure",
+                    retryable: true
+                ))
+            }
+            if (drainToolCall) {
+                return Result.Ok(contractModelReply([ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "drain-call",
+                    name: "echo",
+                    arguments: objectValue([ValueField("text", textValue("nope"))])
+                )], stopReason: "tool_use"))
+            }
+            events(ModelEvent.Completed)
+            return Result.Ok(contractModelReply(
+                [ModelBlock(ModelBlockKind.Text, text: "drain report: completed work; next step: resume from checkpoint")],
+                stopReason: "end_turn"
+            ))
+        }
+        workRequests += 1
+        if (sleepMillisPerWorkCall > 0) {
+            sleep(Duration.millisecond * sleepMillisPerWorkCall)
+        }
+        return Result.Ok(contractModelReply([ModelBlock(
+            ModelBlockKind.ToolCall,
+            callId: "call-" + calls.toString(),
+            name: "echo",
+            arguments: objectValue([ValueField("text", textValue("t" + calls.toString()))])
+        )]))
+    }
+}
+
+func countBudgetSignals(
+    events: ArrayList<AgentEvent>,
+    code: String
+): Int64 {
+    var count: Int64 = 0
+    for (event in events) {
+        match (event.detail.field("code")) {
+            case Some(value) => if (value.text == code) { count += 1 }
+            case None => ()
+        }
+    }
+    count
+}
+
+func budgetDrainCore(
+    model: BudgetProbeModel,
+    runs: MemoryRuns,
+    catalog: ToolCatalog,
+    runId: String,
+    sessionId: String,
+    maxTurns!: Int64,
+    maxDrainTurns!: Int64 = 2,
+    deadlineMillis!: Int64 = 0,
+    sleepyTool!: Bool = false
+): Result<AgentRunOutcome> {
+    let executor: ToolExecutor = if (sleepyTool) {
+        SleepEchoTool()
+    } else {
+        EchoTool()
+    }
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        executor
+    ).isOk(), "tool registration")
+    AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    ).start(AgentRunRequest(
+        RunId(runId),
+        SessionId(sessionId),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(
+            maxTurns: maxTurns,
+            maxDrainTurns: maxDrainTurns,
+            deadlineMillis: deadlineMillis
+        )
+    ))
+}
+
+func completedSnapshotOrThrow(
+    result: Result<AgentRunOutcome>,
+    label: String
+): RunSnapshot {
+    match (result) {
+        case Result.Ok(outcome) => match (outcome) {
+            case AgentRunOutcome.Completed(snapshot) => snapshot
+            case _ => throw IllegalStateException(label + ": run did not complete")
+        }
+        case Result.Err(error) => throw IllegalStateException(
+            label + ": " + error.code + ": " + error.message
+        )
+    }
+}
+
+func workTurnBudgetDrainsGracefullyContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "turn-budget-drain-run", "turn-budget-drain-session", maxTurns: 32
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "32-turn budget must drain gracefully"
+    )
+    expect(
+        completed.status == RunState.Completed && completed.turns == 32 &&
+            model.workRequests == 32 && model.drainWireCalls == 1,
+        "work turns stop at 32 and the bounded drain finalizes without " +
+            "budget.turns_exceeded"
+    )
+}
+
+func drainFinalizationHasNoToolSurfaceContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-no-tools-run", "drain-no-tools-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "drain must complete"
+    )
+    expect(
+        completed.status == RunState.Completed && model.lastRequestToolsEmpty &&
+            model.lastRequestToolChoiceNoTools && completed.toolCalls == 4,
+        "drain finalization carries no tool surface and commits no new tool work"
+    )
+}
+
+func budgetPressureSignalsOnceContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "budget-pressure-run", "budget-pressure-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(result, "pressure run completes")
+    expect(
+        completed.status == RunState.Completed &&
+            countBudgetSignals(runs.eventLog, "budget.pressure") == 1 &&
+            countBudgetSignals(runs.eventLog, "budget.draining") == 1,
+        "budget pressure is signaled exactly once and draining once on drain entry"
+    )
+}
+
+func drainPartialReportCompletedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-report-run", "drain-report-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(result, "drain report run completes")
+    expect(
+        completed.summary.startsWith("budget drained") &&
+            hasEvent(runs.eventLog, "run.completed") &&
+            hasEvent(runs.eventLog, "budget.draining"),
+        "the drained run completes normally and marks the partial report"
+    )
+}
+
+func drainHardCapStopsBoundedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(drainToolCall: true)
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-tool-run", "drain-tool-session", maxTurns: 4
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.kind == AgentErrorKind.BudgetExceeded &&
+                error.code == "budget.drain_exhausted" &&
+                model.workRequests == 4 && model.drainWireCalls == 1
+        case None => false
+    }, "drain refusing tool work stops bounded with budget.drain_exhausted")
+}
+
+func drainProviderFailureStopsBoundedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(drainFailures: 99)
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-fail-run", "drain-fail-session", maxTurns: 4
+    )
+    expect(result.isError() && model.workRequests == 4 &&
+        model.drainWireCalls == 2,
+        "a failing drain finalization is bounded by the attempt retry policy")
+}
+
+func resumeRestoresWorkBudgetContinuityContract(): Unit {
+    let runs = MemoryRuns(failClaimAfterCommitAt: 3)
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let model = BudgetProbeModel()
+    let request = AgentRunRequest(
+        RunId("budget-resume-run"), SessionId("budget-resume-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxTurns: 4)
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    expect(first.isError() && model.workRequests == 2,
+        "budget resume crash is injected after two settled work turns")
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "budget resume must complete"
+    )
+    expect(
+        completed.status == RunState.Completed && completed.turns == 4 &&
+            model.workRequests == 4,
+        "resume restores the consumed work budget and allows exactly the " +
+            "remaining one work turn plus the drain"
+    )
+}
+
+func drainRespectsRunDeadlineContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-deadline-run", "drain-deadline-session",
+        maxTurns: 1, deadlineMillis: agentUtcMillis() + 100,
+        sleepyTool: true
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.code == "run.deadline_exceeded" && model.drainWireCalls == 0
+        case None => false
+    }, "an expired run deadline admits no drain finalization request")
+    let final = runs.find(RunId("drain-deadline-run"))
+    expect(final.isOk() && final.value().getOrThrow().turns == 1,
+        "the deadline failure still persists a durable usage checkpoint")
+}
+
+func budgetModeOrthogonalToApprovalContract(): Unit {
+    let conversations = MemoryConversations()
+    let runs = MemoryRuns()
+    let operations = MemoryOperations()
+    let catalog = ToolCatalog()
+    let tool = EchoTool(observer: Some(conversations))
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "side effect fixture", objectValue([])),
+            Capability(CapabilityKind.WorkspaceWrite),
+            sideEffecting: true
+        ),
+        tool
+    ).isOk(), "side effect tool registration")
+    let model = BudgetProbeModel()
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let request = AgentRunRequest(
+        RunId("budget-approval-run"), SessionId("budget-approval-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)]),
+        budget: ResourceBudget(maxTurns: 2)
+    )
+    let first = core.start(request).value().getOrThrow()
+    let firstApproval = match (first) {
+        case AgentRunOutcome.AwaitingApproval(_, value) => value
+        case _ => throw IllegalStateException("first approval must pause the run")
+    }
+    let second = core.decide(request, firstApproval, ApprovalDecision.Approve)
+    let secondApproval = match (second.value().getOrThrow()) {
+        case AgentRunOutcome.AwaitingApproval(_, value) => value
+        case _ => throw IllegalStateException("second approval must pause the run")
+    }
+    let completed = core.decide(request, secondApproval, ApprovalDecision.Approve)
+    let snapshot = completedSnapshotOrThrow(completed, "approval resume completes")
+    expect(
+        snapshot.status == RunState.Completed && snapshot.turns == 2 &&
+            model.drainWireCalls == 1 && tool.executions == 2,
+        "BudgetMode never blocks WaitingApproval and the drained run still " +
+            "finishes through the approval path"
+    )
+}
+
+
 func usageAccountingContract(): Unit {
     let catalog = ToolCatalog()
     let pricedRuns = MemoryRuns()
@@ -3772,6 +4131,26 @@ class StalledModel <: ModelPort {
     }
 }
 
+class SleepEchoTool <: ToolExecutor {
+    public func execute(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolResult> {
+        sleep(Duration.millisecond * 200)
+        Result.Ok(ToolResult(call.callId, call.arguments))
+    }
+
+    public func afterResultPersisted(
+        context: ToolInvocationContext,
+        result: ToolResult
+    ): Result<Unit> {
+        let _ = context
+        let _ = result
+        Result.Ok(())
+    }
+}
+
+
 class EchoTool <: ToolExecutor {
     var executions: Int64 = 0
     var persistedResults: Int64 = 0
@@ -4345,6 +4724,7 @@ class MemoryRuns <: RunRepository {
     var claims: Int64 = 0
     var savedContinuation: ?RunContinuation = None
     var savedDecision: ?ApprovalDecisionReceipt = None
+    let savedDecisions = ArrayList<ApprovalDecisionReceipt>()
     private let initialSaveLock = Mutex()
     private let blockInitialSave: Bool
     private var initialSaveEntered: Bool = false
@@ -4694,31 +5074,30 @@ class MemoryRuns <: RunRepository {
     }
 
     public func saveDecision(value: ApprovalDecisionReceipt): Result<Unit> {
-        match (savedDecision) {
-            case Some(existing) => if (sameFixtureDecision(existing, value)) {
-                Result.Ok(())
-            } else {
-                Result.Err(AgentError(
-                    AgentErrorKind.Conflict,
-                    "persistence.conflict",
-                    "approval decision receipt cannot be changed"
-                ))
+        for (existing in savedDecisions where
+            existing.operationId.value == value.operationId.value) {
+            if (sameFixtureDecision(existing, value)) {
+                return Result.Ok(())
             }
-            case None =>
-                savedDecision = Some(value)
-                Result.Ok(())
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "persistence.conflict",
+                "approval decision receipt cannot be changed"
+            ))
         }
+        savedDecisions.add(value)
+        if (savedDecision.isNone()) {
+            savedDecision = Some(value)
+        }
+        Result.Ok(())
     }
 
     public func decision(operationId: OperationId): Result<ApprovalDecisionReceipt> {
-        match (savedDecision) {
-            case Some(value) => if (value.operationId.value == operationId.value) {
-                Result.Ok(value)
-            } else {
-                Result.Err(missing("decision"))
-            }
-            case None => Result.Err(missing("decision"))
+        for (value in savedDecisions where
+            value.operationId.value == operationId.value) {
+            return Result.Ok(value)
         }
+        Result.Err(missing("decision"))
     }
 
     public func recordDecision(

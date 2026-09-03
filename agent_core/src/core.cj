@@ -339,13 +339,6 @@ class BudgetCounter {
         )
     }
 
-    func beforeTool(budget: ResourceBudget): Result<Unit> {
-        if (toolCalls >= budget.maxToolCalls) {
-            return budgetError("tool_calls")
-        }
-        toolCalls += 1
-        Result.Ok(())
-    }
 
     private func budgetError(resource: String): Result<Unit> {
         Result.Err(
@@ -698,7 +691,18 @@ public class AgentCore <: AgentRunner {
             case Result.Err(error) => return Result.Err(error)
         }
         let control = match (controlForResume(
-            durableRequest, snapshot, modelRecovery: true
+            durableRequest, snapshot, modelRecovery: true,
+            initialUsage: Some(ExecutionUsage(
+                turns: checkpoint.turns,
+                modelRequests: checkpoint.modelRequests,
+                toolCalls: checkpoint.toolCalls,
+                inputTokens: checkpoint.inputTokens,
+                outputTokens: checkpoint.outputTokens,
+                costMicros: match (checkpoint.costMicros) {
+                    case Some(value) => value
+                    case None => 0
+                }
+            ))
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -786,8 +790,11 @@ public class AgentCore <: AgentRunner {
                         ), sink, counter: Some(counter)
                     )
                 }
-                match (counter.beforeModel(durableRequest.budget)) {
-                    case Result.Ok(_) => ()
+                match (reserveBudget(
+                    control, context, BudgetCharge(modelRequests: 1), sink
+                )) {
+                    case Result.Ok(_) =>
+                        counter.modelRequests += 1
                     case Result.Err(error) => return fail(
                         durableRequest, context, control, error, sink,
                         counter: Some(counter)
@@ -883,8 +890,12 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
-        match (counter.beforeModel(durableRequest.budget)) {
-            case Result.Ok(_) => ()
+        match (reserveBudget(
+            control, context, BudgetCharge(modelRequests: 1), sink,
+            requestId: Some(RequestId(modelRequest.requestId))
+        )) {
+            case Result.Ok(_) =>
+                counter.modelRequests += 1
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
@@ -1474,7 +1485,8 @@ public class AgentCore <: AgentRunner {
         counter: BudgetCounter,
         reply: ModelReply,
         turnId: TurnId,
-        sink: AgentEventSink
+        sink: AgentEventSink,
+        drained!: Bool = false
     ): Result<?AgentRunOutcome> {
         if (control.source.token.isCancelled() || isRunCancelled(request.runId)) {
             return optionalOutcome(cancelledRun(request, context, control, sink))
@@ -1508,7 +1520,11 @@ public class AgentCore <: AgentRunner {
             request.sessionId,
             RunState.Completed,
             sequence: context.currentSequence(),
-            summary: reply.stopReason,
+            summary: if (drained) {
+                "budget drained: " + reply.stopReason
+            } else {
+                reply.stopReason
+            },
             modelRequests: counter.modelRequests,
             usage: counter.usage(),
             lastInputTokens: counter.lastInputTokens,
@@ -1571,13 +1587,32 @@ public class AgentCore <: AgentRunner {
     private func buildBoundedModelRequest(
         request: AgentRunRequest,
         history: Array<ModelMessage>,
-        control: CoreRunControl
+        control: CoreRunControl,
+        drainFinalization!: Bool = false
     ): Result<PreparedModelRequest> {
-        let requestTools = catalog.definitionsFor(request.capabilities)
-        let effectiveSystem = systemWithSkillStack(
+        // The drain finalization is a control-plane request: no tool surface,
+        // NoTools choice, and a bounded wrap-up instruction. It must never be
+        // able to start shell, edit, git, network, or any other side effect.
+        let requestTools = if (drainFinalization) {
+            Array<ModelToolDefinition>()
+        } else {
+            catalog.definitionsFor(request.capabilities)
+        }
+        let baseSystem = systemWithSkillStack(
             request.system,
             request.skillStack
         )
+        let effectiveSystem = if (drainFinalization) {
+            baseSystem +
+                "\n\n[BUDGET DRAINING] The work-turn budget is exhausted. Do " +
+                "not investigate new problems and do not call tools. Summarize " +
+                "the work already completed, the key verifications already " +
+                "performed, what remains unfinished, the current blockers, and " +
+                "the exact next step for a future resume. Never claim " +
+                "unfinished work as complete."
+        } else {
+            baseSystem
+        }
         let contextWindow = buildRequestContext(
             history,
             request.budget,
@@ -1601,6 +1636,11 @@ public class AgentCore <: AgentRunner {
             contextWindow.messages,
             system: effectiveSystem,
             tools: requestTools,
+            toolChoice: if (drainFinalization) {
+                ModelToolChoice.NoTools
+            } else {
+                ModelToolChoice.Auto
+            },
             thinking: request.thinking,
             maxOutputTokens: request.budget.maxOutputTokens,
             streaming: true,
@@ -1931,7 +1971,8 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(Some(outcome)) => return Result.Ok(outcome)
             case Result.Ok(None) => ()
         }
-        while (counter.turns <= request.budget.maxTurns) {
+        let pressureAtTurns = budgetPressureAtTurns(request.budget.maxTurns)
+        while (counter.turns < request.budget.maxTurns) {
             if (control.source.token.isCancelled() || isRunCancelled(request.runId)) {
                 return cancelledRun(
                     request,
@@ -1969,6 +2010,28 @@ public class AgentCore <: AgentRunner {
                 )
             }
             counter.turns += 1
+            if (counter.turns == pressureAtTurns) {
+                control.setBudgetMode(BudgetMode.Pressure)
+                let _ = emitTyped(
+                    context,
+                    control,
+                    AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                        BudgetMode.Pressure,
+                        BudgetDimension.Turns,
+                        request.budget.maxTurns,
+                        counter.turns,
+                        request.budget.maxTurns - counter.turns
+                    )),
+                    sink
+                )
+                match (announceBudgetPressure(request, context, control, sink)) {
+                    case Result.Ok(_) => ()
+                    case Result.Err(error) => return fail(
+                        request, context, control, error, sink,
+                        counter: Some(counter)
+                    )
+                }
+            }
             let projection = match (control.runtime.projectContext()) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return fail(
@@ -2059,14 +2122,264 @@ public class AgentCore <: AgentRunner {
                 turnId: Some(turnId)
             )
         }
-        fail(
-            request,
+        // The work-turn budget is exhausted at a settlement boundary. Do not
+        // start another work turn and never surface budget.turns_exceeded for
+        // this normal path: enter the bounded control-plane drain, checkpoint
+        // durably, and let the model deliver a no-tools partial/final report.
+        drainRun(request, context, control, counter, sink)
+    }
+
+    // Derived pressure threshold: fire once when warningLeadTurns or fewer
+    // work turns remain. Derived, not configured, in v1.
+    private func budgetPressureAtTurns(maxTurns: Int64): Int64 {
+        let leadRaw = maxTurns / 8
+        let leadTurns = if (leadRaw < 1) {
+            1
+        } else if (leadRaw > 4) {
+            4
+        } else {
+            leadRaw
+        }
+        let threshold = maxTurns - leadTurns
+        if (threshold < 1) {
+            1
+        } else {
+            threshold
+        }
+    }
+
+    // One durable user-visible notice at the pressure crossing: it rides the
+    // thread projection into later model requests without per-turn prompt
+    // rewrites.
+    private func announceBudgetPressure(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        match (control.runtime.appendUserInput(
+            ItemId("budget-pressure-" + request.runId.value),
+            ThreadItemContent.UserMessage(textMessageParts(
+                "[budget pressure] The work-turn budget is nearly exhausted. " +
+                    "Finish the current goal now, avoid starting optional " +
+                    "exploration, and converge the current work into a " +
+                    "deliverable state."
+            )),
+            ItemProvenance("budget", runId: Some(request.runId)),
+            agentUtcMillis()
+        )) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    private func saveDrainCheckpoint(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        counter: BudgetCounter
+    ): Result<Unit> {
+        runs.save(RunSnapshot(
+            request.runId,
+            request.sessionId,
+            RunState.Running,
+            sequence: context.currentSequence(),
+            summary: "work turn budget reached; draining",
+            modelRequests: counter.modelRequests,
+            usage: counter.usage(),
+            lastInputTokens: counter.lastInputTokens,
+            lastOutputTokens: counter.lastOutputTokens,
+            lastRequestDurationMillis: counter.lastRequestDurationMillis,
+            toolCalls: counter.toolCalls,
+            turns: counter.turns
+        ))
+    }
+
+    // Deadline- or crash-style drain ending: no further provider request is
+    // admitted, the durable checkpoint is the delivered partial result.
+    private func completeDrainedRun(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        counter: BudgetCounter,
+        sink: AgentEventSink,
+        summary: String
+    ): Result<AgentRunOutcome> {
+        let completed = RunSnapshot(
+            request.runId,
+            request.sessionId,
+            RunState.Completed,
+            sequence: context.currentSequence(),
+            summary: summary,
+            modelRequests: counter.modelRequests,
+            usage: counter.usage(),
+            lastInputTokens: counter.lastInputTokens,
+            lastOutputTokens: counter.lastOutputTokens,
+            lastRequestDurationMillis: counter.lastRequestDurationMillis,
+            toolCalls: counter.toolCalls,
+            turns: counter.turns
+        )
+        let transition = match (control.finish(
+            RunState.Completed,
+            reason: summary
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return fail(
+                request, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        match (runs.save(completed)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                finishControl(request.runId)
+                return Result.Err(error)
+        }
+        let _ = emitTransition(context, control, transition, sink)
+        let _ = emitTyped(context, control, AgentEventPayload.RunCompleted, sink)
+        finishControl(request.runId)
+        Result.Ok(AgentRunOutcome.Completed(completed))
+    }
+
+    // Bounded control-plane drain after the work-turn budget is exhausted.
+    // Durable checkpoint first, then at most maxDrainTurns no-tools
+    // finalization requests; hard dimensions (deadline) are never extended.
+    private func drainRun(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        counter: BudgetCounter,
+        sink: AgentEventSink
+    ): Result<AgentRunOutcome> {
+        control.setBudgetMode(BudgetMode.Draining)
+        let _ = emitTyped(
             context,
             control,
+            AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                BudgetMode.Draining,
+                BudgetDimension.Turns,
+                request.budget.maxTurns,
+                counter.turns,
+                0
+            )),
+            sink
+        )
+        match (saveDrainCheckpoint(request, context, counter)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(
+                request, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        while (true) {
+            match (control.ledger.checkDeadline()) {
+                case Result.Ok(_) => ()
+                case Result.Err(_) =>
+                    control.setBudgetMode(BudgetMode.Exhausted)
+                    let _ = emitTyped(
+                        context,
+                        control,
+                        AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                            BudgetMode.Exhausted,
+                            BudgetDimension.Deadline,
+                            request.budget.deadlineMillis,
+                            request.budget.deadlineMillis,
+                            0
+                        )),
+                        sink
+                    )
+                    return completeDrainedRun(
+                        request, context, control, counter, sink,
+                        "run drained at budget deadline without finalization request"
+                    )
+            }
+            if (control.drainAttempts() >= request.budget.maxDrainTurns) {
+                return fail(
+                    request, context, control,
+                    AgentError(
+                        AgentErrorKind.BudgetExceeded,
+                        "budget.drain_exhausted",
+                        "drain turn budget exhausted before finalization completed"
+                    ),
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            let _ = control.incrementDrainAttempts()
+            let projection = match (control.runtime.projectContext()) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let history = modelMessagesFromProjection(projection)
+            let preparedModelRequest = match (buildBoundedModelRequest(
+                request, history, control, drainFinalization: true
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let turnId = control.nextTurnId()
+            let active = control.runtime.activeRun().getOrThrow()
+            match (contextManifestRuntime.recordBeforeModelEffect(
+                request,
+                preparedModelRequest.requestId,
+                active.turnId,
+                active.executionLaneId,
+                StepId(
+                    "step-" + request.runId.value + "-drain-" +
+                        control.drainAttempts().toString()
+                ),
+                counter.turns,
+                projection,
+                active.lane,
+                modelRequestCheckpointValue(preparedModelRequest.request),
+                preparedModelRequest.estimatedInputTokens,
+                agentUtcMillis()
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let (reply, calledTool) = match (executeCanonicalModelTurn(
+                request, context, control, counter, preparedModelRequest,
+                turnId, sink, CoreToolLoopState()
+            )) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(CoreTurnExecution.Finished(outcome)) =>
+                    return Result.Ok(outcome)
+                case Result.Ok(CoreTurnExecution.ReadyToFinish(value, called)) =>
+                    (value, called)
+            }
+            if (calledTool) {
+                return fail(
+                    request, context, control,
+                    AgentError(
+                        AgentErrorKind.BudgetExceeded,
+                        "budget.drain_exhausted",
+                        "drain finalization returned tool calls; refusing new tool work"
+                    ),
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            match (finishTurnWithoutTools(
+                request, context, control, counter, reply, turnId, sink,
+                drained: true
+            )) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(Some(outcome)) => return Result.Ok(outcome)
+                case Result.Ok(None) => ()
+            }
+        }
+        // Unreachable: every loop branch returns. Kept as the typed terminal
+        // expression the compiler requires for a non-Unit function.
+        fail(
+            request, context, control,
             AgentError(
                 AgentErrorKind.BudgetExceeded,
-                "budget.turns_exceeded",
-                "execution turn budget exceeded"
+                "budget.drain_exhausted",
+                "drain loop exited without a terminal outcome"
             ),
             sink,
             counter: Some(counter)
@@ -2082,6 +2395,17 @@ public class AgentCore <: AgentRunner {
         sink: AgentEventSink,
         loopState: CoreToolLoopState
     ): Result<?AgentRunOutcome> {
+        // Graceful drain forbids new tool side effects: a provider that
+        // returns tool calls without an advertised tool surface, or a
+        // recovered decision that lands while the run is draining, is a drain
+        // violation and must not execute.
+        if (control.budgetMode() == BudgetMode.Draining && !calls.isEmpty()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.BudgetExceeded,
+                "budget.drain_exhausted",
+                "tool work is not permitted while the run is draining"
+            ))
+        }
         if (!interruptsImmediately(request)) {
             return runToolBatch(
                 request,
@@ -2157,8 +2481,12 @@ public class AgentCore <: AgentRunner {
             request.budget.maxConcurrentTools,
             { committed =>
                 let block = committed.block
-                match (counter.beforeTool(request.budget)) {
-                    case Result.Ok(_) => ()
+                match (reserveBudget(
+                    control, context, BudgetCharge(toolCalls: 1), sink,
+                    toolCallId: Some(ToolCallId(block.callId))
+                )) {
+                    case Result.Ok(_) =>
+                        counter.toolCalls += 1
                     case Result.Err(error) => return Result.Err(error)
                 }
                 match (reserveBudget(
@@ -2594,8 +2922,15 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (counter.beforeModel(request.budget)) {
-                case Result.Ok(_) => ()
+            match (reserveBudget(
+                control,
+                context,
+                BudgetCharge(modelRequests: 1),
+                sink,
+                requestId: Some(RequestId(effectiveAttemptRequest.requestId))
+            )) {
+                case Result.Ok(_) =>
+                    counter.modelRequests += 1
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -2706,8 +3041,15 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (counter.beforeModel(request.budget)) {
-                case Result.Ok(_) => ()
+            match (reserveBudget(
+                control,
+                context,
+                BudgetCharge(modelRequests: 1),
+                sink,
+                requestId: Some(RequestId(effectiveAttemptRequest.requestId))
+            )) {
+                case Result.Ok(_) =>
+                    counter.modelRequests += 1
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -4101,7 +4443,8 @@ public class AgentCore <: AgentRunner {
     private func controlForResume(
         request: AgentRunRequest,
         snapshot: RunSnapshot,
-        modelRecovery!: Bool = false
+        modelRecovery!: Bool = false,
+        initialUsage!: ?ExecutionUsage = None
     ): Result<CoreRunControl> {
         match (controls.find(request.runId)) {
             case Some(value) => Result.Ok(value)
@@ -4160,19 +4503,23 @@ public class AgentCore <: AgentRunner {
                     turns: snapshot.turns,
                     modelRequests: snapshot.modelRequests
                 )
-                match (control.ledger.reserve(BudgetCharge(
-                    turns: snapshot.turns,
-                    toolCalls: snapshot.toolCalls,
-                    inputTokens: snapshot.inputTokens,
-                    outputTokens: snapshot.outputTokens,
-                    costMicros: match (snapshot.costMicros) {
-                        case Some(value) => value
-                        case None => 0
-                    }
-                ))) {
-                    case Result.Ok(_) => ()
-                    case Result.Err(error) => return Result.Err(error)
+                // Budget continuity across crash/resume: prefer the exact
+                // durable checkpoint usage over the coarser Run snapshot so a
+                // resumed run can never re-enter the loop with fresh budget.
+                let restoredUsage = match (initialUsage) {
+                    case Some(value) => value
+                    case None => ExecutionUsage(
+                        turns: snapshot.turns,
+                        toolCalls: snapshot.toolCalls,
+                        inputTokens: snapshot.inputTokens,
+                        outputTokens: snapshot.outputTokens,
+                        costMicros: match (snapshot.costMicros) {
+                            case Some(value) => value
+                            case None => 0
+                        }
+                    )
                 }
+                control.ledger.restore(restoredUsage)
                 match (controls.add(control)) {
                     case Result.Ok(_) => ()
                     case Result.Err(error) => return Result.Err(error)
@@ -6872,6 +7219,8 @@ func coreModelLane(request: AgentRunRequest, catalog: ToolCatalog): ModelLane {
 func coreBudgetSnapshot(budget: ResourceBudget): AgentValue {
     objectValue([
         ValueField("max_turns", integerValue(budget.maxTurns)),
+        ValueField("max_drain_turns", integerValue(budget.maxDrainTurns)),
+        ValueField("max_model_requests", integerValue(budget.maxModelRequests)),
         ValueField("max_tool_calls", integerValue(budget.maxToolCalls)),
         ValueField("max_concurrent_tools", integerValue(budget.maxConcurrentTools)),
         ValueField("max_total_input_tokens", integerValue(budget.maxTotalInputTokens)),
