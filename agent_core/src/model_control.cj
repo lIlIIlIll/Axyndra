@@ -284,7 +284,8 @@ public func retryDisposition(error: AgentError, durableDecisionExists: Bool): At
             case AttemptFailureKind.StreamIdleTimeout |
                  AttemptFailureKind.AttemptSoftDeadlineExceeded |
                  AttemptFailureKind.AttemptHardDeadlineExceeded |
-                 AttemptFailureKind.DecisionIncompleteAtDeadline => AttemptRetryDisposition.RetrySamePolicy
+                 AttemptFailureKind.DecisionIncompleteAtDeadline |
+                 AttemptFailureKind.MalformedToolArguments => AttemptRetryDisposition.RetrySamePolicy
             case AttemptFailureKind.OutputLimitedBeforeDecision |
                  AttemptFailureKind.OutputLimited => AttemptRetryDisposition.RetryEscalated
             case _ => if (error.retryable) {

@@ -3645,6 +3645,38 @@ func decodeProviderReply(
             }
             case None => ()
         }
+        // llm4cj keeps protocol diagnostics bounded and separates a terminal
+        // tool-assembly defect from a transport EOF. Preserve that context
+        // for recovery telemetry without copying the provider body.
+        if (error.toolCallId != "") { fields.add(domain.ErrorField("tool_call_id", error.toolCallId)) }
+        match (error.diagnosticJson) {
+            case Some(value) => fields.add(domain.ErrorField("diagnostic_json", value))
+            case None => ()
+        }
+        match (error.phase) {
+            case Some(value) => fields.add(domain.ErrorField("llm_phase", llmTransportPhaseName(value)))
+            case None => ()
+        }
+        if (error.dialectId != "") { fields.add(domain.ErrorField("llm_dialect_id", error.dialectId)) }
+        if (error.eventType != "") { fields.add(domain.ErrorField("llm_event_type", error.eventType)) }
+        if (error.blockIndex >= 0) { fields.add(domain.ErrorField("llm_block_index", error.blockIndex.toString())) }
+        if (error.providerRequestId != "") { fields.add(domain.ErrorField("provider_request_id", error.providerRequestId)) }
+        // A completed provider message with an unexecutable tool argument is
+        // recoverable before any canonical Decision/Operation is projected.
+        // Keep the strict llm4cj error, but classify this one wire condition
+        // as a bounded model-attempt retry. Do not turn malformed JSON into a
+        // synthetic tool_result; schema-invalid, valid JSON remains handled
+        // by tool_runtime's normal recoverable ToolResult path. The shape
+        // variant is also pre-projection wire failure: a JSON array/scalar is
+        // not an executable object and has no domain ToolCall to repair.
+        let malformedToolArguments = error.kind == LlmWireErrorKind.InvalidWire &&
+            (error.code == "llm.tool_arguments_not_executable" ||
+                error.code == "llm.tool_arguments_shape_invalid")
+        // A stream that reaches transport EOF without a protocol terminal is
+        // a provider-attempt failure. It must be retried as a fresh model
+        // attempt, even when llm4cj retained provisional stream evidence.
+        let providerTerminalMissing = error.kind == LlmWireErrorKind.InvalidWire &&
+            error.code == "llm.stream_terminal_missing"
         domain.Result.Err(domain.AgentError(
             match (error.kind) {
                 case LlmWireErrorKind.Cancelled => domain.AgentErrorKind.Cancelled
@@ -3654,9 +3686,20 @@ func decodeProviderReply(
             },
             error.code,
             error.message,
-            retryable: error.retryable,
+            retryable: if (malformedToolArguments || providerTerminalMissing) {
+                true
+            } else { error.retryable },
             fallbackAllowed: true,
-            fields: fields.toArray()
+            fields: fields.toArray(),
+            attemptFailure: if (malformedToolArguments) {
+                Some(domain.AttemptFailure(
+                    domain.AttemptFailureKind.MalformedToolArguments
+                ))
+            } else if (providerTerminalMissing) {
+                Some(domain.AttemptFailure(
+                    domain.AttemptFailureKind.ProviderTerminalMissing
+                ))
+            } else { None }
         ))
     } catch (error: Exception) {
         domain.Result.Err(
@@ -3683,6 +3726,18 @@ func llmWireErrorKindName(kind: LlmWireErrorKind): String {
         case LlmWireErrorKind.Cancelled => "cancelled"
         case LlmWireErrorKind.Deadline => "deadline"
         case LlmWireErrorKind.Transport => "transport"
+    }
+}
+
+func llmTransportPhaseName(phase: LlmTransportPhase): String {
+    match (phase) {
+        case LlmTransportPhase.Encode => "encode"
+        case LlmTransportPhase.Request => "request"
+        case LlmTransportPhase.ResponseHeaders => "response_headers"
+        case LlmTransportPhase.StreamFraming => "stream_framing"
+        case LlmTransportPhase.WireDecode => "wire_decode"
+        case LlmTransportPhase.SemanticAssembly => "semantic_assembly"
+        case LlmTransportPhase.Transport => "transport"
     }
 }
 
