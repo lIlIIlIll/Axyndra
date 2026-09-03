@@ -3654,9 +3654,20 @@ func decodeProviderReply(
             },
             error.code,
             error.message,
-            retryable: error.retryable,
+            retryable: if (malformedToolArguments || providerTerminalMissing) {
+                true
+            } else { error.retryable },
             fallbackAllowed: true,
-            fields: fields.toArray()
+            fields: fields.toArray(),
+            attemptFailure: if (malformedToolArguments) {
+                Some(domain.AttemptFailure(
+                    domain.AttemptFailureKind.MalformedToolArguments
+                ))
+            } else if (providerTerminalMissing) {
+                Some(domain.AttemptFailure(
+                    domain.AttemptFailureKind.ProviderTerminalMissing
+                ))
+            } else { None }
         ))
     } catch (error: Exception) {
         domain.Result.Err(
@@ -3683,6 +3694,18 @@ func llmWireErrorKindName(kind: LlmWireErrorKind): String {
         case LlmWireErrorKind.Cancelled => "cancelled"
         case LlmWireErrorKind.Deadline => "deadline"
         case LlmWireErrorKind.Transport => "transport"
+    }
+}
+
+func llmTransportPhaseName(phase: LlmTransportPhase): String {
+    match (phase) {
+        case LlmTransportPhase.Encode => "encode"
+        case LlmTransportPhase.Request => "request"
+        case LlmTransportPhase.ResponseHeaders => "response_headers"
+        case LlmTransportPhase.StreamFraming => "stream_framing"
+        case LlmTransportPhase.WireDecode => "wire_decode"
+        case LlmTransportPhase.SemanticAssembly => "semantic_assembly"
+        case LlmTransportPhase.Transport => "transport"
     }
 }
 

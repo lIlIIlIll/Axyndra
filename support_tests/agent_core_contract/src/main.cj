@@ -108,6 +108,8 @@ main(): Int64 {
     attemptDeadlineContextContract()
     deadlineRetryExactReplayContract()
     toolEvidenceBlocksRetryContract()
+    malformedToolArgumentsRetryContract()
+    providerTerminalMissingRetryContract()
     cancellationAndRunDeadlineBarriersContract()
     durableDecisionSuppressesRetryRaceContract()
     modelResumeCrashWindowMatrixContract()
@@ -3312,6 +3314,8 @@ class RecordingModelDecisionPort <: ModelDecisionRuntimePort {
     let persisted = ArrayList<ModelDecision>()
     let createdAttempts = ArrayList<DurableModelAttempt>()
     var recoveredDecision: ?ModelDecision = None
+    let terminalizedIds = ArrayList<ModelAttemptId>()
+    let terminalizedLifecycles = ArrayList<ModelAttemptLifecycle>()
     var projected = false
     private let rejectPersistence: Bool
 
@@ -3338,8 +3342,8 @@ class RecordingModelDecisionPort <: ModelDecisionRuntimePort {
         failureKind: String,
         completedAtMillis: Int64
     ): Result<Unit> {
-        let _ = attemptId.value
-        let _ = lifecycle
+        terminalizedIds.add(attemptId)
+        terminalizedLifecycles.add(lifecycle)
         let _ = failureKind
         let _ = completedAtMillis
         Result.Ok(())
