@@ -106,9 +106,12 @@ Chat Completions, emits `max_tokens`, lowers the explicit thinking toggle and
 supported reasoning effort, replays assistant `reasoning_content`, and reads
 `completion_tokens_details.reasoning_tokens`. The Responses dialect uses the
 Responses endpoint and DeepSeek's `reasoning.effort` shape. Both dialects preserve
-the canonical tool loop, omit the unsupported OpenAI `parallel_tool_calls` field,
-and avoid the Messages compatibility path, which cannot preserve tool-result error
-semantics.
+the canonical tool loop and omit the unsupported OpenAI `parallel_tool_calls` field.
+The DeepSeek Messages compatibility path also supports tools, but its provider
+ignores `tool_result.is_error`; llm4cj lowers failed results to a `[tool_error]`
+content marker while retaining canonical `isError`. This is a documented
+compatibility degradation, so use Chat or Responses when the model must receive a
+native, lossless tool-error field.
 
 Reasoning tokens are validated as a subset of completion tokens rather than added
 to completion usage again. The raw finish reason is retained, while `max_tokens`
