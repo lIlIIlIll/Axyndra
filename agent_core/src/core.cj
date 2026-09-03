@@ -2529,14 +2529,6 @@ public class AgentCore <: AgentRunner {
             { committed =>
                 let block = committed.block
                 match (reserveBudget(
-                    control, context, BudgetCharge(toolCalls: 1), sink,
-                    toolCallId: Some(ToolCallId(block.callId))
-                )) {
-                    case Result.Ok(_) =>
-                        counter.toolCalls += 1
-                    case Result.Err(error) => return Result.Err(error)
-                }
-                match (reserveBudget(
                     control,
                     context,
                     BudgetCharge(toolCalls: 1),
@@ -2544,7 +2536,8 @@ public class AgentCore <: AgentRunner {
                     toolBatchId: Some(batchId),
                     toolCallId: Some(ToolCallId(block.callId))
                 )) {
-                    case Result.Ok(_) => ()
+                    case Result.Ok(_) =>
+                        counter.toolCalls += 1
                     case Result.Err(error) => return Result.Err(error)
                 }
                 emitExtension(
@@ -4557,6 +4550,7 @@ public class AgentCore <: AgentRunner {
                     case Some(value) => value
                     case None => ExecutionUsage(
                         turns: snapshot.turns,
+                        modelRequests: snapshot.modelRequests,
                         toolCalls: snapshot.toolCalls,
                         inputTokens: snapshot.inputTokens,
                         outputTokens: snapshot.outputTokens,

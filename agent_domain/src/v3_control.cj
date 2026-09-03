@@ -546,6 +546,7 @@ func executionUsageValue(usage: ExecutionUsage): AgentValue {
     objectValue([
         ValueField("turns", integerValue(usage.turns)),
         ValueField("model_requests", integerValue(usage.modelRequests)),
+        ValueField("drain_model_requests", integerValue(usage.drainModelRequests)),
         ValueField("tool_calls", integerValue(usage.toolCalls)),
         ValueField("active_tools", integerValue(usage.activeTools)),
         ValueField("input_tokens", integerValue(usage.inputTokens)),
@@ -1029,6 +1030,7 @@ public class ExecutionBudget {
         ExecutionUsage(
             turns: usedTurns,
             modelRequests: usedModelRequests,
+            drainModelRequests: usedDrainModelRequests,
             toolCalls: usedToolCalls,
             activeTools: activeTools,
             inputTokens: usedInputTokens,
@@ -1060,6 +1062,7 @@ public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
 public class ExecutionUsage {
     public let turns: Int64
     public let modelRequests: Int64
+    public let drainModelRequests: Int64
     public let toolCalls: Int64
     public let activeTools: Int64
     public let inputTokens: Int64
@@ -1069,18 +1072,20 @@ public class ExecutionUsage {
     public init(
         turns!: Int64 = 0,
         modelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
         toolCalls!: Int64 = 0,
         activeTools!: Int64 = 0,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         costMicros!: Int64 = 0
     ) {
-        if (turns < 0 || modelRequests < 0 || toolCalls < 0 || activeTools < 0 || inputTokens < 0 ||
+        if (turns < 0 || modelRequests < 0 || drainModelRequests < 0 || toolCalls < 0 || activeTools < 0 || inputTokens < 0 ||
             outputTokens < 0 || costMicros < 0) {
             throw IllegalArgumentException("execution usage values must not be negative")
         }
         this.turns = turns
         this.modelRequests = modelRequests
+        this.drainModelRequests = drainModelRequests
         this.toolCalls = toolCalls
         this.activeTools = activeTools
         this.inputTokens = inputTokens
