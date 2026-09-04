@@ -195,6 +195,24 @@ public class ChildBudgetLease {
     }
 }
 
+// Per-parent-run child budget authority. Two ledgers exist by contract and
+// MUST NOT be merged:
+//
+//   1. The parent Run's own ExecutionBudget charges the parent's own turns,
+//      tool calls, model requests, cumulative tokens, and cost.
+//   2. This pool charges the AGGREGATE of children only: each child reserves
+//      its cumulative-token/cost limits up front, settles actual usage on
+//      completion, and the pool checks reserved+consumed against the parent's
+//      cumulative limits.
+//
+// `maxCostMicros` / `maxTotalInputTokens` / `maxTotalOutputTokens` are
+// therefore Run-local hard limits (see ResourceBudget: "the cumulative Run
+// budget"): the parent's own spend does NOT subtract from what children may
+// reserve, and children together are capped by the same limits without
+// counting the parent's own spend. The theoretical subtree total is up to
+// 2x one limit; that is the documented contract, not a leak. Turns, tool
+// calls, and model requests are per-Run budgets and never aggregate here.
+//
 public class ChildBudgetPool {
     private let lock = Mutex()
     private let parent: ExecutionBudget

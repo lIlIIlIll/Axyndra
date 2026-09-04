@@ -656,6 +656,12 @@ func runningModelCheckpointValue(value: RunningModelCheckpoint): AgentValue {
         ValueField("stable_request_id", textValue(value.stableRequestId)),
         ValueField("request_started_at_millis", integerValue(value.requestStartedAtMillis)),
         ValueField("model_requests", integerValue(value.modelRequests)),
+        ValueField("work_model_requests", integerValue(value.workModelRequests)),
+        ValueField("drain_model_requests", integerValue(value.drainModelRequests)),
+        ValueField("request_budget_class", textValue(match (value.requestBudgetClass) {
+            case BudgetChargeClass.Work => "work"
+            case BudgetChargeClass.Drain => "drain"
+        })),
         ValueField("input_tokens", integerValue(value.inputTokens)),
         ValueField("output_tokens", integerValue(value.outputTokens)),
         ValueField("reasoning_tokens", integerValue(value.reasoningTokens)),
@@ -828,6 +834,24 @@ func runningModelCheckpointFromValue(value: AgentValue): Result<RunningModelChec
             requiredCodecText(value, "stable_request_id"),
             requiredCodecInteger(value, "request_started_at_millis"),
             modelRequests: requiredCodecInteger(value, "model_requests"),
+            workModelRequests: match (value.field("work_model_requests")) {
+                case Some(_) => requiredCodecInteger(value, "work_model_requests")
+                case None => requiredCodecInteger(value, "model_requests")
+            },
+            drainModelRequests: match (value.field("drain_model_requests")) {
+                case Some(_) => requiredCodecInteger(value, "drain_model_requests")
+                case None => 0
+            },
+            requestBudgetClass: match (value.field("request_budget_class")) {
+                case Some(_) => match (requiredCodecText(value, "request_budget_class")) {
+                    case "work" => BudgetChargeClass.Work
+                    case "drain" => BudgetChargeClass.Drain
+                    case _ => throw IllegalArgumentException(
+                        "field has invalid value: request_budget_class"
+                    )
+                }
+                case None => BudgetChargeClass.Work
+            },
             inputTokens: requiredCodecInteger(value, "input_tokens"),
             outputTokens: requiredCodecInteger(value, "output_tokens"),
             reasoningTokens: requiredCodecInteger(value, "reasoning_tokens"),
@@ -1268,14 +1292,20 @@ func budgetValue(value: ResourceBudget): AgentValue {
         ValueField("max_input_tokens", integerValue(value.maxInputTokens)),
         ValueField("max_output_tokens", integerValue(value.maxOutputTokens)),
         ValueField("max_model_requests", integerValue(value.maxModelRequests)),
+        ValueField("max_drain_model_requests", integerValue(value.maxDrainModelRequests)),
         ValueField("max_turns", integerValue(value.maxTurns)),
+        ValueField("max_drain_turns", integerValue(value.maxDrainTurns)),
         ValueField("max_tool_calls", integerValue(value.maxToolCalls)),
         ValueField("max_wall_millis", integerValue(value.maxWallMillis)),
         ValueField("max_idle_millis", integerValue(value.maxIdleMillis)),
         ValueField("max_children", integerValue(value.maxChildren)),
         ValueField("max_depth", integerValue(value.maxDepth)),
         ValueField("max_concurrent_children", integerValue(value.maxConcurrentChildren)),
-        ValueField("max_context_messages", integerValue(value.maxContextMessages))
+        ValueField("max_context_messages", integerValue(value.maxContextMessages)),
+        ValueField("max_total_input_tokens", integerValue(value.maxTotalInputTokens)),
+        ValueField("max_total_output_tokens", integerValue(value.maxTotalOutputTokens)),
+        ValueField("max_cost_micros", integerValue(value.maxCostMicros)),
+        ValueField("deadline_millis", integerValue(value.deadlineMillis))
     ])
 }
 
@@ -1393,22 +1423,57 @@ func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    // Fields added after the first continuation schema shipped decode
+    // leniently with their documented defaults so pre-existing durable
+    // payloads keep loading across the upgrade.
     try {
+        let drainRequests = lenientBudgetInteger(value, "max_drain_model_requests", 2)
+        let drainTurns = lenientBudgetInteger(value, "max_drain_turns", 2)
+        let totalInput = lenientBudgetInteger(value, "max_total_input_tokens", 0)
+        let totalOutput = lenientBudgetInteger(value, "max_total_output_tokens", 0)
+        let costMicros = lenientBudgetInteger(value, "max_cost_micros", 0)
+        let deadline = lenientBudgetInteger(value, "deadline_millis", 0)
         Result.Ok(ResourceBudget(
             maxInputTokens: input,
             maxOutputTokens: output,
             maxModelRequests: requests,
             maxTurns: turns,
+            maxDrainModelRequests: drainRequests,
+            maxDrainTurns: drainTurns,
             maxToolCalls: tools,
             maxWallMillis: wall,
             maxIdleMillis: idle,
             maxChildren: children,
             maxDepth: depth,
             maxConcurrentChildren: concurrent,
-            maxContextMessages: contextMessages
+            maxContextMessages: contextMessages,
+            maxTotalInputTokens: totalInput,
+            maxTotalOutputTokens: totalOutput,
+            maxCostMicros: costMicros,
+            deadlineMillis: deadline
         ))
     } catch (error: Exception) {
         codecError("invalid run continuation budget: " + error.message)
+    }
+}
+
+func lenientBudgetInteger(
+    value: AgentValue,
+    name: String,
+    fallback: Int64
+): Int64 {
+    match (value.field(name)) {
+        case Some(raw) => match (raw.unifiedKind) {
+            case ValueKind.Number => try {
+                Int64.parse(raw.number)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("field is not an integer: " + name)
+            }
+            case _ => throw IllegalArgumentException(
+                "field is not an integer: " + name
+            )
+        }
+        case None => fallback
     }
 }
 
@@ -1898,6 +1963,7 @@ func eventPayloadName(payload: AgentEventPayload): String {
         case AgentEventPayload.ToolCompleted(_, _, _) => "tool_completed"
         case AgentEventPayload.ApprovalRequested(_, _) => "approval_requested"
         case AgentEventPayload.BudgetUpdated(_) => "budget_updated"
+        case AgentEventPayload.BudgetSignal(_) => "budget_signal"
         case AgentEventPayload.ContextCompacted(_, _) => "context_compacted"
         case AgentEventPayload.Diagnostic(_) => "diagnostic"
         case AgentEventPayload.Audit(_, _) => "audit"

@@ -197,6 +197,10 @@ public class ToolInvocationContext {
     public let approvalModeOverride: ?ApprovalMode
     public let outputSink: ToolOutputSink
     public let budget: ExecutionBudget
+    // Live view of the owning run's BudgetMode. Captured as a closure so a
+    // tool that reads it late (for example a child spawn admission check)
+    // observes the run's current mode, not the mode at context creation.
+    public let budgetModeFn: ?() -> BudgetMode
     public let skills: SkillStackSnapshot
     private let sequenceLock = Mutex()
     private var sequence: Int64
@@ -212,6 +216,7 @@ public class ToolInvocationContext {
         approvalModeOverride!: ?ApprovalMode = None,
         outputSink!: ToolOutputSink = NoopToolOutputSink(),
         budget!: ExecutionBudget = ExecutionBudget(),
+        budgetModeFn!: ?() -> BudgetMode = None,
         skills!: SkillStackSnapshot = SkillStackSnapshot([], [])
     ) {
         this.runId = runId
@@ -226,6 +231,7 @@ public class ToolInvocationContext {
         this.approvalModeOverride = approvalModeOverride
         this.outputSink = outputSink
         this.budget = budget
+        this.budgetModeFn = budgetModeFn
         this.skills = skills
     }
 
@@ -258,6 +264,15 @@ public class ToolInvocationContext {
             auditSequence
         } finally {
             sequenceLock.unlock()
+        }
+    }
+
+    // BudgetMode of the run that owns this context; Normal when the creator
+    // did not wire a live mode source (host-owned internal flows).
+    public func currentBudgetMode(): BudgetMode {
+        match (budgetModeFn) {
+            case Some(fn) => fn()
+            case None => BudgetMode.Normal
         }
     }
 }

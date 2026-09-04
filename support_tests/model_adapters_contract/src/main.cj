@@ -610,6 +610,100 @@ main(): Int64 {
             throw IllegalStateException(error.message)
     }
 
+    let deepSeekMessagesRequest = domain.ModelRequest(
+        "fixture-model",
+        request.messages,
+        tools: request.tools,
+        thinking: domain.ThinkingLevel.High,
+        maxOutputTokens: 32768,
+        streaming: true,
+        parallelToolCalls: false
+    )
+    let malformedMessagesToolStream =
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":" +
+        "\"msg_bad\",\"content\":[],\"usage\":{\"input_tokens\":3}}}\n\n" +
+        "data: {\"type\":\"content_block_start\",\"index\":0," +
+        "\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_bad\"," +
+        "\"name\":\"task\",\"input\":{}}}\n\n" +
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":" +
+        "{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"tasks\\\":[{\\\"name\\\":\\\"review\\\"}\"}}\n\n" +
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":" +
+        "\"tool_use\"},\"usage\":{\"output_tokens\":4}}\n\n" +
+        "data: {\"type\":\"message_stop\"}\n\n"
+    let malformedMessagesPort: ports.ModelPort = providerModelPort(
+        ProviderSpec(
+            "messages-malformed-tool-fixture",
+            ProviderProtocol.Messages,
+            "fixture-model",
+            "https://fixture.invalid",
+            "FIXTURE_API_KEY",
+            provider: "deepseek",
+            dialect: Some(ProviderDialect.DeepSeekMessages)
+        ),
+        transport: ChunkedStaticTransport(malformedMessagesToolStream)
+    )
+    let malformedEvents = ArrayList<domain.ModelEvent>()
+    match (malformedMessagesPort.execute(deepSeekMessagesRequest, { event => malformedEvents.add(event) })) {
+        case domain.Result.Err(error) =>
+            expect(
+                error.code == "llm.tool_arguments_not_executable" &&
+                error.retryable && malformedEvents.size > 0 &&
+                error.field("usage_input_tokens").getOrThrow() == "3" &&
+                error.field("usage_output_tokens").getOrThrow() == "4" &&
+                match (error.attemptFailure) {
+                    case Some(value) => match (value.kind) {
+                        case domain.AttemptFailureKind.MalformedToolArguments => true
+                        case _ => false
+                    }
+                    case None => false
+                },
+                "DeepSeek Messages malformed terminal tool JSON is a retryable attempt failure"
+            )
+        case domain.Result.Ok(_) =>
+            expect(false, "DeepSeek Messages malformed terminal tool JSON must not produce a reply")
+    }
+
+    let truncatedMessagesToolStream =
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":" +
+        "\"msg_eof\",\"content\":[],\"usage\":{\"input_tokens\":3}}}\n\n" +
+        "data: {\"type\":\"content_block_start\",\"index\":0," +
+        "\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_eof\"," +
+        "\"name\":\"task\",\"input\":{}}}\n\n" +
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":" +
+        "{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"tasks\\\":[\"}}\n\n"
+    let truncatedMessagesPort: ports.ModelPort = providerModelPort(
+        ProviderSpec(
+            "messages-truncated-tool-fixture",
+            ProviderProtocol.Messages,
+            "fixture-model",
+            "https://fixture.invalid",
+            "FIXTURE_API_KEY",
+            provider: "deepseek",
+            dialect: Some(ProviderDialect.DeepSeekMessages)
+        ),
+        transport: ChunkedStaticTransport(truncatedMessagesToolStream)
+    )
+    let truncatedEvents = ArrayList<domain.ModelEvent>()
+    match (truncatedMessagesPort.execute(deepSeekMessagesRequest, { event => truncatedEvents.add(event) })) {
+        case domain.Result.Err(error) =>
+            expect(
+                error.code == "llm.stream_terminal_missing" &&
+                error.retryable && truncatedEvents.size > 0 &&
+                error.field("usage_input_tokens").getOrThrow() == "3" &&
+                match (error.attemptFailure) {
+                    case Some(value) => match (value.kind) {
+                        case domain.AttemptFailureKind.ProviderTerminalMissing => true
+                        case _ => false
+                    }
+                    case None => false
+                },
+                "DeepSeek Messages transport EOF is a retryable provider-terminal failure"
+            )
+        case domain.Result.Ok(_) =>
+            expect(false, "truncated DeepSeek Messages stream must not produce a reply")
+    }
+
     let responsesStream =
         "data: {\"type\":\"response.created\",\"response\":{" +
         "\"id\":\"resp_stream\",\"model\":\"fixture-model\"}}\n\n" +
@@ -1293,6 +1387,25 @@ class StaticTransport <: ProviderTransport {
         _requestId: String,
         _chunks: (String) -> Unit
     ): domain.Result<String> {
+        domain.Result.Ok(response)
+    }
+}
+
+class ChunkedStaticTransport <: ProviderTransport {
+    private let response: String
+
+    public init(response: String) {
+        this.response = response
+    }
+
+    public func post(
+        _provider: ProviderSpec,
+        _payload: String,
+        _streaming: Bool,
+        _requestId: String,
+        chunks: (String) -> Unit
+    ): domain.Result<String> {
+        chunks(response)
         domain.Result.Ok(response)
     }
 }

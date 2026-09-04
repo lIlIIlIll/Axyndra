@@ -90,6 +90,11 @@ public enum AttemptFailureKind {
     | OutputLimitedBeforeDecision
     | ProviderTransportError
     | ProviderProtocolError
+    // The provider reached its terminal boundary, but streamed tool
+    // arguments could not be assembled into executable JSON. No canonical
+    // decision or operation exists, so the attempt may be replayed from the
+    // last committed context.
+    | MalformedToolArguments
     | UserCancelled
     | RunDeadlineExceeded
 }
