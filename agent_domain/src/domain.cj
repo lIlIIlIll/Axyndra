@@ -829,6 +829,13 @@ public class ResourceBudget {
     public let maxTotalOutputTokens: Int64
     public let maxModelRequests: Int64
     public let maxTurns: Int64
+    // Control-plane finalization requests allowed after the work-turn budget
+    // is exhausted. Separate ledger bucket from maxModelRequests: work can
+    // never consume this headroom and drain can never consume work's.
+    public let maxDrainModelRequests: Int64
+    // Control-plane finalization turns allowed after the work-turn budget is
+    // exhausted. Strictly bounded so graceful draining can never loop.
+    public let maxDrainTurns: Int64
     public let maxToolCalls: Int64
     public let maxWallMillis: Int64
     public let maxIdleMillis: Int64
@@ -849,6 +856,8 @@ public class ResourceBudget {
         maxTotalOutputTokens!: Int64 = 0,
         maxModelRequests!: Int64 = 64,
         maxTurns!: Int64 = 32,
+        maxDrainModelRequests!: Int64 = 2,
+        maxDrainTurns!: Int64 = 2,
         maxToolCalls!: Int64 = 64,
         maxWallMillis!: Int64 = 600000,
         maxIdleMillis!: Int64 = 120000,
@@ -869,7 +878,7 @@ public class ResourceBudget {
         }
         if (maxInputTokens < 1 || effectiveOutputBudget.hardLimit < 1 ||
             effectiveOutputBudget.minVisibleResponseTokens < 0 ||
-            maxModelRequests < 1 || maxTurns < 1 || maxToolCalls < 1 ||
+            maxModelRequests < 1 || maxDrainModelRequests < 1 || maxTurns < 1 || maxDrainTurns < 1 || maxToolCalls < 1 ||
             // maxWallMillis == 0 means no wall-clock limit (a stream that
             // keeps emitting tokens is never cut off; only idle hangs are).
             maxWallMillis < 0 || maxIdleMillis < 1 || maxChildren < 0 || maxDepth < 0 || maxConcurrentChildren < 1 ||
@@ -884,6 +893,8 @@ public class ResourceBudget {
         this.maxTotalOutputTokens = maxTotalOutputTokens
         this.maxModelRequests = maxModelRequests
         this.maxTurns = maxTurns
+        this.maxDrainModelRequests = maxDrainModelRequests
+        this.maxDrainTurns = maxDrainTurns
         this.maxToolCalls = maxToolCalls
         this.maxWallMillis = maxWallMillis
         this.maxIdleMillis = maxIdleMillis
@@ -1152,6 +1163,9 @@ public class RunningModelCheckpoint {
     public let stableRequestId: String
     public let requestStartedAtMillis: Int64
     public let modelRequests: Int64
+    public let workModelRequests: Int64
+    public let drainModelRequests: Int64
+    public let requestBudgetClass: BudgetChargeClass
     public let inputTokens: Int64
     public let outputTokens: Int64
     public let reasoningTokens: Int64
@@ -1177,6 +1191,9 @@ public class RunningModelCheckpoint {
         stableRequestId: String,
         requestStartedAtMillis: Int64,
         modelRequests!: Int64 = 0,
+        workModelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
+        requestBudgetClass!: BudgetChargeClass = BudgetChargeClass.Work,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         reasoningTokens!: Int64 = 0,
@@ -1194,7 +1211,8 @@ public class RunningModelCheckpoint {
         if (canonicalRequest.unifiedKind != ValueKind.Object ||
             semanticRequestDigest.trimAscii() == "" || wirePolicyDigest.trimAscii() == "" ||
             stableTurnId.trimAscii() == "" || stableRequestId.trimAscii() == "" ||
-            requestStartedAtMillis < 0 || modelRequests < 0 || inputTokens < 0 ||
+            requestStartedAtMillis < 0 || modelRequests < 0 ||
+            workModelRequests < 0 || drainModelRequests < 0 || inputTokens < 0 ||
             outputTokens < 0 || reasoningTokens < 0 || cacheReadTokens < 0 ||
             cacheWriteTokens < 0 || lastInputTokens < 0 || lastOutputTokens < 0 ||
             lastRequestDurationMillis < 0 || toolCalls < 0 || turns < 0 ||
@@ -1214,6 +1232,9 @@ public class RunningModelCheckpoint {
         this.stableRequestId = stableRequestId
         this.requestStartedAtMillis = requestStartedAtMillis
         this.modelRequests = modelRequests
+        this.workModelRequests = workModelRequests
+        this.drainModelRequests = drainModelRequests
+        this.requestBudgetClass = requestBudgetClass
         this.inputTokens = inputTokens
         this.outputTokens = outputTokens
         this.reasoningTokens = reasoningTokens

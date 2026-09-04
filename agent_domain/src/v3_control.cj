@@ -82,6 +82,27 @@ public func runStateName(state: RunState): String {
     }
 }
 
+// Budget pressure is orthogonal to the Run lifecycle: a WaitingApproval run
+// can already sit in Pressure, and draining never replaces the terminal
+// RunState a run would reach anyway. BudgetMode is the control-plane view of
+// admission, not a lifecycle state.
+@Derive[Equatable]
+public enum BudgetMode {
+    Normal
+    | Pressure
+    | Draining
+    | Exhausted
+}
+
+public func budgetModeName(mode: BudgetMode): String {
+    match (mode) {
+        case BudgetMode.Normal => "normal"
+        case BudgetMode.Pressure => "pressure"
+        case BudgetMode.Draining => "draining"
+        case BudgetMode.Exhausted => "exhausted"
+    }
+}
+
 public func isTerminalRunState(state: RunState): Bool {
     match (state) {
         case RunState.Cancelled | RunState.Completed |
@@ -163,7 +184,9 @@ public enum ModelRequestOutcome {
 
 // One record is emitted for every provider wire attempt, including retries
 // and auxiliary model calls. Successful attempts carry their final usage;
-// failed/cancelled attempts intentionally do not invent usage or cost.
+// failed/cancelled attempts may carry usage observed before the provider
+// failure. They must never invent usage or cost when the provider reported
+// none.
 public class ModelRequestAttempt {
     public let requestId: RequestId
     public let model: String
@@ -193,9 +216,9 @@ public class ModelRequestAttempt {
                     )
                 }
             case ModelRequestOutcome.Failed | ModelRequestOutcome.Cancelled =>
-                if (usage.isSome() || errorCode.trimAscii() == "") {
+                if (errorCode.trimAscii() == "") {
                     throw IllegalArgumentException(
-                        "unsuccessful model request attempt requires an error and no usage"
+                        "unsuccessful model request attempt requires an error"
                     )
                 }
         }
@@ -205,6 +228,31 @@ public class ModelRequestAttempt {
         this.outcome = outcome
         this.usage = usage
         this.errorCode = errorCode
+    }
+}
+
+// Typed snapshot behind budget.pressure / budget.draining / budget.exhausted.
+// One payload keeps the projection table small; the mode picks the stable
+// event code. dimension/limit/used/remaining are provider-neutral facts.
+public class BudgetSignalSnapshot {
+    public let mode: BudgetMode
+    public let dimension: BudgetDimension
+    public let limit: Int64
+    public let used: Int64
+    public let remaining: Int64
+
+    public init(
+        mode: BudgetMode,
+        dimension: BudgetDimension,
+        limit: Int64,
+        used: Int64,
+        remaining: Int64
+    ) {
+        this.mode = mode
+        this.dimension = dimension
+        this.limit = limit
+        this.used = used
+        this.remaining = remaining
     }
 }
 
@@ -224,6 +272,7 @@ public enum AgentEventPayload {
     | ToolCompleted(ToolCallId, Bool, Int64)
     | ApprovalRequested(OperationId, ToolCallId)
     | BudgetUpdated(ExecutionUsage)
+    | BudgetSignal(BudgetSignalSnapshot)
     | ContextCompacted(Int64, Int64)
     | Diagnostic(AgentError)
     | Audit(String, AgentValue)
@@ -247,7 +296,8 @@ public func eventKind(payload: AgentEventPayload): AgentEventKind {
              AgentEventPayload.ToolOutput(_, _, _) |
              AgentEventPayload.ToolCompleted(_, _, _) => AgentEventKind.Tool
         case AgentEventPayload.ApprovalRequested(_, _) => AgentEventKind.Approval
-        case AgentEventPayload.BudgetUpdated(_) => AgentEventKind.Budget
+        case AgentEventPayload.BudgetUpdated(_) |
+             AgentEventPayload.BudgetSignal(_) => AgentEventKind.Budget
         case AgentEventPayload.ContextCompacted(_, _) |
              AgentEventPayload.Diagnostic(_) => AgentEventKind.Diagnostic
         case AgentEventPayload.Audit(_, _) => AgentEventKind.Audit
@@ -311,6 +361,13 @@ public func eventDetail(payload: AgentEventPayload): AgentValue {
             ValueField("call_id", textValue(callId.value))
         ])
         case AgentEventPayload.BudgetUpdated(usage) => executionUsageValue(usage)
+        case AgentEventPayload.BudgetSignal(signal) => objectValue([
+            ValueField("mode", textValue(budgetModeName(signal.mode))),
+            ValueField("dimension", textValue(budgetDimensionName(signal.dimension))),
+            ValueField("limit", integerValue(signal.limit)),
+            ValueField("used", integerValue(signal.used)),
+            ValueField("remaining", integerValue(signal.remaining))
+        ])
         case AgentEventPayload.ContextCompacted(beforeTokens, afterTokens) => objectValue([
             ValueField("before_tokens", integerValue(beforeTokens)),
             ValueField("after_tokens", integerValue(afterTokens))
@@ -364,6 +421,8 @@ func typedEventCode(payload: AgentEventPayload): ?String {
         case AgentEventPayload.ToolCompleted(_, _, _) => Some("tool.execution_completed")
         case AgentEventPayload.ApprovalRequested(_, _) => Some("approval.requested")
         case AgentEventPayload.BudgetUpdated(_) => Some("budget.updated")
+        case AgentEventPayload.BudgetSignal(signal) =>
+            Some("budget." + budgetModeName(signal.mode))
         case AgentEventPayload.ContextCompacted(_, _) => Some("context.compacted")
         case AgentEventPayload.Diagnostic(_) => Some("diagnostic")
         case AgentEventPayload.Audit(_, _) => Some("audit")
@@ -397,6 +456,8 @@ public func eventProtocolDetail(event: AgentEvent): AgentValue {
         case AgentEventPayload.ToolCompleted(_, _, _) => "tool.execution_completed"
         case AgentEventPayload.ApprovalRequested(_, _) => "approval.requested"
         case AgentEventPayload.BudgetUpdated(_) => "budget.updated"
+        case AgentEventPayload.BudgetSignal(signal) =>
+            "budget." + budgetModeName(signal.mode)
         case AgentEventPayload.ContextCompacted(_, _) => "context.compacted"
         case AgentEventPayload.Diagnostic(_) => "diagnostic"
         case AgentEventPayload.Audit(_, _) => "audit"
@@ -484,6 +545,8 @@ func eventErrorKindName(kind: AgentErrorKind): String {
 func executionUsageValue(usage: ExecutionUsage): AgentValue {
     objectValue([
         ValueField("turns", integerValue(usage.turns)),
+        ValueField("model_requests", integerValue(usage.modelRequests)),
+        ValueField("drain_model_requests", integerValue(usage.drainModelRequests)),
         ValueField("tool_calls", integerValue(usage.toolCalls)),
         ValueField("active_tools", integerValue(usage.activeTools)),
         ValueField("input_tokens", integerValue(usage.inputTokens)),
@@ -691,15 +754,28 @@ public func agentUtcMillis(): Int64 {
     DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }
 
+// Separates ordinary work admission from the strictly bounded control-plane
+// drain. A Work charge can never consume drain headroom and a Drain charge
+// can never consume work headroom; cumulative fungible dimensions (tokens,
+// cost) are shared by both classes and keep flowing through the same ledger.
+@Derive[Equatable]
+public enum BudgetChargeClass {
+    Work | Drain
+}
+
 public class ExecutionBudget {
     private let usageLock = Mutex()
     private var usedTurns: Int64 = 0
+    private var usedModelRequests: Int64 = 0
+    private var usedDrainModelRequests: Int64 = 0
     private var usedToolCalls: Int64 = 0
     private var activeTools: Int64 = 0
     private var usedInputTokens: Int64 = 0
     private var usedOutputTokens: Int64 = 0
     private var usedCostMicros: Int64 = 0
     public let maxTurns: Int64
+    public let maxModelRequests: Int64
+    public let maxDrainModelRequests: Int64
     public let maxToolCalls: Int64
     public let maxConcurrentTools: Int64
     public let maxInputTokens: Int64
@@ -716,6 +792,8 @@ public class ExecutionBudget {
 
     public init(
         maxTurns!: Int64 = 32,
+        maxModelRequests!: Int64 = 64,
+        maxDrainModelRequests!: Int64 = 2,
         maxToolCalls!: Int64 = 64,
         maxConcurrentTools!: Int64 = 4,
         maxInputTokens!: Int64 = 100000,
@@ -728,7 +806,7 @@ public class ExecutionBudget {
         maxDepth!: Int64 = 4,
         maxConcurrentChildren!: Int64 = 4
     ) {
-        if (maxTurns < 1 || maxToolCalls < 1 || maxConcurrentTools < 1 ||
+        if (maxTurns < 1 || maxModelRequests < 1 || maxDrainModelRequests < 1 || maxToolCalls < 1 || maxConcurrentTools < 1 ||
             maxInputTokens < 1 || maxOutputTokens < 1 || maxCostMicros < 0 ||
             deadlineMillis < 0 || maxChildren < 0 || maxDepth < 1 ||
             maxTotalInputTokens < 0 || maxTotalOutputTokens < 0 ||
@@ -736,6 +814,8 @@ public class ExecutionBudget {
             throw IllegalArgumentException("execution budget values are out of range")
         }
         this.maxTurns = maxTurns
+        this.maxModelRequests = maxModelRequests
+        this.maxDrainModelRequests = maxDrainModelRequests
         this.maxToolCalls = maxToolCalls
         this.maxConcurrentTools = maxConcurrentTools
         this.maxInputTokens = maxInputTokens
@@ -768,7 +848,20 @@ public class ExecutionBudget {
                     "budget.deadline_exceeded"
                 ))
             }
+            let drainClass = charge.chargeClass == BudgetChargeClass.Drain
             let nextTurns = saturatedExecutionBudgetAdd(usedTurns, charge.turns)
+            let nextModelRequests = if (drainClass) {
+                usedModelRequests
+            } else {
+                saturatedExecutionBudgetAdd(usedModelRequests, charge.modelRequests)
+            }
+            let nextDrainModelRequests = if (drainClass) {
+                saturatedExecutionBudgetAdd(
+                    usedDrainModelRequests, charge.modelRequests
+                )
+            } else {
+                usedDrainModelRequests
+            }
             let nextToolCalls = saturatedExecutionBudgetAdd(
                 usedToolCalls, charge.toolCalls
             )
@@ -787,6 +880,8 @@ public class ExecutionBudget {
             match (executionBudgetViolation(
                 this,
                 nextTurns,
+                nextModelRequests,
+                nextDrainModelRequests,
                 nextToolCalls,
                 nextActiveTools,
                 nextInputTokens,
@@ -797,6 +892,8 @@ public class ExecutionBudget {
                 case None => ()
             }
             usedTurns = nextTurns
+            usedModelRequests = nextModelRequests
+            usedDrainModelRequests = nextDrainModelRequests
             usedToolCalls = nextToolCalls
             activeTools = nextActiveTools
             usedInputTokens = nextInputTokens
@@ -836,15 +933,106 @@ public class ExecutionBudget {
         }
     }
 
+    // Crash recovery replays a durable usage snapshot into the ledger so a
+    // resumed run cannot bypass admission with a fresh budget. This replaces
+    // the cumulative usage instead of adding to it and admits nothing by
+    // itself; the next reserve applies the full admission contract.
+    public func restore(restored: ExecutionUsage): ExecutionUsage {
+        usageLock.lock()
+        try {
+            usedTurns = restored.turns
+            usedModelRequests = restored.modelRequests
+            usedDrainModelRequests = restored.drainModelRequests
+            usedToolCalls = restored.toolCalls
+            usedInputTokens = restored.inputTokens
+            usedOutputTokens = restored.outputTokens
+            usedCostMicros = restored.costMicros
+            usage()
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
+    // Preserve usage observed after a request was admitted even when charging
+    // that usage would exceed a cumulative hard limit. The caller terminates
+    // the run on the rejected reserve, while the durable usage facts remain
+    // available for audit and recovery.
+    public func recordObservedUsage(observed: ModelUsage): ExecutionUsage {
+        usageLock.lock()
+        try {
+            usedInputTokens = saturatedExecutionBudgetAdd(
+                usedInputTokens, observed.inputTokens
+            )
+            usedOutputTokens = saturatedExecutionBudgetAdd(
+                usedOutputTokens, observed.outputTokens
+            )
+            usedCostMicros = saturatedExecutionBudgetAdd(
+                usedCostMicros,
+                match (observed.costMicros) {
+                    case Some(value) => value
+                    case None => 0
+                }
+            )
+            usage()
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
     public func checkDeadline(
         nowMillis!: Int64 = agentUtcMillis()
     ): Result<ExecutionUsage> {
         reserve(BudgetCharge(), nowMillis: nowMillis)
     }
 
+    // Conservative projection-based admission for one control-plane drain
+    // request; not a promise of absolute physical cost non-exceedance.
+    // Before provider dispatch the caller supplies the worst-case
+    // incremental usage it projects on top of the currently observed usage
+    // (request-window input estimate, wire output hard limit, priced
+    // accordingly); the probe rejects when the deadline passed or when
+    // observed usage plus that projection would exceed a cumulative hard
+    // limit, and no request is sent in that case. Actual replies are still
+    // accounted ex-post. This is deliberately stricter than the work loop,
+    // whose cumulative token/cost contract stays ex-post. Input estimate
+    // drift and provider consumption that stays unobservable because a
+    // transport failed mid-flight are outside strictly preflightable scope.
+    // Charges nothing and never rejects on per-run turn/tool buckets.
+    public func projectedAdmissionBlocked(
+        projection: ExecutionUsage,
+        nowMillis!: Int64 = agentUtcMillis()
+    ): ?BudgetDimension {
+        usageLock.lock()
+        try {
+            if (deadlineMillis > 0 && nowMillis >= deadlineMillis) {
+                return Some(BudgetDimension.Deadline)
+            }
+            if (maxTotalInputTokens > 0 &&
+                saturatedExecutionBudgetAdd(usedInputTokens, projection.inputTokens) >
+                    maxTotalInputTokens) {
+                return Some(BudgetDimension.InputTokens)
+            }
+            if (maxTotalOutputTokens > 0 &&
+                saturatedExecutionBudgetAdd(usedOutputTokens, projection.outputTokens) >
+                    maxTotalOutputTokens) {
+                return Some(BudgetDimension.OutputTokens)
+            }
+            if (maxCostMicros > 0 &&
+                saturatedExecutionBudgetAdd(usedCostMicros, projection.costMicros) >
+                    maxCostMicros) {
+                return Some(BudgetDimension.Cost)
+            }
+            None
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
     private func usage(): ExecutionUsage {
         ExecutionUsage(
             turns: usedTurns,
+            modelRequests: usedModelRequests,
+            drainModelRequests: usedDrainModelRequests,
             toolCalls: usedToolCalls,
             activeTools: activeTools,
             inputTokens: usedInputTokens,
@@ -857,6 +1045,8 @@ public class ExecutionBudget {
 public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
     ExecutionBudget(
         maxTurns: resource.maxTurns,
+        maxModelRequests: resource.maxModelRequests,
+        maxDrainModelRequests: resource.maxDrainModelRequests,
         maxToolCalls: resource.maxToolCalls,
         maxConcurrentTools: resource.maxConcurrentTools,
         maxInputTokens: resource.maxInputTokens,
@@ -873,6 +1063,8 @@ public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
 
 public class ExecutionUsage {
     public let turns: Int64
+    public let modelRequests: Int64
+    public let drainModelRequests: Int64
     public let toolCalls: Int64
     public let activeTools: Int64
     public let inputTokens: Int64
@@ -881,17 +1073,21 @@ public class ExecutionUsage {
 
     public init(
         turns!: Int64 = 0,
+        modelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
         toolCalls!: Int64 = 0,
         activeTools!: Int64 = 0,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         costMicros!: Int64 = 0
     ) {
-        if (turns < 0 || toolCalls < 0 || activeTools < 0 || inputTokens < 0 ||
+        if (turns < 0 || modelRequests < 0 || drainModelRequests < 0 || toolCalls < 0 || activeTools < 0 || inputTokens < 0 ||
             outputTokens < 0 || costMicros < 0) {
             throw IllegalArgumentException("execution usage values must not be negative")
         }
         this.turns = turns
+        this.modelRequests = modelRequests
+        this.drainModelRequests = drainModelRequests
         this.toolCalls = toolCalls
         this.activeTools = activeTools
         this.inputTokens = inputTokens
@@ -902,6 +1098,8 @@ public class ExecutionUsage {
 
 public class BudgetCharge {
     public let turns: Int64
+    public let modelRequests: Int64
+    public let chargeClass: BudgetChargeClass
     public let toolCalls: Int64
     public let toolsStarted: Int64
     public let inputTokens: Int64
@@ -910,17 +1108,21 @@ public class BudgetCharge {
 
     public init(
         turns!: Int64 = 0,
+        modelRequests!: Int64 = 0,
+        chargeClass!: BudgetChargeClass = BudgetChargeClass.Work,
         toolCalls!: Int64 = 0,
         toolsStarted!: Int64 = 0,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         costMicros!: Int64 = 0
     ) {
-        if (turns < 0 || toolCalls < 0 || toolsStarted < 0 || inputTokens < 0 ||
+        if (turns < 0 || modelRequests < 0 || toolCalls < 0 || toolsStarted < 0 || inputTokens < 0 ||
             outputTokens < 0 || costMicros < 0) {
             throw IllegalArgumentException("budget charge values must not be negative")
         }
         this.turns = turns
+        this.modelRequests = modelRequests
+        this.chargeClass = chargeClass
         this.toolCalls = toolCalls
         this.toolsStarted = toolsStarted
         this.inputTokens = inputTokens
@@ -931,7 +1133,7 @@ public class BudgetCharge {
 
 @Derive[Equatable]
 public enum BudgetDimension {
-    Turns | ToolCalls | ConcurrentTools | InputTokens | OutputTokens | Cost | Deadline
+    Turns | ModelRequests | ToolCalls | ConcurrentTools | InputTokens | OutputTokens | Cost | Deadline
 }
 
 public class BudgetViolation {
@@ -960,6 +1162,8 @@ public enum BudgetDecision {
 func executionBudgetViolation(
     budget: ExecutionBudget,
     turns: Int64,
+    modelRequests: Int64,
+    drainModelRequests: Int64,
     toolCalls: Int64,
     activeTools: Int64,
     inputTokens: Int64,
@@ -968,6 +1172,10 @@ func executionBudgetViolation(
 ): ?BudgetViolation {
     let checks = [
         (BudgetDimension.Turns, budget.maxTurns, turns, "budget.turns_exceeded"),
+        (BudgetDimension.ModelRequests, budget.maxModelRequests, modelRequests,
+            "budget.model_requests_exceeded"),
+        (BudgetDimension.ModelRequests, budget.maxDrainModelRequests, drainModelRequests,
+            "budget.drain_model_requests_exceeded"),
         (BudgetDimension.ToolCalls, budget.maxToolCalls, toolCalls,
             "budget.tool_calls_exceeded"),
         (BudgetDimension.ConcurrentTools, budget.maxConcurrentTools, activeTools,
@@ -1019,6 +1227,7 @@ func executionBudgetFailure<T>(violation: BudgetViolation): Result<T> {
 func budgetDimensionName(value: BudgetDimension): String {
     match (value) {
         case BudgetDimension.Turns => "turns"
+        case BudgetDimension.ModelRequests => "model_requests"
         case BudgetDimension.ToolCalls => "tool_calls"
         case BudgetDimension.ConcurrentTools => "concurrent_tools"
         case BudgetDimension.InputTokens => "input_tokens"

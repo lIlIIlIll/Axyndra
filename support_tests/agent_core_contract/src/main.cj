@@ -108,6 +108,8 @@ main(): Int64 {
     attemptDeadlineContextContract()
     deadlineRetryExactReplayContract()
     toolEvidenceBlocksRetryContract()
+    malformedToolArgumentsRetryContract()
+    providerTerminalMissingRetryContract()
     cancellationAndRunDeadlineBarriersContract()
     durableDecisionSuppressesRetryRaceContract()
     modelResumeCrashWindowMatrixContract()
@@ -133,6 +135,24 @@ main(): Int64 {
     // recovery before a Thread is resumed.
     singleRequestInputBudgetContract()
     cumulativeInputTripsExecutionBudgetContract()
+    workTurnBudgetDrainsGracefullyContract()
+    drainFinalizationHasNoToolSurfaceContract()
+    budgetPressureSignalsOnceContract()
+    drainPartialReportCompletedContract()
+    drainHardCapStopsBoundedContract()
+    drainProviderFailureStopsBoundedContract()
+    resumeRestoresWorkBudgetContinuityContract()
+    resumeLastWorkTurnKeepsWorkModeContract()
+    resumeDrainPreservesSeparateRequestBucketsContract()
+    drainRespectsRunDeadlineContract()
+    drainPreflightBlocksNearCostBoundaryContract()
+    workBudgetStopsAtModelRequestLimitContract()
+    drainChargeRoutedInDrainingModeContract()
+    workCannotUseDrainHeadroomContract()
+    drainBlockedAtCostBoundaryContract()
+    childBudgetPoolSettlesWorkPlusDrainContract()
+    childBudgetPoolSchedulingGatesContract()
+    budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
     contextCompactionContract()
     contextBoundaryContract()
@@ -286,6 +306,7 @@ class DeadlineThenAnswerModel <: ModelPort {
                 ))
             ))
         }
+        events(ModelEvent.TextDelta("recovered output"))
         events(ModelEvent.Completed)
         Result.Ok(contractModelReply(
             [ModelBlock(ModelBlockKind.Text, text: "recovered")],
@@ -311,6 +332,127 @@ func toolEvidenceBlocksRetryContract(): Unit {
     expect(result.isError() && model.calls == 1 && decisions.createdAttempts.size == 1 &&
         runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence,
         "T6b provisional ToolCall evidence durably prevents A2")
+}
+
+func malformedToolArgumentsRetryContract(): Unit {
+    let model = MalformedToolArgumentsThenSuccessModel()
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let runs = MemoryRuns()
+    let threads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("malformed-tool-retry-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threads),
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(
+            mode: ModelAttemptRecoveryMode.RecoveryV1,
+            attemptTimeoutMillis: 5000,
+            maxRecoveryRetries: 1
+        )
+    ).start(AgentRunRequest(
+        RunId("malformed-tool-retry-run"),
+        SessionId("malformed-tool-retry-session"),
+        "fixture", "retry malformed terminal tool arguments"
+    ))
+    let snapshot = threads.acquire(
+        ThreadId("malformed-tool-retry-session"), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var toolItems: Int64 = 0
+    for (item in snapshot.items) {
+        if (item.kind == ItemKind.ToolCall || item.kind == ItemKind.ToolResult) {
+            toolItems += 1
+        }
+    }
+    let finalSnapshot = runs.find(RunId("malformed-tool-retry-run")).value().getOrThrow()
+    var observedFailedUsage = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                if (value.attempt == 1) {
+                    observedFailedUsage = match (value.usage) {
+                        case Some(usage) => usage.inputTokens == 500 &&
+                            usage.outputTokens == 100
+                        case None => false
+                    }
+                }
+            case _ => ()
+        }
+    }
+    expect(
+        finalSnapshot.usage.inputTokens == 500 && finalSnapshot.usage.outputTokens == 100 &&
+        observedFailedUsage && result.isOk() && model.calls == 2 &&
+        decisions.attempts == 2 &&
+        decisions.decisions == 1 && runs.modelAttempts.size == 2 &&
+        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence &&
+        decisions.terminalizedIds.size == 1 &&
+        decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
+        decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
+        snapshot.items.size == 2 && toolItems == 0,
+        "malformed terminal tool JSON retries after ToolEvidence without canonical tool items"
+    )
+}
+
+func providerTerminalMissingRetryContract(): Unit {
+    let model = ProviderTerminalMissingThenSuccessModel()
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let runs = MemoryRuns()
+    let threads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("provider-terminal-retry-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(threads),
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(
+            mode: ModelAttemptRecoveryMode.RecoveryV1,
+            attemptTimeoutMillis: 5000,
+            maxRecoveryRetries: 1
+        )
+    ).start(AgentRunRequest(
+        RunId("provider-terminal-retry-run"),
+        SessionId("provider-terminal-retry-session"),
+        "fixture", "retry provider EOF before terminal"
+    ))
+    let snapshot = threads.acquire(
+        ThreadId("provider-terminal-retry-session"), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var toolItems: Int64 = 0
+    for (item in snapshot.items) {
+        if (item.kind == ItemKind.ToolCall || item.kind == ItemKind.ToolResult) {
+            toolItems += 1
+        }
+    }
+    var visibleDeltas: Int64 = 0
+    var staleVisible = false
+    var recoveredVisible = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.TextDelta(value) =>
+                visibleDeltas += 1
+                if (value == "stale partial") { staleVisible = true }
+                if (value == "recovered partial") { recoveredVisible = true }
+            case _ => ()
+        }
+    }
+    expect(
+        result.isOk() && model.calls == 2 && decisions.attempts == 2 &&
+        decisions.decisions == 1 && runs.modelAttempts.size == 2 &&
+        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence &&
+        decisions.terminalizedIds.size == 1 &&
+        decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
+        decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
+        snapshot.items.size == 2 && toolItems == 0 && visibleDeltas == 1 &&
+        !staleVisible && recoveredVisible,
+        "provider EOF retries after ToolEvidence without canonical tool items"
+    )
 }
 
 func cancellationAndRunDeadlineBarriersContract(): Unit {
@@ -1787,6 +1929,70 @@ class PartialThenSuccessModel <: ModelPort {
     }
 }
 
+class MalformedToolArgumentsThenSuccessModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request.requestId
+        calls += 1
+        if (calls == 1) {
+            events(ModelEvent.ToolCallStarted("malformed", "task"))
+            events(ModelEvent.ToolArgumentsDelta("malformed", "{\"tasks\":["))
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "llm.tool_arguments_not_executable",
+                "tool arguments are not a complete JSON object",
+                retryable: true,
+                attemptFailure: Some(AttemptFailure(
+                    AttemptFailureKind.MalformedToolArguments
+                )),
+                fields: [
+                    ErrorField("usage_input_tokens", "500"),
+                    ErrorField("usage_output_tokens", "100")
+                ]
+            ))
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "recovered")],
+            stopReason: "end_turn", responseId: "malformed-tool-retry-success"
+        ))
+    }
+}
+
+class ProviderTerminalMissingThenSuccessModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request.requestId
+        calls += 1
+        if (calls == 1) {
+            events(ModelEvent.TextDelta("stale partial"))
+            events(ModelEvent.ToolCallStarted("truncated", "task"))
+            events(ModelEvent.ToolArgumentsDelta("truncated", "{\"tasks\":["))
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "llm.stream_terminal_missing",
+                "stream ended without a protocol terminal",
+                retryable: true,
+                attemptFailure: Some(AttemptFailure(
+                    AttemptFailureKind.ProviderTerminalMissing
+                ))
+            ))
+        }
+        events(ModelEvent.TextDelta("recovered partial"))
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "recovered")],
+            stopReason: "end_turn", responseId: "provider-terminal-retry-success"
+        ))
+    }
+}
+
 func telemetryPersistenceFailureIsolationContract(): Unit {
     let model = TelemetryThenCompleteModel()
     let decisions = RecordingModelDecisionPort()
@@ -2853,6 +3059,672 @@ func cumulativeInputTripsExecutionBudgetContract(): Unit {
     }, "cumulative model usage is reserved by the v3 execution budget ledger")
 }
 
+class BudgetProbeModel <: ModelPort {
+    var calls: Int64 = 0
+    var workRequests: Int64 = 0
+    var drainWireCalls: Int64 = 0
+    var lastRequestToolsEmpty: Bool = false
+    var lastRequestToolChoiceNoTools: Bool = false
+    let drainToolCall: Bool
+    let drainFailures: Int64
+    let sleepMillisPerWorkCall: Int64
+    let usagePerCall: ?ModelUsage
+
+    init(
+        drainToolCall!: Bool = false,
+        drainFailures!: Int64 = 0,
+        sleepMillisPerWorkCall!: Int64 = 0,
+        usagePerCall!: ?ModelUsage = None
+    ) {
+        this.drainToolCall = drainToolCall
+        this.drainFailures = drainFailures
+        this.sleepMillisPerWorkCall = sleepMillisPerWorkCall
+        this.usagePerCall = usagePerCall
+    }
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        calls += 1
+        lastRequestToolsEmpty = request.tools.isEmpty()
+        lastRequestToolChoiceNoTools = match (request.toolChoice) {
+            case ModelToolChoice.NoTools => true
+            case _ => false
+        }
+        if (request.tools.isEmpty()) {
+            drainWireCalls += 1
+            if (drainWireCalls <= drainFailures) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Transport,
+                    "fixture.drain_transport",
+                    "drain transport failure",
+                    retryable: true
+                ))
+            }
+            if (drainToolCall) {
+                return Result.Ok(contractModelReply([ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "drain-call",
+                    name: "echo",
+                    arguments: objectValue([ValueField("text", textValue("nope"))])
+                )], stopReason: "tool_use"))
+            }
+            events(ModelEvent.Completed)
+            return Result.Ok(contractModelReply(
+                [ModelBlock(ModelBlockKind.Text, text: "drain report: completed work; next step: resume from checkpoint")],
+                stopReason: "end_turn",
+                usage: usagePerCall
+            ))
+        }
+        workRequests += 1
+        if (sleepMillisPerWorkCall > 0) {
+            sleep(Duration.millisecond * sleepMillisPerWorkCall)
+        }
+        return Result.Ok(contractModelReply([ModelBlock(
+            ModelBlockKind.ToolCall,
+            callId: "call-" + calls.toString(),
+            name: "echo",
+            arguments: objectValue([ValueField("text", textValue("t" + calls.toString()))])
+        )], usage: usagePerCall))
+    }
+}
+
+func countBudgetSignals(
+    events: ArrayList<AgentEvent>,
+    code: String
+): Int64 {
+    var count: Int64 = 0
+    for (event in events) {
+        match (event.detail.field("code")) {
+            case Some(value) => if (value.text == code) { count += 1 }
+            case None => ()
+        }
+    }
+    count
+}
+
+func budgetDrainCore(
+    model: BudgetProbeModel,
+    runs: MemoryRuns,
+    catalog: ToolCatalog,
+    runId: String,
+    sessionId: String,
+    maxTurns!: Int64,
+    maxModelRequests!: Int64 = 64,
+    maxDrainTurns!: Int64 = 2,
+    deadlineMillis!: Int64 = 0,
+    maxDrainModelRequests!: Int64 = 2,
+    maxCostMicros!: Int64 = 0,
+    pricing!: ?ModelPricing = None,
+    sleepyTool!: Bool = false
+): Result<AgentRunOutcome> {
+    let executor: ToolExecutor = if (sleepyTool) {
+        SleepEchoTool()
+    } else {
+        EchoTool()
+    }
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        executor
+    ).isOk(), "tool registration")
+    AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    ).start(AgentRunRequest(
+        RunId(runId),
+        SessionId(sessionId),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        pricing: pricing,
+        budget: ResourceBudget(
+            maxTurns: maxTurns,
+            maxModelRequests: maxModelRequests,
+            maxDrainModelRequests: maxDrainModelRequests,
+            maxDrainTurns: maxDrainTurns,
+            maxCostMicros: maxCostMicros,
+            deadlineMillis: deadlineMillis
+        )
+    ))
+}
+
+func completedSnapshotOrThrow(
+    result: Result<AgentRunOutcome>,
+    label: String
+): RunSnapshot {
+    match (result) {
+        case Result.Ok(outcome) => match (outcome) {
+            case AgentRunOutcome.Completed(snapshot) => snapshot
+            case _ => throw IllegalStateException(label + ": run did not complete")
+        }
+        case Result.Err(error) => throw IllegalStateException(
+            label + ": " + error.code + ": " + error.message
+        )
+    }
+}
+
+func workTurnBudgetDrainsGracefullyContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "turn-budget-drain-run", "turn-budget-drain-session", maxTurns: 32
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "32-turn budget must drain gracefully"
+    )
+    expect(
+        completed.status == RunState.Completed && completed.turns == 32 &&
+            model.workRequests == 32 && model.drainWireCalls == 1,
+        "work turns stop at 32 and the bounded drain finalizes without " +
+            "budget.turns_exceeded"
+    )
+}
+
+func drainFinalizationHasNoToolSurfaceContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-no-tools-run", "drain-no-tools-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "drain must complete"
+    )
+    expect(
+        completed.status == RunState.Completed && model.lastRequestToolsEmpty &&
+            model.lastRequestToolChoiceNoTools && completed.toolCalls == 4,
+        "drain finalization carries no tool surface and commits no new tool work"
+    )
+}
+
+func budgetPressureSignalsOnceContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "budget-pressure-run", "budget-pressure-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(result, "pressure run completes")
+    expect(
+        completed.status == RunState.Completed &&
+            countBudgetSignals(runs.eventLog, "budget.pressure") == 1 &&
+            countBudgetSignals(runs.eventLog, "budget.draining") == 1,
+        "budget pressure is signaled exactly once and draining once on drain entry"
+    )
+}
+
+func drainPartialReportCompletedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-report-run", "drain-report-session", maxTurns: 4
+    )
+    let completed = completedSnapshotOrThrow(result, "drain report run completes")
+    expect(
+        completed.summary.startsWith("budget drained") &&
+            hasEvent(runs.eventLog, "run.completed") &&
+            hasEvent(runs.eventLog, "budget.draining"),
+        "the drained run completes normally and marks the partial report"
+    )
+}
+
+func drainHardCapStopsBoundedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(drainToolCall: true)
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-tool-run", "drain-tool-session", maxTurns: 4
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.kind == AgentErrorKind.BudgetExceeded &&
+                error.code == "budget.drain_exhausted" &&
+                model.workRequests == 4 && model.drainWireCalls == 1
+        case None => false
+    }, "drain refusing tool work stops bounded with budget.drain_exhausted")
+}
+
+func drainProviderFailureStopsBoundedContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(drainFailures: 99)
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-fail-run", "drain-fail-session", maxTurns: 4
+    )
+    expect(result.isError() && model.workRequests == 4 &&
+        model.drainWireCalls == 2,
+        "a failing drain finalization is bounded by the attempt retry policy")
+}
+
+func resumeRestoresWorkBudgetContinuityContract(): Unit {
+    let runs = MemoryRuns(failClaimAfterCommitAt: 3)
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let model = BudgetProbeModel()
+    let request = AgentRunRequest(
+        RunId("budget-resume-run"), SessionId("budget-resume-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxTurns: 4)
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    expect(first.isError() && model.workRequests == 2,
+        "budget resume crash is injected after two settled work turns")
+    let checkpointPreservesWorkBucket = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            case Some(checkpoint) => checkpoint.modelRequests == 2 &&
+                checkpoint.workModelRequests == 2 &&
+                checkpoint.drainModelRequests == 0 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Work
+            case None => false
+        }
+        case None => false
+    }
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "budget resume must complete"
+    )
+    expect(
+        completed.status == RunState.Completed && completed.turns == 4 &&
+            model.workRequests == 4 && checkpointPreservesWorkBucket,
+        "resume restores the consumed work budget and allows exactly the " +
+            "remaining one work turn plus the drain"
+    )
+}
+
+func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
+    let runs = MemoryRuns(failClaimAfterCommitAt: 2)
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let decisions = RecordingModelDecisionPort()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let request = AgentRunRequest(
+        RunId("budget-last-work-run"), SessionId("budget-last-work-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxTurns: 2, maxModelRequests: 2)
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    let checkpointIsWork = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            case Some(checkpoint) => checkpoint.turns == 2 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Work
+            case None => false
+        }
+        case None => false
+    }
+    expect(first.isError() && checkpointIsWork,
+        "last work request crash leaves a work-class continuation")
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "the last ordinary work turn must resume as work"
+    )
+    expect(first.isError() && checkpointIsWork &&
+        completed.status == RunState.Completed && model.workRequests == 2 &&
+        model.drainWireCalls == 1,
+        "a crash on the last ordinary work request does not misclassify it as drain")
+}
+
+func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
+    // Work requests claim 1 and 2; crash after the first drain claim so the
+    // recovery path is allowed to replay that attempt as drain attempt 2.
+    let runs = MemoryRuns(failClaimAfterCommitAt: 3)
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let decisions = RecordingModelDecisionPort()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let request = AgentRunRequest(
+        RunId("budget-drain-resume-run"), SessionId("budget-drain-resume-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(
+            maxTurns: 2, maxModelRequests: 2, maxDrainModelRequests: 2,
+            maxDrainTurns: 2
+        )
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    let checkpointPreservesDrainBucket = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            // The checkpoint is written before the in-flight drain request is
+            // admitted; the resumed request must charge the drain bucket once.
+            case Some(checkpoint) => checkpoint.modelRequests == 2 &&
+                checkpoint.workModelRequests == 2 &&
+                checkpoint.drainModelRequests == 0 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Drain
+            case None => false
+        }
+        case None => false
+    }
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "drain request bucket continuity must permit recovery"
+    )
+    expect(first.isError() && checkpointPreservesDrainBucket &&
+        completed.status == RunState.Completed && model.workRequests == 2 &&
+        model.drainWireCalls == 2,
+        "resume restores work and drain request counts independently")
+}
+
+func drainRespectsRunDeadlineContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-deadline-run", "drain-deadline-session",
+        maxTurns: 1, deadlineMillis: agentUtcMillis() + 100,
+        sleepyTool: true
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.code == "run.deadline_exceeded" && model.drainWireCalls == 0
+        case None => false
+    }, "an expired run deadline admits no drain finalization request")
+    let final = runs.find(RunId("drain-deadline-run"))
+    expect(final.isOk() && final.value().getOrThrow().turns == 1,
+        "the deadline failure still persists a durable usage checkpoint")
+}
+
+func workBudgetStopsAtModelRequestLimitContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-request-split-run", "drain-request-split-session",
+        maxTurns: 2, maxModelRequests: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
+    )
+    let completed = completedSnapshotOrThrow(result, "split ledger must drain")
+    expect(
+        completed.status == RunState.Completed && completed.turns == 2 &&
+            model.workRequests == 2 && model.drainWireCalls == 1,
+        "a work request budget exhausted to the exact cap still admits the " +
+            "drain finalization request from the separate drain bucket"
+    )
+}
+
+func drainChargeRoutedInDrainingModeContract(): Unit {
+    // Direct ledger-level proof of the mode routing: the identical charge
+    // lands in the work bucket while Normal and in the drain bucket while
+    // Draining, and a Work charge can never touch drain headroom.
+    let budget = ExecutionBudget(
+        maxModelRequests: 1, maxDrainModelRequests: 1
+    )
+    expect(budget.reserve(BudgetCharge(modelRequests: 1)).isOk(),
+        "work request consumes the work bucket")
+    expect(budget.reserve(BudgetCharge(modelRequests: 1)).isError(),
+        "a second work request is rejected even with drain headroom unused")
+    let routed = budget.reserve(BudgetCharge(
+        modelRequests: 1, chargeClass: BudgetChargeClass.Drain
+    ))
+    expect(routed.isOk(), "drain headroom admits the drain charge")
+    expect(budget.reserve(BudgetCharge(
+        modelRequests: 1, chargeClass: BudgetChargeClass.Drain
+    )).isError(),
+        "drain headroom itself is strictly bounded")
+    let usage = budget.snapshot()
+    expect(usage.modelRequests == 1 && usage.drainModelRequests == 1,
+        "work and drain requests are accounted in separate buckets")
+}
+
+func workCannotUseDrainHeadroomContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-headroom-run", "drain-headroom-session",
+        maxTurns: 4, maxModelRequests: 2, maxDrainModelRequests: 1, maxDrainTurns: 1
+    )
+    expect(result.isError() && match (result.error()) {
+        case Some(error) =>
+            error.kind == AgentErrorKind.BudgetExceeded &&
+                error.code == "budget.model_requests_exceeded" &&
+                model.workRequests == 2 && model.drainWireCalls == 0
+        case None => false
+    }, "work model requests stop at maxModelRequests while drain headroom " +
+        "stays untouched")
+}
+
+func drainBlockedAtCostBoundaryContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(usagePerCall: Some(ModelUsage(
+        inputTokens: 100, outputTokens: 20
+    )))
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-cost-boundary-run", "drain-cost-boundary-session",
+        maxTurns: 2, maxCostMicros: 280,
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(2000000)
+        ))
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "cost boundary must drain without provider request"
+    )
+    expect(
+        completed.status == RunState.Completed && model.drainWireCalls == 0 &&
+            completed.summary == "run drained at hard budget limit without " +
+                "finalization request",
+        "a cost-exhausted budget admits no drain finalization request"
+    )
+}
+
+
+func drainPreflightBlocksNearCostBoundaryContract(): Unit {
+    // 240/280 spent after one work turn. The old at-limit probe would pass
+    // (240 < 280) and the drain request could push the run past the cap
+    // before accounting caught it. The worst-case preflight blocks here and
+    // delivers the durable checkpoint instead.
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel(usagePerCall: Some(ModelUsage(
+        inputTokens: 200, outputTokens: 20
+    )))
+    let result = budgetDrainCore(
+        model, runs, catalog,
+        "drain-preflight-run", "drain-preflight-session",
+        maxTurns: 1, maxCostMicros: 280,
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(2000000)
+        ))
+    )
+    let completed = completedSnapshotOrThrow(
+        result, "near-boundary cost must drain without provider request"
+    )
+    expect(
+        completed.status == RunState.Completed && model.drainWireCalls == 0 &&
+            completed.summary == "run drained at hard budget limit without " +
+                "finalization request" &&
+            completed.costMicros == Some(240),
+        "the drain preflight blocks on worst-case cost before the cap is crossed"
+    )
+}
+
+func childBudgetPoolSettlesWorkPlusDrainContract(): Unit {
+    let parent = ExecutionBudget(
+        maxTotalInputTokens: 1000,
+        maxTotalOutputTokens: 1000,
+        maxCostMicros: 1000
+    )
+    let pool = ChildBudgetPool(parent, 4)
+    let childBudget = ExecutionBudget(
+        maxTotalInputTokens: 800,
+        maxTotalOutputTokens: 800,
+        maxCostMicros: 600
+    )
+    let lease = match (pool.reserve("child-1", childBudget)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(
+            "child reserve failed: " + error.code
+        )
+    }
+    let combined = ExecutionUsage(
+        inputTokens: 130, outputTokens: 70, costMicros: 280
+    )
+    match (lease.settle(combined)) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(
+            "child settle failed: " + error.code
+        )
+    }
+    let snapshot = pool.snapshot()
+    expect(
+        snapshot.activeReservations == 0 &&
+            snapshot.consumed.inputTokens == 130 &&
+            snapshot.consumed.outputTokens == 70 &&
+            snapshot.consumed.costMicros == 280,
+        "child budget settlement covers work plus drain usage without residue"
+    )
+}
+
+func childBudgetPoolSchedulingGatesContract(): Unit {
+    let parent = ExecutionBudget(maxCostMicros: 1000)
+    let childBudget = ExecutionBudget(maxCostMicros: 100)
+    let capped = ChildBudgetPool(parent, 1)
+    let first = capped.reserve("c-1", childBudget)
+    expect(first.isOk(), "first child reserves")
+    let second = capped.reserve("c-2", childBudget)
+    expect(second.isError() && second.error().getOrThrow().code ==
+        "child.max_children_exceeded",
+        "the total children gate still blocks after the cap")
+    let concurrent = ChildBudgetPool(parent, 8, maxConcurrentChildren: 1)
+    let unbounded = concurrent.reserve("d-3", ExecutionBudget())
+    expect(unbounded.isError() && unbounded.error().getOrThrow().code ==
+        "child.unbounded_cost_reservation",
+        "unbounded cost children stay rejected under a bounded parent")
+    let active = concurrent.reserve("d-1", childBudget)
+    expect(active.isOk(), "first concurrent child reserves")
+    let blocked = concurrent.reserve("d-2", childBudget)
+    expect(blocked.isError() && blocked.error().getOrThrow().code ==
+        "child.max_concurrent_children_exceeded",
+        "the concurrency gate still blocks a second live lease")
+    let overSettle = active.value().getOrThrow().settle(ExecutionUsage(costMicros: 101))
+    expect(overSettle.isError() && overSettle.error().getOrThrow().code ==
+        "child.actual_usage_exceeds_reservation",
+        "settling above the reserved child budget stays rejected")
+    expect(active.value().getOrThrow().settle(ExecutionUsage(costMicros: 80)).isOk(),
+        "settling within the reservation releases the concurrency slot")
+    expect(concurrent.reserve("d-4", childBudget).isOk(),
+        "a settled lease frees its concurrency slot for the next child")
+}
+
+func budgetModeOrthogonalToApprovalContract(): Unit {
+    let conversations = MemoryConversations()
+    let runs = MemoryRuns()
+    let operations = MemoryOperations()
+    let catalog = ToolCatalog()
+    let tool = EchoTool(observer: Some(conversations))
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "side effect fixture", objectValue([])),
+            Capability(CapabilityKind.WorkspaceWrite),
+            sideEffecting: true
+        ),
+        tool
+    ).isOk(), "side effect tool registration")
+    let model = BudgetProbeModel()
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let request = AgentRunRequest(
+        RunId("budget-approval-run"), SessionId("budget-approval-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)]),
+        budget: ResourceBudget(maxTurns: 2)
+    )
+    let first = core.start(request).value().getOrThrow()
+    let firstApproval = match (first) {
+        case AgentRunOutcome.AwaitingApproval(_, value) => value
+        case _ => throw IllegalStateException("first approval must pause the run")
+    }
+    let second = core.decide(request, firstApproval, ApprovalDecision.Approve)
+    let secondApproval = match (second.value().getOrThrow()) {
+        case AgentRunOutcome.AwaitingApproval(_, value) => value
+        case _ => throw IllegalStateException("second approval must pause the run")
+    }
+    let completed = core.decide(request, secondApproval, ApprovalDecision.Approve)
+    let snapshot = completedSnapshotOrThrow(completed, "approval resume completes")
+    expect(
+        snapshot.status == RunState.Completed && snapshot.turns == 2 &&
+            model.drainWireCalls == 1 && tool.executions == 2,
+        "BudgetMode never blocks WaitingApproval and the drained run still " +
+            "finishes through the approval path"
+    )
+}
+
+
 func usageAccountingContract(): Unit {
     let catalog = ToolCatalog()
     let pricedRuns = MemoryRuns()
@@ -3312,6 +4184,8 @@ class RecordingModelDecisionPort <: ModelDecisionRuntimePort {
     let persisted = ArrayList<ModelDecision>()
     let createdAttempts = ArrayList<DurableModelAttempt>()
     var recoveredDecision: ?ModelDecision = None
+    let terminalizedIds = ArrayList<ModelAttemptId>()
+    let terminalizedLifecycles = ArrayList<ModelAttemptLifecycle>()
     var projected = false
     private let rejectPersistence: Bool
 
@@ -3338,8 +4212,8 @@ class RecordingModelDecisionPort <: ModelDecisionRuntimePort {
         failureKind: String,
         completedAtMillis: Int64
     ): Result<Unit> {
-        let _ = attemptId.value
-        let _ = lifecycle
+        terminalizedIds.add(attemptId)
+        terminalizedLifecycles.add(lifecycle)
         let _ = failureKind
         let _ = completedAtMillis
         Result.Ok(())
@@ -3581,6 +4455,26 @@ class StalledModel <: ModelPort {
         Result.Ok(())
     }
 }
+
+class SleepEchoTool <: ToolExecutor {
+    public func execute(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolResult> {
+        sleep(Duration.millisecond * 200)
+        Result.Ok(ToolResult(call.callId, call.arguments))
+    }
+
+    public func afterResultPersisted(
+        context: ToolInvocationContext,
+        result: ToolResult
+    ): Result<Unit> {
+        let _ = context
+        let _ = result
+        Result.Ok(())
+    }
+}
+
 
 class EchoTool <: ToolExecutor {
     var executions: Int64 = 0
@@ -4155,6 +5049,7 @@ class MemoryRuns <: RunRepository {
     var claims: Int64 = 0
     var savedContinuation: ?RunContinuation = None
     var savedDecision: ?ApprovalDecisionReceipt = None
+    let savedDecisions = ArrayList<ApprovalDecisionReceipt>()
     private let initialSaveLock = Mutex()
     private let blockInitialSave: Bool
     private var initialSaveEntered: Bool = false
@@ -4504,31 +5399,30 @@ class MemoryRuns <: RunRepository {
     }
 
     public func saveDecision(value: ApprovalDecisionReceipt): Result<Unit> {
-        match (savedDecision) {
-            case Some(existing) => if (sameFixtureDecision(existing, value)) {
-                Result.Ok(())
-            } else {
-                Result.Err(AgentError(
-                    AgentErrorKind.Conflict,
-                    "persistence.conflict",
-                    "approval decision receipt cannot be changed"
-                ))
+        for (existing in savedDecisions where
+            existing.operationId.value == value.operationId.value) {
+            if (sameFixtureDecision(existing, value)) {
+                return Result.Ok(())
             }
-            case None =>
-                savedDecision = Some(value)
-                Result.Ok(())
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "persistence.conflict",
+                "approval decision receipt cannot be changed"
+            ))
         }
+        savedDecisions.add(value)
+        if (savedDecision.isNone()) {
+            savedDecision = Some(value)
+        }
+        Result.Ok(())
     }
 
     public func decision(operationId: OperationId): Result<ApprovalDecisionReceipt> {
-        match (savedDecision) {
-            case Some(value) => if (value.operationId.value == operationId.value) {
-                Result.Ok(value)
-            } else {
-                Result.Err(missing("decision"))
-            }
-            case None => Result.Err(missing("decision"))
+        for (value in savedDecisions where
+            value.operationId.value == operationId.value) {
+            return Result.Ok(value)
         }
+        Result.Err(missing("decision"))
     }
 
     public func recordDecision(

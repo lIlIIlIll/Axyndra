@@ -15,6 +15,8 @@ class CoreRunControl {
     let ledger: ExecutionBudget
     private let lock = Mutex()
     private var currentState: RunState
+    private var budgetModeValue: BudgetMode = BudgetMode.Normal
+    private var drainAttemptsValue: Int64 = 0
     private var requestCounter: Int64 = 0
     private var turnCounter: Int64 = 0
     private var batchCounter: Int64 = 0
@@ -234,18 +236,55 @@ class CoreRunControl {
         }
     }
 
+    // Admission only: the ledger reports facts and the callers decide the
+    // action. A rejected reserve no longer cancels the run — the work-turn
+    // loop converts an exhausted work budget into a bounded graceful drain,
+    // and only true hard violations reach the failure path.
+    //
+    // Model-request charges issued while the run is Draining are routed
+    // into the drain ledger bucket (BudgetChargeClass.Drain): work can
+    // never consume drain headroom, and the bounded drain never dies on
+    // maxModelRequests. Cumulative token/cost parts of the charge stay in
+    // the shared fungible buckets.
     func reserve(charge: BudgetCharge): Result<ExecutionUsage> {
-        match (ledger.reserve(charge)) {
-            case Result.Ok(value) => Result.Ok(value)
-            case Result.Err(error) =>
-                let _ = source.cancel(reason: Some(CancellationReason(
-                    CancellationReasonKind.Budget,
-                    error.code,
-                    error.message,
-                    cancelledAtMillis: agentUtcMillis()
-                )))
-                Result.Err(error)
+        if (budgetMode() == BudgetMode.Draining &&
+            charge.chargeClass == BudgetChargeClass.Work &&
+            charge.modelRequests > 0) {
+            return ledger.reserve(BudgetCharge(
+                turns: charge.turns,
+                modelRequests: charge.modelRequests,
+                chargeClass: BudgetChargeClass.Drain,
+                toolCalls: charge.toolCalls,
+                toolsStarted: charge.toolsStarted,
+                inputTokens: charge.inputTokens,
+                outputTokens: charge.outputTokens,
+                costMicros: charge.costMicros
+            ))
         }
+        ledger.reserve(charge)
+    }
+
+    func budgetMode(): BudgetMode {
+        lock.lock()
+        try { budgetModeValue } finally { lock.unlock() }
+    }
+
+    func setBudgetMode(mode: BudgetMode): Unit {
+        lock.lock()
+        try { budgetModeValue = mode } finally { lock.unlock() }
+    }
+
+    func drainAttempts(): Int64 {
+        lock.lock()
+        try { drainAttemptsValue } finally { lock.unlock() }
+    }
+
+    func incrementDrainAttempts(): Int64 {
+        lock.lock()
+        try {
+            drainAttemptsValue += 1
+            drainAttemptsValue
+        } finally { lock.unlock() }
     }
 
     func requestCancel(

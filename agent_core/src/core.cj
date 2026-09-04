@@ -218,6 +218,8 @@ public interface AgentRunner {
 
 class BudgetCounter {
     var modelRequests: Int64
+    var workModelRequests: Int64
+    var drainModelRequests: Int64
     var inputTokens: Int64
     var outputTokens: Int64
     var reasoningTokens: Int64
@@ -233,6 +235,8 @@ class BudgetCounter {
 
     init(
         modelRequests!: Int64 = 0,
+        workModelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         reasoningTokens!: Int64 = 0,
@@ -246,6 +250,8 @@ class BudgetCounter {
         turns!: Int64 = 0
     ) {
         this.modelRequests = modelRequests
+        this.workModelRequests = workModelRequests
+        this.drainModelRequests = drainModelRequests
         this.inputTokens = inputTokens
         this.outputTokens = outputTokens
         this.reasoningTokens = reasoningTokens
@@ -260,13 +266,30 @@ class BudgetCounter {
         this.startedAt = MonoTime.now()
     }
 
-    func beforeModel(budget: ResourceBudget): Result<Unit> {
-        if (modelRequests >= budget.maxModelRequests) {
-            return budgetError("model_requests")
-        }
+    func recordModelRequest(mode: BudgetMode): Unit {
         modelRequests += 1
-        Result.Ok(())
+        if (mode == BudgetMode.Draining) {
+            drainModelRequests += 1
+        } else {
+            workModelRequests += 1
+        }
     }
+
+    func accountObservedUsage(usage: ModelUsage): Unit {
+        inputTokens += usage.inputTokens
+        outputTokens += usage.outputTokens
+        reasoningTokens += usage.reasoningTokens
+        cacheReadTokens += usage.cacheReadTokens
+        cacheWriteTokens += usage.cacheWriteTokens
+        costMicros = match ((costMicros, usage.costMicros)) {
+            case (Some(total), Some(value)) => Some(total + value)
+            case (cost, None) => cost
+            case (None, Some(value)) => Some(value)
+        }
+        lastInputTokens = usage.inputTokens
+        lastOutputTokens = usage.outputTokens
+    }
+
 
     // Token budgets are per-request ceilings: maxInputTokens / maxOutputTokens
     // bound a single model request (the API's reported usage for that turn).
@@ -323,13 +346,6 @@ class BudgetCounter {
         )
     }
 
-    func beforeTool(budget: ResourceBudget): Result<Unit> {
-        if (toolCalls >= budget.maxToolCalls) {
-            return budgetError("tool_calls")
-        }
-        toolCalls += 1
-        Result.Ok(())
-    }
 
     private func budgetError(resource: String): Result<Unit> {
         Result.Err(
@@ -367,6 +383,19 @@ class PreparedModelRequest {
         this.requestId = requestId
         this.request = request
         this.estimatedInputTokens = estimatedInputTokens
+    }
+}
+
+// Text and reasoning deltas are provisional until the attempt's terminal
+// outcome is known. Keeping them with the attempt lets retry recovery discard
+// an abandoned prefix without leaking it to print/headless/ACP consumers.
+class ModelAttemptExecution {
+    let result: Result<ModelReply>
+    let provisionalEvents: Array<ModelEvent>
+
+    init(result: Result<ModelReply>, provisionalEvents: Array<ModelEvent>) {
+        this.result = result
+        this.provisionalEvents = provisionalEvents
     }
 }
 
@@ -592,6 +621,7 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: request.approvalModeOverride,
             budget: executionBudgetFrom(request.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: request.skillStack
         )
         match (emitTyped(context, control, AgentEventPayload.RunStarted, sink)) {
@@ -669,10 +699,28 @@ public class AgentCore <: AgentRunner {
             case Result.Err(error) => return Result.Err(error)
         }
         let control = match (controlForResume(
-            durableRequest, snapshot, modelRecovery: true
+            durableRequest, snapshot, modelRecovery: true,
+            initialUsage: Some(ExecutionUsage(
+                turns: checkpoint.turns,
+                modelRequests: checkpoint.workModelRequests,
+                drainModelRequests: checkpoint.drainModelRequests,
+                toolCalls: checkpoint.toolCalls,
+                inputTokens: checkpoint.inputTokens,
+                outputTokens: checkpoint.outputTokens,
+                costMicros: match (checkpoint.costMicros) {
+                    case Some(value) => value
+                    case None => 0
+                }
+            ))
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
+        }
+        // Restore the request's actual budget class before any replay charge.
+        // A checkpoint can be taken on the last ordinary work turn, so turns
+        // alone cannot infer whether the next request is work or drain.
+        if (checkpoint.requestBudgetClass == BudgetChargeClass.Drain) {
+            control.setBudgetMode(BudgetMode.Draining)
         }
         let context = ToolInvocationContext(
             durableRequest.runId, durableRequest.sessionId,
@@ -681,10 +729,13 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
             budget: executionBudgetFrom(durableRequest.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: durableRequest.skillStack
         )
         let counter = BudgetCounter(
             modelRequests: checkpoint.modelRequests,
+            workModelRequests: checkpoint.workModelRequests,
+            drainModelRequests: checkpoint.drainModelRequests,
             inputTokens: checkpoint.inputTokens,
             outputTokens: checkpoint.outputTokens,
             reasoningTokens: checkpoint.reasoningTokens,
@@ -757,8 +808,11 @@ public class AgentCore <: AgentRunner {
                         ), sink, counter: Some(counter)
                     )
                 }
-                match (counter.beforeModel(durableRequest.budget)) {
-                    case Result.Ok(_) => ()
+                match (reserveBudget(
+                    control, context, BudgetCharge(modelRequests: 1), sink
+                )) {
+                    case Result.Ok(_) =>
+                        counter.recordModelRequest(control.budgetMode())
                     case Result.Err(error) => return fail(
                         durableRequest, context, control, error, sink,
                         counter: Some(counter)
@@ -854,8 +908,12 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
-        match (counter.beforeModel(durableRequest.budget)) {
-            case Result.Ok(_) => ()
+        match (reserveBudget(
+            control, context, BudgetCharge(modelRequests: 1), sink,
+            requestId: Some(RequestId(modelRequest.requestId))
+        )) {
+            case Result.Ok(_) =>
+                counter.recordModelRequest(control.budgetMode())
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
@@ -874,17 +932,28 @@ public class AgentCore <: AgentRunner {
             }
         }
         let started = MonoTime.now()
-        let result = executeModelWithinBudget(
+        let execution = executeModelWithinBudget(
             durableRequest, counter, modelRequest, checkpoint.semanticRequestId,
             attemptId, context, control, sink
         )
+        let result = execution.result
         match (recordModelAttempt(
-            durableRequest, modelRequest, attemptNo, result,
+            durableRequest, modelRequest, attemptNo, counter, result,
             context, control, sink
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        match (settleProvisionalModelEvents(
+            execution.provisionalEvents, true, context, control,
+            checkpoint.semanticRequestId, attemptId, sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(
+                durableRequest, context, control, error, sink,
+                counter: Some(counter)
             )
         }
         let durable = recordDurableDecisionLifecycle(
@@ -1079,6 +1148,7 @@ public class AgentCore <: AgentRunner {
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
             budget: executionBudgetFrom(durableRequest.budget),
+            budgetModeFn: Some({ => control.budgetMode() }),
             skills: durableRequest.skillStack
         )
         let resumed = match (control.resumeAfterApproval()) {
@@ -1434,7 +1504,8 @@ public class AgentCore <: AgentRunner {
         counter: BudgetCounter,
         reply: ModelReply,
         turnId: TurnId,
-        sink: AgentEventSink
+        sink: AgentEventSink,
+        drained!: Bool = false
     ): Result<?AgentRunOutcome> {
         if (control.source.token.isCancelled() || isRunCancelled(request.runId)) {
             return optionalOutcome(cancelledRun(request, context, control, sink))
@@ -1468,7 +1539,11 @@ public class AgentCore <: AgentRunner {
             request.sessionId,
             RunState.Completed,
             sequence: context.currentSequence(),
-            summary: reply.stopReason,
+            summary: if (drained) {
+                "budget drained: " + reply.stopReason
+            } else {
+                reply.stopReason
+            },
             modelRequests: counter.modelRequests,
             usage: counter.usage(),
             lastInputTokens: counter.lastInputTokens,
@@ -1531,13 +1606,32 @@ public class AgentCore <: AgentRunner {
     private func buildBoundedModelRequest(
         request: AgentRunRequest,
         history: Array<ModelMessage>,
-        control: CoreRunControl
+        control: CoreRunControl,
+        drainFinalization!: Bool = false
     ): Result<PreparedModelRequest> {
-        let requestTools = catalog.definitionsFor(request.capabilities)
-        let effectiveSystem = systemWithSkillStack(
+        // The drain finalization is a control-plane request: no tool surface,
+        // NoTools choice, and a bounded wrap-up instruction. It must never be
+        // able to start shell, edit, git, network, or any other side effect.
+        let requestTools = if (drainFinalization) {
+            Array<ModelToolDefinition>()
+        } else {
+            catalog.definitionsFor(request.capabilities)
+        }
+        let baseSystem = systemWithSkillStack(
             request.system,
             request.skillStack
         )
+        let effectiveSystem = if (drainFinalization) {
+            baseSystem +
+                "\n\n[BUDGET DRAINING] The work-turn budget is exhausted. Do " +
+                "not investigate new problems and do not call tools. Summarize " +
+                "the work already completed, the key verifications already " +
+                "performed, what remains unfinished, the current blockers, and " +
+                "the exact next step for a future resume. Never claim " +
+                "unfinished work as complete."
+        } else {
+            baseSystem
+        }
         let contextWindow = buildRequestContext(
             history,
             request.budget,
@@ -1561,6 +1655,11 @@ public class AgentCore <: AgentRunner {
             contextWindow.messages,
             system: effectiveSystem,
             tools: requestTools,
+            toolChoice: if (drainFinalization) {
+                ModelToolChoice.NoTools
+            } else {
+                ModelToolChoice.Auto
+            },
             thinking: request.thinking,
             maxOutputTokens: request.budget.maxOutputTokens,
             streaming: true,
@@ -1891,7 +1990,8 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(Some(outcome)) => return Result.Ok(outcome)
             case Result.Ok(None) => ()
         }
-        while (counter.turns <= request.budget.maxTurns) {
+        let pressureAtTurns = budgetPressureAtTurns(request.budget.maxTurns)
+        while (counter.turns < request.budget.maxTurns) {
             if (control.source.token.isCancelled() || isRunCancelled(request.runId)) {
                 return cancelledRun(
                     request,
@@ -1929,6 +2029,28 @@ public class AgentCore <: AgentRunner {
                 )
             }
             counter.turns += 1
+            if (counter.turns == pressureAtTurns) {
+                control.setBudgetMode(BudgetMode.Pressure)
+                let _ = emitTyped(
+                    context,
+                    control,
+                    AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                        BudgetMode.Pressure,
+                        BudgetDimension.Turns,
+                        request.budget.maxTurns,
+                        counter.turns,
+                        request.budget.maxTurns - counter.turns
+                    )),
+                    sink
+                )
+                match (announceBudgetPressure(request, context, control, sink)) {
+                    case Result.Ok(_) => ()
+                    case Result.Err(error) => return fail(
+                        request, context, control, error, sink,
+                        counter: Some(counter)
+                    )
+                }
+            }
             let projection = match (control.runtime.projectContext()) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return fail(
@@ -2019,14 +2141,309 @@ public class AgentCore <: AgentRunner {
                 turnId: Some(turnId)
             )
         }
-        fail(
-            request,
+        // The work-turn budget is exhausted at a settlement boundary. Do not
+        // start another work turn and never surface budget.turns_exceeded for
+        // this normal path: enter the bounded control-plane drain, checkpoint
+        // durably, and let the model deliver a no-tools partial/final report.
+        drainRun(request, context, control, counter, sink)
+    }
+
+    // Derived pressure threshold: fire once when warningLeadTurns or fewer
+    // work turns remain. Derived, not configured, in v1.
+    private func budgetPressureAtTurns(maxTurns: Int64): Int64 {
+        let leadRaw = maxTurns / 8
+        let leadTurns = if (leadRaw < 1) {
+            1
+        } else if (leadRaw > 4) {
+            4
+        } else {
+            leadRaw
+        }
+        let threshold = maxTurns - leadTurns
+        if (threshold < 1) {
+            1
+        } else {
+            threshold
+        }
+    }
+
+    // One durable user-visible notice at the pressure crossing: it rides the
+    // thread projection into later model requests without per-turn prompt
+    // rewrites.
+    private func announceBudgetPressure(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        match (control.runtime.appendUserInput(
+            ItemId("budget-pressure-" + request.runId.value),
+            ThreadItemContent.UserMessage(textMessageParts(
+                "[budget pressure] The work-turn budget is nearly exhausted. " +
+                    "Finish the current goal now, avoid starting optional " +
+                    "exploration, and converge the current work into a " +
+                    "deliverable state."
+            )),
+            ItemProvenance("budget", runId: Some(request.runId)),
+            agentUtcMillis()
+        )) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    private func saveDrainCheckpoint(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        counter: BudgetCounter
+    ): Result<Unit> {
+        runs.save(RunSnapshot(
+            request.runId,
+            request.sessionId,
+            RunState.Running,
+            sequence: context.currentSequence(),
+            summary: "work turn budget reached; draining",
+            modelRequests: counter.modelRequests,
+            usage: counter.usage(),
+            lastInputTokens: counter.lastInputTokens,
+            lastOutputTokens: counter.lastOutputTokens,
+            lastRequestDurationMillis: counter.lastRequestDurationMillis,
+            toolCalls: counter.toolCalls,
+            turns: counter.turns
+        ))
+    }
+
+    // Deadline- or crash-style drain ending: no further provider request is
+    // admitted, the durable checkpoint is the delivered partial result.
+    private func completeDrainedRun(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        counter: BudgetCounter,
+        sink: AgentEventSink,
+        summary: String
+    ): Result<AgentRunOutcome> {
+        let completed = RunSnapshot(
+            request.runId,
+            request.sessionId,
+            RunState.Completed,
+            sequence: context.currentSequence(),
+            summary: summary,
+            modelRequests: counter.modelRequests,
+            usage: counter.usage(),
+            lastInputTokens: counter.lastInputTokens,
+            lastOutputTokens: counter.lastOutputTokens,
+            lastRequestDurationMillis: counter.lastRequestDurationMillis,
+            toolCalls: counter.toolCalls,
+            turns: counter.turns
+        )
+        let transition = match (control.finish(
+            RunState.Completed,
+            reason: summary
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return fail(
+                request, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        match (runs.save(completed)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                finishControl(request.runId)
+                return Result.Err(error)
+        }
+        let _ = emitTransition(context, control, transition, sink)
+        let _ = emitTyped(context, control, AgentEventPayload.RunCompleted, sink)
+        finishControl(request.runId)
+        Result.Ok(AgentRunOutcome.Completed(completed))
+    }
+
+    // Bounded control-plane drain after the work-turn budget is exhausted.
+    // Durable checkpoint first, then at most maxDrainTurns no-tools
+    // finalization requests; hard dimensions (deadline) are never extended.
+    private func drainRun(
+        request: AgentRunRequest,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        counter: BudgetCounter,
+        sink: AgentEventSink
+    ): Result<AgentRunOutcome> {
+        control.setBudgetMode(BudgetMode.Draining)
+        let _ = emitTyped(
             context,
             control,
+            AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                BudgetMode.Draining,
+                BudgetDimension.Turns,
+                request.budget.maxTurns,
+                counter.turns,
+                0
+            )),
+            sink
+        )
+        match (saveDrainCheckpoint(request, context, counter)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(
+                request, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        while (true) {
+            if (control.drainAttempts() >= request.budget.maxDrainTurns) {
+                return fail(
+                    request, context, control,
+                    AgentError(
+                        AgentErrorKind.BudgetExceeded,
+                        "budget.drain_exhausted",
+                        "drain turn budget exhausted before finalization completed"
+                    ),
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            let _ = control.incrementDrainAttempts()
+            let projection = match (control.runtime.projectContext()) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let history = modelMessagesFromProjection(projection)
+            let preparedModelRequest = match (buildBoundedModelRequest(
+                request, history, control, drainFinalization: true
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let effectiveDrainRequest = match (resolvedModelRequestForAttempt(
+                request, preparedModelRequest.request
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            // Conservative projection-based admission before provider
+            // dispatch, not an absolute physical guarantee: worst case =
+            // request-window input estimate at the input rate (no cache
+            // discount) plus the per-request wire output hard limit at the
+            // output rate, priced through the same priceModelUsage rounding
+            // as accounting. If the projection does not fit the remaining
+            // cumulative budget, no request is sent and the durable
+            // checkpoint is the delivered partial result. Actual replies are
+            // still accounted ex-post; input estimate drift and unobservable
+            // provider consumption from failed transports are outside strict
+            // preflight scope.
+            let worstCaseUsage = ExecutionUsage(
+                inputTokens: preparedModelRequest.estimatedInputTokens,
+                outputTokens: effectiveDrainRequest.wireMaxOutputTokens,
+                costMicros: match (request.pricing) {
+                    case Some(pricing) =>
+                        match (priceModelUsage(ModelUsage(
+                            inputTokens: preparedModelRequest.estimatedInputTokens,
+                            outputTokens: effectiveDrainRequest.wireMaxOutputTokens
+                        ), pricing)) {
+                            case Some(value) => value
+                            case None => 0
+                        }
+                    case None => 0
+                }
+            )
+            let blocked = control.ledger.projectedAdmissionBlocked(worstCaseUsage)
+            if (blocked.isSome()) {
+                control.setBudgetMode(BudgetMode.Exhausted)
+                let usageNow = control.ledger.snapshot()
+                let dimension = blocked.getOrThrow()
+                let (limitValue, usedValue): (Int64, Int64) = match (dimension) {
+                    case BudgetDimension.Deadline =>
+                        (request.budget.deadlineMillis, request.budget.deadlineMillis)
+                    case BudgetDimension.InputTokens =>
+                        (request.budget.maxTotalInputTokens, usageNow.inputTokens)
+                    case BudgetDimension.OutputTokens =>
+                        (request.budget.maxTotalOutputTokens, usageNow.outputTokens)
+                    case _ =>
+                        (request.budget.maxCostMicros, usageNow.costMicros)
+                }
+                let _ = emitTyped(
+                    context,
+                    control,
+                    AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                        BudgetMode.Exhausted,
+                        dimension,
+                        limitValue,
+                        usedValue,
+                        0
+                    )),
+                    sink
+                )
+                return completeDrainedRun(
+                    request, context, control, counter, sink,
+                    "run drained at hard budget limit without finalization request"
+                )
+            }
+            let turnId = control.nextTurnId()
+            let active = control.runtime.activeRun().getOrThrow()
+            match (contextManifestRuntime.recordBeforeModelEffect(
+                request,
+                preparedModelRequest.requestId,
+                active.turnId,
+                active.executionLaneId,
+                StepId(
+                    "step-" + request.runId.value + "-drain-" +
+                        control.drainAttempts().toString()
+                ),
+                counter.turns,
+                projection,
+                active.lane,
+                modelRequestCheckpointValue(preparedModelRequest.request),
+                preparedModelRequest.estimatedInputTokens,
+                agentUtcMillis()
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
+            let (reply, calledTool) = match (executeCanonicalModelTurn(
+                request, context, control, counter, preparedModelRequest,
+                turnId, sink, CoreToolLoopState()
+            )) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(CoreTurnExecution.Finished(outcome)) =>
+                    return Result.Ok(outcome)
+                case Result.Ok(CoreTurnExecution.ReadyToFinish(value, called)) =>
+                    (value, called)
+            }
+            if (calledTool) {
+                return fail(
+                    request, context, control,
+                    AgentError(
+                        AgentErrorKind.BudgetExceeded,
+                        "budget.drain_exhausted",
+                        "drain finalization returned tool calls; refusing new tool work"
+                    ),
+                    sink,
+                    counter: Some(counter)
+                )
+            }
+            match (finishTurnWithoutTools(
+                request, context, control, counter, reply, turnId, sink,
+                drained: true
+            )) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(Some(outcome)) => return Result.Ok(outcome)
+                case Result.Ok(None) => ()
+            }
+        }
+        // Unreachable: every loop branch returns. Kept as the typed terminal
+        // expression the compiler requires for a non-Unit function.
+        fail(
+            request, context, control,
             AgentError(
                 AgentErrorKind.BudgetExceeded,
-                "budget.turns_exceeded",
-                "execution turn budget exceeded"
+                "budget.drain_exhausted",
+                "drain loop exited without a terminal outcome"
             ),
             sink,
             counter: Some(counter)
@@ -2042,6 +2459,17 @@ public class AgentCore <: AgentRunner {
         sink: AgentEventSink,
         loopState: CoreToolLoopState
     ): Result<?AgentRunOutcome> {
+        // Graceful drain forbids new tool side effects: a provider that
+        // returns tool calls without an advertised tool surface, or a
+        // recovered decision that lands while the run is draining, is a drain
+        // violation and must not execute.
+        if (control.budgetMode() == BudgetMode.Draining && !calls.isEmpty()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.BudgetExceeded,
+                "budget.drain_exhausted",
+                "tool work is not permitted while the run is draining"
+            ))
+        }
         if (!interruptsImmediately(request)) {
             return runToolBatch(
                 request,
@@ -2117,10 +2545,6 @@ public class AgentCore <: AgentRunner {
             request.budget.maxConcurrentTools,
             { committed =>
                 let block = committed.block
-                match (counter.beforeTool(request.budget)) {
-                    case Result.Ok(_) => ()
-                    case Result.Err(error) => return Result.Err(error)
-                }
                 match (reserveBudget(
                     control,
                     context,
@@ -2129,7 +2553,8 @@ public class AgentCore <: AgentRunner {
                     toolBatchId: Some(batchId),
                     toolCallId: Some(ToolCallId(block.callId))
                 )) {
-                    case Result.Ok(_) => ()
+                    case Result.Ok(_) =>
+                        counter.toolCalls += 1
                     case Result.Err(error) => return Result.Err(error)
                 }
                 emitExtension(
@@ -2554,8 +2979,15 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (counter.beforeModel(request.budget)) {
-                case Result.Ok(_) => ()
+            match (reserveBudget(
+                control,
+                context,
+                BudgetCharge(modelRequests: 1),
+                sink,
+                requestId: Some(RequestId(effectiveAttemptRequest.requestId))
+            )) {
+                case Result.Ok(_) =>
+                    counter.recordModelRequest(control.budgetMode())
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -2572,7 +3004,7 @@ public class AgentCore <: AgentRunner {
                     ValueField("policy_reason", textValue(attemptPolicyReasonName(policy.reason)))
                 ]
             )
-            let result = executeModelWithinBudget(
+            let execution = executeModelWithinBudget(
                 request,
                 counter,
                 effectiveAttemptRequest,
@@ -2582,14 +3014,23 @@ public class AgentCore <: AgentRunner {
                 control,
                 sink
             )
+            let result = execution.result
             match (recordModelAttempt(
                 request,
                 effectiveAttemptRequest,
                 1,
+                counter,
                 result,
                 context,
                 control,
                 sink
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+            match (settleProvisionalModelEvents(
+                execution.provisionalEvents, true, context, control,
+                semanticRequestId, attemptId, sink
             )) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
@@ -2658,8 +3099,15 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (counter.beforeModel(request.budget)) {
-                case Result.Ok(_) => ()
+            match (reserveBudget(
+                control,
+                context,
+                BudgetCharge(modelRequests: 1),
+                sink,
+                requestId: Some(RequestId(effectiveAttemptRequest.requestId))
+            )) {
+                case Result.Ok(_) =>
+                    counter.recordModelRequest(control.budgetMode())
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -2676,7 +3124,7 @@ public class AgentCore <: AgentRunner {
                     ValueField("policy_reason", textValue(attemptPolicyReasonName(policy.reason)))
                 ]
             )
-            let result = executeModelWithinBudget(
+            let execution = executeModelWithinBudget(
                 request,
                 counter,
                 effectiveAttemptRequest,
@@ -2686,17 +3134,27 @@ public class AgentCore <: AgentRunner {
                 control,
                 sink
             )
+            let result = execution.result
+            let provisionalEvents = execution.provisionalEvents
             match (recordModelAttempt(
                 request,
                 effectiveAttemptRequest,
                 attempt,
+                counter,
                 result,
                 context,
                 control,
                 sink
             )) {
                 case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
+                case Result.Err(error) =>
+                    match (settleProvisionalModelEvents(
+                        provisionalEvents, true, context, control,
+                        semanticRequestId, attemptId, sink
+                    )) {
+                        case Result.Ok(_) => return Result.Err(error)
+                        case Result.Err(settleError) => return Result.Err(settleError)
+                    }
             }
             let durableResult = durableResultForAttempt(
                 request, semanticRequestId, attemptId, result,
@@ -2704,6 +3162,13 @@ public class AgentCore <: AgentRunner {
             )
             match (durableResult) {
                 case Result.Ok(durableValue) =>
+                    match (settleProvisionalModelEvents(
+                        provisionalEvents, true, context, control,
+                        semanticRequestId, attemptId, sink
+                    )) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(error) => return Result.Err(error)
+                    }
                     if (retried) {
                         let _ = emitDetail(
                             context,
@@ -2751,17 +3216,39 @@ public class AgentCore <: AgentRunner {
                                 sink
                             )
                         }
+                        match (settleProvisionalModelEvents(
+                            provisionalEvents, true, context, control,
+                            semanticRequestId, attemptId, sink
+                        )) {
+                            case Result.Ok(_) => ()
+                            case Result.Err(settleError) => return Result.Err(settleError)
+                        }
                         return Result.Err(cancelled)
                     }
                     let durable = match (modelDecisionRuntime.uncommittedDecision(
                         request.runId
                     )) {
                         case Result.Ok(value) => value
-                        case Result.Err(storeError) => return Result.Err(storeError)
+                        case Result.Err(storeError) =>
+                            match (settleProvisionalModelEvents(
+                                provisionalEvents, true, context, control,
+                                semanticRequestId, attemptId, sink
+                            )) {
+                                case Result.Ok(_) => return Result.Err(storeError)
+                                case Result.Err(settleError) => return Result.Err(settleError)
+                            }
                     }
                     let persistedAttempt = match (runs.modelAttempt(attemptId)) {
                         case Result.Ok(value) => value
-                        case Result.Err(storeError) => return Result.Err(storeError)
+                        case Result.Err(storeError) =>
+                            match (settleProvisionalModelEvents(
+                                provisionalEvents, true, context, control,
+                                semanticRequestId, attemptId, sink
+                            )) {
+                                case Result.Ok(_) => return Result.Err(storeError)
+                                case Result.Err(settleError) => return Result.Err(settleError)
+                            }
+                            return Result.Err(storeError)
                     }
                     let durableMayWin = durable.isSome() &&
                         persistedAttempt.replayBarrier != ModelAttemptReplayBarrier.Cancelled &&
@@ -2772,11 +3259,25 @@ public class AgentCore <: AgentRunner {
                             let decision = durable.getOrThrow()
                             if (decision.attemptId.value != attemptId.value ||
                                 decision.semanticRequestId.value != semanticRequestId.value) {
-                                return Result.Err(AgentError(
+                                let bindingError = AgentError(
                                     AgentErrorKind.RecoveryRequired,
                                     "model.decision_attempt_binding_invalid",
                                     "durable Model Decision does not match the active attempt"
-                                ))
+                                )
+                                match (settleProvisionalModelEvents(
+                                    provisionalEvents, true, context, control,
+                                    semanticRequestId, attemptId, sink
+                                )) {
+                                    case Result.Ok(_) => return Result.Err(bindingError)
+                                    case Result.Err(settleError) => return Result.Err(settleError)
+                                }
+                            }
+                            match (settleProvisionalModelEvents(
+                                provisionalEvents, true, context, control,
+                                semanticRequestId, attemptId, sink
+                            )) {
+                                case Result.Ok(_) => ()
+                                case Result.Err(settleError) => return Result.Err(settleError)
                             }
                             return Result.Ok(recoveredDurableModelResult(
                                 decision
@@ -2792,14 +3293,46 @@ public class AgentCore <: AgentRunner {
                                 failure.kind == AttemptFailureKind.OutputLimited
                         case None => false
                     }
+                    // A terminal malformed tool-input response is not a
+                    // durable tool decision. The adapter has rejected it
+                    // before projection, so replaying from the last
+                    // canonical context is safe even though provisional tool
+                    // evidence reached the replay barrier. Other failures
+                    // with ToolEvidence remain fail-closed.
+                    let malformedToolArgumentsRecovery = match (error.attemptFailure) {
+                        case Some(failure) =>
+                            failure.kind == AttemptFailureKind.MalformedToolArguments
+                        case None => false
+                    }
+                    // llm4cj has already established that transport EOF
+                    // occurred before any protocol terminal. Its bounded
+                    // diagnostic makes provisional stream evidence safe to
+                    // discard and replay from canonical context.
+                    let providerTerminalMissingRecovery = match (error.attemptFailure) {
+                        case Some(failure) =>
+                            failure.kind == AttemptFailureKind.ProviderTerminalMissing
+                        case None => false
+                    }
                     let replaySafeForRecovery =
                         persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.NoBarrier ||
+                        (malformedToolArgumentsRecovery &&
+                            persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence) ||
+                        (providerTerminalMissingRecovery &&
+                            (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
+                                persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal)) ||
                         (outputLimitedRecovery &&
                             (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
                                 persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal))
                     let willRetry = retryableDisposition && attempt < maxAttempts &&
                         modelAttemptRecovery.maxRecoveryRetries > 0 &&
                         replaySafeForRecovery
+                    match (settleProvisionalModelEvents(
+                        provisionalEvents, !willRetry, context, control,
+                        semanticRequestId, attemptId, sink
+                    )) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(settleError) => return Result.Err(settleError)
+                    }
                     match (modelDecisionRuntime.terminalizeAttempt(
                         attemptId,
                         if (willRetry) {
@@ -2939,11 +3472,13 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         modelRequest: ModelRequest,
         attempt: Int64,
+        counter: BudgetCounter,
         result: Result<ModelReply>,
         context: ToolInvocationContext,
         control: CoreRunControl,
         sink: AgentEventSink
     ): Result<Unit> {
+        var budgetFailure: ?AgentError = None
         let value = match (result) {
             case Result.Ok(reply) => ModelRequestAttempt(
                 RequestId(modelRequest.requestId),
@@ -2955,25 +3490,60 @@ public class AgentCore <: AgentRunner {
                     request.pricing
                 ))
             )
-            case Result.Err(error) => ModelRequestAttempt(
-                RequestId(modelRequest.requestId),
-                modelRequest.model,
-                attempt,
-                if (error.kind == AgentErrorKind.Cancelled) {
-                    ModelRequestOutcome.Cancelled
-                } else {
-                    ModelRequestOutcome.Failed
-                },
-                errorCode: error.code
-            )
+            case Result.Err(error) =>
+                // A provider may bill a request whose reply was rejected
+                // (malformed tool arguments) or whose stream died before a
+                // terminal (truncated stream). The adapter surfaces that
+                // observed usage as error fields; charge it so cumulative
+                // token and cost enforcement counts abandoned attempts too.
+                let billed = attemptUsageFromError(error, request.pricing)
+                match (billed) {
+                    case Some(usage) =>
+                        counter.accountObservedUsage(usage)
+                        match (control.ledger.reserve(BudgetCharge(
+                            inputTokens: usage.inputTokens,
+                            outputTokens: usage.outputTokens,
+                            costMicros: match (usage.costMicros) {
+                                case Some(value) => value
+                                case None => 0
+                            }
+                        ))) {
+                            case Result.Ok(_) => ()
+                            case Result.Err(budgetError) =>
+                                // Keep the observed usage in the ledger for
+                                // the terminal snapshot, but fail closed:
+                                // an over-limit billed attempt must not retry.
+                                let _ = control.ledger.recordObservedUsage(usage)
+                                budgetFailure = Some(budgetError)
+                        }
+                    case None => ()
+                }
+                ModelRequestAttempt(
+                    RequestId(modelRequest.requestId),
+                    modelRequest.model,
+                    attempt,
+                    if (error.kind == AgentErrorKind.Cancelled) {
+                        ModelRequestOutcome.Cancelled
+                    } else {
+                        ModelRequestOutcome.Failed
+                    },
+                    usage: billed,
+                    errorCode: error.code
+                )
         }
-        emitTyped(
+        match (emitTyped(
             context,
             control,
             AgentEventPayload.ModelRequestAttemptCompleted(value),
             sink,
             requestId: Some(value.requestId)
-        )
+        )) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => match (budgetFailure) {
+                case Some(error) => Result.Err(error)
+                case None => Result.Ok(())
+            }
+        }
     }
 
     private func retryDelayMillis(attempt: Int64, error: AgentError): Int64 {
@@ -3047,7 +3617,7 @@ public class AgentCore <: AgentRunner {
         context: ToolInvocationContext,
         control: CoreRunControl,
         sink: AgentEventSink
-    ): Result<ModelReply> {
+    ): ModelAttemptExecution {
         let activity = AttemptDeadlineContext(
             modelAttemptRecovery, attemptClock,
             idleLimitMillis: request.budget.maxIdleMillis
@@ -3069,7 +3639,8 @@ public class AgentCore <: AgentRunner {
                             }
                             case None => ()
                         }
-                        if (activity.persistenceError().isNone()) {
+                        if (activity.persistenceError().isNone() &&
+                            !activity.isProvisionalOutput(event)) {
                             match (forwardModelEvent(
                                 context, control, semanticRequestId, attemptId, event, sink
                             )) {
@@ -3088,7 +3659,9 @@ public class AgentCore <: AgentRunner {
                     activity.close()
                     let _ = model.cancel(modelRequest.requestId)
                     control.clearActiveRequest(modelRequest.requestId)
-                    return Result.Err(error)
+                    return ModelAttemptExecution(
+                        Result.Err(error), activity.takeProvisionalOutput()
+                    )
                 case None => ()
             }
             match (control.ledger.reserve(BudgetCharge())) {
@@ -3100,7 +3673,9 @@ public class AgentCore <: AgentRunner {
                         context, control, sink
                     )) {
                         case Result.Ok(_) => ()
-                        case Result.Err(storeError) => return Result.Err(storeError)
+                        case Result.Err(storeError) => return ModelAttemptExecution(
+                            Result.Err(storeError), activity.takeProvisionalOutput()
+                        )
                     }
                     let _ = control.requestCancel(
                         CancellationReasonKind.Budget,
@@ -3108,7 +3683,9 @@ public class AgentCore <: AgentRunner {
                         error.message
                     )
                     control.clearActiveRequest(modelRequest.requestId)
-                    return Result.Err(error)
+                    return ModelAttemptExecution(
+                        Result.Err(error), activity.takeProvisionalOutput()
+                    )
                 case Result.Ok(_) => ()
             }
             if (control.source.token.isCancelled() || isRunCancelled(request.runId)) {
@@ -3122,11 +3699,16 @@ public class AgentCore <: AgentRunner {
                     context, control, sink
                 )) {
                     case Result.Ok(_) => ()
-                    case Result.Err(storeError) => return Result.Err(storeError)
+                    case Result.Err(storeError) => return ModelAttemptExecution(
+                        Result.Err(storeError), activity.takeProvisionalOutput()
+                    )
                 }
                 let _ = model.cancel(modelRequest.requestId)
                 control.clearActiveRequest(modelRequest.requestId)
-                return Result.Err(controlCancellationError(control))
+                return ModelAttemptExecution(
+                    Result.Err(controlCancellationError(control)),
+                    activity.takeProvisionalOutput()
+                )
             }
             if (request.budget.maxWallMillis > 0 &&
                 (MonoTime.now() - counter.startedAt).toMilliseconds() >=
@@ -3138,16 +3720,18 @@ public class AgentCore <: AgentRunner {
                     context, control, sink
                 )) {
                     case Result.Ok(_) => ()
-                    case Result.Err(storeError) => return Result.Err(storeError)
+                    case Result.Err(storeError) => return ModelAttemptExecution(
+                        Result.Err(storeError), activity.takeProvisionalOutput()
+                    )
                 }
                 let _ = model.cancel(modelRequest.requestId)
                 control.clearActiveRequest(modelRequest.requestId)
-                return Result.Err(
-                    modelTimeoutError(
-                        "wall",
-                        request.budget.maxWallMillis
+                    return ModelAttemptExecution(
+                        Result.Err(modelTimeoutError(
+                            "wall",
+                            request.budget.maxWallMillis
+                        )), activity.takeProvisionalOutput()
                     )
-                )
             }
             match (activity.evaluate()) {
                     case AttemptDeadlineAction.Continue => ()
@@ -3180,42 +3764,50 @@ public class AgentCore <: AgentRunner {
                         activity.close()
                         let _ = model.cancel(modelRequest.requestId)
                         control.clearActiveRequest(modelRequest.requestId)
-                        return Result.Err(attemptFailureError(
-                            AttemptFailureKind.StreamIdleTimeout,
-                            "model.stream_idle_timeout",
-                            "model stream made no meaningful progress before the idle deadline",
-                            activity.diagnostics(), retryable: true
-                        ))
+                        return ModelAttemptExecution(
+                            Result.Err(attemptFailureError(
+                                AttemptFailureKind.StreamIdleTimeout,
+                                "model.stream_idle_timeout",
+                                "model stream made no meaningful progress before the idle deadline",
+                                activity.diagnostics(), retryable: true
+                            )), activity.takeProvisionalOutput()
+                        )
                     case AttemptDeadlineAction.SoftDeadlineExceeded =>
                         activity.close()
                         let _ = model.cancel(modelRequest.requestId)
                         control.clearActiveRequest(modelRequest.requestId)
-                        return Result.Err(attemptFailureError(
-                            AttemptFailureKind.AttemptSoftDeadlineExceeded,
-                            "model.attempt_soft_deadline_exceeded",
-                            "model attempt reached its soft deadline without completion progress",
-                            activity.diagnostics(), retryable: true
-                        ))
+                        return ModelAttemptExecution(
+                            Result.Err(attemptFailureError(
+                                AttemptFailureKind.AttemptSoftDeadlineExceeded,
+                                "model.attempt_soft_deadline_exceeded",
+                                "model attempt reached its soft deadline without completion progress",
+                                activity.diagnostics(), retryable: true
+                            )), activity.takeProvisionalOutput()
+                        )
                     case AttemptDeadlineAction.HardDeadlineExceeded =>
                         activity.close()
                         let _ = model.cancel(modelRequest.requestId)
                         control.clearActiveRequest(modelRequest.requestId)
-                        return Result.Err(attemptFailureError(
-                            AttemptFailureKind.AttemptHardDeadlineExceeded,
-                            "model.attempt_hard_deadline_exceeded",
-                            "model attempt exceeded its immutable hard deadline",
-                            activity.diagnostics(), retryable: true
-                        ))
+                        return ModelAttemptExecution(
+                            Result.Err(attemptFailureError(
+                                AttemptFailureKind.AttemptHardDeadlineExceeded,
+                                "model.attempt_hard_deadline_exceeded",
+                                "model attempt exceeded its immutable hard deadline",
+                                activity.diagnostics(), retryable: true
+                            )), activity.takeProvisionalOutput()
+                        )
                     case AttemptDeadlineAction.ReasoningRestartedInGrace =>
                         activity.close()
                         let _ = model.cancel(modelRequest.requestId)
                         control.clearActiveRequest(modelRequest.requestId)
-                        return Result.Err(attemptFailureError(
-                            AttemptFailureKind.DecisionIncompleteAtDeadline,
-                            "model.grace_reasoning_restarted",
-                            "model restarted reasoning after entering decision completion grace",
-                            activity.diagnostics(), retryable: true
-                        ))
+                        return ModelAttemptExecution(
+                            Result.Err(attemptFailureError(
+                                AttemptFailureKind.DecisionIncompleteAtDeadline,
+                                "model.grace_reasoning_restarted",
+                                "model restarted reasoning after entering decision completion grace",
+                                activity.diagnostics(), retryable: true
+                            )), activity.takeProvisionalOutput()
+                        )
             }
             sleep(Duration.millisecond * 10)
         }
@@ -3242,14 +3834,19 @@ public class AgentCore <: AgentRunner {
                 context, control, sink
             )) {
                 case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
+                case Result.Err(error) => return ModelAttemptExecution(
+                    Result.Err(error), activity.takeProvisionalOutput()
+                )
             }
             case None => ()
         }
         match (activity.persistenceError()) {
-            case Some(error) => return Result.Err(error)
+            case Some(error) => return ModelAttemptExecution(
+                Result.Err(error), activity.takeProvisionalOutput()
+            )
             case None => ()
         }
+        let provisionalEvents = activity.takeProvisionalOutput()
         match (result) {
             case Result.Err(error) =>
                 // Partial deltas stay attempt-scoped and diagnostic-only. The
@@ -3263,8 +3860,8 @@ public class AgentCore <: AgentRunner {
                         fields.add(field)
                     }
                     fields.add(ErrorField("partial_stream", "true"))
-                    Result.Err(
-                        AgentError(
+                    ModelAttemptExecution(
+                        Result.Err(AgentError(
                             error.kind,
                             error.code,
                             error.message,
@@ -3272,20 +3869,45 @@ public class AgentCore <: AgentRunner {
                             fallbackAllowed: error.fallbackAllowed,
                             fields: fields.toArray(),
                             attemptFailure: error.attemptFailure
-                        )
+                        )), provisionalEvents
                     )
                 } else {
-                    Result.Err(error)
+                    ModelAttemptExecution(Result.Err(error), provisionalEvents)
                 }
             case Result.Ok(reply) => match (persistFirstModelAttemptBarrier(
                 activity, attemptId, semanticRequestId,
                 ModelAttemptReplayBarrier.ProviderTerminal,
                 context, control, sink
             )) {
-                case Result.Ok(_) => Result.Ok(reply)
-                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => ModelAttemptExecution(
+                    Result.Ok(reply), provisionalEvents
+                )
+                case Result.Err(error) => ModelAttemptExecution(
+                    Result.Err(error), provisionalEvents
+                )
             }
         }
+    }
+
+    private func settleProvisionalModelEvents(
+        events: Array<ModelEvent>,
+        keep: Bool,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        semanticRequestId: SemanticModelRequestId,
+        attemptId: ModelAttemptId,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        if (!keep) { return Result.Ok(()) }
+        for (event in events) {
+            match (forwardModelEvent(
+                context, control, semanticRequestId, attemptId, event, sink
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
+        Result.Ok(())
     }
 
     private func isRunCancelled(runId: RunId): Bool {
@@ -3881,7 +4503,8 @@ public class AgentCore <: AgentRunner {
     private func controlForResume(
         request: AgentRunRequest,
         snapshot: RunSnapshot,
-        modelRecovery!: Bool = false
+        modelRecovery!: Bool = false,
+        initialUsage!: ?ExecutionUsage = None
     ): Result<CoreRunControl> {
         match (controls.find(request.runId)) {
             case Some(value) => Result.Ok(value)
@@ -3932,27 +4555,36 @@ public class AgentCore <: AgentRunner {
                             }
                         }
                 }
+                let restoredModelRequests = match (initialUsage) {
+                    case Some(value) => value.modelRequests + value.drainModelRequests
+                    case None => snapshot.modelRequests
+                }
                 let control = CoreRunControl(
                     request.runId,
                     request.budget,
                     runtime,
                     initial: if (modelRecovery) { RunState.Running } else { RunState.WaitingApproval },
                     turns: snapshot.turns,
-                    modelRequests: snapshot.modelRequests
+                    modelRequests: restoredModelRequests
                 )
-                match (control.ledger.reserve(BudgetCharge(
-                    turns: snapshot.turns,
-                    toolCalls: snapshot.toolCalls,
-                    inputTokens: snapshot.inputTokens,
-                    outputTokens: snapshot.outputTokens,
-                    costMicros: match (snapshot.costMicros) {
-                        case Some(value) => value
-                        case None => 0
-                    }
-                ))) {
-                    case Result.Ok(_) => ()
-                    case Result.Err(error) => return Result.Err(error)
+                // Budget continuity across crash/resume: prefer the exact
+                // durable checkpoint usage over the coarser Run snapshot so a
+                // resumed run can never re-enter the loop with fresh budget.
+                let restoredUsage = match (initialUsage) {
+                    case Some(value) => value
+                    case None => ExecutionUsage(
+                        turns: snapshot.turns,
+                        modelRequests: snapshot.modelRequests,
+                        toolCalls: snapshot.toolCalls,
+                        inputTokens: snapshot.inputTokens,
+                        outputTokens: snapshot.outputTokens,
+                        costMicros: match (snapshot.costMicros) {
+                            case Some(value) => value
+                            case None => 0
+                        }
+                    )
                 }
+                control.ledger.restore(restoredUsage)
                 match (controls.add(control)) {
                     case Result.Ok(_) => ()
                     case Result.Err(error) => return Result.Err(error)
@@ -4560,6 +5192,13 @@ public class AgentCore <: AgentRunner {
             effectiveRequest.requestId,
             now,
             modelRequests: counter.modelRequests,
+            workModelRequests: counter.workModelRequests,
+            drainModelRequests: counter.drainModelRequests,
+            requestBudgetClass: if (control.budgetMode() == BudgetMode.Draining) {
+                BudgetChargeClass.Drain
+            } else {
+                BudgetChargeClass.Work
+            },
             inputTokens: counter.inputTokens,
             outputTokens: counter.outputTokens,
             reasoningTokens: counter.reasoningTokens,
@@ -5886,6 +6525,7 @@ func attemptFailureKindName(value: AttemptFailureKind): String {
         case AttemptFailureKind.OutputLimitedBeforeDecision => "output_limited_before_decision"
         case AttemptFailureKind.ProviderTransportError => "provider_transport_error"
         case AttemptFailureKind.ProviderProtocolError => "provider_protocol_error"
+        case AttemptFailureKind.MalformedToolArguments => "malformed_tool_arguments"
         case AttemptFailureKind.UserCancelled => "user_cancelled"
         case AttemptFailureKind.RunDeadlineExceeded => "run_deadline_exceeded"
     }
@@ -6193,7 +6833,8 @@ func invalidAttemptDecision<T>(
         retryable: kind == AttemptFailureKind.OutputLimited ||
             kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
             kind == AttemptFailureKind.ProviderTerminalMissing ||
-            kind == AttemptFailureKind.ProtocolIncomplete,
+            kind == AttemptFailureKind.ProtocolIncomplete ||
+            kind == AttemptFailureKind.MalformedToolArguments,
         fields: fields,
         attemptFailure: Some(AttemptFailure(kind))
     ))
@@ -6650,6 +7291,8 @@ func coreModelLane(request: AgentRunRequest, catalog: ToolCatalog): ModelLane {
 func coreBudgetSnapshot(budget: ResourceBudget): AgentValue {
     objectValue([
         ValueField("max_turns", integerValue(budget.maxTurns)),
+        ValueField("max_drain_turns", integerValue(budget.maxDrainTurns)),
+        ValueField("max_model_requests", integerValue(budget.maxModelRequests)),
         ValueField("max_tool_calls", integerValue(budget.maxToolCalls)),
         ValueField("max_concurrent_tools", integerValue(budget.maxConcurrentTools)),
         ValueField("max_total_input_tokens", integerValue(budget.maxTotalInputTokens)),
