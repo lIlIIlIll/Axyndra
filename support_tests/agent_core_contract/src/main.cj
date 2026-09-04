@@ -118,6 +118,7 @@ main(): Int64 {
     outputLimitedRecoveryExhaustionContract()
     modelIdleTimeoutContract()
     idleRetryRecoversContract()
+    liveStreamingBeforeProviderReturnContract()
     retryBackoffControlContract()
     partialToolCallNeverEscapesContract()
     completedBlockIsNotDecisionContract()
@@ -154,6 +155,8 @@ main(): Int64 {
     childBudgetPoolSchedulingGatesContract()
     budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
+    failedAttemptUsageObeysRequestBudgetContract()
+    zeroUsageFailureThenPricedSuccessContract()
     contextCompactionContract()
     contextBoundaryContract()
     println("agent_core contract passed")
@@ -280,7 +283,7 @@ func deadlineRetryExactReplayContract(): Unit {
             case None => ()
         }
     }
-    expect(scopedDeltas == 1 && starts == 2 && aborted == 1 && committed == 1,
+    expect(scopedDeltas == 2 && starts == 2 && aborted == 1 && committed == 1,
         "U1/U2/U3 provisional and lifecycle events retain durable Attempt identity")
 }
 
@@ -449,9 +452,10 @@ func providerTerminalMissingRetryContract(): Unit {
         decisions.terminalizedIds.size == 1 &&
         decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
         decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
-        snapshot.items.size == 2 && toolItems == 0 && visibleDeltas == 1 &&
-        !staleVisible && recoveredVisible,
-        "provider EOF retries after ToolEvidence without canonical tool items"
+        snapshot.items.size == 2 && toolItems == 0 && visibleDeltas == 2 &&
+        staleVisible && recoveredVisible &&
+        hasEvent(runs.eventLog, "model.attempt_aborted"),
+        "provider EOF retries after ToolEvidence while live deltas remain attempt-scoped"
     )
 }
 
@@ -1997,24 +2001,35 @@ func telemetryPersistenceFailureIsolationContract(): Unit {
     let model = TelemetryThenCompleteModel()
     let decisions = RecordingModelDecisionPort()
     let catalog = ToolCatalog()
+    let liveEvents = ArrayList<AgentEvent>()
+    let runs = MemoryRuns(failStreamTelemetry: true)
     let threads = InMemoryThreadRuntimeRegistry(
         ContextProjector("telemetry-failure-contract", ConservativeThreadTokenEstimator()),
         { => agentUtcMillis() }
     )
     let result = AgentCore(
-        model, MemoryRuns(failStreamTelemetry: true),
+        model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
         catalog, threadRuntimes: Some(threads), modelDecisionRuntime: Some(decisions)
     ).start(AgentRunRequest(
         RunId("telemetry-failure-run"), SessionId("telemetry-failure-session"),
         "fixture", "telemetry is not correctness"
-    ))
+    ), { event => liveEvents.add(event) })
     let snapshot = threads.acquire(
         ThreadId("telemetry-failure-session"), "agent-core"
     ).value().getOrThrow().threadSnapshot()
+    var rawTextReachedLiveSink = false
+    for (event in liveEvents) {
+        match (event.payload) {
+            case AgentEventPayload.TextDelta(_) => rawTextReachedLiveSink = true
+            case _ => ()
+        }
+    }
     expect(result.isOk() && model.calls == 1 && decisions.decisions == 1 &&
-        snapshot.items.size == 2,
-        "stream telemetry persistence failure neither invalidates the Decision nor retries the model")
+        snapshot.items.size == 2 && !rawTextReachedLiveSink &&
+        hasEvent(liveEvents, "model.stream_telemetry_dropped") &&
+        hasEvent(runs.eventLog, "model.stream_telemetry_dropped"),
+        "telemetry fallback exposes the persisted dropped diagnostic to live consumers")
 }
 
 class TelemetryThenCompleteModel <: ModelPort {
@@ -2565,7 +2580,7 @@ class RetryAfterModel <: ModelPort {
             "model.rate_limited",
             "retry later",
             retryable: true,
-            fields: [ErrorField("retry_after_ms", "600000")]
+            fields: [ErrorField(RETRY_AFTER_MILLIS_FIELD, "600000")]
         ))
     }
 
@@ -3787,6 +3802,100 @@ func usageAccountingContract(): Unit {
     }, "usage without explicit catalog pricing keeps cost unknown")
 }
 
+func failedAttemptUsageObeysRequestBudgetContract(): Unit {
+    let model = FailedUsageOverLimitModel()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let result = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    ).start(AgentRunRequest(
+        RunId("failed-usage-budget-run"),
+        SessionId("failed-usage-budget-session"),
+        "fixture",
+        "reject over-limit failed usage",
+        budget: ResourceBudget(
+            maxInputTokens: 1000,
+            maxOutputTokens: 100,
+            maxWallMillis: 5000,
+            maxIdleMillis: 1000
+        ),
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(1000000),
+            cacheReadMicrosPerMillion: Some(1000000),
+            cacheWriteMicrosPerMillion: Some(1000000)
+        ))
+    ))
+    let snapshot = runs.find(
+        RunId("failed-usage-budget-run")
+    ).value().getOrThrow()
+    let budgetFailure = match (result.error()) {
+        case Some(error) => error.kind == AgentErrorKind.BudgetExceeded &&
+            error.code == "run.budget_exceeded" &&
+            error.field("resource") == Some("output_tokens")
+        case None => false
+    }
+    var attemptUsagePreserved = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                match (value.usage) {
+                    case Some(usage) => attemptUsagePreserved =
+                        usage.inputTokens == 10 && usage.outputTokens == 101 &&
+                        usage.reasoningTokens == 50 && usage.cacheReadTokens == 2 &&
+                        usage.cacheWriteTokens == 1 && usage.costMicros == Some(111)
+                    case None => ()
+                }
+            case _ => ()
+        }
+    }
+    expect(
+        result.isError() && budgetFailure && model.calls == 1 &&
+            snapshot.modelRequests == 1 && snapshot.inputTokens == 10 &&
+            snapshot.outputTokens == 101 && snapshot.reasoningTokens == 50 &&
+            snapshot.cacheReadTokens == 2 && snapshot.cacheWriteTokens == 1 &&
+            snapshot.costMicros == Some(111) && attemptUsagePreserved,
+        "failed attempt usage keeps all buckets, applies per-request limits, and prevents retry"
+    )
+}
+
+func zeroUsageFailureThenPricedSuccessContract(): Unit {
+    let model = ZeroUsageFailureThenPricedSuccessModel()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let result = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    ).start(AgentRunRequest(
+        RunId("zero-usage-retry-run"),
+        SessionId("zero-usage-retry-session"),
+        "fixture",
+        "retain the priced retry",
+        pricing: Some(ModelPricing(
+            inputMicrosPerMillion: Some(1000000),
+            outputMicrosPerMillion: Some(1000000)
+        ))
+    ))
+    let completed = match (result) {
+        case Result.Ok(value) => match (value) {
+            case AgentRunOutcome.Completed(snapshot) => snapshot
+            case _ => throw IllegalStateException("priced retry did not complete")
+        }
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    expect(
+        model.calls == 2 && completed.modelRequests == 2 &&
+            completed.inputTokens == 10 && completed.outputTokens == 5 &&
+            completed.costMicros == Some(15),
+        "a priced success after a zero-usage failure remains cost-accounted"
+    )
+}
+
 func contextCompactionContract(): Unit {
     // 8 turns grow the history far beyond maxContextMessages 6; the final
     // request must carry at most 6 messages and must not start on an orphan
@@ -4401,6 +4510,130 @@ class RecoveryAwareModel <: ModelPort {
             )
         ]))
     }
+}
+
+class BlockingTextModel <: ModelPort {
+    private let lock = Mutex()
+    private var callbackReturned = false
+    private var released = false
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        events(ModelEvent.TextDelta("live-before-return"))
+        lock.lock()
+        callbackReturned = true
+        lock.unlock()
+        while (true) {
+            lock.lock()
+            let done = released
+            lock.unlock()
+            if (done) { break }
+            sleep(Duration.millisecond)
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "canonical-after-live")],
+            stopReason: "end_turn", responseId: "live-stream-response"
+        ))
+    }
+
+    func callbackHasReturned(): Bool {
+        lock.lock()
+        try { callbackReturned } finally { lock.unlock() }
+    }
+
+    func release(): Unit {
+        lock.lock()
+        try { released = true } finally { lock.unlock() }
+    }
+}
+
+class LockedEventCollector {
+    private let lock = Mutex()
+    private let values = ArrayList<AgentEvent>()
+
+    func add(event: AgentEvent): Unit {
+        lock.lock()
+        try { values.add(event) } finally { lock.unlock() }
+    }
+
+    func snapshot(): Array<AgentEvent> {
+        lock.lock()
+        try { values.toArray() } finally { lock.unlock() }
+    }
+}
+
+func liveStreamingBeforeProviderReturnContract(): Unit {
+    let model = BlockingTextModel()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let threads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("live-stream-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threads)
+    )
+    let collected = LockedEventCollector()
+    let future = spawn {
+        core.start(
+            AgentRunRequest(
+                RunId("live-stream-run"), SessionId("live-stream-session"),
+                "fixture", "stream while provider is blocked",
+                budget: ResourceBudget(maxWallMillis: 5000, maxIdleMillis: 1000)
+            ),
+            { event => collected.add(event) }
+        )
+    }
+    var callbackObserved = false
+    for (_ in 0..200) {
+        if (model.callbackHasReturned()) {
+            callbackObserved = true
+            break
+        }
+        sleep(Duration.millisecond)
+    }
+    let beforeRelease = collected.snapshot()
+    var liveIndex: Int64 = -1
+    var terminalIndex: Int64 = -1
+    for (index in 0..beforeRelease.size) {
+        match (beforeRelease[index].payload) {
+            case AgentEventPayload.TextDelta(value) => if (value == "live-before-return") {
+                liveIndex = index
+            }
+            case AgentEventPayload.ModelRequestAttemptCompleted(_) => terminalIndex = index
+            case _ => ()
+        }
+    }
+    expect(
+        callbackObserved && liveIndex >= 0 && terminalIndex < 0,
+        "text delta reaches the attempt-scoped live sink before the provider returns"
+    )
+    model.release()
+    let result = future.get()
+    let afterRelease = collected.snapshot()
+    var liveCount: Int64 = 0
+    var completedAttemptIndex: Int64 = -1
+    for (index in 0..afterRelease.size) {
+        match (afterRelease[index].payload) {
+            case AgentEventPayload.TextDelta(value) => if (value == "live-before-return") {
+                liveCount += 1
+            }
+            case AgentEventPayload.ModelRequestAttemptCompleted(_) => completedAttemptIndex = index
+            case _ => ()
+        }
+    }
+    expect(
+        result.isOk() && liveCount == 1 && completedAttemptIndex > liveIndex,
+        "live text is not duplicated when the durable attempt completes"
+    )
 }
 
 class StalledModel <: ModelPort {
@@ -5032,6 +5265,60 @@ class DetailedUsageModel <: ModelPort {
                 cacheReadTokens: 30,
                 cacheWriteTokens: 10
             ))
+        ))
+    }
+}
+
+class FailedUsageOverLimitModel <: ModelPort {
+    var calls: Int64 = 0
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        let _ = events
+        calls += 1
+        Result.Err(AgentError(
+            AgentErrorKind.Protocol,
+            "fixture.failed_usage",
+            "provider rejected a request after consuming output tokens",
+            retryable: true,
+            fields: [
+                ErrorField("usage_input_tokens", "10"),
+                ErrorField("usage_output_tokens", "101"),
+                ErrorField("usage_reasoning_tokens", "50"),
+                ErrorField("usage_cache_read_tokens", "2"),
+                ErrorField("usage_cache_write_tokens", "1")
+            ]
+        ))
+    }
+}
+
+class ZeroUsageFailureThenPricedSuccessModel <: ModelPort {
+    var calls: Int64 = 0
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        calls += 1
+        if (calls == 1) {
+            let _ = events
+            return Result.Err(AgentError(
+                AgentErrorKind.Transport,
+                "fixture.zero_usage_failure",
+                "provider failed before reporting usage",
+                retryable: true
+            ))
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "priced retry")],
+            stopReason: "end_turn",
+            usage: Some(ModelUsage(inputTokens: 10, outputTokens: 5)),
+            responseId: "priced-retry-response"
         ))
     }
 }

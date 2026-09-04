@@ -315,6 +315,16 @@ class RetryAfterParsingTests {
         @Expect(extractRetryAfterHeader(
             "Retry-After: 9223372036854775807\n"
         ), 8000)
+        let produced = providerFailure(
+            0,
+            429,
+            "retry later",
+            "fixture",
+            retryAfterMillis: 5
+        )
+        @Expect(produced.field(domain.RETRY_AFTER_MILLIS_FIELD).isSome(), true)
+        @Expect(produced.field(domain.RETRY_AFTER_MILLIS_FIELD).getOrThrow(), "5")
+        @Expect(produced.field(domain.LEGACY_RETRY_AFTER_MILLIS_FIELD).isNone(), true)
         @Expect(retryAfterMillis(domain.AgentError(
             domain.AgentErrorKind.RateLimited,
             "model.rate_limited",
