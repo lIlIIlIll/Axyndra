@@ -232,6 +232,19 @@ class NativeReplayRegressionTests {
         }
     }
 
+    @TestCase
+    func validNonObjectToolArgumentsRemainProjectable(): Unit {
+        let reply = fromLlmWireReply(LlmWireReply(
+            blocks: [LlmWireOutputBlock.ToolCall(LlmWireToolCallBlock(
+                "call-shape", "read",
+                LlmWireToolArguments.InvalidShape(parseLlmWireJson("[1,2]"))
+            ))],
+            rawStopReason: "tool_use"
+        ), "fixture", ProviderProtocol.Messages, false)
+        @Expect(reply.blocks.size, 1)
+        @Expect(encodeAgentValue(reply.blocks[0].arguments), "[1,2]")
+    }
+
 }
 
 @Test

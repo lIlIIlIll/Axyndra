@@ -288,6 +288,7 @@ class DeadlineThenAnswerModel <: ModelPort {
                 ))
             ))
         }
+        events(ModelEvent.TextDelta("recovered output"))
         events(ModelEvent.Completed)
         Result.Ok(contractModelReply(
             [ModelBlock(ModelBlockKind.Text, text: "recovered")],
@@ -313,6 +314,127 @@ func toolEvidenceBlocksRetryContract(): Unit {
     expect(result.isError() && model.calls == 1 && decisions.createdAttempts.size == 1 &&
         runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence,
         "T6b provisional ToolCall evidence durably prevents A2")
+}
+
+func malformedToolArgumentsRetryContract(): Unit {
+    let model = MalformedToolArgumentsThenSuccessModel()
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let runs = MemoryRuns()
+    let threads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("malformed-tool-retry-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threads),
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(
+            mode: ModelAttemptRecoveryMode.RecoveryV1,
+            attemptTimeoutMillis: 5000,
+            maxRecoveryRetries: 1
+        )
+    ).start(AgentRunRequest(
+        RunId("malformed-tool-retry-run"),
+        SessionId("malformed-tool-retry-session"),
+        "fixture", "retry malformed terminal tool arguments"
+    ))
+    let snapshot = threads.acquire(
+        ThreadId("malformed-tool-retry-session"), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var toolItems: Int64 = 0
+    for (item in snapshot.items) {
+        if (item.kind == ItemKind.ToolCall || item.kind == ItemKind.ToolResult) {
+            toolItems += 1
+        }
+    }
+    let finalSnapshot = runs.find(RunId("malformed-tool-retry-run")).value().getOrThrow()
+    var observedFailedUsage = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                if (value.attempt == 1) {
+                    observedFailedUsage = match (value.usage) {
+                        case Some(usage) => usage.inputTokens == 500 &&
+                            usage.outputTokens == 100
+                        case None => false
+                    }
+                }
+            case _ => ()
+        }
+    }
+    expect(
+        finalSnapshot.usage.inputTokens == 500 && finalSnapshot.usage.outputTokens == 100 &&
+        observedFailedUsage && result.isOk() && model.calls == 2 &&
+        decisions.attempts == 2 &&
+        decisions.decisions == 1 && runs.modelAttempts.size == 2 &&
+        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence &&
+        decisions.terminalizedIds.size == 1 &&
+        decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
+        decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
+        snapshot.items.size == 2 && toolItems == 0,
+        "malformed terminal tool JSON retries after ToolEvidence without canonical tool items"
+    )
+}
+
+func providerTerminalMissingRetryContract(): Unit {
+    let model = ProviderTerminalMissingThenSuccessModel()
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let runs = MemoryRuns()
+    let threads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("provider-terminal-retry-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(threads),
+        modelDecisionRuntime: Some(decisions),
+        modelAttemptRecovery: ModelAttemptRecoveryPolicy(
+            mode: ModelAttemptRecoveryMode.RecoveryV1,
+            attemptTimeoutMillis: 5000,
+            maxRecoveryRetries: 1
+        )
+    ).start(AgentRunRequest(
+        RunId("provider-terminal-retry-run"),
+        SessionId("provider-terminal-retry-session"),
+        "fixture", "retry provider EOF before terminal"
+    ))
+    let snapshot = threads.acquire(
+        ThreadId("provider-terminal-retry-session"), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var toolItems: Int64 = 0
+    for (item in snapshot.items) {
+        if (item.kind == ItemKind.ToolCall || item.kind == ItemKind.ToolResult) {
+            toolItems += 1
+        }
+    }
+    var visibleDeltas: Int64 = 0
+    var staleVisible = false
+    var recoveredVisible = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.TextDelta(value) =>
+                visibleDeltas += 1
+                if (value == "stale partial") { staleVisible = true }
+                if (value == "recovered partial") { recoveredVisible = true }
+            case _ => ()
+        }
+    }
+    expect(
+        result.isOk() && model.calls == 2 && decisions.attempts == 2 &&
+        decisions.decisions == 1 && runs.modelAttempts.size == 2 &&
+        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ToolEvidence &&
+        decisions.terminalizedIds.size == 1 &&
+        decisions.terminalizedIds[0].value == runs.modelAttempts[0].id.value &&
+        decisions.terminalizedLifecycles[0] == ModelAttemptLifecycle.Abandoned &&
+        snapshot.items.size == 2 && toolItems == 0 && visibleDeltas == 1 &&
+        !staleVisible && recoveredVisible,
+        "provider EOF retries after ToolEvidence without canonical tool items"
+    )
 }
 
 func cancellationAndRunDeadlineBarriersContract(): Unit {
@@ -1785,6 +1907,70 @@ class PartialThenSuccessModel <: ModelPort {
         Result.Ok(contractModelReply(
             [ModelBlock(ModelBlockKind.Text, text: "success")],
             stopReason: "end_turn", responseId: "retry-success"
+        ))
+    }
+}
+
+class MalformedToolArgumentsThenSuccessModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request.requestId
+        calls += 1
+        if (calls == 1) {
+            events(ModelEvent.ToolCallStarted("malformed", "task"))
+            events(ModelEvent.ToolArgumentsDelta("malformed", "{\"tasks\":["))
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "llm.tool_arguments_not_executable",
+                "tool arguments are not a complete JSON object",
+                retryable: true,
+                attemptFailure: Some(AttemptFailure(
+                    AttemptFailureKind.MalformedToolArguments
+                )),
+                fields: [
+                    ErrorField("usage_input_tokens", "500"),
+                    ErrorField("usage_output_tokens", "100")
+                ]
+            ))
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "recovered")],
+            stopReason: "end_turn", responseId: "malformed-tool-retry-success"
+        ))
+    }
+}
+
+class ProviderTerminalMissingThenSuccessModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request.requestId
+        calls += 1
+        if (calls == 1) {
+            events(ModelEvent.TextDelta("stale partial"))
+            events(ModelEvent.ToolCallStarted("truncated", "task"))
+            events(ModelEvent.ToolArgumentsDelta("truncated", "{\"tasks\":["))
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "llm.stream_terminal_missing",
+                "stream ended without a protocol terminal",
+                retryable: true,
+                attemptFailure: Some(AttemptFailure(
+                    AttemptFailureKind.ProviderTerminalMissing
+                ))
+            ))
+        }
+        events(ModelEvent.TextDelta("recovered partial"))
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "recovered")],
+            stopReason: "end_turn", responseId: "provider-terminal-retry-success"
         ))
     }
 }
