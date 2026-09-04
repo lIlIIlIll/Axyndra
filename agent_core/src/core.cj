@@ -695,7 +695,8 @@ public class AgentCore <: AgentRunner {
             durableRequest, snapshot, modelRecovery: true,
             initialUsage: Some(ExecutionUsage(
                 turns: checkpoint.turns,
-                modelRequests: checkpoint.modelRequests,
+                modelRequests: checkpoint.workModelRequests,
+                drainModelRequests: checkpoint.drainModelRequests,
                 toolCalls: checkpoint.toolCalls,
                 inputTokens: checkpoint.inputTokens,
                 outputTokens: checkpoint.outputTokens,
@@ -708,11 +709,10 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        // A checkpoint taken at or past the work-turn budget means the
-        // pre-crash run was already draining: restore that mode BEFORE any
-        // replay charge so the replayed finalization request lands in the
-        // drain ledger bucket, never in the work bucket.
-        if (checkpoint.turns >= durableRequest.budget.maxTurns) {
+        // Restore the request's actual budget class before any replay charge.
+        // A checkpoint can be taken on the last ordinary work turn, so turns
+        // alone cannot infer whether the next request is work or drain.
+        if (checkpoint.requestBudgetClass == BudgetChargeClass.Drain) {
             control.setBudgetMode(BudgetMode.Draining)
         }
         let context = ToolInvocationContext(
@@ -727,6 +727,8 @@ public class AgentCore <: AgentRunner {
         )
         let counter = BudgetCounter(
             modelRequests: checkpoint.modelRequests,
+            workModelRequests: checkpoint.workModelRequests,
+            drainModelRequests: checkpoint.drainModelRequests,
             inputTokens: checkpoint.inputTokens,
             outputTokens: checkpoint.outputTokens,
             reasoningTokens: checkpoint.reasoningTokens,
@@ -803,7 +805,7 @@ public class AgentCore <: AgentRunner {
                     control, context, BudgetCharge(modelRequests: 1), sink
                 )) {
                     case Result.Ok(_) =>
-                        counter.modelRequests += 1
+                        counter.recordModelRequest(control.budgetMode())
                     case Result.Err(error) => return fail(
                         durableRequest, context, control, error, sink,
                         counter: Some(counter)
@@ -904,7 +906,7 @@ public class AgentCore <: AgentRunner {
             requestId: Some(RequestId(modelRequest.requestId))
         )) {
             case Result.Ok(_) =>
-                counter.modelRequests += 1
+                counter.recordModelRequest(control.budgetMode())
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
@@ -2307,6 +2309,14 @@ public class AgentCore <: AgentRunner {
                     request, context, control, error, sink, counter: Some(counter)
                 )
             }
+            let effectiveDrainRequest = match (resolvedModelRequestForAttempt(
+                request, preparedModelRequest.request
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return fail(
+                    request, context, control, error, sink, counter: Some(counter)
+                )
+            }
             // Conservative projection-based admission before provider
             // dispatch, not an absolute physical guarantee: worst case =
             // request-window input estimate at the input rate (no cache
@@ -2320,12 +2330,12 @@ public class AgentCore <: AgentRunner {
             // preflight scope.
             let worstCaseUsage = ExecutionUsage(
                 inputTokens: preparedModelRequest.estimatedInputTokens,
-                outputTokens: request.budget.requestOutputBudget.hardLimit,
+                outputTokens: effectiveDrainRequest.wireMaxOutputTokens,
                 costMicros: match (request.pricing) {
                     case Some(pricing) =>
                         match (priceModelUsage(ModelUsage(
                             inputTokens: preparedModelRequest.estimatedInputTokens,
-                            outputTokens: request.budget.requestOutputBudget.hardLimit
+                            outputTokens: effectiveDrainRequest.wireMaxOutputTokens
                         ), pricing)) {
                             case Some(value) => value
                             case None => 0
@@ -2970,7 +2980,7 @@ public class AgentCore <: AgentRunner {
                 requestId: Some(RequestId(effectiveAttemptRequest.requestId))
             )) {
                 case Result.Ok(_) =>
-                    counter.modelRequests += 1
+                    counter.recordModelRequest(control.budgetMode())
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -3090,7 +3100,7 @@ public class AgentCore <: AgentRunner {
                 requestId: Some(RequestId(effectiveAttemptRequest.requestId))
             )) {
                 case Result.Ok(_) =>
-                    counter.modelRequests += 1
+                    counter.recordModelRequest(control.budgetMode())
                 case Result.Err(error) => return Result.Err(error)
             }
             match (claimModelAttemptBeforeRequest(
@@ -4538,13 +4548,17 @@ public class AgentCore <: AgentRunner {
                             }
                         }
                 }
+                let restoredModelRequests = match (initialUsage) {
+                    case Some(value) => value.modelRequests + value.drainModelRequests
+                    case None => snapshot.modelRequests
+                }
                 let control = CoreRunControl(
                     request.runId,
                     request.budget,
                     runtime,
                     initial: if (modelRecovery) { RunState.Running } else { RunState.WaitingApproval },
                     turns: snapshot.turns,
-                    modelRequests: snapshot.modelRequests
+                    modelRequests: restoredModelRequests
                 )
                 // Budget continuity across crash/resume: prefer the exact
                 // durable checkpoint usage over the coarser Run snapshot so a
@@ -5171,6 +5185,13 @@ public class AgentCore <: AgentRunner {
             effectiveRequest.requestId,
             now,
             modelRequests: counter.modelRequests,
+            workModelRequests: counter.workModelRequests,
+            drainModelRequests: counter.drainModelRequests,
+            requestBudgetClass: if (control.budgetMode() == BudgetMode.Draining) {
+                BudgetChargeClass.Drain
+            } else {
+                BudgetChargeClass.Work
+            },
             inputTokens: counter.inputTokens,
             outputTokens: counter.outputTokens,
             reasoningTokens: counter.reasoningTokens,

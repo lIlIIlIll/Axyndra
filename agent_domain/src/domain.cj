@@ -1163,6 +1163,9 @@ public class RunningModelCheckpoint {
     public let stableRequestId: String
     public let requestStartedAtMillis: Int64
     public let modelRequests: Int64
+    public let workModelRequests: Int64
+    public let drainModelRequests: Int64
+    public let requestBudgetClass: BudgetChargeClass
     public let inputTokens: Int64
     public let outputTokens: Int64
     public let reasoningTokens: Int64
@@ -1188,6 +1191,9 @@ public class RunningModelCheckpoint {
         stableRequestId: String,
         requestStartedAtMillis: Int64,
         modelRequests!: Int64 = 0,
+        workModelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
+        requestBudgetClass!: BudgetChargeClass = BudgetChargeClass.Work,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         reasoningTokens!: Int64 = 0,
@@ -1205,7 +1211,8 @@ public class RunningModelCheckpoint {
         if (canonicalRequest.unifiedKind != ValueKind.Object ||
             semanticRequestDigest.trimAscii() == "" || wirePolicyDigest.trimAscii() == "" ||
             stableTurnId.trimAscii() == "" || stableRequestId.trimAscii() == "" ||
-            requestStartedAtMillis < 0 || modelRequests < 0 || inputTokens < 0 ||
+            requestStartedAtMillis < 0 || modelRequests < 0 ||
+            workModelRequests < 0 || drainModelRequests < 0 || inputTokens < 0 ||
             outputTokens < 0 || reasoningTokens < 0 || cacheReadTokens < 0 ||
             cacheWriteTokens < 0 || lastInputTokens < 0 || lastOutputTokens < 0 ||
             lastRequestDurationMillis < 0 || toolCalls < 0 || turns < 0 ||
@@ -1225,6 +1232,9 @@ public class RunningModelCheckpoint {
         this.stableRequestId = stableRequestId
         this.requestStartedAtMillis = requestStartedAtMillis
         this.modelRequests = modelRequests
+        this.workModelRequests = workModelRequests
+        this.drainModelRequests = drainModelRequests
+        this.requestBudgetClass = requestBudgetClass
         this.inputTokens = inputTokens
         this.outputTokens = outputTokens
         this.reasoningTokens = reasoningTokens
