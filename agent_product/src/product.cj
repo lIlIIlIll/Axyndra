@@ -3913,6 +3913,10 @@ func runtimeApiBinding(
             LlmApiId.OpenAiResponses,
             TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
         )
+        case "deepseek_responses" => ModelApiBinding(
+            LlmApiId.OpenAiResponses,
+            TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.DeepSeek)
+        )
         case "deepseek_chat" => ModelApiBinding(
             LlmApiId.OpenAiChatCompletions,
             TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.DeepSeek)
@@ -3974,8 +3978,11 @@ func productModelCapabilities(
     ModelCapabilities(
         toolCalling: true,
         // This is an explicit dialect contract, not provider/model-name
-        // inference. DeepSeek's Messages API rejects parallel_tool_calls.
-        parallelToolCalling: dialect != "deepseek_messages",
+        // inference. DeepSeek Responses and Messages do not expose the
+        // OpenAI parallel_tool_calls field.
+        parallelToolCalling: dialect != "deepseek_messages" &&
+            dialect != "deepseek_chat" &&
+            dialect != "deepseek_responses",
         reasoning: match (productThinkingCapabilities(entry).mode) {
             case ThinkingControlMode.NoThinking => false
             case _ => true
