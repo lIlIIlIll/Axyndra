@@ -276,18 +276,35 @@ class BudgetCounter {
     }
 
     func accountObservedUsage(usage: ModelUsage): Unit {
-        inputTokens += usage.inputTokens
-        outputTokens += usage.outputTokens
-        reasoningTokens += usage.reasoningTokens
-        cacheReadTokens += usage.cacheReadTokens
-        cacheWriteTokens += usage.cacheWriteTokens
+        inputTokens = saturatedModelUsageAdd(inputTokens, usage.inputTokens)
+        outputTokens = saturatedModelUsageAdd(outputTokens, usage.outputTokens)
+        reasoningTokens = saturatedModelUsageAdd(reasoningTokens, usage.reasoningTokens)
+        cacheReadTokens = saturatedModelUsageAdd(cacheReadTokens, usage.cacheReadTokens)
+        cacheWriteTokens = saturatedModelUsageAdd(cacheWriteTokens, usage.cacheWriteTokens)
         costMicros = match ((costMicros, usage.costMicros)) {
-            case (Some(total), Some(value)) => Some(total + value)
+            case (Some(total), Some(value)) => Some(saturatedModelUsageAdd(total, value))
             case (cost, None) => cost
             case (None, Some(value)) => Some(value)
         }
         lastInputTokens = usage.inputTokens
         lastOutputTokens = usage.outputTokens
+    }
+
+    // Every provider attempt, including one that fails after consuming
+    // tokens, uses the same per-request ceilings. The observed facts remain
+    // in the counter even when the attempt is rejected.
+    func accountAttemptUsage(
+        usage: ModelUsage,
+        budget: ResourceBudget
+    ): Result<Unit> {
+        accountObservedUsage(usage)
+        if (usage.inputTokens > budget.maxInputTokens) {
+            return budgetError("input_tokens")
+        }
+        if (usage.outputTokens > budget.maxOutputTokens) {
+            return budgetError("output_tokens")
+        }
+        Result.Ok(())
     }
 
 
@@ -302,29 +319,18 @@ class BudgetCounter {
         pricing: ?ModelPricing,
         durationMillis: Int64
     ): Result<Unit> {
-        let firstAccountedReply = modelRequests == 1 &&
-            inputTokens == 0 && outputTokens == 0 &&
-            reasoningTokens == 0 && cacheReadTokens == 0 &&
-            cacheWriteTokens == 0 && lastRequestDurationMillis == 0
-        inputTokens += reply.inputTokens
-        outputTokens += reply.outputTokens
-        reasoningTokens += reply.reasoningTokens
-        cacheReadTokens += reply.cacheReadTokens
-        cacheWriteTokens += reply.cacheWriteTokens
         let requestCost: ?Int64 = match (pricing) {
             case Some(value) => priceModelUsage(reply.usage, value)
-            case None => None
+            case None => reply.usage.costMicros
         }
-        costMicros = if (firstAccountedReply) {
-            requestCost
-        } else {
-            match ((costMicros, requestCost)) {
-                case (Some(total), Some(value)) => Some(total + value)
-                case _ => None
-            }
-        }
-        lastInputTokens = reply.inputTokens
-        lastOutputTokens = reply.outputTokens
+        accountObservedUsage(ModelUsage(
+            inputTokens: reply.inputTokens,
+            outputTokens: reply.outputTokens,
+            reasoningTokens: reply.reasoningTokens,
+            cacheReadTokens: reply.cacheReadTokens,
+            cacheWriteTokens: reply.cacheWriteTokens,
+            costMicros: requestCost
+        ))
         lastRequestDurationMillis = max(0, durationMillis)
         if (reply.inputTokens > budget.maxInputTokens) {
             return budgetError("input_tokens")
@@ -359,6 +365,10 @@ class BudgetCounter {
     }
 }
 
+func saturatedModelUsageAdd(left: Int64, right: Int64): Int64 {
+    if (right > Int64.Max - left) { Int64.Max } else { left + right }
+}
+
 class CoreExecutionHandoffState {
     var started: Bool = false
 }
@@ -387,8 +397,9 @@ class PreparedModelRequest {
 }
 
 // Text and reasoning deltas are provisional until the attempt's terminal
-// outcome is known. Keeping them with the attempt lets retry recovery discard
-// an abandoned prefix without leaking it to print/headless/ACP consumers.
+// outcome is known. They are delivered to the attempt-scoped live sink as
+// soon as observed; canonical transcript projection still waits for the
+// validated durable ModelDecision.
 class ModelAttemptExecution {
     let result: Result<ModelReply>
     let provisionalEvents: Array<ModelEvent>
@@ -3499,22 +3510,29 @@ public class AgentCore <: AgentRunner {
                 let billed = attemptUsageFromError(error, request.pricing)
                 match (billed) {
                     case Some(usage) =>
-                        counter.accountObservedUsage(usage)
-                        match (control.ledger.reserve(BudgetCharge(
-                            inputTokens: usage.inputTokens,
-                            outputTokens: usage.outputTokens,
-                            costMicros: match (usage.costMicros) {
-                                case Some(value) => value
-                                case None => 0
-                            }
-                        ))) {
-                            case Result.Ok(_) => ()
-                            case Result.Err(budgetError) =>
+                        match (counter.accountAttemptUsage(usage, request.budget)) {
+                            case Result.Err(requestBudgetError) =>
                                 // Keep the observed usage in the ledger for
                                 // the terminal snapshot, but fail closed:
                                 // an over-limit billed attempt must not retry.
                                 let _ = control.ledger.recordObservedUsage(usage)
-                                budgetFailure = Some(budgetError)
+                                budgetFailure = Some(requestBudgetError)
+                            case Result.Ok(_) => match (control.ledger.reserve(BudgetCharge(
+                                inputTokens: usage.inputTokens,
+                                outputTokens: usage.outputTokens,
+                                costMicros: match (usage.costMicros) {
+                                    case Some(value) => value
+                                    case None => 0
+                                }
+                            ))) {
+                                case Result.Ok(_) => ()
+                                case Result.Err(budgetError) =>
+                                    // Keep the observed usage in the ledger
+                                    // for the terminal snapshot, but fail
+                                    // closed when the cumulative limit is hit.
+                                    let _ = control.ledger.recordObservedUsage(usage)
+                                    budgetFailure = Some(budgetError)
+                            }
                         }
                     case None => ()
                 }
@@ -3547,7 +3565,7 @@ public class AgentCore <: AgentRunner {
     }
 
     private func retryDelayMillis(attempt: Int64, error: AgentError): Int64 {
-        let serverDelay = match (error.field("retry_after_ms")) {
+        let serverDelay = match (retryAfterMillisField(error)) {
             case Some(value) => try {
                 Int64.parse(value)
             } catch (_: Exception) {
@@ -3639,8 +3657,7 @@ public class AgentCore <: AgentRunner {
                             }
                             case None => ()
                         }
-                        if (activity.persistenceError().isNone() &&
-                            !activity.isProvisionalOutput(event)) {
+                        if (activity.persistenceError().isNone()) {
                             match (forwardModelEvent(
                                 context, control, semanticRequestId, attemptId, event, sink
                             )) {
@@ -3898,15 +3915,18 @@ public class AgentCore <: AgentRunner {
         attemptId: ModelAttemptId,
         sink: AgentEventSink
     ): Result<Unit> {
-        if (!keep) { return Result.Ok(()) }
-        for (event in events) {
-            match (forwardModelEvent(
-                context, control, semanticRequestId, attemptId, event, sink
-            )) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
-            }
-        }
+        // Text/reasoning deltas are persisted as bounded stream telemetry and
+        // delivered live from the provider callback. Replaying them here
+        // would duplicate every successful delta in the live sink. The
+        // arguments remain in the private execution record only for source
+        // compatibility with the retry state machine.
+        let _ = events
+        let _ = keep
+        let _ = context
+        let _ = control
+        let _ = semanticRequestId
+        let _ = attemptId
+        let _ = sink
         Result.Ok(())
     }
 
@@ -4775,7 +4795,7 @@ public class AgentCore <: AgentRunner {
                 )
                 match (runs.append(dropped)) {
                     case Result.Ok(_) =>
-                        sink(durableEvent)
+                        sink(dropped)
                         Result.Ok(())
                     case Result.Err(error) => Result.Err(error)
                 }
