@@ -70,10 +70,12 @@ The complete production path is:
               -> ProviderModelPort -> standalone llm4cj HTTP/SSE transport
 
 `agent_core` never sees provider DTOs or HTTP/SSE state. `llm4cj` is consumed from
-`https://github.com/lIlIIlIll/llm4cj` on `main`; it remains transport-only and does
-not import Agent domain types. An absent API id, or an API/dialect mismatch, fails
-before credential resolution or network I/O; the runtime never infers either from
-a provider name, model name, or URL.
+`https://github.com/lIlIIlIll/llm4cj` through an explicitly reviewed commit pin
+from `main`. A build does not automatically follow the latest `main`. Updating
+the pin also updates the lock file and runs the compatibility contracts. The
+library remains transport-only and does not import Agent domain types. An absent
+API id, or an API/dialect mismatch, fails before credential resolution or network
+I/O; the runtime never infers either from a provider name, model name, or URL.
 
 ## Configuration and migration
 

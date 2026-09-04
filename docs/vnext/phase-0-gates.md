@@ -87,12 +87,13 @@ completion from `RecoveryRequired` or unknown outcome.
 
 - `vnext_fixture_gate.py` checks fixture structure, C1-C7 coverage and test-ID
   traceability to this document.
-- `vnext_contract_gate.py` executes the focused runtime, storage, lifecycle,
-  projection, child-run, skill, mailbox and chaos contracts with the pinned
-  daily SDK.
-- PR validation runs workspace `cjpm test` and the focused gate. Implementation and release validation
-  run the same preflight before their broader product, packaging and provider
-  gates.
+- `vnext_contract_gate.py` executes the `agent_core`, `model_adapters`, and
+  `tool_runtime` contracts together with the focused runtime, storage,
+  lifecycle, projection, child-run, skill, mailbox, and chaos contracts. It
+  uses the pinned daily SDK.
+- PR validation runs a clean workspace `cjpm check`, the product build, and
+  the focused gate. Implementation and release validation run the same
+  preflight before their broader product, packaging, and provider gates.
 - Required PR/release workflows load the exact Cangjie version and stdx archive
   SHA-256 from `scripts/ci_toolchain.env`; `nightly-gate.yml` alone follows the
   latest nightly as a compatibility canary.

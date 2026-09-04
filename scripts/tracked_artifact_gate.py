@@ -10,7 +10,18 @@ from pathlib import PurePosixPath
 
 
 FORBIDDEN_ROOTS = (".agent-state/", "dist/")
-FORBIDDEN_SUFFIXES = (".db", ".db-shm", ".db-wal", ".log", ".pid")
+FORBIDDEN_ROOTS += ("coverage/",)
+FORBIDDEN_SUFFIXES = (
+    ".db",
+    ".db-shm",
+    ".db-wal",
+    ".log",
+    ".pid",
+    ".profraw",
+    ".profdata",
+    ".coverage",
+)
+FORBIDDEN_NAMES = ("core", "coverage")
 
 
 def forbidden_reason(path: str) -> str | None:
@@ -18,6 +29,8 @@ def forbidden_reason(path: str) -> str | None:
     if any(normalized.startswith(root) for root in FORBIDDEN_ROOTS):
         return "runtime/generated directory"
     name = PurePosixPath(normalized).name
+    if name in FORBIDDEN_NAMES:
+        return "runtime/generated artifact"
     if name.endswith(FORBIDDEN_SUFFIXES):
         return "runtime/generated suffix"
     return None

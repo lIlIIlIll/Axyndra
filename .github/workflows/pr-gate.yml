@@ -14,12 +14,12 @@ concurrency:
 
 jobs:
   clean-build-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.2.0-alpha.21
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           clean: true
       - name: Install native compiler
@@ -68,6 +68,24 @@ jobs:
         run: |
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
       - name: vNext focused contracts
+        env:
+          AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
         run: |
           python3 scripts/vnext_contract_gate.py \
             --sdk-root "$AXYNDRA_SDK_ROOT"
+      - name: Write CI evidence
+        if: always()
+        run: |
+          python3 scripts/ci_evidence.py \
+            --gate pr-gate \
+            --status "${{ job.status }}" \
+            --output-dir "$RUNNER_TEMP/axyndra-evidence" \
+            --artifact-path target/release/bin/agent_app
+      - name: Upload CI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: axyndra-pr-gate-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/axyndra-evidence
+          if-no-files-found: error
+          retention-days: 14
