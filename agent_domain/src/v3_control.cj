@@ -163,7 +163,9 @@ public enum ModelRequestOutcome {
 
 // One record is emitted for every provider wire attempt, including retries
 // and auxiliary model calls. Successful attempts carry their final usage;
-// failed/cancelled attempts intentionally do not invent usage or cost.
+// failed/cancelled attempts may carry usage observed before the provider
+// failure. They must never invent usage or cost when the provider reported
+// none.
 public class ModelRequestAttempt {
     public let requestId: RequestId
     public let model: String
@@ -193,9 +195,9 @@ public class ModelRequestAttempt {
                     )
                 }
             case ModelRequestOutcome.Failed | ModelRequestOutcome.Cancelled =>
-                if (usage.isSome() || errorCode.trimAscii() == "") {
+                if (errorCode.trimAscii() == "") {
                     throw IllegalArgumentException(
-                        "unsuccessful model request attempt requires an error and no usage"
+                        "unsuccessful model request attempt requires an error"
                     )
                 }
         }
@@ -831,6 +833,52 @@ public class ExecutionBudget {
             }
             activeTools -= count
             Result.Ok(usage())
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
+    // Crash recovery replays a durable usage snapshot into the ledger so a
+    // resumed run cannot bypass admission with a fresh budget. This replaces
+    // the cumulative usage instead of adding to it and admits nothing by
+    // itself; the next reserve applies the full admission contract.
+    public func restore(restored: ExecutionUsage): ExecutionUsage {
+        usageLock.lock()
+        try {
+            usedTurns = restored.turns
+            usedModelRequests = restored.modelRequests
+            usedDrainModelRequests = restored.drainModelRequests
+            usedToolCalls = restored.toolCalls
+            usedInputTokens = restored.inputTokens
+            usedOutputTokens = restored.outputTokens
+            usedCostMicros = restored.costMicros
+            usage()
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
+    // Preserve usage observed after a request was admitted even when charging
+    // that usage would exceed a cumulative hard limit. The caller terminates
+    // the run on the rejected reserve, while the durable usage facts remain
+    // available for audit and recovery.
+    public func recordObservedUsage(observed: ModelUsage): ExecutionUsage {
+        usageLock.lock()
+        try {
+            usedInputTokens = saturatedExecutionBudgetAdd(
+                usedInputTokens, observed.inputTokens
+            )
+            usedOutputTokens = saturatedExecutionBudgetAdd(
+                usedOutputTokens, observed.outputTokens
+            )
+            usedCostMicros = saturatedExecutionBudgetAdd(
+                usedCostMicros,
+                match (observed.costMicros) {
+                    case Some(value) => value
+                    case None => 0
+                }
+            )
+            usage()
         } finally {
             usageLock.unlock()
         }

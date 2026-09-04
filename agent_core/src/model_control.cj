@@ -120,6 +120,7 @@ public class AttemptDeadlineContext {
     private var accepting = true
     private var replayBarrier = ModelAttemptReplayBarrier.NoBarrier
     private var persistenceFailure: ?AgentError = None
+    private let provisionalEvents = ArrayList<ModelEvent>()
 
     public init(
         policy: ModelAttemptRecoveryPolicy,
@@ -141,9 +142,11 @@ public class AttemptDeadlineContext {
             let now = clock.nowMillis()
             match (event) {
                 case ModelEvent.ReasoningDelta(value) => if (value != "") {
+                    provisionalEvents.add(event)
                     progress(AttemptProgressKind.ReasoningProgress, now)
                 }
                 case ModelEvent.TextDelta(value) => if (value != "") {
+                    provisionalEvents.add(event)
                     progress(AttemptProgressKind.TextProgress, now)
                 }
                 case ModelEvent.ToolCallStarted(_, _) =>
@@ -208,6 +211,20 @@ public class AttemptDeadlineContext {
     public func hasEvents(): Bool {
         lock.lock()
         try { meaningfulCount > 0 } finally { lock.unlock() }
+    }
+    public func isProvisionalOutput(event: ModelEvent): Bool {
+        match (event) {
+            case ModelEvent.TextDelta(_) | ModelEvent.ReasoningDelta(_) => true
+            case _ => false
+        }
+    }
+    public func takeProvisionalOutput(): Array<ModelEvent> {
+        lock.lock()
+        try {
+            let value = provisionalEvents.toArray()
+            provisionalEvents.clear()
+            value
+        } finally { lock.unlock() }
     }
     public func completedObserved(): Bool {
         lock.lock()
@@ -932,4 +949,36 @@ func accountedModelAttemptUsage(
         source: reply.usage.source,
         evidence: reply.usage.evidence
     )
+}
+
+// Usage billed for an attempt whose provider call failed mid-flight or
+// produced a rejected reply. The adapter surfaces what the wire showed
+// before the failure as error fields; cost is priced the same way as a
+// successful reply. None when the failure carried no observable usage.
+func attemptUsageFromError(
+    error: AgentError,
+    pricing: ?ModelPricing
+): ?ModelUsage {
+    let inputField = error.field("usage_input_tokens")
+    let outputField = error.field("usage_output_tokens")
+    if (inputField.isNone() && outputField.isNone()) { return None }
+    let inputTokens = match (inputField) {
+        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
+        case None => 0
+    }
+    let outputTokens = match (outputField) {
+        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
+        case None => 0
+    }
+    if (inputTokens < 0 || outputTokens < 0) { return None }
+    Some(ModelUsage(
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        costMicros: match (pricing) {
+            case Some(value) => priceModelUsage(ModelUsage(
+                inputTokens: inputTokens, outputTokens: outputTokens
+            ), value)
+            case None => None
+        }
+    ))
 }

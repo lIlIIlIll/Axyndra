@@ -3645,6 +3645,50 @@ func decodeProviderReply(
             }
             case None => ()
         }
+        // llm4cj keeps protocol diagnostics bounded and separates a terminal
+        // tool-assembly defect from a transport EOF. Preserve that context
+        // for recovery telemetry without copying the provider body.
+        if (error.toolCallId != "") { fields.add(domain.ErrorField("tool_call_id", error.toolCallId)) }
+        match (error.diagnosticJson) {
+            case Some(value) => fields.add(domain.ErrorField("diagnostic_json", value))
+            case None => ()
+        }
+        match (error.phase) {
+            case Some(value) => fields.add(domain.ErrorField("llm_phase", llmTransportPhaseName(value)))
+            case None => ()
+        }
+        if (error.dialectId != "") { fields.add(domain.ErrorField("llm_dialect_id", error.dialectId)) }
+        if (error.eventType != "") { fields.add(domain.ErrorField("llm_event_type", error.eventType)) }
+        if (error.blockIndex >= 0) { fields.add(domain.ErrorField("llm_block_index", error.blockIndex.toString())) }
+        if (error.providerRequestId != "") { fields.add(domain.ErrorField("provider_request_id", error.providerRequestId)) }
+        match (error.usage) {
+            case Some(usage) =>
+                match (usage.inputTokens) {
+                    case Some(value) => fields.add(domain.ErrorField("usage_input_tokens", value.toString()))
+                    case None => ()
+                }
+                match (usage.outputTokens) {
+                    case Some(value) => fields.add(domain.ErrorField("usage_output_tokens", value.toString()))
+                    case None => ()
+                }
+            case None => ()
+        }
+        // A completed provider message with an unexecutable tool argument is
+        // recoverable before any canonical Decision/Operation is projected.
+        // Keep the strict llm4cj error, but classify this one wire condition
+        // as a bounded model-attempt retry. Do not turn malformed JSON into a
+        // synthetic tool_result; schema-invalid, valid JSON remains handled
+        // by tool_runtime's normal recoverable ToolResult path. Valid JSON
+        // with a non-object shape is deliberately not malformed: it is
+        // projected below so tool_runtime can return its normal bounded
+        // tool.invalid_arguments result.
+        let malformedToolArguments = error.kind == LlmWireErrorKind.InvalidWire &&
+            error.code == "llm.tool_arguments_not_executable"
+        // A stream that reaches transport EOF without a protocol terminal is
+        // a provider-attempt failure. It must be retried as a fresh model
+        // attempt, even when llm4cj retained provisional stream evidence.
+        let providerTerminalMissing = error.kind == LlmWireErrorKind.InvalidWire &&
+            error.code == "llm.stream_terminal_missing"
         domain.Result.Err(domain.AgentError(
             match (error.kind) {
                 case LlmWireErrorKind.Cancelled => domain.AgentErrorKind.Cancelled
@@ -3827,11 +3871,25 @@ func fromLlmWireReply(
                         name: value.name,
                         arguments: arguments
                     ))
+                // A syntactically complete scalar/array is still valid JSON
+                // data. Keep it projectable so tool_runtime can issue its
+                // normal recoverable invalid-arguments result.
+                case LlmWireToolArguments.InvalidShape(json) =>
+                    let arguments = match (decodeAgentValue(json.stringify())) {
+                        case domain.Result.Ok(parsed) => parsed
+                        case domain.Result.Err(error) => throw IllegalArgumentException(error.message)
+                    }
+                    blocks.add(domain.ModelBlock(
+                        domain.ModelBlockKind.ToolCall,
+                        callId: value.callId,
+                        name: value.name,
+                        arguments: arguments
+                    ))
                 // Preserve the terminal response, especially OutputLimited,
-                // but never promote partial or invalid arguments into an
-                // executable domain tool call.
+                // but never promote partial or invalid JSON into an
+                // executable domain tool call. A valid scalar/array is kept
+                // as data so tool_runtime owns the shape diagnostic.
                 case LlmWireToolArguments.InvalidJson(_) |
-                    LlmWireToolArguments.InvalidShape(_) |
                     LlmWireToolArguments.Partial(_) => throw LlmWireError(
                         LlmWireErrorKind.InvalidWire,
                         "model.output_rejected",
