@@ -1,6 +1,7 @@
 package agent_product
 
 import agent_domain.*
+import model_adapters.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -19,6 +20,84 @@ class ProviderDialectTests {
 
         @Expect(capabilities.toolCalling, true)
         @Expect(capabilities.parallelToolCalling, false)
+    }
+
+    @TestCase
+    func deepSeekChatDisablesParallelToolCalling(): Unit {
+        let capabilities = productModelCapabilities(
+            ModelCatalogEntry(
+                "deepseek-v4-flash",
+                providerProfile: "DEEPSEEK",
+                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
+            ),
+            dialect: "deepseek_chat"
+        )
+
+        @Expect(capabilities.toolCalling, true)
+        @Expect(capabilities.parallelToolCalling, false)
+    }
+
+    @TestCase
+    func deepSeekResponsesDisablesParallelToolCalling(): Unit {
+        let capabilities = productModelCapabilities(
+            ModelCatalogEntry(
+                "deepseek-v4-flash",
+                providerProfile: "DEEPSEEK",
+                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
+            ),
+            dialect: "deepseek_responses"
+        )
+
+        @Expect(capabilities.toolCalling, true)
+        @Expect(capabilities.parallelToolCalling, false)
+    }
+
+    @TestCase
+    func deepSeekResponsesSetupUsesTypedResponsesBinding(): Unit {
+        @Expect(
+            configuredDialectForSetup(
+                "deepseek",
+                "responses",
+                "https://api.deepseek.com"
+            ),
+            "deepseek_responses"
+        )
+        let profile = ProviderProfile(
+            "deepseek",
+            "deepseek",
+            "responses",
+            "https://api.deepseek.com",
+            "DEEPSEEK_API_KEY",
+            dialect: "deepseek_responses"
+        )
+        let entry = ModelCatalogEntry(
+            "deepseek-v4-flash",
+            providerProfile: "deepseek",
+            apiId: "openai_responses",
+            dialect: "deepseek_responses"
+        )
+        let binding = runtimeApiBinding(entry, profile)
+        @Expect(
+            match (binding.dialect) {
+                case TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.DeepSeek) => true
+                case _ => false
+            },
+            true
+        )
+        @Expect(llmApiIdName(binding.apiId), "openai_responses")
+    }
+
+    @TestCase
+    func deepSeekChatSetupKeepsEffortThinking(): Unit {
+        let thinking = configuredThinkingForDialect("deepseek_chat")
+        @Expect(
+            match (thinking.mode) {
+                case ThinkingControlMode.Effort => true
+                case _ => false
+            },
+            true
+        )
+        @Expect(thinking.supportedLevels.size, 5)
     }
 
     @TestCase

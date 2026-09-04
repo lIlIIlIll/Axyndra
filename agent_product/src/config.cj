@@ -320,13 +320,15 @@ public class ProviderProfile {
             throw IllegalArgumentException("provider profile timeout must be positive")
         }
         if (dialect != "" && dialect != "anthropic_messages" &&
-            dialect != "deepseek_messages" && dialect != "openai_responses" &&
-            dialect != "openai_chat" && dialect != "generic_messages" &&
-            dialect != "generic_chat" && dialect != "deepseek_chat") {
+            dialect != "deepseek_messages" && dialect != "deepseek_responses" &&
+            dialect != "openai_responses" && dialect != "openai_chat" &&
+            dialect != "generic_messages" && dialect != "generic_chat" &&
+            dialect != "deepseek_chat") {
             throw IllegalArgumentException("unknown provider profile dialect")
         }
         if ((dialect.endsWith("_messages") && protocol != "messages") ||
-            (dialect == "openai_responses" && protocol != "responses") ||
+            ((dialect == "openai_responses" || dialect == "deepseek_responses") &&
+                protocol != "responses") ||
             ((dialect == "openai_chat" || dialect == "generic_chat" ||
                 dialect == "deepseek_chat") &&
                 protocol != "completions" && protocol != "chat-completions")) {
@@ -496,7 +498,8 @@ public class ModelCatalogEntry {
         }
         if (dialect != "" && dialect != "openai_chat" &&
             dialect != "deepseek_chat" && dialect != "generic_chat" &&
-            dialect != "openai_responses" && dialect != "anthropic_messages" &&
+            dialect != "openai_responses" && dialect != "deepseek_responses" &&
+            dialect != "anthropic_messages" &&
             dialect != "deepseek_messages" && dialect != "generic_messages") {
             throw IllegalArgumentException("model dialect is unknown")
         }
@@ -504,7 +507,7 @@ public class ModelCatalogEntry {
                 dialect != "openai_chat" && dialect != "deepseek_chat" &&
                 dialect != "generic_chat") ||
             (apiId == "openai_responses" && dialect != "" &&
-                dialect != "openai_responses") ||
+                dialect != "openai_responses" && dialect != "deepseek_responses") ||
             (apiId == "anthropic_messages" && dialect != "" &&
                 dialect != "anthropic_messages" && dialect != "deepseek_messages" &&
                 dialect != "generic_messages")) {
@@ -594,7 +597,7 @@ public class ModelCatalogEntry {
 // routing never guesses them from provider names or endpoint URLs.
 public func configuredThinkingForDialect(dialect: String): ThinkingCapabilities {
     match (dialect) {
-        case "deepseek_messages" => ThinkingCapabilities(
+        case "deepseek_messages" | "deepseek_chat" => ThinkingCapabilities(
             ThinkingControlMode.Effort,
             supportedLevels: [
                 ThinkingLevel.Low,
@@ -608,7 +611,7 @@ public func configuredThinkingForDialect(dialect: String): ThinkingCapabilities 
             ThinkingControlMode.Budget,
             supportedLevels: canonicalNonOffThinkingLevels()
         )
-        case "openai_responses" | "openai_chat" => ThinkingCapabilities(
+        case "deepseek_responses" | "openai_responses" | "openai_chat" => ThinkingCapabilities(
             ThinkingControlMode.Effort,
             supportedLevels: canonicalNonOffThinkingLevels()
         )
@@ -627,6 +630,13 @@ public func configuredDialectForSetup(
     // generic until their configuration declares a typed dialect.
     if (provider == "anthropic" && protocol == "messages") {
         "anthropic_messages"
+    } else if (provider == "deepseek" && protocol == "responses") {
+        "deepseek_responses"
+    } else if (provider == "deepseek" &&
+        (protocol == "completions" || protocol == "chat-completions")) {
+        "deepseek_chat"
+    } else if (provider == "deepseek" && protocol == "messages") {
+        "deepseek_messages"
     } else if (provider == "openai" && protocol == "responses") {
         "openai_responses"
     } else if (provider == "openai" &&
