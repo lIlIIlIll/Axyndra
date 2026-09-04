@@ -941,6 +941,8 @@ public class ExecutionBudget {
         usageLock.lock()
         try {
             usedTurns = restored.turns
+            usedModelRequests = restored.modelRequests
+            usedDrainModelRequests = restored.drainModelRequests
             usedToolCalls = restored.toolCalls
             usedInputTokens = restored.inputTokens
             usedOutputTokens = restored.outputTokens
