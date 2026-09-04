@@ -215,14 +215,12 @@ approval:
 | `agent_domain` | 协议无关领域值、`Result<T>`、预算、事件和审批 |
 | `agent_protocol` | 与传输无关的 JSON-RPC 2.0 值、编解码和关联状态 |
 | `agent_ports` | 模型、仓储、工作区、进程、审计等端口 |
-| `model_adapters` | Agent `ModelRequest`/`ModelReply` 与独立仓库 `llm4cj` wire DTO 的语义映射及产品重试策略；依赖始终跟随其 `main` 分支 |
+| `model_adapters` | Agent `ModelRequest`/`ModelReply` 与独立仓库 `llm4cj` wire DTO 的语义映射及产品重试策略；依赖使用来自 `main` 的经审阅 commit pin，更新时显式刷新 `commitId`、lock 和兼容性合同 |
 | `tool_runtime` | catalog → validation → policy → approval → receipt |
 | `agent_core` | 唯一模型/工具循环 |
 | `persistence_runtime` | 仓储实现、bounded events、schema 生命周期 |
-| `sandbox_runtime` | fail-closed 工作区/进程/网络隔离、环境过滤和 secret 脱敏 |
 | `run_control` | run 应用服务 |
 | `task_runtime` | 独立 task 生命周期 |
-| `subagent_runtime` | 使用同一 AgentCore 的结构化子任务 |
 | `agent_mcp` | `mcp4cj` 产品配置、secret 解析、AgentError 映射和 ToolPipeline bridge |
 | `agent_client` | CLI、CI、RPC、未来 cjtui 的稳定边界 |
 | `agent_cli` | 类型化控制命令与自然 prompt 分流 |
@@ -240,6 +238,16 @@ approval:
 
 完整依赖方向和约束见 [docs/architecture.md](docs/architecture.md)，能力状态、
 安全边界和验证口径见 [docs/runtime-capabilities.md](docs/runtime-capabilities.md)。
+
+## Workspace 外的目录
+
+下面的目录不属于根 `cjpm.toml` 的 `members`、`build-members` 或
+`test-members`，也不进入根产品构建：
+
+| 目录 | 状态 |
+| --- | --- |
+| `sandbox_runtime` | 独立实验包，包含自己的 manifest 和实现；需要单独构建和验证 |
+| `subagent_runtime` | 说明和迁移占位目录，不是当前可构建的 workspace 包 |
 
 ## cjtui 与本地命令
 
