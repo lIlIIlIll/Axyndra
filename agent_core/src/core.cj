@@ -218,6 +218,8 @@ public interface AgentRunner {
 
 class BudgetCounter {
     var modelRequests: Int64
+    var workModelRequests: Int64
+    var drainModelRequests: Int64
     var inputTokens: Int64
     var outputTokens: Int64
     var reasoningTokens: Int64
@@ -233,6 +235,8 @@ class BudgetCounter {
 
     init(
         modelRequests!: Int64 = 0,
+        workModelRequests!: Int64 = 0,
+        drainModelRequests!: Int64 = 0,
         inputTokens!: Int64 = 0,
         outputTokens!: Int64 = 0,
         reasoningTokens!: Int64 = 0,
@@ -246,6 +250,8 @@ class BudgetCounter {
         turns!: Int64 = 0
     ) {
         this.modelRequests = modelRequests
+        this.workModelRequests = workModelRequests
+        this.drainModelRequests = drainModelRequests
         this.inputTokens = inputTokens
         this.outputTokens = outputTokens
         this.reasoningTokens = reasoningTokens
@@ -260,12 +266,13 @@ class BudgetCounter {
         this.startedAt = MonoTime.now()
     }
 
-    func beforeModel(budget: ResourceBudget): Result<Unit> {
-        if (modelRequests >= budget.maxModelRequests) {
-            return budgetError("model_requests")
-        }
+    func recordModelRequest(mode: BudgetMode): Unit {
         modelRequests += 1
-        Result.Ok(())
+        if (mode == BudgetMode.Draining) {
+            drainModelRequests += 1
+        } else {
+            workModelRequests += 1
+        }
     }
 
     func accountObservedUsage(usage: ModelUsage): Unit {
