@@ -102,6 +102,9 @@ models:
     provider: "deepseek-agent"
     api: "openai_responses"
     dialect: "deepseek_responses"
+    thinking:
+      mode: "effort"
+      levels: [minimal, low, medium, high, xhigh, max]
 ```
 
 Messages 兼容端点仍可单独配置。DeepSeek 官方说明该端点支持 tools，但会忽略
