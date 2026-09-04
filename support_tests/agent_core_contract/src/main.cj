@@ -142,6 +142,8 @@ main(): Int64 {
     drainHardCapStopsBoundedContract()
     drainProviderFailureStopsBoundedContract()
     resumeRestoresWorkBudgetContinuityContract()
+    resumeLastWorkTurnKeepsWorkModeContract()
+    resumeDrainPreservesSeparateRequestBucketsContract()
     drainRespectsRunDeadlineContract()
     drainPreflightBlocksNearCostBoundaryContract()
     workBudgetStopsAtModelRequestLimitContract()
@@ -3333,6 +3335,16 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     ).start(request)
     expect(first.isError() && model.workRequests == 2,
         "budget resume crash is injected after two settled work turns")
+    let checkpointPreservesWorkBucket = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            case Some(checkpoint) => checkpoint.modelRequests == 2 &&
+                checkpoint.workModelRequests == 2 &&
+                checkpoint.drainModelRequests == 0 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Work
+            case None => false
+        }
+        case None => false
+    }
     runs.failClaimAfterCommitAt = 0
     let resumed = AgentCore(
         model, runs,
@@ -3345,10 +3357,117 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     )
     expect(
         completed.status == RunState.Completed && completed.turns == 4 &&
-            model.workRequests == 4,
+            model.workRequests == 4 && checkpointPreservesWorkBucket,
         "resume restores the consumed work budget and allows exactly the " +
             "remaining one work turn plus the drain"
     )
+}
+
+func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
+    let runs = MemoryRuns(failClaimAfterCommitAt: 2)
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let decisions = RecordingModelDecisionPort()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let request = AgentRunRequest(
+        RunId("budget-last-work-run"), SessionId("budget-last-work-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxTurns: 2, maxModelRequests: 2)
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    let checkpointIsWork = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            case Some(checkpoint) => checkpoint.turns == 2 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Work
+            case None => false
+        }
+        case None => false
+    }
+    expect(first.isError() && checkpointIsWork,
+        "last work request crash leaves a work-class continuation")
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "the last ordinary work turn must resume as work"
+    )
+    expect(first.isError() && checkpointIsWork &&
+        completed.status == RunState.Completed && model.workRequests == 2 &&
+        model.drainWireCalls == 1,
+        "a crash on the last ordinary work request does not misclassify it as drain")
+}
+
+func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
+    // Work requests claim 1 and 2; crash after the first drain claim so the
+    // recovery path is allowed to replay that attempt as drain attempt 2.
+    let runs = MemoryRuns(failClaimAfterCommitAt: 3)
+    let catalog = ToolCatalog()
+    let model = BudgetProbeModel()
+    let decisions = RecordingModelDecisionPort()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo text", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "tool registration")
+    let request = AgentRunRequest(
+        RunId("budget-drain-resume-run"), SessionId("budget-drain-resume-session"),
+        "fixture", "go",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(
+            maxTurns: 2, maxModelRequests: 2, maxDrainModelRequests: 2,
+            maxDrainTurns: 2
+        )
+    )
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-first")),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    let checkpointPreservesDrainBucket = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            // The checkpoint is written before the in-flight drain request is
+            // admitted; the resumed request must charge the drain bucket once.
+            case Some(checkpoint) => checkpoint.modelRequests == 2 &&
+                checkpoint.workModelRequests == 2 &&
+                checkpoint.drainModelRequests == 0 &&
+                checkpoint.requestBudgetClass == BudgetChargeClass.Drain
+            case None => false
+        }
+        case None => false
+    }
+    runs.failClaimAfterCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-second")),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    let completed = completedSnapshotOrThrow(
+        resumed, "drain request bucket continuity must permit recovery"
+    )
+    expect(first.isError() && checkpointPreservesDrainBucket &&
+        completed.status == RunState.Completed && model.workRequests == 2 &&
+        model.drainWireCalls == 2,
+        "resume restores work and drain request counts independently")
 }
 
 func drainRespectsRunDeadlineContract(): Unit {

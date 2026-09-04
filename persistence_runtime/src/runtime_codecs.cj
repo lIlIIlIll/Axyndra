@@ -656,6 +656,12 @@ func runningModelCheckpointValue(value: RunningModelCheckpoint): AgentValue {
         ValueField("stable_request_id", textValue(value.stableRequestId)),
         ValueField("request_started_at_millis", integerValue(value.requestStartedAtMillis)),
         ValueField("model_requests", integerValue(value.modelRequests)),
+        ValueField("work_model_requests", integerValue(value.workModelRequests)),
+        ValueField("drain_model_requests", integerValue(value.drainModelRequests)),
+        ValueField("request_budget_class", textValue(match (value.requestBudgetClass) {
+            case BudgetChargeClass.Work => "work"
+            case BudgetChargeClass.Drain => "drain"
+        })),
         ValueField("input_tokens", integerValue(value.inputTokens)),
         ValueField("output_tokens", integerValue(value.outputTokens)),
         ValueField("reasoning_tokens", integerValue(value.reasoningTokens)),
@@ -828,6 +834,24 @@ func runningModelCheckpointFromValue(value: AgentValue): Result<RunningModelChec
             requiredCodecText(value, "stable_request_id"),
             requiredCodecInteger(value, "request_started_at_millis"),
             modelRequests: requiredCodecInteger(value, "model_requests"),
+            workModelRequests: match (value.field("work_model_requests")) {
+                case Some(_) => requiredCodecInteger(value, "work_model_requests")
+                case None => requiredCodecInteger(value, "model_requests")
+            },
+            drainModelRequests: match (value.field("drain_model_requests")) {
+                case Some(_) => requiredCodecInteger(value, "drain_model_requests")
+                case None => 0
+            },
+            requestBudgetClass: match (value.field("request_budget_class")) {
+                case Some(_) => match (requiredCodecText(value, "request_budget_class")) {
+                    case "work" => BudgetChargeClass.Work
+                    case "drain" => BudgetChargeClass.Drain
+                    case _ => throw IllegalArgumentException(
+                        "field has invalid value: request_budget_class"
+                    )
+                }
+                case None => BudgetChargeClass.Work
+            },
             inputTokens: requiredCodecInteger(value, "input_tokens"),
             outputTokens: requiredCodecInteger(value, "output_tokens"),
             reasoningTokens: requiredCodecInteger(value, "reasoning_tokens"),
