@@ -27,12 +27,15 @@ public interface McpTaskProvider {
 
 public class McpServer {
     private let primitive: library.McpServer
+    private let requestOwner: String
 
     public init(
         discovery: McpDiscoverResult,
         host: McpToolHost,
-        taskProvider!: ?McpTaskProvider = None
+        taskProvider!: ?McpTaskProvider = None,
+        requestOwner!: String = ""
     ) {
+        this.requestOwner = requestOwner
         primitive = library.McpServer(
             discovery,
             host: Some(McpToolHostBridge(host)),
@@ -45,10 +48,10 @@ public class McpServer {
 
     public func state(): McpLifecycleState { primitive.state() }
     public func handleRequest(request: JsonRpcRequest): JsonRpcResponse {
-        primitive.handleRequest(request)
+        primitive.handleRequest(request, requestOwner: requestOwner)
     }
     public func handleNotification(notification: JsonRpcNotification): Result<Unit> {
-        mapMcpResult(primitive.handleNotification(notification))
+        mapMcpResult(primitive.handleNotification(notification, requestOwner: requestOwner))
     }
     public func cancelRequest(requestId: JsonRpcId, reason: String): Result<Unit> {
         handleNotification(mcpCancellationNotification(

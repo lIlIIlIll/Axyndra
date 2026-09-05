@@ -215,6 +215,7 @@ func buildProductMcpServer(
             serverInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
             instructions: options.instructions
         ),
-        ProductMcpToolHost(catalog, pipeline, ids, options, toolContext)
+        ProductMcpToolHost(catalog, pipeline, ids, options, toolContext),
+        requestOwner: options.sessionId.value
     )
 }
