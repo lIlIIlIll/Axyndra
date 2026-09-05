@@ -224,6 +224,7 @@ if ! rg_matches -n '"llm4cj".*git = "https://github.com/lIlIIlIll/llm4cj.git".*b
   "$ROOT/model_adapters/cjpm.toml" >/dev/null; then
   fail "model_adapters does not depend on llm4cj main from the standalone repository"
 fi
+python3 "$ROOT/scripts/dependency_pin_gate.py"
 
 if ! rg_matches -n 'UnifiedModelRuntime\(' \
   "$ROOT/agent_product/src/product.cj" >/dev/null; then
