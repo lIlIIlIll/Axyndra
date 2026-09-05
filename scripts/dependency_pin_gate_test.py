@@ -6,7 +6,7 @@ from pathlib import Path
 from dependency_pin_gate import check_root
 
 
-PIN = "7d4f225a24db8eba697855f54039702ad0bbc81d"
+PIN = "62e6c57227630f2ccbc0f48fecfdf36a896e7e6d"
 REMOTE = "https://github.com/lIlIIlIll/llm4cj.git"
 
 
