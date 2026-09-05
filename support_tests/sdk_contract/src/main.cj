@@ -516,14 +516,15 @@ func budgetFailureHasTypedExit(): Bool {
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
     ).build().value().getOrThrow()
     let result = HeadlessRunner(sdk).run("keep reading")
+    // Reaching maxTurns enters the bounded no-tool drain. This fixture keeps
+    // returning a tool call during drain, so the fail-closed terminal error
+    // is drain_exhausted after one work request and one drain request.
     expect(
         result.status == HeadlessStatus.BudgetExceeded && result.exitCode == 75 &&
             result.error.isSome() && result.error.getOrThrow().kind == AgentErrorKind.BudgetExceeded &&
-            result.error.getOrThrow().code == "budget.turns_exceeded" &&
-            result.error.getOrThrow().field("dimension") == Some("turns") &&
-            result.error.getOrThrow().field("limit") == Some("1") &&
-            result.error.getOrThrow().field("observed") == Some("2") &&
-            provider.calls == 1 && tool.calls == 1,
+            result.error.getOrThrow().code == "budget.drain_exhausted" &&
+            result.error.getOrThrow().message.contains("tool work is not permitted") &&
+            provider.calls == 2 && tool.calls == 1,
         "execution budget failures preserve their type and stable headless exit mapping"
     )
 }
