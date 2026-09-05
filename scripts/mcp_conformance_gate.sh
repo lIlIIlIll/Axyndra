@@ -31,7 +31,6 @@ trap cleanup EXIT
 server_pid=$!
 
 http_code=000
-ready_line="mcp4cj conformance server: http://127.0.0.1:$port/mcp"
 for _ in {1..40}; do
   if ! kill -0 "$server_pid" 2>/dev/null; then
     wait "$server_pid" 2>/dev/null || true
@@ -39,11 +38,12 @@ for _ in {1..40}; do
     printf 'MCP conformance fixture exited before readiness\n' >&2
     exit 1
   fi
-  if grep -Fxq -- "$ready_line" "$server_log"; then
-    http_code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/mcp" || true)
-    if [[ "$http_code" != 000 ]]; then
-      break
-    fi
+  # stdout is block-buffered when the fixture is redirected to server.log;
+  # use the actual HTTP listener as readiness evidence instead of waiting for
+  # the informational println to flush.
+  http_code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/mcp" || true)
+  if [[ "$http_code" != 000 ]]; then
+    break
   fi
   sleep 0.25
 done
