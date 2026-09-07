@@ -17,8 +17,8 @@
 | Tool descriptor/pipeline | `tool_runtime` | catalog → validation → policy → approval → prepared execution → receipt/audit | `tool_runtime_contract` |
 | ToolContext / 依赖注入 | `tool_runtime/src/context.cj`, `agent_core`, `agent_product`, `agent_sdk` | workspace/cwd、显式过滤环境、typed service 描述均为不可变快照；活动 CancellationToken 由 Core 按 run 绑定 | `tool_runtime_contract`, `agent_core_contract`, `sdk_contract`, `product_contract` |
 | 并行 Tool Call | `agent_core/src/tool_batch.cj` | 按并发声明和冲突关系分 wave；有界并发、稳定结果顺序、协作取消 | `agent_core_contract`, `tool_runtime_contract` |
-| Workspace Sandbox | `sandbox_runtime` | bubblewrap namespace、mount、resource limit、最小环境；宿主不支持时 fail-closed | `sandbox_contract` |
-| Secret 与环境边界 | `sandbox_runtime`, `agent_product` | 环境默认拒绝、显式 allowlist、启发式 secret 名和已知值脱敏 | `sandbox_contract`, `product_contract` |
+| Workspace Sandbox | `agent_product`, `sandbox4cj` | bubblewrap namespace、mount、resource limit、最小环境；宿主不支持时 fail-closed；`sandbox_runtime` 是 workspace 外的独立实验包 | `sandbox_contract` |
+| Secret 与环境边界 | `agent_product`, `sandbox4cj` | 环境默认拒绝、显式 allowlist、启发式 secret 名和已知值脱敏；`sandbox_runtime` 不属于根产品构建 | `sandbox_contract`, `product_contract` |
 | Canonical Thread state | `agent_domain`, `agent_runtime`, `agent_store` | Thread/Turn/Item 是唯一语义事实；每个 Thread 单 owner，异步结果携带 run/epoch 后才可提交 | `thread_runtime_contract`, `agent_store_contract`, `chaos_contract` |
 | Context projection/checkpoint | `agent_runtime`, `agent_store`, `agent_core` | ModelContext 从 canonical Items 派生；checkpoint 覆盖不可变前缀且不改写 Thread | `context_projector_vnext_contract`, `agent_store_contract` |
 | SQLite WAL durability | `agent_store`, `persistence_runtime` | Thread、Run、Operation、Receipt、Approval、metadata 与 memory 使用一个事务数据库；artifact body 单独内容寻址，归档同时快照 DB 与 blobs | `agent_store_contract`, `sqlite_run_repository_contract`, `gc_contract`, `product_contract` |
@@ -33,7 +33,7 @@
 | Public SDK testkit | `axyndra_agent_testkit` | deterministic clock/ID/cancellation、pure extension contract harness、experimental named fault plan；JSON 值由 yjson 提供 | `testkit_consumer`, `testkit_extension_contract` |
 | Internal Agent testkit | `agent_testkit` | scripted Model/Tool/policy、Run/Operation port doubles、audit recorder、benchmark 分位数；仅内部测试依赖 | `testkit_contract`, `chaos_contract`, `extensions_contract` |
 | Coding Agent tools | `agent_product` | read/search/edit/shell 受 workspace、approval、operation receipt 与 audit 约束 | `product_contract`, `worktree_contract` |
-| Planning/Subagent/Task | `subagent_runtime`, `task_runtime`, `run_control` | 子任务仍使用 AgentCore；权限、取消和预算不因委派消失 | `orchestration_contract`, `task_persistence_contract` |
+| Planning/Subagent/Task | `agent_core`, `agent_runtime`, `task_runtime`, `run_control` | 子任务仍使用 AgentCore；权限、取消和预算不因委派消失；`subagent_runtime` 目前只是 workspace 外的说明占位 | `orchestration_contract`, `task_persistence_contract` |
 | TUI / RPC / CLI | `agent_tui`, `agent_rpc`, `agent_cli`, `agent_app` | UI 不依赖 Core/持久化；命令不伪装成 Prompt；所有入口消费同一 Runtime | `agent_cli_contract`, `client_contract`, `product_rpc_contract` |
 
 ## Security invariants

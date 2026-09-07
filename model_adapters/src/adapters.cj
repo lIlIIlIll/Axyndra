@@ -14,6 +14,7 @@ import std.io.*
 import std.process.*
 import std.sync.*
 import std.time.*
+import stdx.crypto.crypto.*
 
 public enum ProviderProtocol {
     Messages | Responses | Completions
@@ -523,7 +524,7 @@ func providerFailure(
         [
             domain.ErrorField("provider_id", providerId),
             domain.ErrorField(
-                "retry_after_ms",
+                domain.RETRY_AFTER_MILLIS_FIELD,
                 retryAfterMillis.toString()
             )
         ]
@@ -659,6 +660,7 @@ func extractHttpStatus(stderr: String): HttpDiagnostic {
 // 0.5s * 2^n exponential backoff, capped at 8s, with up to 25% jitter.
 const BASE_RETRY_DELAY_MILLIS: Int64 = 500
 const MAX_RETRY_DELAY_MILLIS: Int64 = 8000
+const MAX_RETRY_ATTEMPTS: Int64 = 64
 
 func extractRetryAfterHeader(headers: String): Int64 {
     clampRetryDelay(extractRetryAfterMillis(headers, currentEpochMillis()))
@@ -2760,7 +2762,7 @@ public class RetryControl {
 }
 
 func retryAfterMillis(error: domain.AgentError): Int64 {
-    match (error.field("retry_after_ms")) {
+    match (domain.retryAfterMillisField(error)) {
         case Some(value) =>
             let parsed = try {
                 Int64.parse(value)
@@ -2772,22 +2774,68 @@ func retryAfterMillis(error: domain.AgentError): Int64 {
     }
 }
 
+public interface RetryJitterSource {
+    // Return an offset in milliseconds. Implementations must keep the offset
+    // within the caller's configured jitter window.
+    func offsetMillis(backoffMillis: Int64): Int64
+}
+
+public class SecureRetryJitterSource <: RetryJitterSource {
+    private let lock = Mutex()
+    private let random = SecureRandom()
+
+    public init() {}
+
+    public func offsetMillis(backoffMillis: Int64): Int64 {
+        if (backoffMillis <= 0) { return 0 }
+        let quarter = backoffMillis / 4
+        let span = quarter * 2 + 1
+        lock.lock()
+        try {
+            Int64(random.nextUInt64() % UInt64(span)) - quarter
+        } finally { lock.unlock() }
+    }
+}
+
+public interface RetryDelaySleeper {
+    func sleepMillis(delayMillis: Int64): Unit
+}
+
+public class SystemRetryDelaySleeper <: RetryDelaySleeper {
+    public init() {}
+
+    public func sleepMillis(delayMillis: Int64): Unit {
+        if (delayMillis > 0) {
+            sleep(Duration.millisecond * delayMillis)
+        }
+    }
+}
+
 public class RetryingModelPort <: ports.ModelPort {
     private let inner: ports.ModelPort
     private let control: RetryControl
     private let maxAttempts: Int64
+    private let jitter: RetryJitterSource
+    private let sleeper: RetryDelaySleeper
 
     public init(
         inner: ports.ModelPort,
         control: RetryControl,
-        maxAttempts!: Int64 = 3
+        maxAttempts!: Int64 = 3,
+        jitter!: RetryJitterSource = SecureRetryJitterSource(),
+        sleeper!: RetryDelaySleeper = SystemRetryDelaySleeper()
     ) {
-        if (maxAttempts < 1) {
-            throw IllegalArgumentException("model max attempts must be positive")
+        if (maxAttempts < 1 || maxAttempts > MAX_RETRY_ATTEMPTS) {
+            throw IllegalArgumentException(
+                "model max attempts must be between 1 and " +
+                    MAX_RETRY_ATTEMPTS.toString()
+            )
         }
         this.inner = inner
         this.control = control
         this.maxAttempts = maxAttempts
+        this.jitter = jitter
+        this.sleeper = sleeper
     }
 
     public func execute(
@@ -2808,16 +2856,19 @@ public class RetryingModelPort <: ports.ModelPort {
                         // Exponential backoff with up to 25% jitter, honoring
                         // a server-suggested retry-after hint when present.
                         let serverDelay = retryAfterMillis(error)
-                        let backoffMillis = min(
-                            BASE_RETRY_DELAY_MILLIS * (1 << (attempt - 1)),
-                            MAX_RETRY_DELAY_MILLIS
+                        let backoffMillis = exponentialBackoffMillis(attempt)
+                        let jitteredBackoff = min(
+                            MAX_RETRY_DELAY_MILLIS,
+                            max(
+                                0,
+                                backoffMillis + jitter.offsetMillis(backoffMillis)
+                            )
                         )
-                        let jitter = backoffMillis / 4
-                        let delay = max(
-                            serverDelay,
-                            backoffMillis - jitter + (backoffMillis / 2)
+                        let delay = min(
+                            MAX_RETRY_DELAY_MILLIS,
+                            max(serverDelay, jitteredBackoff)
                         )
-                        sleep(Duration.millisecond * delay)
+                        sleeper.sleepMillis(delay)
                 }
                 attempt += 1
             }
@@ -2837,6 +2888,19 @@ public class RetryingModelPort <: ports.ModelPort {
         control.abort(requestId)
         inner.cancel(requestId)
     }
+}
+
+func exponentialBackoffMillis(attempt: Int64): Int64 {
+    var delay = BASE_RETRY_DELAY_MILLIS
+    var remaining = max(0, attempt - 1)
+    while (remaining > 0 && delay < MAX_RETRY_DELAY_MILLIS) {
+        if (delay > MAX_RETRY_DELAY_MILLIS / 2) {
+            return MAX_RETRY_DELAY_MILLIS
+        }
+        delay *= 2
+        remaining -= 1
+    }
+    min(delay, MAX_RETRY_DELAY_MILLIS)
 }
 
 public func fixtureModelPort(): ports.ModelPort {
@@ -3641,7 +3705,9 @@ func decodeProviderReply(
         match (error.httpStatus) { case Some(value) => fields.add(domain.ErrorField("http_status", value.toString())); case None => () }
         match (error.retryAfterMillis) {
             case Some(value) => if (value > 0) {
-                fields.add(domain.ErrorField("retry_after_millis", value.toString()))
+                fields.add(domain.ErrorField(
+                    domain.RETRY_AFTER_MILLIS_FIELD, value.toString()
+                ))
             }
             case None => ()
         }
@@ -3663,12 +3729,37 @@ func decodeProviderReply(
         if (error.providerRequestId != "") { fields.add(domain.ErrorField("provider_request_id", error.providerRequestId)) }
         match (error.usage) {
             case Some(usage) =>
-                match (usage.inputTokens) {
-                    case Some(value) => fields.add(domain.ErrorField("usage_input_tokens", value.toString()))
-                    case None => ()
+                if (usage.inputTokens.isSome() || usage.cacheReadTokens.isSome() ||
+                    usage.cacheWriteTokens.isSome()) {
+                    // Agent domain inputTokens is the canonical total. The
+                    // Messages wire dialect reports cache buckets separately,
+                    // so preserve the same normalization used by successful
+                    // replies before crossing the error boundary.
+                    fields.add(domain.ErrorField(
+                        "usage_input_tokens",
+                        providerInputUsageTotal(provider.protocol, usage).toString()
+                    ))
                 }
                 match (usage.outputTokens) {
                     case Some(value) => fields.add(domain.ErrorField("usage_output_tokens", value.toString()))
+                    case None => ()
+                }
+                match (usage.reasoningTokens) {
+                    case Some(value) => fields.add(domain.ErrorField(
+                        "usage_reasoning_tokens", value.toString()
+                    ))
+                    case None => ()
+                }
+                match (usage.cacheReadTokens) {
+                    case Some(value) => fields.add(domain.ErrorField(
+                        "usage_cache_read_tokens", value.toString()
+                    ))
+                    case None => ()
+                }
+                match (usage.cacheWriteTokens) {
+                    case Some(value) => fields.add(domain.ErrorField(
+                        "usage_cache_write_tokens", value.toString()
+                    ))
                     case None => ()
                 }
             case None => ()

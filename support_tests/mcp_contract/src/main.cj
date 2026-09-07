@@ -413,8 +413,8 @@ func runClientServerContracts(): Unit {
 
     expect(
         transport.cancel(jsonRpcNumberId(99), "test cancellation", meta).isOk() &&
-        host.cancellations() == ["99"],
-        "MCP cancellation reaches the tool host"
+        host.cancellations().isEmpty(),
+        "MCP cancellation for an unknown request is ignored safely"
     )
     let missingMeta = server.handleRequest(JsonRpcRequest(
         jsonRpcNumberId(100),

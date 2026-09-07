@@ -184,11 +184,17 @@ reused verbatim rather than re-resolved.
 
 ## Attempt-scoped UI and telemetry
 
-Provider deltas are live, Attempt-scoped provisional observations. They update
-the UI `AttemptProjection` immediately and are separately chunked in the
-bounded stream-telemetry retention class. Attempt/Decision lifecycle facts use
-an independent low-frequency lifecycle class. Neither class is a correctness
-source.
+Provider deltas are live, Attempt-scoped provisional observations. Core sends
+each delta to the live sink when the provider callback observes it, then stores
+it separately in the bounded stream-telemetry retention class. Each live and
+persisted event carries the same `AttemptId`. If telemetry persistence falls
+back to a `model.stream_telemetry_dropped` diagnostic, the live sink receives
+that persisted diagnostic. Attempt/Decision lifecycle facts use an independent
+low-frequency lifecycle class. Neither class is a correctness source.
+
+When an attempt is cancelled, aborted, or superseded, Core emits the matching
+attempt lifecycle fact and rejects later provider deltas. A retry therefore has
+its own live projection and cannot append to the previous attempt's projection.
 
 Reconnect begins from canonical ThreadItems, then identifies the current
 durable streaming Attempt and applies only an available telemetry tail. A

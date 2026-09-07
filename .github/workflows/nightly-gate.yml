@@ -10,10 +10,14 @@ permissions:
 
 jobs:
   release-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      # The floating nightly is a compatibility canary, not reproducible
+      # release evidence. The fixed release workflow owns that proof.
+      AXYNDRA_CI_COMPATIBILITY_CANARY: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           clean: true
       - name: Install native compiler
@@ -48,7 +52,24 @@ jobs:
           AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-nightly.outputs.version }}" \
             AXYNDRA_CI_EXPECTED_CJPM_VERSION="$expected_cjpm_version" \
             AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
-      - name: Full local release gate
+      - name: Full local release gate (compatibility canary)
         env:
           AXYNDRA_GATE_KIND: implementation
+          AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
         run: bash scripts/release_gate.sh
+      - name: Write CI evidence
+        if: always()
+        run: |
+          python3 scripts/ci_evidence.py \
+            --gate nightly-compatibility-canary \
+            --status "${{ job.status }}" \
+            --output-dir "$RUNNER_TEMP/axyndra-evidence" \
+            --artifact-path target/release/bin/agent_app
+      - name: Upload CI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: axyndra-nightly-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/axyndra-evidence
+          if-no-files-found: error
+          retention-days: 30

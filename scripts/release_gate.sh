@@ -55,6 +55,11 @@ candidate=$(
   AXYNDRA_PACKAGE_ROOT="$package_root" \
     "$root/scripts/package_candidate.sh"
 )
+if [[ -n "${AXYNDRA_EVIDENCE_DIR:-}" ]]; then
+  mkdir -p -- "$AXYNDRA_EVIDENCE_DIR"
+  printf '%s\n' "$candidate" > "$AXYNDRA_EVIDENCE_DIR/candidate-path.txt"
+  printf '%s\n' "$package_root" > "$AXYNDRA_EVIDENCE_DIR/package-root-path.txt"
+fi
 "$root/scripts/pinned_cangjie" cjc -v \
   > "$package_root/diagnostics/cjc-version.txt" 2>&1
 "$root/scripts/pinned_cangjie" cjpm --version \

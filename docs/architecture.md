@@ -95,9 +95,10 @@ agent_tui       → agent_cli + vendored cjtui packages
 - MCP client/server 共享 `agent_protocol` 的 JSON-RPC 2.0 值与关联规则。stdio
   使用长生命周期子进程管道，Streamable HTTP 使用 `stdx.net.http`；发现出的远端
   Tool 经 `agent_extensions` 转成普通 descriptor/executor，仍进入同一 ToolPipeline。
-- Approval 只是逻辑授权，不是操作系统隔离。`sandbox_runtime` 才负责 workspace
-  mount、进程/网络 namespace、资源上限、最小环境和 secret 脱敏；若 Linux、
-  bubblewrap 或所需 namespace 不可用，返回 Unsupported，绝不退回裸执行。
+- Approval 只是逻辑授权，不是操作系统隔离。`agent_product` 通过
+  `sandbox4cj` 负责 workspace mount、进程/网络 namespace、资源上限、最小环境
+  和 secret 脱敏；若 Linux、bubblewrap 或所需 namespace 不可用，返回
+  Unsupported，绝不退回裸执行。workspace 外的 `sandbox_runtime` 是独立实验包。
 - Workspace 路径在宿主侧规范化并限制于批准的根；环境变量默认拒绝，只允许显式
   allowlist。Secret 同时在环境投影和输出/事件边界脱敏。
 - Prompt 中的 trust 标签用于组织模型输入，不是安全边界。最终权限始终由宿主的
