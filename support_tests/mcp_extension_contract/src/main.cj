@@ -140,7 +140,8 @@ func executeOutcome(
     let client = McpClient(
         FakeMcpTransport(McpServer(
             McpDiscoverResult(serverInfo: McpImplementationInfo("outcome-server", "1")),
-            MemoryMcpToolHost([tool], {_, _, _ => Result.Ok(outcome)})
+            MemoryMcpToolHost([tool], {_, _, _ => Result.Ok(outcome)}),
+            taskProvider: Some(ContractMcpTaskProvider())
         )),
         McpRequestMeta(
             clientInfo: McpImplementationInfo("outcome-client", "1"),
@@ -175,5 +176,35 @@ func errorField(error: AgentError, name: String): String {
 func expect(condition: Bool, message: String): Unit {
     if (!condition) {
         throw IllegalStateException(message)
+    }
+}
+
+class ContractMcpTaskProvider <: McpTaskProvider {
+    private let task: McpTask
+
+    init() {
+        this.task = McpTask(
+            "fixture-task",
+            McpTaskStatus.Working,
+            "2026-08-27T00:00:00Z",
+            "2026-08-27T00:00:00Z",
+            None
+        )
+    }
+
+    public func getTask(taskId: String): Result<McpTask> {
+        let _ = taskId
+        Result.Ok(task)
+    }
+
+    public func updateTask(taskId: String, inputResponses: JsonNode): Result<Unit> {
+        let _ = taskId
+        let _ = inputResponses
+        Result.Ok(())
+    }
+
+    public func cancelTask(taskId: String): Result<Unit> {
+        let _ = taskId
+        Result.Ok(())
     }
 }

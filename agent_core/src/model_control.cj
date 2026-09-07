@@ -120,7 +120,6 @@ public class AttemptDeadlineContext {
     private var accepting = true
     private var replayBarrier = ModelAttemptReplayBarrier.NoBarrier
     private var persistenceFailure: ?AgentError = None
-    private let provisionalEvents = ArrayList<ModelEvent>()
 
     public init(
         policy: ModelAttemptRecoveryPolicy,
@@ -142,11 +141,9 @@ public class AttemptDeadlineContext {
             let now = clock.nowMillis()
             match (event) {
                 case ModelEvent.ReasoningDelta(value) => if (value != "") {
-                    provisionalEvents.add(event)
                     progress(AttemptProgressKind.ReasoningProgress, now)
                 }
                 case ModelEvent.TextDelta(value) => if (value != "") {
-                    provisionalEvents.add(event)
                     progress(AttemptProgressKind.TextProgress, now)
                 }
                 case ModelEvent.ToolCallStarted(_, _) =>
@@ -219,12 +216,10 @@ public class AttemptDeadlineContext {
         }
     }
     public func takeProvisionalOutput(): Array<ModelEvent> {
-        lock.lock()
-        try {
-            let value = provisionalEvents.toArray()
-            provisionalEvents.clear()
-            value
-        } finally { lock.unlock() }
+        // Provisional deltas are forwarded at observation time. Do not retain
+        // an unbounded copy of a long provider stream just to replay it after
+        // the attempt has completed.
+        []
     }
     public func completedObserved(): Bool {
         lock.lock()
@@ -577,19 +572,17 @@ public class ControlledModelPort <: ModelPort {
                 let outputExceeded = reply.outputTokens > request.budget.maxOutputTokens
                 let requestCost: ?Int64 = match (request.pricing) {
                     case Some(value) => priceModelUsage(reply.usage, value)
-                    case None => None
+                    case None => reply.usage.costMicros
                 }
-                let firstKnownUsage = snapshot.modelRequests == 1 &&
-                    snapshot.inputTokens == 0 && snapshot.outputTokens == 0 &&
-                    snapshot.reasoningTokens == 0 && snapshot.cacheReadTokens == 0 &&
-                    snapshot.cacheWriteTokens == 0
-                let totalCost: ?Int64 = if (firstKnownUsage) {
-                    requestCost
-                } else {
-                    match ((snapshot.costMicros, requestCost)) {
-                        case (Some(total), Some(value)) => Some(total + value)
-                        case _ => None
-                    }
+                // A previous attempt may have consumed no billable usage. A
+                // later priced reply must still become the first known cost;
+                // an unknown contribution does not erase a known one.
+                let totalCost: ?Int64 = match ((snapshot.costMicros, requestCost)) {
+                    case (Some(total), Some(value)) =>
+                        Some(saturatedModelUsageAdd(total, value))
+                    case (Some(total), None) => Some(total)
+                    case (None, Some(value)) => Some(value)
+                    case (None, None) => None
                 }
                 let costExceeded = match (totalCost) {
                     case Some(value) => request.budget.maxCostMicros > 0 &&
@@ -907,7 +900,7 @@ func nextInternalEventSequence(
 }
 
 func internalRetryDelayMillis(attempt: Int64, error: AgentError): Int64 {
-    match (error.field("retry_after_ms")) {
+    match (retryAfterMillisField(error)) {
         case Some(value) => try {
             let parsed = Int64.parse(value)
             if (parsed > 0) { return min(parsed, 8000) }
@@ -961,24 +954,50 @@ func attemptUsageFromError(
 ): ?ModelUsage {
     let inputField = error.field("usage_input_tokens")
     let outputField = error.field("usage_output_tokens")
-    if (inputField.isNone() && outputField.isNone()) { return None }
-    let inputTokens = match (inputField) {
-        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
-        case None => 0
-    }
-    let outputTokens = match (outputField) {
-        case Some(value) => try { Int64.parse(value) } catch (_: Exception) { return None }
-        case None => 0
-    }
-    if (inputTokens < 0 || outputTokens < 0) { return None }
+    let reasoningField = error.field("usage_reasoning_tokens")
+    let cacheReadField = error.field("usage_cache_read_tokens")
+    let cacheWriteField = error.field("usage_cache_write_tokens")
+    if (inputField.isNone() && outputField.isNone() && reasoningField.isNone() &&
+        cacheReadField.isNone() && cacheWriteField.isNone()) { return None }
+    let inputTokens = parseObservedUsageField(inputField)
+    let outputTokens = parseObservedUsageField(outputField)
+    let reasoningTokens = parseObservedUsageField(reasoningField)
+    let cacheReadTokens = parseObservedUsageField(cacheReadField)
+    let cacheWriteTokens = parseObservedUsageField(cacheWriteField)
+    if (inputTokens.isNone() || outputTokens.isNone() || reasoningTokens.isNone() ||
+        cacheReadTokens.isNone() || cacheWriteTokens.isNone()) { return None }
+    let input = inputTokens.getOrThrow()
+    let output = outputTokens.getOrThrow()
+    let reasoning = reasoningTokens.getOrThrow()
+    let cacheRead = cacheReadTokens.getOrThrow()
+    let cacheWrite = cacheWriteTokens.getOrThrow()
+    if (cacheRead > Int64.Max - cacheWrite ||
+        cacheRead + cacheWrite > input || reasoning > output) { return None }
     Some(ModelUsage(
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
+        inputTokens: input,
+        outputTokens: output,
+        reasoningTokens: reasoning,
+        cacheReadTokens: cacheRead,
+        cacheWriteTokens: cacheWrite,
         costMicros: match (pricing) {
             case Some(value) => priceModelUsage(ModelUsage(
-                inputTokens: inputTokens, outputTokens: outputTokens
+                inputTokens: input,
+                outputTokens: output,
+                reasoningTokens: reasoning,
+                cacheReadTokens: cacheRead,
+                cacheWriteTokens: cacheWrite
             ), value)
             case None => None
         }
     ))
+}
+
+func parseObservedUsageField(value: ?String): ?Int64 {
+    match (value) {
+        case Some(text) => try {
+            let parsed = Int64.parse(text)
+            if (parsed < 0) { None } else { Some(parsed) }
+        } catch (_: Exception) { None }
+        case None => Some(0)
+    }
 }

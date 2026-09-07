@@ -9,12 +9,12 @@ permissions:
 jobs:
   release-gate:
     environment: release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.2.0-alpha.21
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           clean: true
       - name: Install native compiler
@@ -51,5 +51,22 @@ jobs:
         env:
           AXYNDRA_GATE_KIND: release
           AXYNDRA_REAL_SMOKE: "1"
+          AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: bash scripts/release_gate.sh
+      - name: Write CI evidence
+        if: always()
+        run: |
+          python3 scripts/ci_evidence.py \
+            --gate protected-release \
+            --status "${{ job.status }}" \
+            --output-dir "$RUNNER_TEMP/axyndra-evidence" \
+            --artifact-path target/release/bin/agent_app
+      - name: Upload CI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: axyndra-release-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/axyndra-evidence
+          if-no-files-found: error
+          retention-days: 90

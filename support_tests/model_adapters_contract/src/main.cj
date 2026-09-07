@@ -495,6 +495,42 @@ main(): Int64 {
             throw IllegalStateException(error.message)
     }
 
+    let failedUsageRequest = domain.ModelRequest(
+        "fixture-model",
+        request.messages,
+        tools: request.tools,
+        thinking: domain.ThinkingLevel.Off,
+        maxOutputTokens: 128,
+        streaming: false,
+        parallelToolCalls: false
+    )
+    let failedUsagePort: ports.ModelPort = providerModelPort(
+        provider,
+        transport: StaticTransport(
+            "{\"id\":\"resp_bad_usage\",\"status\":\"completed\"," +
+            "\"output\":[{\"type\":\"function_call\",\"call_id\":\"bad\"," +
+            "\"name\":\"echo\",\"arguments\":\"[\"}]," +
+            "\"usage\":{\"input_tokens\":10,\"output_tokens\":3," +
+            "\"input_tokens_details\":{\"cached_tokens\":4," +
+            "\"cache_write_tokens\":2},\"output_tokens_details\":" +
+            "{\"reasoning_tokens\":2}}}"
+        )
+    )
+    match (failedUsagePort.execute(failedUsageRequest, { _ => () })) {
+        case domain.Result.Err(error) => expect(
+            error.code == "llm.tool_arguments_not_executable" &&
+                error.field("usage_input_tokens") == Some("10") &&
+                error.field("usage_output_tokens") == Some("3") &&
+                error.field("usage_reasoning_tokens") == Some("2") &&
+                error.field("usage_cache_read_tokens") == Some("4") &&
+                error.field("usage_cache_write_tokens") == Some("2"),
+            "failed provider attempts preserve all normalized usage buckets"
+        )
+        case domain.Result.Ok(_) => expect(
+            false, "malformed provider tool arguments must remain an error"
+        )
+    }
+
     let completionsPort: ports.ModelPort = providerModelPort(
         ProviderSpec(
             "completions-fixture",
@@ -958,6 +994,54 @@ main(): Int64 {
         abortingPort.calls == 1,
         "abort retry stops the active request before another attempt"
     )
+    let boundedSleeper = RecordingRetrySleeper()
+    let boundedRetry = RetryingModelPort(
+        EventuallySuccessfulPort(1),
+        RetryControl(),
+        maxAttempts: 2,
+        jitter: FixedRetryJitter(10000),
+        sleeper: boundedSleeper
+    )
+    expect(
+        boundedRetry.execute(request, { _ => () }).isOk() &&
+            boundedSleeper.delays.size == 1 && boundedSleeper.delays[0] == 8000,
+        "retry jitter is bounded and the final delay never exceeds the maximum"
+    )
+    let hintSleeper = RecordingRetrySleeper()
+    let hintRetry = RetryingModelPort(
+        RetryAfterHintPort(true),
+        RetryControl(),
+        maxAttempts: 2,
+        jitter: FixedRetryJitter(0),
+        sleeper: hintSleeper
+    )
+    expect(
+        hintRetry.execute(request, { _ => () }).isOk() &&
+            hintSleeper.delays.size == 1 && hintSleeper.delays[0] == 5000,
+        "canonical Retry-After is consumed by the adapter retry policy"
+    )
+    let legacyHintSleeper = RecordingRetrySleeper()
+    let legacyHintRetry = RetryingModelPort(
+        RetryAfterHintPort(false),
+        RetryControl(),
+        maxAttempts: 2,
+        jitter: FixedRetryJitter(0),
+        sleeper: legacyHintSleeper
+    )
+    expect(
+        legacyHintRetry.execute(request, { _ => () }).isOk() &&
+            legacyHintSleeper.delays.size == 1 && legacyHintSleeper.delays[0] == 5000,
+        "legacy Retry-After remains readable during field migration"
+    )
+    var attemptsRejected = false
+    try {
+        let _ = RetryingModelPort(
+            EventuallySuccessfulPort(1), RetryControl(), maxAttempts: 65
+        )
+    } catch (_: Exception) {
+        attemptsRejected = true
+    }
+    expect(attemptsRejected, "retry attempts have a finite configured upper bound")
     let deadlineTransport = RecordingTransport(
         "{\"id\":\"deadline-response\",\"content\":[{\"type\":\"text\"," +
         "\"text\":\"after soft deadline\"}],\"stop_reason\":\"end_turn\"," +
@@ -1493,6 +1577,64 @@ class AbortOnFailurePort <: ports.ModelPort {
         calls += 1
         control.abort(request.requestId)
         retryableFailure()
+    }
+}
+
+class FixedRetryJitter <: RetryJitterSource {
+    private let offset: Int64
+
+    init(offset: Int64) {
+        this.offset = offset
+    }
+
+    public func offsetMillis(backoffMillis: Int64): Int64 {
+        let _ = backoffMillis
+        offset
+    }
+}
+
+class RecordingRetrySleeper <: RetryDelaySleeper {
+    let delays = ArrayList<Int64>()
+
+    public func sleepMillis(delayMillis: Int64): Unit {
+        delays.add(delayMillis)
+    }
+}
+
+class RetryAfterHintPort <: ports.ModelPort {
+    private let canonical: Bool
+    private var calls: Int64 = 0
+
+    init(canonical: Bool) {
+        this.canonical = canonical
+    }
+
+    public func execute(
+        request: domain.ModelRequest,
+        events: domain.ModelEventSink
+    ): domain.Result<domain.ModelReply> {
+        let _ = request
+        let _ = events
+        calls += 1
+        if (calls == 1) {
+            return domain.Result.Err(domain.AgentError(
+                domain.AgentErrorKind.RateLimited,
+                "fixture.rate_limited",
+                "retry later",
+                retryable: true,
+                fields: [domain.ErrorField(
+                    if (canonical) {
+                        domain.RETRY_AFTER_MILLIS_FIELD
+                    } else {
+                        domain.LEGACY_RETRY_AFTER_MILLIS_FIELD
+                    },
+                    "5000"
+                )]
+            ))
+        }
+        domain.Result.Ok(domain.ModelReply([
+            domain.ModelBlock(domain.ModelBlockKind.Text, text: "retried")
+        ]))
     }
 }
 

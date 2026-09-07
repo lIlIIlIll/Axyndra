@@ -17,19 +17,41 @@ public interface McpToolHost {
     func cancel(requestId: JsonRpcId, reason: String): Result<Unit>
 }
 
+// Product task state is optional; when present it is bridged to the generic
+// protocol server so task results can be polled, updated, and cancelled.
+public interface McpTaskProvider {
+    func getTask(taskId: String): Result<McpTask>
+    func updateTask(taskId: String, inputResponses: AgentValue): Result<Unit>
+    func cancelTask(taskId: String): Result<Unit>
+}
+
 public class McpServer {
     private let primitive: library.McpServer
+    private let requestOwner: String
 
-    public init(discovery: McpDiscoverResult, host: McpToolHost) {
-        primitive = library.McpServer(discovery, host: McpToolHostBridge(host))
+    public init(
+        discovery: McpDiscoverResult,
+        host: McpToolHost,
+        taskProvider!: ?McpTaskProvider = None,
+        requestOwner!: String = ""
+    ) {
+        this.requestOwner = requestOwner
+        primitive = library.McpServer(
+            discovery,
+            host: Some(McpToolHostBridge(host)),
+            tasks: match (taskProvider) {
+                case Some(value) => Some(McpTaskProviderBridge(value))
+                case None => None
+            }
+        )
     }
 
     public func state(): McpLifecycleState { primitive.state() }
     public func handleRequest(request: JsonRpcRequest): JsonRpcResponse {
-        primitive.handleRequest(request)
+        primitive.handleRequest(request, requestOwner: requestOwner)
     }
     public func handleNotification(notification: JsonRpcNotification): Result<Unit> {
-        mapMcpResult(primitive.handleNotification(notification))
+        mapMcpResult(primitive.handleNotification(notification, requestOwner: requestOwner))
     }
     public func cancelRequest(requestId: JsonRpcId, reason: String): Result<Unit> {
         handleNotification(mcpCancellationNotification(
@@ -59,6 +81,24 @@ class McpToolHostBridge <: library.McpToolHost {
     }
     public func cancel(requestId: JsonRpcId, reason: String): library.McpResult<Unit> {
         unmapMcpResult(product.cancel(requestId, reason))
+    }
+}
+
+class McpTaskProviderBridge <: library.McpTaskProvider {
+    private let product: McpTaskProvider
+
+    init(product: McpTaskProvider) { this.product = product }
+
+    public func getTask(taskId: String): library.McpResult<McpTask> {
+        unmapMcpResult(product.getTask(taskId))
+    }
+
+    public func updateTask(taskId: String, inputResponses: AgentValue): library.McpResult<Unit> {
+        unmapMcpResult(product.updateTask(taskId, inputResponses))
+    }
+
+    public func cancelTask(taskId: String): library.McpResult<Unit> {
+        unmapMcpResult(product.cancelTask(taskId))
     }
 }
 

@@ -34,6 +34,10 @@ class TrackedArtifactGateTest(unittest.TestCase):
             ".agent-state/fixture/state.db",
             ".agent-state/fixture/state.db-wal",
             "dist/axyndra/bin/axyndra",
+            "coverage/report.txt",
+            "support_tests/model_adapters_contract/default.profraw",
+            "coverage.profdata",
+            "core",
             "mock.log",
             "worker.pid",
         ):

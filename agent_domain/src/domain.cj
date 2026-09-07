@@ -116,6 +116,18 @@ public class AgentError {
     }
 }
 
+// Retry-After is a provider-neutral error field. Keep the legacy spelling
+// readable while every producer writes the canonical field below.
+public let RETRY_AFTER_MILLIS_FIELD: String = "retry_after_millis"
+public let LEGACY_RETRY_AFTER_MILLIS_FIELD: String = "retry_after_ms"
+
+public func retryAfterMillisField(error: AgentError): ?String {
+    match (error.field(RETRY_AFTER_MILLIS_FIELD)) {
+        case Some(value) => Some(value)
+        case None => error.field(LEGACY_RETRY_AFTER_MILLIS_FIELD)
+    }
+}
+
 // Agent payloads use the canonical JSON value tree. These aliases preserve the
 // product vocabulary without maintaining a second AST or parser.
 public type ValueKind = UnifiedJsonKind
