@@ -2869,6 +2869,9 @@ public class RetryingModelPort <: ports.ModelPort {
                             max(serverDelay, jitteredBackoff)
                         )
                         sleeper.sleepMillis(delay)
+                        if (!control.shouldRetry(request.requestId)) {
+                            return domain.Result.Err(error)
+                        }
                 }
                 attempt += 1
             }

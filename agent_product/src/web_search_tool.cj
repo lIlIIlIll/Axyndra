@@ -17,7 +17,13 @@ public interface WebSearchTransport {
     ): Result<ProcessResult>
 }
 
-public class CurlWebSearchTransport <: WebSearchTransport {
+public interface WebSearchOperationControl {
+    func reserve(id: OperationId): Unit
+    func release(id: OperationId): Unit
+    func cancel(id: OperationId): Result<Unit>
+}
+
+public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationControl {
     private let processes: ProcessPort
     private let executable: String
 
@@ -35,6 +41,14 @@ public class CurlWebSearchTransport <: WebSearchTransport {
             )
         }
     }
+
+    public func reserve(id: OperationId): Unit {
+        match (processes as LocalProcessPort) { case Some(local) => local.reserveOperation(id); case None => () }
+    }
+    public func release(id: OperationId): Unit {
+        match (processes as LocalProcessPort) { case Some(local) => local.releaseOperation(id); case None => () }
+    }
+    public func cancel(id: OperationId): Result<Unit> { processes.cancel(id) }
 
     public func execute(
         arguments: Array<String>,
@@ -91,6 +105,7 @@ class ProductSearchResponse {
 public class ProductWebSearchRuntime {
     private let transport: WebSearchTransport
     private let settingsRoot: String
+    private let operations: ProductProcessOperations
 
     public init(
         transport: WebSearchTransport,
@@ -98,7 +113,13 @@ public class ProductWebSearchRuntime {
     ) {
         this.transport = transport
         this.settingsRoot = settingsRoot
+        this.operations = ProductProcessOperations("web-search",
+            { id => match (transport as WebSearchOperationControl) { case Some(control) => control.reserve(id); case None => () } },
+            { id => match (transport as WebSearchOperationControl) { case Some(control) => control.release(id); case None => () } },
+            { id => match (transport as WebSearchOperationControl) { case Some(control) => control.cancel(id); case None => Result.Ok(()) } })
     }
+
+    public func cancel(runId: RunId): Result<Unit> { operations.cancel(runId) }
 
     public func execute(
         context: ToolInvocationContext,
@@ -112,7 +133,6 @@ public class ProductWebSearchRuntime {
         call: ToolCall,
         providerOverride: String
     ): Result<ToolResult> {
-        let _ = context
         let query = match (requiredString(call, "query")) {
             case Result.Ok(value) => value.trimAscii()
             case Result.Err(error) => return Result.Err(error)
@@ -206,13 +226,9 @@ public class ProductWebSearchRuntime {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let result = match (transport.execute(
-            request,
-            OperationId(
-                "web-search-" + safeOperationPart(call.callId)
-            ),
-            webSearchSecretValues(provider)
-        )) {
+        let result = match (operations.execute(context, call, { operationId => transport.execute(
+            request, operationId, webSearchSecretValues(provider)
+        ) })) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -309,7 +325,7 @@ public class ProductWebSearchRuntime {
             case "brave" =>
                 let arguments = ArrayList<String>()
                 arguments.add(all: [
-                    "--fail-with-body", "--silent", "--show-error",
+                    "-q", "--fail-with-body", "--silent", "--show-error",
                     "--get",
                     "https://api.search.brave.com/res/v1/web/search",
                     "-H",
@@ -368,7 +384,7 @@ public class ProductWebSearchRuntime {
                     case None => ()
                 }
                 Result.Ok([
-                    "--fail-with-body", "--silent", "--show-error",
+                    "-q", "--fail-with-body", "--silent", "--show-error",
                     "https://api.tavily.com/search",
                     "-H", "Content-Type: application/json",
                     "--data", payload.stringify()
@@ -377,7 +393,7 @@ public class ProductWebSearchRuntime {
                 let endpoint = webSearchVariable("SEARXNG_URL")
                     .removeSuffix("/")
                 Result.Ok([
-                    "--fail-with-body", "--silent", "--show-error",
+                    "-q", "--fail-with-body", "--silent", "--show-error",
                     "--get", endpoint + "/search",
                     "--data-urlencode", "q=" + query,
                     "--data-urlencode", "format=json",
@@ -401,6 +417,8 @@ public class ProductWebSearchRuntime {
 class WebSearchTool <: ToolExecutor {
     private let runtime: ProductWebSearchRuntime
     init(runtime: ProductWebSearchRuntime) { this.runtime = runtime }
+
+    public func cancel(runId: RunId): Result<Unit> { runtime.cancel(runId) }
 
     public func execute(
         context: ToolInvocationContext,

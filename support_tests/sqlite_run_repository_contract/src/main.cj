@@ -14,6 +14,7 @@ main(): Int64 {
     let root = Directory.createTemp("target").toString()
     let database = SqliteDatabase(root + "/state.db")
     try {
+        interiorRetentionGapContract(root)
         seedCanonicalRun(database)
         let repository = SqliteRunRepository(database, eventCapacity: 2)
         let runId = RunId("run-1")
@@ -739,4 +740,48 @@ func seedMigrationRun(database: SqliteDatabase): Unit {
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
+}
+
+func interiorRetentionGapContract(root: String): Unit {
+    let database = SqliteDatabase(root + "/gap.db")
+    try {
+        seedCanonicalRun(database)
+        let repository = SqliteRunRepository(database, eventCapacity: 1)
+        let runId = RunId("run-1")
+        for (sequence in 1..6) {
+            let payload = if (sequence == 3) { AgentEventPayload.TextDelta("text") }
+                else if (sequence == 5) { AgentEventPayload.ReasoningDelta("reason") }
+                else { AgentEventPayload.Audit("lifecycle", objectValue([])) }
+            expect(repository.append(AgentEvent(EventMeta(sequence, TraceId("gap"), runId),
+                payload)).isOk(), "retention gap fixture appends through public API")
+        }
+        let page = repository.events(runId, 1).value().getOrThrow()
+        expect(page.resyncRequired && page.nextSequence == 6 && page.events.size == 3,
+            "interior pruned telemetry requires resync even when first replay event is contiguous")
+        expect(!repository.events(runId, 0).value().getOrThrow().resyncRequired &&
+            !repository.events(runId, 4).value().getOrThrow().resyncRequired,
+            "initial partial replay and complete retained suffix keep existing semantics")
+        let interleaved = SqliteRunRepository(database, eventCapacity: 2)
+        for (sequence in 6..10) {
+            let payload = if (sequence == 7) { AgentEventPayload.ReasoningDelta("more") }
+                else if (sequence == 9) { AgentEventPayload.Audit("lifecycle", objectValue([])) }
+                else { AgentEventPayload.TextDelta("more") }
+            expect(interleaved.append(AgentEvent(EventMeta(sequence, TraceId("gap"), runId),
+                payload)).isOk(), "interleaved telemetry aggregates through public API")
+        }
+        let ordered = interleaved.events(runId, 5).value().getOrThrow()
+        // Reasoning spans 5..7 and therefore still needs the established aggregate resync.
+        expect(ordered.resyncRequired && ordered.events.size == 3 &&
+            ordered.events[0].sequence == 7 && ordered.events[1].sequence == 8 &&
+            ordered.events[2].sequence == 9,
+            "interleaved aggregation preserves last-event sequence replay order")
+        expect(!interleaved.events(runId, 8).value().getOrThrow().resyncRequired &&
+            !interleaved.events(runId, 9).value().getOrThrow().resyncRequired,
+            "cursor at aggregate end or head has complete suffix")
+        let pruning = SqliteRunRepository(database, eventCapacity: 1)
+        expect(pruning.append(AgentEvent(EventMeta(10, TraceId("gap"), runId),
+            AgentEventPayload.TextDelta("last"))).isOk(), "prune stream inside retained envelope")
+        expect(pruning.events(runId, 4).value().getOrThrow().resyncRequired,
+            "retained interleaved envelope cannot hide a pruned stream")
+    } finally { database.close() }
 }

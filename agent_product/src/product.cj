@@ -1388,10 +1388,17 @@ public class ProductRuntime {
         Result.Ok(canonical)
     }
 
+    func reserveBash(operationId: OperationId): Unit { processes.reserveOperation(operationId) }
+    func releaseBash(operationId: OperationId): Unit { processes.releaseOperation(operationId) }
+
     public func executeBash(
         command: String,
         operationId: OperationId
     ): Result<ProcessResult> {
+        if (processes.reservedOperationCancelled(operationId)) {
+            return Result.Err(AgentError(AgentErrorKind.Cancelled,
+                "application.bash_cancelled", "bash command was cancelled"))
+        }
         // This is an explicitly user-authored application/RPC control command,
         // not a model tool invocation, so it does not mint an approval grant or
         // a ToolPipeline receipt. It still crosses the process boundary and
@@ -2783,17 +2790,6 @@ public class ProductRuntime {
             case Result.Err(error) => return Result.Err(error)
         }
         let configuredModel = profile.id + "/" + model
-        let config = encodeProductSettings(
-            configuredModel,
-            asyncEnabled,
-            theme: theme,
-            approval: approvalSettings,
-            compaction: compactionSettings
-        )
-        match (atomicConfigWrite(settingsRoot + "/config.yml", config)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
         if (credential != "") {
             match (saveProviderCredential(
                 settingsRoot,
@@ -2804,27 +2800,18 @@ public class ProductRuntime {
                 case Result.Err(error) => return Result.Err(error)
             }
         }
-        Result.Ok(())
+        updateProductConfig(settingsRoot, [
+            ProductConfigEdit("default_model", ProductConfigScalar.Text(configuredModel))
+        ])
     }
 
     public func saveTheme(name: String): Result<Unit> {
         if (!persistSettings) {
             return Result.Ok(())
         }
-        let settings = match (loadProductSettings(settingsRoot)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let saved = atomicConfigWrite(
-            settingsRoot + "/config.yml",
-            encodeProductSettings(
-                settings.model,
-                settings.asyncEnabled,
-                theme: name,
-                approval: settings.approval,
-                compaction: settings.compaction
-            )
-        )
+        let saved = updateProductConfig(settingsRoot, [
+            ProductConfigEdit("theme", ProductConfigScalar.Text(name))
+        ])
         if (saved.isOk()) {
             theme = name
         }

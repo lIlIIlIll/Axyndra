@@ -156,6 +156,14 @@ func typedParameterContract(database: SqliteDatabase): Unit {
             "text_value TEXT NOT NULL, int_value INTEGER NOT NULL, " +
             "blob_value BLOB NOT NULL, null_value TEXT)"
     )
+    let nul = String.fromUtf8([UInt8(97), UInt8(0), UInt8(98)])
+    for (value in [nul, "中文'", ""]) {
+        let encoded = encodeStoredValue(textValue(value))
+        let row = database.query("SELECT ?," + sqliteText(encoded), [SqlParameter.Text(encoded)])[0]
+        expect(decodeStoredValue(row.required(0)).text == value &&
+            decodeStoredValue(row.required(1)).text == value,
+            "bound and literal framed text preserve NUL, Unicode, quotes and empty strings")
+    }
     let hostile = "quote ' and SQL ); DROP TABLE threads; --"
     database.execute(
         "INSERT INTO parameter_contract VALUES (?,?,?,?)",

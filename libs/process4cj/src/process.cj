@@ -21,6 +21,7 @@ foreign func process4cj_read(fd: Int32, buffer: CPointer<UInt8>, length: Int64):
 foreign func process4cj_wait_readable(fd: Int32, timeoutMillis: Int32): Int32
 foreign func process4cj_write_all(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int32
 foreign func process4cj_close(fd: Int32): Int32
+foreign func process4cj_wait_owned(pid: Int64): Int64
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
 foreign func process4cj_is_alive(pid: Int64): Int32
@@ -112,7 +113,7 @@ class ProcessLifecycle {
     func requestCancellation(cause: CancellationCause): Bool {
         lock.lock()
         try {
-            if (current.isTerminal() || requestedCancellation.isSome()) { return false }
+            if (requestedCancellation.isSome()) { return false }
             requestedCancellation = Some(cause)
             true
         } finally { lock.unlock() }
@@ -618,14 +619,28 @@ public interface ProcessBackend {
 }
 
 class NativeProcessInput <: InputStream & Resource {
+    private let ioLock = Mutex()
     private var fd: Int32
     private var closed = false
 
     init(fd: Int32) { this.fd = fd }
 
     public func read(buffer: Array<Byte>): Int64 {
-        if (closed) { return 0 }
         if (buffer.size == 0) { return 0 }
+        while (true) {
+            ioLock.lock()
+            try {
+                if (closed) { return 0 }
+                // Keep the descriptor owned across poll/read, but never pin
+                // a Cangjie buffer while waiting for a silent child.
+                if (waitReadableFd(fd, 10)) { return readReady(buffer) }
+            } finally { ioLock.unlock() }
+            sleep(Duration.millisecond)
+        }
+        0
+    }
+
+    private func readReady(buffer: Array<Byte>): Int64 {
         unsafe {
             let raw = acquireArrayRawData(buffer)
             try {
@@ -633,23 +648,42 @@ class NativeProcessInput <: InputStream & Resource {
                 if (result < 0) {
                     throw ProcessError(ProcessErrorKind.Io, "process pipe read failed errno=" + (-result).toString())
                 }
-                if (result == 0) { close() }
+                if (result == 0) { closeOwned() }
                 result
             } finally { releaseArrayRawData(raw) }
         }
     }
 
-    public func close(): Unit {
+    private func closeOwned(): Unit {
         if (closed) { return }
-        let error = unsafe { process4cj_close(fd) }
+        let ownedFd = fd
+        fd = -1
+        closed = true
+        let error = unsafe { process4cj_close(ownedFd) }
         if (error != 0) {
             throw ProcessError(ProcessErrorKind.Io, "process pipe close failed errno=" + error.toString())
         }
-        fd = -1
-        closed = true
     }
 
-    public func isClosed(): Bool { closed }
+    public func close(): Unit {
+        ioLock.lock()
+        try { closeOwned() } finally { ioLock.unlock() }
+    }
+
+    func readAvailable(budget: BoundedOutputBudget, output: ArrayList<Byte>): Unit {
+        ioLock.lock()
+        try {
+            if (closed || !waitReadableFd(fd, 5)) { return }
+            let buffer = Array<Byte>(8192, repeat: 0)
+            let count = readReady(buffer)
+            let accepted = budget.claim(count)
+            for (index in 0..accepted) { output.add(buffer[index]) }
+        } finally { ioLock.unlock() }
+    }
+
+    public func isClosed(): Bool {
+        ioLock.lock(); try { closed } finally { ioLock.unlock() }
+    }
 }
 
 class LinuxNativeProcess <: ProcessPlatformProcess {
@@ -657,6 +691,7 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
     private var stdinFd: Int32
     private let stdoutStream: NativeProcessInput
     private let stderrStream: NativeProcessInput
+    private var closed = false
 
     init(pid: Int64, stdinFd: Int32, stdoutFd: Int32, stderrFd: Int32) {
         nativePid = pid
@@ -693,7 +728,7 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
     }
 
     public func inputCloseSupported(): Bool { true }
-    public func wait(): Int64 { unsafe { process4cj_wait(nativePid) } }
+    public func wait(): Int64 { unsafe { process4cj_wait_owned(nativePid) } }
     public func terminate(force: Bool, processTree: Bool): Bool {
         unsafe {
             process4cj_kill(nativePid, if (force) { 1 } else { 0 }, if (processTree) { 1 } else { 0 }) == 0
@@ -701,11 +736,14 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
     }
     public func isAlive(): Bool { unsafe { process4cj_is_alive(nativePid) == 1 } }
     public func close(): Unit {
+        if (closed) { return }
+        closed = true
         if (stdinFd >= 0) {
             try { closeInput() } catch (_: ProcessError) {}
         }
         try { stdoutStream.close() } catch (_: ProcessError) {}
         try { stderrStream.close() } catch (_: ProcessError) {}
+        let _ = unsafe { process4cj_wait(nativePid) }
     }
 }
 
@@ -746,16 +784,15 @@ public class ManagedProcess {
     public prop stderr: InputStream { get() { platform.stderr } }
 
     public func isAlive(): Bool {
-        if (waitFuture.tryGet().isSome()) { return false }
+        if (lifecycle.state().isTerminal()) { return false }
         platform.isAlive()
     }
     public func state(): ProcessLifecycleState { lifecycle.state() }
     public func tryExit(): ?ExitStatus {
-        match (waitFuture.tryGet()) {
-            case Some(value) => value.exitStatus
-            case None => None
-        }
+        lifecycle.state().exitStatus
     }
+    // wait observes exit; close releases the native leader and remaining pipes.
+    // Keeping the exited leader until close prevents process-group ID reuse.
     public func wait(): ExitStatus { waitFuture.get().exitStatus.getOrThrow() }
 
     public func writeStdin(data: Array<Byte>): Unit {
@@ -764,7 +801,7 @@ public class ManagedProcess {
             if (inputClosed) {
                 throw ProcessError(ProcessErrorKind.BrokenPipe, "process stdin is closed")
             }
-            if (waitFuture.tryGet().isSome()) {
+            if (lifecycle.state().isTerminal()) {
                 throw ProcessError(ProcessErrorKind.BrokenPipe, "child process has exited")
             }
             platform.writeInput(data)
@@ -806,15 +843,19 @@ public class ManagedProcess {
     public func inputCloseSupported(): Bool { platform.inputCloseSupported() }
 
     public func cancel(cause: CancellationCause): Bool {
-        if (!lifecycle.requestCancellation(cause)) { return false }
-        let _ = terminate(force: true)
-        true
+        closeLock.lock()
+        try {
+            if (closed || (!terminateTree && lifecycle.state().isTerminal())) { return false }
+            if (!lifecycle.requestCancellation(cause)) { return false }
+            let _ = terminate(force: true)
+            true
+        } finally { closeLock.unlock() }
     }
 
     public func terminate(force!: Bool = false): Bool {
         terminationLock.lock()
         try {
-            if (waitFuture.tryGet().isSome()) { return false }
+            if (closed || (!terminateTree && lifecycle.state().isTerminal())) { return false }
             let requested: Int64 = if (force) { 2 } else { 1 }
             if (requested <= terminationLevel) { return false }
             terminationLevel = requested
@@ -826,7 +867,7 @@ public class ManagedProcess {
         closeLock.lock()
         try {
             if (closed) { return false }
-            if (isAlive()) { let _ = terminate(force: true) }
+            let _ = terminate(force: true)
             let _ = wait()
             inputLock.lock()
             try {
@@ -835,8 +876,11 @@ public class ManagedProcess {
                     inputClosed = true
                 }
             } finally { inputLock.unlock() }
-            platform.close()
-            closed = true
+            terminationLock.lock()
+            try {
+                platform.close()
+                closed = true
+            } finally { terminationLock.unlock() }
             true
         } finally { closeLock.unlock() }
     }
@@ -922,26 +966,30 @@ public func runProcess(
     command: ProcessCommand,
     cancellation!: CancellationToken = CancellationSource().token
 ): ProcessRunResult {
+    cancellation.check()
     let process = startProcess(command)
     let budget = BoundedOutputBudget(command.maxOutputBytes)
-    let stdout = spawn { readBounded(process.stdout, budget) }
-    let stderr = spawn { readBounded(process.stderr, budget) }
-    let registration = cancellation.onCancel({ cause =>
-        let _ = process.cancel(cause)
-    })
+    // runProcess always uses the native backend. One owner polls both pipes;
+    // no blocked reader Future survives a deadline or the finally block.
+    let stdout = (process.stdout as NativeProcessInput).getOrThrow()
+    let stderr = (process.stderr as NativeProcessInput).getOrThrow()
+    let output = ArrayList<Byte>()
+    let errors = ArrayList<Byte>()
+    let registration = cancellation.onCancel({ cause => let _ = process.cancel(cause) })
     try {
-        while (process.tryExit().isNone()) {
+        while (process.tryExit().isNone() || !stdout.isClosed() || !stderr.isClosed()) {
             cancellation.check()
-            sleep(Duration.millisecond * 5)
+            stdout.readAvailable(budget, output)
+            stderr.readAvailable(budget, errors)
+            if (stdout.isClosed() && stderr.isClosed() && process.tryExit().isNone()) {
+                sleep(Duration.millisecond * 5)
+            }
         }
         cancellation.check()
-        ProcessRunResult(process.wait(), stdout.get(), stderr.get(), budget.wasTruncated())
+        ProcessRunResult(process.wait(), output.toArray(), errors.toArray(), budget.wasTruncated())
     } finally {
         registration.dispose()
-        if (process.isAlive()) { let _ = process.terminate(force: true) }
-        try { let _ = process.close() } catch (_: Exception) {}
-        try { let _ = stdout.get() } catch (_: Exception) {}
-        try { let _ = stderr.get() } catch (_: Exception) {}
+        let _ = process.close()
     }
 }
 
@@ -974,3 +1022,21 @@ func earliestDeadline(own: Int64, parent: Int64): Int64 {
 func utf8Size(value: String): Int64 { unsafe { value.rawData().size } }
 
 func processUtcMillis(): Int64 { DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() }
+
+// Output is an arbitrary byte stream, unlike strict protocol frames. Preserve
+// valid text and replace invalid/incomplete bytes without losing exit metadata.
+public func decodeProcessOutput(bytes: Array<Byte>): String {
+    let builder = StringBuilder()
+    var index: Int64 = 0
+    while (index < bytes.size) {
+        try {
+            let (rune, count) = Rune.fromUtf8(bytes, index)
+            builder.append(rune)
+            index += count
+        } catch (_: Exception) {
+            builder.append(r'\u{FFFD}')
+            index++
+        }
+    }
+    builder.toString()
+}

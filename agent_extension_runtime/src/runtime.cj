@@ -459,11 +459,11 @@ public class ExtensionRuntime {
         providers: Array<CompiledExtensionProvider>,
         configured: Array<ConfiguredExtension>
     ): ExtensionRuntimeResult<Unit> {
-        if (started) {
+        if (started || stopping) {
             return runtimeError(
                 ExtensionRuntimeErrorKind.Activation,
                 ExtensionRuntimePhase.Activation,
-                "", "runtime", "extension runtime is already started"
+                "", "runtime", "extension runtime is already started or stopping"
             )
         }
         let ordered = orderProviders(providers)
@@ -592,7 +592,10 @@ public class ExtensionRuntime {
         if (record.state != ExtensionLifecycleState.Active) {
             return runtimeError(ExtensionRuntimeErrorKind.Deactivation, ExtensionRuntimePhase.Deactivation, id, record.provider.source, "extension is not active")
         }
-        match (host.deactivate(id)) {
+        let outcome = try { host.deactivate(id) } catch (error: Exception) {
+            HostLifecycleResult.Err("host.deactivate_exception", error.message)
+        }
+        match (outcome) {
             case HostLifecycleResult.Ok =>
                 record.enabled = false
                 record.state = ExtensionLifecycleState.Inactive
@@ -606,16 +609,22 @@ public class ExtensionRuntime {
     }
 
     public func shutdown(): ExtensionRuntimeResult<Unit> {
-        if (stopping) { return ExtensionRuntimeResult.Ok(()) }
+        // Admission remains closed, but failed deactivations stay active and
+        // must be retried on subsequent shutdown calls.
         stopping = true
+        var failure: ?ExtensionRuntimeError = None
         let ordered = diagnostics()
         for (diagnostic in ordered where diagnostic.state == ExtensionLifecycleState.Active) {
             match (deactivate(diagnostic.id)) {
                 case ExtensionRuntimeResult.Ok(_) => ()
-                case ExtensionRuntimeResult.Err(error) => return ExtensionRuntimeResult.Err(error)
+                case ExtensionRuntimeResult.Err(error) =>
+                    if (failure.isNone()) { failure = Some(error) }
             }
         }
-        ExtensionRuntimeResult.Ok(())
+        match (failure) {
+            case Some(error) => ExtensionRuntimeResult.Err(error)
+            case None => ExtensionRuntimeResult.Ok(())
+        }
     }
 
     public func diagnostics(): Array<ExtensionDiagnostic> {
@@ -638,6 +647,13 @@ public class ExtensionRuntime {
     }
 
     private func activateRecord(record: RuntimeRecord): ExtensionRuntimeResult<Unit> {
+        let currentSdk = parseVersionUnchecked(AGENT_SDK_VERSION)
+        if (!record.manifest.sdk.includes(currentSdk)) {
+            let error = sdkCompatibilityError(record.manifest, record.provider.source, currentSdk)
+            record.state = ExtensionLifecycleState.Failed
+            record.error = Some(error)
+            return ExtensionRuntimeResult.Err(error)
+        }
         for (name in record.manifest.requirements.executables) {
             let available = probe.executable(name)
             if (available != RequirementAvailability.Available) {

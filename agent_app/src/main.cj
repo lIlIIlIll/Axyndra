@@ -299,8 +299,9 @@ func unavailableCliCommand(
 }
 
 func containsArgument(arguments: Array<String>, expected: String): Bool {
-    for (argument in arguments where argument == expected) {
-        return true
+    for (argument in arguments) {
+        if (argument == "--") { break }
+        if (argument == expected) { return true }
     }
     false
 }
@@ -324,7 +325,9 @@ func directCliCommandIndex(arguments: Array<String>): Int64 {
             return -1
         }
         if (candidate == "--approval-mode" || candidate == "--mode" || candidate == "--model" || candidate == "--cwd" ||
-            candidate == "--max-time") {
+            candidate == "--max-time" || candidate == "--model-attempt-recovery" ||
+            candidate == "--model-stream-idle-timeout-ms" || candidate == "--model-stream-fault-profile") {
+            if (index + 1 >= arguments.size || arguments[index + 1] == "--") { return -1 }
             index += 2
             continue
         }
@@ -1106,13 +1109,19 @@ func cliPositionals(
 ): Array<String> {
     let values = ArrayList<String>()
     var skipNext = false
+    var positionalOnly = false
     for (argument in arguments) {
+        if (positionalOnly) { values.add(argument)
+            continue }
+        if (argument == "--") { positionalOnly = true
+            continue }
         if (skipNext) {
             skipNext = false
             continue
         }
         if (argument == "--approval-mode" || argument == "--mode" || argument == "--model" || argument == "--cwd" ||
-            argument == "--max-time") {
+            argument == "--max-time" || argument == "--model-attempt-recovery" ||
+            argument == "--model-stream-idle-timeout-ms" || argument == "--model-stream-fault-profile") {
             skipNext = true
             continue
         }
@@ -1312,12 +1321,8 @@ func runSetup(): Int64 {
         suggestedApiKeyEnvironment(profileId, providerKind, baseUrl)
     )
     let configuredModel = profileId + "/" + model
-    let content = "default_model: " + yamlQuote(configuredModel) + "\n"
     let target = root + "/config.yml"
-    let temporary = target + ".tmp"
     try {
-        File.writeTo(temporary, content.toArray())
-        rename(temporary, to: target, overwrite: true)
         let dialect = configuredDialectForSetup(providerKind, protocol, baseUrl)
         match (upsertProviderProfile(
             root,
@@ -1358,6 +1363,14 @@ func runSetup(): Int64 {
                 println("error: " + error.message)
                 return 1
         }
+        match (updateProductConfig(root, [
+            ProductConfigEdit("default_model", ProductConfigScalar.Text(configuredModel))
+        ])) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                println("error: " + error.message)
+                return 1
+        }
         println("wrote " + target)
         println("Provider profile: " + profileId)
         println("Model: " + configuredModel)
@@ -1370,7 +1383,6 @@ func runSetup(): Int64 {
         }
         0
     } catch (error: Exception) {
-        let _ = removeIfExists(temporary)
         println("error: cannot write configuration: " + error.message)
         1
     }
@@ -1622,8 +1634,9 @@ func yamlQuote(value: String): String {
 }
 
 func hasArgument(arguments: Array<String>, expected: String): Bool {
-    for (argument in arguments where argument == expected) {
-        return true
+    for (argument in arguments) {
+        if (argument == "--") { break }
+        if (argument == expected) { return true }
     }
     false
 }
@@ -1666,7 +1679,7 @@ func argumentParseError(arguments: Array<String>): ?String {
             consumesValue = true
         }
         if (consumesValue) {
-            if (index + 1 >= arguments.size) {
+            if (index + 1 >= arguments.size || arguments[index + 1] == "--") {
                 return Some("missing value for flag: " + argument)
             }
             index += 2
@@ -1758,6 +1771,7 @@ func modelStreamFaultProfileFrom(arguments: Array<String>): ?ModelStreamFaultPro
 func argumentValue(arguments: Array<String>, name: String): String {
     var expectValue = false
     for (argument in arguments) {
+        if (argument == "--") { break }
         if (expectValue) {
             return argument
         }
@@ -1850,6 +1864,7 @@ func approvalModeFrom(arguments: Array<String>): ApprovalMode {
 func approvalRoutingModeFrom(arguments: Array<String>): ?ApprovalRoutingMode {
     var expectValue = false
     for (argument in arguments) {
+        if (argument == "--") { break }
         if (expectValue) {
             return approvalRoutingModeValue(argument)
         }
@@ -1958,6 +1973,7 @@ func serveRpc(product: ProductRuntime, once: Bool): Int64 {
     }
     output.write(server.ready())
     let input = PollingJsonlInput()
+    try {
     while (true) {
         let polled = input.poll(50)
         if (polled.eof) { return 0 }
@@ -1974,6 +1990,7 @@ func serveRpc(product: ProductRuntime, once: Bool): Int64 {
         }
     }
     0
+    } finally { server.close(cancelBash: !once) }
 }
 
 func serveAcp(

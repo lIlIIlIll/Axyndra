@@ -553,16 +553,21 @@ public class ProductAcpServer {
             case Some(value) => value
             case None => nullValue()
         }
-        if (record.running || record.pendingPromptId.isSome()) {
-            return acpFailure(
-                AgentErrorKind.Conflict,
-                "acp.session_busy",
-                "session is already processing a prompt"
-            )
-        }
-        record.running = true
-        record.pendingPromptId = Some(id)
-        let _ = spawn {runPrompt(record, text)}
+        record.turnLock.lock()
+        var generation: Int64 = 0
+        try {
+            if (record.running || record.pendingPromptId.isSome() || record.activeWorkers > 0) {
+                return acpFailure(AgentErrorKind.Conflict, "acp.session_busy",
+                    "session is already processing a prompt")
+            }
+            record.generation += 1
+            generation = record.generation
+            record.running = true
+            record.activeWorkers += 1
+            record.pendingPromptId = Some(id)
+        } finally { record.turnLock.unlock() }
+        let turn = generation
+        let _ = spawn {runPrompt(record, text, turn)}
         Result.Ok(acpDeferredValue())
     }
 
@@ -571,20 +576,53 @@ public class ProductAcpServer {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (record.session.cancel()) {
-            case Result.Ok(_) => Result.Ok(objectValue([]))
-            case Result.Err(error) => Result.Err(error)
-        }
+        record.turnLock.lock()
+        try {
+            match (record.session.cancel()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => ()
+            }
+            record.generation += 1
+            record.permissionRequestId = -1
+            record.operationId = ""
+            if (record.pendingPromptId.isSome()) {
+                let id = takePromptId(record)
+                emit(acpResult(id, objectValue([ValueField("stopReason", textValue("cancelled"))])))
+            }
+            record.running = false
+            Result.Ok(objectValue([]))
+        } finally { record.turnLock.unlock() }
     }
 
-    private func runPrompt(record: AcpSessionRecord, text: String): Unit {
-        finishTurn(record, record.session.handle(text))
+    private func runPrompt(record: AcpSessionRecord, text: String, generation: Int64): Unit {
+        record.turnLock.lock()
+        let active = record.generation == generation
+        record.turnLock.unlock()
+        let result = try {
+            if (active) { record.session.handle(text) } else {
+                Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.Cancelled,
+                    "acp.prompt_cancelled", "prompt was cancelled"))
+            }
+        } catch (error: Exception) {
+            Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.Internal,
+                "acp.prompt_failed", error.message))
+        }
+        finishTurn(record, result, generation)
     }
 
     private func finishTurn(
         record: AcpSessionRecord,
-        result: Result<ApplicationResponse>
+        result: Result<ApplicationResponse>,
+        generation: Int64
     ): Unit {
+        record.turnLock.lock()
+        try {
+        record.activeWorkers -= 1
+        if (record.generation != generation) {
+            let _ = record.session.cancel()
+            return
+        }
+        if (record.pendingPromptId.isNone()) { return }
         match (result) {
             case Result.Err(error) =>
                 let id = takePromptId(record)
@@ -612,6 +650,7 @@ public class ProductAcpServer {
                     )
             }
         }
+            } finally { record.turnLock.unlock() }
     }
 
     private func requestPermission(
@@ -701,13 +740,24 @@ public class ProductAcpServer {
             return
         }
         let target = record.getOrThrow()
+        target.turnLock.lock()
+        if (target.permissionRequestId != id || target.pendingPromptId.isNone()) {
+            target.turnLock.unlock()
+            return
+        }
+        let generation = target.generation
+        let operationId = target.operationId
+        target.permissionRequestId = -1
+        target.operationId = ""
+        target.activeWorkers += 1
+        target.turnLock.unlock()
         let resultValue = match (value.field("result")) {
             case Some(item) => item
             case None =>
                 let _ = spawn {
                     finishPermission(
                         target,
-                        ApprovalDecision.Reject
+                        ApprovalDecision.Reject, generation, operationId
                     )
                 }
                 return
@@ -725,34 +775,28 @@ public class ProductAcpServer {
         } else {
             ApprovalDecision.Reject
         }
-        let _ = spawn {finishPermission(target, decision)}
+        let _ = spawn {finishPermission(target, decision, generation, operationId)}
     }
 
     private func finishPermission(
         record: AcpSessionRecord,
-        decision: ApprovalDecision
+        decision: ApprovalDecision,
+        generation: Int64,
+        operationId: String
     ): Unit {
-        let operationId = record.operationId
-        record.permissionRequestId = -1
-        record.operationId = ""
-        let result = record.session.decide(operationId, decision)
-        if (record.pendingPromptId.isSome()) {
-            finishTurn(record, result)
-            return
-        }
-        match (result) {
-            case Result.Ok(response) => match (response.approval) {
-                case Some(approval) => requestPermission(record, approval)
-                case None => ()
+        record.turnLock.lock()
+        let active = record.generation == generation
+        record.turnLock.unlock()
+        let result = try {
+            if (active) { record.session.decide(operationId, decision) } else {
+                Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.Cancelled,
+                    "acp.prompt_cancelled", "prompt was cancelled"))
             }
-            case Result.Err(error) => emitUpdate(record, objectValue([
-                ValueField("sessionUpdate", textValue("agent_message_chunk")),
-                ValueField("content", objectValue([
-                    ValueField("type", textValue("text")),
-                    ValueField("text", textValue(error.code + ": " + error.message))
-                ]))
-            ]))
+        } catch (error: Exception) {
+            Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.Internal,
+                "acp.permission_failed", error.message))
         }
+        finishTurn(record, result, generation)
     }
 
     private func addRecord(record: AcpSessionRecord): Result<Unit> {
@@ -1039,14 +1083,15 @@ public class ProductAcpServer {
 
     private func findPermissionRecord(requestId: Int64): ?AcpSessionRecord {
         lock.lock()
-        try {
-            for (record in records where record.permissionRequestId == requestId && !record.closed) {
-                return Some(record)
-            }
-            None
-        } finally {
-            lock.unlock()
+        let snapshot = records.toArray()
+        lock.unlock()
+        for (record in snapshot where !record.closed) {
+            record.turnLock.lock()
+            let matches = record.permissionRequestId == requestId
+            record.turnLock.unlock()
+            if (matches) { return Some(record) }
         }
+        None
     }
 
     private func takePromptId(record: AcpSessionRecord): AgentValue {
@@ -1154,6 +1199,9 @@ class AcpSessionRecord {
     private let lifecycleLock = Mutex()
     private var released = false
     private var releaseError: ?AgentError = None
+    let turnLock = Mutex()
+    var generation: Int64 = 0
+    var activeWorkers: Int64 = 0
     var running = false
     var closed = false
     var pendingPromptId: ?AgentValue = None

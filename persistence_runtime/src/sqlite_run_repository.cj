@@ -133,7 +133,7 @@ public class SqliteRunRepository <: RunRepository {
                 return sqliteRunMissing<EventPage>(runId, "Run was not found")
             }
             let rows = database.query(
-                "SELECT sequence_start,sequence_end,payload FROM app_run_events WHERE run_id=" +
+                "SELECT sequence_start,sequence_end,payload,delta_count FROM app_run_events WHERE run_id=" +
                     sqliteText(runId.value) + " ORDER BY sequence"
             )
             let decoded = ArrayList<AgentEvent>()
@@ -153,31 +153,23 @@ public class SqliteRunRepository <: RunRepository {
             }
             let selected = ArrayList<AgentEvent>()
             var resyncRequired = false
-            var firstSelectedStart: ?Int64 = None
+            var retainedCount: Int64 = 0
             for (index in 0..decoded.size) {
                 if (ends[index] > after) {
                     selected.add(decoded[index])
-                    firstSelectedStart = match (firstSelectedStart) {
-                        case Some(current) => Some(if (starts[index] < current) {
-                            starts[index]
-                        } else { current })
-                        case None => Some(starts[index])
-                    }
+                    // Each row counts its original events, including interleaved
+                    // streams whose start/end envelope is not continuous coverage.
+                    retainedCount += Int64.parse(rows[index].required(3))
                 }
                 if (after > 0 && starts[index] <= after && after < ends[index]) {
                     resyncRequired = true
-                }
-            }
-            if (after > 0) {
-                match (firstSelectedStart) {
-                    case Some(first) => if (after + 1 < first) { resyncRequired = true }
-                    case None => ()
                 }
             }
             let next = database.scalarInt(
                 "SELECT COALESCE((SELECT last_sequence FROM app_run_event_heads WHERE run_id=" +
                     sqliteText(runId.value) + "),0)+1"
             )
+            if (after > 0 && after < next - 1 && retainedCount != next - 1 - after) { resyncRequired = true }
             Result.Ok(EventPage(selected.toArray(), next, resyncRequired: resyncRequired))
         } catch (error: Exception) {
             sqliteRunStorageError("persistence.sqlite_run_events", error.message)

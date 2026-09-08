@@ -40,6 +40,36 @@ class Handler(BaseHTTPRequestHandler):
                 "text/event-stream",
             )
             return
+        if case == "partial-read-error":
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("transfer-encoding", "chunked")
+            self.send_header("connection", "close")
+            self.end_headers()
+            payload = b'data: {"type":"fixture"}\n\n'
+            self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
+            self.wfile.flush()
+            time.sleep(0.02)
+            self.wfile.write(b"Z\r\ninvalid\r\n")
+            self.wfile.flush()
+            return
+        if case == "partial-active-timeout":
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("transfer-encoding", "chunked")
+            self.send_header("connection", "close")
+            self.end_headers()
+            payload = b'data: {"type":"fixture"}\n\n'
+            try:
+                for _ in range(12):
+                    self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
+                    self.wfile.flush()
+                    time.sleep(0.02)
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if case == "partial-timeout":
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")

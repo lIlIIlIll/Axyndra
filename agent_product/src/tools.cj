@@ -359,6 +359,10 @@ func registerEditTool(
             Capability(CapabilityKind.WorkspaceWrite),
             sideEffecting: true,
             capabilityResolver: {call => editCapabilityFor(workspace, call)},
+            additionalCapabilityResolver: {call =>
+                hashlineApprovalPaths(writeArgumentText(call.arguments, "input"))
+                    .map({path => workspace.writeCapability(path)})
+            },
             approvalMetadataResolver: {call => editApprovalMetadataFor(workspace, call)}
         ),
         HashlineEditTool(workspace)
@@ -539,7 +543,7 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
         let result = match (intent) {
             case OperationIntent.WorkspaceSearch(value) => grep.execute(
                 context,
-                ToolCall("sdk-workspace-search", "grep", objectValue([
+                ToolCall("sdk-workspace-search-" + context.runId.value + "-" + context.nextAuditSequence().toString(), "grep", objectValue([
                     ValueField("pattern", textValue(value.pattern)),
                     ValueField("path", textValue(value.path)),
                     ValueField("case", boolValue(value.caseSensitive)),
@@ -564,7 +568,7 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
                 ))
                 case "web_search" => match (webSearch) {
                     case Some(tool) => tool.execute(context, ToolCall(
-                        "sdk-web-search", "web_search", value.input
+                        "sdk-web-search-" + context.runId.value + "-" + context.nextAuditSequence().toString(), "web_search", value.input
                     ))
                     case None => Result<ToolResult>.Err(AgentError(
                         AgentErrorKind.Configuration,
@@ -587,6 +591,8 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
     public func cancel(operation: String, runId: RunId): Result<Unit> {
         match (operation) {
+            case "grep" => grep.cancel(runId)
+            case "web_search" => match (webSearch) { case Some(tool) => tool.cancel(runId); case None => Result.Ok(()) }
             case "ast_grep" => astGrep.cancel(runId)
             case "ast_edit" => astEdit.cancel(runId)
             case _ => Result.Ok(())
@@ -2254,17 +2260,20 @@ func textListValue(values: Array<String>): AgentValue {
 class GrepTool <: ToolExecutor {
     private let workspace: LocalWorkspace
     private let processes: ProcessPort
+    private let operations: ProductProcessOperations
 
     init(workspace: LocalWorkspace, processes: ProcessPort) {
         this.workspace = workspace
         this.processes = processes
+        this.operations = processOperations(processes, "grep")
     }
 
+    public func cancel(runId: RunId): Result<Unit> { operations.cancel(runId) }
+
     public func execute(
-        _context: ToolInvocationContext,
+        context: ToolInvocationContext,
         call: ToolCall
     ): Result<ToolResult> {
-        let _ = _context
         let query = match (requiredString(call, "pattern")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2324,14 +2333,15 @@ class GrepTool <: ToolExecutor {
         if (paths.isEmpty() && !globs.isEmpty()) {
             arguments.add(".")
         }
-        let result = match (processes.execute(
+        let result = match (operations.execute(context, call, { operationId => processes.execute(
             ProcessRequest(
                 "rg",
+                operationId: operationId,
                 arguments: arguments.toArray(),
                 timeoutMillis: 15000,
                 sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
             )
-        )) {
+        ) })) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -3416,4 +3426,89 @@ func insertSorted(values: ArrayList<String>, value: String): Unit {
         values[index] = previous
         index -= 1
     }
+}
+
+class ProductProcessOperation {
+    let id: OperationId
+    let runId: RunId
+    var cancelled = false
+    init(id: OperationId, runId: RunId) { this.id = id; this.runId = runId }
+}
+
+// Register ownership before entering the process port. LocalProcessPort's
+// reservation bridges cancellation between admission and its onStarted hook.
+class ProductProcessOperations {
+    private let lock = Mutex()
+    private let active = ArrayList<ProductProcessOperation>()
+    private var sequence: Int64 = 0
+    private let prefix: String
+    private let reserve: (OperationId) -> Unit
+    private let release: (OperationId) -> Unit
+    private let stop: (OperationId) -> Result<Unit>
+    init(prefix: String, reserve: (OperationId) -> Unit,
+        release: (OperationId) -> Unit, stop: (OperationId) -> Result<Unit>) {
+        this.prefix = prefix; this.reserve = reserve; this.release = release; this.stop = stop
+    }
+    func execute(context: ToolInvocationContext, call: ToolCall,
+        action: (OperationId) -> Result<ProcessResult>): Result<ProcessResult> {
+        match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
+        let operation: ProductProcessOperation
+        lock.lock()
+        try {
+            sequence += 1
+            operation = ProductProcessOperation(OperationId(prefix + "-" + safeOperationPart(context.runId.value) +
+                "-" + safeOperationPart(call.callId) + "-" + sequence.toString()), context.runId)
+            reserve(operation.id)
+            active.add(operation)
+        } finally { lock.unlock() }
+        let registration = context.cancellation.onCancel({ _ => let _ = cancelOperation(operation) })
+        try {
+            match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
+            if (wasCancelled(operation)) { return cancelledResult() }
+            let result = action(operation.id)
+            if (wasCancelled(operation)) { return cancelledResult() }
+            match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
+            result
+        } finally {
+            registration.dispose()
+            lock.lock()
+            try {
+                for (index in 0..active.size) {
+                    if (active[index].id.value == operation.id.value) { active.remove(at: index); break }
+                }
+                release(operation.id)
+            } finally { lock.unlock() }
+        }
+    }
+    private func cancelledResult(): Result<ProcessResult> {
+        Result.Err(AgentError(AgentErrorKind.Cancelled, "process.cancelled", "process tool operation was cancelled"))
+    }
+    private func wasCancelled(operation: ProductProcessOperation): Bool {
+        lock.lock(); try { operation.cancelled } finally { lock.unlock() }
+    }
+    private func cancelOperation(operation: ProductProcessOperation): Result<Unit> {
+        lock.lock()
+        try {
+            operation.cancelled = true
+            stop(operation.id)
+        } finally { lock.unlock() }
+    }
+    func cancel(runId: RunId): Result<Unit> {
+        lock.lock()
+        try {
+            var failure: ?AgentError = None
+            for (operation in active where operation.runId.value == runId.value) {
+                operation.cancelled = true
+                match (stop(operation.id)) { case Result.Err(error) => failure = Some(error); case _ => () }
+            }
+            match (failure) { case Some(error) => Result.Err(error); case None => Result.Ok(()) }
+        } finally { lock.unlock() }
+    }
+}
+
+func processOperations(processes: ProcessPort, prefix: String): ProductProcessOperations {
+    ProductProcessOperations(prefix,
+        { id => match (processes as LocalProcessPort) { case Some(local) => local.reserveOperation(id); case None => () } },
+        { id => match (processes as LocalProcessPort) { case Some(local) => local.releaseOperation(id); case None => () } },
+        { id => processes.cancel(id) })
 }

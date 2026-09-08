@@ -230,7 +230,6 @@ public class AppEventCursor {
         lock.lock()
         try {
             selectedThreadId = threadId
-            lastSequence = 0
             lastRevision = 0
             activeRunId = None
             activeEpoch = 0
@@ -244,8 +243,7 @@ public class AppEventCursor {
     public func accept(event: AppEvent): AppEventDisposition {
         lock.lock()
         try {
-            if (event.meta.threadId.value != selectedThreadId.value ||
-                event.meta.deliverySequence <= lastSequence) {
+            if (event.meta.deliverySequence <= lastSequence) {
                 return AppEventDisposition.Stale
             }
             if (event.meta.deliverySequence != lastSequence + 1) {
@@ -255,6 +253,9 @@ public class AppEventCursor {
             // semantically stale for the selected Run, but it still explains
             // this exact cursor position and prevents a false gap afterward.
             lastSequence = event.meta.deliverySequence
+            if (event.meta.threadId.value != selectedThreadId.value) {
+                return AppEventDisposition.Stale
+            }
             if (event.meta.threadRevision < lastRevision) {
                 return AppEventDisposition.Stale
             }

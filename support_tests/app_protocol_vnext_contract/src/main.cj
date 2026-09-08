@@ -153,8 +153,20 @@ func threadSwitchContract(): Unit {
     expect(cursor.accept(wrong) == AppEventDisposition.Stale,
         "events for an unselected Thread are stale")
     cursor.switchThread(ThreadId("thread-b"))
-    expect(cursor.accept(wrong) == AppEventDisposition.Accepted,
-        "switch resets the selected Thread cursor")
+    expect(cursor.accept(wrong) == AppEventDisposition.Stale,
+        "switch preserves already consumed connection delivery sequence")
+    let mailbox = AppEventMailbox()
+    let connected = AppEventCursor(ThreadId("thread-a"))
+    for (id in ["thread-a", "thread-other", "thread-b"]) {
+        let _ = mailbox.push(AppEvent(threadMeta(1, 0, id),
+            AppEventPayload.ItemsPage(ThreadItemsPage(ThreadId(id), 0, 0, 0, false, []))))
+        if (id == "thread-b") { connected.switchThread(ThreadId(id)) }
+        let disposition = connected.accept(mailbox.drain()[0])
+        expect(disposition == if (id == "thread-other") {
+            AppEventDisposition.Stale
+        } else { AppEventDisposition.Accepted },
+            "same mailbox consumes other Thread deliveries and survives Thread switching")
+    }
 }
 
 func runMeta(

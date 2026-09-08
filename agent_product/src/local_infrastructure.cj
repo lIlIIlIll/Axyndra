@@ -187,10 +187,10 @@ public class LocalWorkspace <: WorkspacePort {
                 "sensitive path writes are not supported by the write tool"
             )
         }
-        let temporary = target.normalizedPath + ".agent-tmp"
+        var temporary = ""
         try {
-            File.writeTo(temporary, content.toArray())
-            rename(temporary, to: target.normalizedPath)
+            temporary = workspaceTemporary(target.normalizedPath, content)
+            workspacePublish(temporary, target.normalizedPath, target.exists)
             let contentBytes = unsafe { content.rawData() }
             let bytes = contentBytes.size
             Result.Ok(
@@ -213,7 +213,7 @@ public class LocalWorkspace <: WorkspacePort {
                 )
             )
         } catch (error: Exception) {
-            let _ = removeIfExists(temporary)
+            if (temporary != "") { let _ = removeIfExists(temporary) }
             workspaceError(AgentErrorKind.Internal, "workspace.write", error.message)
         }
     }
@@ -561,18 +561,10 @@ public class LocalWorkspace <: WorkspacePort {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        let temporary = path + ".agent-tmp"
+        var temporary = ""
         try {
-            File.writeTo(temporary, mutation.replacement.toArray())
-            let (code, _, error) = executeWithOutput("mv", [temporary, path])
-            if (code != 0) {
-                removeIfExists(temporary)
-                return workspaceError(
-                    AgentErrorKind.Internal,
-                    "workspace.atomic_commit",
-                    String.fromUtf8(error).trimAscii()
-                )
-            }
+            temporary = workspaceTemporary(path, mutation.replacement)
+            workspacePublish(temporary, path, exists(Path(path)))
             Result.Ok(
                 OperationReceipt(
                     mutation.operationId,
@@ -586,7 +578,7 @@ public class LocalWorkspace <: WorkspacePort {
                 )
             )
         } catch (error: Exception) {
-            let _ = removeIfExists(temporary)
+            if (temporary != "") { let _ = removeIfExists(temporary) }
             workspaceError(
                 AgentErrorKind.Internal,
                 "workspace.commit",
@@ -608,16 +600,16 @@ public class LocalWorkspace <: WorkspacePort {
         let files = ArrayList<TransactionFile>()
         for (index in 0..mutations.size) {
             let mutation = mutations[index]
-            for (existing in files where existing.path == mutation.path) {
+            let resolved = match (resolve(mutation.path)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            for (existing in files where existing.resolved == resolved) {
                 return workspaceError(
                     AgentErrorKind.InvalidInput,
                     "workspace.transaction_duplicate_path",
                     "a transaction cannot edit the same path twice"
                 )
-            }
-            let resolved = match (resolve(mutation.path)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
             }
             match (prepare(mutation)) {
                 case Result.Ok(_) => ()
@@ -627,39 +619,30 @@ public class LocalWorkspace <: WorkspacePort {
                 TransactionFile(
                     mutation,
                     resolved,
-                    resolved + ".agent-txn-" + index.toString(),
-                    resolved + ".agent-backup-" + index.toString(),
                     exists(Path(resolved))
                 )
             )
         }
-        var committed: Int64 = 0
         try {
             for (file in files) {
-                File.writeTo(
-                    file.temporary,
-                    file.mutation.replacement.toArray()
-                )
+                file.temporary = workspaceTemporary(file.resolved, file.mutation.replacement)
+                if (file.existed) {
+                    let backup = File.createTemp(Path(file.resolved).parent)
+                    file.backup = backup.info.path.toString()
+                    backup.close()
+                }
             }
             for (file in files) {
                 if (file.existed) {
-                    rename(file.resolved, to: file.backup)
+                    rename(file.resolved, to: file.backup, overwrite: true)
+                    file.backupMoved = true
                 }
-                try {
-                    rename(file.temporary, to: file.resolved)
-                    committed += 1
-                } catch (error: Exception) {
-                    rollbackTransaction(files.toArray(), committed)
-                    return workspaceError(
-                        AgentErrorKind.Internal,
-                        "workspace.transaction_commit",
-                        error.message
-                    )
-                }
+                rename(file.temporary, to: file.resolved, overwrite: false)
+                file.installed = true
             }
             let receipts = ArrayList<OperationReceipt>()
             for (file in files) {
-                let _ = removeIfExists(file.backup)
+                if (file.backup != "") { let _ = removeIfExists(file.backup) }
                 receipts.add(
                     OperationReceipt(
                         file.mutation.operationId,
@@ -681,11 +664,11 @@ public class LocalWorkspace <: WorkspacePort {
             }
             Result.Ok(receipts.toArray())
         } catch (error: Exception) {
-            rollbackTransaction(files.toArray(), committed)
+            let recovery = rollbackTransaction(files.toArray())
             workspaceError(
                 AgentErrorKind.Internal,
                 "workspace.transaction_prepare",
-                error.message
+                error.message + recovery
             )
         }
     }
@@ -792,44 +775,101 @@ class TransactionFile {
     let mutation: WorkspaceMutation
     let path: String
     let resolved: String
-    let temporary: String
-    let backup: String
+    var temporary: String = ""
+    var backup: String = ""
+    var backupMoved: Bool = false
+    var installed: Bool = false
     let existed: Bool
 
     init(
         mutation: WorkspaceMutation,
         resolved: String,
-        temporary: String,
-        backup: String,
         existed: Bool
     ) {
         this.mutation = mutation
         this.path = mutation.path
         this.resolved = resolved
-        this.temporary = temporary
-        this.backup = backup
         this.existed = existed
     }
 }
 
-func rollbackTransaction(
-    files: Array<TransactionFile>,
-    committed: Int64
-): Unit {
-    for (index in 0..files.size) {
-        let file = files[index]
-        let _ = removeIfExists(file.temporary)
-        if (index < committed) {
+foreign func axyndra_workspace_copy_mode(source: CString, destinationFd: Int32): Int32
+
+foreign func axyndra_workspace_replace(source: CString, destination: CString): Int32
+
+func workspacePublish(temporary: String, path: String, overwrite: Bool): Unit {
+    if (!overwrite) {
+        rename(temporary, to: path, overwrite: false)
+        return
+    }
+    unsafe {
+        let source = LibC.mallocCString(temporary)
+        try {
+            let destination = LibC.mallocCString(path)
+            try {
+                let code = axyndra_workspace_replace(source, destination)
+                if (code != 0) {
+                    throw Exception("cannot atomically replace file, errno=" + (-code).toString())
+                }
+            } finally { LibC.free(destination) }
+        } finally { LibC.free(source) }
+    }
+}
+
+// Keep the exclusive handle through the write. Preserve all POSIX mode bits,
+// including executable and private files, before publishing the replacement.
+func workspaceTemporary(path: String, content: String): String {
+    let file = File.createTemp(Path(path).parent)
+    let temporary = file.info.path.toString()
+    try {
+        try {
+            file.write(content.toArray())
+            if (exists(Path(path))) {
+                unsafe {
+                    let source = LibC.mallocCString(path)
+                    try {
+                        let code = axyndra_workspace_copy_mode(source, Int32(file.fileDescriptor.fileHandle))
+                        if (code != 0) {
+                            throw Exception("cannot preserve file mode, errno=" + (-code).toString())
+                        }
+                    } finally {
+                        LibC.free(source)
+                    }
+                }
+            }
+        } finally {
+            file.close()
+        }
+        temporary
+    } catch (error: Exception) {
+        let _ = removeIfExists(temporary)
+        throw error
+    }
+}
+
+func rollbackTransaction(files: Array<TransactionFile>): String {
+    var recovery = ""
+    for (file in files) {
+        if (file.temporary != "") {
+            let _ = removeIfExists(file.temporary)
+        }
+        if (file.installed) {
             let _ = removeIfExists(file.resolved)
         }
-        if (exists(Path(file.backup))) {
+        if (file.backupMoved) {
             try {
-                rename(file.backup, to: file.resolved, overwrite: true)
+                // Never replace a new object after a failed installation or
+                // failed removal. Retain this transaction's backup for recovery.
+                rename(file.backup, to: file.resolved, overwrite: false)
+                file.backupMoved = false
             } catch (_: Exception) {
-                ()
+                recovery += "; recovery backup retained: " + file.backup + " for " + file.resolved
             }
+        } else if (file.backup != "") {
+            let _ = removeIfExists(file.backup)
         }
     }
+    recovery
 }
 
 func resolveThroughExistingAncestor(path: Path): Path {
@@ -1138,6 +1178,7 @@ public class LocalProcessPort <: ProcessPort {
     private let sandboxPathEntriesValue: Array<String>
     private let activeLock = Mutex()
     private let active = ArrayList<ActiveLocalProcess>()
+    private let reserved = HashMap<String, Bool>()
     private let shellLock = Mutex()
     private let shells = ArrayList<PersistentShell>()
     private let evalLock = Mutex()
@@ -1227,6 +1268,9 @@ public class LocalProcessPort <: ProcessPort {
     }
 
     public func execute(request: ProcessRequest): Result<ProcessResult> {
+        if (reservedOperationCancelled(request.operationId)) {
+            return Result.Err(AgentError(AgentErrorKind.Cancelled, "process.cancelled", "process operation was cancelled before launch"))
+        }
         let workingDirectory = if (request.workingDirectory == "") {
             workspace.rootPath()
         } else {
@@ -1264,15 +1308,16 @@ public class LocalProcessPort <: ProcessPort {
             let errorFuture = spawn {
                 readBounded(process.stdErrPipe, outputBudget)
             }
-            let code = process.wait()
-            finish(request.operationId)
+            // Finish the owned readers before completing SDK wait: otherwise
+            // buffered output can be discarded before byte-cap accounting.
             let output = outputFuture.get()
             let error = errorFuture.get()
+            let code = process.wait()
             Result.Ok(
                 ProcessResult(
                     code,
-                    stdout: String.fromUtf8(output),
-                    stderr: String.fromUtf8(error),
+                    stdout: decodeProcessOutput(output),
+                    stderr: decodeProcessOutput(error),
                     timedOut: code == 124,
                     truncated: outputBudget.wasTruncated()
                 )
@@ -1285,7 +1330,7 @@ public class LocalProcessPort <: ProcessPort {
                     error.message
                 )
             )
-        }
+        } finally { finish(request.operationId) }
     }
 
     public func executeShell(
@@ -1460,12 +1505,29 @@ public class LocalProcessPort <: ProcessPort {
         }
     }
 
+    func reserveOperation(operationId: OperationId): Unit {
+        activeLock.lock()
+        try { reserved[operationId.value] = false } finally { activeLock.unlock() }
+    }
+
+    func releaseOperation(operationId: OperationId): Unit {
+        activeLock.lock()
+        try { reserved.remove(operationId.value) } finally { activeLock.unlock() }
+    }
+
+    func reservedOperationCancelled(operationId: OperationId): Bool {
+        activeLock.lock()
+        try { reserved.get(operationId.value) ?? false } finally { activeLock.unlock() }
+    }
+
     public func cancel(operationId: OperationId): Result<Unit> {
         activeLock.lock()
         try {
+            let wasReserved = reserved.contains(operationId.value)
+            if (wasReserved) { reserved[operationId.value] = true }
             for (item in active where item.operationId.value == operationId.value) {
                 try {
-                    item.process.terminate(force: true)
+                    item.terminateOwned()
                 } catch (error: Exception) {
                     return Result.Err(
                         AgentError(
@@ -1477,6 +1539,7 @@ public class LocalProcessPort <: ProcessPort {
                 }
                 return Result.Ok(())
             }
+            if (wasReserved) { return Result.Ok(()) }
             Result.Err(
                 AgentError(
                     AgentErrorKind.InvalidInput,
@@ -1514,7 +1577,9 @@ public class LocalProcessPort <: ProcessPort {
     ): Unit {
         activeLock.lock()
         try {
-            active.add(ActiveLocalProcess(operationId, process))
+            let entry = ActiveLocalProcess(operationId, process)
+            active.add(entry)
+            if (reserved.get(operationId.value) ?? false) { entry.terminateOwned() }
         } finally {
             activeLock.unlock()
         }
@@ -1752,10 +1817,28 @@ public class LocalProcessPort <: ProcessPort {
 class ActiveLocalProcess {
     let operationId: OperationId
     let process: SubProcess
+    private let startIdentity: String
 
     init(operationId: OperationId, process: SubProcess) {
         this.operationId = operationId
         this.process = process
+        this.startIdentity = linuxProcessStartToken("/proc/" + process.pid.toString() + "/stat")
+    }
+
+    func terminateOwned(): Unit {
+        if (!process.isAlive()) { return }
+        // Only signal the timeout/session group while its original leader
+        // identity is still present. Never infer ownership from a reused PID.
+        if (startIdentity != "" && startIdentity ==
+            linuxProcessStartToken("/proc/" + process.pid.toString() + "/stat")) {
+            let _ = signalProcessTree(process.pid, "SIGKILL")
+        }
+        try {
+            process.terminate(force: true)
+        } catch (error: Exception) {
+            // The group signal may have won the race with SDK termination.
+            if (process.isAlive()) { throw error }
+        }
     }
 }
 

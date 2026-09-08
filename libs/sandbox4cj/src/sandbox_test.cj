@@ -7,6 +7,26 @@ import std.unittest.testmacro.*
 @Test
 class Sandbox4CjTests {
     @TestCase
+    func outputCapAndBinaryBytesPreserveCommandResult() {
+        let sandbox = WorkspaceSandbox(WorkspaceSandboxPolicy(sandboxTestRoot(),
+            resources: SandboxResourceLimits(maxOutputBytes: 2)))
+        match (sandbox.execute(WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "printf '中'; exit 7"]))) {
+            case SandboxResult.Ok(result) =>
+                @Expect(result.exitCode, 7)
+                @Expect(result.outputTruncated, true)
+                @Expect(result.stdout, "��")
+            case SandboxResult.Err(error) => @Fail(error.code + ": " + error.message)
+        }
+        match (sandbox.execute(WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "printf '\\377A'; exit 9"]))) {
+            case SandboxResult.Ok(result) =>
+                @Expect(result.exitCode, 9)
+                @Expect(result.outputTruncated, false)
+                @Expect(result.stdout, "�A")
+            case SandboxResult.Err(error) => @Fail(error.code + ": " + error.message)
+        }
+    }
+
+    @TestCase
     func filtersEnvironmentAndRedactsGrantedSecrets() {
         let filter = EnvironmentFilter(
             allowlist: ["VISIBLE", "API_TOKEN"],

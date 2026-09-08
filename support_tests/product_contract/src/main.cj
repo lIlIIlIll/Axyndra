@@ -26,6 +26,40 @@ main(): Int64 {
     let root = Directory.createTemp("target").toString()
     try {
         runProductIdContracts()
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("process-remediation")) {
+            runProcessRemediationContracts(root)
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("child-authority")) {
+            runChildAuthorityContracts(root)
+            println("product child authority contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("config-preservation")) {
+            runConfigPreservationContract(root)
+            println("product config preservation contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("atomic-rollback")) {
+            runAtomicRollbackContract(root)
+            println("atomic rollback contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("atomic-write-failure")) {
+            runAtomicWriteFailureContract(root)
+            println("atomic write failure contract passed")
+            return 0
+        }
+        runAtomicWorkspaceContracts(root)
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("atomic-workspace")) {
+            println("atomic workspace contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("session-queue")) {
+            runSessionQueueContracts(root)
+            println("product session queue contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("finalization")) {
             runApplicationResponseProjectionOnly(root)
             runHybridCompactionSummaryContracts(root)
@@ -92,8 +126,10 @@ main(): Int64 {
             println("product session lifecycle contract passed")
             return 0
         }
+        runSessionQueueContracts(root)
         prepareProductContractWorkspace(root)
         runToolContracts(root)
+        runProcessRemediationContracts(root)
         runWriteApprovalClassificationContracts(root)
         runReadApprovalClassificationContracts(root)
         runApplicationContracts(root)
@@ -101,6 +137,7 @@ main(): Int64 {
         runSessionCatalogContracts(root)
         runAiApprovalContracts(root)
         runApprovalReviewerFailureContracts(root)
+        runChildAuthorityContracts(root)
         println("product contract passed")
         0
     } finally {
@@ -4528,6 +4565,74 @@ func productToolEnvironmentIsSafe(environment: ToolEnvironmentView): Bool {
     true
 }
 
+func runSessionQueueContracts(root: String): Unit {
+    let config = ProductConfig(
+        stateRoot: root + "/queue-state", workspaceRoot: root,
+        fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false
+    )
+    let product = openProduct(config: config).value().getOrThrow()
+    let app = product.applicationSession()
+    let source = app.id()
+    app.enqueue("source-input", "steer", "source work").value().getOrThrow()
+    let target = app.newSession().value().getOrThrow()
+    expect(app.queuedCount() == 0, "new session detaches source queue")
+    app.enqueue("target-input", "follow_up", "target work").value().getOrThrow()
+    app.switchSession(source).value().getOrThrow()
+    expect(app.queuedCount() == 1, "switch restores source queue without target input")
+    expect(match (app.withdrawQueued("target-input")) {
+        case Result.Ok(QueuedWithdrawal.AlreadyDelivered) => true
+        case _ => false
+    }, "source cannot withdraw another session input")
+    app.switchSession(target).value().getOrThrow()
+    expect(app.queuedCount() == 1, "switch back restores target queue exactly once")
+    app.switchSession(target).value().getOrThrow()
+    expect(app.queuedCount() == 1, "same-session switch does not duplicate pending inputs")
+    app.clearQueued()
+    expect(app.queuedCount() == 0, "clear removes durable target inputs from active view")
+    app.switchSession(source).value().getOrThrow()
+    let fork = app.forkCurrent().value().getOrThrow()
+    expect(app.queuedCount() == 0 && fork.value != source.value,
+        "fork detaches source pending inputs")
+    app.switchSession(source).value().getOrThrow()
+    expect(app.queuedCount() == 1, "fork preserves source durable pending inputs")
+    let corrupt = SessionId("queue-corrupt")
+    product.vnext.enqueueLaneInput(DurableInboxEntry(
+        InboxEntryId("queue-corrupt-entry"), ThreadId(corrupt.value), LaneId("main"),
+        InboxEntryKind.Steering, objectValue([]), createdAtMillis: agentUtcMillis()
+    )).value().getOrThrow()
+    app.switchSession(corrupt).value().getOrThrow()
+    expect(app.resumeStartup().isError(), "corrupt queued input blocks startup recovery")
+    app.switchSession(source).value().getOrThrow()
+    expect(app.resumeStartup().isOk() && app.queuedCount() == 1,
+        "recovery errors do not follow a switch to a healthy session")
+    product.close()
+    let reopened = openProduct(config: config).value().getOrThrow()
+    let restoredSource = reopened.applicationSession(sessionId: Some(source))
+    let restoredTarget = reopened.applicationSession(sessionId: Some(target))
+    expect(restoredSource.queuedCount() == 1 && restoredTarget.queuedCount() == 0,
+        "runtime reopen retains source work and does not resurrect cleared target work")
+    expect(match (restoredSource.withdrawQueued("source-input")) {
+        case Result.Ok(QueuedWithdrawal.Withdrawn(item)) => item.input == "source work"
+        case _ => false
+    }, "restored source queue retains its input identity")
+    restoredSource.enqueue("clear-failure", "steer", "keep on failure").value().getOrThrow()
+    reopened.close()
+    var clearFailed = false
+    try {
+        restoredSource.clearQueued()
+    } catch (_: IllegalStateException) {
+        clearFailed = true
+    }
+    expect(clearFailed && restoredSource.queuedCount() == 1,
+        "failed durable clear reports failure and retains in-memory work")
+    expect(restoredSource.withdrawQueued("clear-failure").isError(),
+        "failed durable withdrawal reports storage error instead of already delivered")
+    let recovered = openProduct(config: config).value().getOrThrow()
+    expect(recovered.applicationSession(sessionId: Some(source)).queuedCount() == 1,
+        "failed clear leaves durable work recoverable")
+    recovered.close()
+}
+
 func runApplicationInteractionContracts(application: ApplicationSession): Unit {
     application.setAskInteractive(true)
     let applicationAskFuture = spawn {
@@ -6871,4 +6976,77 @@ func rejectsIllegalArgument(action: () -> Unit): Bool {
     } catch (_: IllegalArgumentException) {
         true
     }
+}
+
+func runAtomicWorkspaceContracts(root: String): Unit {
+    let workspace = LocalWorkspace(root)
+    let path = root + "/atomic-mode.txt"
+    let other = root + "/atomic-other.txt"
+    File.writeTo(path, "old".toArray())
+    File.writeTo(other, "untouched".toArray())
+    for (suffix in [".agent-tmp", ".agent-txn-0", ".agent-backup-0"]) {
+        let (code, _, _) = executeWithOutput("ln", ["-s", other, path + suffix])
+        expect(code == 0, "seed unrelated predictable symlinks")
+    }
+    let (modeCode, _, _) = executeWithOutput("chmod", ["755", path])
+    let (privateCode, _, _) = executeWithOutput("chmod", ["600", other])
+    expect(modeCode == 0 && privateCode == 0, "seed original modes")
+    expect(workspace.writeFile("atomic-mode.txt", "written").isOk(), "write overwrites existing file")
+    expect(String.fromUtf8(File.readFrom(path)) == "written", "write publishes replacement")
+    expect(workspace.commit(WorkspaceMutation(OperationId("atomic-one"), "atomic-mode.txt", "written", "edited")).isOk(), "single edit overwrites existing file")
+    expect(String.fromUtf8(File.readFrom(other)) == "untouched", "preplanted temp link target untouched")
+    expect(workspace.commitAll([
+        WorkspaceMutation(OperationId("atomic-a"), "atomic-mode.txt", "edited", "multi"),
+        WorkspaceMutation(OperationId("atomic-b"), "atomic-other.txt", "untouched", "other")
+    ]).isOk(), "multi edit tolerates unrelated predictable backup names")
+    let (statCode, modes, _) = executeWithOutput("python3", ["-c", "import os,sys; [print(oct(os.stat(p).st_mode & 0o7777)[2:]) for p in sys.argv[1:]]", path, other])
+    expect(statCode == 0 && String.fromUtf8(modes) == "755\n600\n", "multi edit retains exact executable and private modes")
+    for (suffix in [".agent-tmp", ".agent-txn-0", ".agent-backup-0"]) {
+        expect(FileInfo(path + suffix).isSymbolicLink(), "unrelated predictable symlink remains intact")
+    }
+    expect(!workspace.commitAll([
+        WorkspaceMutation(OperationId("atomic-fail-a"), "atomic-mode.txt", "multi", "bad"),
+        WorkspaceMutation(OperationId("atomic-fail-b"), "missing-parent/file", "", "bad")
+    ]).isOk(), "transaction staging failure reported")
+    expect(String.fromUtf8(File.readFrom(path)) == "multi", "failed transaction preserves original")
+    let catalog = ToolCatalog()
+    expect(installLocalTools(catalog, workspace, LocalProcessPort(workspace, sandboxEnabled: true)).isOk(), "install atomic tools")
+    let call = ToolCall("atomic-paths", "edit", objectValue([ValueField("input", textValue(
+        "[atomic-mode.txt#" + hashlineTag("multi") + "]\nSWAP 1:\n+x\n" +
+        "[atomic-other.txt#" + hashlineTag("other") + "]\nSWAP 1:\n+y"
+    ))]))
+    let requirements = catalog.resolvedDescriptor(call).getOrThrow().requiredCapabilities()
+    expect(requirements.size == 2 && requirements[0].resource != requirements[1].resource,
+        "multi edit declares a distinct capability for each path")
+    let pipeline = ToolPipeline(catalog, MemoryOperationRepository(), RecordingAuditPort(), ProductIds())
+    let context = ToolInvocationContext(RunId("atomic-capability"), SessionId("atomic-capability"),
+        CapabilitySet(values: [requirements[0]]))
+    expect(match (pipeline.invoke(context, call)) {
+        case Result.Ok(ToolInvocationResult.Denied(_)) => true
+        case _ => false
+    }, "first-path-only grant cannot authorize multi-path edit")
+    expect(String.fromUtf8(File.readFrom(path)) == "multi" && String.fromUtf8(File.readFrom(other)) == "other",
+        "capability denial preserves both files")
+}
+
+func runAtomicRollbackContract(root: String): Unit {
+    let workspace = LocalWorkspace(root)
+    File.writeTo(root + "/rollback-a", "before-a".toArray())
+    File.writeTo(root + "/rollback-b", "before-b".toArray())
+    File.writeTo(root + "/rollback-b.agent-backup-1", "unrelated".toArray())
+    let result = workspace.commitAll([
+        WorkspaceMutation(OperationId("rollback-a"), "rollback-a", "before-a", "after-a"),
+        WorkspaceMutation(OperationId("rollback-b"), "rollback-b", "before-b", "after-b")
+    ])
+    expect(!result.isOk(), "injected second installation failure is reported")
+    expect(String.fromUtf8(File.readFrom(root + "/rollback-a")) == "before-a", "first installed file restored")
+    expect(String.fromUtf8(File.readFrom(root + "/rollback-b")) == "before-b", "second moved backup restored")
+    expect(String.fromUtf8(File.readFrom(root + "/rollback-b.agent-backup-1")) == "unrelated", "unrelated backup untouched")
+}
+
+func runAtomicWriteFailureContract(root: String): Unit {
+    let workspace = LocalWorkspace(root)
+    File.writeTo(root + "/fault-write", "before".toArray())
+    expect(!workspace.writeFile("fault-write", "after").isOk(), "injected replacement failure is reported")
+    expect(String.fromUtf8(File.readFrom(root + "/fault-write")) == "before", "failed replacement retains original content")
 }

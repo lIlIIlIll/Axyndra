@@ -184,7 +184,7 @@ public class LspClient {
             JsonObjectEntry("params", params)
         ]))) {
             case LspResult.Ok(_) => ()
-            case LspResult.Err(error) => settleError(item.id, error); return LspResult.Err(error)
+            case LspResult.Err(error) => release(item.id); return LspResult.Err(error)
         }
         let deadline = MonoTime.now() + Duration.millisecond * timeoutMillis
         while (MonoTime.now() < deadline) {

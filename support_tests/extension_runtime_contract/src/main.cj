@@ -112,6 +112,48 @@ func safeLifecycleContracts(): Unit {
         rollbackDiagnostics[0].accepting &&
         rollbackDiagnostics[1].state == ExtensionLifecycleState.Inactive,
         "failed generation switch disposes the new generation and retains the old active generation")
+
+    let activationHost = RecordingGenerationHost()
+    activationHost.failActivateGeneration = 41u64
+    let activation = SafeExtensionLifecycleRuntime(activationHost)
+    expect(!activation.mountInitial(searchProvider(), generation: 41u64).isOk(),
+        "activation failure rejects the initial generation")
+    expect(activationHost.events.toArray() == ["mount:41", "activate:41", "stop:41", "dispose:41"] &&
+        activation.diagnostics()[0].state == ExtensionLifecycleState.Failed &&
+        !activation.acquire("axyndra.workspace-search").isOk(),
+        "activation failure cleans mounted resources without admitting invocations")
+    expect(activation.mountInitial(searchProvider(), generation: 42u64).isOk(),
+        "a cleaned activation failure permits a fresh generation")
+    activationHost.failActivateGeneration = 43u64
+    activationHost.failDisposeGeneration = 43u64
+    expect(match (activation.reload(searchProvider(), 43u64)) {
+        case SafeLifecycleResult.Err(error) => error.contains("activate.failed") && error.contains("dispose.failed")
+        case _ => false
+    }, "failed activation reports both original and cleanup errors")
+    let failedGeneration = activation.diagnostics()[2]
+    expect(failedGeneration.state == ExtensionLifecycleState.Quarantined &&
+        !failedGeneration.accepting && failedGeneration.error.contains("dispose.failed"),
+        "incomplete cleanup remains quarantined with diagnostic evidence")
+    let retained = mustLease(activation.acquire("axyndra.workspace-search"))
+    expect(retained.generation == 42u64, "failed reload preserves the old active generation")
+    retained.release()
+    let stopFailureHost = RecordingGenerationHost()
+    stopFailureHost.failActivateGeneration = 50u64
+    stopFailureHost.failStopGeneration = 50u64
+    let stopFailure = SafeExtensionLifecycleRuntime(stopFailureHost)
+    expect(!stopFailure.mountInitial(searchProvider(), generation: 50u64).isOk() &&
+        stopFailureHost.events.toArray() == ["mount:50", "activate:50", "stop:50", "dispose:50"] &&
+        stopFailure.diagnostics()[0].state == ExtensionLifecycleState.Quarantined &&
+        stopFailure.diagnostics()[0].error.contains("stop.failed"),
+        "stop failure still attempts disposal and preserves incomplete cleanup diagnostics")
+    let throwCleanupHost = RecordingGenerationHost()
+    throwCleanupHost.failActivateGeneration = 51u64
+    throwCleanupHost.throwDisposeGeneration = 51u64
+    let throwCleanup = SafeExtensionLifecycleRuntime(throwCleanupHost)
+    expect(!throwCleanup.mountInitial(searchProvider(), generation: 51u64).isOk() &&
+        throwCleanup.diagnostics()[0].state == ExtensionLifecycleState.Quarantined &&
+        throwCleanup.diagnostics()[0].error.contains("host.lifecycle_exception"),
+        "a throwing activation cleanup remains observable and incomplete")
 }
 
 func mustLease(result: SafeLifecycleResult<ExtensionInvocationLease>): ExtensionInvocationLease {
@@ -133,6 +175,9 @@ class FixedSignatureVerifier <: ExtensionPackageSignatureVerifier {
 class RecordingGenerationHost <: GenerationLifecycleHost {
     let events = ArrayList<String>()
     var failStopGeneration: UInt64 = 0u64
+    var failActivateGeneration: UInt64 = 0u64
+    var failDisposeGeneration: UInt64 = 0u64
+    var throwDisposeGeneration: UInt64 = 0u64
     public func mount(_provider: CompiledExtensionProvider, generation: UInt64): HostLifecycleResult {
         let _ = _provider
         events.add("mount:${generation}")
@@ -141,6 +186,9 @@ class RecordingGenerationHost <: GenerationLifecycleHost {
     public func activate(_extensionId: String, generation: UInt64): HostLifecycleResult {
         let _ = _extensionId
         events.add("activate:${generation}")
+        if (generation == failActivateGeneration) {
+            return HostLifecycleResult.Err("activate.failed", "injected activation failure")
+        }
         HostLifecycleResult.Ok
     }
     public func stopAdmitting(_extensionId: String, generation: UInt64): HostLifecycleResult {
@@ -155,6 +203,10 @@ class RecordingGenerationHost <: GenerationLifecycleHost {
     public func dispose(_extensionId: String, generation: UInt64): HostLifecycleResult {
         let _ = _extensionId
         events.add("dispose:${generation}")
+        if (generation == throwDisposeGeneration) { throw IllegalStateException("injected cleanup exception") }
+        if (generation == failDisposeGeneration) {
+            return HostLifecycleResult.Err("dispose.failed", "injected disposal failure")
+        }
         HostLifecycleResult.Ok
     }
 }
@@ -270,6 +322,35 @@ func runtimeContracts(): Unit {
     expect(runtime.deactivate("axyndra.workspace-search").isOk(), "double deactivation is idempotent")
     expect(!host.activeTools.contains("grep"), "inactive extension tool is unavailable")
     expect(runtime.activate("axyndra.workspace-search").isOk(), "inactive extension reactivates")
+    host.failDeactivationId = "axyndra.workspace-search"
+    expect(!runtime.shutdown().isOk() && host.deactivationOrder.toArray() ==
+        ["axyndra.workspace-search", "axyndra.workspace-search", "axyndra.workspace-write"],
+        "shutdown continues cleaning other extensions after a failure")
+    expect(host.activeTools.toArray() == ["grep"] && runtime.diagnostics()[0].error.isSome(),
+        "failed shutdown retains only unfinished work and its error")
+    expect(!runtime.shutdown().isOk() && host.deactivationOrder.size == 4,
+        "repeated shutdown retries unfinished work and does not report false success")
+    expect(!runtime.activate("axyndra.workspace-write").isOk(),
+        "shutdown closes activation admission even when cleanup is incomplete")
+    host.failDeactivationId = ""
+    expect(runtime.shutdown().isOk() && host.activeTools.isEmpty(), "shutdown retry finishes cleanup")
+    expect(runtime.shutdown().isOk() && host.deactivationOrder.size == 5,
+        "completed shutdown does not deactivate a second time")
+    let stoppedBeforeStart = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
+    expect(stoppedBeforeStart.shutdown().isOk() &&
+        !stoppedBeforeStart.start([writeProvider()], [ConfiguredExtension("axyndra.workspace-write")]).isOk(),
+        "shutdown also closes startup admission")
+    let throwingHost = RecordingLifecycleHost()
+    let throwingRuntime = ExtensionRuntime(throwingHost, probe: probe)
+    expect(throwingRuntime.start([searchProvider(), writeProvider()], [
+        ConfiguredExtension("axyndra.workspace-search"), ConfiguredExtension("axyndra.workspace-write")
+    ]).isOk(), "throwing shutdown fixture starts")
+    throwingHost.throwDeactivationId = "axyndra.workspace-search"
+    expect(!throwingRuntime.shutdown().isOk() && throwingHost.activeTools.toArray() == ["grep"] &&
+        throwingRuntime.diagnostics()[0].error.isSome(),
+        "a throwing host is diagnosed without skipping other shutdown work")
+    throwingHost.throwDeactivationId = ""
+    expect(throwingRuntime.shutdown().isOk(), "throwing shutdown work remains retryable")
 
     let duplicate = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     expect(match (duplicate.start(
@@ -350,6 +431,10 @@ func runtimeContracts(): Unit {
         optionalIncompatible.diagnostics()[0].state == ExtensionLifecycleState.Failed &&
         !optionalIncompatible.diagnostics()[0].compatible,
         "optional incompatibility exposes diagnostics and zero tools")
+    expect(!optionalIncompatible.activate("axyndra.workspace-write").isOk() &&
+        optionalIncompatibleHost.activeTools.isEmpty() &&
+        optionalIncompatible.diagnostics()[0].state == ExtensionLifecycleState.Failed,
+        "manual activation cannot bypass an optional extension SDK incompatibility")
 
     let mismatch = ExtensionRuntime(RecordingLifecycleHost(), probe: probe)
     let drift = workspaceWriteExtensionManifest().replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"")
@@ -402,6 +487,9 @@ class FakeProbe <: RuntimeRequirementProbe {
 class RecordingLifecycleHost <: ExtensionLifecycleHost {
     let activeTools = ArrayList<String>()
     let activationOrder = ArrayList<String>()
+    let deactivationOrder = ArrayList<String>()
+    var failDeactivationId: String = ""
+    var throwDeactivationId: String = ""
 
     public func activate(extension: Extension, _source: String): HostLifecycleResult {
         let _ = _source
@@ -419,6 +507,11 @@ class RecordingLifecycleHost <: ExtensionLifecycleHost {
     }
 
     public func deactivate(extensionId: String): HostLifecycleResult {
+        deactivationOrder.add(extensionId)
+        if (extensionId == throwDeactivationId) { throw IllegalStateException("injected host exception") }
+        if (extensionId == failDeactivationId) {
+            return HostLifecycleResult.Err("deactivate.failed", "injected deactivation failure")
+        }
         if (extensionId == "axyndra.workspace-search") { remove(activeTools, "grep") }
         else if (extensionId == "axyndra.workspace-write") { remove(activeTools, "write") }
         else if (extensionId == "axyndra.ast") { remove(activeTools, "ast_grep"); remove(activeTools, "ast_edit") }

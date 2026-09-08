@@ -8,6 +8,7 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "mcp4cj" = { path = "../../libs/mcp4cj", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_product" = { path = "../../agent_product", output-type = "static" }
   "model_adapters" = { path = "../../model_adapters", output-type = "static" }

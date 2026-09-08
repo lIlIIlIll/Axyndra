@@ -28,6 +28,7 @@ func composerFooterHint(width: Int64, working: Bool, hasQueue: Bool): String {
     if (width <= 0) {
         return ""
     }
+    var showNavigation = !working
     var showEdit = hasQueue
     var showNewline = !working
     var showFollowUp = working
@@ -43,6 +44,7 @@ func composerFooterHint(width: Int64, working: Bool, hasQueue: Bool): String {
         if (showEdit) {
             parts.add("Alt+↑ edit")
         }
+        if (showNavigation) { parts.add("Alt+j/k cards") }
         var value = ""
         for (part in parts) {
             if (value != "") { value += " · " }
@@ -51,7 +53,9 @@ func composerFooterHint(width: Int64, working: Bool, hasQueue: Bool): String {
         if (displayWidth(value) <= width) {
             return value
         }
-        if (showEdit) {
+        if (showNavigation) {
+            showNavigation = false
+        } else if (showEdit) {
             showEdit = false
         } else if (showNewline) {
             showNewline = false

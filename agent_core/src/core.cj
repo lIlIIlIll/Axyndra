@@ -13,6 +13,7 @@ import std.convert.*
 import std.deriving.*
 import std.overflow.*
 import std.time.*
+import std.sync.*
 import tool_runtime.*
 
 private let MODEL_RETRY_MAX_DELAY_MILLIS: Int64 = 8000
@@ -1578,6 +1579,12 @@ public class AgentCore <: AgentRunner {
                 counter: Some(counter)
             ))
         }
+        if (transition.to != RunState.Completed) {
+            return optionalOutcome(fail(request, context, control,
+                AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
+                    "owned work prevented successful Run settlement"),
+                sink, counter: Some(counter)))
+        }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
@@ -2257,6 +2264,12 @@ public class AgentCore <: AgentRunner {
                 request, context, control, error, sink, counter: Some(counter)
             )
         }
+        if (transition.to != RunState.Completed) {
+            return fail(request, context, control,
+                AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
+                    "owned work prevented successful Run settlement"),
+                sink, counter: Some(counter))
+        }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
@@ -2785,11 +2798,17 @@ public class AgentCore <: AgentRunner {
             }
         }
         for (outcome in preparation.immediate) {
-            let operationId = OperationId(
-                "operation-immediate-" + outcome.committed.decisionId.value + "-" +
-                    outcome.committed.scopedToolCallId.value
-            )
-            let plan = canonicalImmediatePlan(context, outcome.block)
+            let operationId = match (outcome.operationId) {
+                case Some(value) => value
+                case None => OperationId(
+                    "operation-immediate-" + outcome.committed.decisionId.value + "-" +
+                        outcome.committed.scopedToolCallId.value
+                )
+            }
+            let plan = match (outcome.operationPlan) {
+                case Some(value) => value
+                case None => canonicalImmediatePlan(context, outcome.block)
+            }
             match (operationRuntime.prepare(
                 operationId,
                 context.runId,
@@ -3641,8 +3660,15 @@ public class AgentCore <: AgentRunner {
             idleLimitMillis: request.budget.maxIdleMillis
         )
         control.setActiveRequest(modelRequest.requestId)
+        let admitted = AtomicInt64(0)
+        let completed = AtomicBool(false)
         let future = spawn {
-            model.execute(
+            while (admitted.load() == 0) { sleep(Duration.millisecond) }
+            try {
+                if (admitted.load() < 0 || control.source.token.isCancelled()) {
+                    return Result<ModelReply>.Err(controlCancellationError(control))
+                }
+                model.execute(
                 modelRequest,
                 {
                     event => if (activity.record(event)) {
@@ -3669,8 +3695,18 @@ public class AgentCore <: AgentRunner {
                     }
                 }
             )
+            } finally { completed.store(true) }
         }
-        while (future.tryGet().isNone()) {
+        let owned = spawn { let _ = future.get() }
+        match (control.runtime.ownTask("model/" + attemptId.value, owned)) {
+            case Result.Ok(_) => admitted.store(1)
+            case Result.Err(error) =>
+                admitted.store(-1)
+                activity.close()
+                control.clearActiveRequest(modelRequest.requestId)
+                return ModelAttemptExecution(Result.Err(error), activity.takeProvisionalOutput())
+        }
+        while (!completed.load()) {
             match (activity.persistenceError()) {
                 case Some(error) =>
                     activity.close()
@@ -4221,6 +4257,12 @@ public class AgentCore <: AgentRunner {
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
+        }
+        if (transition.to != RunState.Completed) {
+            return fail(request, context, control,
+                AgentError(AgentErrorKind.RecoveryRequired, "run.owned_work_unsettled",
+                    "owned work prevented successful Run settlement"),
+                sink, counter: Some(counter))
         }
         match (runs.save(completed)) {
             case Result.Ok(_) => ()
@@ -4886,11 +4928,13 @@ public class AgentCore <: AgentRunner {
         let snapshot = RunSnapshot(
             request.runId,
             request.sessionId,
-            match (error.kind) {
+            if (control.state() == RunState.RecoveryRequired) {
+                RunState.RecoveryRequired
+            } else { match (error.kind) {
                 case AgentErrorKind.Cancelled => RunState.Cancelled
                 case AgentErrorKind.RecoveryRequired => RunState.RecoveryRequired
                 case _ => RunState.Failed
-            },
+            } },
             sequence: context.currentSequence(),
             summary: error.message,
             modelRequests: modelRequests,

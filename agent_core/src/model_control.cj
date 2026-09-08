@@ -325,18 +325,24 @@ public class InternalModelCallOptions {
     public let timeoutMillis: Int64
     public let maxAttempts: Int64
     public let parent: ?AgentRunRequest
+    public let standaloneAccounting: Bool
 
     public init(
         timeoutMillis!: Int64 = 30000,
         maxAttempts!: Int64 = 2,
-        parent!: ?AgentRunRequest = None
+        parent!: ?AgentRunRequest = None,
+        standaloneAccounting!: Bool = false
     ) {
         if (timeoutMillis < 1 || maxAttempts < 1 || maxAttempts > 8) {
             throw IllegalArgumentException("internal model call limits are out of range")
         }
         this.timeoutMillis = timeoutMillis
         this.maxAttempts = maxAttempts
+        if (standaloneAccounting && parent.isNone()) {
+            throw IllegalArgumentException("standalone accounting requires an explicit budget context")
+        }
         this.parent = parent
+        this.standaloneAccounting = standaloneAccounting
     }
 }
 
@@ -387,14 +393,23 @@ public class ControlledModelPort <: ModelPort {
                 "durable internal model calls require a request id"
             ))
         }
+        // Standalone maintenance has no canonical Run. Its explicit ledger is
+        // call-local; missing durable parents never fall back to this mode.
+        let standalone: ?StandaloneInternalLedger = if (options.standaloneAccounting) {
+            Some(StandaloneInternalLedger(options.parent.getOrThrow()))
+        } else { None }
+        let accountingParent: ?AgentRunRequest = if (options.standaloneAccounting) { None } else { options.parent }
         let started = MonoTime.now()
         var attempt: Int64 = 1
         while (attempt <= options.maxAttempts) {
-            match (internalParentGuard(options.parent, started)) {
+            match (internalParentGuard(options.parent, started, checkRunState: !options.standaloneAccounting)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (chargeAttempt(options.parent)) {
+            match (match (standalone) {
+                case Some(ledger) => ledger.chargeAttempt()
+                case None => chargeAttempt(accountingParent)
+            }) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
@@ -420,7 +435,7 @@ public class ControlledModelPort <: ModelPort {
                             cleanupWaited += 10
                         }
                         match (recordInternalAttempt(
-                            options.parent,
+                            accountingParent,
                             request,
                             attempt,
                             error: Some(error)
@@ -449,7 +464,7 @@ public class ControlledModelPort <: ModelPort {
                         ]
                     )
                     match (recordInternalAttempt(
-                        options.parent,
+                        accountingParent,
                         request,
                         attempt,
                         error: Some(timeout)
@@ -463,14 +478,12 @@ public class ControlledModelPort <: ModelPort {
             activity.close()
             match (future.get()) {
                 case Result.Ok(reply) =>
-                    let charged = chargeReply(
-                        options.parent,
-                        request,
-                        reply,
-                        started
-                    )
+                    let charged = match (standalone) {
+                        case Some(ledger) => ledger.chargeReply(reply)
+                        case None => chargeReply(accountingParent, request, reply, started)
+                    }
                     match (recordInternalAttempt(
-                        options.parent,
+                        accountingParent,
                         request,
                         attempt,
                         reply: Some(reply)
@@ -500,7 +513,7 @@ public class ControlledModelPort <: ModelPort {
                         error
                     }
                     match (recordInternalAttempt(
-                        options.parent,
+                        accountingParent,
                         request,
                         attempt,
                         error: Some(normalized)
@@ -570,6 +583,8 @@ public class ControlledModelPort <: ModelPort {
                 }
                 let inputExceeded = reply.inputTokens > request.budget.maxInputTokens
                 let outputExceeded = reply.outputTokens > request.budget.maxOutputTokens
+                let totalInput = saturatedModelUsageAdd(snapshot.inputTokens, reply.inputTokens)
+                let totalOutput = saturatedModelUsageAdd(snapshot.outputTokens, reply.outputTokens)
                 let requestCost: ?Int64 = match (request.pricing) {
                     case Some(value) => priceModelUsage(reply.usage, value)
                     case None => reply.usage.costMicros
@@ -600,8 +615,8 @@ public class ControlledModelPort <: ModelPort {
                 match (repository.save(copyInternalSnapshot(
                     snapshot,
                     sequence: eventSequence,
-                    inputTokens: snapshot.inputTokens + reply.inputTokens,
-                    outputTokens: snapshot.outputTokens + reply.outputTokens,
+                    inputTokens: totalInput,
+                    outputTokens: totalOutput,
                     reasoningTokens: snapshot.reasoningTokens + reply.reasoningTokens,
                     cacheReadTokens: snapshot.cacheReadTokens + reply.cacheReadTokens,
                     cacheWriteTokens: snapshot.cacheWriteTokens + reply.cacheWriteTokens,
@@ -649,6 +664,12 @@ public class ControlledModelPort <: ModelPort {
                 }
                 if (inputExceeded) { return internalBudgetError<Unit>("input_tokens") }
                 if (outputExceeded) { return internalBudgetError<Unit>("output_tokens") }
+                if (request.budget.maxTotalInputTokens > 0 && totalInput > request.budget.maxTotalInputTokens) {
+                    return internalBudgetError<Unit>("total_input_tokens")
+                }
+                if (request.budget.maxTotalOutputTokens > 0 && totalOutput > request.budget.maxTotalOutputTokens) {
+                    return internalBudgetError<Unit>("total_output_tokens")
+                }
                 if (costExceeded) { return internalBudgetError<Unit>("cost") }
                 Result.Ok(())
             })
@@ -746,7 +767,7 @@ public class ControlledModelPort <: ModelPort {
             match (internalParentGuard(
                 options.parent,
                 started,
-                checkRunState: checkRunState
+                checkRunState: checkRunState && !options.standaloneAccounting
             )) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
@@ -999,5 +1020,46 @@ func parseObservedUsageField(value: ?String): ?Int64 {
             if (parsed < 0) { None } else { Some(parsed) }
         } catch (_: Exception) { None }
         case None => Some(0)
+    }
+}
+
+class StandaloneInternalLedger {
+    private let parent: AgentRunRequest
+    private var requests: Int64 = 0
+    private var input: Int64 = 0
+    private var output: Int64 = 0
+    private var cost: Int64 = 0
+
+    init(parent: AgentRunRequest) { this.parent = parent }
+
+    func chargeAttempt(): Result<Unit> {
+        if (requests >= parent.budget.maxModelRequests) {
+            return internalBudgetError<Unit>("model_requests")
+        }
+        requests += 1
+        Result.Ok(())
+    }
+
+    func chargeReply(reply: ModelReply): Result<Unit> {
+        input = saturatedModelUsageAdd(input, reply.inputTokens)
+        output = saturatedModelUsageAdd(output, reply.outputTokens)
+        let priced = match (parent.pricing) {
+            case Some(value) => priceModelUsage(reply.usage, value)
+            case None => reply.usage.costMicros
+        }
+        cost = saturatedModelUsageAdd(cost, match (priced) { case Some(value) => value; case None => 0 })
+        let budget = parent.budget
+        if (reply.inputTokens > budget.maxInputTokens) { return internalBudgetError<Unit>("input_tokens") }
+        if (reply.outputTokens > budget.maxOutputTokens) { return internalBudgetError<Unit>("output_tokens") }
+        if (budget.maxTotalInputTokens > 0 && input > budget.maxTotalInputTokens) {
+            return internalBudgetError<Unit>("total_input_tokens")
+        }
+        if (budget.maxTotalOutputTokens > 0 && output > budget.maxTotalOutputTokens) {
+            return internalBudgetError<Unit>("total_output_tokens")
+        }
+        if (budget.maxCostMicros > 0 && cost > budget.maxCostMicros) {
+            return internalBudgetError<Unit>("cost")
+        }
+        Result.Ok(())
     }
 }

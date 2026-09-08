@@ -13,5 +13,6 @@
   "agent_core" = { path = "../../agent_core", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_product" = { path = "../../agent_product", output-type = "static" }
+  "agent_skills" = { path = "../../agent_skills", output-type = "static" }
   "model_adapters" = { path = "../../model_adapters", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }

@@ -20,12 +20,13 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15 ripgrep unzip
+          sudo apt-get install --yes clang-15 ripgrep unzip python3-yaml
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
       - name: Load pinned Cangjie toolchain
         id: cangjie-toolchain
         run: |
           source scripts/ci_toolchain.env
+          cat scripts/ci_toolchain.env >> "$GITHUB_ENV"
           echo "version=$AXYNDRA_CI_CANGJIE_VERSION" >> "$GITHUB_OUTPUT"
           echo "stdx_sha256=$AXYNDRA_CI_STDX_SHA256" >> "$GITHUB_OUTPUT"
       - name: Setup Cangjie

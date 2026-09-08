@@ -8,6 +8,7 @@ main(): Int64 {
     stateMachineContract()
     completedJoinContract()
     failedChildContract()
+    emptyFailureContract()
     structuredCancellationContract()
     quarantineContract()
     println("vNext run lifecycle contract passed")
@@ -89,4 +90,13 @@ func quarantineContract(): Unit {
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
+}
+
+func emptyFailureContract(): Unit {
+    let lifecycle = RunLifecycle()
+    lifecycle.start().value().getOrThrow()
+    lifecycle.scope.own("empty", spawn { throw Exception("") }).value().getOrThrow()
+    let (transition, report) = lifecycle.settle(RunState.Completed, 1000)
+    expect(transition.to == RunState.Failed && report.failedCount() == 1,
+        "empty exception message still represents failed owned work")
 }

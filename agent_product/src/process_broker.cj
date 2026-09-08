@@ -853,6 +853,28 @@ func prepareBrokerEndpointTakeover(
     Result.Ok(())
 }
 
+// restart uses a persisted readiness spec which is not present in the request;
+// its legal maximum is one hour, plus the stop phase and transport margin.
+func brokerOperationReadTimeout(request: AgentValue): Int64 {
+    let op = daemonValueText(request, "op")
+    let arguments = request.field("arguments") ?? objectValue([])
+    var deadline: Int64 = 0
+    match (op) {
+        case "start" => match (arguments.field("ready")) {
+            case Some(ready) => deadline = secondsToMillis(daemonValueInteger(ready, "timeout", 30), 30)
+            case None => ()
+        }
+        case "restart" => deadline = 3600000 + 7000
+        case "wait" => deadline = secondsToMillis(daemonValueInteger(arguments, "timeout", 30), 30)
+        case "logs" => if (brokerBoolean(arguments, "follow", false)) {
+            deadline = secondsToMillis(daemonValueInteger(arguments, "timeout", 30), 30)
+        }
+        case "stop" => deadline = secondsToMillis(daemonValueInteger(arguments, "timeout", 5), 5) + 2000
+        case _ => ()
+    }
+    max(10000, deadline + 10000)
+}
+
 func brokerRoundTrip(
     socketPath: String,
     request: AgentValue,
@@ -876,7 +898,7 @@ func brokerRoundTrip(
         )
     }
     try {
-        socket.readTimeout = Some(Duration.second * 10)
+        socket.readTimeout = Some(Duration.millisecond * brokerOperationReadTimeout(request))
         socket.writeTimeout = Some(Duration.second * 10)
         socket.connect(timeout: Some(Duration.millisecond * 500))
         socket.write(payload.toArray())

@@ -158,6 +158,7 @@ public class ApplicationSession <: AgentInteractionSource {
     private var pendingRecovery: ?AgentError = None
     private var pendingModelResume = false
     private let recentApprovalDenials = ArrayList<String>()
+    private let bashLock = Mutex()
     private var currentBashOperation: ?OperationId = None
     private var askInteractive = false
     private var planModeEnabled = false
@@ -204,6 +205,23 @@ public class ApplicationSession <: AgentInteractionSource {
         restoreWorkMode(this.sessionId)
         restoreQueuedInteractions()
         restorePendingContinuation()
+    }
+
+    // Changing the active view must not withdraw work owned by the source session.
+    private func activateSession(value: SessionId): Unit {
+        moveAskSurface(sessionId, value)
+        lock.lock()
+        try {
+            sessionId = value
+            queuedInteractions.clear()
+            pendingRecovery = None
+            restoreQueuedInteractions()
+        } finally {
+            lock.unlock()
+        }
+        restoreWorkMode(value)
+        restorePendingContinuation()
+        disableLoop()
     }
 
     private func restoreQueuedInteractions(): Unit {
@@ -779,12 +797,8 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        moveAskSurface(sessionId, value)
-        sessionId = value
         currentModel = restored
-        restoreWorkMode(value)
-        restorePendingContinuation()
-        disableLoop()
+        activateSession(value)
         Result.Ok(())
     }
 
@@ -793,9 +807,7 @@ public class ApplicationSession <: AgentInteractionSource {
         match (product.forkSession(sessionId, target)) {
             case Result.Ok(_) => match (product.setSessionModel(target, currentModel)) {
                 case Result.Ok(_) =>
-                    moveAskSurface(sessionId, target)
-                    sessionId = target
-                    restoreWorkMode(target)
+                    activateSession(target)
                     Result.Ok(target)
                 case Result.Err(error) => Result.Err(error)
             }
@@ -887,12 +899,7 @@ public class ApplicationSession <: AgentInteractionSource {
             prefix.toArray()
         )) {
             case Result.Ok(_) =>
-                moveAskSurface(sessionId, target)
-                sessionId = target
-                restoreWorkMode(target)
-                currentRequest = None
-                pendingApproval = None
-                clearQueued()
+                activateSession(target)
                 Result.Ok(ApplicationBranchResult(target, text))
             case Result.Err(error) => Result.Err(error)
         }
@@ -1002,37 +1009,71 @@ public class ApplicationSession <: AgentInteractionSource {
             ]
         )) {
             case Result.Ok(_) =>
-                moveAskSurface(sessionId, target)
-                sessionId = target
-                restoreWorkMode(target)
-                pendingApproval = None
+                activateSession(target)
                 Result.Ok(ApplicationHandoffResult(target, document))
             case Result.Err(error) => Result.Err(error)
         }
     }
 
-    public func executeBash(command: String): Result<ProcessResult> {
+    private func reserveBash(command: String): Result<OperationId> {
         if (command.trimAscii() == "") {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.InvalidInput,
-                    "application.bash_empty",
-                    "bash command must not be empty"
-                )
-            )
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                "application.bash_empty", "bash command must not be empty"))
         }
-        let operationId = product.ids.nextOperationId()
-        currentBashOperation = Some(operationId)
-        let result = product.executeBash(command, operationId)
-        currentBashOperation = None
-        result
+        bashLock.lock()
+        try {
+            if (currentBashOperation.isSome()) {
+                return Result.Err(AgentError(AgentErrorKind.Conflict,
+                    "application.bash_busy", "bash command is already running"))
+            }
+            let operationId = product.ids.nextOperationId()
+            product.reserveBash(operationId)
+            currentBashOperation = Some(operationId)
+            Result.Ok(operationId)
+        } finally { bashLock.unlock() }
+    }
+
+    private func executeReservedBash(command: String, operationId: OperationId): Result<ProcessResult> {
+        try { product.executeBash(command, operationId) } finally {
+            bashLock.lock()
+            product.releaseBash(operationId)
+            currentBashOperation = None
+            bashLock.unlock()
+        }
+    }
+
+    public func executeBash(command: String): Result<ProcessResult> {
+        match (reserveBash(command)) {
+            case Result.Ok(operationId) => executeReservedBash(command, operationId)
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    public func executeBashAsync(
+        command: String,
+        complete: (Result<ProcessResult>) -> Unit
+    ): Result<Future<Unit>> {
+        let operationId = match (reserveBash(command)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        Result.Ok(spawn {
+            let result = try { executeReservedBash(command, operationId) } catch (error: Exception) {
+                Result<ProcessResult>.Err(AgentError(AgentErrorKind.Internal,
+                    "application.bash_failed", error.message))
+            }
+            complete(result)
+        })
     }
 
     public func abortBash(): Result<Unit> {
-        match (currentBashOperation) {
-            case Some(operationId) => product.abortBash(operationId)
-            case None => Result.Ok(())
-        }
+        bashLock.lock()
+        try {
+            match (currentBashOperation) {
+                case Some(operationId) => product.abortBash(operationId)
+                case None => Result.Ok(())
+            }
+        } finally { bashLock.unlock() }
     }
 
     public func exportHtml(outputPath: String): Result<String> {
@@ -1159,15 +1200,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 let queued = queuedInteractions[index]
                 if (queued.correlationId == correlationId) {
                     match (product.vnext.rejectLaneInput(
-                        InboxEntryId(applicationInboxEntryId(
-                            sessionId, LaneId("main"), correlationId
-                        ))
+                        InboxEntryId(queued.durableItemId)
                     )) {
                         case Result.Ok(_) =>
                             queuedInteractions.remove(at: index)
                             return Result.Ok(QueuedWithdrawal.Withdrawn(queued))
-                        case Result.Err(_) =>
-                            return Result.Ok(QueuedWithdrawal.AlreadyDelivered)
+                        case Result.Err(error) => return Result.Err(error)
                     }
                 }
             }
@@ -1290,7 +1328,14 @@ public class ApplicationSession <: AgentInteractionSource {
     public func clearQueued(): Unit {
         lock.lock()
         try {
-            queuedInteractions.clear()
+            while (!queuedInteractions.isEmpty()) {
+                let queued = queuedInteractions[0]
+                match (product.vnext.rejectLaneInput(InboxEntryId(queued.durableItemId))) {
+                    case Result.Ok(_) => queuedInteractions.remove(at: 0)
+                    case Result.Err(error) =>
+                        throw IllegalStateException(error.code + ": " + error.message)
+                }
+            }
         } finally {
             lock.unlock()
         }
@@ -1455,11 +1500,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        moveAskSurface(source, target)
-        sessionId = target
-        currentRequest = None
-        pendingApproval = None
-        clearQueued()
+        activateSession(target)
         planModeEnabled = false
         vibeModeEnabled = false
         disableLoop()
@@ -1932,12 +1973,8 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         match (product.setSessionModel(target, product.model)) {
             case Result.Ok(_) =>
-                moveAskSurface(sessionId, target)
-                sessionId = target
                 currentModel = product.model
-                currentRequest = None
-                pendingApproval = None
-                clearQueued()
+                activateSession(target)
                 planModeEnabled = false
                 vibeModeEnabled = false
                 disableLoop()

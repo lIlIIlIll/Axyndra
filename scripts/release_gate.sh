@@ -48,6 +48,7 @@ export AXYNDRA_SDK_ROOT="$sdk_root"
 export CANGJIE_SDK_ROOT="$sdk_root"
 export CANGJIE_STDX_PATH="$stdx_root"
 export LD_LIBRARY_PATH="$root/libs/process4cj/native:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
+python3 scripts/product_unit_gate.py
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 package_root=$(mktemp -d -t axyndra-candidate.XXXXXX)
 candidate=$(
@@ -102,7 +103,7 @@ AXYNDRA_BINARY="$candidate" python3 support_tests/package_candidate_clean_env/ch
 AXYNDRA_BINARY="$candidate" python3 support_tests/provider_profiles_blackbox/check.py
 AXYNDRA_BINARY="$candidate" python3 support_tests/entry_modes_blackbox/check.py
 AXYNDRA_BINARY="$candidate" python3 support_tests/acp_blackbox/check.py
-python3 support_tests/process_broker_blackbox/check.py --candidate "$candidate"
+AXYNDRA_BINARY="$candidate" bash scripts/product_regression_gate.sh
 bash support_tests/provider_blackbox/check.sh "$candidate"
 if [[ "$gate_kind" == "release" ]]; then
   AXYNDRA_BINARY="$candidate" python3 support_tests/provider_real_smoke/check.py

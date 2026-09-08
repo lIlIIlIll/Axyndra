@@ -38,6 +38,16 @@ main(): Int64 {
             application,
             {frame => output.add(frame)}
         )
+        if (getVariable("AXYNDRA_RPC_CONTRACT_SCOPE") == Some("bash-once")) {
+            expect(server.handle("{\"id\":\"once\",\"type\":\"bash\",\"command\":\"sleep 0.05; printf rpc-once\"}") == "",
+                "one-request bash starts asynchronously")
+            server.close(cancelBash: false)
+            expect(output.contains("\"stdout\":\"rpc-once\"") &&
+                output.contains("\"id\":\"once\""), "one-request shutdown waits for normal bash completion")
+            product.close().value().getOrThrow()
+            println("RPC one-request bash contract passed")
+            return 0
+        }
         expect(
             server.ready().contains("\"type\":\"ready\"") && server.ready().contains("\"maxFrameBytes\":1048576") &&
                 server.ready().contains("\"supportedProtocolVersions\":[1,2]"),
@@ -524,6 +534,11 @@ main(): Int64 {
                 continue
             }
             let response = server.handle(requestFor(command, root))
+            if (command == "bash") {
+                expect(response == "" && output.awaitContains("\"id\":\"inventory-bash\""),
+                    "RPC bash response is delivered asynchronously")
+                continue
+            }
             expect(
                 response.contains("\"command\":\"" + command + "\"") && !response.contains("unknown RPC command"),
                 "RPC decodes pinned command: " + command

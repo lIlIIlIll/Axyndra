@@ -10,6 +10,7 @@ import std.random.*
 import std.sync.*
 import stdx.log.NoopLogger
 import stdx.net.http.*
+import stdx.net.tls.*
 
 public class McpHttpHeader {
     public let name: String
@@ -337,7 +338,11 @@ public class StreamableHttpMcpTransport <: McpTransport {
         try {
             let timeout = Duration.millisecond * config.framing.requestTimeoutMillis
             let readTimeout = if (subscription) { Duration.Max } else { timeout }
-            let client = ClientBuilder().autoRedirect(false).readTimeout(readTimeout).writeTimeout(timeout).logger(NoopLogger()).build()
+            let clientBuilder = ClientBuilder().autoRedirect(false).readTimeout(readTimeout).writeTimeout(timeout).logger(NoopLogger())
+            if (config.url.startsWith("https://")) {
+                clientBuilder.tlsConfig(TlsClientConfig())
+            }
+            let client = clientBuilder.build()
             let protocolVersion = mcpProtocolVersion(params)
             if (protocolVersion == "") { try { client.close() } catch (_: Exception) {}; return httpMcpFailure<(Client, HttpRequest)>(McpErrorKind.Protocol, "mcp.http_protocol_metadata_missing", "request omitted protocolVersion", retrySafe: true) }
             let builder = HttpRequestBuilder()
