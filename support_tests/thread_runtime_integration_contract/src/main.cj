@@ -16,6 +16,9 @@ main(): Int64 {
     let root = Directory.createTemp("/tmp").toString()
     let database = SqliteDatabase(root + "/state.db")
     try {
+        concurrentThreadSnapshotContract(root + "/snapshot.db")
+        settlementReentryContract()
+        rejectedSettlementContract()
         registryOwnershipContract(database)
         externalInputCommitContract(database)
         modelResultBatchContract(database)
@@ -556,12 +559,17 @@ func registryOwnershipContract(database: SqliteDatabase): Unit {
     expect(recovery.isError() && recovery.error().getOrThrow().kind ==
         AgentErrorKind.RecoveryRequired,
         "a second process-style registry cannot guess ownership of an active durable Run")
+    expect(reopened.discardInactive(ThreadId("registry-thread")).isError() &&
+        database.scalarInt("SELECT COUNT(*) FROM runs WHERE id='registry-run'") == 1,
+        "empty registry refuses to discard a durable active Thread before recovery")
     let recovered = reopened.recover(ThreadId("registry-thread"), "workspace")
         .value().getOrThrow()
     expect(recovered.activeRun().getOrThrow().runId.value == active.runId.value,
         "explicit registry recovery reconstructs the durable active Run snapshot")
     recovered.finish(RunState.Completed, 1000).value().getOrThrow()
 
+    expect(reopened.discardInactive(ThreadId("registry-thread")).value().getOrThrow(),
+        "durably completed Thread can be discarded after recovery")
     let disposable = registry.acquire(ThreadId("registry-disposable"), "workspace")
         .value().getOrThrow()
     expect(disposable.activeRun().isNone() &&
@@ -611,4 +619,68 @@ func lane(modelId: String): ModelLane {
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
+}
+
+func settlementReentryContract(): Unit {
+    for (cancel in [false, true]) {
+        let runtime = AgentThreadRuntime(
+            ThreadCoordinator(ThreadId("join-lock"), "workspace", InMemoryThreadCommitSink()),
+            ContextProjector("projector", FixedEstimator()), { => 100 }
+        )
+        runtime.startTurn(SemanticTurnId("turn"), RunId("run"), ItemId("user"),
+            ThreadItemContent.UserMessage(textMessageParts("join")), lane("model"),
+            SkillStackSnapshot([], [])).value().getOrThrow()
+        var negativeRejected = false
+        try {
+            let _ = if (cancel) { runtime.cancel(-1) } else { runtime.finish(RunState.Completed, -1) }
+        } catch (_: IllegalArgumentException) { negativeRejected = true }
+        expect(negativeRejected && runtime.activeRun().getOrThrow().state == RunState.Running,
+            "negative timeout does not mutate lifecycle or close admission")
+        let entered = AtomicBool(false)
+        let release = AtomicBool(false)
+        let worker = spawn {
+            entered.store(true)
+            while (!release.load()) { sleep(Duration.millisecond) }
+            expect(runtime.activeRun().isSome(), "owned worker can inspect runtime during join")
+            expect(runtime.finish(RunState.Completed, 0).isError(), "reentrant settlement is rejected")
+            expect(runtime.ownTask("late", spawn {}).isError(), "settling run rejects new work")
+            let operation = OperationId("late-approval")
+            expect(runtime.resolveOperation(ItemId("late-result"), operation, CanonicalToolCallId("late-call"),
+                NormalizedOperationPlan("read", objectValue([]), [Capability(CapabilityKind.WorkspaceRead)],
+                    OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe, "binding"),
+                OperationAttemptStage.Prepared,
+                Result<ToolInvocationResult>.Ok(ToolInvocationResult.NeedsApproval(ApprovalRequest(
+                    operation, "late-call", "read", Capability(CapabilityKind.WorkspaceRead)))),
+                "late-receipt", 100).isError(),
+                "operation resolution cannot introduce a new approval pause during settlement")
+        }
+        runtime.ownTask("worker", worker).value().getOrThrow()
+        while (!entered.load()) { sleep(Duration.millisecond) }
+        let releaser = spawn { sleep(Duration.millisecond * 30); release.store(true) }
+        let result = if (cancel) { runtime.cancel(1000) } else { runtime.finish(RunState.Completed, 1000) }
+        let settled = result.value().getOrThrow()
+        releaser.get()
+        expect(settled.joined.quarantinedCount() == 0 && settled.joined.failedCount() == 0,
+            "worker reentry does not turn ordinary completion into quarantine")
+    }
+}
+
+func rejectedSettlementContract(): Unit {
+    let runtime = AgentThreadRuntime(
+        ThreadCoordinator(ThreadId("rejected-settlement"), "workspace", InMemoryThreadCommitSink()),
+        ContextProjector("projector", FixedEstimator()), { => 100 }
+    )
+    let active = runtime.startTurn(SemanticTurnId("turn"), RunId("run"), ItemId("user"),
+        ThreadItemContent.UserMessage(textMessageParts("pending tool")), lane("model"),
+        SkillStackSnapshot([], [])).value().getOrThrow()
+    let _ = runtime.commitResult(ResultEnvelope(ThreadId("rejected-settlement"),
+        SemanticTurnId("turn"), RunId("run"), active.epoch, 1,
+        ThreadItemDraft(ItemId("call"), ThreadItemContent.ToolCall(
+            CanonicalToolCallId("call"), "tool", objectValue([])),
+            ItemProvenance("model", runId: Some(RunId("run"))))))
+    expect(runtime.finish(RunState.Completed, 1000).isError() &&
+        runtime.activeRun().getOrThrow().state == RunState.RecoveryRequired,
+        "rejected durable settlement remains visibly recovery-required")
+    expect(runtime.finish(RunState.Failed, 1000).isError() && runtime.cancel(1000).isError(),
+        "retrying rejected settlement returns a conflict without joining scope twice")
 }

@@ -117,25 +117,34 @@ public class SqliteThreadRuntimeRegistry <: ThreadRuntimeRegistry {
                             fields: [ErrorField("thread_id", threadId.value)]
                         ))
                     }
-                    entries.remove(at: index)
                     break
                 }
                 index += 1
             }
-            let existed = database.scalarInt(
-                "SELECT COUNT(*) FROM threads WHERE id=" + sqliteText(threadId.value)
-            ) > 0
-            if (existed) {
-                database.transaction { transaction =>
-                    transaction.execute(
-                        "DELETE FROM audit_events WHERE thread_id=" + sqliteText(threadId.value)
-                    )
-                    transaction.execute(
-                        "DELETE FROM threads WHERE id=" + sqliteText(threadId.value)
-                    )
+            let result: Result<Bool> = database.transaction { transaction: SqliteTransaction =>
+                let rows = transaction.query(
+                    "SELECT active_turn_id FROM threads WHERE id=" + sqliteText(threadId.value)
+                )
+                if (rows.isEmpty()) { return Result.Ok(false) }
+                if (rows[0][0].isSome() || transaction.query(
+                    "SELECT COUNT(*) FROM turns WHERE thread_id=" + sqliteText(threadId.value) +
+                        " AND active_run_id IS NOT NULL"
+                )[0].required(0) != "0") {
+                    return Result<Bool>.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "thread.registry_discard_active",
+                        "cannot discard a Thread with an active Run",
+                        fields: [ErrorField("thread_id", threadId.value)]
+                    ))
                 }
+                transaction.execute(
+                    "DELETE FROM audit_events WHERE thread_id=" + sqliteText(threadId.value)
+                )
+                transaction.execute("DELETE FROM threads WHERE id=" + sqliteText(threadId.value))
+                Result.Ok(true)
             }
-            Result.Ok(existed)
+            if (result.isOk() && index < entries.size) { entries.remove(at: index) }
+            result
         } catch (error: Exception) {
             Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,

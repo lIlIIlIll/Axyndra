@@ -110,6 +110,12 @@ func capabilityCeilingContract(): Unit {
 }
 
 func budgetReservationContract(): Unit {
+    let tokenParent = ChildBudgetPool(ExecutionBudget(maxTotalInputTokens: 100, maxTotalOutputTokens: 100), 2)
+    expect(tokenParent.reserve("unbounded-input", ExecutionBudget(maxTotalOutputTokens: 10)).isError(),
+        "bounded input parent rejects unbounded child input")
+    expect(tokenParent.reserve("unbounded-output", ExecutionBudget(maxTotalInputTokens: 10)).isError(),
+        "bounded output parent rejects unbounded child output")
+
     let pool = ChildBudgetPool(ExecutionBudget(
         maxTurns: 10, maxToolCalls: 20, maxConcurrentTools: 4,
         maxInputTokens: 1000, maxOutputTokens: 500,
@@ -168,7 +174,7 @@ func isolatedResultContract(): Unit {
             RunId("child"), "edit", emptyProjection(),
             ChildWorkspaceView("workspace", "/repo", ChildWorkspaceMode.SharedReadOnly),
             ToolSetSnapshot("tools", []), [], ExecutionBudget(),
-            CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)]),
+            CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite, resource: "/repo/file")]),
             source.token
         )
     } catch (_: Exception) { rejected = true }

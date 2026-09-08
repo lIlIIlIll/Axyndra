@@ -6,9 +6,11 @@
 #include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -142,6 +144,17 @@ int32_t process4cj_close(int32_t fd) {
     return result == 0 ? 0 : (int32_t)errno;
 }
 
+/* Keep the exited leader reserved until the owner closes the process. This
+ * pins the session/process-group ID while inherited output is still draining. */
+int64_t process4cj_wait_owned(int64_t pid_value) {
+    siginfo_t info = {0};
+    int result;
+    do { result = waitid(P_PID, (id_t)pid_value, &info, WEXITED | WNOWAIT); }
+    while (result < 0 && errno == EINTR);
+    if (result < 0) return -(int64_t)errno;
+    return info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+}
+
 int64_t process4cj_wait(int64_t pid_value) {
     int status = 0;
     pid_t result;
@@ -160,5 +173,19 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
 
 int32_t process4cj_is_alive(int64_t pid_value) {
     if (kill((pid_t)pid_value, 0) == 0 || errno == EPERM) return 1;
+    return 0;
+}
+
+/* Preserve mode on an exclusively opened replacement without reopening its path. */
+int32_t axyndra_workspace_copy_mode(const char *source, int32_t destination_fd) {
+    struct stat info;
+    if (stat(source, &info) < 0) return -errno;
+    if (fchmod(destination_fd, info.st_mode & 07777) < 0) return -errno;
+    return 0;
+}
+
+/* POSIX rename preserves the destination when the operation fails. */
+int32_t axyndra_workspace_replace(const char *source, const char *destination) {
+    if (rename(source, destination) < 0) return -errno;
     return 0;
 }

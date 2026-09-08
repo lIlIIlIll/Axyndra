@@ -243,6 +243,9 @@ func taskPersistSubagentValue(state: ProductSubagentState): AgentValue {
         ValueField("parentRunId", textValue(state.parentRunId.value)),
         ValueField("parentToolCallId", textValue(state.parentToolCallId)),
         ValueField("depth", integerValue(state.depth)),
+        ValueField("capabilities", if (state.capabilityCeilingKnown) {
+            taskPersistCapabilitiesValue(state.capabilities)
+        } else { nullValue() }),
         ValueField("startedAt", integerValue(state.startedAt)),
         ValueField("status", textValue(state.status)),
         ValueField("lastUpdate", integerValue(state.lastUpdate)),
@@ -454,7 +457,8 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
         SessionId(rootSessionId),
         taskPersistText(value, "parentToolCallId"),
         taskPersistNonNegative(value, "depth"),
-        capabilities: CapabilitySet(),
+        capabilities: taskPersistCapabilities(value),
+        capabilityCeilingKnown: taskPersistCapabilityCeilingKnown(value),
         startedAt: startedAt,
         status: restoredStatus,
         lastUpdate: lastUpdate
@@ -464,9 +468,47 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
     state.toolCount = taskPersistNonNegative(value, "toolCount")
     state.currentTool = if (interrupted) { "" } else { taskPersistText(value, "currentTool") }
     state.error = restoredError
-    // pendingRequest, approval state, denial history, and capabilities are
+    // pendingRequest, approval state, and denial history are
     // intentionally never decoded from disk.
     state
+}
+
+func taskPersistCapabilitiesValue(capabilities: CapabilitySet): AgentValue {
+    let values = ArrayList<AgentValue>()
+    for (capability in capabilities.values) {
+        values.add(objectValue([
+            ValueField("kind", textValue(capabilityDisplayName(capability.kind))),
+            ValueField("resource", textValue(capability.resource))
+        ]))
+    }
+    listValue(values.toArray())
+}
+
+func taskPersistCapabilities(value: AgentValue): CapabilitySet {
+    // Older snapshots contain no authority. Missing data grants nothing.
+    if (!taskPersistCapabilityCeilingKnown(value)) { return CapabilitySet() }
+    let values = ArrayList<Capability>()
+    for (item in taskPersistList(value, "capabilities")) {
+        let kind = match (taskPersistNonEmptyText(item, "kind")) {
+            case "workspace.read" => CapabilityKind.WorkspaceRead
+            case "workspace.write" => CapabilityKind.WorkspaceWrite
+            case "process.spawn" => CapabilityKind.ProcessSpawn
+            case "network.access" => CapabilityKind.NetworkAccess
+            case "peer.message" => CapabilityKind.PeerMessage
+            case "delegate" => CapabilityKind.Delegate
+            case "extension.invoke" => CapabilityKind.ExtensionInvoke
+            case _ => throw IllegalArgumentException("unknown persisted child capability")
+        }
+        values.add(Capability(kind, resource: taskPersistText(item, "resource")))
+    }
+    CapabilitySet(values: values.toArray())
+}
+
+func taskPersistCapabilityCeilingKnown(value: AgentValue): Bool {
+    match (value.field("capabilities")) {
+        case Some(item) => item.unifiedKind != ValueKind.Null
+        case None => false
+    }
 }
 
 func taskPersistDecodeJob(

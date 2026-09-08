@@ -74,6 +74,8 @@ class ModelCompactionSummarizer <: CompactionSummarizer {
                 modelControl.executeInternal(
                     request,
                     InternalModelCallOptions(
+                        parent: Some(parent),
+                        standaloneAccounting: true,
                         timeoutMillis: timeoutMillis,
                         maxAttempts: if (parent.autoRetry) { 2 } else { 1 }
                     )

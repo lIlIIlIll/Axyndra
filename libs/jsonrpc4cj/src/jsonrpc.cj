@@ -75,13 +75,12 @@ public class JsonRpcId {
 
     public init(kind: JsonRpcIdKind, value!: String = "") {
         match (kind) {
-            case JsonRpcIdKind.Text =>
-                if (value == "") { throw IllegalArgumentException("JSON-RPC text id must not be empty") }
+            case JsonRpcIdKind.Text => ()
             case JsonRpcIdKind.Number =>
                 try {
-                    let _ = Int64.parse(value)
+                    let _ = jsonNumber(value)
                 } catch (_: Exception) {
-                    throw IllegalArgumentException("JSON-RPC number id must be an integer")
+                    throw IllegalArgumentException("JSON-RPC number id must be a JSON number")
                 }
             case JsonRpcIdKind.Null =>
                 if (value != "") { throw IllegalArgumentException("JSON-RPC null id must not carry a value") }
@@ -110,7 +109,10 @@ public func jsonRpcNumberId(value: Int64): JsonRpcId {
 public func jsonRpcNullId(): JsonRpcId { JsonRpcId(JsonRpcIdKind.Null) }
 
 public func sameJsonRpcId(left: JsonRpcId, right: JsonRpcId): Bool {
-    left.kind == right.kind && left.value == right.value
+    if (left.kind != right.kind) { return false }
+    if (left.kind == JsonRpcIdKind.Number) {
+        normalizedJsonRpcNumber(left.value) == normalizedJsonRpcNumber(right.value)
+    } else { left.value == right.value }
 }
 
 public class JsonRpcRequest {
@@ -145,9 +147,6 @@ public class JsonRpcError {
     public let data: JsonNode
 
     public init(code: Int64, message: String, data!: JsonNode = jsonNull()) {
-        if (message.trimAscii() == "") {
-            throw IllegalArgumentException("JSON-RPC error message must not be empty")
-        }
         this.code = code
         this.message = message
         this.data = data
@@ -309,11 +308,11 @@ func decodeResponse(root: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
             }
             let message = match (value.field("message")) {
                 case Some(item) =>
-                    if (item.unifiedKind != UnifiedJsonKind.Text || item.text.trimAscii() == "") {
-                        return invalidRequest<JsonRpcEnvelope>("error message must be a non-empty string")
+                    if (item.unifiedKind != UnifiedJsonKind.Text) {
+                        return invalidRequest<JsonRpcEnvelope>("error message must be a string")
                     }
                     item.text
-                case None => return invalidRequest<JsonRpcEnvelope>("error message must be a non-empty string")
+                case None => return invalidRequest<JsonRpcEnvelope>("error message must be a string")
             }
             let data = match (value.field("data")) {
                 case Some(item) => item
@@ -338,7 +337,7 @@ func decodeJsonRpcId(value: JsonNode): JsonRpcResult<JsonRpcId> {
             invalidRequest<JsonRpcId>(error.message)
         }
         case UnifiedJsonKind.Null => JsonRpcResult.Ok(jsonRpcNullId())
-        case _ => invalidRequest<JsonRpcId>("id must be a string, integer, or null")
+        case _ => invalidRequest<JsonRpcId>("id must be a string, number, or null")
     }
 }
 
@@ -493,4 +492,95 @@ public class JsonRpcCorrelation {
             lock.unlock()
         }
     }
+}
+
+// Compare exact decimal values without expanding powers of ten or rounding
+// through floating point. The input was validated by JsonNumberLiteralValue.
+func normalizedJsonRpcNumber(value: String): String {
+    let bytes = value.toArray()
+    let negative = bytes[0] == b'-'
+    let start: Int64 = if (negative) { 1 } else { 0 }
+    var exponentAt = bytes.size
+    var fractionDigits: Int64 = 0
+    var fractional = false
+    let digits = ArrayList<Byte>()
+    for (index in start..bytes.size) {
+        let byte = bytes[index]
+        if (byte == b'e' || byte == b'E') { exponentAt = index; break }
+        if (byte == b'.') { fractional = true; continue }
+        digits.add(byte)
+        if (fractional) { fractionDigits += 1 }
+    }
+    var first: Int64 = 0
+    while (first < digits.size && digits[first] == b'0') { first += 1 }
+    if (first == digits.size) { return "0" }
+    var end = digits.size
+    while (end > first && digits[end - 1] == b'0') { end -= 1 }
+    let exponent = if (exponentAt < bytes.size) {
+        String.fromUtf8(bytes[(exponentAt + 1)..])
+    } else { "0" }
+    let adjusted = addJsonRpcExponent(exponent, digits.size - end - fractionDigits)
+    let coefficientStart = first
+    let coefficient = String.fromUtf8(Array<Byte>(end - first, { index => digits[coefficientStart + index] }))
+    (if (negative) { "-" } else { "" }) + coefficient + "e" + adjusted
+}
+
+func jsonRpcUnsignedDigits(value: String): String {
+    let bytes = value.toArray()
+    var first: Int64 = if (bytes[0] == b'-' || bytes[0] == b'+') { 1 } else { 0 }
+    while (first < bytes.size - 1 && bytes[first] == b'0') { first += 1 }
+    String.fromUtf8(bytes[first..])
+}
+
+func addJsonRpcExponent(value: String, adjustment: Int64): String {
+    let left = jsonRpcUnsignedDigits(value)
+    let right = jsonRpcUnsignedDigits(adjustment.toString())
+    let leftNegative = value.startsWith("-") && left != "0"
+    let rightNegative = adjustment < 0
+    if (leftNegative == rightNegative) {
+        let sum = jsonRpcMagnitudeArithmetic(left, right, false)
+        return (if (leftNegative && sum != "0") { "-" } else { "" }) + sum
+    }
+    var leftGreater = left.size > right.size
+    if (left.size == right.size) {
+        let a = left.toArray()
+        let b = right.toArray()
+        for (index in 0..a.size) {
+            if (a[index] != b[index]) { leftGreater = a[index] > b[index]; break }
+        }
+    }
+    if (left == right) { return "0" }
+    let difference = if (leftGreater) {
+        jsonRpcMagnitudeArithmetic(left, right, true)
+    } else { jsonRpcMagnitudeArithmetic(right, left, true) }
+    let negative = if (leftGreater) { leftNegative } else { rightNegative }
+    (if (negative) { "-" } else { "" }) + difference
+}
+
+// Addition, or subtraction where the left magnitude is greater than the right.
+func jsonRpcMagnitudeArithmetic(left: String, right: String, subtract: Bool): String {
+    let a = left.toArray()
+    let b = right.toArray()
+    let reversed = ArrayList<Byte>()
+    var offset: Int64 = 0
+    var carry: Int64 = 0
+    while (offset < a.size || offset < b.size) {
+        let x: Int64 = if (offset < a.size) { Int64(a[a.size - 1 - offset] - b'0') } else { 0 }
+        let y: Int64 = if (offset < b.size) { Int64(b[b.size - 1 - offset] - b'0') } else { 0 }
+        var digit = if (subtract) { x - y - carry } else { x + y + carry }
+        if (subtract) {
+            carry = if (digit < 0) { 1 } else { 0 }
+            if (digit < 0) { digit += 10 }
+        } else {
+            carry = digit / 10
+            digit %= 10
+        }
+        reversed.add(UInt8(digit) + b'0')
+        offset += 1
+    }
+    if (carry > 0) { reversed.add(UInt8(carry) + b'0') }
+    while (reversed.size > 1 && reversed[reversed.size - 1] == b'0') {
+        reversed.remove(at: reversed.size - 1)
+    }
+    String.fromUtf8(Array<Byte>(reversed.size, { index => reversed[reversed.size - 1 - index] }))
 }

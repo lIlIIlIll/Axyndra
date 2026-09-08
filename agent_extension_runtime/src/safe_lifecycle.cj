@@ -198,13 +198,15 @@ public class ExtensionGenerationDiagnostic {
     public let state: ExtensionLifecycleState
     public let inFlight: UInt64
     public let accepting: Bool
+    public let error: String
 
-    public init(extensionId: String, generation: UInt64, state: ExtensionLifecycleState, inFlight: UInt64, accepting: Bool) {
+    public init(extensionId: String, generation: UInt64, state: ExtensionLifecycleState, inFlight: UInt64, accepting: Bool, error!: String = "") {
         this.extensionId = extensionId
         this.generation = generation
         this.state = state
         this.inFlight = inFlight
         this.accepting = accepting
+        this.error = error
     }
 }
 
@@ -214,6 +216,7 @@ class ExtensionGenerationRecord {
     var state: ExtensionLifecycleState
     var inFlight: UInt64 = 0u64
     var accepting: Bool = false
+    var error: String = ""
 
     init(provider: CompiledExtensionProvider, generation: UInt64) {
         this.provider = provider
@@ -328,7 +331,8 @@ public class SafeExtensionLifecycleRuntime {
         let values = ArrayList<ExtensionGenerationDiagnostic>()
         for (record in records) {
             values.add(ExtensionGenerationDiagnostic(
-                record.provider.id, record.generation, record.state, record.inFlight, record.accepting
+                record.provider.id, record.generation, record.state, record.inFlight, record.accepting,
+                error: record.error
             ))
         }
         values.toArray()
@@ -338,26 +342,53 @@ public class SafeExtensionLifecycleRuntime {
         if (generation == 0u64) { return SafeLifecycleResult.Err("generation must be positive") }
         let record = ExtensionGenerationRecord(provider, generation)
         record.state = ExtensionLifecycleState.Validated
-        match (host.mount(provider, generation)) {
+        match (callHost({ => host.mount(provider, generation) })) {
             case HostLifecycleResult.Err(code, message) =>
-                match (host.dispose(provider.id, generation)) {
+                record.error = "${code}: ${message}"
+                match (callHost({ => host.dispose(provider.id, generation) })) {
                     case HostLifecycleResult.Ok => record.state = ExtensionLifecycleState.Failed
-                    case HostLifecycleResult.Err(_, _) => record.state = ExtensionLifecycleState.Quarantined
+                    case HostLifecycleResult.Err(cleanupCode, cleanupMessage) =>
+                        record.state = ExtensionLifecycleState.Quarantined
+                        record.error += "; cleanup: ${cleanupCode}: ${cleanupMessage}"
                 }
                 records.add(record)
-                return SafeLifecycleResult.Err("${code}: ${message}")
+                return SafeLifecycleResult.Err(record.error)
             case HostLifecycleResult.Ok => record.state = ExtensionLifecycleState.Mounted
         }
-        match (host.activate(provider.id, generation)) {
+        match (callHost({ => host.activate(provider.id, generation) })) {
             case HostLifecycleResult.Err(code, message) =>
-                record.state = ExtensionLifecycleState.Failed
+                record.error = "${code}: ${message}"
+                // A failed activation may already have published resources.
+                // This generation has never admitted a lease, so dispose it.
+                var cleanupFailed = false
+                match (callHost({ => host.stopAdmitting(provider.id, generation) })) {
+                    case HostLifecycleResult.Ok => ()
+                    case HostLifecycleResult.Err(cleanupCode, cleanupMessage) =>
+                        cleanupFailed = true
+                        record.error += "; stop admission: ${cleanupCode}: ${cleanupMessage}"
+                }
+                match (callHost({ => host.dispose(provider.id, generation) })) {
+                    case HostLifecycleResult.Ok => ()
+                    case HostLifecycleResult.Err(cleanupCode, cleanupMessage) =>
+                        cleanupFailed = true
+                        record.error += "; cleanup: ${cleanupCode}: ${cleanupMessage}"
+                }
+                record.state = if (cleanupFailed) {
+                    ExtensionLifecycleState.Quarantined
+                } else { ExtensionLifecycleState.Failed }
                 records.add(record)
-                return SafeLifecycleResult.Err("${code}: ${message}")
+                return SafeLifecycleResult.Err(record.error)
             case HostLifecycleResult.Ok =>
                 record.state = ExtensionLifecycleState.Active
                 record.accepting = true
                 records.add(record)
                 SafeLifecycleResult.Ok(())
+        }
+    }
+
+    private func callHost(action: () -> HostLifecycleResult): HostLifecycleResult {
+        try { action() } catch (error: Exception) {
+            HostLifecycleResult.Err("host.lifecycle_exception", error.message)
         }
     }
 
@@ -376,6 +407,7 @@ public class SafeExtensionLifecycleRuntime {
                 SafeLifecycleResult.Ok(())
             case HostLifecycleResult.Err(code, message) =>
                 record.state = ExtensionLifecycleState.Quarantined
+                record.error = "${code}: ${message}"
                 SafeLifecycleResult.Err("${code}: ${message}")
         }
     }

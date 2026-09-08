@@ -991,9 +991,8 @@ class AgentScreen {
                     return UpdateResult.exit()
                 }
                 idleCtrlCArmed = false
-                // Card focus navigation when the composer is empty: j/k move focus,
-                // space toggles the focused card.
-                if (composer.area.value.isEmpty()) {
+                // Alt explicitly focuses transcript navigation; plain text always edits the composer.
+                if (key.modifiers.alt && composer.area.value.isEmpty()) {
                     if (r == r'y' || r == r'Y') {
                         return copyFocusedCard()
                     }
@@ -4651,7 +4650,7 @@ class AgentScreen {
     }
 
     // Card focus navigation over the visible cards (transcriptRanges).
-    // j/k move the focus; Enter/Space toggle the focused card. Up/Down stay
+    // Alt+j/k move the focus; Enter/Alt+Space toggle the focused card. Up/Down stay
     // reserved for composer history navigation.
     private func moveCardFocus(delta: Int64): Unit {
         if (transcriptRanges.isEmpty()) {
@@ -7885,10 +7884,16 @@ class AgentScreen {
     }
 
     func cardFocusNavigationObserved(): Bool {
-        // j moves card focus, Enter toggles the focused card, and the
+        // Alt+j moves card focus, Enter toggles the focused card, and the
         // focused card title carries the › marker.
         composer.area.setValue("")
         UiReducer.reduce(ui, UiEvent.ClearApproval)
+        for (r in [r'h', r'j', r'k', r'l', r'y', r'H', r'J', r'K', r'L', r'Y']) {
+            composer.area.setValue("")
+            let _ = update(Event.KeyDown(KeyEvent(KeyCode.Char(r))))
+            if (composer.area.value != r.toString()) { return false }
+        }
+        composer.area.setValue("")
         let _ = AppTestRunner.run(
             HeadlessScript().tick(count: 2),
             {frame => render(frame)},
@@ -7898,7 +7903,7 @@ class AgentScreen {
                 ticks: 2
             )
         )
-        let _ = update(Event.KeyDown(KeyEvent(KeyCode.Char(r'j'))))
+        let _ = update(Event.KeyDown(KeyEvent(KeyCode.Char(r'j'), modifiers: KeyModifier(alt: true))))
         if (focusedCardIndex < 0 || focusedCardId == "") {
             return false
         }

@@ -86,6 +86,8 @@ class ProductDaemonState {
     var restartCount: Int64 = 0
     var consecutiveFailures: Int64 = 0
     var generation: Int64 = 0
+    var readyLogCursor: Int64 = 0
+    var launching = false
     var stopRequested: Bool = false
     var logBaseCursor: Int64 = 0
     var startIdentity: String = ""
@@ -220,13 +222,13 @@ class ProductProcessSupervisor {
         } finally {
             lock.unlock()
         }
-        match (launchState(state, false)) {
-            case Result.Ok(_) => ()
+        let generation = match (launchState(state, false)) {
+            case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
         var timedOut = false
         if (hasReadiness(spec)) {
-            timedOut = !waitForReady(state, spec.readyTimeoutMillis)
+            timedOut = !waitForReady(state, spec.readyTimeoutMillis, generation)
         }
         Result.Ok(ToolResult(
             call.callId,
@@ -381,11 +383,12 @@ class ProductProcessSupervisor {
             lock.unlock()
         }
         match (launchState(state, true)) {
-            case Result.Ok(_) =>
+            case Result.Ok(generation) =>
                 if (hasReadiness(state.spec)) {
                     let _ = waitForReady(
                         state,
-                        state.spec.readyTimeoutMillis
+                        state.spec.readyTimeoutMillis,
+                        generation
                     )
                 }
                 Result.Ok(ToolResult(
@@ -725,12 +728,35 @@ class ProductProcessSupervisor {
 
     private func launchState(
         state: ProductDaemonState,
-        restarting: Bool
-    ): Result<Unit> {
+        restarting: Bool,
+        expectedGeneration!: Int64 = -1
+    ): Result<Int64> {
+        let generation: Int64
+        lock.lock()
+        try {
+            let registered = findLocked(state.spec.name)
+            if (registered.isNone() || registered.getOrThrow().id != state.id ||
+                state.launching || state.process.isSome() || state.stopRequested ||
+                (expectedGeneration >= 0 && state.generation != expectedGeneration)) {
+                return supervisorError<Int64>("hub.process_launch_superseded", "process launch was stopped or superseded")
+            }
+            state.generation += 1
+            generation = state.generation
+            state.launching = true
+        } finally { lock.unlock() }
         try {
             let spec = state.spec
-            if (brokerMode && !restarting && state.logPath != "") {
-                File.writeTo(state.logPath, [])
+            lock.lock()
+            let admitted = try {
+                let current = state.generation == generation && !state.stopRequested
+                if (current && brokerMode && !restarting && state.logPath != "") {
+                    File.writeTo(state.logPath, [])
+                }
+                current
+            } finally { lock.unlock() }
+            if (!admitted) {
+                return failDaemonLaunch(state, generation, AgentError(AgentErrorKind.Cancelled,
+                    "hub.process_launch_superseded", "process launch was stopped or superseded"))
             }
             var launchExecutable = spec.application
             let launchArguments = ArrayList<String>()
@@ -767,14 +793,20 @@ class ProductProcessSupervisor {
                 errorCode: "hub.process_start_failed"
             )) {
                 case Result.Ok(value) => value
-                case Result.Err(error) => return failDaemonLaunch(state, error)
+                case Result.Err(error) => return failDaemonLaunch(state, generation, error)
             }
             let process = opened.process
-            let generation: Int64
             lock.lock()
             try {
-                state.generation += 1
-                generation = state.generation
+                if (state.generation != generation || state.stopRequested) {
+                    lock.unlock()
+                    try { let _ = process.close() } finally { lock.lock() }
+                    settleStoppedLaunchLocked(state)
+                    lock.unlock()
+                    try { persistState(state) } finally { lock.lock() }
+                    return supervisorError<Int64>("hub.process_launch_superseded", "process launch was stopped or superseded")
+                }
+                state.launching = false
                 state.process = Some(process)
                 state.state = if (hasReadiness(spec)) {
                     "starting"
@@ -793,6 +825,7 @@ class ProductProcessSupervisor {
                 state.exitedAt = 0
                 state.readyAt = 0
                 state.readyMatch = ""
+                state.readyLogCursor = state.logBaseCursor + state.output.size
                 state.secretValues = opened.secretValues
                 if (!restarting) { state.stopRequested = false }
             } finally {
@@ -823,38 +856,45 @@ class ProductProcessSupervisor {
                 finishProcess(state, generation, code)
             }
             let _ = monitor
-            Result.Ok(())
-        } catch (error: Exception) {
-            lock.lock()
-            try {
-                state.state = "failed"
-                state.exitReason = error.message
-                state.exitedAt = nowMillis()
-            } finally {
-                lock.unlock()
+            if (hasReadiness(spec)) {
+                let ready = spawn { let _ = waitForReady(state, spec.readyTimeoutMillis, generation) }
+                let _ = ready
             }
-            persistState(state)
-            supervisorError<Unit>(
-                "hub.process_start_failed",
-                error.message
-            )
+            Result.Ok(generation)
+        } catch (error: Exception) {
+            failDaemonLaunch(state, generation, AgentError(
+                AgentErrorKind.Transport, "hub.process_start_failed", error.message))
         }
     }
 
     private func failDaemonLaunch(
         state: ProductDaemonState,
+        generation: Int64,
         error: AgentError
-    ): Result<Unit> {
+    ): Result<Int64> {
         lock.lock()
         try {
-            state.state = "failed"
-            state.exitReason = error.message
-            state.exitedAt = nowMillis()
-        } finally {
-            lock.unlock()
-        }
+            if (state.generation == generation) {
+                state.launching = false
+                state.state = "failed"
+                state.exitReason = error.message
+                state.exitedAt = nowMillis()
+            } else {
+                settleStoppedLaunchLocked(state)
+            }
+        } finally { lock.unlock() }
         persistState(state)
         Result.Err(error)
+    }
+
+    private func settleStoppedLaunchLocked(state: ProductDaemonState): Unit {
+        if (state.launching && state.stopRequested) {
+            state.launching = false
+            state.state = "exited"
+            state.recoveryRequired = false
+            state.exitedAt = nowMillis()
+            state.exitReason = "in-flight launch stopped before publication"
+        }
     }
 
     private func finishProcess(
@@ -906,7 +946,7 @@ class ProductProcessSupervisor {
             } finally {
                 lock.unlock()
             }
-            let _ = launchState(state, true)
+            let _ = launchState(state, true, expectedGeneration: generation)
         }
     }
 
@@ -969,7 +1009,8 @@ class ProductProcessSupervisor {
 
     private func waitForReady(
         state: ProductDaemonState,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        generation: Int64
     ): Bool {
         let started = nowMillis()
         while (true) {
@@ -977,7 +1018,11 @@ class ProductProcessSupervisor {
             let currentState: String
             lock.lock()
             try {
-                output = safeUtf8(state.output.toArray())
+                if (state.generation != generation || state.stopRequested ||
+                    (state.state != "starting" && state.state != "ready")) { return false }
+                if (state.state == "ready") { return true }
+                let offset = max(0, state.readyLogCursor - state.logBaseCursor)
+                output = safeUtf8(state.output.toArray()[offset..])
                 currentState = state.state
             } finally {
                 lock.unlock()
@@ -1000,7 +1045,9 @@ class ProductProcessSupervisor {
             if (logReady && portReady) {
                 lock.lock()
                 try {
-                    if (!daemonTerminal(state.state)) {
+                    if (state.generation != generation || state.stopRequested ||
+                        (state.state != "starting" && state.state != "ready")) { return false }
+                    if (state.state == "starting") {
                         state.state = "ready"
                         state.readyAt = nowMillis()
                         state.readyMatch = matchText
@@ -1026,6 +1073,7 @@ class ProductProcessSupervisor {
         let recoveredPid: Int64
         let recoveredIdentity: String
         let recovered: Bool
+        let pendingLaunch: Bool
         lock.lock()
         try {
             state.stopRequested = true
@@ -1033,12 +1081,41 @@ class ProductProcessSupervisor {
             recoveredPid = state.pid
             recoveredIdentity = state.startIdentity
             recovered = state.recoveryRequired
+            pendingLaunch = state.launching
             if (process.isSome()) { state.state = "stopping" }
+            else if (!recovered) {
+                state.generation += 1
+                state.state = if (pendingLaunch) { "stopping" } else { "exited" }
+                if (!pendingLaunch) { state.exitedAt = nowMillis() }
+                state.readyAt = 0
+                state.readyMatch = ""
+                state.exitReason = "stopped before restart"
+            }
         } finally {
             lock.unlock()
         }
         match (process) {
             case None =>
+                if (pendingLaunch) {
+                    let started = nowMillis()
+                    while (true) {
+                        lock.lock()
+                        let pending = try { state.launching } finally { lock.unlock() }
+                        if (!pending) { break }
+                        if (nowMillis() - started >= timeoutMillis + 1000) {
+                            lock.lock()
+                            try {
+                                if (!state.launching) { break }
+                                state.state = "recovery_required"
+                                state.recoveryRequired = true
+                                state.exitReason = "in-flight launch did not finish cleanup before stop deadline"
+                            } finally { lock.unlock() }
+                            persistState(state)
+                            return supervisorError<Unit>("hub.process_stop_unconfirmed", state.exitReason)
+                        }
+                        sleep(Duration.millisecond * 10)
+                    }
+                }
                 if (recovered) {
                     if (recoveredPid > 0) {
                         stopRecoveredProcess(
@@ -1318,6 +1395,8 @@ class ProductProcessSupervisor {
             let path: String
             lock.lock()
             try {
+                let registered = findLocked(state.spec.name)
+                if (registered.isNone() || registered.getOrThrow().id != state.id) { return }
                 encoded = encodeAgentValue(daemonRecordValueLocked(state))
                 path = brokerRecordPath(state.spec.name)
             } finally {

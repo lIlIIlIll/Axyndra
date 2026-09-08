@@ -148,6 +148,7 @@ public class AgentThreadRuntime {
     private let checkpointRepository: ?ContextCheckpointRepository
     private let nowMillis: () -> Int64
     private var active: ?OwnedActiveRun = None
+    private var settling = false
 
     public init(
         coordinator: ThreadCoordinator,
@@ -209,6 +210,7 @@ public class AgentThreadRuntime {
     ): Result<ThreadItem> {
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             match (active) {
                 case Some(value) => coordinator.appendUserInput(
                     value.turnId,
@@ -247,6 +249,7 @@ public class AgentThreadRuntime {
         }
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             let itemId = ItemId("external-item-" + normalized)
             let snapshot = coordinator.snapshot()
             for (item in snapshot.items where item.id.value == itemId.value) {
@@ -361,6 +364,7 @@ public class AgentThreadRuntime {
     public func ownTask(name: String, future: Future<Unit>): Result<Unit> {
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             match (active) {
                 case Some(value) => value.lifecycle.scope.own(name, future)
                 case None => runtimeConflict("runtime.no_active_run", "Thread has no active Run")
@@ -373,6 +377,7 @@ public class AgentThreadRuntime {
     public func childCancellationToken(deadlineMillis!: Int64 = 0): Result<CancellationToken> {
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             match (active) {
                 case Some(value) => Result.Ok(
                     value.lifecycle.scope.childToken(deadlineMillis: deadlineMillis)
@@ -467,6 +472,9 @@ public class AgentThreadRuntime {
             )
             match (resolution) {
                 case OperationResolution.WaitingApproval(_) =>
+                    if (settling) {
+                        return runtimeConflict("runtime.run_settling", "Run is settling")
+                    }
                     match (transitionOwned(owned, RunState.WaitingApproval)) {
                         case Result.Ok(_) => Result.Ok(RuntimeOperationResolution(resolution))
                         case Result.Err(error) => Result.Err(error)
@@ -528,6 +536,7 @@ public class AgentThreadRuntime {
     public func resumeAfterApproval(): Result<RunTransition> {
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             match (active) {
                 case Some(value) => transitionOwned(value, RunState.Running)
                 case None => runtimeConflict(
@@ -542,6 +551,7 @@ public class AgentThreadRuntime {
     public func pauseForApproval(): Result<RunTransition> {
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             match (active) {
                 case Some(value) => transitionOwned(value, RunState.WaitingApproval)
                 case None => runtimeConflict(
@@ -588,8 +598,12 @@ public class AgentThreadRuntime {
         joinTimeoutMillis: Int64,
         reason!: ?CancellationReason = None
     ): Result<RuntimeSettlement> {
+        if (joinTimeoutMillis < 0) {
+            throw IllegalArgumentException("run join timeout must not be negative")
+        }
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             let owned = match (active) {
                 case Some(value) => value
                 case None => return runtimeConflict(
@@ -600,8 +614,18 @@ public class AgentThreadRuntime {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            let _ = owned.lifecycle.scope.cancel(reason: reason)
-            let report = owned.lifecycle.joinOwned(joinTimeoutMillis)
+            settling = true
+            lock.unlock()
+            let report = try {
+                let _ = owned.lifecycle.scope.cancel(reason: reason)
+                owned.lifecycle.joinOwned(joinTimeoutMillis)
+            } catch (error: Exception) {
+                lock.lock()
+                try {
+                    markSettlementRecovery(owned, "owned_settlement_exception")
+                } finally { lock.unlock() }
+                return runtimeConflict("runtime.owned_settlement_failed", error.message)
+            } finally { lock.lock() }
             let effective = effectiveRunTerminal(RunState.Cancelled, report)
             let finishedAtMillis = nowMillis()
             let cancellationText = match (reason) {
@@ -631,10 +655,7 @@ public class AgentThreadRuntime {
             let thread = match (threadResult) {
                 case Result.Ok(value) => value
                 case Result.Err(error) =>
-                    let _ = transitionOwned(
-                        owned, RunState.RecoveryRequired,
-                        reason: "durable_cancel_failed"
-                    )
+                    markSettlementRecovery(owned, "durable_cancel_failed")
                     return Result.Err(error)
             }
             let _ = owned.lifecycle.machine.commitPreview(terminalProposal).value().getOrThrow()
@@ -643,6 +664,7 @@ public class AgentThreadRuntime {
             )
             let run = activeSnapshot(owned)
             active = None
+            settling = false
             Result.Ok(RuntimeSettlement(thread, run, report))
         } finally {
             lock.unlock()
@@ -660,15 +682,29 @@ public class AgentThreadRuntime {
                 "runtime.invalid_terminal", "Run may finish only as completed, failed, or recovery-required"
             )
         }
+        if (joinTimeoutMillis < 0) {
+            throw IllegalArgumentException("run join timeout must not be negative")
+        }
         lock.lock()
         try {
+            if (settling) { return runtimeConflict("runtime.run_settling", "Run is settling") }
             let owned = match (active) {
                 case Some(value) => value
                 case None => return runtimeConflict(
                     "runtime.no_active_run", "Thread has no active Run to finish"
                 )
             }
-            let report = owned.lifecycle.joinOwned(joinTimeoutMillis)
+            settling = true
+            lock.unlock()
+            let report = try {
+                owned.lifecycle.joinOwned(joinTimeoutMillis)
+            } catch (error: Exception) {
+                lock.lock()
+                try {
+                    markSettlementRecovery(owned, "owned_settlement_exception")
+                } finally { lock.unlock() }
+                return runtimeConflict("runtime.owned_settlement_failed", error.message)
+            } finally { lock.lock() }
             let effective = effectiveRunTerminal(terminal, report)
             let settlementReason = if (reason != "") {
                 reason
@@ -701,10 +737,7 @@ public class AgentThreadRuntime {
             let thread = match (threadResult) {
                 case Result.Ok(value) => value
                 case Result.Err(error) =>
-                    let _ = transitionOwned(
-                        owned, RunState.RecoveryRequired,
-                        reason: "durable_settlement_failed"
-                    )
+                    markSettlementRecovery(owned, "durable_settlement_failed")
                     return Result.Err(error)
             }
             let _ = owned.lifecycle.machine.commitPreview(terminalProposal).value().getOrThrow()
@@ -713,9 +746,20 @@ public class AgentThreadRuntime {
             )
             let run = activeSnapshot(owned)
             active = None
+            settling = false
             Result.Ok(RuntimeSettlement(thread, run, report))
         } finally {
             lock.unlock()
+        }
+    }
+
+    private func markSettlementRecovery(owned: OwnedActiveRun, reason: String): Unit {
+        match (transitionOwned(owned, RunState.RecoveryRequired, reason: reason)) {
+            case Result.Ok(_) => ()
+            case Result.Err(_) =>
+                // Storage failure cannot leave the live owner claiming Running
+                // after its task scope has already stopped accepting work.
+                let _ = owned.lifecycle.machine.transition(RunState.RecoveryRequired, reason: reason)
         }
     }
 

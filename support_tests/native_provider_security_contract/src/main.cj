@@ -3,6 +3,7 @@ package native_provider_security_contract
 import agent_domain as domain
 import agent_product.*
 import model_adapters.*
+import mcp4cj.*
 import std.collection.*
 import std.env.*
 import std.sync.*
@@ -33,6 +34,9 @@ main(): Int64 {
     expectStreamErrorRedacted(transport, loopbackBase)
     expectExceptionRedacted(transport, loopbackBase)
     expectPartialStreamTimeout(transport, loopbackBase)
+    expectPartialStreamTimeout(transport, loopbackBase, caseName: "partial-active-timeout")
+    expectPartialReadFailure(transport, loopbackBase)
+    expectMcpTlsVerification("https://127.0.0.1:" + arguments[2])
     expectPublicCancellationLifecycle(transport, loopbackBase)
     expectNativeRemoteHttpRejected(transport)
     expectInvalidCertificateRejected(transport, "https://127.0.0.1:" + arguments[2])
@@ -130,19 +134,22 @@ func expectPublicCancellationLifecycle(
 
 func expectPartialStreamTimeout(
     transport: NativeProviderTransport,
-    baseUrl: String
+    baseUrl: String,
+    caseName!: String = "partial-timeout"
 ): Unit {
+    let delivered = AtomicInt64(0)
     match (transport.post(
-        provider("partial-timeout", baseUrl, timeoutMillis: 100),
-        "{\"case\":\"partial-timeout\"}",
+        provider(caseName, baseUrl, timeoutMillis: 100),
+        "{\"case\":\"" + caseName + "\"}",
         true,
         "native-security-partial-timeout",
-        {_ => ()}
+        {_ => let _ = delivered.fetchAdd(1)}
     )) {
         case domain.Result.Err(error) => match (error.kind) {
             case domain.AgentErrorKind.Timeout => expect(
                 error.code == "model.timeout" &&
-                    error.field("provider_id") == Some("partial-timeout"),
+                    error.field("provider_id") == Some(caseName) && delivered.load() > 0 &&
+                    !error.retryable && !error.fallbackAllowed && error.field("partial_stream") == Some("true"),
                 "a partial SSE body that outlives the request limit remains a timeout"
             )
             case _ => throw IllegalStateException(
@@ -350,4 +357,32 @@ func allRedacted(values: Array<String>): Bool {
 
 func expect(condition: Bool, label: String): Unit {
     if (!condition) { throw IllegalStateException(label) }
+}
+
+func expectPartialReadFailure(transport: NativeProviderTransport, baseUrl: String): Unit {
+    let delivered = AtomicInt64(0)
+    match (transport.post(provider("partial-read-error", baseUrl),
+        "{\"case\":\"partial-read-error\"}", true, "partial-read-error", {_ => let _ = delivered.fetchAdd(1)})) {
+        case domain.Result.Err(error) => expect(delivered.load() > 0 && !error.retryable && !error.fallbackAllowed &&
+            error.field("partial_stream") == Some("true"),
+            "partial stream evidence survives a malformed chunk read exception")
+        case _ => throw IllegalStateException("malformed chunk unexpectedly succeeded")
+    }
+}
+
+func expectMcpTlsVerification(baseUrl: String): Unit {
+    let transport = match (openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(baseUrl + "/mcp"))) {
+        case McpResult.Ok(value) => value
+        case McpResult.Err(error) => throw IllegalStateException(error.message)
+    }
+    let client = McpClient(transport, McpRequestMeta())
+    try {
+        match (client.discover()) {
+            case McpResult.Err(error) =>
+                expect(!error.message.contains("TLS must be configured") &&
+                    (error.message.contains("certificate") || error.message.contains("Certificate")),
+                    "MCP HTTPS initializes TLS and rejects the local untrusted certificate")
+            case _ => throw IllegalStateException("MCP accepted an untrusted TLS certificate")
+        }
+    } finally { let _ = client.close() }
 }

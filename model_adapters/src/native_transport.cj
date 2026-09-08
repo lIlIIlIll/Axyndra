@@ -84,7 +84,7 @@ public class NativeProviderTransport <: ProviderTransport {
             case domain.Result.Ok(_) => ()
         }
         let startedAt = MonoTime.now()
-        var emitted = false
+        let emitted = AtomicBool(false)
         try {
             let builder = HttpRequestBuilder()
                 .url(provider.endpoint())
@@ -114,9 +114,11 @@ public class NativeProviderTransport <: ProviderTransport {
                 return cancelledNative(requestId)
             }
             let read = readNativeBody(response.body, streaming, { chunk =>
+                // Preserve delivery evidence even if a later body read throws.
                 chunks(redactNativeProviderText(chunk, apiKey))
+                emitted.store(true)
             })
-            emitted = read.emitted
+            emitted.store(read.emitted)
             if (nativeCancelled(requestId)) {
                 return cancelledNative(requestId)
             }
@@ -136,11 +138,12 @@ public class NativeProviderTransport <: ProviderTransport {
                     domain.AgentErrorKind.Timeout,
                     "model.timeout",
                     "provider response timed out before a terminal event",
-                    retryable: !emitted,
-                    fallbackAllowed: !emitted,
+                    retryable: !emitted.load(),
+                    fallbackAllowed: !emitted.load(),
                     fields: [
                         domain.ErrorField("provider_id", provider.id),
-                        domain.ErrorField("elapsed_ms", elapsedMillis.toString())
+                        domain.ErrorField("elapsed_ms", elapsedMillis.toString()),
+                            domain.ErrorField("partial_stream", emitted.load().toString())
                     ]
                 ))
             }
@@ -170,27 +173,28 @@ public class NativeProviderTransport <: ProviderTransport {
                         domain.AgentErrorKind.Timeout,
                         "model.timeout",
                         message,
-                        retryable: !emitted,
-                        fallbackAllowed: !emitted,
+                        retryable: !emitted.load(),
+                        fallbackAllowed: !emitted.load(),
                         fields: [
                             domain.ErrorField("provider_id", provider.id),
-                            domain.ErrorField("elapsed_ms", elapsedMillis.toString())
+                            domain.ErrorField("elapsed_ms", elapsedMillis.toString()),
+                            domain.ErrorField("partial_stream", emitted.load().toString())
                         ]
                     ))
                 } else {
                     domain.Result.Err(domain.AgentError(
                         domain.AgentErrorKind.Transport,
-                        if (streaming && emitted) {
+                        if (streaming && emitted.load()) {
                             "model.streaming_interrupted"
                         } else {
                             "model.transport_internal"
                         },
                         message,
-                        retryable: !emitted,
-                        fallbackAllowed: !emitted,
+                        retryable: !emitted.load(),
+                        fallbackAllowed: !emitted.load(),
                         fields: [
                             domain.ErrorField("provider_id", provider.id),
-                            domain.ErrorField("partial_stream", emitted.toString())
+                            domain.ErrorField("partial_stream", emitted.load().toString())
                         ]
                     ))
                 }
