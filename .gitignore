@@ -37,3 +37,5 @@ perf_results/
 !docs/tui-goldens/60x18.txt
 !docs/tui-goldens/80x24.txt
 !scripts/release_contracts.txt
+
+!scripts/product_unit_inventory.json

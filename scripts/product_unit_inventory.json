@@ -1,0 +1,68 @@
+{
+  "libs/yjson_support": [
+    "libs/yjson_support/src/json_support_test.cj"
+  ],
+  "libs/jsonrpc4cj": [
+    "libs/jsonrpc4cj/src/jsonrpc_test.cj"
+  ],
+  "libs/process4cj": [
+    "libs/process4cj/src/process_test.cj"
+  ],
+  "libs/mcp4cj": [
+    "libs/mcp4cj/src/mcp_test.cj",
+    "libs/mcp4cj/src/protocol_2026_test.cj"
+  ],
+  "libs/sandbox4cj": [
+    "libs/sandbox4cj/src/sandbox_test.cj"
+  ],
+  "libs/skill_runtime": [
+    "libs/skill_runtime/src/skills_test.cj"
+  ],
+  "libs/lsp4cj": [
+    "libs/lsp4cj/src/lsp_test.cj"
+  ],
+  "libs/dap4cj": [
+    "libs/dap4cj/src/dap_test.cj"
+  ],
+  "agent_mcp": [
+    "agent_mcp/src/client_test.cj"
+  ],
+  "model_adapters": [
+    "model_adapters/src/adapters_test.cj"
+  ],
+  "extensions/workspace_write_extension": [
+    "extensions/workspace_write_extension/src/write_extension_test.cj"
+  ],
+  "extensions/ast_extension": [
+    "extensions/ast_extension/src/ast_extension_test.cj"
+  ],
+  "extensions/web_search_extension": [
+    "extensions/web_search_extension/src/web_search_extension_test.cj"
+  ],
+  "axyndra_agent_testkit": [
+    "axyndra_agent_testkit/src/testkit_test.cj"
+  ],
+  "agent_product": [
+    "agent_product/src/application_handoff_test.cj",
+    "agent_product/src/provider_dialect_test.cj"
+  ],
+  "agent_rpc": [
+    "agent_rpc/src/acp_event_test.cj"
+  ],
+  "agent_tui": [
+    "agent_tui/src/ask_controller_test.cj",
+    "agent_tui/src/event_cards_test.cj",
+    "agent_tui/src/perf_trace_test.cj",
+    "agent_tui/src/plan_review_controller_test.cj",
+    "agent_tui/src/streaming_transcript_test.cj",
+    "agent_tui/src/todo_controller_test.cj",
+    "agent_tui/src/tool_output_preview_test.cj",
+    "agent_tui/src/tui_mailbox_test.cj"
+  ],
+  "agent_app": [
+    "agent_app/src/acp_config_test.cj",
+    "agent_app/src/gallery_cli_test.cj",
+    "agent_app/src/main_test.cj",
+    "agent_app/src/tui_tool_projection_test.cj"
+  ]
+}

@@ -7,6 +7,7 @@ import yjson.*
 import agent_core.*
 import agent_domain.*
 import agent_product.*
+import agent_skills.*
 import model_adapters.*
 import std.fs.*
 import tool_runtime.*
@@ -18,11 +19,59 @@ main(): Int64 {
     let temporary = Directory.createTemp("target").toString()
     try {
         verifyProductPrompt(temporary)
+        verifySkillDiscovery(temporary + "/discovery")
         println("product prompt contract passed")
         0
     } finally {
         let _ = removeIfExists(temporary, recursive: true)
     }
+}
+
+func verifySkillDiscovery(temporary: String): Unit {
+    let settings = temporary + "/settings"
+    let workspace = temporary + "/workspace"
+    writeSkill(settings + "/managed-skills/a", "first", "managed-a")
+    writeSkill(settings + "/managed-skills/b", "second", "managed-b")
+    writeSkill(settings + "/skills/a", "second", "user-winner")
+    let runtime = ProductSkillRuntime(settings, workspace)
+    expect(runtime.metadata().size == 1 && runtime.metadata()[0].id == "a" &&
+        runtime.metadata()[0].name == "second", "user Skill removes all crossed managed id/name conflicts")
+    writeSkill(workspace + "/.omp/skills/c", "second", "workspace-winner")
+    let selected = runtime.resolve("$second", SkillStackSnapshot([], []))
+    expect(runtime.metadata().size == 1 && selected.active.size == 1 &&
+        selected.active[0].instructions.contains("workspace-winner"),
+        "workspace Skill wins over user and managed definitions")
+    writeSkill(workspace + "/.omp/skills/d", "second", "lexical-winner")
+    expect(runtime.metadata().size == 1 && runtime.metadata()[0].id == "d",
+        "same-layer conflicts have a stable sorted-directory winner")
+    writeSkill(workspace + "/.omp/skills/review", "Review Changes", "short")
+    writeSkill(workspace + "/.omp/skills/review-extra", "审查", "long")
+    writeSkill(workspace + "/.omp/skills/review.extra", "Extended.Review", "dotted")
+    for (prompt in ["$review_var", "$review-extra-more", "x$review", "中$review",
+        "$review中", "$review\u{0301}"]) {
+        expect(runtime.resolve(prompt, SkillStackSnapshot([], [])).active.isEmpty(),
+            "partial or embedded Skill marker does not activate: " + prompt)
+    }
+    for (prompt in ["$review", "($review)", "$review。", "请用：$review！", "\u{3000}$review\u{00a0}",
+        "$Review Changes"]) {
+        let active = runtime.resolve(prompt, SkillStackSnapshot([], [])).active
+        expect(active.size == 1 && active[0].descriptor.id == "review",
+            "complete Skill marker respects text boundaries: " + prompt)
+    }
+    for (prompt in ["$review-extra", "《$审查》"]) {
+        let active = runtime.resolve(prompt, SkillStackSnapshot([], [])).active
+        expect(active.size == 1 && active[0].descriptor.id == "review-extra",
+            "full hyphenated or Unicode Skill name activates without its prefix")
+    }
+    let dotted = runtime.resolve("$review.extra!", SkillStackSnapshot([], [])).active
+    expect(dotted.size == 1 && dotted[0].descriptor.id == "review.extra",
+        "longest declared marker wins when a legal name contains punctuation")
+}
+
+func writeSkill(directory: String, name: String, body: String): Unit {
+    Directory.create(directory, recursive: true)
+    File.writeTo(directory + "/SKILL.md", ("---\nname: " + name +
+        "\ndescription: discovery fixture\n---\n" + body).toArray())
 }
 
 func verifyProductPrompt(temporary: String): Unit {

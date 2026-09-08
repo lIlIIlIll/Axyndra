@@ -720,6 +720,109 @@ def run_unsafe_token_symlink(candidate: Path, scopes: list[BrokerScope]) -> None
     require(stat.S_IMODE(victim.stat().st_mode) == 0o644, "token validation chmod followed the unsafe symlink")
 
 
+def run_deadlines_and_generations(scope: BrokerScope) -> None:
+    def request(op, name, **extra):
+        if op == "start":
+            extra = {"persist": True, "pty": False, **extra}
+        return scope.request(op, {"name": name, **extra}, owner="deadline-contract",
+                             call_id=f"{op}-{name}", timeout=30)
+
+    name = "long-operation"
+    scope.daemons.add(name)
+    started = time.monotonic()
+    result = request("start", name, application="/bin/sh",
+                     args=["-c", "sleep 11; printf 'LONG_READY\\n'; sleep 60"],
+                     ready={"log": "LONG_READY", "timeout": 15})
+    require(result["daemon"]["state"] == "ready" and time.monotonic() - started >= 10,
+            f"broker did not honor long readiness: {result}")
+    started = time.monotonic()
+    result = request("wait", name, pattern="NEVER_MATCH", timeout=11)
+    require(time.monotonic() - started >= 10, f"broker cut long wait short: {result}")
+    logs = request("logs", name)
+    started = time.monotonic()
+    result = request("logs", name, cursor=logs["cursor"], follow=True, timeout=11)
+    require(time.monotonic() - started >= 10, f"broker cut long follow short: {result}")
+    # restart inherits the stored ready timeout; the request has no ready field.
+    started = time.monotonic()
+    result = request("restart", name)
+    require(result["daemon"]["state"] == "ready" and time.monotonic() - started >= 10,
+            f"broker cut stored restart readiness short: {result}")
+    request("stop", name)
+
+    name = "manual-generation"
+    scope.daemons.add(name)
+    script = ("if test -f manual-generation-count; then sleep 0.7; printf 'READY_NEW\\n'; "
+              "else touch manual-generation-count; printf 'READY_OLD\\n'; fi; sleep 30")
+    request("start", name, application="/bin/sh", args=["-c", script], ready={"log": "READY_", "timeout": 3})
+    started = time.monotonic()
+    result = request("restart", name)
+    require(result["daemon"]["state"] == "ready" and time.monotonic() - started >= .6,
+            f"manual readiness used old generation: {result}")
+    logs = request("logs", name)["text"]
+    require("READY_OLD" in logs and "READY_NEW" in logs, "generation filtering discarded historical logs")
+    request("stop", name)
+
+    name = "stale-ready-waiter"
+    scope.daemons.add(name)
+    script = ("if test -f stale-ready-count; then sleep 0.7; printf 'READY_NEW\\n'; "
+              "else touch stale-ready-count; printf 'BOOT_OLD\\n'; sleep 5; printf 'READY_OLD\\n'; fi; sleep 30")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        old = pool.submit(request, "start", name, application="/bin/sh", args=["-c", script],
+                          ready={"log": "READY_", "timeout": 8})
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if (scope.workspace / "stale-ready-count").exists() and "BOOT_OLD" in request("logs", name)["text"]:
+                break
+            time.sleep(.02)
+        restarted = request("restart", name)
+        previous = old.result(timeout=3)
+    require(previous["readyTimedOut"] is True and restarted["daemon"]["state"] == "ready" and
+            "READY_NEW" in request("logs", name)["text"],
+            f"old readiness waiter adopted another generation: {previous}, {restarted}")
+    request("stop", name)
+
+    name = "automatic-generation"
+    scope.daemons.add(name)
+    script = ("if test -f automatic-generation-count; then sleep 0.7; printf 'READY_NEW\\n'; sleep 30; "
+              "else touch automatic-generation-count; printf 'READY_OLD\\n'; sleep 0.2; exit 1; fi")
+    request("start", name, application="/bin/sh", args=["-c", script],
+            ready={"log": "READY_", "timeout": 4}, restart="on-failure")
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        daemon = request("describe", name)["daemon"]
+        if daemon["restartCount"] > 0 and daemon["state"] == "ready":
+            break
+        time.sleep(.03)
+    require(daemon["restartCount"] == 1 and daemon["state"] == "ready" and
+            "READY_NEW" in request("logs", name)["text"], f"auto readiness not rebound: {daemon}")
+    request("stop", name)
+
+    name = "stop-backoff"
+    scope.daemons.add(name)
+    request("start", name, application="/bin/sh", args=["-c", "echo old >> backoff-launches; exit 1"], restart="on-failure")
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        daemon = request("describe", name)["daemon"]
+        if daemon["state"] == "restarting":
+            break
+        time.sleep(.01)
+    require(daemon["state"] == "restarting", f"did not enter backoff: {daemon}")
+    stopped = request("stop", name)
+    require(stopped["daemon"]["state"] == "exited", f"stop during backoff was not terminal: {stopped}")
+    result = request("start", name, application="/bin/sh", args=["-c", "printf 'NEW_READY\\n'; sleep 30"],
+                     ready={"log": "NEW_READY", "timeout": 3})
+    new_id = result["daemon"]["id"]
+    time.sleep(2.2)
+    current = request("describe", name)["daemon"]
+    require(current["id"] == new_id and current["state"] == "ready" and
+            (scope.workspace / "backoff-launches").read_text().splitlines() == ["old"],
+            f"old backoff task replaced new process: {current}")
+    record = json.loads((Path(scope.paths()["runtimeRoot"]) / "daemons" / f"{name}.json").read_text())
+    require(record["id"] == new_id and record["state"] == "ready", "old task overwrote the replacement persistent record")
+    request("stop", name)
+    print("PASS R1-R4 long broker operations, generation readiness and stop during backoff")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", required=True, type=Path)
@@ -731,6 +834,7 @@ def main() -> int:
         main_scope = BrokerScope(candidate, "main")
         scopes.append(main_scope)
         run_lifecycle_and_recovery(main_scope)
+        run_deadlines_and_generations(main_scope)
         run_bounded_log(main_scope)
         run_persistent_pty(main_scope)
         run_auth_and_permissions(main_scope)

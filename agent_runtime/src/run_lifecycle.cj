@@ -197,7 +197,7 @@ class OwnedRunTask {
     private let future: Future<Unit>
     private let lock = Mutex()
     private var settled = false
-    private var failure = ""
+    private var failure: ?String = None
 
     init(name: String, future: Future<Unit>) {
         this.name = name
@@ -208,19 +208,19 @@ class OwnedRunTask {
         let _ = spawn {
             try {
                 future.get()
-                recordSettlement("")
+                recordSettlement(None)
             } catch (error: Exception) {
-                recordSettlement(error.message)
+                recordSettlement(Some(error.message))
             }
         }
     }
 
-    func snapshot(): (Bool, String) {
+    func snapshot(): (Bool, ?String) {
         lock.lock()
         try { (settled, failure) } finally { lock.unlock() }
     }
 
-    private func recordSettlement(value: String): Unit {
+    private func recordSettlement(value: ?String): Unit {
         lock.lock()
         try {
             settled = true
@@ -326,9 +326,9 @@ public class RunScope {
                 settlements.add(OwnedTaskSettlement(
                     task.name, OwnedTaskOutcome.Quarantined
                 ))
-            } else if (failure != "") {
+            } else if (failure.isSome()) {
                 settlements.add(OwnedTaskSettlement(
-                    task.name, OwnedTaskOutcome.Failed, failure: failure
+                    task.name, OwnedTaskOutcome.Failed, failure: failure.getOrThrow()
                 ))
             } else {
                 settlements.add(OwnedTaskSettlement(task.name, OwnedTaskOutcome.Joined))

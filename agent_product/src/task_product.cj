@@ -153,7 +153,15 @@ class ProductSubagentState {
     var pendingRequest: ?AgentRunRequest = None
     var pendingApproval: ?ApprovalRequest = None
     let recentApprovalDenials = ArrayList<String>()
-    let capabilities: CapabilitySet
+    var capabilities: CapabilitySet
+    let capabilityCeilingKnown: Bool
+    // A live delegation authority is not reconstructible from a task snapshot.
+    let budgetAuthority: ?ToolInvocationContext
+    var budgetParentRunId: RunId
+    var launchInProgress: Bool = false
+    var executionInProgress: Bool = false
+    var finishing: Bool = false
+    let settlementLock = Mutex()
 
     init(
         id: String,
@@ -170,6 +178,8 @@ class ProductSubagentState {
         parentToolCallId: String,
         depth: Int64,
         capabilities!: CapabilitySet = CapabilitySet(),
+        capabilityCeilingKnown!: Bool = true,
+        budgetAuthority!: ?ToolInvocationContext = None,
         startedAt!: Int64 = 0,
         status!: String = "running",
         lastUpdate!: Int64 = 0
@@ -188,6 +198,9 @@ class ProductSubagentState {
         this.parentToolCallId = parentToolCallId
         this.depth = depth
         this.capabilities = capabilities
+        this.capabilityCeilingKnown = capabilityCeilingKnown
+        this.budgetAuthority = budgetAuthority
+        this.budgetParentRunId = parentRunId
         this.status = status
         this.startedAt = if (startedAt > 0) { startedAt } else { nowMillis() }
         this.lastUpdate = if (lastUpdate > 0) { lastUpdate } else { this.startedAt }
@@ -321,9 +334,11 @@ class ProductTaskResult {
         schemaMode!: String = "permissive"
     ) {
         this.snapshot = snapshot
-        this.exitCode = exitCode
+        this.exitCode = if (snapshot.status == "cancelled" || snapshot.status == "recovery_required") { 1 } else { exitCode }
         this.output = output
-        this.stderr = stderr
+        this.stderr = if (snapshot.status == "cancelled" || snapshot.status == "recovery_required") {
+            if (snapshot.error != "") { snapshot.error } else { "subagent ended as " + snapshot.status }
+        } else { stderr }
         this.schemaStatus = schemaStatus
         this.schemaError = schemaError
         this.schemaMode = schemaMode
@@ -934,6 +949,22 @@ public class ProductTaskRuntime {
             )
         }
         let suffix = nowMillis().toString()
+        let authority: ?ToolInvocationContext
+        lock.lock()
+        try {
+            let state = match (findSubagentLocked(subagentId)) {
+                case Some(value) => value
+                case None => return taskError<Unit>("subagent.not_found", "unknown subagent")
+            }
+            if (state.parentSessionId.value != rootSessionId.value) {
+                return taskError<Unit>("subagent.not_found", "unknown subagent")
+            }
+            authority = state.budgetAuthority
+            if (state.status != "running" && state.status != "blocked" && authority.isNone()) {
+                return taskError<Unit>("child.redelegation_required",
+                    "restored child has no live parent budget authority; delegate a new task")
+            }
+        } finally { lock.unlock() }
         match (sendHubMessage(
             ToolInvocationContext(
                 RunId("tui-hub-" + suffix),
@@ -949,7 +980,8 @@ public class ProductTaskRuntime {
             text,
             "",
             false,
-            0
+            0,
+            budgetAuthority: authority
         )) {
             case Result.Ok(_) => Result.Ok(())
             case Result.Err(error) => Result.Err(error)
@@ -1018,8 +1050,12 @@ public class ProductTaskRuntime {
                     "Unknown subagent: " + subagentId
                 )
             }
+            if (state.executionInProgress || state.launchInProgress) {
+                return taskError<Unit>("child.execution_in_progress", "child execution has not settled")
+            }
             pendingRequest = state.pendingRequest
             pendingApproval = state.pendingApproval
+            if (pendingRequest.isSome() && pendingApproval.isSome()) { state.executionInProgress = true }
         } finally {
             lock.unlock()
         }
@@ -1037,27 +1073,36 @@ public class ProductTaskRuntime {
                 "subagent has no pending approval"
             )
         }
-        let _ = tasks.transition(TaskId(subagentId), TaskStatus.Running)
-        match (runtime.client.decide(
-            request,
-            approval,
-            decision,
-            {event => recordChildEvent(subagentId, event)}
-        )) {
-            case Result.Err(error) =>
-                let _ = tasks.transition(TaskId(subagentId), TaskStatus.Blocked)
-                Result.Err(error)
-            case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                applyRunSnapshot(subagentId, snapshot)
-                let _ = tasks.transition(TaskId(subagentId), TaskStatus.Completed)
-                let _ = finishSubagent(subagentId, "completed")
-                Result.Ok(())
-            case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) =>
-                applyRunSnapshot(subagentId, snapshot)
-                let _ = markSubagentAwaitingApproval(subagentId, request, next)
-                let _ = tasks.transition(TaskId(subagentId), TaskStatus.Blocked)
-                Result.Ok(())
-        }
+        try {
+            let _ = tasks.transition(TaskId(subagentId), TaskStatus.Running)
+            match (childRunAction(subagentId, { => runtime.client.decide(
+                request,
+                approval,
+                decision,
+                {event => recordChildEvent(subagentId, event)}
+            ) })) {
+                case Result.Err(error) =>
+                    let ended = finishSubagent(subagentId, "failed", error: error.message)
+                    if (ended.status == "recovery_required") {
+                        taskError<Unit>("child.budget_recovery_required", ended.error)
+                    } else { Result.Err(error) }
+                case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
+                    applyRunSnapshot(subagentId, snapshot)
+                    let ended = finishSubagent(subagentId, "completed")
+                    if (ended.status == "completed") {
+                        let _ = tasks.transition(TaskId(subagentId), TaskStatus.Completed)
+                        Result.Ok(())
+                    } else {
+                        taskError<Unit>("child." + ended.status,
+                            if (ended.error != "") { ended.error } else { "subagent ended as " + ended.status })
+                    }
+                case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) =>
+                    applyRunSnapshot(subagentId, snapshot)
+                    let _ = markSubagentAwaitingApproval(subagentId, request, next)
+                    let _ = tasks.transition(TaskId(subagentId), TaskStatus.Blocked)
+                    Result.Ok(())
+            }
+        } finally { releaseChildExecution(subagentId) }
     }
 
     private func runningSubagent(
@@ -1493,7 +1538,8 @@ public class ProductTaskRuntime {
         message: String,
         replyTo: String,
         awaitReply: Bool,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        budgetAuthority!: ?ToolInvocationContext = None
     ): Result<ToolResult> {
         if (awaitReply && to == "all") {
             return taskError<ToolResult>(
@@ -1515,6 +1561,13 @@ public class ProductTaskRuntime {
                 )
             }
             for (target in targets) {
+                if (target.id != "Main" && target.status != "running" && target.status != "blocked") {
+                    let child = findSubagentLocked(target.id).getOrThrow()
+                    if (!child.capabilityCeilingKnown) {
+                        return taskError<ToolResult>("child.redelegation_required",
+                            "restored child has no recorded capability ceiling; delegate a new task")
+                    }
+                }
                 if (target.id == sender.id) {
                     return taskError<ToolResult>(
                         "hub.self_send",
@@ -1564,7 +1617,8 @@ public class ProductTaskRuntime {
         for (delivery in deliveries) {
             if (delivery.reviveTarget) {
                 match (startOwnedWorker({ =>
-                    reviveSubagent(delivery.snapshot.to, delivery.snapshot)
+                    reviveSubagent(delivery.snapshot.to, delivery.snapshot,
+                        match (budgetAuthority) { case Some(value) => value; case None => context })
                 })) {
                     case Result.Ok(_) => ()
                     case Result.Err(error) => return Result.Err(error)
@@ -2093,7 +2147,7 @@ public class ProductTaskRuntime {
         let jobTargets = ArrayList<ProductAsyncJobKey>()
         lock.lock()
         try {
-            for (record in records where record.parentRunId.value == parentRunId.value && (record.status == "running" ||
+            for (record in records where record.budgetParentRunId.value == parentRunId.value && (record.status == "running" ||
                 record.status == "blocked")) {
                 targets.add(record.snapshot())
             }
@@ -2169,143 +2223,144 @@ public class ProductTaskRuntime {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (reserveChildBudget(context, state.id, executionBudgetFrom(child.budget))) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) =>
-                let _ = finishSubagent(state.id, "failed", error: error.message)
-                return Result.Err(error)
-        }
-        let backgroundCanStart = match (jobKey) {
-            case Some(value) => jobCanStart(value)
-            case None => true
-        }
-        if (subagentStatus(state.id) == "cancelled" || !backgroundCanStart) {
-            let snapshot = finishSubagent(state.id, "cancelled")
-            return Result.Ok(
-                ProductTaskResult(
-                    snapshot,
-                    1,
-                    textValue(""),
-                    stderr: "subagent was cancelled before launch"
-                )
-            )
-        }
-        if (depth > child.budget.maxDepth) {
-            finishSubagent(state.id, "failed")
-            return taskError<ProductTaskResult>(
-                "subagent.budget_exceeded",
-                "subagent resource budget exceeded",
-                fields: [ErrorField("resource", "depth")]
-            )
-        }
-        let taskId = TaskId(state.id)
-        match (tasks.create(taskId, spec.task)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) =>
-                finishSubagent(state.id, "failed")
-                return Result.Err(error)
-        }
-        let _ = tasks.transition(
-            taskId,
-            TaskStatus.Running,
-            runId: Some(child.runId)
-        )
-        if (subagentStatus(state.id) == "cancelled") {
-            let snapshot = subagentSnapshot(state.id)
-            return Result.Ok(
-                ProductTaskResult(
-                    snapshot,
-                    1,
-                    textValue(""),
-                    stderr: "subagent was cancelled before launch"
-                )
-            )
-        }
-        // ChildBudgetPool already owns child count, concurrency and aggregate
-        // usage reservations. Launch the isolated child Run directly through
-        // the same typed AgentClient as the parent instead of layering a
-        // second coordinator with a duplicate budget ledger.
-        let launched = runtime.client.start(
-            child,
-            {event => recordChildEvent(state.id, event)}
-        )
-        let messages: Array<ModelMessage> = match (runtime.messages(child.sessionId)) {
-            case Result.Ok(value) => value
-            case Result.Err(_) => []
-        }
-        let lastText = lastAssistantText(messages)
-        match (launched) {
-            case Result.Err(error) =>
-                if (subagentStatus(state.id) == "cancelled") {
-                    Result.Ok(
-                        ProductTaskResult(
-                            subagentSnapshot(state.id),
-                            1,
-                            textValue(""),
-                            stderr: "subagent was cancelled"
-                        )
-                    )
-                } else {
-                    let _ = tasks.transition(taskId, TaskStatus.Failed)
-                    let snapshot = finishSubagent(
-                        state.id,
-                        "failed",
-                        error: error.message
-                    )
-                    Result.Ok(
-                        ProductTaskResult(
-                            snapshot,
-                            1,
-                            textValue(""),
-                            stderr: error.message
-                        )
-                    )
-                }
-            case Result.Ok(outcome) => match (reviewSubagentOutcome(
-                runtime,
-                state.id,
-                child,
-                outcome
-            )) {
+        try {
+            match (reserveChildBudget(context, state.id, executionBudgetFrom(child.budget))) {
+                case Result.Ok(_) => ()
                 case Result.Err(error) =>
-                    let _ = tasks.transition(taskId, TaskStatus.Failed)
-                    let snapshot = finishSubagent(state.id, "failed", error: error.message)
-                    Result.Ok(
-                        ProductTaskResult(
-                            snapshot,
-                            1,
-                            textValue(""),
-                            stderr: error.message
-                        )
+                    let _ = finishSubagent(state.id, "failed", error: error.message)
+                    return Result.Err(error)
+            }
+            let backgroundCanStart = match (jobKey) {
+                case Some(value) => jobCanStart(value)
+                case None => true
+            }
+            if (subagentStatus(state.id) == "cancelled" || !backgroundCanStart) {
+                let snapshot = finishSubagent(state.id, "cancelled")
+                return Result.Ok(
+                    ProductTaskResult(
+                        snapshot,
+                        1,
+                        textValue(""),
+                        stderr: "subagent was cancelled before launch"
                     )
-                case Result.Ok(outcome) => match (outcome) {
-                    case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
-                        let _ = tasks.transition(taskId, TaskStatus.Blocked)
-                        applyRunSnapshot(state.id, snapshot)
-                        let blockedSnapshot = markSubagentAwaitingApproval(
+                )
+            }
+            if (depth > child.budget.maxDepth) {
+                finishSubagent(state.id, "failed")
+                return taskError<ProductTaskResult>(
+                    "subagent.budget_exceeded",
+                    "subagent resource budget exceeded",
+                    fields: [ErrorField("resource", "depth")]
+                )
+            }
+            let taskId = TaskId(state.id)
+            match (tasks.create(taskId, spec.task)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) =>
+                    finishSubagent(state.id, "failed")
+                    return Result.Err(error)
+            }
+            let _ = tasks.transition(
+                taskId,
+                TaskStatus.Running,
+                runId: Some(child.runId)
+            )
+            if (subagentStatus(state.id) == "cancelled") {
+                let snapshot = finishSubagent(state.id, "cancelled")
+                return Result.Ok(
+                    ProductTaskResult(
+                        snapshot,
+                        1,
+                        textValue(""),
+                        stderr: "subagent was cancelled before launch"
+                    )
+                )
+            }
+            // ChildBudgetPool already owns child count, concurrency and aggregate
+            // usage reservations. Launch the isolated child Run directly through
+            // the same typed AgentClient as the parent instead of layering a
+            // second coordinator with a duplicate budget ledger.
+            let launched = startChildRun(runtime, state.id, child)
+            match (launched) {
+                case Result.Err(error) =>
+                    if (subagentStatus(state.id) == "cancelled") {
+                        let _ = finishSubagent(state.id, "cancelled")
+                        Result.Ok(
+                            ProductTaskResult(
+                                subagentSnapshot(state.id),
+                                1,
+                                textValue(""),
+                                stderr: "subagent was cancelled"
+                            )
+                        )
+                    } else {
+                        let _ = tasks.transition(taskId, TaskStatus.Failed)
+                        let snapshot = finishSubagent(
                             state.id,
-                            child,
-                            approval
+                            "failed",
+                            error: error.message
                         )
                         Result.Ok(
                             ProductTaskResult(
-                                blockedSnapshot,
+                                snapshot,
                                 1,
                                 textValue(""),
-                                stderr: "subagent is awaiting approval"
+                                stderr: error.message
                             )
                         )
-                    case AgentRunOutcome.Completed(snapshot) =>
-                        applyRunSnapshot(state.id, snapshot)
-                        finalizeCompletedTask(
-                            taskId,
-                            state.id,
-                            spec,
-                            lastText
+                    }
+                case Result.Ok(outcome) => match (reviewSubagentOutcome(
+                    runtime,
+                    state.id,
+                    child,
+                    outcome
+                )) {
+                    case Result.Err(error) =>
+                        let _ = tasks.transition(taskId, TaskStatus.Failed)
+                        let snapshot = finishSubagent(state.id, "failed", error: error.message)
+                        Result.Ok(
+                            ProductTaskResult(
+                                snapshot,
+                                1,
+                                textValue(""),
+                                stderr: error.message
+                            )
                         )
+                    case Result.Ok(outcome) => match (outcome) {
+                        case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
+                            let _ = tasks.transition(taskId, TaskStatus.Blocked)
+                            applyRunSnapshot(state.id, snapshot)
+                            let blockedSnapshot = markSubagentAwaitingApproval(
+                                state.id,
+                                child,
+                                approval
+                            )
+                            Result.Ok(
+                                ProductTaskResult(
+                                    blockedSnapshot,
+                                    1,
+                                    textValue(""),
+                                    stderr: "subagent is awaiting approval"
+                                )
+                            )
+                        case AgentRunOutcome.Completed(snapshot) =>
+                            applyRunSnapshot(state.id, snapshot)
+                            // Automatic approval continuations may append the final
+                            // answer after start returned its first paused outcome.
+                            let messages: Array<ModelMessage> = match (runtime.messages(child.sessionId)) {
+                                case Result.Ok(value) => value
+                                case Result.Err(_) => []
+                            }
+                            finalizeCompletedTask(
+                                taskId,
+                                state.id,
+                                spec,
+                                lastAssistantText(messages)
+                            )
+                    }
                 }
             }
-        }
+        } finally { releaseChildExecution(state.id) }
     }
 
     private func finalizeCompletedTask(
@@ -2352,13 +2407,20 @@ public class ProductTaskRuntime {
                 )
             )
         }
-        let _ = tasks.transition(taskId, TaskStatus.Completed)
         let snapshot = finishSubagent(subagentId, "completed")
+        if (snapshot.status == "completed") {
+            let _ = tasks.transition(taskId, TaskStatus.Completed)
+        } else if (snapshot.status == "recovery_required") {
+            let _ = tasks.transition(taskId, TaskStatus.Blocked)
+        }
         Result.Ok(
             ProductTaskResult(
                 snapshot,
-                0,
+                if (snapshot.status == "completed") { 0 } else { 1 },
                 output,
+                stderr: if (snapshot.status == "completed") { "" } else {
+                    if (snapshot.error != "") { snapshot.error } else { "subagent ended as " + snapshot.status }
+                },
                 schemaStatus: if (spec.outputSchema.isSome()) {
                     if (validation.valid) {
                         "valid"
@@ -2408,8 +2470,10 @@ public class ProductTaskRuntime {
                 context.sessionId,
                 call.callId,
                 depth,
-                capabilities: context.capabilities
+                capabilities: child.capabilities,
+                budgetAuthority: Some(context)
             )
+            state.executionInProgress = true
             state.pendingRequest = Some(child)
             records.add(state)
             yields.add(ProductYieldState(child.runId))
@@ -2461,6 +2525,7 @@ public class ProductTaskRuntime {
             let state = findSubagentLocked(id)
             match (state) {
                 case Some(value) =>
+                    if (value.runId.value != event.runId.value) { return }
                     value.lastUpdate = nowMillis()
                     progressChanged = updateSubagentProgress(
                         value,
@@ -2544,7 +2609,8 @@ public class ProductTaskRuntime {
 
     private func reviveSubagent(
         id: String,
-        message: ProductHubMessageSnapshot
+        message: ProductHubMessageSnapshot,
+        authority: ToolInvocationContext
     ): Unit {
         let runtime = match (attachedProduct()) {
             case Result.Ok(value) => value
@@ -2555,7 +2621,9 @@ public class ProductTaskRuntime {
             case Some(value) => value
             case None => return
         }
-        let childCapabilities = capabilitiesForSubagent(id)
+        let childCapabilities = effectiveChildCapabilities(
+            capabilitiesForSubagent(id), productAgentCapabilityCeiling(state.agent), authority.capabilities
+        )
         let base = runtime.request(
             hubMessagePrompt(message),
             sessionId: Some(state.sessionId),
@@ -2566,6 +2634,54 @@ public class ProductTaskRuntime {
             state.agent,
             childCapabilities
         )
+        while (true) {
+            let claimed = claimRevivedChild(runtime, id, message, request, authority)
+            if (claimed < 0) { return }
+            if (claimed > 0) { break }
+            match (authority.cancellation.check()) {
+                case Result.Err(_) => return
+                case Result.Ok(_) => sleep(Duration.millisecond * 5)
+            }
+        }
+        try {
+            match (reserveChildBudget(authority, id, executionBudgetFrom(request.budget))) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) =>
+                    let _ = finishSubagent(id, "failed", error: error.code + ": " + error.message)
+                    return
+            }
+            if (subagentStatus(id) == "cancelled") {
+                let _ = finishSubagent(id, "cancelled")
+                return
+            }
+            match (startChildRun(runtime, id, request)) {
+                case Result.Ok(initial) => match (reviewSubagentOutcome(
+                    runtime,
+                    id,
+                    request,
+                    initial
+                )) {
+                    case Result.Ok(AgentRunOutcome.Completed(value)) =>
+                        applyRunSnapshot(id, value)
+                        let _ = finishSubagent(id, "completed")
+                    case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) =>
+                        applyRunSnapshot(id, snapshot)
+                        let _ = markSubagentAwaitingApproval(id, request, approval)
+                    case Result.Err(error) =>
+                        let _ = finishSubagent(id, "failed", error: error.code + ": " + error.message)
+                }
+                case Result.Err(error) =>
+                    let _ = finishSubagent(id, "failed", error: error.code + ": " + error.message)
+            }
+        } finally { releaseChildExecution(id) }
+    }
+
+    // 1 claims a fresh generation, 0 waits for a previous terminal worker,
+    // -1 delivered to a live generation or left a recovery-required record.
+    private func claimRevivedChild(
+        runtime: ProductRuntime, id: String, message: ProductHubMessageSnapshot,
+        request: AgentRunRequest, authority: ToolInvocationContext
+    ): Int64 {
         let sinks: Array<ProductSubagentEventSink>
         let snapshot: ProductSubagentSnapshot
         lock.lock()
@@ -2578,13 +2694,21 @@ public class ProductTaskRuntime {
                     hubMessageModelMessage(message),
                     source: "hub"
                 )
-                return
+                return -1
             }
-            if (current.status == "recovery_required") {
-                return
+            if (current.status == "recovery_required") { return -1 }
+            if (current.executionInProgress || current.finishing || childBudgetLeases.get(id).isSome()) {
+                return 0
             }
+            current.executionInProgress = true
             current.runId = request.runId
+            current.budgetParentRunId = authority.runId
+            current.capabilities = request.capabilities
             current.status = "running"
+            current.requests = 0
+            current.tokens = 0
+            current.toolCount = 0
+            current.error = ""
             current.pendingRequest = Some(request)
             current.pendingApproval = None
             current.lastUpdate = nowMillis()
@@ -2595,8 +2719,9 @@ public class ProductTaskRuntime {
                 case Result.Ok(_) => ()
                 case Result.Err(error) =>
                     markSubagentPersistenceRecoveryLocked(current, error)
+                    current.executionInProgress = false
                     let _ = persistRootLocked(current.parentSessionId)
-                    return
+                    return -1
             }
             snapshot = current.snapshot()
             sinks = listenerSinksLocked()
@@ -2607,31 +2732,40 @@ public class ProductTaskRuntime {
             sinks,
             ProductSubagentEvent("lifecycle", snapshot)
         )
-        match (runtime.client.start(
-            request,
-            {event => recordChildEvent(id, event)}
-        )) {
-            case Result.Ok(initial) => match (reviewSubagentOutcome(
-                runtime,
-                id,
-                request,
-                initial
-            )) {
-                case Result.Ok(AgentRunOutcome.Completed(value)) =>
-                    applyRunSnapshot(id, value)
-                    let _ = finishSubagent(id, "completed")
-                case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) =>
-                    applyRunSnapshot(id, snapshot)
-                    let _ = markSubagentAwaitingApproval(id, request, approval)
-                case Result.Err(_) =>
-                    if (subagentStatus(id) != "cancelled") {
-                        let _ = finishSubagent(id, "failed")
-                    }
+        1
+    }
+
+    private func releaseChildExecution(id: String): Unit {
+        lock.lock()
+        try { findSubagentLocked(id).getOrThrow().executionInProgress = false }
+        finally { lock.unlock() }
+    }
+
+    private func startChildRun(
+        runtime: ProductRuntime, id: String, request: AgentRunRequest
+    ): Result<AgentRunOutcome> {
+        childRunAction(id, { =>
+            runtime.client.start(request, { event => recordChildEvent(id, event) })
+        })
+    }
+
+    private func childRunAction(
+        id: String, action: () -> Result<AgentRunOutcome>
+    ): Result<AgentRunOutcome> {
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            if (state.status == "cancelled" || closing) {
+                return taskError<AgentRunOutcome>("child.cancelled_before_launch", "child launch was cancelled")
             }
-            case Result.Err(_) =>
-                if (subagentStatus(id) != "cancelled") {
-                    let _ = finishSubagent(id, "failed")
-                }
+            state.launchInProgress = true
+        } finally { lock.unlock() }
+        try { action() } catch (error: Exception) {
+            taskError<AgentRunOutcome>("child.launch_exception", error.message)
+        } finally {
+            lock.lock()
+            try { findSubagentLocked(id).getOrThrow().launchInProgress = false }
+            finally { lock.unlock() }
         }
     }
 
@@ -2641,49 +2775,51 @@ public class ProductTaskRuntime {
         request: AgentRunRequest,
         initial: AgentRunOutcome
     ): Result<AgentRunOutcome> {
-        var outcome = initial
-        while (true) {
-            match (outcome) {
-                case AgentRunOutcome.Completed(_) => return Result.Ok(outcome)
-                case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
-                    if (runtime.approvalSettings.mode == ApprovalRoutingMode.Manual) {
-                        return Result.Ok(outcome)
-                    }
-                    let review = runtime.reviewApproval(
-                        request,
-                        approval,
-                        recentDenials: subagentApprovalDenials(id)
-                    )
-                    let reviewed = reviewedApprovalRequest(approval, review)
-                    if (review.decision == ApprovalReviewDecision.AskUser) {
-                        return Result.Ok(
-                            AgentRunOutcome.AwaitingApproval(
-                                snapshot,
-                                reviewed
+        childRunAction(id, { =>
+            var outcome = initial
+            while (true) {
+                match (outcome) {
+                    case AgentRunOutcome.Completed(_) => return Result.Ok(outcome)
+                    case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
+                        if (runtime.approvalSettings.mode == ApprovalRoutingMode.Manual) {
+                            return Result.Ok(outcome)
+                        }
+                        let review = runtime.reviewApproval(
+                            request,
+                            approval,
+                            recentDenials: subagentApprovalDenials(id)
+                        )
+                        let reviewed = reviewedApprovalRequest(approval, review)
+                        if (review.decision == ApprovalReviewDecision.AskUser) {
+                            return Result.Ok(
+                                AgentRunOutcome.AwaitingApproval(
+                                    snapshot,
+                                    reviewed
+                                )
                             )
-                        )
-                    }
-                    let decision = if (review.decision == ApprovalReviewDecision.Approve) {
-                        ApprovalDecision.Approve
-                    } else {
-                        rememberSubagentApprovalDenial(
-                            id,
-                            reviewed.argumentHash + ": " + review.reason
-                        )
-                        ApprovalDecision.RejectWithReason(reviewerDenialMessage(review.reason))
-                    }
-                    outcome = match (runtime.client.decide(
-                        request,
-                        reviewed,
-                        decision,
-                        {event => recordChildEvent(id, event)}
-                    )) {
-                        case Result.Ok(value) => value
-                        case Result.Err(error) => return Result.Err(error)
-                    }
+                        }
+                        let decision = if (review.decision == ApprovalReviewDecision.Approve) {
+                            ApprovalDecision.Approve
+                        } else {
+                            rememberSubagentApprovalDenial(
+                                id,
+                                reviewed.argumentHash + ": " + review.reason
+                            )
+                            ApprovalDecision.RejectWithReason(reviewerDenialMessage(review.reason))
+                        }
+                        outcome = match (runtime.client.decide(
+                            request,
+                            reviewed,
+                            decision,
+                            {event => recordChildEvent(id, event)}
+                        )) {
+                            case Result.Ok(value) => value
+                            case Result.Err(error) => return Result.Err(error)
+                        }
+                }
             }
-        }
-        Result.Ok(outcome)
+            Result.Ok(outcome)
+        })
     }
 
     private func subagentApprovalDenials(id: String): Array<String> {
@@ -2722,6 +2858,7 @@ public class ProductTaskRuntime {
         try {
             match (findSubagentLocked(id)) {
                 case Some(state) =>
+                    if (state.runId.value != snapshot.runId.value) { return }
                     state.requests = snapshot.modelRequests
                     state.tokens = snapshot.inputTokens + snapshot.outputTokens
                     state.toolCount = snapshot.toolCalls
@@ -2750,10 +2887,33 @@ public class ProductTaskRuntime {
     }
 
     private func finishSubagent(
+        id: String, status: String, error!: String = ""
+    ): ProductSubagentSnapshot {
+        let state: ProductSubagentState
+        lock.lock()
+        try { state = findSubagentLocked(id).getOrThrow() }
+        finally { lock.unlock() }
+        state.settlementLock.lock()
+        let snapshot = try { settleAndFinishSubagent(id, status, error: error) }
+            finally { state.settlementLock.unlock() }
+        let sinks: Array<ProductSubagentEventSink>
+        lock.lock()
+        try { sinks = listenerSinksLocked() }
+        finally { lock.unlock() }
+        emitToSinks(sinks, ProductSubagentEvent("lifecycle", snapshot))
+        snapshot
+    }
+
+    private func settleAndFinishSubagent(
         id: String,
         status: String,
         error!: String = ""
     ): ProductSubagentSnapshot {
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            state.finishing = true
+        } finally { lock.unlock() }
         let budgetSettlementError: ?AgentError = if (status == "blocked") {
             None
         } else {
@@ -2764,9 +2924,7 @@ public class ProductTaskRuntime {
         }
         let effectiveStatus = if (budgetSettlementError.isSome()) {
             "recovery_required"
-        } else {
-            status
-        }
+        } else if (subagentStatus(id) == "cancelled") { "cancelled" } else { status }
         let effectiveError = match (budgetSettlementError) {
             case Some(value) => "recovery_required: child budget settlement failed: " + value.message
             case None => error
@@ -2791,15 +2949,13 @@ public class ProductTaskRuntime {
                     markSubagentPersistenceRecoveryLocked(state, persistError)
                     let _ = persistRootLocked(state.parentSessionId)
             }
+            state.finishing = false
             snapshot = state.snapshot()
             sinks = listenerSinksLocked()
         } finally {
             lock.unlock()
         }
-        emitToSinks(
-            sinks,
-            ProductSubagentEvent("lifecycle", snapshot)
-        )
+        let _ = sinks
         snapshot
     }
 
@@ -2842,6 +2998,17 @@ public class ProductTaskRuntime {
         }
         var reservedLease: ?ChildBudgetLease = None
         while (true) {
+            match (context.cancellation.check()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => ()
+            }
+            if (subagentStatus(childId) == "cancelled") {
+                return taskError<Unit>("child.cancelled_before_admission", "child admission was cancelled")
+            }
+            if (context.currentBudgetMode() == BudgetMode.Draining ||
+                context.currentBudgetMode() == BudgetMode.Exhausted) {
+                return taskError<Unit>("child.spawn_denied_budget_draining", "parent stopped child admission")
+            }
             match (pool.reserve(childId, child)) {
                 case Result.Ok(value) =>
                     reservedLease = Some(value)
@@ -2876,7 +3043,25 @@ public class ProductTaskRuntime {
             for (index in 0..childBudgetOrder.size) {
                 let runId = childBudgetOrder[index]
                 let pool = childBudgetPools.get(runId)
-                if (pool.isNone() || pool.getOrThrow().snapshot().activeReservations == 0) {
+                var retained = false
+                for (record in records) {
+                    if (record.budgetParentRunId.value == runId) { retained = true }
+                    match (record.budgetAuthority) {
+                        case Some(authority) => if (authority.runId.value == runId) { retained = true }
+                        case None => ()
+                    }
+                }
+                // A still-running canonical parent may delegate again even
+                // after its old terminal child records were pruned.
+                match (product) {
+                    case Some(runtime) => match (runtime.client.find(RunId(runId))) {
+                        case Result.Ok(snapshot) =>
+                            if (!isTerminalRunState(snapshot.status)) { retained = true }
+                        case Result.Err(error) => if (error.code != "persistence.not_found") { retained = true }
+                    }
+                    case None => ()
+                }
+                if (!retained && (pool.isNone() || pool.getOrThrow().snapshot().activeReservations == 0)) {
                     childBudgetPools.remove(runId)
                     childBudgetOrder.remove(at: index)
                     removed = true
@@ -2890,36 +3075,48 @@ public class ProductTaskRuntime {
     }
 
     private func settleChildBudget(childId: String): Result<Unit> {
-        let lease: ?ChildBudgetLease
-        let usage: ExecutionUsage
+        let runId: RunId
         lock.lock()
         try {
-            lease = childBudgetLeases.get(childId)
-            usage = match (childUsage.get(childId)) {
+            let state = findSubagentLocked(childId).getOrThrow()
+            // Cancellation can be reported before the model worker returns.
+            // Keep the reservation until that worker's final usage is visible.
+            if (state.launchInProgress) { return Result.Ok(()) }
+            if (childBudgetLeases.get(childId).isNone()) { return Result.Ok(()) }
+            runId = state.runId
+        } finally { lock.unlock() }
+        match (attachedProduct()) {
+            case Result.Ok(runtime) => match (runtime.client.find(runId)) {
+                case Result.Ok(snapshot) =>
+                    applyRunSnapshot(childId, snapshot)
+                    if (snapshot.status == RunState.RecoveryRequired) {
+                        return taskError<Unit>("child.budget_recovery_required",
+                            "child Run has unfinished recovery work; budget reservation is retained")
+                    }
+                case Result.Err(error) =>
+                    if (error.code != "persistence.not_found") { return Result.Err(error) }
+            }
+            case Result.Err(error) => return Result.Err(error)
+        }
+        lock.lock()
+        try {
+            let lease = match (childBudgetLeases.get(childId)) {
+                case Some(value) => value
+                // Concurrent cancellation/completion has already settled it.
+                case None => return Result.Ok(())
+            }
+            let usage = match (childUsage.get(childId)) {
                 case Some(value) => value
                 case None => ExecutionUsage()
             }
-        } finally {
-            lock.unlock()
-        }
-        let selected = match (lease) {
-            case Some(value) => value
-            // A restored pre-vNext child has no live lease. Recovery keeps its
-            // durable terminal record but cannot invent historical usage.
-            case None => return Result.Ok(())
-        }
-        match (selected.settle(usage)) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) =>
-                lock.lock()
-                try {
+            match (lease.settle(usage)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) =>
                     childBudgetLeases.remove(childId)
                     childUsage.remove(childId)
-                } finally {
-                    lock.unlock()
-                }
-                Result.Ok(())
-        }
+                    Result.Ok(())
+            }
+        } finally { lock.unlock() }
     }
 
     private func takeYield(subagentId: String): ProductYieldState {
@@ -3054,7 +3251,8 @@ public class ProductTaskRuntime {
             var removeIndex: Int64 = -1
             for (index in 0..records.size) {
                 let status = records[index].status
-                if (status != "running" && status != "blocked") {
+                if (status != "running" && status != "blocked" && !records[index].executionInProgress && !records[index].launchInProgress && !records[index].finishing &&
+                    childBudgetLeases.get(records[index].id).isNone()) {
                     removeIndex = index
                     break
                 }
@@ -4364,7 +4562,9 @@ func productSubagentRequest(
         base.prompt,
         system: promptBuild.text,
         thinking: base.thinking,
-        capabilities: capabilities,
+        capabilities: effectiveChildCapabilities(
+            capabilities, productAgentCapabilityCeiling(agent), capabilities
+        ),
         budget: ResourceBudget(
             maxInputTokens: base.budget.maxInputTokens,
             maxOutputTokens: min(8000, base.budget.maxOutputTokens),

@@ -720,9 +720,12 @@ public class SqliteDatabase {
             let index = Int32(offset + 1)
             let code = match (parameters[offset]) {
                 case SqlParameter.Text(value) =>
+                    if (value.size > Int64(Int32.Max)) {
+                        throw IllegalArgumentException("SQLite text exceeds Int32 byte length")
+                    }
                     let raw = unsafe { LibC.mallocCString(value) }
                     textValues.add(raw)
-                    unsafe { sqlite3_bind_text(statement, index, raw, -1, CPointer<Unit>()) }
+                    unsafe { sqlite3_bind_text(statement, index, raw, Int32(value.size), CPointer<Unit>()) }
                 case SqlParameter.Int64Value(value) =>
                     unsafe { sqlite3_bind_int64(statement, index, value) }
                 case SqlParameter.Blob(value) =>
@@ -777,6 +780,15 @@ public class SqliteDatabase {
 }
 
 public func sqliteText(value: String): String {
+    if (value.contains(String.fromUtf8([UInt8(0)]))) {
+        let digits = "0123456789ABCDEF".toArray()
+        let hex = ArrayList<UInt8>()
+        for (byte in value.toArray()) {
+            hex.add(digits[Int64(byte / 16)])
+            hex.add(digits[Int64(byte % 16)])
+        }
+        return "CAST(X'" + String.fromUtf8(hex.toArray()) + "' AS TEXT)"
+    }
     "'" + value.replace("'", "''") + "'"
 }
 

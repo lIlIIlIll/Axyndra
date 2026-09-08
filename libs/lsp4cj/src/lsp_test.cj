@@ -12,6 +12,21 @@ import std.unittest.testmacro.*
 @Test
 class Lsp4CjTests {
     @TestCase
+    func failedWritesAndFlushesReleasePendingRequests() {
+        for (flushFailure in [false, true]) {
+            let process = FailedWriteProcess(!flushFailure, flushFailure: flushFailure)
+            let client = LspClient(startProcess(ProcessCommand("fixture"), backend: FailedWriteBackend(process)))
+            try {
+                for (_ in 0..3) {
+                    @Expect(client.request("echo", jsonObject([])).isOk(), false)
+                    @Expect(client.pendingCount(), 0)
+                }
+                @Expect(process.writes.load(), 3)
+            } finally { let _ = client.close() }
+        }
+    }
+
+    @TestCase
     func framesAndDecodesMessages() {
         let source = jsonObject([
             JsonObjectEntry("jsonrpc", jsonString("2.0")),
@@ -101,4 +116,39 @@ func lspFixtureScript(): String {
     " elif method=='shutdown': send({'jsonrpc':'2.0','id':m['id'],'result':None})\n" +
     " elif method=='exit': break\n" +
     " elif 'id' in m: send({'jsonrpc':'2.0','id':m['id'],'result':m.get('params',{})})\n"
+}
+
+class FailedWriteInput <: InputStream {
+    let stopped: AtomicBool
+    init(stopped: AtomicBool) { this.stopped = stopped }
+    public func read(buffer: Array<Byte>): Int64 {
+        while (!stopped.load()) { sleep(Duration.millisecond * 1) }
+        0
+    }
+}
+class FailedWriteProcess <: ProcessPlatformProcess {
+    let stopped = AtomicBool(false)
+    let writes = AtomicInt64(0)
+    let reject: Bool
+    let flushFailure: Bool
+    init(reject: Bool, flushFailure!: Bool = false) { this.reject = reject; this.flushFailure = flushFailure }
+    public prop pid: Int64 { get() { 7 } }
+    public prop stdout: InputStream { get() { FailedWriteInput(stopped) } }
+    public prop stderr: InputStream { get() { FailedWriteInput(stopped) } }
+    public func writeInput(data: Array<Byte>): Unit {
+        writes.fetchAdd(1)
+        if (reject) { throw ProcessError(ProcessErrorKind.BrokenPipe, "injected write failure") }
+    }
+    public func flushInput(): Unit { if (flushFailure) { throw ProcessError(ProcessErrorKind.BrokenPipe, "injected flush failure") } }
+    public func closeInput(): Unit {}
+    public func inputCloseSupported(): Bool { true }
+    public func wait(): Int64 { while (!stopped.load()) { sleep(Duration.millisecond * 1) }; 0 }
+    public func terminate(force: Bool, processTree: Bool): Bool { stopped.store(true); true }
+    public func isAlive(): Bool { !stopped.load() }
+    public func close(): Unit { stopped.store(true) }
+}
+class FailedWriteBackend <: ProcessBackend {
+    let process: FailedWriteProcess
+    init(process: FailedWriteProcess) { this.process = process }
+    public func launchProcess(command: ProcessCommand): ProcessPlatformProcess { process }
 }

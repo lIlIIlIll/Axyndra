@@ -994,6 +994,12 @@ main(): Int64 {
         abortingPort.calls == 1,
         "abort retry stops the active request before another attempt"
     )
+    let backoffControl = RetryControl()
+    let backoffPort = EventuallySuccessfulPort(1)
+    let cancelDuringBackoff = RetryingModelPort(backoffPort, backoffControl,
+        maxAttempts: 3, sleeper: AbortRetrySleeper(backoffControl, request.requestId))
+    expect(cancelDuringBackoff.execute(request, {_ => ()}).isError() && backoffPort.calls == 1,
+        "cancellation inside the backoff sleeper prevents another provider call")
     let boundedSleeper = RecordingRetrySleeper()
     let boundedRetry = RetryingModelPort(
         EventuallySuccessfulPort(1),
@@ -1691,4 +1697,11 @@ func expectUsage(
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
+}
+
+class AbortRetrySleeper <: RetryDelaySleeper {
+    private let control: RetryControl
+    private let requestId: String
+    init(control: RetryControl, requestId: String) { this.control = control; this.requestId = requestId }
+    public func sleepMillis(_delayMillis: Int64): Unit { control.abort(requestId) }
 }

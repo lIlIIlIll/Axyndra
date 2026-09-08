@@ -21,6 +21,8 @@ public class ProductJsonlRpcServer {
     private let lock = Mutex()
     private let frameLock = Mutex()
     private var running = false
+    private let bashWorkers = ArrayList<RpcBashWorker>()
+    private var closing = false
     private var protocolVersion: Int64 = 1
     private var chunkCounter: Int64 = 0
     private var thinkingLevel = "medium"
@@ -447,7 +449,7 @@ public class ProductJsonlRpcServer {
             case "abort_retry" =>
                 session.abortRetry()
                 success(id, command)
-            case "bash" => runBash(id, command, productTextField(value, "command"))
+            case "bash" => startBash(id, command, productTextField(value, "command"))
             case "abort_bash" => match (session.abortBash()) {
                 case Result.Ok(_) => success(id, command)
                 case Result.Err(error) => failure(id, command, error.message)
@@ -840,12 +842,56 @@ public class ProductJsonlRpcServer {
         hostUris.getOrThrow()
     }
 
-    private func runBash(
+    public func close(cancelBash!: Bool = true): Unit {
+        lock.lock()
+        closing = true
+        let workers = bashWorkers.toArray()
+        lock.unlock()
+        if (cancelBash) { let _ = session.abortBash() }
+        var failureMessage: ?String = None
+        for (worker in workers) {
+            try { worker.future.getOrThrow().get() } catch (error: Exception) {
+                if (failureMessage.isNone()) { failureMessage = Some(error.message) }
+            }
+        }
+        match (failureMessage) {
+            case Some(message) => throw IllegalStateException(message)
+            case None => ()
+        }
+    }
+
+    private func startBash(id: String, command: String, source: String): String {
+        lock.lock()
+        try {
+            if (closing) { return failure(id, command, "RPC server is closing") }
+            var index: Int64 = 0
+            while (index < bashWorkers.size) {
+                let complete = bashWorkers[index].completed
+                if (complete) { bashWorkers.remove(at: index) } else { index += 1 }
+            }
+            let owned = RpcBashWorker()
+            match (session.executeBashAsync(source, {result =>
+                try { emitFrame(bashReply(id, command, result)) } finally {
+                    lock.lock()
+                    owned.completed = true
+                    lock.unlock()
+                }
+            })) {
+                case Result.Ok(worker) =>
+                    owned.future = Some(worker)
+                    bashWorkers.add(owned)
+                    ""
+                case Result.Err(error) => failure(id, command, error.message)
+            }
+        } finally { lock.unlock() }
+    }
+
+    private func bashReply(
         id: String,
         command: String,
-        source: String
+        execution: Result<ProcessResult>
     ): String {
-        match (session.executeBash(source)) {
+        match (execution) {
             case Result.Ok(result) => success(
                 id,
                 command,
@@ -2162,4 +2208,11 @@ func appendBase64(
     index: Int64
 ): Unit {
     output.add(unsafe { alphabet.rawData() }[index])
+}
+
+// The completion flag is protected by the server lock. Inspecting a Future
+// itself is not a nonblocking liveness probe on every supported SDK.
+class RpcBashWorker {
+    var future: ?Future<Unit> = None
+    var completed = false
 }

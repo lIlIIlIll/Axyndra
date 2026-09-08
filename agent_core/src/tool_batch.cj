@@ -134,7 +134,22 @@ class CoreToolBatchCoordinator {
             }
             match (reserve(committed)) {
                 case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
+                case Result.Err(error) =>
+                    // No effects have started. Preserve prepared operation identities
+                    // and settle every canonical call, including unadmitted calls.
+                    for (work in ready) {
+                        immediate.add(CoreToolOutcome(
+                            work.index, work.committed, Result.Err(error),
+                            operationId: Some(work.prepared.operationId),
+                            operationPlan: Some(work.prepared.operationPlan)
+                        ))
+                    }
+                    for (remaining in index..calls.size) {
+                        immediate.add(CoreToolOutcome(remaining, calls[remaining], Result.Err(error)))
+                    }
+                    return Result.Ok(CoreToolBatchPreparation(
+                        [], coreSortToolOutcomes(immediate.toArray()), None, None, None, []
+                    ))
             }
             let call = ToolCall(block.callId, block.name, block.arguments)
             match (tools.prepareCommitted(context, committed)) {
@@ -252,11 +267,18 @@ func corePlanToolWaves(
     let waves = ArrayList<CoreToolWave>()
     let width = max(1, maxConcurrent)
     for (call in calls) {
-        var placed = false
-        for (wave in waves) {
-            if (wave.calls.size >= width || coreWaveConflicts(wave, call)) {
-                continue
+        // A call must follow every earlier conflicting call, even when an
+        // earlier free wave has room. Independent calls can still fill holes.
+        var earliest: Int64 = 0
+        for (index in 0..waves.size) {
+            if (coreWaveConflicts(waves[index], call)) {
+                earliest = index + 1
             }
+        }
+        var placed = false
+        for (index in earliest..waves.size) {
+            let wave = waves[index]
+            if (wave.calls.size >= width) { continue }
             wave.calls.add(call)
             placed = true
             break

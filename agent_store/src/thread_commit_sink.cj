@@ -27,7 +27,15 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
     }
 
     public func loadThread(threadId: ThreadId): AgentThreadSnapshot {
-        let threadRows = database.query(
+        // Header, Turns, Items and active Run must describe one durable revision.
+        database.readTransaction { transaction => loadThreadSnapshot(transaction, threadId) }
+    }
+
+    private func loadThreadSnapshot(
+        transaction: SqliteTransaction,
+        threadId: ThreadId
+    ): AgentThreadSnapshot {
+        let threadRows = transaction.query(
             "SELECT revision,workspace_id,status,next_item_ordinal,COALESCE(active_turn_id,'') " +
                 "FROM threads WHERE id=" + sqliteText(threadId.value)
         )
@@ -47,8 +55,8 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
             parseStoreInt(row.required(3), "Thread item ordinal"),
             activeTurnId: activeTurnId
         )
-        let turns = loadTurns(threadId)
-        let items = loadItems(threadId)
+        let turns = loadTurns(transaction, threadId)
+        let items = loadItems(transaction, threadId)
         var activeRunId: ?RunId = None
         var activeEpoch: Int64 = 0
         var nextResultSequence: Int64 = 1
@@ -59,7 +67,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 let activeTurn = selected.getOrThrow()
                 activeRunId = activeTurn.activeRunId
                 let runId = activeTurn.activeRunId.getOrThrow()
-                let runRows = database.query(
+                let runRows = transaction.query(
                     "SELECT epoch FROM runs WHERE id=" + sqliteText(runId.value) +
                         " AND thread_id=" + sqliteText(threadId.value) +
                         " AND turn_id=" + sqliteText(turnId.value)
@@ -627,9 +635,9 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
         )
     }
 
-    private func loadTurns(threadId: ThreadId): Array<TurnRecord> {
+    private func loadTurns(transaction: SqliteTransaction, threadId: ThreadId): Array<TurnRecord> {
         let records = ArrayList<TurnRecord>()
-        for (row in database.query(
+        for (row in transaction.query(
             "SELECT id,ordinal,state,user_item_id,COALESCE(active_run_id,'') FROM turns WHERE thread_id=" +
                 sqliteText(threadId.value) + " ORDER BY ordinal"
         )) {
@@ -644,9 +652,9 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
         records.toArray()
     }
 
-    private func loadItems(threadId: ThreadId): Array<ThreadItem> {
+    private func loadItems(transaction: SqliteTransaction, threadId: ThreadId): Array<ThreadItem> {
         let records = ArrayList<ThreadItem>()
-        for (row in database.query(
+        for (row in transaction.query(
             "SELECT id,turn_id,ordinal,kind,payload,provenance,created_at_millis FROM items WHERE thread_id=" +
                 sqliteText(threadId.value) + " ORDER BY ordinal"
         )) {

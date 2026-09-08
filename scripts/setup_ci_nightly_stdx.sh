@@ -16,6 +16,10 @@ url="https://gitcode.com/Cangjie/nightly_build/releases/download/$version/$archi
 
 mkdir -p -- "$extract_root"
 curl -fL --retry 3 --connect-timeout 20 -o "$archive" "$url"
+actual_sha256=$(sha256sum "$archive" | cut -d " " -f1)
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  printf "AXYNDRA_CI_STDX_ACTUAL_SHA256=%s\n" "$actual_sha256" >> "$GITHUB_ENV"
+fi
 if [[ -n "$expected_sha256" ]]; then
   printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum --check --status
 fi

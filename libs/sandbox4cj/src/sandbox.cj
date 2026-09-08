@@ -466,7 +466,7 @@ public class WorkspaceSandbox {
             let stderr = spawn { readBounded(process.stdErrPipe, probeBudget) }
             let code = process.wait()
             let _ = stdout.get()
-            let detail = String.fromUtf8(stderr.get()).trimAscii()
+            let detail = decodeProcessOutput(stderr.get()).trimAscii()
             if (code == 0) {
                 SandboxResult.Ok(())
             } else {
@@ -521,9 +521,12 @@ public class WorkspaceSandbox {
             }
             let stdout = spawn { readBounded(process.stdOutPipe, budget) }
             let stderr = spawn { readBounded(process.stdErrPipe, budget) }
+            // Collect buffered bytes before SDK wait can discard the unread tail.
+            let output = stdout.get()
+            let errors = stderr.get()
             let code = process.wait()
-            let outputText = requestedRedactor.redact(ambientRedactor.redact(String.fromUtf8(stdout.get())))
-            let errorText = requestedRedactor.redact(ambientRedactor.redact(String.fromUtf8(stderr.get())))
+            let outputText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(output)))
+            let errorText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(errors)))
             SandboxResult.Ok(SandboxExecutionResult(
                 code,
                 outputText,

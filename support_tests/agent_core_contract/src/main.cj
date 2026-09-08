@@ -68,6 +68,9 @@ main(): Int64 {
     expect(model.calls == 2, "one execute primitive drives both model turns")
     modelProtocolCapabilityBoundaryContract(model)
     controlledInternalModelCallContract()
+    internalTotalBudgetContract()
+    standaloneInternalBudgetContract()
+    stubbornModelOwnershipContract()
     let canonical = threadRuntimes.acquire(
         ThreadId(request.sessionId.value), "agent-core"
     ).value().getOrThrow().threadSnapshot()
@@ -92,6 +95,8 @@ main(): Int64 {
     )
     typedLifecycleContract(runs.eventLog, request.runId)
     activeSkillStackContract()
+    toolBudgetPreparationFailureContract()
+    conflictingToolDependencyContract()
     parallelToolWaveContract()
     partialToolWaveFailureContract()
     approvalBatchBarrierContract()
@@ -5988,4 +5993,231 @@ func missing(resource: String): AgentError {
         "fixture resource is missing",
         fields: [ErrorField("resource", resource)]
     )
+}
+
+func toolBudgetPreparationFailureContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let tool = EchoTool()
+    catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("echo", "echo", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        tool
+    ).value().getOrThrow()
+    let registry = InMemoryThreadRuntimeRegistry(
+        ContextProjector("budget", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let core = AgentCore(
+        TwoToolModel(),
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(registry)
+    )
+    let session = SessionId("budget-preparation-session")
+    let result = core.start(AgentRunRequest(
+        RunId("budget-preparation-run"),
+        session,
+        "fixture",
+        "test",
+        budget: ResourceBudget(maxToolCalls: 1),
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        parallelToolCalls: true
+    ))
+    expect(
+        result.error().getOrThrow().code == "budget.tool_calls_exceeded",
+        "partial preparation preserves budget failure"
+    )
+    let saved = runs.find(RunId("budget-preparation-run")).value().getOrThrow()
+    expect(
+        saved.status == RunState.Failed && saved.toolCalls == 1 && tool.executions == 0,
+        "only admitted reservation charged and no tool effects executed"
+    )
+    let ids = transcriptToolResultIds(coreMessages(core, session))
+    expect(
+        ids.size == 2 && ids[0] == "queue-call-1" && ids[1] == "queue-call-2",
+        "failed preparation pairs every committed call in order"
+    )
+    for (message in coreMessages(core, session)) {
+        for (block in message.blocks where block.kind == ModelBlockKind.ToolResult) {
+            expect(
+                block.isError,
+                "unexecuted calls are paired with errors, never fabricated successes"
+            )
+        }
+    }
+    expect(
+        registry.acquire(ThreadId(session.value), "agent-core")
+            .value().getOrThrow().activeRun().isNone(),
+        "failed tool preparation settles runtime owner"
+    )
+    // MemoryRuns has a single-run event log; the next Core shares the public
+    // Thread registry but uses a fresh repository fixture for its own run.
+    let nextCore = AgentCore(
+        TerminalModel(),
+        MemoryRuns(),
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(registry)
+    )
+    let next = nextCore.start(AgentRunRequest(
+        RunId("budget-preparation-next"), session, "fixture", "next"
+    ))
+    match (next) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => expect(
+            false,
+            "session accepts next run after preparation budget failure: " + error.code
+        )
+    }
+}
+
+func conflictingToolDependencyContract(): Unit {
+    let catalog = ToolCatalog()
+    let state = ConflictWaveState()
+    let x = ToolResourceAccess("workspace", "/x", ToolAccessMode.Write)
+    let y = ToolResourceAccess("workspace", "/y", ToolAccessMode.Write)
+    for ((name, accesses) in [("wave_a", [x]), ("wave_b", [x, y]), ("wave_c", [y])]) {
+        catalog.register(
+            ToolDescriptor(
+                ModelToolDefinition(name, name, objectValue([])),
+                Capability(CapabilityKind.WorkspaceRead),
+                concurrency: sharedToolConcurrency(accesses: accesses)
+            ),
+            ConflictWaveTool(name, state)
+        ).value().getOrThrow()
+    }
+    let core = AgentCore(
+        ParallelBatchModel(),
+        MemoryRuns(),
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let result = core.start(AgentRunRequest(
+        RunId("wave-order"),
+        SessionId("wave-order"),
+        "fixture",
+        "test",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxConcurrentTools: 2)
+    ))
+    expect(
+        result.isOk() && state.cObservedB.load(),
+        "later conflicting C observes earlier B effect across resource bridge"
+    )
+}
+
+class ConflictWaveState {
+    let bFinished = AtomicBool(false)
+    let cObservedB = AtomicBool(false)
+}
+
+class ConflictWaveTool <: ToolExecutor {
+    let name: String
+    let state: ConflictWaveState
+
+    init(name: String, state: ConflictWaveState) {
+        this.name = name
+        this.state = state
+    }
+
+    public func execute(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+        if (name == "wave_b") {
+            state.bFinished.store(true)
+        }
+        if (name == "wave_c") {
+            state.cObservedB.store(state.bFinished.load())
+        }
+        Result.Ok(ToolResult(call.callId, objectValue([])))
+    }
+}
+
+func internalTotalBudgetContract(): Unit {
+    for (inputLimit in [0, 50]) {
+        let runs = MemoryRuns()
+        let runId = RunId("internal-total")
+        runs.save(RunSnapshot(runId, SessionId("total"), RunState.Running)).value().getOrThrow()
+        let parent = AgentRunRequest(runId, SessionId("total"), "fixture", "total",
+            budget: ResourceBudget(maxTotalInputTokens: inputLimit,
+                maxTotalOutputTokens: if (inputLimit == 0) { 10 } else { 0 }))
+        let outcome = ControlledModelPort(DetailedUsageModel(), runs: Some(runs)).executeInternal(
+            ModelRequest("fixture", [], requestId: "total", tools: [],
+                parallelToolCalls: false, toolChoice: ModelToolChoice.NoTools),
+            InternalModelCallOptions(timeoutMillis: 1000, parent: Some(parent)))
+        let charged = runs.find(runId).value().getOrThrow()
+        expect(outcome.isError() && charged.inputTokens == 100 && charged.outputTokens == 20,
+            "internal cumulative token rejection retains actual consumed usage")
+    }
+}
+
+class StubbornOwnedModel <: ModelPort {
+    let started = AtomicBool(false)
+    let release = AtomicBool(false)
+    let finished = AtomicBool(false)
+    public func execute(_request: ModelRequest, _sink: ModelEventSink): Result<ModelReply> {
+        started.store(true)
+        while (!release.load()) { sleep(Duration.millisecond) }
+        finished.store(true)
+        Result.Ok(contractModelReply([ModelBlock(ModelBlockKind.Text, text: "late old result")]))
+    }
+    public func cancel(_requestId: String): Result<Unit> { Result.Ok(()) }
+}
+
+func stubbornModelOwnershipContract(): Unit {
+    let runs = MemoryRuns()
+    let model = StubbornOwnedModel()
+    let catalog = ToolCatalog()
+    let core = AgentCore(model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()), catalog)
+    let runId = RunId("stubborn-owned")
+    let pending = spawn { core.start(AgentRunRequest(runId, SessionId("stubborn"), "fixture", "wait")) }
+    while (!model.started.load()) { sleep(Duration.millisecond) }
+    core.cancel(runId).value().getOrThrow()
+    expect(pending.get().isError() && !model.finished.load() &&
+        runs.find(runId).value().getOrThrow().status == RunState.RecoveryRequired,
+        "uncooperative model remains owned and cannot report settled cancellation")
+    model.release.store(true)
+    while (!model.finished.load()) { sleep(Duration.millisecond) }
+    expect(runs.find(runId).value().getOrThrow().status == RunState.RecoveryRequired,
+        "late model result cannot overwrite terminal recovery state")
+}
+
+func standaloneInternalBudgetContract(): Unit {
+    let runs = MemoryRuns()
+    let provider = DetailedUsageModel()
+    let control = ControlledModelPort(provider, runs: Some(runs))
+    let parent = AgentRunRequest(RunId("standalone"), SessionId("standalone"), "fixture", "summary",
+        budget: ResourceBudget(maxTotalInputTokens: 50))
+    let request = ModelRequest("fixture", [], requestId: "standalone-request", tools: [],
+        parallelToolCalls: false, toolChoice: ModelToolChoice.NoTools)
+    expect(control.executeInternal(request, InternalModelCallOptions(parent: Some(parent))).isError() &&
+        provider.calls == 0, "missing durable parent never silently switches accounting mode")
+    let bounded = control.executeInternal(request, InternalModelCallOptions(parent: Some(parent),
+        standaloneAccounting: true))
+    expect(bounded.isError() && bounded.error().getOrThrow().kind == AgentErrorKind.BudgetExceeded &&
+        provider.calls == 1, "explicit standalone calls enforce cumulative tokens without a canonical Run")
+    let retryProvider = StandaloneRetryModel()
+    let retryParent = AgentRunRequest(RunId("standalone-retry"), SessionId("standalone"), "fixture", "summary",
+        budget: ResourceBudget(maxModelRequests: 1))
+    let retry = ControlledModelPort(retryProvider, runs: Some(runs)).executeInternal(request,
+        InternalModelCallOptions(parent: Some(retryParent), standaloneAccounting: true))
+    expect(retry.isError() && retry.error().getOrThrow().kind == AgentErrorKind.BudgetExceeded &&
+        retryProvider.calls == 1, "standalone retries share the request reservation ledger")
+    let unlimited = AgentRunRequest(RunId("standalone-unlimited"), SessionId("standalone"), "fixture", "summary")
+    expect(control.executeInternal(request, InternalModelCallOptions(parent: Some(unlimited),
+        standaloneAccounting: true)).isOk() && provider.calls == 2,
+        "zero cumulative standalone token limits remain unbounded")
+}
+
+class StandaloneRetryModel <: ModelPort {
+    var calls: Int64 = 0
+    public func execute(_request: ModelRequest, _events: ModelEventSink): Result<ModelReply> {
+        calls += 1
+        Result.Err(AgentError(AgentErrorKind.RateLimited, "retry", "retry", retryable: true,
+            fields: [ErrorField(RETRY_AFTER_MILLIS_FIELD, "1")]))
+    }
+    public func cancel(_requestId: String): Result<Unit> { Result.Ok(()) }
 }

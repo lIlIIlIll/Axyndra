@@ -156,6 +156,9 @@ public class DapClient {
         arguments: JsonNode,
         timeoutMillis!: Int64 = 30000
     ): DapResult<JsonNode> {
+        if (timeoutMillis <= 0) {
+            return DapResult.Err(DapError(DapErrorKind.Deadline, "dap.deadline_invalid", "deadline must be positive"))
+        }
         let sequence = match (beginRequest(command, arguments)) {
             case DapResult.Ok(value) => value
             case DapResult.Err(error) => return DapResult.Err(error)
@@ -178,7 +181,7 @@ public class DapClient {
             JsonObjectEntry("arguments", arguments)
         ]))) {
             case DapResult.Ok(_) => DapResult.Ok(item.sequence)
-            case DapResult.Err(error) => settleError(item.sequence, error); DapResult.Err(error)
+            case DapResult.Err(error) => release(item.sequence); DapResult.Err(error)
         }
     }
 

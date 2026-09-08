@@ -20,6 +20,7 @@ main(): Int64 {
     try {
         verifySchema(root)
         verifyProviders(root)
+        verifyLocalProcessContracts(root)
         println("web search contract passed")
         0
     } finally {
@@ -141,7 +142,7 @@ func verifyProviders(root: String): Unit {
         )
     )
     expect(
-        brave.output.field("provider").getOrThrow().text == "brave" &&
+        transport.arguments[0] == "-q" && brave.output.field("provider").getOrThrow().text == "brave" &&
         brave.output.field("count").getOrThrow().number == "1" &&
         brave.output.field("content").getOrThrow().text
             .contains("[1] Cangjie docs (2026-07-30)") &&
@@ -180,7 +181,7 @@ func verifyProviders(root: String): Unit {
         transport.arguments.size - 1
     ]
     expect(
-        tavily.output.field("provider").getOrThrow().text == "tavily" &&
+        transport.arguments[0] == "-q" && tavily.output.field("provider").getOrThrow().text == "tavily" &&
         tavily.output.field("content").getOrThrow().text
             .startsWith("Cangjie is a programming language.") &&
         tavily.output.field("content").getOrThrow().text
@@ -205,7 +206,7 @@ func verifyProviders(root: String): Unit {
         searchCall("searxng", "local metasearch")
     )
     expect(
-        searxng.output.field("provider").getOrThrow().text == "searxng" &&
+        transport.arguments[0] == "-q" && searxng.output.field("provider").getOrThrow().text == "searxng" &&
         searxng.output.field("content").getOrThrow().text
             .contains("SearXNG snippet") &&
         containsArgument(

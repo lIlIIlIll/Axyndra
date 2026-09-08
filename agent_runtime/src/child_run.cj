@@ -50,11 +50,13 @@ public class ChildRunSpec {
         if (objective.trimAscii() == "") {
             throw IllegalArgumentException("child run objective must not be empty")
         }
-        if (workspace.mode == ChildWorkspaceMode.SharedReadOnly &&
-            capabilityCeiling.allows(CapabilityKind.WorkspaceWrite)) {
-            throw IllegalArgumentException(
-                "read-only child workspace cannot carry workspace-write capability"
-            )
+        if (workspace.mode == ChildWorkspaceMode.SharedReadOnly) {
+            for (capability in capabilityCeiling.values where
+                capability.kind == CapabilityKind.WorkspaceWrite) {
+                throw IllegalArgumentException(
+                    "read-only child workspace cannot carry workspace-write capability"
+                )
+            }
         }
         this.runId = runId
         this.objective = objective.trimAscii()
@@ -261,6 +263,13 @@ public class ChildBudgetPool {
                 return childBudgetError(
                     "child.unbounded_cost_reservation",
                     "unbounded child cost cannot be reserved from a bounded parent"
+                )
+            }
+            if ((parent.maxTotalInputTokens > 0 && budget.maxTotalInputTokens == 0) ||
+                (parent.maxTotalOutputTokens > 0 && budget.maxTotalOutputTokens == 0)) {
+                return childBudgetError(
+                    "child.unbounded_token_reservation",
+                    "unbounded child tokens cannot be reserved from a bounded parent"
                 )
             }
             let reserved = reservedUsageLocked()
