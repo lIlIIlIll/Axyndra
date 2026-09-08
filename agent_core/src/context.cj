@@ -255,7 +255,11 @@ func toolProtocolCompleteFrom(messages: Array<ModelMessage>, start: Int64): Bool
             let results = ArrayList<String>()
             var scan = index + 1
             while (scan < messages.size && isOnlyToolResultMessage(messages[scan])) {
-                for (result in toolResultIds(messages[scan])) {
+                let messageResults = toolResultIds(messages[scan])
+                if (messageResults.isEmpty()) {
+                    return false
+                }
+                for (result in messageResults) {
                     if (containsString(results, result)) {
                         return false
                     }

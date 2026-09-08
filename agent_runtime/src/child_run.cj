@@ -189,7 +189,14 @@ public class ChildBudgetLease {
                 ))
             }
             let result = settleFn(id, actual)
-            if (result.isOk()) { settled = true }
+            match (result) {
+                case Result.Ok(_) => settled = true
+                case Result.Err(error) =>
+                    if (error.code == "child.actual_usage_exceeds_reservation" ||
+                        error.code == "child.parent_actual_usage_exceeded") {
+                        settled = true
+                    }
+            }
             result
         } finally {
             lock.unlock()
@@ -238,7 +245,8 @@ public class ChildBudgetPool {
     }
 
     public func reserve(id: String, budget: ExecutionBudget): Result<ChildBudgetLease> {
-        if (id.trimAscii() == "") {
+        let normalizedId = id.trimAscii()
+        if (normalizedId == "") {
             return childBudgetError("child.budget_id_empty", "child budget id must not be empty")
         }
         lock.lock()
@@ -254,9 +262,21 @@ public class ChildBudgetPool {
                     "parent concurrent child budget is exhausted"
                 )
             }
-            for (item in reservations where item.id == id) {
+            for (item in reservations where item.id == normalizedId) {
                 return childBudgetError(
                     "child.duplicate_budget_id", "child budget id is already reserved"
+                )
+            }
+            if (parent.maxTotalInputTokens > 0 && budget.maxTotalInputTokens == 0) {
+                return childBudgetError(
+                    "child.unbounded_input_token_reservation",
+                    "unbounded child input tokens cannot be reserved from a bounded parent"
+                )
+            }
+            if (parent.maxTotalOutputTokens > 0 && budget.maxTotalOutputTokens == 0) {
+                return childBudgetError(
+                    "child.unbounded_output_token_reservation",
+                    "unbounded child output tokens cannot be reserved from a bounded parent"
                 )
             }
             if (parent.maxCostMicros > 0 && budget.maxCostMicros == 0) {
@@ -280,10 +300,10 @@ public class ChildBudgetPool {
                     "child budget reservation exceeds remaining parent budget"
                 )
             }
-            reservations.add(ChildBudgetReservationRecord(id.trimAscii(), budget))
+            reservations.add(ChildBudgetReservationRecord(normalizedId, budget))
             totalChildrenStarted += 1
             Result.Ok(ChildBudgetLease(
-                id.trimAscii(), budget,
+                normalizedId, budget,
                 { leaseId, actual => settleReservation(leaseId, actual) }
             ))
         } finally {
@@ -319,21 +339,25 @@ public class ChildBudgetPool {
                 )
             }
             let reservation = reservations[index]
-            if (!usageFits(reservation.budget, actual)) {
+            let exceedsReservation = !usageFits(reservation.budget, actual)
+            let nextConsumed = addConsumedUsage(consumed, actual)
+            let exceedsParent = !aggregateUsageFits(parent, nextConsumed)
+            // Actual usage has already happened. Release the reservation and
+            // account it before returning a terminal budget violation.
+            reservations.remove(at: index)
+            consumed = nextConsumed
+            if (exceedsReservation) {
                 return childBudgetError(
                     "child.actual_usage_exceeds_reservation",
                     "child actual usage exceeds its reserved budget"
                 )
             }
-            let nextConsumed = addConsumedUsage(consumed, actual)
-            if (!aggregateUsageFits(parent, nextConsumed)) {
+            if (exceedsParent) {
                 return childBudgetError(
                     "child.parent_actual_usage_exceeded",
                     "settling child usage would exceed the parent budget"
                 )
             }
-            reservations.remove(at: index)
-            consumed = nextConsumed
             Result.Ok(ChildBudgetPoolSnapshot(
                 totalChildrenStarted, reservations.size, reservedUsageLocked(), consumed
             ))

@@ -84,6 +84,12 @@ main(): Int64 {
         router.route("/not-implemented").isError(),
         "unknown slash input is rejected locally"
     )
+    let overflowSequence = router.route(
+        "/events run-overflow 9223372036854775808"
+    )
+    expect(overflowSequence.isError() &&
+        overflowSequence.error().getOrThrow().code == "cli.invalid_command_arguments",
+        "decimal sequence overflow stays inside the Result boundary")
     let surface = availableSlashSurfaceNames()
     for (name in [
         "todo",

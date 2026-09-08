@@ -284,17 +284,25 @@ func expectExceptionRedacted(
     transport: NativeProviderTransport,
     baseUrl: String
 ): Unit {
-    expectRedactedError(
-        transport.post(
-            provider("callback-error", baseUrl),
-            "{\"case\":\"callback-error\"}",
-            true,
-            "native-security-callback-error",
-            {_ => throw IllegalStateException("callback failed: " + TEST_API_KEY)}
-        ),
-        "model.transport_internal",
-        "transport exception diagnostics redact an API key"
-    )
+    match (transport.post(
+        provider("callback-error", baseUrl),
+        "{\"case\":\"callback-error\"}",
+        true,
+        "native-security-callback-error",
+        {_ => throw IllegalStateException("callback failed: " + TEST_API_KEY)}
+    )) {
+        case domain.Result.Err(error) => expect(
+            error.code == "model.streaming_interrupted" &&
+                !error.retryable && !error.fallbackAllowed &&
+                error.field("partial_stream") == Some("true") &&
+                error.message.contains("[REDACTED]") &&
+                !error.message.contains(TEST_API_KEY),
+            "a callback failure after visible output is redacted and non-retryable"
+        )
+        case domain.Result.Ok(_) => throw IllegalStateException(
+            "callback failure unexpectedly returned a response body"
+        )
+    }
 }
 
 func expectNativeRemoteHttpRejected(transport: NativeProviderTransport): Unit {
