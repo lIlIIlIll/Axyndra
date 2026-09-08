@@ -23,8 +23,11 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15 ripgrep unzip
+          sudo apt-get install --yes clang-15 ripgrep unzip bubblewrap
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+          # The workspace sandbox executes every tool through bubblewrap;
+          # ubuntu-24.04 images restrict unprivileged user namespaces by default.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Resolve latest Cangjie nightly
         id: cangjie-nightly
         run: |
