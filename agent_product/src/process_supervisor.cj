@@ -2142,6 +2142,18 @@ func signalProcessTree(pid: Int64, signal: String): Result<Unit> {
                 "unsupported signal: " + signal
             )
     }
+    // A sandbox wrapper re-sessions its descendants (bwrap --new-session),
+    // so the launch group does not cover them, and PDEATHSIG does not
+    // cascade through every bubblewrap build. Signal every live descendant
+    // explicitly while the tree is still connected, then the launch group.
+    let descendants = processDescendantPids(pid)
+    if (!descendants.isEmpty()) {
+        let sweepArguments = ArrayList<String>(["-" + suffix, "--"])
+        for (descendant in descendants) {
+            sweepArguments.add(descendant.toString())
+        }
+        let _ = executeWithOutput("kill", sweepArguments.toArray())
+    }
     let (groupCode, _, groupError) = executeWithOutput(
         "kill",
         ["-" + suffix, "--", "-" + pid.toString()]
@@ -2151,9 +2163,7 @@ func signalProcessTree(pid: Int64, signal: String): Result<Unit> {
     } else {
         // A sandbox wrapper can own the child without being a process-group
         // leader in the host namespace. Signal the already-owned root PID as
-        // a fail-closed fallback; bwrap's --die-with-parent then tears down
-        // the isolated descendants. Report failure only when neither target
-        // accepted the signal.
+        // a fail-closed fallback.
         let (rootCode, _, rootError) = executeWithOutput(
             "kill",
             ["-" + suffix, "--", pid.toString()]
@@ -2168,6 +2178,71 @@ func signalProcessTree(pid: Int64, signal: String): Result<Unit> {
             )
         }
     }
+}
+
+func processDescendantPids(root: Int64): Array<Int64> {
+    let childrenOf = HashMap<Int64, ArrayList<Int64>>()
+    try {
+        for (entry in Directory.readFrom("/proc")) {
+            let name = entry.name
+            var allDigits = name.size > 0
+            for (byte in name.toArray()) {
+                if (byte < b'0' || byte > b'9') {
+                    allDigits = false
+                    break
+                }
+            }
+            if (!allDigits) { continue }
+            let statText = try {
+                String.fromUtf8(File.readFrom("/proc/" + name + "/stat")).trimAscii()
+            } catch (_: Exception) {
+                ""
+            }
+            let closing = match (statText.lastIndexOf(")")) {
+                case Some(index) => index
+                case None => continue
+            }
+            let fields = statText[closing + 1..].trimAscii().split(" ")
+            if (fields.size < 2) { continue }
+            let parsedPid = decimalOrZero(name)
+            let parsedParent = decimalOrZero(fields[1])
+            if (parsedPid == 0 || parsedParent == 0) { continue }
+            match (childrenOf.get(parsedParent)) {
+                case Some(list) => list.add(parsedPid)
+                case None =>
+                    let list = ArrayList<Int64>()
+                    list.add(parsedPid)
+                    childrenOf.add(parsedParent, list)
+            }
+        }
+    } catch (_: Exception) {
+        // A partial view is acceptable; the group signal still runs.
+    }
+    let descendants = ArrayList<Int64>()
+    let pending = ArrayList<Int64>()
+    pending.add(root)
+    while (!pending.isEmpty()) {
+        let current = pending.remove(at: pending.size - 1)
+        match (childrenOf.get(current)) {
+            case Some(children) =>
+                for (child in children) {
+                    descendants.add(child)
+                    pending.add(child)
+                }
+            case None => ()
+        }
+    }
+    descendants.toArray()
+}
+
+func decimalOrZero(value: String): Int64 {
+    var result: Int64 = 0
+    for (byte in value.toArray()) {
+        if (byte < b'0' || byte > b'9') { return 0 }
+        result = result * 10 + Int64(byte - b'0')
+        if (result > 4194304) { return 0 }
+    }
+    result
 }
 
 func shellCommand(
