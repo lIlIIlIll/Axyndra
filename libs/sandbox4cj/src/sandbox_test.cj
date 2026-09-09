@@ -10,12 +10,26 @@ class Sandbox4CjTests {
     func outputCapAndBinaryBytesPreserveCommandResult() {
         let sandbox = WorkspaceSandbox(WorkspaceSandboxPolicy(sandboxTestRoot(),
             resources: SandboxResourceLimits(maxOutputBytes: 2)))
-        match (sandbox.execute(WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "printf '中'; exit 7"]))) {
+        let first = sandbox.execute(
+            WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "printf '中'; exit 7"])
+        )
+        match (first) {
             case SandboxResult.Ok(result) =>
                 @Expect(result.exitCode, 7)
                 @Expect(result.outputTruncated, true)
                 @Expect(result.stdout, "��")
-            case SandboxResult.Err(error) => @Fail(error.code + ": " + error.message)
+            case SandboxResult.Err(error) =>
+                // Hosts without a usable enforcer (CI runners restrict
+                // unprivileged user namespaces) must fail closed instead of
+                // executing an unsandboxed command; the byte-cap contract
+                // itself stays covered on enforcer-capable hosts below.
+                if (error.code != "sandbox.platform_unsupported" &&
+                    error.code != "sandbox.bubblewrap_unavailable" &&
+                    error.code != "sandbox.isolation_unsupported") {
+                    @Fail("sandbox must fail closed without a usable enforcer: " +
+                        error.code + ": " + error.message)
+                }
+                return
         }
         match (sandbox.execute(WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "printf '\\377A'; exit 9"]))) {
             case SandboxResult.Ok(result) =>

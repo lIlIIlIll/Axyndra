@@ -56,7 +56,7 @@ class CiEvidenceTest(unittest.TestCase):
                 self.assertTrue(environment['AXYNDRA_CI_STDX_SHA256'])
                 expected = hashlib.sha256(archive.read_bytes()).hexdigest()
                 environment['AXYNDRA_CI_STDX_SHA256'] = expected
-                download = subprocess.run(['bash', str(ROOT / 'scripts/setup_ci_nightly_stdx.sh'),
+                download = subprocess.run(['bash', str(ROOT / 'scripts/setup_ci_stdx.sh'),
                     environment['AXYNDRA_CI_CANGJIE_VERSION'], str(root / 'download'), expected],
                     env=environment, check=True, capture_output=True, text=True)
                 for line in envfile.read_text().splitlines():
@@ -81,7 +81,7 @@ class CiEvidenceTest(unittest.TestCase):
                     env=environment, check=True, capture_output=True)
                 missing = json.loads((output / 'gate-manifest.json').read_text())['toolchain']
                 self.assertIsNone(missing['cjc'])
-                failed = subprocess.run(['bash', str(ROOT / 'scripts/setup_ci_nightly_stdx.sh'),
+                failed = subprocess.run(['bash', str(ROOT / 'scripts/setup_ci_stdx.sh'),
                     environment['AXYNDRA_CI_CANGJIE_VERSION'], str(root / 'bad-download'), '0'*64],
                     env=environment, capture_output=True)
                 self.assertNotEqual(failed.returncode, 0)

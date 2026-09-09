@@ -23,8 +23,11 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15 ripgrep unzip
+          sudo apt-get install --yes clang-15 ripgrep unzip bubblewrap
           sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+          # The workspace sandbox executes every tool through bubblewrap;
+          # ubuntu-24.04 images restrict unprivileged user namespaces by default.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Resolve latest Cangjie nightly
         id: cangjie-nightly
         run: |
@@ -38,7 +41,7 @@ jobs:
           archive-path: ${{ runner.temp }}/cangjie-nightly.tar.gz
       - name: Setup matching nightly stdx
         run: |
-          stdx_root=$(bash scripts/setup_ci_nightly_stdx.sh \
+          stdx_root=$(bash scripts/setup_ci_stdx.sh \
             "${{ steps.cangjie-nightly.outputs.version }}" "$RUNNER_TEMP")
           echo "CANGJIE_STDX_PATH=$stdx_root" >> "$GITHUB_ENV"
       - name: Configure pinned SDK

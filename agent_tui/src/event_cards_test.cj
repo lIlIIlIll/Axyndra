@@ -914,7 +914,7 @@ class AgentEventCardTests {
             expanded: true
         )
         @Expect(stripAnsi(longShell).startsWith("╭"))
-        @Expect(longShell.contains("$ ssh"))
+        @Expect(stripAnsi(longShell).contains("$ ssh"))
         @Expect(longShell.contains("Output"))
         @Expect(longShell.contains("Exit: 0"))
         let emptyShell = renderTranscriptGallery(
