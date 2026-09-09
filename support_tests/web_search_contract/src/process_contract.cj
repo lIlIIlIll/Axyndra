@@ -92,19 +92,22 @@ func verifyLocalProcessContracts(root: String): Unit {
             expect(exists(Path(fixtureRoot + "/" + name)), "curl process reached delayed local fixture")
         }
         // Markers normally appear well inside one second. A multi-second
-        // marker wait means the host runtime stalled the whole scenario
-        // (a known runtime wakeup bug on some hosts); the timing asserts
-        // below are meaningless there, so verify only the semantics.
+        // marker wait means only the latency measurement is unreliable on
+        // this host; the cancellation and isolation assertions still apply.
         let hostStalled = (MonoTime.now() - markersStarted).toMilliseconds() > 2000
         let started = MonoTime.now()
         runtime.cancel(owned.runId).value().getOrThrow()
+        let firstResult = first.get()
+        let secondResult = second.get()
+        expect(firstResult.isError() && secondResult.isError(),
+            "run cancellation stops every matching curl operation")
+        expect(!otherDone.load(),
+            "same call IDs remain isolated across runs and calls")
         if (hostStalled) {
-            println("web search cancellation scenario: host runtime stalled; skipping timing assertions")
-            let _ = first.get(); let _ = second.get()
+            println("web search cancellation scenario: host runtime stalled; skipping timing assertion")
         } else {
-            expect(first.get().isError() && second.get().isError(), "run cancellation stops every matching curl operation")
-            expect((MonoTime.now() - started).toMilliseconds() < 3000 && !otherDone.load(),
-                "same call IDs remain isolated across runs and calls")
+            expect((MonoTime.now() - started).toMilliseconds() < 3000,
+                "run cancellation completes within the healthy-host bound")
         }
     } finally {
         let _ = runtime.cancel(owned.runId)
