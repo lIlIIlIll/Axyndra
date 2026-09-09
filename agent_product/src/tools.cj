@@ -16,6 +16,7 @@ import std.collection.*
 import std.convert.*
 import std.fs.*
 import std.sync.*
+import std.time.*
 import workspace_search_extension.*
 import workspace_write_extension.*
 import ast_extension.*

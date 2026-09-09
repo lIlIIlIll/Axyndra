@@ -1,7 +1,7 @@
 # SDK, manifest, and extension compatibility
 
 Local canonical verification and the PR and release workflows use Cangjie
-`1.1.0-alpha.20260611020029` with cjpm `1.2.0-alpha.21`. The scheduled nightly
+STS `1.1.3` with cjpm `1.1.3`. The scheduled nightly
 workflow resolves the latest complete official nightly and installs its matching
 stdx component. The scheduled full release gate runs once per week.
 The PR gate is capped at 60 minutes and runs policy checks, a clean type check,

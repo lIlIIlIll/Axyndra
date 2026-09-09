@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_version='1.1.0-alpha.20260611020029'
-expected_cjpm_version='1.2.0-alpha.21'
+expected_version='1.1.3'
+expected_cjpm_version='1.1.3'
 if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJC_VERSION:-}" ]]; then
   expected_version=$AXYNDRA_CI_EXPECTED_CJC_VERSION
 fi
@@ -52,12 +52,16 @@ cjpm_version=$(env \
   PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH" \
   LD_LIBRARY_PATH="$sdk_ld" \
   "$cjpm" --version 2>&1 || true)
-if [[ "$cjc_version" != *"$expected_version"* ]]; then
+cjc_actual_version="${cjc_version#Cangjie Compiler: }"
+cjc_actual_version="${cjc_actual_version%% *}"
+cjpm_actual_version="${cjpm_version#Cangjie Project Manager: }"
+cjpm_actual_version="${cjpm_actual_version%% *}"
+if [[ "$cjc_actual_version" != "$expected_version" ]]; then
   printf 'axyndra: unsupported cjc; expected %s, got: %s\n' \
     "$expected_version" "${cjc_version//$'\n'/; }" >&2
   exit 2
 fi
-if [[ "$cjpm_version" != *"$expected_cjpm_version"* ]]; then
+if [[ "$cjpm_actual_version" != "$expected_cjpm_version" ]]; then
   printf 'axyndra: unsupported cjpm; expected %s, got: %s\n' \
     "$expected_cjpm_version" "${cjpm_version//$'\n'/; }" >&2
   exit 2
