@@ -132,6 +132,16 @@ func budgetReservationContract(): Unit {
     let boundedParent = ChildBudgetPool(ExecutionBudget(maxCostMicros: 10), 1)
     expect(boundedParent.reserve("unbounded", ExecutionBudget()).isError(),
         "bounded parent rejects an unbounded child cost reservation")
+    let inputBoundedParent = ChildBudgetPool(
+        ExecutionBudget(maxTotalInputTokens: 10), 1
+    )
+    expect(inputBoundedParent.reserve("unbounded-input", ExecutionBudget()).isError(),
+        "bounded parent rejects an unbounded child cumulative input reservation")
+    let outputBoundedParent = ChildBudgetPool(
+        ExecutionBudget(maxTotalOutputTokens: 10), 1
+    )
+    expect(outputBoundedParent.reserve("unbounded-output", ExecutionBudget()).isError(),
+        "bounded parent rejects an unbounded child cumulative output reservation")
     let settled = first.settle(ExecutionUsage(
         turns: 2, toolCalls: 3, inputTokens: 100, outputTokens: 50, costMicros: 10
     )).value().getOrThrow()
@@ -158,6 +168,33 @@ func budgetReservationContract(): Unit {
         maxTurns: 1, maxToolCalls: 1, maxConcurrentTools: 1,
         maxInputTokens: 1, maxOutputTokens: 1
     )).isError(), "child reservations cannot exceed parent child concurrency")
+
+    let normalizedIds = ChildBudgetPool(ExecutionBudget(), 2, maxConcurrentChildren: 2)
+    let normalizedLease = normalizedIds.reserve("same", ExecutionBudget())
+        .value().getOrThrow()
+    let duplicate = normalizedIds.reserve(" same ", ExecutionBudget())
+    expect(duplicate.isError() && duplicate.error().getOrThrow().code ==
+        "child.duplicate_budget_id",
+        "child reservation identity is normalized before duplicate detection")
+    normalizedLease.settle(ExecutionUsage()).value().getOrThrow()
+
+    let overspendPool = ChildBudgetPool(
+        ExecutionBudget(maxTotalInputTokens: 100), 1
+    )
+    let overspendLease = overspendPool.reserve(
+        "overspend", ExecutionBudget(maxTotalInputTokens: 100)
+    ).value().getOrThrow()
+    let overspend = overspendLease.settle(ExecutionUsage(inputTokens: 101))
+    let overspendSnapshot = overspendPool.snapshot()
+    expect(overspend.isError() && overspend.error().getOrThrow().code ==
+        "child.actual_usage_exceeds_reservation" &&
+        overspendSnapshot.activeReservations == 0 &&
+        overspendSnapshot.consumed.inputTokens == 101,
+        "actual overspend remains accounted and releases its reservation")
+    let repeatedOverspend = overspendLease.settle(ExecutionUsage(inputTokens: 101))
+    expect(repeatedOverspend.isError() && repeatedOverspend.error().getOrThrow().code ==
+        "child.budget_lease_settled",
+        "an overspent child lease is terminal and cannot be settled repeatedly")
 }
 
 func isolatedResultContract(): Unit {

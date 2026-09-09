@@ -555,6 +555,14 @@ func registryOwnershipContract(database: SqliteDatabase): Unit {
         ContextProjector("registry-projector", FixedEstimator()),
         { => 51 }
     )
+    let coldDiscard = reopened.discardInactive(ThreadId("registry-thread"))
+    expect(coldDiscard.isError() &&
+        coldDiscard.error().getOrThrow().code == "thread.registry_discard_active" &&
+        database.scalarInt("SELECT COUNT(*) FROM threads WHERE id='registry-thread'") == 1 &&
+        database.scalarInt(
+            "SELECT COUNT(*) FROM runs WHERE id='registry-run' AND state='running'"
+        ) == 1,
+        "a cold registry cannot delete a Thread whose active Run exists only in durable state")
     let recovery = reopened.acquire(ThreadId("registry-thread"), "workspace")
     expect(recovery.isError() && recovery.error().getOrThrow().kind ==
         AgentErrorKind.RecoveryRequired,

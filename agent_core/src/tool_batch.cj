@@ -210,13 +210,13 @@ class CoreToolBatchCoordinator {
                 ))
             }
             let futures = ArrayList<Future<Result<ToolInvocationResult>>>()
+            var launchFailure: ?AgentError = None
             for (work in wave.calls) {
                 match (beforeExecute(work)) {
                     case Result.Ok(_) => ()
-                    case Result.Err(error) => return Result.Ok(CoreToolBatchExecution(
-                        coreSortToolOutcomes(outcomes.toArray()),
-                        fatal: Some(error)
-                    ))
+                    case Result.Err(error) =>
+                        launchFailure = Some(error)
+                        break
                 }
                 futures.add(spawn {
                     try {
@@ -237,7 +237,7 @@ class CoreToolBatchCoordinator {
                     }
                 })
             }
-            for (index in 0..wave.calls.size) {
+            for (index in 0..futures.size) {
                 let work = wave.calls[index]
                 outcomes.add(CoreToolOutcome(
                     work.index,
@@ -247,6 +247,21 @@ class CoreToolBatchCoordinator {
                     operationPlan: Some(work.prepared.operationPlan),
                     attemptStage: OperationAttemptStage.Executing
                 ))
+            }
+            match (launchFailure) {
+                case Some(error) =>
+                    match (afterWave(wave.calls.size)) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(releaseError) => return Result.Ok(CoreToolBatchExecution(
+                            coreSortToolOutcomes(outcomes.toArray()),
+                            fatal: Some(releaseError)
+                        ))
+                    }
+                    return Result.Ok(CoreToolBatchExecution(
+                        coreSortToolOutcomes(outcomes.toArray()),
+                        fatal: Some(error)
+                    ))
+                case None => ()
             }
             match (afterWave(wave.calls.size)) {
                 case Result.Ok(_) => ()

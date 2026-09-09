@@ -98,6 +98,11 @@ class Process4CjTests {
         @Expect(completed[0], "one")
         @Expect(completed[1], "two")
         @ExpectThrows[ProcessError](LineFramer(maxFrameBytes: 3).push("four"))
+        let oversizedTail = LineFramer(maxFrameBytes: 8)
+        @ExpectThrows[ProcessError](oversizedTail.push(
+            "ok\n" + String.fromUtf8(Array<Byte>(9, repeat: b'x'))
+        ))
+        @Expect(oversizedTail.bufferedBytes(), 0)
 
         let bytes = encodeContentLengthFrame("{\"ok\":true}")
         let stream = ByteBuffer()

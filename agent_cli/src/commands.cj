@@ -670,7 +670,11 @@ func parseSequence(value: String): ?Int64 {
         if (byte < b'0' || byte > b'9') {
             return None
         }
-        result = result * 10 + Int64(byte - b'0')
+        let digit = Int64(byte - b'0')
+        if (result > (Int64.Max - digit) / 10) {
+            return None
+        }
+        result = result * 10 + digit
     }
     Some(result)
 }
