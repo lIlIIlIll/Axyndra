@@ -98,7 +98,10 @@ main(): Int64 {
     toolBudgetPreparationFailureContract()
     conflictingToolDependencyContract()
     parallelToolWaveContract()
+    orderedConflictWaveContract()
     partialToolWaveFailureContract()
+    partialWaveHandoffFailureContract()
+    malformedToolResultProtocolContract()
     approvalBatchBarrierContract()
     toolContextApprovalResumeContract()
     approvalResumeContract()
@@ -1370,6 +1373,35 @@ func nonPendingDecisionDoesNotPersistContract(): Unit {
     }
 }
 
+func malformedToolResultProtocolContract(): Unit {
+    let messages = [
+        ModelMessage(ModelRole.Assistant, [
+            ModelBlock(
+                ModelBlockKind.ToolCall,
+                callId: "protocol-call",
+                name: "echo",
+                arguments: objectValue([])
+            )
+        ]),
+        ModelMessage(ModelRole.User, [
+            ModelBlock(
+                ModelBlockKind.ToolResult,
+                callId: "protocol-call",
+                name: "echo",
+                arguments: objectValue([])
+            ),
+            ModelBlock(
+                ModelBlockKind.ToolResult,
+                callId: "",
+                name: "echo",
+                arguments: objectValue([])
+            )
+        ])
+    ]
+    expect(!isToolProtocolComplete(messages),
+        "a malformed empty tool-result id cannot be ignored during protocol validation")
+}
+
 func modelProtocolCapabilityBoundaryContract(model: TwoStepModel): Unit {
     expect(
         model.requests.size == 2 &&
@@ -1509,6 +1541,105 @@ func parallelToolWaveContract(): Unit {
             decisions.persisted[0].blocks.size == 3,
         "complete multi-tool response becomes one durable atomic Decision"
     )
+}
+
+func orderedConflictWaveContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let probe = OrderedConflictProbe()
+    let readX = sharedToolConcurrency(accesses: [ToolResourceAccess(
+        "workspace", "/ordered-x", ToolAccessMode.Read
+    )])
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("ordered_a", "ordered read a", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),
+            concurrency: readX
+        ),
+        OrderedConflictTool("ordered_a", 10, probe)
+    ).isOk(), "ordered a registration")
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("ordered_b", "ordered exclusive b", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),
+            concurrency: exclusiveToolConcurrency()
+        ),
+        OrderedConflictTool("ordered_b", 35, probe)
+    ).isOk(), "ordered b registration")
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("ordered_c", "ordered read c", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),
+            concurrency: readX
+        ),
+        OrderedConflictTool("ordered_c", 1, probe)
+    ).isOk(), "ordered c registration")
+    let model = OrderedConflictBatchModel()
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let result = core.start(AgentRunRequest(
+        RunId("ordered-wave-run"),
+        SessionId("ordered-wave-session"),
+        "fixture",
+        "run ordered conflict wave",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxConcurrentTools: 2)
+    ))
+    expect(result.isOk() && !probe.cStartedBeforeBFinished() && model.observedStableResultOrder,
+        "a later non-conflicting read cannot overtake an earlier exclusive barrier")
+}
+
+func partialWaveHandoffFailureContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let started = DelayedHandoffTool(60)
+    let skipped = EchoTool()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("handoff_a", "handoff fixture a", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),
+            concurrency: sharedToolConcurrency()
+        ),
+        started
+    ).isOk(), "handoff fixture registration a")
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("handoff_b", "handoff fixture b", objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),
+            concurrency: sharedToolConcurrency()
+        ),
+        skipped
+    ).isOk(), "handoff fixture registration b")
+    let core = AgentCore(
+        HandoffFailureBatchModel(),
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        operationRuntime: Some(FailingSecondExecutionRuntime())
+    )
+    let startedAt = MonoTime.now()
+    let result = core.start(AgentRunRequest(
+        RunId("handoff-failure-run"),
+        SessionId("handoff-failure-session"),
+        "fixture",
+        "run partial handoff failure wave",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+        budget: ResourceBudget(maxConcurrentTools: 2)
+    ))
+    let ids = transcriptToolResultIds(coreMessages(
+        core, SessionId("handoff-failure-session")
+    ))
+    var hasStartedResult = false
+    for (id in ids where id == "handoff-call-a") { hasStartedResult = true }
+    expect(result.isError() && result.error().getOrThrow().code ==
+        "fixture.execution_handoff_failed" &&
+        started.completed.load() && skipped.executions == 0 && hasStartedResult &&
+        (MonoTime.now() - startedAt).toMilliseconds() >= 50,
+        "a later handoff failure joins and commits already-started siblings before returning")
 }
 
 func approvalBatchBarrierContract(): Unit {
@@ -3691,10 +3822,16 @@ func childBudgetPoolSchedulingGatesContract(): Unit {
     expect(overSettle.isError() && overSettle.error().getOrThrow().code ==
         "child.actual_usage_exceeds_reservation",
         "settling above the reserved child budget stays rejected")
-    expect(active.value().getOrThrow().settle(ExecutionUsage(costMicros: 80)).isOk(),
-        "settling within the reservation releases the concurrency slot")
+    let repeatedSettle = active.value().getOrThrow().settle(ExecutionUsage(costMicros: 80))
+    expect(repeatedSettle.isError() && repeatedSettle.error().getOrThrow().code ==
+        "child.budget_lease_settled",
+        "an overspent lease is terminal instead of accepting replacement usage")
+    let afterOverspend = concurrent.snapshot()
+    expect(afterOverspend.activeReservations == 0 &&
+        afterOverspend.consumed.costMicros == 101,
+        "overspent usage is accounted and its concurrency slot is released")
     expect(concurrent.reserve("d-4", childBudget).isOk(),
-        "a settled lease frees its concurrency slot for the next child")
+        "a terminal lease frees its concurrency slot for the next child")
 }
 
 func budgetModeOrthogonalToApprovalContract(): Unit {
@@ -5002,6 +5139,217 @@ class ParallelBatchModel <: ModelPort {
             [ModelBlock(ModelBlockKind.Text, text: "parallel done")],
             stopReason: "end_turn"
         ))
+    }
+}
+
+class OrderedConflictProbe {
+    private let lock = Mutex()
+    private var bFinished = false
+    private var violation = false
+
+    func entered(name: String): Unit {
+        lock.lock()
+        try {
+            if (name == "ordered_c" && !bFinished) {
+                violation = true
+            }
+        } finally { lock.unlock() }
+    }
+
+    func left(name: String): Unit {
+        lock.lock()
+        try {
+            if (name == "ordered_b") { bFinished = true }
+        } finally { lock.unlock() }
+    }
+
+    func cStartedBeforeBFinished(): Bool {
+        lock.lock()
+        try { violation } finally { lock.unlock() }
+    }
+}
+
+class OrderedConflictTool <: ToolExecutor {
+    private let name: String
+    private let delayMillis: Int64
+    private let probe: OrderedConflictProbe
+
+    init(name: String, delayMillis: Int64, probe: OrderedConflictProbe) {
+        this.name = name
+        this.delayMillis = delayMillis
+        this.probe = probe
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolResult> {
+        let _ = context
+        probe.entered(name)
+        sleep(Duration.millisecond * delayMillis)
+        probe.left(name)
+        Result.Ok(ToolResult(call.callId, objectValue([
+            ValueField("tool", textValue(name))
+        ])))
+    }
+}
+
+class OrderedConflictBatchModel <: ModelPort {
+    var calls: Int64 = 0
+    var observedStableResultOrder = false
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        calls += 1
+        events(ModelEvent.Completed)
+        if (calls == 1) {
+            return Result.Ok(contractModelReply([
+                ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "ordered-call-a",
+                    name: "ordered_a",
+                    arguments: objectValue([])
+                ),
+                ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "ordered-call-b",
+                    name: "ordered_b",
+                    arguments: objectValue([])
+                ),
+                ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "ordered-call-c",
+                    name: "ordered_c",
+                    arguments: objectValue([])
+                )
+            ]))
+        }
+        let ids = modelRequestToolResultIds(request)
+        observedStableResultOrder = ids.size == 3 &&
+            ids[0] == "ordered-call-a" && ids[1] == "ordered-call-b" &&
+            ids[2] == "ordered-call-c"
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "ordered done")],
+            stopReason: "end_turn"
+        ))
+    }
+}
+
+class DelayedHandoffTool <: ToolExecutor {
+    private let delayMillis: Int64
+    let completed = AtomicBool(false)
+
+    init(delayMillis: Int64) { this.delayMillis = delayMillis }
+
+    public func execute(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolResult> {
+        let _ = context
+        sleep(Duration.millisecond * delayMillis)
+        completed.store(true)
+        Result.Ok(ToolResult(call.callId, call.arguments))
+    }
+}
+
+class HandoffFailureBatchModel <: ModelPort {
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply([
+            ModelBlock(
+                ModelBlockKind.ToolCall,
+                callId: "handoff-call-a",
+                name: "handoff_a",
+                arguments: objectValue([])
+            ),
+            ModelBlock(
+                ModelBlockKind.ToolCall,
+                callId: "handoff-call-b",
+                name: "handoff_b",
+                arguments: objectValue([])
+            )
+        ]))
+    }
+}
+
+class FailingSecondExecutionRuntime <: OperationRuntimePort {
+    private let delegate = InMemoryOperationRuntimePort()
+    private var executions: Int64 = 0
+
+    public func prepare(
+        operationId: OperationId,
+        runId: RunId,
+        toolCall: CommittedToolCallRef,
+        plan: NormalizedOperationPlan
+    ): Result<Unit> {
+        delegate.prepare(operationId, runId, toolCall, plan)
+    }
+
+    public func waitForApproval(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<Unit> {
+        delegate.waitForApproval(operationId, runId)
+    }
+
+    public func recordApproval(
+        approvalId: String,
+        operationId: OperationId,
+        runId: RunId,
+        reviewedPlan: NormalizedOperationPlan,
+        capabilityCeiling: CapabilitySet,
+        approved: Bool,
+        source: String,
+        expiresAtMillis: ?Int64
+    ): Result<Unit> {
+        delegate.recordApproval(
+            approvalId, operationId, runId, reviewedPlan, capabilityCeiling,
+            approved, source, expiresAtMillis
+        )
+    }
+
+    public func markExecuting(
+        operationId: OperationId,
+        runId: RunId,
+        executionPlan: NormalizedOperationPlan,
+        nowMillis: Int64,
+        approvalRequired: Bool
+    ): Result<Unit> {
+        executions += 1
+        if (executions == 2) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Internal,
+                "fixture.execution_handoff_failed",
+                "injected execution handoff failure"
+            ))
+        }
+        delegate.markExecuting(
+            operationId, runId, executionPlan, nowMillis, approvalRequired
+        )
+    }
+
+    public func markExecutionHandoff(
+        operationId: OperationId,
+        runId: RunId,
+        threadId: ThreadId,
+        observedAtMillis: Int64
+    ): Result<Unit> {
+        delegate.markExecutionHandoff(
+            operationId, runId, threadId, observedAtMillis
+        )
+    }
+
+    public func loadPlan(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<NormalizedOperationPlan> {
+        delegate.loadPlan(operationId, runId)
     }
 }
 

@@ -185,6 +185,23 @@ func typedParameterContract(database: SqliteDatabase): Unit {
     expect(row[3].isNone(), "bound Null remains SQL null")
     expect(database.scalarInt("SELECT COUNT(*) FROM threads") == 1,
         "bound hostile text cannot mutate schema or prior rows")
+
+    database.execute(
+        "INSERT INTO parameter_contract VALUES (?,?,?,?)",
+        [
+            SqlParameter.Text(String.fromUtf8([0x61, 0x00, 0x62])),
+            SqlParameter.Int64Value(1),
+            SqlParameter.Blob([]),
+            SqlParameter.Null
+        ]
+    )
+    let embedded = database.query(
+        "SELECT hex(text_value),length(CAST(text_value AS BLOB)) " +
+            "FROM parameter_contract WHERE int_value=?",
+        [SqlParameter.Int64Value(1)]
+    )[0]
+    expect(embedded.required(0) == "610062" && embedded.required(1) == "3",
+        "bound text preserves embedded NUL bytes instead of truncating at C-string length")
 }
 
 func sqliteAppendRestoreBenchmark(): Unit {

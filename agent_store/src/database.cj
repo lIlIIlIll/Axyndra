@@ -720,12 +720,21 @@ public class SqliteDatabase {
             let index = Int32(offset + 1)
             let code = match (parameters[offset]) {
                 case SqlParameter.Text(value) =>
-                    if (value.size > Int64(Int32.Max)) {
-                        throw IllegalArgumentException("SQLite text exceeds Int32 byte length")
+                    // Bind exact UTF-8 byte length so embedded NUL bytes are
+                    // preserved instead of truncating at the C-string length.
+                    let byteLength = unsafe { value.rawData().size }
+                    if (byteLength > 2147483647) {
+                        throw IllegalArgumentException(
+                            "SQLite text parameter exceeds Int32 byte length"
+                        )
                     }
                     let raw = unsafe { LibC.mallocCString(value) }
                     textValues.add(raw)
-                    unsafe { sqlite3_bind_text(statement, index, raw, Int32(value.size), CPointer<Unit>()) }
+                    unsafe {
+                        sqlite3_bind_text(
+                            statement, index, raw, Int32(byteLength), CPointer<Unit>()
+                        )
+                    }
                 case SqlParameter.Int64Value(value) =>
                     unsafe { sqlite3_bind_int64(statement, index, value) }
                 case SqlParameter.Blob(value) =>

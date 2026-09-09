@@ -114,9 +114,10 @@ public class NativeProviderTransport <: ProviderTransport {
                 return cancelledNative(requestId)
             }
             let read = readNativeBody(response.body, streaming, { chunk =>
-                // Preserve delivery evidence even if a later body read throws.
-                chunks(redactNativeProviderText(chunk, apiKey))
+                // Mark before invoking user callbacks: a throwing callback may
+                // have delivered partial output that must not be retried.
                 emitted.store(true)
+                chunks(redactNativeProviderText(chunk, apiKey))
             })
             emitted.store(read.emitted)
             if (nativeCancelled(requestId)) {

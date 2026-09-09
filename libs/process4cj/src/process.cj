@@ -497,6 +497,10 @@ public class LineFramer {
             }
             frames.add(frame)
         }
+        if (utf8Size(pending) > maxFrameBytes) {
+            pending = ""
+            throw ProcessError(ProcessErrorKind.Frame, "line frame exceeds configured byte limit")
+        }
         frames.toArray()
     }
 
