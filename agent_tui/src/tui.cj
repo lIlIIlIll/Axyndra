@@ -3559,9 +3559,15 @@ class AgentScreen {
                 TuiModalKind.Model,
                 backend.models()
             )
-            case TuiTurnAction.OpenBranchSelector => openModal(
-                TuiModalKind.Branch,
-                backend.branchMessages()
+            case TuiTurnAction.OpenBranchSelector => startBackground(
+                "loading branches",
+                {
+                    => TuiTurnResult(
+                        "",
+                        "select branch",
+                        action: TuiTurnAction.BranchesLoaded(backend.branchMessages())
+                    )
+                }
             )
             case TuiTurnAction.OpenPlanReview(body) =>
                 resetGenericModal()

@@ -23,6 +23,14 @@ static void p4_close_if_open(int fd) {
         while (close(fd) < 0 && errno == EINTR) {}
     }
 }
+static int p4_promote_pipe_fd(int *fd) {
+    if (fd == NULL || *fd < 0 || *fd > STDERR_FILENO) return 0;
+    int promoted = fcntl(*fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (promoted < 0) return errno;
+    p4_close_if_open(*fd);
+    *fd = promoted;
+    return 0;
+}
 
 int32_t process4cj_spawn(
     const char *executable,
@@ -50,6 +58,18 @@ int32_t process4cj_spawn(
         result = errno;
         goto cleanup;
     }
+    /*
+     * Keep every pipe endpoint above stderr.  Otherwise a caller with a
+     * closed standard descriptor can make pipe2 reuse that descriptor; the
+     * later dup2 followed by addclose would then close the child's remapped
+     * stdin, stdout, or stderr.
+     */
+    if ((result = p4_promote_pipe_fd(&in_pipe[0])) != 0 ||
+        (result = p4_promote_pipe_fd(&in_pipe[1])) != 0 ||
+        (result = p4_promote_pipe_fd(&out_pipe[0])) != 0 ||
+        (result = p4_promote_pipe_fd(&out_pipe[1])) != 0 ||
+        (result = p4_promote_pipe_fd(&err_pipe[0])) != 0 ||
+        (result = p4_promote_pipe_fd(&err_pipe[1])) != 0) goto cleanup;
     if ((result = posix_spawn_file_actions_init(&actions)) != 0) goto cleanup;
     actions_ready = 1;
     if ((result = posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO)) != 0 ||
@@ -178,7 +198,7 @@ int64_t process4cj_wait(int64_t pid_value) {
  * --new-session), so a process-group signal alone is not a complete owned
  * process-tree termination. Collect the direct-child tree before signalling
  * the root; reverse order avoids leaving descendants behind during teardown. */
-#define P4_MAX_DESCENDANTS 1024
+#define P4_MAX_DESCENDANTS 4096
 static int p4_parse_pid_name(const char *name, pid_t *pid_out) {
     if (name == NULL || pid_out == NULL || name[0] == '\0') return 0;
     char *end = NULL;
@@ -201,8 +221,10 @@ typedef struct {
 static int p4_read_process_stat(
     pid_t pid,
     pid_t *parent_pid,
-    uint64_t *start_time
+    uint64_t *start_time,
+    char *state
 );
+static void p4_sleep_millis(int32_t millis);
 static p4_process_target p4_capture_target(pid_t pid);
 static int p4_capture_child_target(
     pid_t child_pid,
@@ -212,6 +234,38 @@ static int p4_capture_child_target(
 );
 static int p4_target_matches(const p4_process_target *target);
 static int p4_signal_target(const p4_process_target *target, int signal_value);
+static int p4_stop_target(const p4_process_target *target);
+static int p4_contains_target(
+    const p4_process_target *targets,
+    size_t count,
+    const p4_process_target *candidate
+);
+static int p4_freeze_tree(
+    const p4_process_target *root,
+    p4_process_target *descendants,
+    size_t capacity,
+    size_t *count
+);
+static int p4_continue_captured_tree(
+    const p4_process_target *root,
+    const p4_process_target *descendants,
+    size_t count
+);
+static int p4_contains_target(
+    const p4_process_target *targets,
+    size_t count,
+    const p4_process_target *candidate
+) {
+    if (targets == NULL || candidate == NULL || !candidate->valid) return 0;
+    for (size_t index = 0; index < count; ++index) {
+        if (targets[index].valid &&
+            targets[index].pid == candidate->pid &&
+            targets[index].start_time == candidate->start_time) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static void p4_collect_descendants(
     pid_t pid,
@@ -238,6 +292,7 @@ static void p4_collect_child_token(
             child, process_pid, thread_pid, &child_target)) {
         return;
     }
+    if (p4_contains_target(descendants, *count, &child_target)) return;
     descendants[(*count)++] = child_target;
     p4_collect_descendants(
         child,
@@ -388,9 +443,13 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
 static int p4_read_process_stat(
     pid_t pid,
     pid_t *parent_pid,
-    uint64_t *start_time
+    uint64_t *start_time,
+    char *state
 ) {
-    if (pid <= 0 || (parent_pid == NULL && start_time == NULL)) return 0;
+    if (pid <= 0 ||
+        (parent_pid == NULL && start_time == NULL && state == NULL)) {
+        return 0;
+    }
     char path[96];
     int length = snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
     if (length <= 0 || (size_t)length >= sizeof(path)) return 0;
@@ -408,11 +467,17 @@ static int p4_read_process_stat(
     char *cursor = closing_name + 2;
     int parent_found = parent_pid == NULL;
     int start_found = start_time == NULL;
+    int state_found = state == NULL;
     for (int field = 3; field <= 22; ++field) {
         while (*cursor == ' ') cursor++;
         if (*cursor == '\0' || *cursor == '\n') return 0;
         char *end = cursor;
         while (*end != '\0' && *end != ' ' && *end != '\n') end++;
+        if (field == 3 && state != NULL) {
+            if (end - cursor != 1) return 0;
+            *state = *cursor;
+            state_found = 1;
+        }
         if (field == 4 && parent_pid != NULL) {
             errno = 0;
             char *parsed_end = NULL;
@@ -436,11 +501,11 @@ static int p4_read_process_stat(
         }
         cursor = end;
     }
-    return parent_found && start_found;
+    return parent_found && start_found && state_found;
 }
 
 static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
-    return p4_read_process_stat(pid, NULL, start_time);
+    return p4_read_process_stat(pid, NULL, start_time, NULL);
 }
 
 int64_t process4cj_start_time(int64_t pid_value) {
@@ -468,7 +533,7 @@ static int p4_capture_child_target(
     }
     pid_t parent_pid = 0;
     uint64_t start_time = 0;
-    if (!p4_read_process_stat(child_pid, &parent_pid, &start_time) ||
+    if (!p4_read_process_stat(child_pid, &parent_pid, &start_time, NULL) ||
         start_time == 0) {
         return 0;
     }
@@ -490,6 +555,79 @@ static int p4_target_matches(const p4_process_target *target) {
 static int p4_signal_target(const p4_process_target *target, int signal_value) {
     if (!p4_target_matches(target)) return 0;
     return p4_signal_one(target->pid, signal_value);
+}
+static int p4_stop_target(const p4_process_target *target) {
+    if (!p4_target_matches(target)) return 0;
+    if (kill(target->pid, SIGSTOP) < 0) {
+        return errno == ESRCH ? 0 : errno;
+    }
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        uint64_t start_time = 0;
+        char state = '\0';
+        if (!p4_read_process_stat(
+                target->pid, NULL, &start_time, &state)) {
+            return 0;
+        }
+        if (start_time != target->start_time) return 0;
+        if (state == 'T' || state == 't' || state == 'Z' || state == 'X') {
+            return 0;
+        }
+        p4_sleep_millis(1);
+    }
+    return ETIMEDOUT;
+}
+
+static int p4_freeze_tree(
+    const p4_process_target *root,
+    p4_process_target *descendants,
+    size_t capacity,
+    size_t *count
+) {
+    int first_error = p4_stop_target(root);
+    if (first_error != 0) return first_error;
+    for (;;) {
+        size_t previous_count = *count;
+        if (p4_target_matches(root)) {
+            p4_collect_descendants(
+                root->pid,
+                root,
+                descendants,
+                capacity,
+                count,
+                0
+            );
+        }
+        for (size_t index = 0; index < *count; ++index) {
+            int result = p4_stop_target(&descendants[index]);
+            if (result != 0 && first_error == 0) first_error = result;
+        }
+        if (first_error != 0 || *count == previous_count) break;
+    }
+    return first_error;
+}
+
+static int p4_continue_captured_tree(
+    const p4_process_target *root,
+    const p4_process_target *descendants,
+    size_t count
+) {
+    int first_error = 0;
+    for (size_t index = count; index > 0; --index) {
+        int result = p4_signal_target(
+            &descendants[index - 1],
+            SIGCONT
+        );
+        if (result != 0 && first_error == 0) first_error = result;
+    }
+    if (p4_target_matches(root)) {
+        int result = kill(-root->pid, SIGCONT);
+        if (result < 0 && errno != ESRCH && first_error == 0) {
+            first_error = errno;
+        }
+    }
+    int result = p4_signal_target(root, SIGCONT);
+    if (result != 0 && first_error == 0) first_error = result;
+    return first_error;
 }
 
 static int p4_signal_captured_tree(
@@ -549,9 +687,12 @@ static void p4_wait_for_graceful_tree(
 }
 
 
-/* Escalate using one process-tree snapshot.  A descendant can be reparented
- * after the leader receives SIGTERM, so recollecting from the root for the
- * forced pass would lose ownership of that descendant. */
+/*
+ * Freeze the owned tree before signalling.  Stopping the root first prevents
+ * new children at the ownership boundary; each observed descendant is then
+ * stopped before its children are collected.  The fixed point pass closes
+ * the fork window between reading a children list and stopping its parent.
+ */
 int32_t process4cj_terminate_tree(
     int64_t pid_value,
     int64_t expected_start_time,
@@ -567,27 +708,38 @@ int32_t process4cj_terminate_tree(
     }
     p4_process_target descendants[P4_MAX_DESCENDANTS];
     size_t count = 0;
-    p4_collect_descendants(
-        pid,
+    int freeze_error = p4_freeze_tree(
         &root,
         descendants,
         P4_MAX_DESCENDANTS,
-        &count,
-        0
+        &count
     );
-    if (!p4_target_matches(&root)) return ESRCH;
+    if (freeze_error != 0) {
+        (void)p4_continue_captured_tree(&root, descendants, count);
+        int kill_error = p4_signal_captured_tree(
+            &root,
+            descendants,
+            count,
+            SIGKILL
+        );
+        return kill_error != 0 ? kill_error : freeze_error;
+    }
     int first_error = p4_signal_captured_tree(
         &root,
         descendants,
         count,
         SIGTERM
     );
-    p4_wait_for_graceful_tree(
-        &root,
-        descendants,
-        count,
-        graceful_millis
-    );
+    if (graceful_millis > 0) {
+        int result = p4_continue_captured_tree(&root, descendants, count);
+        if (result != 0 && first_error == 0) first_error = result;
+        p4_wait_for_graceful_tree(
+            &root,
+            descendants,
+            count,
+            graceful_millis
+        );
+    }
     int result = p4_signal_captured_tree(
         &root,
         descendants,
