@@ -1,12 +1,15 @@
 # SDK, manifest, and extension compatibility
 
-Local canonical verification and the PR and release workflows use Cangjie
+Local canonical verification and the PR and protected-release workflows use Cangjie
 STS `1.1.3` with cjpm `1.1.3`. The scheduled nightly
-workflow resolves the latest complete official nightly and installs its matching
-stdx component. The scheduled full release gate runs once per week.
-The PR gate is capped at 60 minutes and runs policy checks, a clean type check,
-the product build, and focused vNext contracts. Full-workspace tests, black-box
-checks, TUI gates, and provider smoke remain release-gate responsibilities.
+workflow runs weekly, resolves the latest complete official nightly, and installs
+its matching stdx component as a compatibility canary; the protected release
+workflow owns fixed-toolchain release evidence.
+The PR gate has a 120-minute timeout and runs repository policy gates, a clean
+Cangjie check, workspace unit tests, the product executable build, focused vNext
+contracts, product regression fixtures, and CI evidence writing/upload.
+The protected release gate is separate and manual; its real-provider smoke runs
+through `scripts/release_gate.sh`.
 `scripts/check_sdk.sh` owns the exact compiler check, while package
 `cjc-version = "1.1.0"` fields continue to describe language compatibility.
 `scripts/pinned_cangjie` derives compiler, runtime, and dynamic stdx paths from
@@ -16,6 +19,8 @@ verification may set
 Older daily compilers remain unsupported because their test-macro code
 generation can crash when enumerating a legal suite containing `@Bench`.
 
+The SDK and stdx pairing requirements remain in force. The candidate network-library
+migration has not been switched on; see [the stdx migration specification](stdx-migration.md).
 This is the compatibility contract for compile-time cooperative extensions. It
 separates version identity, source shape, observable semantics, and security
 invariants. A matching range is necessary, but never overrides authorization.
