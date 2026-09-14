@@ -1964,25 +1964,11 @@ class ActiveLocalProcess {
 
     func terminateOwned(): Unit {
         // The process may have exited between registration and cancellation.
-        // LocalProcessPort launches every owned process through setsid. Kill
-        // the owned process tree so persistent-shell children cannot retain
-        // command pipes after cancellation, then escalate if graceful
-        // termination is ignored.
-        let gracefulSent = killProcessTree(process.pid, force: false)
-        if (!gracefulSent) {
-            try {
-                let _ = process.terminate(force: false)
-            } catch (error: Exception) {
-                if (process.isAlive()) { throw error }
-            }
-        }
-        let gracefulDeadline = MonoTime.now() + Duration.millisecond * 250
-        while (process.isAlive() && MonoTime.now() < gracefulDeadline) {
-            sleep(Duration.millisecond * 10)
-        }
-        if (!process.isAlive()) { return }
-        let forcedSent = killProcessTree(process.pid, force: true)
-        if (!forcedSent) {
+        // LocalProcessPort launches every owned process through setsid. Capture
+        // the process tree before graceful termination so descendants that
+        // leave the session remain available for forced escalation.
+        let terminated = terminateProcessTree(process.pid, gracefulMillis: 250)
+        if (!terminated && process.isAlive()) {
             try {
                 let _ = process.terminate(force: true)
             } catch (error: Exception) {

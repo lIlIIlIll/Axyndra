@@ -58,6 +58,7 @@ func runProcessRemediationContracts(root: String): Unit {
             !processes.hasActiveOperation(stubbornOperation),
         "ignored SIGTERM escalates and releases the owned process"
     )
+    runEscapedDescendantCancellationContract(directory, processes)
     runDisplayServerEnvironmentContracts(directory, processes)
     let catalog = ToolCatalog()
     installLocalTools(catalog, workspace, processes).value().getOrThrow()
@@ -97,6 +98,67 @@ func runProcessRemediationContracts(root: String): Unit {
     expect(pipeline.invoke(context, blockingGrep(directory + "/first")).isError(), "already cancelled grep cannot start a new operation")
     processes.close().value().getOrThrow()
     println("process output and concurrent grep cancellation contracts passed")
+}
+
+func runEscapedDescendantCancellationContract(
+    directory: String,
+    processes: LocalProcessPort
+): Unit {
+    let pidFile = directory + "/escaped-descendant.pid"
+    let operationId = OperationId("escaped-descendant-cancel")
+    let worker = spawn {
+        processes.execute(ProcessRequest(
+            "/bin/sh",
+            operationId: operationId,
+            arguments: [
+                "-c",
+                "( setsid /bin/sh -c 'exec >/dev/null 2>&1; trap \"\" TERM; echo $$ > \"$1\"; while :; do sleep 1; done' escaped \"$1\" ) & sleep 5",
+                "leader",
+                pidFile
+            ],
+            timeoutMillis: 10000
+        ))
+    }
+    var escapedPid: Int64 = 0
+    try {
+        let deadline = MonoTime.now() + Duration.second * 3
+        while (!exists(Path(pidFile)) && MonoTime.now() < deadline) {
+            sleep(Duration.millisecond * 10)
+        }
+        expect(exists(Path(pidFile)), "escaped descendant writes its identity")
+        escapedPid = parseProcessPid(String.fromUtf8(File.readFrom(pidFile)))
+        expect(processes.hasActiveOperation(operationId), "leader remains owned before cancellation")
+        expect(processes.cancel(operationId).isOk(), "leader-exit descendant cancellation is accepted")
+        let goneDeadline = MonoTime.now() + Duration.second * 2
+        while (exists(Path("/proc/" + escapedPid.toString())) &&
+            MonoTime.now() < goneDeadline) {
+            sleep(Duration.millisecond * 10)
+        }
+        expect(
+            !exists(Path("/proc/" + escapedPid.toString())),
+            "captured descendant is killed after its leader exits"
+        )
+    } finally {
+        if (escapedPid > 0) {
+            let _ = executeWithOutput("kill", ["-KILL", escapedPid.toString()])
+        }
+        let _ = processes.cancel(operationId)
+        let _ = worker.get()
+        try { let _ = removeIfExists(pidFile) } catch (_: Exception) {}
+    }
+}
+
+func parseProcessPid(value: String): Int64 {
+    var result: Int64 = 0
+    let text = value.trimAscii()
+    if (text == "") { throw IllegalArgumentException("process pid is empty") }
+    for (byte in text.toArray()) {
+        if (byte < b'0' || byte > b'9') {
+            throw IllegalArgumentException("process pid is not numeric")
+        }
+        result = result * 10 + Int64(byte - b'0')
+    }
+    result
 }
 
 func runDisplayServerEnvironmentContracts(
