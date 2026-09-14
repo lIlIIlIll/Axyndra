@@ -15,13 +15,15 @@ foreign func process4cj_spawn(
     pid: CPointer<Int64>,
     stdinFd: CPointer<Int32>,
     stdoutFd: CPointer<Int32>,
-    stderrFd: CPointer<Int32>
+    stderrFd: CPointer<Int32>,
+    statusFd: CPointer<Int32>
 ): Int32
 foreign func process4cj_read(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int64
 foreign func process4cj_wait_readable(fd: Int32, timeoutMillis: Int32): Int32
 foreign func process4cj_write_all(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int32
 foreign func process4cj_close(fd: Int32): Int32
 foreign func process4cj_wait_owned(pid: Int64): Int64
+foreign func process4cj_wait_status(fd: Int32): Int64
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
 foreign func process4cj_terminate_tree(
@@ -726,13 +728,21 @@ class NativeProcessInput <: InputStream & Resource {
 
 class LinuxNativeProcess <: ProcessPlatformProcess {
     private let nativePid: Int64
+    private var statusFd: Int32
     private var stdinFd: Int32
     private let stdoutStream: NativeProcessInput
     private let stderrStream: NativeProcessInput
     private var closed = false
 
-    init(pid: Int64, stdinFd: Int32, stdoutFd: Int32, stderrFd: Int32) {
+    init(
+        pid: Int64,
+        stdinFd: Int32,
+        stdoutFd: Int32,
+        stderrFd: Int32,
+        statusFd: Int32
+    ) {
         nativePid = pid
+        this.statusFd = statusFd
         this.stdinFd = stdinFd
         stdoutStream = NativeProcessInput(stdoutFd)
         stderrStream = NativeProcessInput(stderrFd)
@@ -766,7 +776,14 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
     }
 
     public func inputCloseSupported(): Bool { true }
-    public func wait(): Int64 { unsafe { process4cj_wait_owned(nativePid) } }
+    public func wait(): Int64 {
+        if (statusFd < 0) {
+            return unsafe { process4cj_wait_owned(nativePid) }
+        }
+        let fd = statusFd
+        statusFd = -1
+        unsafe { process4cj_wait_status(fd) }
+    }
     public func terminate(force: Bool, processTree: Bool): Bool {
         unsafe {
             process4cj_kill(nativePid, if (force) { 1 } else { 0 }, if (processTree) { 1 } else { 0 }) == 0
@@ -781,6 +798,10 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
         }
         try { stdoutStream.close() } catch (_: ProcessError) {}
         try { stderrStream.close() } catch (_: ProcessError) {}
+        if (statusFd >= 0) {
+            let _ = unsafe { process4cj_close(statusFd) }
+            statusFd = -1
+        }
         let _ = unsafe { process4cj_wait(nativePid) }
     }
 }
@@ -935,6 +956,7 @@ func nativeSpawn(command: ProcessCommand): ProcessPlatformProcess {
     var stdinPointer = CPointer<Int32>()
     var stdoutPointer = CPointer<Int32>()
     var stderrPointer = CPointer<Int32>()
+    var statusPointer = CPointer<Int32>()
     unsafe {
         try {
             executable = LibC.mallocCString(command.executable)
@@ -958,6 +980,7 @@ func nativeSpawn(command: ProcessCommand): ProcessPlatformProcess {
             stdinPointer = LibC.malloc<Int32>()
             stdoutPointer = LibC.malloc<Int32>()
             stderrPointer = LibC.malloc<Int32>()
+            statusPointer = LibC.malloc<Int32>()
             let error = process4cj_spawn(
                 executable,
                 argumentPointer,
@@ -967,7 +990,8 @@ func nativeSpawn(command: ProcessCommand): ProcessPlatformProcess {
                 pidPointer,
                 stdinPointer,
                 stdoutPointer,
-                stderrPointer
+                stderrPointer,
+                statusPointer
             )
             if (error != 0) {
                 throw ProcessError(ProcessErrorKind.Spawn, "process spawn failed errno=" + error.toString())
@@ -976,13 +1000,15 @@ func nativeSpawn(command: ProcessCommand): ProcessPlatformProcess {
                 pidPointer.read(),
                 stdinPointer.read(),
                 stdoutPointer.read(),
-                stderrPointer.read()
+                stderrPointer.read(),
+                statusPointer.read()
             )
         } finally {
             if (!pidPointer.isNull()) { LibC.free(pidPointer) }
             if (!stdinPointer.isNull()) { LibC.free(stdinPointer) }
             if (!stdoutPointer.isNull()) { LibC.free(stdoutPointer) }
             if (!stderrPointer.isNull()) { LibC.free(stderrPointer) }
+            if (!statusPointer.isNull()) { LibC.free(statusPointer) }
             if (!argumentPointer.isNull()) { LibC.free(argumentPointer) }
             if (!environmentPointer.isNull()) { LibC.free(environmentPointer) }
             if (!executable.getChars().isNull()) { LibC.free(executable) }

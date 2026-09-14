@@ -48,6 +48,33 @@ class Process4CjTests {
         @Expect(unrelated.isAlive(), true)
         let _ = unrelated.close()
     }
+    @TestCase
+    func cancellationTracksEscapedDescendantAfterLeaderExit() {
+        let marker = "/tmp/process4cj-detached-" +
+            processTestMillis().toString() + ".marker"
+        let process = startProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "setsid sh -c 'sleep 0.3; printf escaped > " +
+                    marker + "' & exit 0"
+            ]
+        ))
+        @Expect(process.wait().code, 0)
+        @Expect(exists(Path("/proc/" + process.pid.toString())), true)
+        @Expect(
+            process.cancel(CancellationCause(
+                CancellationKind.Explicit,
+                "test.cancel.escaped",
+                "stop escaped descendant"
+            )),
+            true
+        )
+        @Expect(process.close(), true)
+        sleep(Duration.millisecond * 500)
+        @Expect(exists(Path(marker)), false)
+    }
+
 
     @TestCase
     func silentReaderCanCloseConcurrentlyWithoutClosingReusedDescriptor() {

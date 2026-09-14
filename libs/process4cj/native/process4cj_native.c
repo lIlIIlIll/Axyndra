@@ -15,6 +15,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits.h>
+#include <sys/prctl.h>
 
 extern char **environ;
 
@@ -32,6 +34,287 @@ static int p4_promote_pipe_fd(int *fd) {
     return 0;
 }
 
+static int p4_write_spawn_error(int fd, int error_value) {
+    const unsigned char *bytes = (const unsigned char *)&error_value;
+    size_t offset = 0;
+    while (offset < sizeof(error_value)) {
+        ssize_t written = write(fd, bytes + offset, sizeof(error_value) - offset);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) return written < 0 ? errno : EPIPE;
+        offset += (size_t)written;
+    }
+    return 0;
+}
+
+static const char *p4_environment_path(char *const envp[]) {
+    char *const *values = envp == NULL ? environ : envp;
+    if (values == NULL) return NULL;
+    for (size_t index = 0; values[index] != NULL; ++index) {
+        if (strncmp(values[index], "PATH=", 5) == 0) return values[index] + 5;
+    }
+    return NULL;
+}
+
+/*
+ * execvpe is not async-signal-safe after fork from the multithreaded
+ * Cangjie runtime.  Keep the supervisor child on the execve path and do
+ * PATH lookup with fixed storage instead.
+ */
+static int p4_exec_with_path(
+    const char *executable,
+    char *const argv[],
+    char *const envp[]
+) {
+    char *const *values = envp == NULL ? environ : envp;
+    if (executable == NULL || argv == NULL) return EINVAL;
+    if (strchr(executable, '/') != NULL) {
+        execve(executable, argv, values);
+        return errno;
+    }
+    const char *path = p4_environment_path(envp);
+    if (path == NULL) path = "/bin:/usr/bin";
+    size_t executable_length = strlen(executable);
+    char candidate[PATH_MAX];
+    int first_error = ENOENT;
+    const char *segment = path;
+    for (;;) {
+        const char *separator = strchr(segment, ':');
+        size_t directory_length = separator == NULL
+            ? strlen(segment)
+            : (size_t)(separator - segment);
+        size_t directory_prefix = directory_length == 0 ? 1 : directory_length;
+        size_t candidate_length = directory_prefix + 1 + executable_length;
+        if (candidate_length + 1 <= sizeof(candidate)) {
+            size_t offset = 0;
+            if (directory_length == 0) {
+                candidate[offset++] = '.';
+            } else {
+                memcpy(candidate, segment, directory_length);
+                offset = directory_length;
+            }
+            candidate[offset++] = '/';
+            memcpy(candidate + offset, executable, executable_length);
+            candidate[candidate_length] = '\0';
+            execve(candidate, argv, values);
+            int error = errno;
+            if (error == EACCES) {
+                first_error = EACCES;
+            } else if (error != ENOENT && error != ENOTDIR &&
+                       first_error == ENOENT) {
+                first_error = error;
+            }
+        } else if (first_error == ENOENT) {
+            first_error = ENAMETOOLONG;
+        }
+        if (separator == NULL) break;
+        segment = separator + 1;
+    }
+    return first_error;
+}
+
+static void p4_supervisor_exec_child(
+    const char *executable,
+    char *const argv[],
+    char *const envp[],
+    const char *working_directory,
+    int in_read,
+    int in_write,
+    int out_read,
+    int out_write,
+    int err_read,
+    int err_write,
+    int status_read,
+    int status_write,
+    int error_write
+) {
+    int error = 0;
+    if (signal(SIGTERM, SIG_DFL) == SIG_ERR) {
+        error = errno;
+    }
+    if (error == 0 && working_directory != NULL &&
+        working_directory[0] != '\0' && chdir(working_directory) < 0) {
+        error = errno;
+    }
+    if (error == 0 && dup2(in_read, STDIN_FILENO) < 0) error = errno;
+    if (error == 0 && dup2(out_write, STDOUT_FILENO) < 0) error = errno;
+    if (error == 0 && dup2(err_write, STDERR_FILENO) < 0) error = errno;
+    if (error != 0) {
+        (void)p4_write_spawn_error(error_write, error);
+        _exit(127);
+    }
+    p4_close_if_open(in_read);
+    p4_close_if_open(in_write);
+    p4_close_if_open(out_read);
+    p4_close_if_open(out_write);
+    p4_close_if_open(err_read);
+    p4_close_if_open(err_write);
+    p4_close_if_open(status_read);
+    p4_close_if_open(status_write);
+    error = p4_exec_with_path(executable, argv, envp);
+    (void)p4_write_spawn_error(error_write, error);
+    p4_close_if_open(error_write);
+    _exit(127);
+}
+
+static void p4_supervisor_child(
+    const char *executable,
+    char *const argv[],
+    char *const envp[],
+    const char *working_directory,
+    int in_read,
+    int in_write,
+    int out_read,
+    int out_write,
+    int err_read,
+    int err_write,
+    int status_read,
+    int status_write,
+    int error_write
+) {
+    if (setsid() < 0) {
+        (void)p4_write_spawn_error(error_write, errno);
+        _exit(127);
+    }
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) < 0) {
+        (void)p4_write_spawn_error(error_write, errno);
+        _exit(127);
+    }
+    if (signal(SIGTERM, SIG_IGN) == SIG_ERR) {
+        (void)p4_write_spawn_error(error_write, errno);
+        _exit(127);
+    }
+    pid_t command_pid = fork();
+    if (command_pid < 0) {
+        (void)p4_write_spawn_error(error_write, errno);
+        _exit(127);
+    }
+    if (command_pid == 0) {
+        p4_supervisor_exec_child(
+            executable,
+            argv,
+            envp,
+            working_directory,
+            in_read,
+            in_write,
+            out_read,
+            out_write,
+            err_read,
+            err_write,
+            status_read,
+            status_write,
+            error_write
+        );
+        _exit(127);
+    }
+    p4_close_if_open(in_read);
+    p4_close_if_open(in_write);
+    p4_close_if_open(out_read);
+    p4_close_if_open(out_write);
+    p4_close_if_open(err_read);
+    p4_close_if_open(err_write);
+    p4_close_if_open(status_read);
+    p4_close_if_open(error_write);
+
+    int command_status = 127;
+    int command_reaped = 0;
+    int status_sent = 0;
+    for (;;) {
+        int status = 0;
+        pid_t waited;
+        do { waited = waitpid(-1, &status, 0); }
+        while (waited < 0 && errno == EINTR);
+        if (waited < 0) {
+            if (errno == ECHILD) break;
+            _exit(127);
+        }
+        if (waited == command_pid) {
+            command_reaped = 1;
+            if (WIFEXITED(status)) {
+                command_status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                command_status = 128 + WTERMSIG(status);
+            }
+            (void)p4_write_spawn_error(status_write, command_status);
+            p4_close_if_open(status_write);
+            status_write = -1;
+            status_sent = 1;
+        }
+    }
+    if (!status_sent) p4_close_if_open(status_write);
+    _exit(command_reaped ? command_status : 127);
+}
+
+static int p4_spawn_supervisor(
+    const char *executable,
+    char *const argv[],
+    char *const envp[],
+    const char *working_directory,
+    int in_pipe[2],
+    int out_pipe[2],
+    int err_pipe[2],
+    int status_pipe[2],
+    int error_pipe[2],
+    pid_t *pid_out
+) {
+    pid_t supervisor = fork();
+    if (supervisor < 0) return errno;
+    if (supervisor == 0) {
+        p4_close_if_open(error_pipe[0]);
+        p4_supervisor_child(
+            executable,
+            argv,
+            envp,
+            working_directory,
+            in_pipe[0],
+            in_pipe[1],
+            out_pipe[0],
+            out_pipe[1],
+            err_pipe[0],
+            err_pipe[1],
+            status_pipe[0],
+            status_pipe[1],
+            error_pipe[1]
+        );
+        _exit(127);
+    }
+    p4_close_if_open(error_pipe[1]);
+    error_pipe[1] = -1;
+    unsigned char bytes[sizeof(int)];
+    size_t received = 0;
+    int read_error = 0;
+    for (;;) {
+        unsigned char buffer[sizeof(int)];
+        ssize_t count = read(
+            error_pipe[0],
+            buffer,
+            sizeof(buffer)
+        );
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) {
+            read_error = errno;
+            break;
+        }
+        if (count == 0) break;
+        if (received + (size_t)count > sizeof(bytes)) {
+            read_error = EPROTO;
+            break;
+        }
+        memcpy(bytes + received, buffer, (size_t)count);
+        received += (size_t)count;
+    }
+    p4_close_if_open(error_pipe[0]);
+    error_pipe[0] = -1;
+    if (read_error != 0 || received == sizeof(bytes)) {
+        int error = read_error;
+        if (error == 0) memcpy(&error, bytes, sizeof(error));
+        (void)kill(supervisor, SIGKILL);
+        (void)waitpid(supervisor, NULL, 0);
+        return error == 0 ? EIO : error;
+    }
+    *pid_out = supervisor;
+    return 0;
+}
+
 int32_t process4cj_spawn(
     const char *executable,
     char *const argv[],
@@ -41,11 +324,14 @@ int32_t process4cj_spawn(
     int64_t *pid_out,
     int32_t *stdin_out,
     int32_t *stdout_out,
-    int32_t *stderr_out
+    int32_t *stderr_out,
+    int32_t *status_out
 ) {
     int in_pipe[2] = {-1, -1};
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
+    int status_pipe[2] = {-1, -1};
+    int error_pipe[2] = {-1, -1};
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attributes;
     int actions_ready = 0;
@@ -70,6 +356,40 @@ int32_t process4cj_spawn(
         (result = p4_promote_pipe_fd(&out_pipe[1])) != 0 ||
         (result = p4_promote_pipe_fd(&err_pipe[0])) != 0 ||
         (result = p4_promote_pipe_fd(&err_pipe[1])) != 0) goto cleanup;
+    if (new_session) {
+        if (pipe2(status_pipe, O_CLOEXEC) < 0 ||
+            pipe2(error_pipe, O_CLOEXEC) < 0) {
+            result = errno;
+            goto cleanup;
+        }
+        if ((result = p4_promote_pipe_fd(&status_pipe[0])) != 0 ||
+            (result = p4_promote_pipe_fd(&status_pipe[1])) != 0 ||
+            (result = p4_promote_pipe_fd(&error_pipe[0])) != 0 ||
+            (result = p4_promote_pipe_fd(&error_pipe[1])) != 0) goto cleanup;
+        result = p4_spawn_supervisor(
+            executable,
+            argv,
+            envp,
+            working_directory,
+            in_pipe,
+            out_pipe,
+            err_pipe,
+            status_pipe,
+            error_pipe,
+            &pid
+        );
+        if (result != 0) goto cleanup;
+        p4_close_if_open(in_pipe[0]); in_pipe[0] = -1;
+        p4_close_if_open(out_pipe[1]); out_pipe[1] = -1;
+        p4_close_if_open(err_pipe[1]); err_pipe[1] = -1;
+        p4_close_if_open(status_pipe[1]); status_pipe[1] = -1;
+        *pid_out = (int64_t)pid;
+        *stdin_out = in_pipe[1]; in_pipe[1] = -1;
+        *stdout_out = out_pipe[0]; out_pipe[0] = -1;
+        *stderr_out = err_pipe[0]; err_pipe[0] = -1;
+        *status_out = status_pipe[0]; status_pipe[0] = -1;
+        goto cleanup;
+    }
     if ((result = posix_spawn_file_actions_init(&actions)) != 0) goto cleanup;
     actions_ready = 1;
     if ((result = posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO)) != 0 ||
@@ -89,14 +409,6 @@ int32_t process4cj_spawn(
         (result = posix_spawn_file_actions_addchdir_np(&actions, working_directory)) != 0) goto cleanup;
     if ((result = posix_spawnattr_init(&attributes)) != 0) goto cleanup;
     attributes_ready = 1;
-    if (new_session) {
-#ifdef POSIX_SPAWN_SETSID
-        if ((result = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID)) != 0) goto cleanup;
-#else
-        result = ENOTSUP;
-        goto cleanup;
-#endif
-    }
     result = posix_spawnp(
         &pid, executable, &actions, &attributes, argv,
         envp == NULL ? environ : envp
@@ -110,6 +422,7 @@ int32_t process4cj_spawn(
     *stdin_out = in_pipe[1]; in_pipe[1] = -1;
     *stdout_out = out_pipe[0]; out_pipe[0] = -1;
     *stderr_out = err_pipe[0]; err_pipe[0] = -1;
+    *status_out = -1;
 
 cleanup:
     if (attributes_ready) posix_spawnattr_destroy(&attributes);
@@ -117,6 +430,8 @@ cleanup:
     p4_close_if_open(in_pipe[0]); p4_close_if_open(in_pipe[1]);
     p4_close_if_open(out_pipe[0]); p4_close_if_open(out_pipe[1]);
     p4_close_if_open(err_pipe[0]); p4_close_if_open(err_pipe[1]);
+    p4_close_if_open(status_pipe[0]); p4_close_if_open(status_pipe[1]);
+    p4_close_if_open(error_pipe[0]); p4_close_if_open(error_pipe[1]);
     return (int32_t)result;
 }
 
@@ -182,6 +497,28 @@ int64_t process4cj_wait_owned(int64_t pid_value) {
     while (result < 0 && errno == EINTR);
     if (result < 0) return -(int64_t)errno;
     return info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+}
+int64_t process4cj_wait_status(int32_t fd) {
+    if (fd < 0) return -EBADF;
+    int32_t status = 0;
+    unsigned char *bytes = (unsigned char *)&status;
+    size_t offset = 0;
+    while (offset < sizeof(status)) {
+        ssize_t count = read(fd, bytes + offset, sizeof(status) - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) {
+            int error = errno;
+            p4_close_if_open(fd);
+            return -(int64_t)error;
+        }
+        if (count == 0) {
+            p4_close_if_open(fd);
+            return -EPIPE;
+        }
+        offset += (size_t)count;
+    }
+    p4_close_if_open(fd);
+    return (int64_t)status;
 }
 
 int64_t process4cj_wait(int64_t pid_value) {
