@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <pthread.h>
 #include <poll.h>
 #include <signal.h>
@@ -179,18 +180,39 @@ int64_t process4cj_wait(int64_t pid_value) {
  * the root; reverse order avoids leaving descendants behind during teardown. */
 #define P4_MAX_DESCENDANTS 1024
 
+static int p4_parse_pid_name(const char *name, pid_t *pid_out) {
+    if (name == NULL || pid_out == NULL || name[0] == '\0') return 0;
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(name, &end, 10);
+    if (errno != 0 || end == name || *end != '\0' || value <= 0) return 0;
+    pid_t pid = (pid_t)value;
+    if ((long)pid != value) return 0;
+    *pid_out = pid;
+    return 1;
+}
+
 static void p4_collect_descendants(
     pid_t pid,
     pid_t *descendants,
     size_t capacity,
     size_t *count,
     int depth
+);
+
+static void p4_collect_children_from_thread(
+    pid_t process_pid,
+    pid_t thread_pid,
+    pid_t *descendants,
+    size_t capacity,
+    size_t *count,
+    int depth
 ) {
-    if (pid <= 0 || depth > 32 || *count >= capacity) return;
-    char path[96];
+    if (process_pid <= 0 || thread_pid <= 0 || *count >= capacity) return;
+    char path[128];
     int length = snprintf(
         path, sizeof(path), "/proc/%ld/task/%ld/children",
-        (long)pid, (long)pid
+        (long)process_pid, (long)thread_pid
     );
     if (length <= 0 || (size_t)length >= sizeof(path)) return;
     int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -225,6 +247,35 @@ static void p4_collect_descendants(
         descendants[(*count)++] = child;
         p4_collect_descendants(child, descendants, capacity, count, depth + 1);
     }
+}
+
+static void p4_collect_descendants(
+    pid_t pid,
+    pid_t *descendants,
+    size_t capacity,
+    size_t *count,
+    int depth
+) {
+    if (pid <= 0 || depth > 32 || *count >= capacity) return;
+    char path[96];
+    int length = snprintf(path, sizeof(path), "/proc/%ld/task", (long)pid);
+    if (length <= 0 || (size_t)length >= sizeof(path)) return;
+    DIR *tasks = opendir(path);
+    if (tasks == NULL) return;
+    struct dirent *entry;
+    while (*count < capacity && (entry = readdir(tasks)) != NULL) {
+        pid_t thread_pid = 0;
+        if (!p4_parse_pid_name(entry->d_name, &thread_pid)) continue;
+        p4_collect_children_from_thread(
+            pid,
+            thread_pid,
+            descendants,
+            capacity,
+            count,
+            depth
+        );
+    }
+    closedir(tasks);
 }
 
 static int p4_signal_one(pid_t pid, int signal_value) {
@@ -295,6 +346,14 @@ static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
         cursor = end;
     }
     return 0;
+}
+
+int64_t process4cj_start_time(int64_t pid_value) {
+    uint64_t start_time = 0;
+    if (!p4_read_start_time((pid_t)pid_value, &start_time) || start_time == 0) {
+        return 0;
+    }
+    return (int64_t)start_time;
 }
 
 static p4_process_target p4_capture_target(pid_t pid) {
@@ -375,9 +434,19 @@ static void p4_wait_for_graceful_tree(
 /* Escalate using one process-tree snapshot.  A descendant can be reparented
  * after the leader receives SIGTERM, so recollecting from the root for the
  * forced pass would lose ownership of that descendant. */
-int32_t process4cj_terminate_tree(int64_t pid_value, int32_t graceful_millis) {
+int32_t process4cj_terminate_tree(
+    int64_t pid_value,
+    int64_t expected_start_time,
+    int32_t graceful_millis
+) {
     pid_t pid = (pid_t)pid_value;
-    if (pid <= 0 || graceful_millis < 0) return EINVAL;
+    if (pid <= 0 || expected_start_time < 0 || graceful_millis < 0) return EINVAL;
+    p4_process_target root = p4_capture_target(pid);
+    if (!root.valid ||
+        (expected_start_time > 0 &&
+         root.start_time != (uint64_t)expected_start_time)) {
+        return ESRCH;
+    }
     pid_t descendant_pids[P4_MAX_DESCENDANTS];
     size_t count = 0;
     p4_collect_descendants(
@@ -391,7 +460,6 @@ int32_t process4cj_terminate_tree(int64_t pid_value, int32_t graceful_millis) {
     for (size_t index = 0; index < count; ++index) {
         descendants[index] = p4_capture_target(descendant_pids[index]);
     }
-    p4_process_target root = p4_capture_target(pid);
     int first_error = p4_signal_captured_tree(
         &root,
         descendants,

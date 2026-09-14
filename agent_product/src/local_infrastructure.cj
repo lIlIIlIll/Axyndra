@@ -1956,27 +1956,42 @@ func sandboxRequired<T>(request: ProcessRequest): Result<T> {
 class ActiveLocalProcess {
     let operationId: OperationId
     let process: SubProcess
+    let startTime: Int64
 
     init(operationId: OperationId, process: SubProcess) {
         this.operationId = operationId
         this.process = process
+        this.startTime = processStartTime(process.pid)
+    }
+
+    func leaderMatches(): Bool {
+        startTime > 0 && processStartTime(process.pid) == startTime
     }
 
     func terminateOwned(): Unit {
         // The process may have exited between registration and cancellation.
+        // Keep the launch-time identity as the ownership guard: a reused PID
+        // must never become an eligible cancellation target.
+        if (!leaderMatches()) { return }
         // LocalProcessPort launches every owned process through setsid. Capture
         // the process tree before graceful termination so descendants that
         // leave the session remain available for forced escalation.
-        let terminated = terminateProcessTree(process.pid, gracefulMillis: 250)
-        if (!terminated && process.isAlive()) {
-            try {
-                let _ = process.terminate(force: true)
-            } catch (error: Exception) {
-                if (process.isAlive()) { throw error }
-            }
+        let terminated = terminateProcessTree(
+            process.pid,
+            expectedStartTime: startTime,
+            gracefulMillis: 250
+        )
+        if (!terminated) {
+            // Retry through the identity-checked native path only. The standard
+            // SubProcess fallback is PID-only and can race with PID reuse.
+            let _ = terminateProcessTree(
+                process.pid,
+                expectedStartTime: startTime,
+                gracefulMillis: 0
+            )
         }
         let forceDeadline = MonoTime.now() + Duration.millisecond * 1000
-        while (process.isAlive() && MonoTime.now() < forceDeadline) {
+        while (leaderMatches() && process.isAlive() && MonoTime.now() < forceDeadline) {
             sleep(Duration.millisecond * 10)
         }
     }

@@ -24,7 +24,12 @@ foreign func process4cj_close(fd: Int32): Int32
 foreign func process4cj_wait_owned(pid: Int64): Int64
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
-foreign func process4cj_terminate_tree(pid: Int64, gracefulMillis: Int32): Int32
+foreign func process4cj_terminate_tree(
+    pid: Int64,
+    expectedStartTime: Int64,
+    gracefulMillis: Int32
+): Int32
+foreign func process4cj_start_time(pid: Int64): Int64
 foreign func process4cj_is_alive(pid: Int64): Int32
 // Terminate a process group by its owned session leader PID.  This keeps
 // process-port cancellation inside the native ownership boundary instead of
@@ -36,11 +41,23 @@ public func killProcessTree(pid: Int64, force!: Bool = true): Bool {
     }
 }
 
+// Read the Linux process start-time token used to reject PID reuse.
+public func processStartTime(pid: Int64): Int64 {
+    if (pid <= 0) { return 0 }
+    unsafe { process4cj_start_time(pid) }
+}
+
 // Capture the owned tree once, then escalate against that same snapshot.
 // Descendants may leave the leader's session before the forced pass.
-public func terminateProcessTree(pid: Int64, gracefulMillis!: Int32 = 250): Bool {
-    if (pid <= 0 || gracefulMillis < 0) { return false }
-    unsafe { process4cj_terminate_tree(pid, gracefulMillis) == 0 }
+public func terminateProcessTree(
+    pid: Int64,
+    expectedStartTime!: Int64 = 0,
+    gracefulMillis!: Int32 = 250
+): Bool {
+    if (pid <= 0 || expectedStartTime < 0 || gracefulMillis < 0) { return false }
+    unsafe {
+        process4cj_terminate_tree(pid, expectedStartTime, gracefulMillis) == 0
+    }
 }
 
 // Bound blocking reads in protocol hosts so every Cangjie mutator regularly

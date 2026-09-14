@@ -257,6 +257,23 @@ class Process4CjTests {
         let _ = waiting.close()
         let _ = exited.close()
     }
+
+    @TestCase
+    func mismatchedLaunchIdentityNeverSignalsReusedPid(): Unit {
+        let process = startProcess(ProcessCommand("/bin/sleep", arguments: ["5"]))
+        let startTime = processStartTime(process.pid)
+        @Expect(startTime > 0, true)
+        @Expect(
+            terminateProcessTree(
+                process.pid,
+                expectedStartTime: startTime + 1,
+                gracefulMillis: 0
+            ),
+            false
+        )
+        @Expect(process.isAlive(), true)
+        @Expect(process.close(), true)
+    }
 }
 
 func processErrorKindName(kind: ProcessErrorKind): String {
