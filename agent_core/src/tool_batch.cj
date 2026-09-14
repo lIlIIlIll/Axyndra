@@ -239,10 +239,11 @@ class CoreToolBatchCoordinator {
             }
             for (index in 0..futures.size) {
                 let work = wave.calls[index]
+                let result = futures[index].get()
                 outcomes.add(CoreToolOutcome(
                     work.index,
                     work.committed,
-                    futures[index].get(),
+                    result,
                     operationId: Some(work.prepared.operationId),
                     operationPlan: Some(work.prepared.operationPlan),
                     attemptStage: OperationAttemptStage.Executing

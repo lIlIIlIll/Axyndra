@@ -162,14 +162,15 @@ public func discoverMcpExtension(
         case Result.Err(error) => return Result.Err(redactMcpError(error, redact))
     }
     try {
-        Result.Ok(McpAgentExtension(
+        let extension = McpAgentExtension(
             normalized,
             client,
             directory.tools,
             aliases,
             redact,
             trustedReadOnlyTools
-        ))
+        )
+        Result.Ok(extension)
     } catch (error: Exception) {
         Result.Err(AgentError(
             AgentErrorKind.Configuration,

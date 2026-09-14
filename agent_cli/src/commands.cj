@@ -357,7 +357,7 @@ public class CommandRouter {
         }
         match (parts[0]) {
             case "/help" => noArguments(parts, ClientCommand.Help)
-            case "/exit" => noArguments(parts, ClientCommand.Exit)
+            case "/exit" | "/quit" => noArguments(parts, ClientCommand.Exit)
             case "/new" => noArguments(parts, ClientCommand.NewSession)
             case "/status" => oneArgument(parts, {
                 value => ClientCommand.RunStatus(value)

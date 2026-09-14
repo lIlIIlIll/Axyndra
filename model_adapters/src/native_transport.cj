@@ -16,6 +16,8 @@ private class ActiveNativeRequest {
     let client: Client
     var response: ?HttpResponse = None
     var cancelled: Bool = false
+    var resourcesClaimed: Bool = false
+    var closeByFinisher: Bool = false
 
     init(requestId: String, client: Client) {
         this.requestId = requestId
@@ -205,32 +207,51 @@ public class NativeProviderTransport <: ProviderTransport {
             let item = finishNative(requestId)
             match (item) {
                 case Some(value) =>
-                    match (value.response) {
-                        case Some(response) => try { response.close() } catch (_: Exception) {}
-                        case None => ()
+                    if (value.closeByFinisher) {
+                        match (value.response) {
+                            case Some(response) => try { response.close() } catch (_: Exception) {}
+                            case None => ()
+                        }
+                        try { value.client.close() } catch (_: Exception) {}
                     }
-                    try { value.client.close() } catch (_: Exception) {}
                 case None => try { client.close() } catch (_: Exception) {}
             }
         }
-    }
 
+    }
     public func cancel(requestId: String): domain.Result<Unit> {
         let credentialCancellation = credentials.cancel(requestId)
+        var selected: ?ActiveNativeRequest = None
+        var responseToClose: ?HttpResponse = None
+        var clientToClose: ?Client = None
         activeLock.lock()
         try {
             for (item in active where item.requestId == requestId) {
                 item.cancelled = true
-                match (item.response) {
+                selected = Some(item)
+                if (!item.resourcesClaimed) {
+                    item.resourcesClaimed = true
+                    responseToClose = item.response
+                    item.response = None
+                    clientToClose = Some(item.client)
+                }
+                break
+            }
+        } finally {
+            activeLock.unlock()
+        }
+        match (selected) {
+            case Some(_) =>
+                match (responseToClose) {
                     case Some(response) => try { response.close() } catch (_: Exception) {}
                     case None => ()
                 }
-                try { item.client.close() } catch (_: Exception) {}
-                return domain.Result.Ok(())
-            }
-            credentialCancellation
-        } finally {
-            activeLock.unlock()
+                match (clientToClose) {
+                    case Some(client) => try { client.close() } catch (_: Exception) {}
+                    case None => ()
+                }
+                domain.Result.Ok(())
+            case None => credentialCancellation
         }
     }
 
@@ -256,18 +277,39 @@ public class NativeProviderTransport <: ProviderTransport {
     }
 
     private func attachNativeResponse(requestId: String, response: HttpResponse): Unit {
+        var responseToClose: ?HttpResponse = None
+        var clientToClose: ?Client = None
         activeLock.lock()
         try {
+            var found = false
             for (item in active where item.requestId == requestId) {
-                item.response = Some(response)
-                if (item.cancelled) {
-                    try { response.close() } catch (_: Exception) {}
+                found = true
+                if (item.resourcesClaimed) {
+                    responseToClose = Some(response)
+                } else {
+                    item.response = Some(response)
+                    if (item.cancelled) {
+                        item.resourcesClaimed = true
+                        item.response = None
+                        responseToClose = Some(response)
+                        clientToClose = Some(item.client)
+                    }
                 }
-                return
+                break
             }
-            try { response.close() } catch (_: Exception) {}
+            if (!found) {
+                responseToClose = Some(response)
+            }
         } finally {
             activeLock.unlock()
+        }
+        match (responseToClose) {
+            case Some(value) => try { value.close() } catch (_: Exception) {}
+            case None => ()
+        }
+        match (clientToClose) {
+            case Some(value) => try { value.close() } catch (_: Exception) {}
+            case None => ()
         }
     }
 
@@ -289,6 +331,10 @@ public class NativeProviderTransport <: ProviderTransport {
             for (index in 0..active.size) {
                 if (active[index].requestId == requestId) {
                     let value = active[index]
+                    if (!value.resourcesClaimed) {
+                        value.resourcesClaimed = true
+                        value.closeByFinisher = true
+                    }
                     active.remove(at: index)
                     return Some(value)
                 }
