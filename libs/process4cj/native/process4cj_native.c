@@ -610,6 +610,7 @@ static void p4_collect_descendants(
     p4_process_target *descendants,
     size_t capacity,
     size_t *count,
+    int *overflow,
     int depth
 );
 static void p4_collect_child_token(
@@ -619,9 +620,10 @@ static void p4_collect_child_token(
     p4_process_target *descendants,
     size_t capacity,
     size_t *count,
+    int *overflow,
     int depth
 ) {
-    if (token == NULL || token[0] == '\0' || *count >= capacity) return;
+    if (token == NULL || token[0] == '\0') return;
     pid_t child = 0;
     if (!p4_parse_pid_name(token, &child)) return;
     p4_process_target child_target;
@@ -630,6 +632,10 @@ static void p4_collect_child_token(
         return;
     }
     if (p4_contains_target(descendants, *count, &child_target)) return;
+    if (*count >= capacity) {
+        if (overflow != NULL) *overflow = 1;
+        return;
+    }
     descendants[(*count)++] = child_target;
     p4_collect_descendants(
         child,
@@ -637,10 +643,10 @@ static void p4_collect_child_token(
         descendants,
         capacity,
         count,
+        overflow,
         depth + 1
     );
 }
-
 
 static void p4_collect_children_from_thread(
     pid_t process_pid,
@@ -648,9 +654,10 @@ static void p4_collect_children_from_thread(
     p4_process_target *descendants,
     size_t capacity,
     size_t *count,
+    int *overflow,
     int depth
 ) {
-    if (process_pid <= 0 || thread_pid <= 0 || *count >= capacity) return;
+    if (process_pid <= 0 || thread_pid <= 0) return;
     char path[128];
     int length = snprintf(
         path, sizeof(path), "/proc/%ld/task/%ld/children",
@@ -663,14 +670,12 @@ static void p4_collect_children_from_thread(
     char token[32];
     size_t token_length = 0;
     int token_overflow = 0;
-    while (*count < capacity) {
+    for (;;) {
         ssize_t bytes;
         do { bytes = read(fd, buffer, sizeof(buffer)); }
         while (bytes < 0 && errno == EINTR);
         if (bytes <= 0) break;
-        for (ssize_t index = 0;
-             index < bytes && *count < capacity;
-             ++index) {
+        for (ssize_t index = 0; index < bytes; ++index) {
             char byte = buffer[index];
             if (byte >= '0' && byte <= '9') {
                 if (!token_overflow) {
@@ -692,6 +697,7 @@ static void p4_collect_children_from_thread(
                         descendants,
                         capacity,
                         count,
+                        overflow,
                         depth
                     );
                 }
@@ -700,7 +706,7 @@ static void p4_collect_children_from_thread(
             }
         }
     }
-    if (*count < capacity && (token_length > 0 || token_overflow)) {
+    if (token_length > 0 || token_overflow) {
         if (!token_overflow) {
             token[token_length] = '\0';
             p4_collect_child_token(
@@ -710,6 +716,7 @@ static void p4_collect_children_from_thread(
                 descendants,
                 capacity,
                 count,
+                overflow,
                 depth
             );
         }
@@ -717,16 +724,21 @@ static void p4_collect_children_from_thread(
     p4_close_if_open(fd);
 }
 
+
 static void p4_collect_descendants(
     pid_t pid,
     const p4_process_target *expected_target,
     p4_process_target *descendants,
     size_t capacity,
     size_t *count,
+    int *overflow,
     int depth
 ) {
-    if (pid <= 0 || *count >= capacity) return;
-    if (depth < 0 || (size_t)depth >= capacity) return;
+    if (pid <= 0) return;
+    if (depth < 0 || (size_t)depth > capacity) {
+        if (overflow != NULL) *overflow = 1;
+        return;
+    }
     if (expected_target != NULL && !p4_target_matches(expected_target)) return;
     char path[96];
     int length = snprintf(path, sizeof(path), "/proc/%ld/task", (long)pid);
@@ -734,15 +746,16 @@ static void p4_collect_descendants(
     DIR *tasks = opendir(path);
     if (tasks == NULL) return;
     struct dirent *entry;
-    while (*count < capacity && (entry = readdir(tasks)) != NULL) {
+    while ((entry = readdir(tasks)) != NULL) {
         pid_t thread_pid = 0;
         if (!p4_parse_pid_name(entry->d_name, &thread_pid)) continue;
         p4_collect_children_from_thread(
-            pid, thread_pid, descendants, capacity, count, depth
+            pid, thread_pid, descendants, capacity, count, overflow, depth
         );
     }
     closedir(tasks);
 }
+
 
 static int p4_signal_one(pid_t pid, int signal_value) {
     if (pid <= 0) return EINVAL;
@@ -761,15 +774,17 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
     );
     if (descendants == NULL) return ENOMEM;
     size_t count = 0;
+    int overflow = 0;
     p4_collect_descendants(
         pid,
         NULL,
         descendants,
         P4_MAX_DESCENDANTS,
         &count,
+        &overflow,
         0
     );
-    int first_error = 0;
+    int first_error = overflow ? EOVERFLOW : 0;
     for (size_t index = count; index > 0; --index) {
         int result = p4_signal_target(&descendants[index - 1], signal_value);
         if (result != 0 && first_error == 0) first_error = result;
@@ -927,6 +942,7 @@ static int p4_freeze_tree(
 ) {
     int first_error = p4_stop_target(root);
     if (first_error != 0) return first_error;
+    int overflow = 0;
     for (;;) {
         size_t previous_count = *count;
         if (p4_target_matches(root)) {
@@ -936,6 +952,7 @@ static int p4_freeze_tree(
                 descendants,
                 capacity,
                 count,
+                &overflow,
                 0
             );
         }
@@ -945,6 +962,7 @@ static int p4_freeze_tree(
         }
         if (first_error != 0 || *count == previous_count) break;
     }
+    if (first_error == 0 && overflow) first_error = EOVERFLOW;
     return first_error;
 }
 
