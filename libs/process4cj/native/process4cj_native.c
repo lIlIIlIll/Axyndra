@@ -418,7 +418,11 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
     int signal_value = force ? SIGKILL : SIGTERM;
     if (pid <= 0) return EINVAL;
     if (!process_group) return (int32_t)p4_signal_one(pid, signal_value);
-    p4_process_target descendants[P4_MAX_DESCENDANTS];
+    p4_process_target *descendants = calloc(
+        P4_MAX_DESCENDANTS,
+        sizeof(*descendants)
+    );
+    if (descendants == NULL) return ENOMEM;
     size_t count = 0;
     p4_collect_descendants(
         pid,
@@ -437,6 +441,7 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
     if (result < 0 && errno != ESRCH && first_error == 0) first_error = errno;
     result = p4_signal_one(pid, signal_value);
     if (result != 0 && first_error == 0) first_error = result;
+    free(descendants);
     return (int32_t)first_error;
 }
 
@@ -706,7 +711,11 @@ int32_t process4cj_terminate_tree(
          root.start_time != (uint64_t)expected_start_time)) {
         return ESRCH;
     }
-    p4_process_target descendants[P4_MAX_DESCENDANTS];
+    p4_process_target *descendants = calloc(
+        P4_MAX_DESCENDANTS,
+        sizeof(*descendants)
+    );
+    if (descendants == NULL) return ENOMEM;
     size_t count = 0;
     int freeze_error = p4_freeze_tree(
         &root,
@@ -722,6 +731,7 @@ int32_t process4cj_terminate_tree(
             count,
             SIGKILL
         );
+        free(descendants);
         return kill_error != 0 ? kill_error : freeze_error;
     }
     int first_error = p4_signal_captured_tree(
@@ -747,6 +757,7 @@ int32_t process4cj_terminate_tree(
         SIGKILL
     );
     if (result != 0 && first_error == 0) first_error = result;
+    free(descendants);
     return (int32_t)first_error;
 }
 
