@@ -41,6 +41,47 @@ class TuiRunEventCursorTests {
             2, "approval-run", AgentEventPayload.TextDelta("after-finish")
         )))
     }
+    @TestCase
+    func delayedSyntheticEventsCannotCrossUiRunGeneration(): Unit {
+        let cursor = TuiRunEventCursor()
+        cursor.begin()
+        @Expect(cursor.accept(appCursorEvent(
+            1, "run-a", AgentEventPayload.RunStarted
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            2, "run-a", AgentEventPayload.RunCompleted
+        )))
+
+        cursor.begin()
+        @Expect(cursor.accept(appCursorEvent(
+            3, "run-b", AgentEventPayload.RunStarted
+        )))
+        @Expect(!cursor.accept(appCursorEvent(
+            4,
+            "compaction-session",
+            AgentEventPayload.ContextCompacted(100, 60)
+        )))
+        @Expect(!cursor.accept(appCursorEvent(
+            5,
+            "compaction-session",
+            AgentEventPayload.Extension(
+                AgentEventKind.Transcript,
+                objectValue([
+                    ValueField("code", textValue("run.summary")),
+                    ValueField("text", textValue("stale summary"))
+                ])
+            )
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            6, "run-b", AgentEventPayload.RunCompleted
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            7,
+            "compaction-session",
+            AgentEventPayload.ContextCompacted(100, 60)
+        )))
+    }
+
 }
 
 func appCursorEvent(sequence: Int64, runId: String, payload: AgentEventPayload): AgentEvent {

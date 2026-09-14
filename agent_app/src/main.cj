@@ -2569,7 +2569,10 @@ class TuiRunEventCursor {
                 case _ => false
             }
             if (outOfBand) {
-                return true
+                // Compaction and summary events are emitted after the completed
+                // run has cleared activeRunId. A later run must not inherit a
+                // delayed synthetic event from the previous UI generation.
+                return activeRunId == ""
             }
             if (activeRunId == "") {
                 match (event.payload) {
