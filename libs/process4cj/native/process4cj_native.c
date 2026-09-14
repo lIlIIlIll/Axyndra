@@ -179,7 +179,6 @@ int64_t process4cj_wait(int64_t pid_value) {
  * process-tree termination. Collect the direct-child tree before signalling
  * the root; reverse order avoids leaving descendants behind during teardown. */
 #define P4_MAX_DESCENDANTS 1024
-
 static int p4_parse_pid_name(const char *name, pid_t *pid_out) {
     if (name == NULL || pid_out == NULL || name[0] == '\0') return 0;
     char *end = NULL;
@@ -192,9 +191,31 @@ static int p4_parse_pid_name(const char *name, pid_t *pid_out) {
     return 1;
 }
 
+
+typedef struct {
+    pid_t pid;
+    uint64_t start_time;
+    int valid;
+} p4_process_target;
+
+static int p4_read_process_stat(
+    pid_t pid,
+    pid_t *parent_pid,
+    uint64_t *start_time
+);
+static p4_process_target p4_capture_target(pid_t pid);
+static int p4_capture_child_target(
+    pid_t child_pid,
+    pid_t process_pid,
+    pid_t thread_pid,
+    p4_process_target *target_out
+);
+static int p4_target_matches(const p4_process_target *target);
+static int p4_signal_target(const p4_process_target *target, int signal_value);
+
 static void p4_collect_descendants(
     pid_t pid,
-    pid_t *descendants,
+    p4_process_target *descendants,
     size_t capacity,
     size_t *count,
     int depth
@@ -203,7 +224,7 @@ static void p4_collect_descendants(
 static void p4_collect_children_from_thread(
     pid_t process_pid,
     pid_t thread_pid,
-    pid_t *descendants,
+    p4_process_target *descendants,
     size_t capacity,
     size_t *count,
     int depth
@@ -244,14 +265,19 @@ static void p4_collect_children_from_thread(
             while (index < (size_t)bytes && buffer[index] != ' ') index++;
             continue;
         }
-        descendants[(*count)++] = child;
+        p4_process_target child_target;
+        if (!p4_capture_child_target(
+                child, process_pid, thread_pid, &child_target)) {
+            continue;
+        }
+        descendants[(*count)++] = child_target;
         p4_collect_descendants(child, descendants, capacity, count, depth + 1);
     }
 }
 
 static void p4_collect_descendants(
     pid_t pid,
-    pid_t *descendants,
+    p4_process_target *descendants,
     size_t capacity,
     size_t *count,
     int depth
@@ -267,12 +293,7 @@ static void p4_collect_descendants(
         pid_t thread_pid = 0;
         if (!p4_parse_pid_name(entry->d_name, &thread_pid)) continue;
         p4_collect_children_from_thread(
-            pid,
-            thread_pid,
-            descendants,
-            capacity,
-            count,
-            depth
+            pid, thread_pid, descendants, capacity, count, depth
         );
     }
     closedir(tasks);
@@ -289,12 +310,12 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
     int signal_value = force ? SIGKILL : SIGTERM;
     if (pid <= 0) return EINVAL;
     if (!process_group) return (int32_t)p4_signal_one(pid, signal_value);
-    pid_t descendants[P4_MAX_DESCENDANTS];
+    p4_process_target descendants[P4_MAX_DESCENDANTS];
     size_t count = 0;
     p4_collect_descendants(pid, descendants, P4_MAX_DESCENDANTS, &count, 0);
     int first_error = 0;
     for (size_t index = count; index > 0; --index) {
-        int result = p4_signal_one(descendants[index - 1], signal_value);
+        int result = p4_signal_target(&descendants[index - 1], signal_value);
         if (result != 0 && first_error == 0) first_error = result;
     }
     int result = kill(-pid, signal_value);
@@ -304,14 +325,12 @@ int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group)
     return (int32_t)first_error;
 }
 
-typedef struct {
-    pid_t pid;
-    uint64_t start_time;
-    int valid;
-} p4_process_target;
-
-static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
-    if (pid <= 0 || start_time == NULL) return 0;
+static int p4_read_process_stat(
+    pid_t pid,
+    pid_t *parent_pid,
+    uint64_t *start_time
+) {
+    if (pid <= 0 || (parent_pid == NULL && start_time == NULL)) return 0;
     char path[96];
     int length = snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
     if (length <= 0 || (size_t)length >= sizeof(path)) return 0;
@@ -327,12 +346,24 @@ static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
     char *closing_name = strrchr(buffer, ')');
     if (closing_name == NULL || closing_name[1] != ' ') return 0;
     char *cursor = closing_name + 2;
+    int parent_found = parent_pid == NULL;
+    int start_found = start_time == NULL;
     for (int field = 3; field <= 22; ++field) {
         while (*cursor == ' ') cursor++;
         if (*cursor == '\0' || *cursor == '\n') return 0;
         char *end = cursor;
         while (*end != '\0' && *end != ' ' && *end != '\n') end++;
-        if (field == 22) {
+        if (field == 4 && parent_pid != NULL) {
+            errno = 0;
+            char *parsed_end = NULL;
+            long value = strtol(cursor, &parsed_end, 10);
+            if (errno != 0 || parsed_end != end || value <= 0) return 0;
+            pid_t parsed_parent = (pid_t)value;
+            if ((long)parsed_parent != value) return 0;
+            *parent_pid = parsed_parent;
+            parent_found = 1;
+        }
+        if (field == 22 && start_time != NULL) {
             uint64_t value = 0;
             for (char *digit = cursor; digit < end; ++digit) {
                 if (*digit < '0' || *digit > '9') return 0;
@@ -341,11 +372,15 @@ static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
                 value = next;
             }
             *start_time = value;
-            return 1;
+            start_found = 1;
         }
         cursor = end;
     }
-    return 0;
+    return parent_found && start_found;
+}
+
+static int p4_read_start_time(pid_t pid, uint64_t *start_time) {
+    return p4_read_process_stat(pid, NULL, start_time);
 }
 
 int64_t process4cj_start_time(int64_t pid_value) {
@@ -361,6 +396,29 @@ static p4_process_target p4_capture_target(pid_t pid) {
     target.valid = p4_read_start_time(pid, &target.start_time);
     return target;
 }
+static int p4_capture_child_target(
+    pid_t child_pid,
+    pid_t process_pid,
+    pid_t thread_pid,
+    p4_process_target *target_out
+) {
+    if (child_pid <= 0 || process_pid <= 0 || thread_pid <= 0 ||
+        target_out == NULL) {
+        return 0;
+    }
+    pid_t parent_pid = 0;
+    uint64_t start_time = 0;
+    if (!p4_read_process_stat(child_pid, &parent_pid, &start_time) ||
+        start_time == 0) {
+        return 0;
+    }
+    if (parent_pid != process_pid && parent_pid != thread_pid) return 0;
+    target_out->pid = child_pid;
+    target_out->start_time = start_time;
+    target_out->valid = 1;
+    return 1;
+}
+
 
 static int p4_target_matches(const p4_process_target *target) {
     if (target == NULL || !target->valid) return 0;
@@ -447,19 +505,16 @@ int32_t process4cj_terminate_tree(
          root.start_time != (uint64_t)expected_start_time)) {
         return ESRCH;
     }
-    pid_t descendant_pids[P4_MAX_DESCENDANTS];
+    p4_process_target descendants[P4_MAX_DESCENDANTS];
     size_t count = 0;
     p4_collect_descendants(
         pid,
-        descendant_pids,
+        descendants,
         P4_MAX_DESCENDANTS,
         &count,
         0
     );
-    p4_process_target descendants[P4_MAX_DESCENDANTS];
-    for (size_t index = 0; index < count; ++index) {
-        descendants[index] = p4_capture_target(descendant_pids[index]);
-    }
+    if (!p4_target_matches(&root)) return ESRCH;
     int first_error = p4_signal_captured_tree(
         &root,
         descendants,

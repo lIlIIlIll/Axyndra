@@ -51,25 +51,19 @@ public class FaultInjectingModelPort <: ModelPort {
     }
 
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
+        var current: Int64 = 0
+        var shouldInject = false
         lock.lock()
-        let current = try {
+        try {
             ordinal += 1
+            current = ordinal
             observedRequests.add(request)
-            ordinal
+            if (current >= profile.triggerAttemptOrdinal &&
+                injected < profile.maxInjectedAttempts) {
+                injected += 1
+                shouldInject = true
+            }
         } finally { lock.unlock() }
-        let shouldInject = if (current < profile.triggerAttemptOrdinal) {
-            false
-        } else {
-            lock.lock()
-            try {
-                if (injected >= profile.maxInjectedAttempts) {
-                    false
-                } else {
-                    injected += 1
-                    true
-                }
-            } finally { lock.unlock() }
-        }
         if (!shouldInject) {
             return inner.execute(request, events)
         }
