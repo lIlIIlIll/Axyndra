@@ -217,12 +217,25 @@ func runDisplayServerEnvironmentContracts(
 ): Unit {
     let output = directory + "/display-environment.txt"
     let fallbackOutput = directory + "/display-environment-fallback.txt"
+    let pathOutput = directory + "/display-path.txt"
     let authority = directory + "/xauthority"
     let hostHome = directory + "/host-home"
     let originalHome = getVariable("HOME")
     let originalAuthority = getVariable("XAUTHORITY")
+    let originalPath = getVariable("PATH")
     try {
         setVariable("HOME", hostHome)
+        let callerPath = "/contract/clipboard-bin:/usr/bin:/bin"
+        setVariable("PATH", callerPath)
+        let pathProbe = displayPathEnvironmentProbe(processes, pathOutput)
+        let pathValue = match (pathProbe) {
+            case Result.Ok(_) => String.fromUtf8(File.readFrom(pathOutput))
+            case Result.Err(error) => error.message
+        }
+        expect(
+            pathProbe.isOk() && pathValue == callerPath,
+            "display-server process preserves the caller PATH for installed clients"
+        )
         setVariable("XAUTHORITY", authority)
         let explicit = displayEnvironmentProbe(processes, output)
         let explicitValue = match (explicit) {
@@ -253,6 +266,11 @@ func runDisplayServerEnvironmentContracts(
             case Some(value) => setVariable("HOME", value)
             case None => removeVariable("HOME")
         }
+        match (originalPath) {
+            case Some(value) => setVariable("PATH", value)
+            case None => removeVariable("PATH")
+        }
+        try { let _ = removeIfExists(pathOutput) } catch (_: Exception) {}
         try { let _ = removeIfExists(output) } catch (_: Exception) {}
         try { let _ = removeIfExists(fallbackOutput) } catch (_: Exception) {}
     }
@@ -268,6 +286,22 @@ func displayEnvironmentProbe(
             "-c",
             "printf '%s' \"$XAUTHORITY\" > \"$1\"",
             "display-environment",
+            output
+        ],
+        timeoutMillis: 5000,
+        displayServerAccess: true
+    ))
+}
+func displayPathEnvironmentProbe(
+    processes: LocalProcessPort,
+    output: String
+): Result<ProcessResult> {
+    processes.execute(ProcessRequest(
+        "/bin/sh",
+        arguments: [
+            "-c",
+            "printf '%s' \"$PATH\" > \"$1\"",
+            "display-path-environment",
             output
         ],
         timeoutMillis: 5000,

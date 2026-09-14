@@ -1457,7 +1457,11 @@ public class LocalProcessPort <: ProcessPort {
         if (includeDisplayServer) {
             // Clipboard clients need the selected display server and, for
             // authenticated X11 sessions, the explicit authority path.
-            allowed.add(all: ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY"])
+            // PATH is non-sensitive but must retain user-installed clients.
+            allowed.add(all: [
+                "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
+                "PATH"
+            ])
         }
         // EnvironmentFilter requires secret names to be present in both
         // allowlists, keeping an explicit secret grant as the only path to
@@ -1475,12 +1479,18 @@ public class LocalProcessPort <: ProcessPort {
             secretValues: request.redactedValues
         ).filterCurrent()
         let environment = HashMap<String, String>()
+        var hasUsablePath = false
         for (entry in filtered.entries) {
             environment[entry.name] = entry.value
+            if (entry.name == "PATH" && entry.value.trimAscii() != "") {
+                hasUsablePath = true
+            }
         }
-        // Stable non-sensitive defaults keep the host-mode clipboard child
-        // independent of the caller's shell configuration.
-        environment["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        if (!hasUsablePath) {
+            environment["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        }
+        // Stable defaults keep HOME, TMPDIR, and LANG predictable while the
+        // explicitly allowlisted PATH remains available to user-installed tools.
         environment["HOME"] = workspace.rootPath()
         environment["TMPDIR"] = "/tmp"
         environment["LANG"] = "C.UTF-8"

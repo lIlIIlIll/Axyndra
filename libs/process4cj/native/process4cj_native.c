@@ -333,7 +333,8 @@ static void p4_collect_descendants(
     size_t *count,
     int depth
 ) {
-    if (pid <= 0 || depth > 32 || *count >= capacity) return;
+    if (pid <= 0 || *count >= capacity) return;
+    if (depth < 0 || (size_t)depth >= capacity) return;
     if (expected_target != NULL && !p4_target_matches(expected_target)) return;
     char path[96];
     int length = snprintf(path, sizeof(path), "/proc/%ld/task", (long)pid);
