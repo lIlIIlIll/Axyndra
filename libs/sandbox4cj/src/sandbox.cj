@@ -553,7 +553,8 @@ func buildSandboxArguments(
 ): Array<String> {
     let arguments = ArrayList<String>()
     arguments.add("--die-with-parent")
-    arguments.add("--new-session")
+    // Keep descendants in the launcher's process group. Cancellation can
+    // race bwrap startup before --die-with-parent is installed.
     arguments.add("--unshare-user")
     arguments.add("--disable-userns")
     match (policy.process) {

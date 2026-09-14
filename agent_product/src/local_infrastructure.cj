@@ -1294,6 +1294,9 @@ public class LocalProcessPort <: ProcessPort {
             arguments.add(request.executable)
             arguments.add(all: request.arguments)
             let launchArguments = ArrayList<String>()
+            // Keep the tracked session leader alive until its command exits.
+            // Without --wait, util-linux setsid forks and returns immediately.
+            launchArguments.add("--wait")
             launchArguments.add("timeout")
             launchArguments.add(all: arguments.toArray())
             let process = launch(
@@ -1736,6 +1739,8 @@ public class LocalProcessPort <: ProcessPort {
             }
             try {
                 let launchArguments = ArrayList<String>()
+                // Keep the tracked session leader alive until the shell exits.
+                launchArguments.add("--wait")
                 launchArguments.add("/bin/bash")
                 launchArguments.add("--noprofile")
                 launchArguments.add("--norc")
@@ -1807,6 +1812,7 @@ public class LocalProcessPort <: ProcessPort {
                 // wrapper. Each command has its own monotonic deadline in
                 // PersistentShell; timeout/error tears down the whole shell.
                 let launchArguments = ArrayList<String>()
+                launchArguments.add("--wait")
                 launchArguments.add(plan.sandboxExecutable)
                 launchArguments.add(all: plan.sandboxArguments)
                 let process = launch(
