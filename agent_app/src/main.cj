@@ -2594,7 +2594,6 @@ class ProductTuiBackend <: AgentTuiBackend {
     private let product: ProductRuntime
     private let branchLabel: String
     private let lock = Mutex()
-    private let cachedMcpStatus: TuiTurnResult
     private var running = false
     private let uiRunEvents = TuiRunEventCursor()
     private let appEvents: AppEventCursor
@@ -2611,7 +2610,6 @@ class ProductTuiBackend <: AgentTuiBackend {
             case Some(value) => value
             case None => product.applicationSession()
         }
-        this.cachedMcpStatus = tuiResult(session.handle("/mcp"), "/mcp")
         this.appEvents = AppEventCursor(ThreadId(this.session.id().value))
         this.branchLabel = workspaceBranch(session.workspaceRoot())
         session.subscribe({event => forward(event)})
@@ -3294,7 +3292,7 @@ class ProductTuiBackend <: AgentTuiBackend {
         values.toArray()
     }
     public func mcpStatus(): TuiTurnResult {
-        cachedMcpStatus
+        tuiResult(session.handle("/mcp"), "/mcp")
     }
 
     public func setExtensionEnabled(
