@@ -631,7 +631,18 @@ static void p4_collect_child_token(
             child, process_pid, thread_pid, &child_target)) {
         return;
     }
-    if (p4_contains_target(descendants, *count, &child_target)) return;
+    if (p4_contains_target(descendants, *count, &child_target)) {
+        p4_collect_descendants(
+            child,
+            &child_target,
+            descendants,
+            capacity,
+            count,
+            overflow,
+            depth + 1
+        );
+        return;
+    }
     if (*count >= capacity) {
         if (overflow != NULL) *overflow = 1;
         return;

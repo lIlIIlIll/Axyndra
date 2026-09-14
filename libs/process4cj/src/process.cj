@@ -728,6 +728,7 @@ class NativeProcessInput <: InputStream & Resource {
 
 class LinuxNativeProcess <: ProcessPlatformProcess {
     private let nativePid: Int64
+    private let nativeStartTime: Int64
     private var statusFd: Int32
     private var stdinFd: Int32
     private let stdoutStream: NativeProcessInput
@@ -736,12 +737,14 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
 
     init(
         pid: Int64,
+        startTime: Int64,
         stdinFd: Int32,
         stdoutFd: Int32,
         stderrFd: Int32,
         statusFd: Int32
     ) {
         nativePid = pid
+        nativeStartTime = startTime
         this.statusFd = statusFd
         this.stdinFd = stdinFd
         stdoutStream = NativeProcessInput(stdoutFd)
@@ -785,6 +788,11 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
         unsafe { process4cj_wait_status(fd) }
     }
     public func terminate(force: Bool, processTree: Bool): Bool {
+        if (processTree && force) {
+            return unsafe {
+                process4cj_terminate_tree(nativePid, nativeStartTime, 0) == 0
+            }
+        }
         unsafe {
             process4cj_kill(nativePid, if (force) { 1 } else { 0 }, if (processTree) { 1 } else { 0 }) == 0
         }
@@ -996,8 +1004,10 @@ func nativeSpawn(command: ProcessCommand): ProcessPlatformProcess {
             if (error != 0) {
                 throw ProcessError(ProcessErrorKind.Spawn, "process spawn failed errno=" + error.toString())
             }
+            let pid = pidPointer.read()
             LinuxNativeProcess(
-                pidPointer.read(),
+                pid,
+                unsafe { process4cj_start_time(pid) },
                 stdinPointer.read(),
                 stdoutPointer.read(),
                 stderrPointer.read(),
