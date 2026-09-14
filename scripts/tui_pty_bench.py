@@ -73,6 +73,7 @@ class PtyRun:
         data_count: int,
         stream_chunks: int,
         timeout: float,
+        frame_coalesce_ms: int | None = None,
     ) -> None:
         self.command = command
         self.root = root
@@ -81,6 +82,7 @@ class PtyRun:
         self.data_count = data_count
         self.stream_chunks = stream_chunks
         self.timeout = timeout
+        self.frame_coalesce_ms = frame_coalesce_ms
         self.master_fd = -1
         self.process: subprocess.Popen[bytes] | None = None
         self.selector = selectors.DefaultSelector()
@@ -113,6 +115,12 @@ class PtyRun:
                 "NO_COLOR": "1",
             }
         )
+        if self.frame_coalesce_ms is not None:
+            # The stream fixture samples every timer event. Disable only the
+            # production background-frame budget for that diagnostic process;
+            # otherwise several 5 ms timer updates intentionally coalesce into
+            # one frame and the per-event latency sample cannot be collected.
+            environment["CJ_TUI_FRAME_COALESCE_MS"] = str(self.frame_coalesce_ms)
         self.spawn_ns = time.monotonic_ns()
         self.process = subprocess.Popen(
             self.command,
@@ -457,6 +465,7 @@ def main() -> int:
                     data_count,
                     args.stream_chunks,
                     args.timeout,
+                    frame_coalesce_ms=0 if scenario == "stream" else None,
                 )
                 try:
                     session.start()
