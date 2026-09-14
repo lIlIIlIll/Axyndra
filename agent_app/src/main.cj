@@ -23,6 +23,7 @@ import std.sync.*
 import std.time.*
 import tool_runtime.*
 
+
 main(): Int64 {
     let rawArguments = getCommandLine()
     if (isProductProcessBrokerWorker(rawArguments)) {
@@ -1712,7 +1713,9 @@ func argumentParseError(arguments: Array<String>): ?String {
         }
     }
     let fault = argumentValue(arguments, "--model-stream-fault-profile")
-    if (fault != "" && fault != "incomplete-text-attempt-1-v1") {
+    if (fault != "" && fault != "incomplete-text-attempt-1-v1" &&
+        fault != "incomplete-text-attempt-1-idle-v1" &&
+        fault != "incomplete-text-attempts-1-2-idle-v1") {
         return Some("invalid --model-stream-fault-profile: " + fault)
     }
     None
@@ -1763,6 +1766,19 @@ func modelStreamFaultProfileFrom(arguments: Array<String>): ?ModelStreamFaultPro
             "IncompleteStreamFaultProfileV1",
             triggerAttemptOrdinal: 1,
             partialText: "controlled incomplete stream"
+        ))
+        case "incomplete-text-attempt-1-idle-v1" => Some(ModelStreamFaultProfile(
+            "IncompleteStreamIdleFaultProfileV1",
+            triggerAttemptOrdinal: 1,
+            partialText: "controlled idle stream",
+            faultDelayMillis: 3000
+        ))
+        case "incomplete-text-attempts-1-2-idle-v1" => Some(ModelStreamFaultProfile(
+            "IncompleteStreamIdleFaultProfileAttempts1And2V1",
+            triggerAttemptOrdinal: 1,
+            maxInjectedAttempts: 2,
+            partialText: "controlled idle stream",
+            faultDelayMillis: 3000
         ))
         case _ => throw IllegalArgumentException("invalid model stream fault profile")
     }
@@ -2542,6 +2558,19 @@ class TuiRunEventCursor {
         lock.lock()
         try {
             if (!running) { return false }
+            let outOfBand = match (event.payload) {
+                case AgentEventPayload.ContextCompacted(_, _) => true
+                case AgentEventPayload.Extension(_, detail) =>
+                    match (detail.field("code")) {
+                        case Some(value) => value.unifiedKind == ValueKind.Text &&
+                            (value.text == "run.summary" || value.text == "task.summary")
+                        case None => false
+                    }
+                case _ => false
+            }
+            if (outOfBand) {
+                return true
+            }
             if (activeRunId == "") {
                 match (event.payload) {
                     case AgentEventPayload.RunStarted => activeRunId = event.runId.value
@@ -2565,6 +2594,7 @@ class ProductTuiBackend <: AgentTuiBackend {
     private let product: ProductRuntime
     private let branchLabel: String
     private let lock = Mutex()
+    private let cachedMcpStatus: TuiTurnResult
     private var running = false
     private let uiRunEvents = TuiRunEventCursor()
     private let appEvents: AppEventCursor
@@ -2581,6 +2611,7 @@ class ProductTuiBackend <: AgentTuiBackend {
             case Some(value) => value
             case None => product.applicationSession()
         }
+        this.cachedMcpStatus = tuiResult(session.handle("/mcp"), "/mcp")
         this.appEvents = AppEventCursor(ThreadId(this.session.id().value))
         this.branchLabel = workspaceBranch(session.workspaceRoot())
         session.subscribe({event => forward(event)})
@@ -2638,7 +2669,8 @@ class ProductTuiBackend <: AgentTuiBackend {
         emitTurnError(result, events)
         emitApproval(result)
         finish()
-        tuiResult(result, prompt)
+        let tui = tuiResult(result, prompt)
+        tui
     }
 
     public func steer(correlationId: String, prompt: String): Bool {
@@ -2953,9 +2985,11 @@ class ProductTuiBackend <: AgentTuiBackend {
     public func cancel(): Unit {
         let focused = focusedSubagent()
         if (focused == "") {
-            let _ = session.cancel()
+            let result = session.cancel()
+            let _ = result
         } else {
-            let _ = session.cancelSubagent(focused)
+            let result = session.cancelSubagent(focused)
+            let _ = result
         }
     }
 
@@ -3258,6 +3292,9 @@ class ProductTuiBackend <: AgentTuiBackend {
             )
         }
         values.toArray()
+    }
+    public func mcpStatus(): TuiTurnResult {
+        cachedMcpStatus
     }
 
     public func setExtensionEnabled(

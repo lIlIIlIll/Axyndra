@@ -69,6 +69,26 @@ class TuiMailboxTests {
         @Expect(mailbox.drain().size, 1)
         port.close()
     }
+    @TestCase
+    func completedResultsPreserveOrder(): Unit {
+        let mailbox = TuiMailbox(capacity: 8)
+        mailbox.complete(TuiTurnResult("first", "first-status"))
+        mailbox.complete(TuiTurnResult("second", "second-status"))
+
+        match (mailbox.takeResult()) {
+            case Some(value) =>
+                @Expect(value.text, "first")
+                @Expect(value.status, "first-status")
+            case None => @Fail("expected first completed result")
+        }
+        match (mailbox.takeResult()) {
+            case Some(value) =>
+                @Expect(value.text, "second")
+                @Expect(value.status, "second-status")
+            case None => @Fail("expected second completed result")
+        }
+        @Expect(mailbox.takeResult().isNone(), true)
+    }
 }
 
 @Test

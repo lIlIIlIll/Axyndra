@@ -1894,6 +1894,9 @@ public class ProcessRequest {
     // registered with the sandbox output redactor without being injected into
     // the child environment.
     public let redactedValues: Array<String>
+    // A product-authored clipboard action may explicitly expose the selected
+    // display-server socket without granting the general host environment.
+    public let displayServerAccess: Bool
 
     public init(
         executable: String,
@@ -1905,7 +1908,8 @@ public class ProcessRequest {
         networkAccess!: Bool = false,
         environmentAllowlist!: Array<String> = [],
         secretEnvironmentAllowlist!: Array<String> = [],
-        redactedValues!: Array<String> = []
+        redactedValues!: Array<String> = [],
+        displayServerAccess!: Bool = false
     ) {
         if (executable.trimAscii() == "") {
             throw IllegalArgumentException("process executable must not be empty")
@@ -1923,6 +1927,7 @@ public class ProcessRequest {
         this.environmentAllowlist = environmentAllowlist
         this.secretEnvironmentAllowlist = secretEnvironmentAllowlist
         this.redactedValues = redactedValues
+        this.displayServerAccess = displayServerAccess
     }
 }
 

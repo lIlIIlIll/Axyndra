@@ -400,6 +400,9 @@ func compactRunStatus(value: String): String {
     }
     cut(trimmed, 35) + "…"
 }
+func tuiUsageStatus(inputTokens: Int64, outputTokens: Int64): String {
+    "tokens " + inputTokens.toString() + " in / " + outputTokens.toString() + " out"
+}
 
 func toolCardDetail(body: String, state: String): String {
     if (body == state) {

@@ -56,6 +56,13 @@ int32_t process4cj_spawn(
         (result = posix_spawn_file_actions_addclose(&actions, in_pipe[1])) != 0 ||
         (result = posix_spawn_file_actions_addclose(&actions, out_pipe[0])) != 0 ||
         (result = posix_spawn_file_actions_addclose(&actions, err_pipe[0])) != 0) goto cleanup;
+    /* Do not let forked descendants retain the original pipe endpoints. */
+    if (in_pipe[0] != STDIN_FILENO &&
+        (result = posix_spawn_file_actions_addclose(&actions, in_pipe[0])) != 0) goto cleanup;
+    if (out_pipe[1] != STDOUT_FILENO &&
+        (result = posix_spawn_file_actions_addclose(&actions, out_pipe[1])) != 0) goto cleanup;
+    if (err_pipe[1] != STDERR_FILENO &&
+        (result = posix_spawn_file_actions_addclose(&actions, err_pipe[1])) != 0) goto cleanup;
     if (working_directory != NULL && working_directory[0] != '\0' &&
         (result = posix_spawn_file_actions_addchdir_np(&actions, working_directory)) != 0) goto cleanup;
     if ((result = posix_spawnattr_init(&attributes)) != 0) goto cleanup;
@@ -165,10 +172,84 @@ int64_t process4cj_wait(int64_t pid_value) {
     return 255;
 }
 
+/* Descendants may enter a different session (bubblewrap does this with
+ * --new-session), so a process-group signal alone is not a complete owned
+ * process-tree termination. Collect the direct-child tree before signalling
+ * the root; reverse order avoids leaving descendants behind during teardown. */
+#define P4_MAX_DESCENDANTS 1024
+
+static void p4_collect_descendants(
+    pid_t pid,
+    pid_t *descendants,
+    size_t capacity,
+    size_t *count,
+    int depth
+) {
+    if (pid <= 0 || depth > 32 || *count >= capacity) return;
+    char path[96];
+    int length = snprintf(
+        path, sizeof(path), "/proc/%ld/task/%ld/children",
+        (long)pid, (long)pid
+    );
+    if (length <= 0 || (size_t)length >= sizeof(path)) return;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    char buffer[4096];
+    ssize_t bytes;
+    do { bytes = read(fd, buffer, sizeof(buffer) - 1); }
+    while (bytes < 0 && errno == EINTR);
+    p4_close_if_open(fd);
+    if (bytes <= 0) return;
+    buffer[bytes] = '\0';
+    size_t index = 0;
+    while (index < (size_t)bytes && *count < capacity) {
+        while (index < (size_t)bytes &&
+               (buffer[index] == ' ' || buffer[index] == '\n' ||
+                buffer[index] == '\t')) {
+            index++;
+        }
+        if (index >= (size_t)bytes) break;
+        pid_t child = 0;
+        int digits = 0;
+        while (index < (size_t)bytes && buffer[index] >= '0' &&
+               buffer[index] <= '9') {
+            child = (pid_t)(child * 10 + (buffer[index] - '0'));
+            index++;
+            digits++;
+        }
+        if (digits == 0 || child <= 0) {
+            while (index < (size_t)bytes && buffer[index] != ' ') index++;
+            continue;
+        }
+        descendants[(*count)++] = child;
+        p4_collect_descendants(child, descendants, capacity, count, depth + 1);
+    }
+}
+
+static int p4_signal_one(pid_t pid, int signal_value) {
+    if (pid <= 0) return EINVAL;
+    if (kill(pid, signal_value) == 0 || errno == ESRCH) return 0;
+    return errno;
+}
+
 int32_t process4cj_kill(int64_t pid_value, int32_t force, int32_t process_group) {
-    pid_t target = process_group ? -(pid_t)pid_value : (pid_t)pid_value;
-    if (kill(target, force ? SIGKILL : SIGTERM) == 0 || errno == ESRCH) return 0;
-    return (int32_t)errno;
+    pid_t pid = (pid_t)pid_value;
+    int signal_value = force ? SIGKILL : SIGTERM;
+    if (pid <= 0) return EINVAL;
+    if (!process_group) return (int32_t)p4_signal_one(pid, signal_value);
+    pid_t descendants[P4_MAX_DESCENDANTS];
+    size_t count = 0;
+    p4_collect_descendants(pid, descendants, P4_MAX_DESCENDANTS, &count, 0);
+    int first_error = 0;
+    for (size_t index = count; index > 0; --index) {
+        int result = p4_signal_one(descendants[index - 1], signal_value);
+        if (result != 0 && first_error == 0) first_error = result;
+    }
+    int result = kill(-pid, signal_value);
+    if (result < 0 && errno != ESRCH && first_error == 0) first_error = errno;
+    result = p4_signal_one(pid, signal_value);
+    if (result != 0 && first_error == 0) first_error = result;
+    return (int32_t)first_error;
 }
 
 int32_t process4cj_is_alive(int64_t pid_value) {

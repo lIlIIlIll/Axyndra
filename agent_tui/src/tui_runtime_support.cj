@@ -43,7 +43,7 @@ class TuiMailbox {
     private let lock = Mutex()
     private let events = ArrayList<TuiAgentEvent>()
     private let capacity: Int64
-    private var result: ?TuiTurnResult = None
+    private let results = ArrayList<TuiTurnResult>()
     private let ready: () -> Unit
 
     init(capacity!: Int64 = 4096, ready!: () -> Unit = {=>}) {
@@ -93,11 +93,8 @@ class TuiMailbox {
         var needsReady = false
         lock.lock()
         try {
-            needsReady = events.isEmpty() && match (result) {
-                case Some(_) => false
-                case None => true
-            }
-            result = Some(value)
+            needsReady = events.isEmpty() && results.isEmpty()
+            results.add(value)
         } finally {
             lock.unlock()
         }
@@ -125,14 +122,20 @@ class TuiMailbox {
     }
 
     func takeResult(): ?TuiTurnResult {
+        var needsReady = false
+        var value: ?TuiTurnResult = None
         lock.lock()
         try {
-            let value = result
-            result = None
-            value
+            if (!results.isEmpty()) {
+                value = Some(results[0])
+                results.remove(at: 0)
+                needsReady = !results.isEmpty()
+            }
         } finally {
             lock.unlock()
         }
+        if (needsReady) { ready() }
+        value
     }
 }
 

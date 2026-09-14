@@ -1293,25 +1293,47 @@ public class LocalProcessPort <: ProcessPort {
             arguments.add(timeoutSeconds(request.timeoutMillis))
             arguments.add(request.executable)
             arguments.add(all: request.arguments)
+            let launchArguments = ArrayList<String>()
+            launchArguments.add("timeout")
+            launchArguments.add(all: arguments.toArray())
             let process = launch(
-                "timeout",
-                arguments.toArray(),
+                "setsid",
+                launchArguments.toArray(),
                 workingDirectory: Path(workingDirectory),
-                stdOut: ProcessRedirect.Pipe,
-                stdErr: ProcessRedirect.Pipe
+                environment: if (request.displayServerAccess) {
+                    scopedDisplayServerEnvironment(request)
+                } else {
+                    HashMap<String, String>()
+                },
+                stdOut: if (request.displayServerAccess) {
+                    ProcessRedirect.Discard
+                } else {
+                    ProcessRedirect.Pipe
+                },
+                stdErr: if (request.displayServerAccess) {
+                    ProcessRedirect.Discard
+                } else {
+                    ProcessRedirect.Pipe
+                }
             )
             register(request.operationId, process)
             let outputBudget = BoundedOutputBudget(sandboxResourcesValue.maxOutputBytes)
-            let outputFuture = spawn {
-                readBounded(process.stdOutPipe, outputBudget)
+            let output = if (request.displayServerAccess) {
+                Array<Byte>(0, repeat: 0)
+            } else {
+                let outputFuture = spawn {
+                    readBounded(process.stdOutPipe, outputBudget)
+                }
+                outputFuture.get()
             }
-            let errorFuture = spawn {
-                readBounded(process.stdErrPipe, outputBudget)
+            let error = if (request.displayServerAccess) {
+                Array<Byte>(0, repeat: 0)
+            } else {
+                let errorFuture = spawn {
+                    readBounded(process.stdErrPipe, outputBudget)
+                }
+                errorFuture.get()
             }
-            // Finish the owned readers before completing SDK wait: otherwise
-            // buffered output can be discarded before byte-cap accounting.
-            let output = outputFuture.get()
-            let error = errorFuture.get()
             let code = process.wait()
             Result.Ok(
                 ProcessResult(
@@ -1422,20 +1444,83 @@ public class LocalProcessPort <: ProcessPort {
         }
     }
 
-    private func processSandbox(
+    private func processEnvironmentAllowlist(
         request: ProcessRequest,
-        filesystem: FilesystemIsolationMode
-    ): WorkspaceSandbox {
+        includeDisplayServer!: Bool = false
+    ): Array<String> {
         let allowed = ArrayList<String>()
         allowed.add(all: [
             "TERM", "COLORTERM", "NO_COLOR", "CANGJIE_HOME",
             "CANGJIE_SDK_ROOT", "CANGJIE_STDX_PATH", "JAVA_HOME"
         ])
         allowed.add(all: request.environmentAllowlist)
-        // EnvironmentFilter deliberately requires a secret variable to be in
-        // both lists. Adding it here makes ProcessRequest's scoped secret list
-        // the single code-authored grant surface.
+        if (includeDisplayServer) {
+            // Clipboard clients need only the display connection
+            // coordinates, never the ambient host environment.
+            allowed.add(all: ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"])
+        }
+        // EnvironmentFilter requires secret names to be present in both
+        // allowlists, keeping an explicit secret grant as the only path to
+        // credential injection.
         allowed.add(all: request.secretEnvironmentAllowlist)
+        allowed.toArray()
+    }
+
+    private func scopedDisplayServerEnvironment(
+        request: ProcessRequest
+    ): HashMap<String, String> {
+        let filtered = EnvironmentFilter(
+            allowlist: processEnvironmentAllowlist(request, includeDisplayServer: true),
+            allowedSecrets: request.secretEnvironmentAllowlist,
+            secretValues: request.redactedValues
+        ).filterCurrent()
+        let environment = HashMap<String, String>()
+        for (entry in filtered.entries) {
+            environment[entry.name] = entry.value
+        }
+        // Stable non-sensitive defaults keep the host-mode clipboard child
+        // independent of the caller's shell configuration.
+        environment["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        environment["HOME"] = workspace.rootPath()
+        environment["TMPDIR"] = "/tmp"
+        environment["LANG"] = "C.UTF-8"
+        environment
+    }
+
+    private func processSandbox(
+        request: ProcessRequest,
+        filesystem: FilesystemIsolationMode
+    ): WorkspaceSandbox {
+        let allowed = processEnvironmentAllowlist(
+            request,
+            includeDisplayServer: request.displayServerAccess
+        )
+        let mounts = ArrayList<SandboxReadOnlyMount>()
+        for (mount in sandboxReadOnlyMountsValue) {
+            mounts.add(mount)
+        }
+        if (request.displayServerAccess) {
+            // Mount only the explicitly selected runtime directory. The
+            // directory is read-only; clients can connect to its socket but
+            // cannot create or modify files in the host runtime tree.
+            match (getVariable("XDG_RUNTIME_DIR")) {
+                case Some(value) =>
+                    let runtimePath = value.trimAscii()
+                    if (runtimePath != "") {
+                        try {
+                            let runtimeMount = SandboxReadOnlyMount(runtimePath)
+                            var duplicate = false
+                            for (existing in mounts where existing.path == runtimeMount.path) {
+                                duplicate = true
+                            }
+                            if (!duplicate) {
+                                mounts.add(runtimeMount)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                case None => ()
+            }
+        }
         WorkspaceSandbox(WorkspaceSandboxPolicy(
             workspace.rootPath(),
             filesystem: filesystem,
@@ -1446,12 +1531,12 @@ public class LocalProcessPort <: ProcessPort {
                 NetworkIsolationMode.Denied
             },
             environment: EnvironmentFilter(
-                allowlist: allowed.toArray(),
+                allowlist: allowed,
                 allowedSecrets: request.secretEnvironmentAllowlist,
                 secretValues: request.redactedValues
             ),
             resources: sandboxResourcesValue,
-            readOnlyMounts: sandboxReadOnlyMountsValue,
+            readOnlyMounts: mounts.toArray(),
             pathEntries: sandboxPathEntriesValue
         ))
     }
@@ -1521,40 +1606,46 @@ public class LocalProcessPort <: ProcessPort {
     }
 
     public func cancel(operationId: OperationId): Result<Unit> {
+        var wasReserved = false
+        var selected: ?ActiveLocalProcess = None
         activeLock.lock()
         try {
-            let wasReserved = reserved.contains(operationId.value)
+            wasReserved = reserved.contains(operationId.value)
             if (wasReserved) { reserved[operationId.value] = true }
-            for (item in active where item.operationId.value == operationId.value) {
+            for (index in 0..active.size) {
+                if (active[index].operationId.value == operationId.value) {
+                    selected = Some(active[index])
+                    active.remove(at: index)
+                    break
+                }
+            }
+        } finally {
+            activeLock.unlock()
+        }
+        match (selected) {
+            case Some(item) =>
                 try {
                     item.terminateOwned()
-                } catch (error: Exception) {
-                    return Result.Err(
+                } catch (_: Exception) {}
+                Result.Ok(())
+            case None =>
+                if (wasReserved) {
+                    Result.Ok(())
+                } else {
+                    Result.Err(
                         AgentError(
-                            AgentErrorKind.Transport,
-                            "process.cancel_failed",
-                            error.message
+                            AgentErrorKind.InvalidInput,
+                            "process.operation_not_running",
+                            "process operation is not running",
+                            fields: [
+                                ErrorField(
+                                    "operation_id",
+                                    operationId.value
+                                )
+                            ]
                         )
                     )
                 }
-                return Result.Ok(())
-            }
-            if (wasReserved) { return Result.Ok(()) }
-            Result.Err(
-                AgentError(
-                    AgentErrorKind.InvalidInput,
-                    "process.operation_not_running",
-                    "process operation is not running",
-                    fields: [
-                        ErrorField(
-                            "operation_id",
-                            operationId.value
-                        )
-                    ]
-                )
-            )
-        } finally {
-            activeLock.unlock()
         }
     }
 
@@ -1575,13 +1666,21 @@ public class LocalProcessPort <: ProcessPort {
         operationId: OperationId,
         process: SubProcess
     ): Unit {
+        let entry = ActiveLocalProcess(operationId, process)
+        var terminate = false
         activeLock.lock()
         try {
-            let entry = ActiveLocalProcess(operationId, process)
             active.add(entry)
-            if (reserved.get(operationId.value) ?? false) { entry.terminateOwned() }
+            terminate = reserved.get(operationId.value) ?? false
         } finally {
             activeLock.unlock()
+        }
+        if (terminate) {
+            let _ = spawn {
+                try {
+                    entry.terminateOwned()
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -1607,9 +1706,13 @@ public class LocalProcessPort <: ProcessPort {
                 return Result.Ok(shell)
             }
             try {
+                let launchArguments = ArrayList<String>()
+                launchArguments.add("/bin/bash")
+                launchArguments.add("--noprofile")
+                launchArguments.add("--norc")
                 let process = launch(
-                    "/bin/bash",
-                    ["--noprofile", "--norc"],
+                    "setsid",
+                    launchArguments.toArray(),
                     workingDirectory: Path(workspace.rootPath()),
                     stdIn: ProcessRedirect.Pipe,
                     stdOut: ProcessRedirect.Pipe,
@@ -1674,9 +1777,12 @@ public class LocalProcessPort <: ProcessPort {
                 // Launch bwrap directly instead of its one-shot timeout
                 // wrapper. Each command has its own monotonic deadline in
                 // PersistentShell; timeout/error tears down the whole shell.
+                let launchArguments = ArrayList<String>()
+                launchArguments.add(plan.sandboxExecutable)
+                launchArguments.add(all: plan.sandboxArguments)
                 let process = launch(
-                    plan.sandboxExecutable,
-                    plan.sandboxArguments,
+                    "setsid",
+                    launchArguments.toArray(),
                     environment: HashMap<String, String>(),
                     stdIn: ProcessRedirect.Pipe,
                     stdOut: ProcessRedirect.Pipe,
@@ -1814,34 +1920,6 @@ public class LocalProcessPort <: ProcessPort {
     }
 }
 
-class ActiveLocalProcess {
-    let operationId: OperationId
-    let process: SubProcess
-    private let startIdentity: String
-
-    init(operationId: OperationId, process: SubProcess) {
-        this.operationId = operationId
-        this.process = process
-        this.startIdentity = linuxProcessStartToken("/proc/" + process.pid.toString() + "/stat")
-    }
-
-    func terminateOwned(): Unit {
-        if (!process.isAlive()) { return }
-        // Only signal the timeout/session group while its original leader
-        // identity is still present. Never infer ownership from a reused PID.
-        if (startIdentity != "" && startIdentity ==
-            linuxProcessStartToken("/proc/" + process.pid.toString() + "/stat")) {
-            let _ = signalProcessTree(process.pid, "SIGKILL")
-        }
-        try {
-            process.terminate(force: true)
-        } catch (error: Exception) {
-            // The group signal may have won the race with SDK termination.
-            if (process.isAlive()) { throw error }
-        }
-    }
-}
-
 func sandboxRequired<T>(request: ProcessRequest): Result<T> {
     Result.Err(AgentError(
         AgentErrorKind.Configuration,
@@ -1854,6 +1932,29 @@ func sandboxRequired<T>(request: ProcessRequest): Result<T> {
     ))
 }
 
+class ActiveLocalProcess {
+    let operationId: OperationId
+    let process: SubProcess
+
+    init(operationId: OperationId, process: SubProcess) {
+        this.operationId = operationId
+        this.process = process
+    }
+
+    func terminateOwned(): Unit {
+        // The process may have exited between registration and cancellation.
+        // LocalProcessPort launches every owned process through setsid. Kill
+        // the owned process tree so persistent-shell children cannot retain
+        // command pipes after cancellation.
+        let killed = killProcessTree(process.pid, force: false)
+        if (killed) { return }
+        try {
+            process.terminate(force: false)
+        } catch (error: Exception) {
+            if (process.isAlive()) { throw error }
+        }
+    }
+}
 class EvalSandboxLaunch {
     let sandbox: WorkspaceSandbox
     let plan: SandboxLaunchPlan

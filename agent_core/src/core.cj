@@ -5072,7 +5072,9 @@ public class AgentCore <: AgentRunner {
                             case Result.Ok(value) => isTerminalRunState(value.status)
                             case Result.Err(_) => isTerminalRunState(control.state())
                         }
-                        if (terminal) { return Result.Ok(()) }
+                        if (terminal) {
+                            return Result.Ok(())
+                        }
                         sleep(Duration.millisecond * 10)
                     }
                     return Result.Ok(())

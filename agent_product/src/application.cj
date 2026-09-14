@@ -15,6 +15,7 @@ import std.convert.*
 import std.sync.*
 import std.time.*
 
+
 public enum ApplicationAction {
     NoAction
     | OpenProviderSetup
@@ -154,6 +155,7 @@ public class ApplicationSession <: AgentInteractionSource {
     private var compacting = false
     private var theme = "axyndra"
     private var currentRequest: ?AgentRunRequest = None
+    private var compactionSequence: Int64 = 0
     private var pendingApproval: ?ApprovalRequest = None
     private var pendingRecovery: ?AgentError = None
     private var pendingModelResume = false
@@ -260,7 +262,7 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     private func restorePendingContinuation(): Unit {
-        currentRequest = None
+        setCurrentRequest(None)
         pendingApproval = None
         pendingModelResume = false
         let approvalContinuation: ?RunContinuation = match (product.pendingContinuation(sessionId)) {
@@ -284,12 +286,12 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         match (approvalContinuation) {
             case Some(value) =>
-                currentRequest = Some(product.continuationRequest(value, Some(this)))
+                setCurrentRequest(Some(product.continuationRequest(value, Some(this))))
                 pendingApproval = Some(value.approval)
                 currentModel = value.model
             case None => match (modelContinuation) {
                 case Some(value) =>
-                    currentRequest = Some(product.continuationRequest(value, Some(this)))
+                    setCurrentRequest(Some(product.continuationRequest(value, Some(this))))
                     pendingModelResume = true
                     currentModel = value.model
                 case None => ()
@@ -306,7 +308,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case None => ()
         }
         if (!pendingModelResume) { return Result.Ok(None) }
-        let request = match (currentRequest) {
+        let request = match (currentRequestSnapshot()) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -316,7 +318,7 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         match (product.client.resume(request, eventSink())) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                currentRequest = None
+                setCurrentRequest(None)
                 pendingModelResume = false
                 match (finishCompletedRun(snapshot, false)) {
                     case Result.Ok(value) => Result.Ok(Some(value))
@@ -342,15 +344,28 @@ public class ApplicationSession <: AgentInteractionSource {
         currentModel
     }
 
-    public func activeRunId(): String {
+    private func currentRequestSnapshot(): ?AgentRunRequest {
         lock.lock()
         try {
-            match (currentRequest) {
-                case Some(value) => value.runId.value
-                case None => ""
-            }
+            currentRequest
         } finally {
             lock.unlock()
+        }
+    }
+
+    private func setCurrentRequest(value: ?AgentRunRequest): Unit {
+        lock.lock()
+        try {
+            currentRequest = value
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    public func activeRunId(): String {
+        match (currentRequestSnapshot()) {
+            case Some(value) => value.runId.value
+            case None => ""
         }
     }
 
@@ -723,7 +738,7 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func abortRetry(): Unit {
-        match (currentRequest) {
+        match (currentRequestSnapshot()) {
             case Some(request) => product.abortRetry(request.runId.value)
             case None => ()
         }
@@ -765,7 +780,7 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func switchSession(value: SessionId): Result<Unit> {
-        if (currentRequest.isSome() || pendingApproval.isSome()) {
+        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
             return Result.Err(
                 AgentError(
                     AgentErrorKind.Conflict,
@@ -841,7 +856,7 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func branchAt(entryId: String): Result<ApplicationBranchResult> {
-        if (currentRequest.isSome() || pendingApproval.isSome()) {
+        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
             return Result.Err(
                 AgentError(
                     AgentErrorKind.Conflict,
@@ -906,12 +921,12 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func handoff(customInstructions!: String = ""): Result<ApplicationHandoffResult> {
-        if (currentRequest.isSome() || pendingApproval.isSome()) {
+        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
             return Result.Err(
                 AgentError(
                     AgentErrorKind.Conflict,
                     "application.session_busy",
-                    "Cannot hand off while a response is in progress"
+                    "cannot hand off while an operation is active"
                 )
             )
         }
@@ -945,11 +960,11 @@ public class ApplicationSession <: AgentInteractionSource {
             thinkingSource: requestedThinkingSource()
         )
         let request = handoffRunRequest(base)
-        currentRequest = Some(request)
+        setCurrentRequest(Some(request))
         let outcome = try {
             product.client.start(request, eventSink())
         } finally {
-            currentRequest = None
+            setCurrentRequest(None)
         }
         let document = match (outcome) {
             case Result.Ok(AgentRunOutcome.Completed(_)) => match (product.messages(temporary)) {
@@ -1520,12 +1535,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 )
             )
         }
-        if (currentRequest.isSome() || pendingApproval.isSome()) {
+        if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
             return Result.Err(
                 AgentError(
                     AgentErrorKind.Conflict,
                     "application.session_busy",
-                    "wait for the active turn before editing the plan"
+                    "cannot edit the plan while an operation is active"
                 )
             )
         }
@@ -1642,15 +1657,16 @@ public class ApplicationSession <: AgentInteractionSource {
             guide: capabilityGuide(),
             readOnly: planModeEnabled || vibeModeEnabled
         )
-        currentRequest = Some(request)
-        match (product.client.start(request, eventSink())) {
+        setCurrentRequest(Some(request))
+        let clientResult = product.client.start(request, eventSink())
+        match (clientResult) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                currentRequest = None
+                setCurrentRequest(None)
                 finishCompletedRun(snapshot, true)
-            case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) => settleApproval(request, snapshot,
-                approval, true)
+            case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) =>
+                settleApproval(request, snapshot, approval, true)
             case Result.Err(error) =>
-                currentRequest = None
+                setCurrentRequest(None)
                 Result.Err(error)
         }
     }
@@ -1663,7 +1679,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case Some(error) => return Result.Err(error)
             case None => ()
         }
-        let request = match (currentRequest) {
+        let request = match (currentRequestSnapshot()) {
             case Some(value) => value
             case None => return noPendingApproval()
         }
@@ -1694,7 +1710,7 @@ public class ApplicationSession <: AgentInteractionSource {
             eventSink()
         )) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                currentRequest = None
+                setCurrentRequest(None)
                 pendingApproval = None
                 finishCompletedRun(snapshot, false)
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) => settleApproval(request, snapshot, next,
@@ -1704,7 +1720,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     case Result.Ok(snapshot) => if (snapshot.status == RunState.WaitingApproval) {
                         pendingApproval = Some(approval)
                     } else {
-                        currentRequest = None
+                        setCurrentRequest(None)
                         pendingApproval = None
                         if (snapshot.status == RunState.RecoveryRequired) {
                             pendingRecovery = Some(error)
@@ -1723,12 +1739,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 case Result.Err(error) => return Result.Err(error)
             }
         }
-        match (currentRequest) {
+        match (currentRequestSnapshot()) {
             case Some(request) =>
                 let _ = product.cancelApprovalReview(request.runId)
                 match (product.client.cancel(request.runId)) {
                 case Result.Ok(_) =>
-                    currentRequest = None
+                    setCurrentRequest(None)
                     pendingApproval = None
                     product.pauseGoal(sessionId)
                 case Result.Err(error) => Result.Err(error)
@@ -1840,7 +1856,7 @@ public class ApplicationSession <: AgentInteractionSource {
     ): Result<ApplicationResponse> {
         match (product.client.decide(request, approval, decision, eventSink())) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                currentRequest = None
+                setCurrentRequest(None)
                 pendingApproval = None
                 finishCompletedRun(snapshot, agentInvoked)
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) => settleApproval(request, snapshot, next,
@@ -1850,7 +1866,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     case Result.Ok(snapshot) => if (snapshot.status == RunState.WaitingApproval) {
                         pendingApproval = Some(approval)
                     } else {
-                        currentRequest = None
+                        setCurrentRequest(None)
                         pendingApproval = None
                         if (snapshot.status == RunState.RecoveryRequired) {
                             pendingRecovery = Some(error)
@@ -2451,11 +2467,10 @@ public class ApplicationSession <: AgentInteractionSource {
             localResponse(
                 "Debug snapshot:" + "\nsession: " + sessionId.value + "\nmodel: " + currentModel + "\nprovider: " +
                     providerId() + "\nworkspace: " + workspaceRoot() + "\nstate_root: " + stateRoot() + "\ncurrent_run: " +
-                    (match (currentRequest) {
+                    (match (currentRequestSnapshot()) {
                     case Some(value) => value.runId.value
                     case None => "-"
                 }) + "\npending_approval: " + pendingApproval.isSome().toString() + "\nqueued_inputs: " +
-                    queuedCount().toString() + "\nplan_mode: " + planModeEnabled.toString() + "\nvibe_mode: " +
                     vibeModeEnabled.toString() + "\nloop_mode: " + loopModeEnabled.toString() + "\nauto_compaction: " +
                     autoCompaction.toString()))
     }
@@ -2926,7 +2941,8 @@ public class ApplicationSession <: AgentInteractionSource {
             return invalidUsage("/compact")
         }
         match (runCompaction(true)) {
-            case Result.Ok(removed) => Result.Ok(localResponse("compacted messages: " + removed.toString()))
+            case Result.Ok(removed) =>
+                Result.Ok(localResponse("compacted messages: " + removed.toString()))
             case Result.Err(error) => Result.Err(error)
         }
     }
@@ -3035,10 +3051,10 @@ public class ApplicationSession <: AgentInteractionSource {
                     guide: capabilityGuide(),
                     readOnly: true
                 )
-                currentRequest = Some(correction)
+                setCurrentRequest(Some(correction))
                 match (product.client.start(correction, eventSink())) {
                     case Result.Ok(AgentRunOutcome.Completed(next)) =>
-                        currentRequest = None
+                        setCurrentRequest(None)
                         snapshot = next
                     case Result.Ok(AgentRunOutcome.AwaitingApproval(waiting, approval)) => return settleApproval(
                         correction,
@@ -3047,7 +3063,7 @@ public class ApplicationSession <: AgentInteractionSource {
                         agentInvoked
                     )
                     case Result.Err(error) =>
-                        currentRequest = None
+                        setCurrentRequest(None)
                         return Result.Err(error)
                 }
                 let correctedMessages = match (product.messages(sessionId)) {
@@ -3090,10 +3106,10 @@ public class ApplicationSession <: AgentInteractionSource {
                 modeSystem: activeModeSystem(),
                 readOnly: planModeEnabled || vibeModeEnabled
             )
-            currentRequest = Some(continuation)
+            setCurrentRequest(Some(continuation))
             match (product.client.start(continuation, eventSink())) {
                 case Result.Ok(AgentRunOutcome.Completed(next)) =>
-                    currentRequest = None
+                    setCurrentRequest(None)
                     snapshot = next
                 case Result.Ok(AgentRunOutcome.AwaitingApproval(waiting, approval)) => return settleApproval(
                     continuation,
@@ -3102,7 +3118,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     agentInvoked
                 )
                 case Result.Err(error) =>
-                    currentRequest = None
+                    setCurrentRequest(None)
                     return Result.Err(error)
             }
         }
@@ -3254,6 +3270,54 @@ public class ApplicationSession <: AgentInteractionSource {
         loopDeadlineMillis = 0
     }
 
+    private func nextCompactionSequence(): Int64 {
+        lock.lock()
+        try {
+            compactionSequence += 1
+            compactionSequence
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private func emitCompactionEvents(report: ProductCompactionReport): Unit {
+        if (report.removedMessages <= 0) {
+            return
+        }
+        let runId = RunId("compaction-" + sessionId.value)
+        let traceId = TraceId("compaction-" + sessionId.value)
+        let sink = eventSink()
+        sink(AgentEvent(
+            EventMeta(
+                nextCompactionSequence(),
+                traceId,
+                runId,
+                occurredAtMillis: agentUtcMillis()
+            ),
+            AgentEventPayload.ContextCompacted(
+                report.beforeTokens,
+                report.afterTokens
+            )
+        ))
+        if (report.summary != "") {
+            sink(AgentEvent(
+                EventMeta(
+                    nextCompactionSequence(),
+                    traceId,
+                    runId,
+                    occurredAtMillis: agentUtcMillis()
+                ),
+                AgentEventPayload.Extension(
+                    AgentEventKind.Transcript,
+                    objectValue([
+                        ValueField("code", textValue("run.summary")),
+                        ValueField("text", textValue(report.summary))
+                    ])
+                )
+            ))
+        }
+    }
+
     private func compactAtSafeBoundary(): Result<Int64> {
         if (!autoCompaction) {
             return Result.Ok(0)
@@ -3268,8 +3332,8 @@ public class ApplicationSession <: AgentInteractionSource {
         } finally {
             lock.unlock()
         }
-        try {
-            product.compactSession(sessionId, force: force)
+        let result = try {
+            product.compactSessionReport(sessionId, force: force)
         } finally {
             lock.lock()
             try {
@@ -3277,6 +3341,12 @@ public class ApplicationSession <: AgentInteractionSource {
             } finally {
                 lock.unlock()
             }
+        }
+        match (result) {
+            case Result.Ok(report) =>
+                emitCompactionEvents(report)
+                Result.Ok(report.removedMessages)
+            case Result.Err(error) => Result.Err(error)
         }
     }
 }

@@ -25,6 +25,15 @@ foreign func process4cj_wait_owned(pid: Int64): Int64
 foreign func process4cj_wait(pid: Int64): Int64
 foreign func process4cj_kill(pid: Int64, force: Int32, processGroup: Int32): Int32
 foreign func process4cj_is_alive(pid: Int64): Int32
+// Terminate a process group by its owned session leader PID.  This keeps
+// process-port cancellation inside the native ownership boundary instead of
+// shelling out to an external `kill` command.
+public func killProcessTree(pid: Int64, force!: Bool = true): Bool {
+    if (pid <= 0) { return false }
+    unsafe {
+        process4cj_kill(pid, if (force) { 1 } else { 0 }, 1) == 0
+    }
+}
 
 // Bound blocking reads in protocol hosts so every Cangjie mutator regularly
 // returns from native code and remains available to the stop-the-world GC.

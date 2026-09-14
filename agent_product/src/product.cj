@@ -27,6 +27,7 @@ import agent_extension_runtime.*
 import std.time.*
 import stdx.crypto.crypto.*
 
+
 public class ProductConfig {
     public let settingsRoot: String
     public let stateRoot: String
@@ -184,6 +185,25 @@ public class ProductContextUsage {
         this.percent = percent
     }
 }
+public class ProductCompactionReport {
+    public let removedMessages: Int64
+    public let beforeTokens: Int64
+    public let afterTokens: Int64
+    public let summary: String
+
+    public init(
+        removedMessages: Int64,
+        beforeTokens: Int64,
+        afterTokens: Int64,
+        summary: String
+    ) {
+        this.removedMessages = removedMessages
+        this.beforeTokens = beforeTokens
+        this.afterTokens = afterTokens
+        this.summary = summary
+    }
+}
+
 
 public class ProductRuntime {
     public let client: AgentClient
@@ -1661,20 +1681,24 @@ public class ProductRuntime {
         } else {
             // Same trusted UI boundary as the deterministic base64 branch;
             // argv and the staged path are entirely product-authored.
+            // std.process captures child pipes; wl-copy forks a daemon, so
+            // close inherited descriptors and detach that daemon's lifecycle.
             match (processes.execute(
                 ProcessRequest(
                     "/bin/sh",
                     operationId: ids.nextOperationId(),
                     arguments: [
                         "-c",
-                        "if command -v wl-copy >/dev/null 2>&1; then " + "wl-copy < \"$1\"; " +
+                        "for fd in $(/usr/bin/seq 3 255); do eval \"exec $fd>&-\"; done; " +
+                            "if command -v wl-copy >/dev/null 2>&1; then " + "setsid wl-copy < \"$1\" >/dev/null 2>&1; " +
                             "elif command -v xclip >/dev/null 2>&1; then " + "xclip -selection clipboard < \"$1\"; " +
                             "elif command -v xsel >/dev/null 2>&1; then " + "xsel --clipboard --input < \"$1\"; " +
                             "else exit 127; fi",
                         "axyndra-clipboard",
                         path
                     ],
-                    timeoutMillis: 5000
+                    timeoutMillis: 5000,
+                    displayServerAccess: true
                 )
             )) {
                 case Result.Ok(result) => result.exitCode == 0
@@ -2035,7 +2059,88 @@ public class ProductRuntime {
             case Result.Err(error) => Result.Err(error)
         }
     }
+    public func latestCompactionSummary(sessionId: SessionId): String {
+        let snapshot = match (canonicalThreadSnapshot(sessionId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => return ""
+        }
+        let checkpoint = SqliteContextCheckpointStore(vnextDatabase).loadLatest(
+            snapshot, "agent-product-v1", "agent-core"
+        )
+        match (checkpoint) {
+            case Some(value) =>
+                match (value.structuredSummary.field("deterministic_summary")) {
+                    case Some(summary) =>
+                        if (summary.unifiedKind == ValueKind.Text) { summary.text } else { "" }
+                    case None => match (value.structuredSummary.field("summary")) {
+                        case Some(summary) =>
+                            if (summary.unifiedKind == ValueKind.Text) { summary.text } else { "" }
+                        case None => ""
+                    }
+                }
+            case None => ""
+        }
+    }
+    public func compactSessionReport(
+        sessionId: SessionId,
+        force!: Bool = true
+    ): Result<ProductCompactionReport> {
+        let before = compactionTokenEstimate(sessionId, projected: false)
+        match (compactSession(sessionId, force: force)) {
+            case Result.Ok(removed) =>
+                let after = compactionTokenEstimate(sessionId, projected: true)
+                Result.Ok(ProductCompactionReport(
+                    removed,
+                    before,
+                    after,
+                    if (removed > 0) { latestCompactionSummary(sessionId) } else { "" }
+                ))
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
 
+    private func compactionTokenEstimate(
+        sessionId: SessionId,
+        projected!: Bool
+    ): Int64 {
+        let snapshot = match (canonicalThreadSnapshot(sessionId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => return 0
+        }
+        let tools = catalog.definitionsFor(productCapabilities())
+        if (!projected) {
+            return estimateContextTokens(
+                modelMessagesFromCanonicalItems(snapshot.items),
+                tools: tools
+            )
+        }
+        let checkpoint = SqliteContextCheckpointStore(vnextDatabase).loadLatest(
+            snapshot, "agent-product-v1", "agent-core"
+        )
+        match (checkpoint) {
+            case Some(value) =>
+                let recent = ArrayList<ThreadItem>()
+                for (item in snapshot.items where
+                    item.ordinal > value.coversThroughItemOrdinal) {
+                    recent.add(item)
+                }
+                estimateContextTokens(
+                    modelMessagesFromProjection(ModelContextProjection(
+                        snapshot.thread.revision,
+                        Some(value),
+                        recent.toArray(),
+                        objectValue([]),
+                        0,
+                        false
+                    )),
+                    tools: tools
+                )
+            case None => estimateContextTokens(
+                modelMessagesFromCanonicalItems(snapshot.items),
+                tools: tools
+            )
+        }
+    }
     private func saveCanonicalCheckpoint(
         sessionId: SessionId,
         keepRecentItems: Int64,

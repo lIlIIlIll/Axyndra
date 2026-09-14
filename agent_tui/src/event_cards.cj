@@ -1466,7 +1466,10 @@ func mcpCardDocument(item: UiCard, theme: ProductTheme): Document {
     if (resource != "") {
         addCardSection(lines, "resource", redactSensitiveText(resource), theme)
     }
-    let output = structuredOutput(item)
+    var output = structuredOutput(item)
+    if (output == "" && item.toolName == "" && item.toolArguments == "") {
+        output = item.body
+    }
     if (output != "") {
         addCardSection(lines, if (item.state == "failed") {
             "error"
