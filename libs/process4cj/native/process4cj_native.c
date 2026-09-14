@@ -1086,6 +1086,28 @@ int32_t process4cj_terminate_tree(
             count,
             graceful_millis
         );
+        /*
+         * A SIGTERM handler can fork after the first snapshot. Stop the
+         * supervisor again so the forced pass also owns those descendants.
+         */
+        count = 0;
+        int refreeze_error = p4_freeze_tree(
+            &root,
+            descendants,
+            P4_MAX_DESCENDANTS,
+            &count
+        );
+        if (refreeze_error != 0) {
+            (void)p4_continue_captured_tree(&root, descendants, count);
+            int kill_error = p4_signal_captured_tree(
+                &root,
+                descendants,
+                count,
+                SIGKILL
+            );
+            free(descendants);
+            return kill_error != 0 ? kill_error : refreeze_error;
+        }
     }
     int result = p4_signal_captured_tree(
         &root,

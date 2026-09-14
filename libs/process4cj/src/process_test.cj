@@ -74,6 +74,28 @@ class Process4CjTests {
         sleep(Duration.millisecond * 500)
         @Expect(exists(Path(marker)), false)
     }
+    @TestCase
+    func cancellationRecapturesDescendantForkedDuringGrace() {
+        let marker = "/tmp/process4cj-grace-detached-" +
+            processTestMillis().toString() + ".marker"
+        let process = startProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "trap \"setsid sh -c 'sleep 0.4; printf escaped > " +
+                    marker + "' &\" TERM; sleep 5"
+            ]
+        ))
+        sleep(Duration.millisecond * 50)
+        @Expect(
+            terminateProcessTree(process.pid, gracefulMillis: 250),
+            true
+        )
+        @Expect(process.close(), true)
+        sleep(Duration.millisecond * 600)
+        @Expect(exists(Path(marker)), false)
+    }
+
 
 
     @TestCase
