@@ -18,12 +18,66 @@
 #include <limits.h>
 #include <sys/prctl.h>
 
+#include <sys/resource.h>
+#include <sys/syscall.h>
+
 extern char **environ;
 
 static void p4_close_if_open(int fd) {
     if (fd >= 0) {
         while (close(fd) < 0 && errno == EINTR) {}
     }
+}
+static int p4_close_fd_range(unsigned int first, unsigned int last) {
+    if (first > last) return 0;
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, first, last, 0) == 0) return 0;
+    if (errno != ENOSYS && errno != EINVAL) return errno;
+#endif
+    struct rlimit limits;
+    if (getrlimit(RLIMIT_NOFILE, &limits) < 0) return errno;
+    unsigned long limit = limits.rlim_cur;
+    if (limit > (unsigned long)INT_MAX + 1UL) {
+        limit = (unsigned long)INT_MAX + 1UL;
+    }
+    for (unsigned long value = first; value < limit && value <= last; ++value) {
+        p4_close_if_open((int)value);
+    }
+    return 0;
+}
+
+static int p4_close_all_except(const int *keep, size_t keep_count) {
+    int sorted[16];
+    size_t count = 0;
+    for (size_t index = 0; index < keep_count; ++index) {
+        int value = keep[index];
+        if (value < STDERR_FILENO + 1) continue;
+        if (count >= sizeof(sorted) / sizeof(sorted[0])) return E2BIG;
+        size_t position = count;
+        while (position > 0 && sorted[position - 1] > value) {
+            sorted[position] = sorted[position - 1];
+            --position;
+        }
+        if (position > 0 && sorted[position - 1] == value) continue;
+        if (position < count && sorted[position] == value) continue;
+        sorted[position] = value;
+        ++count;
+    }
+    unsigned int first = STDERR_FILENO + 1;
+    int first_error = 0;
+    for (size_t index = 0; index < count; ++index) {
+        unsigned int value = (unsigned int)sorted[index];
+        if (first < value) {
+            int error = p4_close_fd_range(first, value - 1);
+            if (error != 0 && first_error == 0) first_error = error;
+        }
+        first = value + 1;
+    }
+    if (first <= UINT_MAX) {
+        int error = p4_close_fd_range(first, UINT_MAX);
+        if (error != 0 && first_error == 0) first_error = error;
+    }
+    return first_error;
 }
 static int p4_promote_pipe_fd(int *fd) {
     if (fd == NULL || *fd < 0 || *fd > STDERR_FILENO) return 0;
@@ -127,8 +181,16 @@ static void p4_supervisor_exec_child(
     int status_write,
     int error_write
 ) {
+    pid_t parent_pid = getppid();
     int error = 0;
-    if (signal(SIGTERM, SIG_DFL) == SIG_ERR) {
+    if (parent_pid <= 1) {
+        error = ESRCH;
+    } else if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0) {
+        error = errno;
+    } else if (getppid() != parent_pid) {
+        error = ESRCH;
+    }
+    if (error == 0 && signal(SIGTERM, SIG_DFL) == SIG_ERR) {
         error = errno;
     }
     if (error == 0 && working_directory != NULL &&
@@ -183,6 +245,31 @@ static void p4_supervisor_child(
         (void)p4_write_spawn_error(error_write, errno);
         _exit(127);
     }
+    /*
+     * A forked process inherits the broker's listener and lock descriptors.
+     * Keep only the endpoints needed by this supervisor and its command;
+     * otherwise an orphaned supervisor can keep a dead broker endpoint alive.
+     */
+    int inherited_fds[] = {
+        in_read,
+        in_write,
+        out_read,
+        out_write,
+        err_read,
+        err_write,
+        status_read,
+        status_write,
+        error_write
+    };
+    int close_error = p4_close_all_except(
+        inherited_fds,
+        sizeof(inherited_fds) / sizeof(inherited_fds[0])
+    );
+    if (close_error != 0) {
+        (void)p4_write_spawn_error(error_write, close_error);
+        _exit(127);
+    }
+
     pid_t command_pid = fork();
     if (command_pid < 0) {
         (void)p4_write_spawn_error(error_write, errno);
@@ -256,10 +343,19 @@ static int p4_spawn_supervisor(
     int error_pipe[2],
     pid_t *pid_out
 ) {
+    pid_t parent_pid = getpid();
     pid_t supervisor = fork();
     if (supervisor < 0) return errno;
     if (supervisor == 0) {
         p4_close_if_open(error_pipe[0]);
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0) {
+            (void)p4_write_spawn_error(error_pipe[1], errno);
+            _exit(127);
+        }
+        if (getppid() != parent_pid) {
+            (void)p4_write_spawn_error(error_pipe[1], ESRCH);
+            _exit(127);
+        }
         p4_supervisor_child(
             executable,
             argv,
