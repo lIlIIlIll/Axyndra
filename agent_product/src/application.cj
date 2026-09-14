@@ -2471,6 +2471,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     case Some(value) => value.runId.value
                     case None => "-"
                 }) + "\npending_approval: " + pendingApproval.isSome().toString() + "\nqueued_inputs: " +
+                    queuedCount().toString() + "\nplan_mode: " + planModeEnabled.toString() + "\nvibe_mode: " +
                     vibeModeEnabled.toString() + "\nloop_mode: " + loopModeEnabled.toString() + "\nauto_compaction: " +
                     autoCompaction.toString()))
     }

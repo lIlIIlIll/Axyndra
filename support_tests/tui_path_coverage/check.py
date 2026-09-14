@@ -2835,9 +2835,11 @@ def run_modes_loop(case_run: CaseRun, _: dict[str, Any]) -> None:
     loop_state = strip_ansi(case_run.wait_screen(("loop_mode: false",), "loop-state"))
     case_run.assertions.check(
         "loop_count_is_bounded",
-        ("queued_inputs: 0" in loop_state or "queued_inputs: false" in loop_state)
+        "queued_inputs: 0" in loop_state
+        and "plan_mode: false" in loop_state
+        and "vibe_mode: false" in loop_state
         and "loop_mode: false" in loop_state,
-        "a two-iteration loop drains its queue and disables itself",
+        "a two-iteration loop drains its queue and reports all work modes",
     )
     case_run.send("loop-state-close", b"\x1b")
     wait_text_absent(case_run, "Diagnostics", "loop-state-closed")
@@ -4393,6 +4395,13 @@ def run_sessions_branches(case_run: CaseRun, _: dict[str, Any]) -> None:
         "session_search_filters",
         "No matching sessions." not in searched,
         "session search retains the renamed session",
+    )
+    case_run.send("session-search-clear-filter", b"\x1b")
+    cleared = strip_ansi(case_run.wait_screen(("Enter open", "session-main"), "session-search-cleared"))
+    case_run.assertions.check(
+        "session_search_clear_restores_all",
+        "session-main" in cleared and "coverage-renamed" in cleared,
+        "clearing a session filter rebuilds the complete selector list",
     )
     case_run.send("archive-search-open", b"/")
     case_run.wait_screen(("Esc clear",), "archive-search-mode")

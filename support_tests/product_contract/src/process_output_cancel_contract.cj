@@ -28,6 +28,35 @@ func runProcessRemediationContracts(root: String): Unit {
         "host byte cap cutting UTF8 retains command result: code=" + bounded.exitCode.toString() +
             " truncated=" + bounded.truncated.toString() + " size=" + bounded.stdout.size.toString() +
             " stderr=" + bounded.stderr + " tail=" + bounded.stdout[max(0, bounded.stdout.size - 12)..])
+    let concurrent = processes.execute(ProcessRequest("/bin/sh", arguments: ["-c",
+        "head -c 131072 /dev/zero | tr '\\000' e >&2; printf done"])).value().getOrThrow()
+    expect(
+        concurrent.exitCode == 0 && concurrent.stdout == "done" && concurrent.stderr.size == 131072,
+        "host execution drains stdout and stderr concurrently"
+    )
+    let stubbornOperation = OperationId("stubborn-output-cancel")
+    let stubborn = spawn {
+        processes.execute(ProcessRequest(
+            "/bin/sh",
+            operationId: stubbornOperation,
+            arguments: ["-c", "trap '' TERM; while :; do sleep 1; done"],
+            timeoutMillis: 10000
+        ))
+    }
+    let registrationDeadline = MonoTime.now() + Duration.second * 3
+    while (!processes.hasActiveOperation(stubbornOperation) && MonoTime.now() < registrationDeadline) {
+        sleep(Duration.millisecond * 10)
+    }
+    expect(processes.hasActiveOperation(stubbornOperation), "stubborn process enters the owned registry")
+    let cancelStarted = MonoTime.now()
+    expect(processes.cancel(stubbornOperation).isOk(), "stubborn process cancellation is accepted")
+    let stubbornResult = stubborn.get().value().getOrThrow()
+    expect(
+        stubbornResult.exitCode != 0 &&
+            (MonoTime.now() - cancelStarted).toMilliseconds() < 3000 &&
+            !processes.hasActiveOperation(stubbornOperation),
+        "ignored SIGTERM escalates and releases the owned process"
+    )
     let catalog = ToolCatalog()
     installLocalTools(catalog, workspace, processes).value().getOrThrow()
     let pipeline = ToolPipeline(catalog, MemoryOperationRepository(), RecordingAuditPort(), ProductIds(),

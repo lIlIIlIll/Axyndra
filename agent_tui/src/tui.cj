@@ -2869,6 +2869,7 @@ class AgentScreen {
                 if (sessionFilter != "") {
                     sessionFilter = ""
                     sessionInput = ""
+                    rebuildVisibleSessions(selectCurrent: true)
                 } else {
                     closeModal()
                     return UpdateResult.dirty(viewportArea)

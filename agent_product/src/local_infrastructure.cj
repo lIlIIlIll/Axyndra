@@ -1318,21 +1318,21 @@ public class LocalProcessPort <: ProcessPort {
             )
             register(request.operationId, process)
             let outputBudget = BoundedOutputBudget(sandboxResourcesValue.maxOutputBytes)
-            let output = if (request.displayServerAccess) {
-                Array<Byte>(0, repeat: 0)
+            let (output, error) = if (request.displayServerAccess) {
+                (
+                    Array<Byte>(0, repeat: 0),
+                    Array<Byte>(0, repeat: 0)
+                )
             } else {
+                // Start both readers before waiting for either pipe.  A child
+                // can fill stderr while stdout remains open.
                 let outputFuture = spawn {
                     readBounded(process.stdOutPipe, outputBudget)
                 }
-                outputFuture.get()
-            }
-            let error = if (request.displayServerAccess) {
-                Array<Byte>(0, repeat: 0)
-            } else {
                 let errorFuture = spawn {
                     readBounded(process.stdErrPipe, outputBudget)
                 }
-                errorFuture.get()
+                (outputFuture.get(), errorFuture.get())
             }
             let code = process.wait()
             Result.Ok(
@@ -1615,7 +1615,8 @@ public class LocalProcessPort <: ProcessPort {
             for (index in 0..active.size) {
                 if (active[index].operationId.value == operationId.value) {
                     selected = Some(active[index])
-                    active.remove(at: index)
+                    // Keep ownership until execute() reaches finish(), so a
+                    // later close() can still enforce termination.
                     break
                 }
             }
@@ -1945,16 +1946,36 @@ class ActiveLocalProcess {
         // The process may have exited between registration and cancellation.
         // LocalProcessPort launches every owned process through setsid. Kill
         // the owned process tree so persistent-shell children cannot retain
-        // command pipes after cancellation.
-        let killed = killProcessTree(process.pid, force: false)
-        if (killed) { return }
-        try {
-            process.terminate(force: false)
-        } catch (error: Exception) {
-            if (process.isAlive()) { throw error }
+        // command pipes after cancellation, then escalate if graceful
+        // termination is ignored.
+        let gracefulSent = killProcessTree(process.pid, force: false)
+        if (!gracefulSent) {
+            try {
+                let _ = process.terminate(force: false)
+            } catch (error: Exception) {
+                if (process.isAlive()) { throw error }
+            }
+        }
+        let gracefulDeadline = MonoTime.now() + Duration.millisecond * 250
+        while (process.isAlive() && MonoTime.now() < gracefulDeadline) {
+            sleep(Duration.millisecond * 10)
+        }
+        if (!process.isAlive()) { return }
+        let forcedSent = killProcessTree(process.pid, force: true)
+        if (!forcedSent) {
+            try {
+                let _ = process.terminate(force: true)
+            } catch (error: Exception) {
+                if (process.isAlive()) { throw error }
+            }
+        }
+        let forceDeadline = MonoTime.now() + Duration.millisecond * 1000
+        while (process.isAlive() && MonoTime.now() < forceDeadline) {
+            sleep(Duration.millisecond * 10)
         }
     }
 }
+
 class EvalSandboxLaunch {
     let sandbox: WorkspaceSandbox
     let plan: SandboxLaunchPlan
