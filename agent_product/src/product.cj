@@ -2086,10 +2086,10 @@ public class ProductRuntime {
         sessionId: SessionId,
         force!: Bool = true
     ): Result<ProductCompactionReport> {
-        let before = compactionTokenEstimate(sessionId, projected: false)
+        let before = compactionTokenEstimate(sessionId)
         match (compactSession(sessionId, force: force)) {
             case Result.Ok(removed) =>
-                let after = compactionTokenEstimate(sessionId, projected: true)
+                let after = compactionTokenEstimate(sessionId)
                 Result.Ok(ProductCompactionReport(
                     removed,
                     before,
@@ -2100,21 +2100,12 @@ public class ProductRuntime {
         }
     }
 
-    private func compactionTokenEstimate(
-        sessionId: SessionId,
-        projected!: Bool
-    ): Int64 {
+    private func compactionTokenEstimate(sessionId: SessionId): Int64 {
         let snapshot = match (canonicalThreadSnapshot(sessionId)) {
             case Result.Ok(value) => value
             case Result.Err(_) => return 0
         }
         let tools = catalog.definitionsFor(productCapabilities())
-        if (!projected) {
-            return estimateContextTokens(
-                modelMessagesFromCanonicalItems(snapshot.items),
-                tools: tools
-            )
-        }
         let checkpoint = SqliteContextCheckpointStore(vnextDatabase).loadLatest(
             snapshot, "agent-product-v1", "agent-core"
         )

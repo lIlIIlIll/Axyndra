@@ -60,6 +60,33 @@ main(): Int64 {
             "compaction preserves the complete active checkpoint protocol and rewind state"
         )
 
+        let reported = SessionId("checkpoint-report-projection")
+        let reportedMessages = ArrayList<ModelMessage>()
+        for (index in 0..20) {
+            reportedMessages.add(textMessage(
+                "report-prefix-" + index.toString() + " " + repeated("z", 5000)
+            ))
+        }
+        product.replaceMessages(reported, reportedMessages.toArray()).value().getOrThrow()
+        let firstReport = product.compactSessionReport(reported, force: false).value().getOrThrow()
+        let _ = product.appendExternalMessageOnce(
+            reported,
+            "report-followup-1",
+            textMessage("report follow-up one")
+        ).value().getOrThrow()
+        let _ = product.appendExternalMessageOnce(
+            reported,
+            "report-followup-2",
+            textMessage("report follow-up two")
+        ).value().getOrThrow()
+        let secondReport = product.compactSessionReport(reported).value().getOrThrow()
+        expect(
+            firstReport.removedMessages > 0 && secondReport.removedMessages > 0 &&
+            secondReport.beforeTokens < firstReport.beforeTokens &&
+            secondReport.afterTokens <= secondReport.beforeTokens,
+            "repeated compaction reports the active projected context before compaction"
+        )
+
         let blocked = SessionId("active-checkpoint-too-large")
         let blockedMessages = ArrayList<ModelMessage>()
         blockedMessages.add(textMessage("checkpoint setup"))

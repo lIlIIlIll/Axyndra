@@ -1460,15 +1460,7 @@ class AgentScreen {
         if (!draftLoadStarted && !setupRequired && initialPrompt == "") {
             match (event) {
                 case Event.Capabilities(caps) =>
-                    terminalUnicode = caps.unicode && !asciiRailRequested()
-                    match (virtualTranscriptView) {
-                        case Some(view) => view.setUnicode(terminalUnicode)
-                        case None => ()
-                    }
-                    match (virtualTranscriptSource) {
-                        case Some(source) => source.unicode = terminalUnicode
-                        case None => ()
-                    }
+                    applyTerminalCapabilities(caps)
                     draftLoadStarted = true
                     return startBackground("loading session", {
                         => TuiTurnResult(
@@ -1491,7 +1483,11 @@ class AgentScreen {
         }
         if (!initialSubmitted && !setupRequired) {
             match (event) {
-                case Event.Capabilities(_) | Event.Tick(_) =>
+                case Event.Capabilities(caps) =>
+                    applyTerminalCapabilities(caps)
+                    initialSubmitted = true
+                    return submitPrompt(initialPrompt)
+                case Event.Tick(_) =>
                     initialSubmitted = true
                     return submitPrompt(initialPrompt)
                 case _ => ()
@@ -1510,15 +1506,7 @@ class AgentScreen {
             }
             case Event.Paste(text) => handlePaste(text)
             case Event.Capabilities(caps) =>
-                terminalUnicode = caps.unicode && !asciiRailRequested()
-                match (virtualTranscriptView) {
-                    case Some(view) => view.setUnicode(terminalUnicode)
-                    case None => ()
-                }
-                match (virtualTranscriptSource) {
-                    case Some(source) => source.unicode = terminalUnicode
-                    case None => ()
-                }
+                applyTerminalCapabilities(caps)
                 dirtyTranscriptAndActivity()
             case Event.Resize(_) => UpdateResult.next()
             case Event.Timer(timer) =>
@@ -4054,6 +4042,18 @@ class AgentScreen {
             newTranscriptLines = 0
         } else {
             newTranscriptLines += max(1, lines)
+        }
+    }
+
+    private func applyTerminalCapabilities(caps: TerminalCapabilities): Unit {
+        terminalUnicode = caps.unicode && !asciiRailRequested()
+        match (virtualTranscriptView) {
+            case Some(view) => view.setUnicode(terminalUnicode)
+            case None => ()
+        }
+        match (virtualTranscriptSource) {
+            case Some(source) => source.unicode = terminalUnicode
+            case None => ()
         }
     }
 
