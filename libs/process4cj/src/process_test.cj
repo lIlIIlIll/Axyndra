@@ -1,6 +1,8 @@
 package process4cj
 
 import std.io.*
+import std.collection.*
+import std.env.*
 import std.fs.*
 import std.time.*
 import std.unittest.*
@@ -187,6 +189,40 @@ class Process4CjTests {
         @Expect(result.status.succeeded, true)
         @Expect(result.stdout.size + result.stderr.size, 128)
         @Expect(result.truncated, true)
+    }
+
+    @TestCase
+    func resolvesBareExecutableThroughParentPathWithCustomEnvironment() {
+        let directory = "/tmp/process4cj-path-" + processTestMillis().toString()
+        let executable = directory + "/path-probe"
+        let originalPath = getVariable("PATH")
+        let setup = runProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "mkdir -p " + directory + "; printf '#!/bin/sh\\nexit 0\\n' > " +
+                    executable + "; chmod +x " + executable
+            ]
+        ))
+        @Expect(setup.status.succeeded, true)
+        try {
+            setVariable("PATH", directory)
+            let environment = HashMap<String, String>()
+            environment["AXYNDRA_PROCESS4CJ_TEST"] = "1"
+            let result = runProcess(ProcessCommand(
+                "path-probe",
+                environment: environment
+            ))
+            @Expect(result.status.succeeded, true)
+        } finally {
+            match (originalPath) {
+                case Some(value) => setVariable("PATH", value)
+                case None => removeVariable("PATH")
+            }
+            try {
+                let _ = runProcess(ProcessCommand("/bin/rm", arguments: ["-rf", directory]))
+            } catch (_: Exception) {}
+        }
     }
 
     @TestCase

@@ -126,6 +126,7 @@ static int p4_exec_with_path(
         return errno;
     }
     const char *path = p4_environment_path(envp);
+    if (path == NULL && envp != NULL) path = p4_environment_path(NULL);
     if (path == NULL) path = "/bin:/usr/bin";
     size_t executable_length = strlen(executable);
     char candidate[PATH_MAX];
