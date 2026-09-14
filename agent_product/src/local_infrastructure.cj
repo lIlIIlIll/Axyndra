@@ -1707,11 +1707,9 @@ public class LocalProcessPort <: ProcessPort {
             activeLock.unlock()
         }
         if (terminate) {
-            let _ = spawn {
-                try {
-                    entry.terminateOwned()
-                } catch (_: Exception) {}
-            }
+            try {
+                entry.terminateOwned()
+            } catch (_: Exception) {}
         }
     }
 
