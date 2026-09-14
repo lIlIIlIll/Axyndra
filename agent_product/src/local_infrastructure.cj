@@ -1455,9 +1455,9 @@ public class LocalProcessPort <: ProcessPort {
         ])
         allowed.add(all: request.environmentAllowlist)
         if (includeDisplayServer) {
-            // Clipboard clients need only the display connection
-            // coordinates, never the ambient host environment.
-            allowed.add(all: ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"])
+            // Clipboard clients need the selected display server and, for
+            // authenticated X11 sessions, the explicit authority path.
+            allowed.add(all: ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY"])
         }
         // EnvironmentFilter requires secret names to be present in both
         // allowlists, keeping an explicit secret grant as the only path to
@@ -1484,6 +1484,26 @@ public class LocalProcessPort <: ProcessPort {
         environment["HOME"] = workspace.rootPath()
         environment["TMPDIR"] = "/tmp"
         environment["LANG"] = "C.UTF-8"
+        // HOME stays workspace-scoped; expose only the X11 authority path.
+        var hasXAuthority = false
+        match (getVariable("XAUTHORITY")) {
+            case Some(value) =>
+                if (value.trimAscii() != "" && !value.contains("\u{0000}")) {
+                    environment["XAUTHORITY"] = value
+                    hasXAuthority = true
+                }
+            case None => ()
+        }
+        if (!hasXAuthority) {
+            match (getVariable("HOME")) {
+                case Some(value) =>
+                    let home = value.trimAscii()
+                    if (home != "" && !home.contains("\u{0000}") && Path(home).isAbsolute()) {
+                        environment["XAUTHORITY"] = Path(home).join(".Xauthority").normalize().toString()
+                    }
+                case None => ()
+            }
+        }
         environment
     }
 

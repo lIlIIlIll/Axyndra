@@ -1682,14 +1682,15 @@ public class ProductRuntime {
             // Same trusted UI boundary as the deterministic base64 branch;
             // argv and the staged path are entirely product-authored.
             // std.process captures child pipes; wl-copy forks a daemon, so
-            // close inherited descriptors and detach that daemon's lifecycle.
+            // POSIX sh (including dash) only gets single-digit redirection
+            // descriptors here; close that portable range before detaching.
             match (processes.execute(
                 ProcessRequest(
                     "/bin/sh",
                     operationId: ids.nextOperationId(),
                     arguments: [
                         "-c",
-                        "for fd in $(/usr/bin/seq 3 255); do eval \"exec $fd>&-\"; done; " +
+                        "exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-; " +
                             "if command -v wl-copy >/dev/null 2>&1; then " + "setsid wl-copy < \"$1\" >/dev/null 2>&1; " +
                             "elif command -v xclip >/dev/null 2>&1; then " + "xclip -selection clipboard < \"$1\"; " +
                             "elif command -v xsel >/dev/null 2>&1; then " + "xsel --clipboard --input < \"$1\"; " +

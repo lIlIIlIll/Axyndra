@@ -7,6 +7,7 @@ import agent_ports.*
 import agent_product.*
 import agent_testkit.*
 import tool_runtime.*
+import std.env.*
 import std.fs.*
 import std.process.*
 import std.sync.*
@@ -57,6 +58,7 @@ func runProcessRemediationContracts(root: String): Unit {
             !processes.hasActiveOperation(stubbornOperation),
         "ignored SIGTERM escalates and releases the owned process"
     )
+    runDisplayServerEnvironmentContracts(directory, processes)
     let catalog = ToolCatalog()
     installLocalTools(catalog, workspace, processes).value().getOrThrow()
     let pipeline = ToolPipeline(catalog, MemoryOperationRepository(), RecordingAuditPort(), ProductIds(),
@@ -95,6 +97,70 @@ func runProcessRemediationContracts(root: String): Unit {
     expect(pipeline.invoke(context, blockingGrep(directory + "/first")).isError(), "already cancelled grep cannot start a new operation")
     processes.close().value().getOrThrow()
     println("process output and concurrent grep cancellation contracts passed")
+}
+
+func runDisplayServerEnvironmentContracts(
+    directory: String,
+    processes: LocalProcessPort
+): Unit {
+    let output = directory + "/display-environment.txt"
+    let fallbackOutput = directory + "/display-environment-fallback.txt"
+    let authority = directory + "/xauthority"
+    let hostHome = directory + "/host-home"
+    let originalHome = getVariable("HOME")
+    let originalAuthority = getVariable("XAUTHORITY")
+    try {
+        setVariable("HOME", hostHome)
+        setVariable("XAUTHORITY", authority)
+        let explicit = displayEnvironmentProbe(processes, output)
+        let explicitValue = match (explicit) {
+            case Result.Ok(_) => String.fromUtf8(File.readFrom(output))
+            case Result.Err(error) => error.message
+        }
+        expect(
+            explicit.isOk() && explicitValue == authority,
+            "display-server process preserves explicit X11 authority path"
+        )
+        removeVariable("XAUTHORITY")
+        let fallbackAuthority = Path(hostHome).join(".Xauthority").normalize().toString()
+        let fallback = displayEnvironmentProbe(processes, fallbackOutput)
+        let fallbackValue = match (fallback) {
+            case Result.Ok(_) => String.fromUtf8(File.readFrom(fallbackOutput))
+            case Result.Err(error) => error.message
+        }
+        expect(
+            fallback.isOk() && fallbackValue == fallbackAuthority,
+            "display-server process derives the default X11 authority path"
+        )
+    } finally {
+        match (originalAuthority) {
+            case Some(value) => setVariable("XAUTHORITY", value)
+            case None => removeVariable("XAUTHORITY")
+        }
+        match (originalHome) {
+            case Some(value) => setVariable("HOME", value)
+            case None => removeVariable("HOME")
+        }
+        try { let _ = removeIfExists(output) } catch (_: Exception) {}
+        try { let _ = removeIfExists(fallbackOutput) } catch (_: Exception) {}
+    }
+}
+
+func displayEnvironmentProbe(
+    processes: LocalProcessPort,
+    output: String
+): Result<ProcessResult> {
+    processes.execute(ProcessRequest(
+        "/bin/sh",
+        arguments: [
+            "-c",
+            "printf '%s' \"$XAUTHORITY\" > \"$1\"",
+            "display-environment",
+            output
+        ],
+        timeoutMillis: 5000,
+        displayServerAccess: true
+    ))
 }
 
 func blockingGrep(name: String): ToolCall {
