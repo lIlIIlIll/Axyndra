@@ -7,6 +7,7 @@ import yjson.*
 import agent_domain.*
 import agent_product.*
 import agent_tui.*
+import tool_runtime.*
 import model_adapters.*
 import std.collection.*
 import std.fs.*
@@ -40,6 +41,47 @@ class TuiRunEventCursorTests {
             2, "approval-run", AgentEventPayload.TextDelta("after-finish")
         )))
     }
+    @TestCase
+    func delayedSyntheticEventsCannotCrossUiRunGeneration(): Unit {
+        let cursor = TuiRunEventCursor()
+        cursor.begin()
+        @Expect(cursor.accept(appCursorEvent(
+            1, "run-a", AgentEventPayload.RunStarted
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            2, "run-a", AgentEventPayload.RunCompleted
+        )))
+
+        cursor.begin()
+        @Expect(cursor.accept(appCursorEvent(
+            3, "run-b", AgentEventPayload.RunStarted
+        )))
+        @Expect(!cursor.accept(appCursorEvent(
+            4,
+            "compaction-session",
+            AgentEventPayload.ContextCompacted(100, 60)
+        )))
+        @Expect(!cursor.accept(appCursorEvent(
+            5,
+            "compaction-session",
+            AgentEventPayload.Extension(
+                AgentEventKind.Transcript,
+                objectValue([
+                    ValueField("code", textValue("run.summary")),
+                    ValueField("text", textValue("stale summary"))
+                ])
+            )
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            6, "run-b", AgentEventPayload.RunCompleted
+        )))
+        @Expect(cursor.accept(appCursorEvent(
+            7,
+            "compaction-session",
+            AgentEventPayload.ContextCompacted(100, 60)
+        )))
+    }
+
 }
 
 func appCursorEvent(sequence: Int64, runId: String, payload: AgentEventPayload): AgentEvent {
@@ -382,5 +424,103 @@ class ProductTuiBackendPlanReviewTests {
             case TuiPlanReviewDisposition.Retain => true
             case _ => false
         })
+    }
+}
+
+@Test
+class ProductTuiBackendMcpStatusTests {
+    @TestCase
+    func mcpStatusReflectsClosedServerAfterBackendConstruction(): Unit {
+        if (!exists(Path("target"))) {
+            Directory.create("target", recursive: true)
+        }
+        let root = Directory.createTemp("target").toString()
+        try {
+            let settings = root + "/settings"
+            let workspace = root + "/workspace"
+            Directory.create(settings, recursive: true)
+            Directory.create(workspace, recursive: true)
+            File.writeTo(
+                settings + "/config.yml",
+                "default_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
+            )
+            File.writeTo(
+                settings + "/models.yml",
+                ("models:\n" +
+                    "  - id: product-contract\n" +
+                    "    provider: local\n" +
+                    "    context_window: 200000\n" +
+                    "    max_output_tokens: 8192\n" +
+                    "    thinking:\n" +
+                    "      mode: none\n").toArray()
+            )
+            File.writeTo(
+                settings + "/providers.yml",
+                ("providers:\n" +
+                    "  - id: local\n" +
+                    "    provider: custom\n" +
+                    "    protocol: completions\n" +
+                    "    dialect: generic_chat\n" +
+                    "    base_url: http://127.0.0.1:11434\n" +
+                    "    api_key_env: MCP_PRODUCT_UNUSED_PROVIDER_KEY\n").toArray()
+            )
+            let fixtureScript = workspace + "/mcp_fixture.py"
+            File.writeTo(
+                fixtureScript,
+                ("import json\n" +
+                    "import sys\n" +
+                    "\n" +
+                    "for line in sys.stdin:\n" +
+                    "    request = json.loads(line)\n" +
+                    "    request_id = request.get(\"id\")\n" +
+                    "    if request_id is None:\n" +
+                    "        continue\n" +
+                    "    method = request.get(\"method\", \"\")\n" +
+                    "    if method == \"server/discover\":\n" +
+                    "        result = {\"supportedVersions\": [\"2026-07-28\"], \"capabilities\": {\"tools\": {\"listChanged\": False}}, \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
+                    "    elif method == \"tools/list\":\n" +
+                    "        result = {\"tools\": [], \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
+                    "    else:\n" +
+                    "        result = {}\n" +
+                    "    result[\"resultType\"] = \"complete\"\n" +
+                    "    result[\"_meta\"] = {\"io.modelcontextprotocol/serverInfo\": {\"name\": \"status-fixture\", \"version\": \"1.0.0\"}}\n" +
+                    "    response = {\"jsonrpc\": \"2.0\", \"id\": request_id, \"result\": result}\n" +
+                    "    sys.stdout.write(json.dumps(response, separators=(\",\", \":\")) + \"\\n\")\n" +
+                    "    sys.stdout.flush()\n").toArray()
+            )
+            File.writeTo(
+                settings + "/mcp.yml",
+                ("version: 1\n" +
+                    "servers:\n" +
+                    "  - id: refresh\n" +
+                    "    enabled: true\n" +
+                    "    transport: stdio\n" +
+                    "    command: /usr/bin/python3\n" +
+                    "    args:\n" +
+                    "      - \"-B\"\n" +
+                    "      - \"-u\"\n" +
+                    "      - \"" + fixtureScript + "\"\n" +
+                    "    max_frame_bytes: 65536\n" +
+                    "    request_timeout_ms: 1000\n" +
+                    "    graceful_shutdown_ms: 1000\n").toArray()
+            )
+            let product = openProduct(config: ProductConfig(
+                settingsRoot: settings,
+                stateRoot: root + "/state",
+                workspaceRoot: workspace,
+                approvalMode: ApprovalMode.Yolo,
+                asyncEnabled: false
+            )).value().getOrThrow()
+            try {
+                let backend = ProductTuiBackend(product)
+                @Expect(backend.mcpStatus().text.contains("[ready] refresh"))
+                @Expect(product.closeMcp().isOk())
+                @Expect(backend.mcpStatus().text.contains("[stopped] refresh"))
+            } finally {
+                let _ = product.closeMcp()
+            }
+        } finally {
+            let _ = removeIfExists(root, recursive: true)
+        }
     }
 }

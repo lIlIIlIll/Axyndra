@@ -1118,6 +1118,11 @@ class AgentScreen {
             return applyTodoTransition(todos.paste(text))
         } else if (ask.editorActive()) {
             return ask.paste(text)
+        } else if (modal.isSome()) {
+            // Generic selector/document modals own paste input.  Ignoring it
+            // keeps pasted text out of the composer and cannot submit a draft.
+            let _ = text
+            return UpdateResult.next()
         } else {
             _ = composer.paste(text)
         }
@@ -1279,8 +1284,29 @@ class AgentScreen {
             result
         }
     }
+    private func performanceTimerResult(timer: TimerEvent): ?UpdateResult {
+        if (timer.id != PERF_STREAM_TIMER || performanceStreamRemaining <= 0) {
+            return None
+        }
+        let chunkIndex = tuiPerformanceStreamChunks() - performanceStreamRemaining
+        acceptAgentEvent(
+            TuiAgentEvent.TextDelta(
+                "stream ${chunkIndex} · 中文 🧭 wide 界 · \u{1b}[36mANSI\u{1b}[0m\n"
+            )
+        )
+        performanceStreamRemaining--
+        if (performanceStreamRemaining == 0) {
+            return Some(UpdateResult(
+                command: Command.StopTimer(PERF_STREAM_TIMER),
+                dirtyRects: Some(DirtyRects.full(viewportArea))
+            ))
+        }
+        Some(dirtyTranscriptAndActivity())
+    }
+
 
     func update(event: Event): UpdateResult {
+        mailboxChanged = false
         performanceBurstAppliedThisUpdate = 0
         let performanceBurstReadyEvent = performanceBurstActive && match (event) {
             case Event.Message("agent-external-ready") => true
@@ -1352,6 +1378,13 @@ class AgentScreen {
                     modalRefreshOnly = false
                     return consumeMailboxViewportRefresh(mergeDirty(mailboxRedraw, interactiveResult))
                 case Event.Timer(timer) =>
+                    match (performanceTimerResult(timer)) {
+                        case Some(performanceResult) =>
+                            return consumeMailboxViewportRefresh(
+                                mergeDirty(dirtyTranscriptAndActivity(), performanceResult)
+                            )
+                        case None => ()
+                    }
                     // Stream tick while the mailbox still holds events: the
                     // drain above already applied the deltas, so redraw the
                     // transcript now and keep the working spinner advancing.
@@ -1382,14 +1415,23 @@ class AgentScreen {
             }
         }
         match (event) {
-            case Event.AsyncCompleted("agent-turn", _) => settleStreamingCards(
-                if (status == "error" || status == "failed" || status == "rejected") {
+            case Event.AsyncCompleted("agent-turn", _) =>
+                let usageStatus = if (status.startsWith("tokens ")) {
+                    status
+                } else {
+                    ""
+                }
+                let finalState = if (status == "error" || status == "failed" || status == "rejected") {
                     "failed"
                 } else if (status == "cancelled") {
                     "cancelled"
                 } else {
                     "completed"
-                })
+                }
+                settleStreamingCards(finalState)
+                if (finalState == "completed" && usageStatus != "") {
+                    status = usageStatus
+                }
             case Event.AsyncFailed("agent-turn", _) => settleStreamingCards("failed")
             case Event.AsyncCancelled("agent-turn") => settleStreamingCards("cancelled")
             case _ => ()
@@ -1418,15 +1460,7 @@ class AgentScreen {
         if (!draftLoadStarted && !setupRequired && initialPrompt == "") {
             match (event) {
                 case Event.Capabilities(caps) =>
-                    terminalUnicode = caps.unicode && !asciiRailRequested()
-                    match (virtualTranscriptView) {
-                        case Some(view) => view.setUnicode(terminalUnicode)
-                        case None => ()
-                    }
-                    match (virtualTranscriptSource) {
-                        case Some(source) => source.unicode = terminalUnicode
-                        case None => ()
-                    }
+                    applyTerminalCapabilities(caps)
                     draftLoadStarted = true
                     return startBackground("loading session", {
                         => TuiTurnResult(
@@ -1449,6 +1483,10 @@ class AgentScreen {
         }
         if (!initialSubmitted && !setupRequired) {
             match (event) {
+                case Event.Capabilities(caps) =>
+                    applyTerminalCapabilities(caps)
+                    initialSubmitted = true
+                    return submitPrompt(initialPrompt)
                 case Event.Tick(_) =>
                     initialSubmitted = true
                     return submitPrompt(initialPrompt)
@@ -1468,33 +1506,13 @@ class AgentScreen {
             }
             case Event.Paste(text) => handlePaste(text)
             case Event.Capabilities(caps) =>
-                terminalUnicode = caps.unicode && !asciiRailRequested()
-                match (virtualTranscriptView) {
-                    case Some(view) => view.setUnicode(terminalUnicode)
-                    case None => ()
-                }
-                match (virtualTranscriptSource) {
-                    case Some(source) => source.unicode = terminalUnicode
-                    case None => ()
-                }
+                applyTerminalCapabilities(caps)
                 dirtyTranscriptAndActivity()
             case Event.Resize(_) => UpdateResult.next()
             case Event.Timer(timer) =>
-                if (timer.id == PERF_STREAM_TIMER && performanceStreamRemaining > 0) {
-                    let chunkIndex = tuiPerformanceStreamChunks() - performanceStreamRemaining
-                    acceptAgentEvent(
-                        TuiAgentEvent.TextDelta(
-                            "stream ${chunkIndex} · 中文 🧭 wide 界 · \u{1b}[36mANSI\u{1b}[0m\n"
-                        )
-                    )
-                    performanceStreamRemaining--
-                    if (performanceStreamRemaining == 0) {
-                        return UpdateResult(
-                            command: Command.StopTimer(PERF_STREAM_TIMER),
-                            dirtyRects: Some(DirtyRects.full(viewportArea))
-                        )
-                    }
-                    return dirtyTranscriptAndActivity()
+                match (performanceTimerResult(timer)) {
+                    case Some(result) => return result
+                    case None => ()
                 }
                 if (timer.id == AGENT_STREAM_TIMER && ask.isActive()) {
                     // AskRuntime still owns the live turn, but it is waiting
@@ -1538,6 +1556,13 @@ class AgentScreen {
                         case Some(action) => applyTurnAction(action)
                         case None => UpdateResult.next()
                     }
+                }
+                // The first drain at update entry may consume terminal
+                // events while the AsyncCompleted branch is still being
+                // selected. Redraw the mailbox mutations now instead of
+                // waiting for an unrelated key press.
+                if (mailboxChanged) {
+                    result = mergeDirty(result, dirtyTranscriptAndActivity())
                 }
                 if (todoChanged) {
                     result = invalidateTodoLayout(result)
@@ -1679,7 +1704,13 @@ class AgentScreen {
                             card.footer = match (approvalSelected) {
                                 case 0 => "allowed once"
                                 case 1 => approvalSessionLabel
-                                case _ => "rejected"
+                                case _ =>
+                                    let reason = composer.area.value.trimAscii()
+                                    if (reason == "") {
+                                        "rejected"
+                                    } else {
+                                        "rejected: " + reason
+                                    }
                             }
                         }
                     case None => ()
@@ -1719,11 +1750,15 @@ class AgentScreen {
                     }
                 )
             case KeyCode.Char(r'e') =>
-                if (approvalInspectBody == "") {
-                    status = "no additional approval details"
-                    UpdateResult.next()
-                } else {
+                if (approvalInspectBody != "" && composer.area.value.trimAscii() == "") {
                     applyTurnAction(TuiTurnAction.OpenDocument(approvalInspectTitle, approvalInspectBody))
+                } else {
+                    match (composer.handle(key)) {
+                        case Some(_) =>
+                            status = "choose an approval action before sending"
+                            UpdateResult.next()
+                        case None => dirtyComposer()
+                    }
                 }
             case KeyCode.Esc => cancelApprovalInteraction(false)
             case _ => match (composer.handle(key)) {
@@ -2343,6 +2378,9 @@ class AgentScreen {
 
     private func submitPrompt(raw: String, delivery!: String = "normal"): UpdateResult {
         let prompt = raw.trimAscii()
+        if (prompt == "/exit" || prompt == "/quit") {
+            return UpdateResult.exit()
+        }
         if (prompt == "") {
             return UpdateResult.next()
         }
@@ -2488,11 +2526,11 @@ class AgentScreen {
         if (prompt == "/tree") {
             sessionShowArchived = false
             sessionFilter = ""
-            return startBackground("loading sessions", {
+            return startBackground("loading session tree", {
                 => TuiTurnResult(
                     "",
-                    "select session",
-                    action: TuiTurnAction.SessionsLoaded(backend.sessions(false))
+                    "select session tree",
+                    action: TuiTurnAction.SessionTreeLoaded(backend.sessionTree())
                 )
             })
         }
@@ -2504,6 +2542,15 @@ class AgentScreen {
                     action: TuiTurnAction.ExtensionsLoaded(backend.extensions())
                 )
             })
+        }
+        if (prompt == "/mcp") {
+            let result = backend.mcpStatus()
+            if (result.text != "") {
+                addCard(UiCardKind.Mcp, "MCP", result.text)
+            }
+            status = result.status
+            let actionResult = applyTurnAction(result.action)
+            return mergeDirty(dirtyTranscriptAndActivity(), actionResult)
         }
         if (prompt == "/settings") {
             return openModal(
@@ -2662,7 +2709,11 @@ class AgentScreen {
         }
         modalSelected = 0
         status = "select with ↑/↓ and Enter; Esc closes"
-        UpdateResult.next()
+        if (viewportArea.width > 0 && viewportArea.height > 0) {
+            UpdateResult.dirty(viewportArea)
+        } else {
+            UpdateResult.next()
+        }
     }
 
     private func openSessionModal(items: Array<TuiSessionNode>): UpdateResult {
@@ -2672,6 +2723,9 @@ class AgentScreen {
         sessionInput = ""
         rebuildVisibleSessions(selectCurrent: true)
         status = sessionSelectorFooter(sessionMode, sessionShowArchived, sessionFilter)
+        if (viewportArea.width > 0 && viewportArea.height > 0) {
+            return UpdateResult.dirty(viewportArea)
+        }
         UpdateResult.next()
     }
 
@@ -2707,7 +2761,7 @@ class AgentScreen {
                         rebuildVisibleSessions(selectCurrent: true)
                     } else {
                         closeModal()
-                        return UpdateResult.next()
+                        return UpdateResult.dirty(viewportArea)
                     }
                 case KeyCode.Backspace =>
                     sessionInput = dropLastSessionRune(sessionInput)
@@ -2806,7 +2860,7 @@ class AgentScreen {
                     rebuildVisibleSessions(selectCurrent: true)
                 } else {
                     closeModal()
-                    return UpdateResult.next()
+                    return UpdateResult.dirty(viewportArea)
                 }
             case KeyCode.Up | KeyCode.Char(r'k') => modalSelected = max(0, modalSelected - 1)
             case KeyCode.Down | KeyCode.Char(r'j') => modalSelected = min(max(0, visibleSessionNodes.size - 1),
@@ -3437,7 +3491,9 @@ class AgentScreen {
 
     private func drainMailbox(): ?TuiTurnAction {
         let events = mailbox.drain()
-        mailboxChanged = !events.isEmpty()
+        if (!events.isEmpty()) {
+            mailboxChanged = true
+        }
         for (event in events) {
             acceptAgentEvent(event)
         }
@@ -3470,7 +3526,12 @@ class AgentScreen {
                         case None => status = planReview.statusText()
                     }
                 } else {
-                    status = compactRunStatus(result.status)
+                    let resultStatus = compactRunStatus(result.status)
+                    status = if (resultStatus == "completed" && status.startsWith("tokens ")) {
+                        status
+                    } else {
+                        resultStatus
+                    }
                     match (result.action) {
                         case TuiTurnAction.NoAction => ()
                         case action => return Some(action)
@@ -3494,20 +3555,20 @@ class AgentScreen {
                     "Close"
                 ]
             )
-            case TuiTurnAction.OpenModelSelector => startBackground("loading models", {
-                => TuiTurnResult(
-                    "",
-                    "select model",
-                    action: TuiTurnAction.ModelsLoaded(backend.models())
-                )
-            })
-            case TuiTurnAction.OpenBranchSelector => startBackground("loading branch points", {
-                => TuiTurnResult(
-                    "",
-                    "select branch point",
-                    action: TuiTurnAction.BranchesLoaded(backend.branchMessages())
-                )
-            })
+            case TuiTurnAction.OpenModelSelector => openModal(
+                TuiModalKind.Model,
+                backend.models()
+            )
+            case TuiTurnAction.OpenBranchSelector => startBackground(
+                "loading branches",
+                {
+                    => TuiTurnResult(
+                        "",
+                        "select branch",
+                        action: TuiTurnAction.BranchesLoaded(backend.branchMessages())
+                    )
+                }
+            )
             case TuiTurnAction.OpenPlanReview(body) =>
                 resetGenericModal()
                 let update = planReview.open(body)
@@ -3522,6 +3583,9 @@ class AgentScreen {
                 modal = Some(TuiModalKind.Document)
                 modalItems = []
                 status = "↑/↓ scroll · Esc closes"
+                if (viewportArea.width > 0 && viewportArea.height > 0) {
+                    return UpdateResult.dirty(viewportArea)
+                }
                 UpdateResult.next()
             case TuiTurnAction.ModelsLoaded(items) => openModal(TuiModalKind.Model, items)
             case TuiTurnAction.ThemeSelected(name, ok, definitions) =>
@@ -3635,7 +3699,7 @@ class AgentScreen {
                 UpdateResult.next()
             case TuiTurnAction.UiStatus(value) =>
                 status = compactRunStatus(value)
-                UpdateResult.next()
+                mergeDirty(dirtyTranscriptAndActivity(), dirtyComposer())
         }
     }
 
@@ -3987,6 +4051,18 @@ class AgentScreen {
         }
     }
 
+    private func applyTerminalCapabilities(caps: TerminalCapabilities): Unit {
+        terminalUnicode = caps.unicode && !asciiRailRequested()
+        match (virtualTranscriptView) {
+            case Some(view) => view.setUnicode(terminalUnicode)
+            case None => ()
+        }
+        match (virtualTranscriptSource) {
+            case Some(source) => source.unicode = terminalUnicode
+            case None => ()
+        }
+    }
+
     private func acceptAgentEvent(event: TuiAgentEvent): Unit {
         let followedBefore = scrollOffset <= 0
         match (event) {
@@ -4280,7 +4356,7 @@ class AgentScreen {
                 }
             case TuiAgentEvent.Usage(input, output) =>
                 UiReducer.reduce(ui, UiEvent.SetUsage(input, output))
-                status = "tokens " + input.toString() + " in / " + output.toString() + " out"
+                status = tuiUsageStatus(input, output)
             case TuiAgentEvent.Setup(message) =>
                 addCard(
                     UiCardKind.Setup,
@@ -4343,7 +4419,7 @@ class AgentScreen {
                             "\n\nReason   " + reason
                         },
                         "completed",
-                        true,
+                        false,
                         "Conversation summary preserved"
                     )
                 )

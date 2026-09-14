@@ -4978,7 +4978,9 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     let queued = queueApplication.handle("/queue inspect after yield").value().getOrThrow()
     expect(
         !loopOn.agentInvoked && loopOn.text.contains("Iterations: 2") && loopDebug.text.contains("loop_mode: true") &&
-            loopOff.text == "Loop mode disabled." && !queued.agentInvoked && queueApplication.queuedCount() == 1,
+            loopDebug.text.contains("queued_inputs: 0") && loopDebug.text.contains("plan_mode: false") &&
+            loopDebug.text.contains("vibe_mode: false") && loopOff.text == "Loop mode disabled." &&
+            !queued.agentInvoked && queueApplication.queuedCount() == 1,
         "loop and queue commands use ApplicationSession safe-boundary state"
     )
     let diagnostics = [

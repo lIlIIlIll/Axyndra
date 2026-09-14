@@ -46,7 +46,7 @@ agent_extensions→ agent_mcp + tool_runtime
 agent_ports     → agent_domain
 tool_runtime    → agent_ports + agent_domain
 agent_core      → tool_runtime + agent_ports + agent_domain
-agent_sdk       → agent_core + tool_runtime + agent_ports + agent_domain
+agent_sdk       → yjson + yjson_support
 agent_runtime   → agent_domain + agent_skills
 agent_store     → agent_runtime + agent_domain
 run_control     → agent_core + agent_ports + agent_domain
@@ -59,11 +59,13 @@ agent_tui       → agent_cli + vendored cjtui packages
 图只展示主要方向；完整 workspace 图由 `scripts/architecture_gate.sh` 从每个
 `cjpm.toml` 解析并检查。门禁拒绝任意本地依赖环，拒绝 Runtime/SDK/Product
 反向依赖 `agent_tui` 或 `agent_app`，并限制 TUI 只能消费窄前端边界。
+完整依赖 pin、native/link 和 stdx 传递闭包见 [依赖与 stdx 审计](dependencies.md)；候选切换合同见
+[stdx 迁移执行规格](stdx-migration.md)。
 
 ## Runtime boundaries
 
-- `agent_domain` 不依赖 JSON、文件系统、进程、网络、RPC 或终端库。核心事件使用
-  `EventMeta` 与可穷举的 `AgentEventPayload`；`kind/detail` 只是适配器边界投影。
+- `agent_domain` 使用 `yjson`/`yjson_support` 表示 `AgentValue` 和 JSON 协议值，
+  并通过 `process4cj` 类型参与取消适配；它不拥有文件、网络、RPC 或终端 I/O。
 - `ModelPort.execute` 是唯一模型执行原语，只有 `agent_core` 可以调用。Provider
   的 profile/model 解析、typed API adapter、协议编码和网络错误分类属于
   `model_adapters`。协议只能由显式 `model.apiId` 选择；同协议厂商差异使用该 API

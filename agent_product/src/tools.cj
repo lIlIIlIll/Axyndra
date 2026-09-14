@@ -3489,21 +3489,28 @@ class ProductProcessOperations {
     }
     private func cancelOperation(operation: ProductProcessOperation): Result<Unit> {
         lock.lock()
-        try {
-            operation.cancelled = true
-            stop(operation.id)
-        } finally { lock.unlock() }
+        try { operation.cancelled = true } finally { lock.unlock() }
+        // stop() can synchronously finish the action and enter execute()'s
+        // cleanup. Never hold the operation registry lock across that call.
+        stop(operation.id)
     }
     func cancel(runId: RunId): Result<Unit> {
+        let targets = ArrayList<OperationId>()
         lock.lock()
         try {
-            var failure: ?AgentError = None
             for (operation in active where operation.runId.value == runId.value) {
                 operation.cancelled = true
-                match (stop(operation.id)) { case Result.Err(error) => failure = Some(error); case _ => () }
+                targets.add(operation.id)
             }
-            match (failure) { case Some(error) => Result.Err(error); case None => Result.Ok(()) }
         } finally { lock.unlock() }
+        var failure: ?AgentError = None
+        for (operationId in targets) {
+            match (stop(operationId)) {
+                case Result.Err(error) => if (failure.isNone()) { failure = Some(error) }
+                case Result.Ok(_) => ()
+            }
+        }
+        match (failure) { case Some(error) => Result.Err(error); case None => Result.Ok(()) }
     }
 }
 

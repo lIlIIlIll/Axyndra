@@ -5,8 +5,8 @@ import agent_runtime.*
 import agent_ports.*
 import std.collection.*
 import std.sync.*
-import tool_runtime.*
 
+import tool_runtime.*
 class CoreRunControl {
     let runId: RunId
     let traceId: TraceId
@@ -118,7 +118,6 @@ class CoreRunControl {
             case Result.Err(error) => Result.Err(error)
         }
     }
-
     private func setState(value: RunState): Unit {
         lock.lock()
         try { currentState = value } finally { lock.unlock() }
@@ -292,12 +291,13 @@ class CoreRunControl {
         code: String,
         message: String
     ): Bool {
-        source.cancel(reason: Some(CancellationReason(
+        let result = source.cancel(reason: Some(CancellationReason(
             kind,
             code,
             message,
             cancelledAtMillis: agentUtcMillis()
         )))
+        result
     }
 }
 

@@ -187,13 +187,15 @@ class TodoController {
                 status: Some(result.message)
             )
         }
-        let snapshot = applySnapshot(result)
+        let _ = applySnapshot(result)
         todoEditor.setValue(result.markdown)
         editingTodos = true
         TodoTransition(
             UpdateResult.next(),
             status: Some("todo editor · Ctrl+S save · Esc cancel"),
-            layoutChanged: snapshot.layoutChanged
+            // Opening the editor changes the entire layout even when the
+            // loaded Markdown has the same strip row count.
+            layoutChanged: true
         )
     }
 

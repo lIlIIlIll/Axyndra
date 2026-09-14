@@ -1,6 +1,8 @@
 package process4cj
 
 import std.io.*
+import std.collection.*
+import std.env.*
 import std.fs.*
 import std.time.*
 import std.unittest.*
@@ -48,6 +50,55 @@ class Process4CjTests {
         @Expect(unrelated.isAlive(), true)
         let _ = unrelated.close()
     }
+    @TestCase
+    func cancellationTracksEscapedDescendantAfterLeaderExit() {
+        let marker = "/tmp/process4cj-detached-" +
+            processTestMillis().toString() + ".marker"
+        let process = startProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "setsid sh -c 'sleep 0.3; printf escaped > " +
+                    marker + "' & exit 0"
+            ]
+        ))
+        @Expect(process.wait().code, 0)
+        @Expect(exists(Path("/proc/" + process.pid.toString())), true)
+        @Expect(
+            process.cancel(CancellationCause(
+                CancellationKind.Explicit,
+                "test.cancel.escaped",
+                "stop escaped descendant"
+            )),
+            true
+        )
+        @Expect(process.close(), true)
+        sleep(Duration.millisecond * 500)
+        @Expect(exists(Path(marker)), false)
+    }
+    @TestCase
+    func cancellationRecapturesDescendantForkedDuringGrace() {
+        let marker = "/tmp/process4cj-grace-detached-" +
+            processTestMillis().toString() + ".marker"
+        let process = startProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "trap \"setsid sh -c 'sleep 0.4; printf escaped > " +
+                    marker + "' &\" TERM; sleep 5"
+            ]
+        ))
+        sleep(Duration.millisecond * 50)
+        @Expect(
+            terminateProcessTree(process.pid, gracefulMillis: 250),
+            true
+        )
+        @Expect(process.close(), true)
+        sleep(Duration.millisecond * 600)
+        @Expect(exists(Path(marker)), false)
+    }
+
+
 
     @TestCase
     func silentReaderCanCloseConcurrentlyWithoutClosingReusedDescriptor() {
@@ -138,6 +189,40 @@ class Process4CjTests {
         @Expect(result.status.succeeded, true)
         @Expect(result.stdout.size + result.stderr.size, 128)
         @Expect(result.truncated, true)
+    }
+
+    @TestCase
+    func resolvesBareExecutableThroughParentPathWithCustomEnvironment() {
+        let directory = "/tmp/process4cj-path-" + processTestMillis().toString()
+        let executable = directory + "/path-probe"
+        let originalPath = getVariable("PATH")
+        let setup = runProcess(ProcessCommand(
+            "/bin/sh",
+            arguments: [
+                "-c",
+                "mkdir -p " + directory + "; printf '#!/bin/sh\\nexit 0\\n' > " +
+                    executable + "; chmod +x " + executable
+            ]
+        ))
+        @Expect(setup.status.succeeded, true)
+        try {
+            setVariable("PATH", directory)
+            let environment = HashMap<String, String>()
+            environment["AXYNDRA_PROCESS4CJ_TEST"] = "1"
+            let result = runProcess(ProcessCommand(
+                "path-probe",
+                environment: environment
+            ))
+            @Expect(result.status.succeeded, true)
+        } finally {
+            match (originalPath) {
+                case Some(value) => setVariable("PATH", value)
+                case None => removeVariable("PATH")
+            }
+            try {
+                let _ = runProcess(ProcessCommand("/bin/rm", arguments: ["-rf", directory]))
+            } catch (_: Exception) {}
+        }
     }
 
     @TestCase
@@ -256,6 +341,23 @@ class Process4CjTests {
         @Expect(waiting.closeInput(), false)
         let _ = waiting.close()
         let _ = exited.close()
+    }
+
+    @TestCase
+    func mismatchedLaunchIdentityNeverSignalsReusedPid(): Unit {
+        let process = startProcess(ProcessCommand("/bin/sleep", arguments: ["5"]))
+        let startTime = processStartTime(process.pid)
+        @Expect(startTime > 0, true)
+        @Expect(
+            terminateProcessTree(
+                process.pid,
+                expectedStartTime: startTime + 1,
+                gracefulMillis: 0
+            ),
+            false
+        )
+        @Expect(process.isAlive(), true)
+        @Expect(process.close(), true)
     }
 }
 

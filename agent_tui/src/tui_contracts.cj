@@ -616,6 +616,7 @@ public interface AgentTuiBackend {
     func focusMain(): TuiConversationView
     func loadMainTranscriptPage(beforeOrdinal: Int64, limit: Int64): TuiTranscriptPage
     func extensions(): Array<TuiExtensionInfo>
+    func mcpStatus(): TuiTurnResult
     func setExtensionEnabled(id: String, enabled: Bool): Bool
     func draft(): String
     func saveDraft(value: String): Bool

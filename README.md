@@ -236,8 +236,10 @@ approval:
 | `agent_tui` | 只依赖窄前端端口的 cjtui 界面 |
 | `agent_app` | REPL、单次运行、恢复、RPC 与 TUI 可执行入口 |
 
-完整依赖方向和约束见 [docs/architecture.md](docs/architecture.md)，能力状态、
-安全边界和验证口径见 [docs/runtime-capabilities.md](docs/runtime-capabilities.md)。
+完整依赖方向和约束见 [docs/architecture.md](docs/architecture.md)，依赖审计见
+[docs/dependencies.md](docs/dependencies.md)。
+stdx 候选迁移的适配职责和验收门槛见 [docs/stdx-migration.md](docs/stdx-migration.md)；
+能力状态、安全边界和验证口径见 [docs/runtime-capabilities.md](docs/runtime-capabilities.md)。
 
 ## Workspace 外的目录
 
