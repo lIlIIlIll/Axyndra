@@ -37,9 +37,9 @@ foreign func close(fd: Int32): Int32
 foreign func getpid(): Int32
 
 @When[os == "Linux"]
-const APP_SIGTSTP: Int32 = 20
+const APP_SIGSTOP: Int32 = 19
 @When[os == "macOS"]
-const APP_SIGTSTP: Int32 = 18
+const APP_SIGSTOP: Int32 = 17
 
 @When[os == "Linux"]
 let EPOLL_CTL_ADD: Int32 = 1
@@ -2304,8 +2304,11 @@ public class App {
     }
 
     @When[os != "Windows"]
+    // SIGSTOP cannot be ignored by a non-interactive PTY parent.  Detached
+    // tmux panes commonly inherit SIGTSTP as ignored, so use the unmaskable
+    // stop signal for the explicit Ctrl-Z command and resume with SIGCONT.
     private static func suspendCurrentProcess(): Unit {
-        unsafe { _ = kill(getpid(), APP_SIGTSTP) }
+        unsafe { _ = kill(getpid(), APP_SIGSTOP) }
     }
 
     @When[os == "Windows"]
