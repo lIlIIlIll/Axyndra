@@ -1303,7 +1303,7 @@ public class LocalProcessPort <: ProcessPort {
                 environment: if (request.displayServerAccess) {
                     scopedDisplayServerEnvironment(request)
                 } else {
-                    HashMap<String, String>()
+                    None
                 },
                 stdOut: if (request.displayServerAccess) {
                     ProcessRedirect.Discard
