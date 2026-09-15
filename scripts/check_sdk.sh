@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_version='1.1.3'
-expected_cjpm_version='1.1.3'
-if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJC_VERSION:-}" ]]; then
-  expected_version=$AXYNDRA_CI_EXPECTED_CJC_VERSION
-fi
-if [[ "${GITHUB_ACTIONS:-}" == 'true' && -n "${AXYNDRA_CI_EXPECTED_CJPM_VERSION:-}" ]]; then
-  expected_cjpm_version=$AXYNDRA_CI_EXPECTED_CJPM_VERSION
-fi
+minimum_version=${AXYNDRA_MIN_CJC_VERSION:-1.1.0}
+minimum_cjpm_version=${AXYNDRA_MIN_CJPM_VERSION:-1.1.0}
+exact_toolchain=${AXYNDRA_REQUIRE_EXACT_TOOLCHAIN:-0}
+expected_version=${AXYNDRA_CI_EXPECTED_CJC_VERSION:-1.1.3}
+expected_cjpm_version=${AXYNDRA_CI_EXPECTED_CJPM_VERSION:-1.1.3}
 sdk_root=${AXYNDRA_SDK_ROOT:-${CANGJIE_SDK_ROOT:-}}
 
 if [[ -z "$sdk_root" ]]; then
@@ -37,7 +34,7 @@ cache_root=${AXYNDRA_SDK_CHECK_CACHE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/axyndra-sdk-c
 cache_file=$cache_root/validation.cache
 cjc_fingerprint=$(stat -Lc '%d:%i:%s:%Y' -- "$cjc")
 cjpm_fingerprint=$(stat -Lc '%d:%i:%s:%Y' -- "$cjpm")
-fingerprint="$sdk_root|$cjc_fingerprint|$cjpm_fingerprint|$expected_version|$expected_cjpm_version"
+fingerprint="$sdk_root|$cjc_fingerprint|$cjpm_fingerprint|$minimum_version|$minimum_cjpm_version|$exact_toolchain|$expected_version|$expected_cjpm_version"
 if [[ -f "$cache_file" && ! -L "$cache_file" && -O "$cache_file" ]]; then
   IFS= read -r cached_fingerprint < "$cache_file" || true
   if [[ "$cached_fingerprint" == "$fingerprint" ]]; then
@@ -56,13 +53,43 @@ cjc_actual_version="${cjc_version#Cangjie Compiler: }"
 cjc_actual_version="${cjc_actual_version%% *}"
 cjpm_actual_version="${cjpm_version#Cangjie Project Manager: }"
 cjpm_actual_version="${cjpm_actual_version%% *}"
-if [[ "$cjc_actual_version" != "$expected_version" ]]; then
-  printf 'axyndra: unsupported cjc; expected %s, got: %s\n' \
+version_core() {
+  local version=$1
+  if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]; then
+    return 1
+  fi
+  printf '%09d%09d%09d\n' "$((10#${BASH_REMATCH[1]}))" \
+    "$((10#${BASH_REMATCH[2]}))" "$((10#${BASH_REMATCH[3]}))"
+}
+
+require_supported_version() {
+  local tool=$1 actual=$2 minimum=$3 raw=$4
+  local actual_key minimum_key
+  actual_key=$(version_core "$actual") || {
+    printf 'axyndra: cannot parse %s version: %s\n' "$tool" "${raw//$'\n'/; }" >&2
+    exit 2
+  }
+  minimum_key=$(version_core "$minimum") || {
+    printf 'axyndra: invalid minimum %s version: %s\n' "$tool" "$minimum" >&2
+    exit 2
+  }
+  if [[ "$actual_key" < "$minimum_key" ]]; then
+    printf 'axyndra: unsupported %s; require >= %s, got: %s\n' \
+      "$tool" "$minimum" "${raw//$'\n'/; }" >&2
+    exit 2
+  fi
+}
+
+require_supported_version cjc "$cjc_actual_version" "$minimum_version" "$cjc_version"
+require_supported_version cjpm "$cjpm_actual_version" "$minimum_cjpm_version" "$cjpm_version"
+
+if [[ "$exact_toolchain" == 1 && "$cjc_actual_version" != "$expected_version" ]]; then
+  printf 'axyndra: release toolchain requires cjc %s, got: %s\n' \
     "$expected_version" "${cjc_version//$'\n'/; }" >&2
   exit 2
 fi
-if [[ "$cjpm_actual_version" != "$expected_cjpm_version" ]]; then
-  printf 'axyndra: unsupported cjpm; expected %s, got: %s\n' \
+if [[ "$exact_toolchain" == 1 && "$cjpm_actual_version" != "$expected_cjpm_version" ]]; then
+  printf 'axyndra: release toolchain requires cjpm %s, got: %s\n' \
     "$expected_cjpm_version" "${cjpm_version//$'\n'/; }" >&2
   exit 2
 fi

@@ -1,23 +1,37 @@
 # SDK, manifest, and extension compatibility
 
-Local canonical verification and the PR and protected-release workflows use Cangjie
-STS `1.1.3` with cjpm `1.1.3`. The scheduled nightly
-workflow runs weekly, resolves the latest complete official nightly, and installs
-its matching stdx component as a compatibility canary; the protected release
-workflow owns fixed-toolchain release evidence.
+The minimum supported Cangjie compiler and cjpm version is `1.1.0`, matching the
+language baseline declared by the workspace manifests. Ordinary local builds and
+tests accept newer STS and nightly versions. The SDK, runtime, and stdx must still
+come from a matching distribution.
+
+Local reference verification and the PR workflow use Cangjie STS `1.1.3` with
+cjpm `1.1.3`. The scheduled nightly workflow runs weekly, resolves the latest
+complete official nightly, installs its matching stdx component, and uses LLVM 18
+as a forward-compatibility canary. The protected release workflow alone enables
+the exact STS `1.1.3` toolchain check and owns fixed-toolchain release evidence.
 The PR gate has a 120-minute timeout and runs repository policy gates, a clean
 Cangjie check, workspace unit tests, the product executable build, focused vNext
 contracts, product regression fixtures, and CI evidence writing/upload.
 The protected release gate is separate and manual; its real-provider smoke runs
 through `scripts/release_gate.sh`.
-`scripts/check_sdk.sh` owns the exact compiler check, while package
-`cjc-version = "1.1.0"` fields continue to describe language compatibility.
+`scripts/check_sdk.sh` owns the minimum compiler check and provides the explicit
+`AXYNDRA_REQUIRE_EXACT_TOOLCHAIN=1` release mode. Package
+`cjc-version = "1.1.0"` fields describe the same minimum language compatibility.
 `scripts/pinned_cangjie` derives compiler, runtime, and dynamic stdx paths from
 the validated SDK root and never consults a mutable `daily` symlink. Canonical
 verification may set
 `AXYNDRA_CANONICAL_TARGET_ROOT` to isolate cjpm artifacts by toolchain identity.
-Older daily compilers remain unsupported because their test-macro code
-generation can crash when enumerating a legal suite containing `@Bench`.
+Known-bad compiler builds should be rejected explicitly when a reproducible
+compiler defect is identified; release channel names are not compatibility
+proxies.
+
+The minimum supported LLVM/Clang major is 15. The native `process4cj` shim also
+probes the selected compiler against its C11/Linux source instead of assuming
+that a version number is sufficient. LLVM 15 is the reference and release
+baseline, not an exact compatibility requirement. `AXYNDRA_NATIVE_CC` and
+`AXYNDRA_NATIVE_AR` select another toolchain; otherwise `clang` and `llvm-ar` are
+discovered from `PATH`. The nightly gate exercises LLVM 18.
 
 The SDK and stdx pairing requirements remain in force. The candidate network-library
 migration has not been switched on; see [the stdx migration specification](stdx-migration.md).

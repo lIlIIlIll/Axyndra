@@ -16,6 +16,8 @@ jobs:
       # The floating nightly is a compatibility canary, not reproducible
       # release evidence. The fixed release workflow owns that proof.
       AXYNDRA_CI_COMPATIBILITY_CANARY: "1"
+      AXYNDRA_NATIVE_CC: /usr/bin/clang-18
+      AXYNDRA_NATIVE_AR: /usr/bin/llvm-ar-18
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -23,8 +25,7 @@ jobs:
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-15 ripgrep unzip bubblewrap
-          sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+          sudo apt-get install --yes clang-18 ripgrep unzip bubblewrap
           # The workspace sandbox executes every tool through bubblewrap;
           # ubuntu-24.04 images restrict unprivileged user namespaces by default.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -44,7 +45,7 @@ jobs:
           stdx_root=$(bash scripts/setup_ci_stdx.sh \
             "${{ steps.cangjie-nightly.outputs.version }}" "$RUNNER_TEMP")
           echo "CANGJIE_STDX_PATH=$stdx_root" >> "$GITHUB_ENV"
-      - name: Configure pinned SDK
+      - name: Configure compatible SDK
         run: |
           sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
           cjpm_output=$(cjpm --version 2>&1)

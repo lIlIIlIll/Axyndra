@@ -18,6 +18,13 @@ export PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH"
 export LD_LIBRARY_PATH="$AXYNDRA_NATIVE_ROOT:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 
 "$root/scripts/prepare_native_deps.sh"
+native_compiler=${AXYNDRA_NATIVE_CC:-$(command -v clang || true)}
+if [[ -n "$native_compiler" ]]; then
+  clang_resource_dir=$("$native_compiler" --print-resource-dir 2>/dev/null || true)
+  if [[ -d "$clang_resource_dir/lib/linux" ]]; then
+    export LIBRARY_PATH="$clang_resource_dir/lib/linux${LIBRARY_PATH:+:$LIBRARY_PATH}"
+  fi
+fi
 
 command=("$@")
 if [[ -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then

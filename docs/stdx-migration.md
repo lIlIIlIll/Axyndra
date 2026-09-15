@@ -8,7 +8,7 @@
 
 迁移开始前必须同时满足以下条件：
 
-- 选定并记录一组 Cangjie SDK、stdx 和 native 物料。`scripts/check_sdk.sh` 的精确版本检查、`scripts/sdk_paths.sh` 对 `libstdx.net.http.so` 的检查、`scripts/prepare_native_deps.sh` 对 LLVM 15 C shim 的检查都保持不变。
+- 选定并记录一组 Cangjie SDK、stdx 和 native 物料。`scripts/check_sdk.sh` 的最低版本检查、`scripts/sdk_paths.sh` 对 `libstdx.net.http.so` 的检查、`scripts/prepare_native_deps.sh` 对 C11/Linux compiler capability 的检查都保持不变；只有 release gate 启用精确版本复现。
 - yjson 使用 commit `92858f75aedc3dd6f7322789117854514549e62c`，llm4cj 使用 commit `62e6c57227630f2ccbc0f48fecfdf36a896e7e6d`；所有受影响 lockfile 同步更新并经过现有 pin gate。相邻 `../yjson`、`../llm4cj`、`../Wirestack` 和 `../sse4cj` 工作树只能作为源码对照，不能直接写进 Axyndra manifest。
 - yjson schema 的可复现来源和兼容的 yjson/macros/llm4cj 闭包必须确认。当前 `yjson_algorithms` 只有相邻 `../yjson/packages/yjson_algorithms` 源码证据，不能用开发机 path 作为 CI 依赖。
 - HTTP、SSE、JSON 的行为合同先有可执行 fixture 或现有合同入口，再提交适配。候选库的 API 可见不等于 TLS、取消、EOF、预算、错误分类或 native 物料已经验收。
@@ -166,7 +166,7 @@ JSON-RPC 数字 ID 还必须保留现有合同：`1e3` 和 `1000` 的编码文�
 
 ## 运行证据入口
 
-后续聚焦合同按现有 release gate 方式运行。先设置符合 `scripts/check_sdk.sh` 精确版本要求的 `AXYNDRA_SDK_ROOT`；`$HOME/cangjie_sdk/daily/` 解析后若版本不匹配，记录环境前置未满足，不绕过检查，也不替换 SDK。
+后续聚焦合同按现有 implementation gate 方式运行。先设置满足 `scripts/check_sdk.sh` 最低版本且带匹配 runtime/stdx 的 `AXYNDRA_SDK_ROOT`；release gate 继续要求固定的可复现版本。
 
 在 `support_tests/model_adapters_contract` 或 `support_tests/mcp_contract` 中：
 
