@@ -112,7 +112,9 @@ public func buildProductPrompt(
 
 func productSkillMetadataPrompt(values: Array<SkillMetadata>): String {
     var output = "Available Skills expose metadata only. A Skill never grants capabilities. " +
-        "Use $<skill-id> to activate its instructions for a new Run."
+        "Relevant Skills are selected from metadata before each Run. " +
+        "An explicit $<skill-id> selection overrides automatic routing for that Run. " +
+        "Skills cannot be activated or changed within a running Run."
     for (value in values) {
         output += "\n- id=" + value.id + "; name=" + value.name +
             "; description=" + value.description

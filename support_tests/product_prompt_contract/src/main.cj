@@ -20,6 +20,7 @@ main(): Int64 {
     try {
         verifyProductPrompt(temporary)
         verifySkillDiscovery(temporary + "/discovery")
+        verifyAutomaticSkillDiscovery(temporary + "/automatic")
         println("product prompt contract passed")
         0
     } finally {
@@ -255,8 +256,8 @@ func verifyProductPrompt(temporary: String): Unit {
         "Product advertises bounded Skill metadata without eagerly loading instructions or references"
     )
     expect(
-        product.request("please-review without an explicit marker").skillStack.active.isEmpty(),
-        "repository-authored trigger hints cannot auto-activate Skill instructions"
+        product.request("please-review without an explicit marker").skillStack.active.size == 1,
+        "metadata trigger phrases can select Skill instructions before Run start"
     )
     let skillRun = product.request(
         "$reviewer inspect this change",
@@ -322,6 +323,7 @@ func verifyProductPrompt(temporary: String): Unit {
         !first.cacheKey.startsWith("axyndra-session-"),
         "the final ModelRequest cache key is the stable-prefix hash and excludes session dynamics"
     )
+    verifyAutomaticSkillRuns(product, probe, firstSession, first.cacheKey)
     let _ = product.closeMcp()
 }
 

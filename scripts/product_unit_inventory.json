@@ -44,7 +44,9 @@
   ],
   "agent_product": [
     "agent_product/src/application_handoff_test.cj",
-    "agent_product/src/provider_dialect_test.cj"
+    "agent_product/src/provider_dialect_test.cj",
+    "agent_product/src/skill_reference_discovery_test.cj",
+    "agent_product/src/skill_routing_test.cj"
   ],
   "agent_rpc": [
     "agent_rpc/src/acp_event_test.cj"
