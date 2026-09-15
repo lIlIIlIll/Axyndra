@@ -1,0 +1,79 @@
+name: Skill routing pre-PR validation
+
+on:
+  push:
+    branches: [codex/issue-29-validation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-routing-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.1.3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install native compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-15 ripgrep unzip python3-yaml bubblewrap
+          sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Load pinned Cangjie toolchain
+        id: toolchain
+        run: |
+          source scripts/ci_toolchain.env
+          cat scripts/ci_toolchain.env >> "$GITHUB_ENV"
+          echo "version=$AXYNDRA_CI_CANGJIE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "stdx_sha256=$AXYNDRA_CI_STDX_SHA256" >> "$GITHUB_OUTPUT"
+      - name: Setup Cangjie
+        uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
+        with:
+          channel: sts
+          version: ${{ steps.toolchain.outputs.version }}
+          archive-path: ${{ runner.temp }}/cangjie-sts.tar.gz
+      - name: Setup matching stdx
+        run: |
+          stdx_root=$(bash scripts/setup_ci_stdx.sh \
+            "${{ steps.toolchain.outputs.version }}" "$RUNNER_TEMP" \
+            "${{ steps.toolchain.outputs.stdx_sha256 }}")
+          echo "CANGJIE_STDX_PATH=$stdx_root" >> "$GITHUB_ENV"
+      - name: Configure SDK
+        run: |
+          sdk_root=$(dirname "$(dirname "$(command -v cjc)")")
+          echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.toolchain.outputs.version }}" >> "$GITHUB_ENV"
+      - name: Policy and focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          {
+            scripts/check_sdk.sh
+            python3 scripts/tracked_artifact_gate.py
+            python3 scripts/docs_gate.py
+            scripts/architecture_gate.sh
+            python3 scripts/product_unit_gate.py --inventory-only
+            scripts/pinned_cangjie cjpm test -m agent_product --no-color
+            for name in skill_runtime_vnext_contract product_prompt_contract product_thread_runtime_contract agent_core_contract sdk_contract; do
+              (
+                cd "support_tests/$name"
+                "$GITHUB_WORKSPACE/scripts/pinned_cangjie" cjpm build
+                "$GITHUB_WORKSPACE/scripts/pinned_cangjie" target/release/bin/main
+              )
+            done
+          } 2>&1 | tee target/issue29-validation.log
+      - name: Upload validation log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue29-validation-${{ github.run_id }}
+          path: target/issue29-validation.log
+          if-no-files-found: warn
+          retention-days: 7

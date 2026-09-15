@@ -4,8 +4,6 @@ import agent_domain.*
 import agent_skills.*
 import std.collection.*
 import std.fs.*
-import std.math.*
-import std.unicode.*
 
 private let PRODUCT_SKILL_MAX_BYTES: Int64 = 65536
 private let PRODUCT_SKILL_MAX_REFERENCES: Int64 = 32
@@ -29,6 +27,8 @@ public class ProductSkillRuntime {
 
     public func metadata(): Array<SkillMetadata> { currentRegistry().metadata() }
 
+    // On-demand references are durable tool output, not mutations of the
+    // immutable launch snapshot. loadedReferences holds caller-preloaded data.
     public func readReference(
         snapshot: SkillStackSnapshot,
         skillId: String,
@@ -76,8 +76,8 @@ public class ProductSkillRuntime {
         let registry = currentRegistry()
         let stack = SkillStack(registry, loader)
         let available = registry.metadata()
-        for (metadata in available where productSkillTriggered(metadata, prompt, available)) {
-            let _ = stack.activate(metadata.id)
+        for (id in selectProductSkills(available, prompt)) {
+            let _ = stack.activate(id)
         }
         stack.snapshot()
     }
@@ -97,6 +97,14 @@ class ProductSkillContentLoader <: SkillContentLoader {
     }
 
     public func read(contentRef: String): Result<String> {
+        readContent(contentRef, metadataOnly: false)
+    }
+
+    func readMetadata(contentRef: String): Result<String> {
+        readContent(contentRef, metadataOnly: true)
+    }
+
+    private func readContent(contentRef: String, metadataOnly!: Bool): Result<String> {
         let path = productSkillCanonical(contentRef)
         var allowed = false
         for (root in roots where productSkillPathInside(root, path)) {
@@ -114,14 +122,21 @@ class ProductSkillContentLoader <: SkillContentLoader {
             )
         }
         try {
-            let source = String.fromUtf8(File.readFrom(path))
-            let body = if (path.endsWith("/SKILL.md")) {
+            let file = File(path, OpenMode.Read)
+            let source = try {
+                if (metadataOnly) {
+                    readProductSkillHeader(file, PRODUCT_SKILL_MAX_HEADER_BYTES)
+                } else {
+                    readProductSkillText(file, PRODUCT_SKILL_MAX_BYTES)
+                }
+            } finally { file.close() }
+            let body = if (!metadataOnly && path.endsWith("/SKILL.md")) {
                 productSkillBody(source)
             } else {
                 source
             }
             if (body.trimAscii() == "") {
-                return productSkillError("skill.content_empty", "skill content is empty")
+                return productSkillError("skill.content_empty", "skill content is empty or invalid")
             }
             Result.Ok(body)
         } catch (error: Exception) {
@@ -140,15 +155,16 @@ func discoverProductSkills(
         let rootInfo = try { FileInfo(Path(root)) } catch (_: Exception) { continue }
         if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) { continue }
         let names = productSkillDirectoryNames(root)
+        var inspected: Int64 = 0
         for (directoryName in names) {
+            if (inspected >= PRODUCT_SKILL_MAX_CANDIDATES) { break }
+            inspected += 1
             let directory = productSkillCanonical(root + "/" + directoryName)
             if (!productSkillPathInside(productSkillCanonical(root), directory)) { continue }
             let instructionRef = directory + "/SKILL.md"
             if (!productSkillRegularFile(instructionRef, PRODUCT_SKILL_MAX_BYTES)) { continue }
-            let source = match (loader.read(instructionRef)) {
-                case Result.Ok(_) => try {
-                    String.fromUtf8(File.readFrom(instructionRef))
-                } catch (_: Exception) { continue }
+            let source = match (loader.readMetadata(instructionRef)) {
+                case Result.Ok(value) => value
                 case Result.Err(_) => continue
             }
             let name = productSkillFrontmatter(source, "name")
@@ -167,7 +183,7 @@ func discoverProductSkills(
             productSkillReplace(descriptors, descriptor)
         }
     }
-    descriptors.toArray()
+    boundedProductSkillDescriptors(descriptors.toArray())
 }
 
 func productSkillDirectoryNames(root: String): Array<String> {
@@ -184,6 +200,9 @@ func productSkillDirectoryNames(root: String): Array<String> {
                 values[index - 1] = values[index]
                 values[index] = previous
                 index -= 1
+            }
+            if (values.size > PRODUCT_SKILL_MAX_CANDIDATES) {
+                values.remove(at: values.size - 1)
             }
         }
     } catch (_: Exception) { () }
@@ -220,48 +239,12 @@ func productSkillRegularNames(root: String): Array<String> {
                 values[index] = previous
                 index -= 1
             }
+            if (values.size > PRODUCT_SKILL_MAX_REFERENCES) {
+                values.remove(at: values.size - 1)
+            }
         }
     } catch (_: Exception) { () }
     values.toArray()
-}
-
-func productSkillTriggered(metadata: SkillMetadata, prompt: String, available: Array<SkillMetadata>): Bool {
-    // Triggers are discovery hints. Auto-activating repository-authored text
-    // from an arbitrary substring would let a Skill choose its own escalation
-    // trigger; activation therefore requires an explicit user marker.
-    let text = prompt.toRuneArray()
-    for (index in 0..text.size where text[index] == r'$') {
-        if (index > 0 && !productSkillMarkerBoundary(text[index - 1])) { continue }
-        let length = max(productSkillMarkerLength(text, index + 1, metadata.id),
-            productSkillMarkerLength(text, index + 1, metadata.name))
-        if (length == 0) { continue }
-        var longer = false
-        for (candidate in available) {
-            if (productSkillMarkerLength(text, index + 1, candidate.id) > length ||
-                productSkillMarkerLength(text, index + 1, candidate.name) > length) {
-                longer = true
-                break
-            }
-        }
-        if (!longer) { return true }
-    }
-    false
-}
-
-func productSkillMarkerLength(text: Array<Rune>, start: Int64, name: String): Int64 {
-    let marker = name.toRuneArray()
-    if (marker.isEmpty() || start + marker.size > text.size) { return 0 }
-    for (offset in 0..marker.size where text[start + offset] != marker[offset]) { return 0 }
-    let end = start + marker.size
-    if (end < text.size && !productSkillMarkerBoundary(text[end])) { return 0 }
-    marker.size
-}
-
-func productSkillMarkerBoundary(value: Rune): Bool {
-    // Names are not restricted to ASCII slugs. Only text separators delimit
-    // mentions; other Unicode characters (including combining marks), '-' and
-    // '_' continue a name. Declared names containing separators match in full.
-    value.isWhiteSpace() || "()[]{}<>.,!?;:'\"`，。！？；：、（）【】《》「」『』“”‘’".toRuneArray().contains(value)
 }
 
 func productSkillReplace(
