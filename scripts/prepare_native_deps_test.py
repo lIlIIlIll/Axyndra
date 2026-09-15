@@ -57,6 +57,44 @@ class PrepareNativeDepsTest(unittest.TestCase):
             stamp = Path(f"{output}.compiler-id").read_text()
             self.assertIn(str(second), stamp)
 
+    def test_rejects_non_clang_and_older_clang(self) -> None:
+        real_clang = shutil.which("clang")
+        if real_clang is None:
+            self.skipTest("clang is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "compiler.log"
+            old_clang = root / "clang-14"
+            self.make_compiler(old_clang, 14, real_clang, log)
+            result = subprocess.run(
+                [str(PREPARE)],
+                env={
+                    **os.environ,
+                    "AXYNDRA_NATIVE_CC": str(old_clang),
+                    "AXYNDRA_NATIVE_OUTPUT": str(root / "native.so"),
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("requires LLVM/Clang >= 15", result.stderr)
+
+            gcc = root / "gcc"
+            gcc.write_text("#!/bin/sh\necho 'gcc (GCC) 15.1.0'\n", encoding="utf-8")
+            gcc.chmod(0o755)
+            result = subprocess.run(
+                [str(PREPARE)],
+                env={
+                    **os.environ,
+                    "AXYNDRA_NATIVE_CC": str(gcc),
+                    "AXYNDRA_NATIVE_OUTPUT": str(root / "native.so"),
+                },
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cannot determine LLVM/Clang compatibility", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

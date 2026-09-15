@@ -153,7 +153,7 @@ persistence_runtime
 
 - `scripts/sdk_paths.sh` 只有在目标 stdx 目录存在 `libstdx.net.http.so` 时才接受它。`CANGJIE_STDX_PATH` 是 fallback，匹配选定 SDK 的相邻 stdx 时优先使用相邻目录。
 - `scripts/pinned_cangjie` 先通过 `scripts/check_sdk.sh` 校验 SDK，再解析 stdx，设置 `CANGJIE_STDX_PATH`，并无条件调用 `scripts/prepare_native_deps.sh`。
-- `scripts/prepare_native_deps.sh` 使用 `AXYNDRA_NATIVE_CC` 或 `PATH` 中的 `clang`，要求 LLVM/Clang >= 15，并以一次 C11/Linux capability probe 验证它，再把 `libs/process4cj/native/process4cj_native.c` 构建为 `libs/process4cj/native/libprocess4cj_native.so`。LLVM 15 是 reference/release baseline，而非唯一兼容版本。
+- `scripts/check_native_compiler.sh` 是 native compiler validation 的单一入口：它使用 `AXYNDRA_NATIVE_CC` 或 `PATH` 中的 `clang`，要求 LLVM/Clang >= 15，并执行 C11/Linux capability probe。开发构建和 source-package staging 都在编译 `process4cj_native.c` 前调用该检查；LLVM 15 是 reference/release baseline，而非唯一兼容版本。
 - `scripts/package_candidate.sh` 先验证 SDK、完整 stdx、构建出的产品 executable 和 `patchelf`，再以 `ldd` 递归收集 process-native、SDK、tools 和 stdx 动态库，并检查最终诊断中没有 `not found`。
 - `.github/workflows/pr-gate.yml` 以 LLVM 15 和 STS 1.1.3 作为 reference baseline；nightly gate 以匹配的 nightly SDK/stdx 和 LLVM 18 覆盖前向兼容，并把 SDK/stdx 检查放在构建测试之前。
 

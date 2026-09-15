@@ -38,6 +38,21 @@ def native_tool(name: str, fallback: str) -> str | None:
     return shutil.which(fallback)
 
 
+def validate_native_compiler(compiler: Path) -> Path:
+    completed = subprocess.run(
+        [str(ROOT / "scripts" / "check_native_compiler.sh"), str(compiler)],
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or "native compiler validation failed"
+        raise ValueError(detail)
+    canonical = completed.stdout.strip()
+    if not canonical:
+        raise ValueError("native compiler validation returned no compiler path")
+    return Path(canonical)
+
+
 def load_toml(path: Path) -> dict[str, object]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
@@ -297,6 +312,7 @@ def stage(destination: Path) -> None:
                     "process4cj source packaging requires clang and llvm-ar; "
                     "set AXYNDRA_NATIVE_CC/AXYNDRA_NATIVE_AR to override discovery"
                 )
+            compiler = validate_native_compiler(compiler)
             object_file = native_root / "process4cj_native.o"
             subprocess.run([
                 str(compiler), "-x", "c", "-std=c11", "-O2", "-fPIC", "-c",

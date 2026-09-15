@@ -30,9 +30,13 @@ command=("$@")
 if [[ -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then
   cjc_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/bin/cjc")
   cjpm_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/tools/bin/cjpm")
-  native_compiler_path=$(readlink -f -- "$native_compiler")
+  native_compiler_dir=$(cd -- "$(dirname -- "$native_compiler")" && pwd -P)
+  native_compiler_path="$native_compiler_dir/$(basename -- "$native_compiler")"
+  native_compiler_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$native_compiler_path")
+  native_compiler_version=$("$native_compiler_path" --version 2>&1)
+  native_compiler_version=${native_compiler_version%%$'\n'*}
   toolchain_key=$(printf '%s' \
-    "$sdk_root|$cjc_identity|$cjpm_identity|$stdx_root|$native_compiler_path" | \
+    "$sdk_root|$cjc_identity|$cjpm_identity|$stdx_root|$native_compiler_path|$native_compiler_identity|$native_compiler_version" | \
     sha256sum | cut -c1-16)
   workdir_key=$(printf '%s' "$(pwd -P)" | sha256sum | cut -c1-16)
   target_dir="$AXYNDRA_CANONICAL_TARGET_ROOT/$toolchain_key/$workdir_key"

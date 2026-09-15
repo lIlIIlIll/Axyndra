@@ -39,15 +39,15 @@ class PinnedCangjieTest(unittest.TestCase):
         cjpm.chmod(0o755)
         return sdk
 
-    def run_wrapper(self, sdk: Path, root: Path, log: Path) -> str:
-        real_clang = shutil.which("clang")
-        if real_clang is None:
+    def run_wrapper(self, sdk: Path, root: Path, log: Path, compiler: Path | None = None) -> str:
+        selected_compiler = str(compiler) if compiler is not None else shutil.which("clang")
+        if selected_compiler is None:
             self.skipTest("clang is unavailable")
         environment = {
             **os.environ,
             "AXYNDRA_SDK_ROOT": str(sdk),
             "AXYNDRA_SDK_CHECK_CACHE_DIR": str(root / "sdk-cache"),
-            "AXYNDRA_NATIVE_CC": real_clang,
+            "AXYNDRA_NATIVE_CC": selected_compiler,
             "AXYNDRA_NATIVE_OUTPUT": str(root / "libprocess4cj_native.so"),
             "AXYNDRA_CANONICAL_TARGET_ROOT": str(root / "targets"),
         }
@@ -76,6 +76,34 @@ class PinnedCangjieTest(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertIn("--target-dir", first)
             self.assertIn("--target-dir", second)
+
+    def test_canonical_target_changes_after_in_place_compiler_upgrade(self) -> None:
+        real_clang = shutil.which("clang")
+        if real_clang is None:
+            self.skipTest("clang is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "invocations.log"
+            sdk = self.make_sdk(root, "1.1.3", log)
+            compiler = root / "clang"
+
+            def write_compiler(version: int) -> None:
+                compiler.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"${1:-}\" = --version ]; then\n"
+                    f"  echo 'clang version {version}.0.0'\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    f"exec '{real_clang}' \"$@\"\n",
+                    encoding="utf-8",
+                )
+                compiler.chmod(0o755)
+
+            write_compiler(17)
+            first = self.run_wrapper(sdk, root, log, compiler)
+            write_compiler(18)
+            second = self.run_wrapper(sdk, root, log, compiler)
+            self.assertNotEqual(first, second)
 
 
 if __name__ == "__main__":
