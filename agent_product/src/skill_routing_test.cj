@@ -81,7 +81,9 @@ class ProductSkillRoutingTests {
     func automaticTermBudgetDoesNotRouteFromATruncatedPrefix(): Unit {
         let available = [skillRoutingMetadata("review", "Review code changes")]
         var prompt = "review code "
-        for (_ in 0..PRODUCT_SKILL_MAX_ROUTING_TERMS) { prompt += "token " }
+        for (index in 0..PRODUCT_SKILL_MAX_ROUTING_TERMS) {
+            prompt += "token" + index.toString() + " "
+        }
         @Expect(selectProductSkills(available, prompt).isEmpty())
     }
 

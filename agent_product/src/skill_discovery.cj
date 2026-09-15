@@ -17,7 +17,7 @@ func readProductSkillHeader(stream: InputStream, maxBytes: Int64): String {
     let line = ArrayList<Byte>()
     let buffer = Array<Byte>(1, repeat: 0)
     var opened = false
-    for (_ in 0..maxBytes) {
+    while (header.size < maxBytes) {
         if (stream.read(buffer) != 1) { return "" }
         let byte = buffer[0]
         header.add(byte)
@@ -40,7 +40,7 @@ func readProductSkillHeader(stream: InputStream, maxBytes: Int64): String {
 // Bound actual reads too: a regular file can grow after the metadata stat.
 func readProductSkillText(stream: InputStream, maxBytes: Int64): String {
     let bytes = ArrayList<Byte>()
-    while (true) {
+    while (bytes.size <= maxBytes) {
         let buffer = Array<Byte>(min(4096, maxBytes - bytes.size + 1), repeat: 0)
         let count = stream.read(buffer)
         if (count == 0) { return String.fromUtf8(bytes.toArray()) }
@@ -49,6 +49,7 @@ func readProductSkillText(stream: InputStream, maxBytes: Int64): String {
         }
         for (index in 0..count) { bytes.add(buffer[index]) }
     }
+    throw IllegalStateException("skill content exceeds its read budget")
 }
 
 // Identity collisions were resolved before this budget is applied. Prefer
