@@ -228,9 +228,8 @@ func productSkillRegularNames(root: String): Array<String> {
     let values = ArrayList<String>()
     try {
         for (entry in Directory.readFrom(root)) {
-            let info = try { FileInfo(Path(root).join(entry.name)) }
-                catch (_: Exception) { continue }
-            if (!info.isRegular() || info.isSymbolicLink()) { continue }
+            let path = Path(root).join(entry.name).toString()
+            if (!productSkillRegularFile(path, PRODUCT_SKILL_MAX_BYTES)) { continue }
             values.add(entry.name)
             var index = values.size - 1
             while (index > 0 && values[index] < values[index - 1]) {
