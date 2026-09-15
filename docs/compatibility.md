@@ -21,7 +21,9 @@ through `scripts/release_gate.sh`.
 `scripts/pinned_cangjie` derives compiler, runtime, and dynamic stdx paths from
 the validated SDK root and never consults a mutable `daily` symlink. Canonical
 verification may set
-`AXYNDRA_CANONICAL_TARGET_ROOT` to isolate cjpm artifacts by toolchain identity.
+`AXYNDRA_CANONICAL_TARGET_ROOT` to isolate cjpm artifacts by both workspace and
+validated SDK/stdx/native-compiler identity. Switching any selected toolchain
+therefore cannot reuse another compiler's canonical target tree.
 Known-bad compiler builds should be rejected explicitly when a reproducible
 compiler defect is identified; release channel names are not compatibility
 proxies.

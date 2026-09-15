@@ -66,6 +66,7 @@ jobs:
           python3 scripts/docs_gate_test.py
           python3 scripts/check_sdk_test.py
           python3 scripts/prepare_native_deps_test.py
+          python3 scripts/pinned_cangjie_test.py
           scripts/architecture_gate.sh
       - name: Clean Cangjie check
         run: |

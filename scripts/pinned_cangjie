@@ -28,8 +28,14 @@ fi
 
 command=("$@")
 if [[ -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then
+  cjc_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/bin/cjc")
+  cjpm_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/tools/bin/cjpm")
+  native_compiler_path=$(readlink -f -- "$native_compiler")
+  toolchain_key=$(printf '%s' \
+    "$sdk_root|$cjc_identity|$cjpm_identity|$stdx_root|$native_compiler_path" | \
+    sha256sum | cut -c1-16)
   workdir_key=$(printf '%s' "$(pwd -P)" | sha256sum | cut -c1-16)
-  target_dir="$AXYNDRA_CANONICAL_TARGET_ROOT/$workdir_key"
+  target_dir="$AXYNDRA_CANONICAL_TARGET_ROOT/$toolchain_key/$workdir_key"
   mkdir -p -- "$target_dir"
   command+=(--target-dir "$target_dir")
 fi
