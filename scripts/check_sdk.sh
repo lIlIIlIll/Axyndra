@@ -73,7 +73,8 @@ require_supported_version() {
     printf 'axyndra: invalid minimum %s version: %s\n' "$tool" "$minimum" >&2
     exit 2
   }
-  if [[ "$actual_key" < "$minimum_key" ]]; then
+  if [[ "$actual_key" < "$minimum_key" ||
+        ( "$actual_key" == "$minimum_key" && "$actual" == *-* && "$minimum" != *-* ) ]]; then
     printf 'axyndra: unsupported %s; require >= %s, got: %s\n' \
       "$tool" "$minimum" "${raw//$'\n'/; }" >&2
     exit 2

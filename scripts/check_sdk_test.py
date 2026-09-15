@@ -50,6 +50,13 @@ class CheckSdkTest(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("require >= 1.1.0", result.stderr)
 
+    def test_rejects_prerelease_of_stable_minimum(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = self.make_sdk(Path(directory), "1.1.0-alpha.1", "1.1.0-alpha.1")
+            result = self.run_check(sdk)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("require >= 1.1.0", result.stderr)
+
     def test_exact_release_mode_keeps_reproducible_pin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdk = self.make_sdk(Path(directory), "1.1.4", "1.1.4")

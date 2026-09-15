@@ -5,7 +5,7 @@
   description = "Executable MCP product-composition contract"
   version = "1.0.0"
   output-type = "executable"
-  link-option = "--whole-archive -lclang_rt.profile-x86_64 --no-whole-archive -lsqlite3"
+  link-option = "--whole-archive -L${AXYNDRA_CLANG_RUNTIME_PATH} -lclang_rt.profile-x86_64 --no-whole-archive -lsqlite3"
 
 [dependencies]
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

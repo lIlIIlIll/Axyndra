@@ -31,7 +31,11 @@ probes the selected compiler against its C11/Linux source instead of assuming
 that a version number is sufficient. LLVM 15 is the reference and release
 baseline, not an exact compatibility requirement. `AXYNDRA_NATIVE_CC` and
 `AXYNDRA_NATIVE_AR` select another toolchain; otherwise `clang` and `llvm-ar` are
-discovered from `PATH`. The nightly gate exercises LLVM 18.
+discovered from `PATH`. The wrapper exports the selected compiler's runtime
+directory as `AXYNDRA_CLANG_RUNTIME_PATH`, and contract manifests add it as an
+explicit linker search path. Native artifact freshness includes the compiler
+identity, so changing compilers cannot silently reuse an older shim. The nightly
+gate exercises LLVM 18.
 
 The SDK and stdx pairing requirements remain in force. The candidate network-library
 migration has not been switched on; see [the stdx migration specification](stdx-migration.md).

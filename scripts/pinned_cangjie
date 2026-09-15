@@ -22,7 +22,7 @@ native_compiler=${AXYNDRA_NATIVE_CC:-$(command -v clang || true)}
 if [[ -n "$native_compiler" ]]; then
   clang_resource_dir=$("$native_compiler" --print-resource-dir 2>/dev/null || true)
   if [[ -d "$clang_resource_dir/lib/linux" ]]; then
-    export LIBRARY_PATH="$clang_resource_dir/lib/linux${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    export AXYNDRA_CLANG_RUNTIME_PATH="$clang_resource_dir/lib/linux"
   fi
 fi
 
