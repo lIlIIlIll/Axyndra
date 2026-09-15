@@ -52,6 +52,24 @@ func readProductSkillText(stream: InputStream, maxBytes: Int64): String {
     throw IllegalStateException("skill content exceeds its read budget")
 }
 
+// PromptBuilder escapes external data by doubling original backslashes and
+// replacing '<'/'>' with six-byte \u003c/\u003e sequences. Charge that final
+// representation rather than the raw catalog text so the 64 KiB budget remains
+// valid after the available-skills section is rendered.
+func productSkillEscapedMetadataBytes(source: String): Int64 {
+    var size: Int64 = 0
+    for (byte in source.toArray()) {
+        if (byte == 92) {
+            size += 2
+        } else if (byte == 60 || byte == 62) {
+            size += 6
+        } else {
+            size += 1
+        }
+    }
+    size
+}
+
 // Identity collisions were resolved before this budget is applied. Prefer
 // later (workspace, then user, then managed) entries; never resurrect a
 // shadowed lower-priority definition when its replacement does not fit.
@@ -64,7 +82,9 @@ func boundedProductSkillDescriptors(values: Array<SkillDescriptor>): Array<Skill
         let value = values[index]
         // Charging the common catalog header per entry is conservative and
         // keeps the budget valid if the metadata renderer changes later.
-        let bytes = productSkillMetadataPrompt([SkillMetadata(value)]).size
+        let bytes = productSkillEscapedMetadataBytes(
+            productSkillMetadataPrompt([SkillMetadata(value)])
+        )
         if (bytes > PRODUCT_SKILL_MAX_METADATA_BYTES - used) { continue }
         selected.add(value)
         used += bytes
