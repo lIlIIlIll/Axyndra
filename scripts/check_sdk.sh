@@ -62,6 +62,52 @@ version_core() {
     "$((10#${BASH_REMATCH[2]}))" "$((10#${BASH_REMATCH[3]}))"
 }
 
+version_is_less() {
+  local actual=$1 minimum=$2 actual_key=$3 minimum_key=$4
+  if [[ "$actual_key" != "$minimum_key" ]]; then
+    [[ "$actual_key" < "$minimum_key" ]]
+    return
+  fi
+
+  local actual_without_build=${actual%%+*}
+  local minimum_without_build=${minimum%%+*}
+  local actual_prerelease= minimum_prerelease=
+  if [[ "$actual_without_build" == *-* ]]; then
+    actual_prerelease=${actual_without_build#*-}
+  fi
+  if [[ "$minimum_without_build" == *-* ]]; then
+    minimum_prerelease=${minimum_without_build#*-}
+  fi
+  if [[ -z "$actual_prerelease" ]]; then
+    return 1
+  fi
+  if [[ -z "$minimum_prerelease" ]]; then
+    return 0
+  fi
+
+  local IFS=.
+  local -a actual_parts minimum_parts
+  read -ra actual_parts <<< "$actual_prerelease"
+  read -ra minimum_parts <<< "$minimum_prerelease"
+  local index actual_part minimum_part
+  for ((index = 0; index < ${#actual_parts[@]} || index < ${#minimum_parts[@]}; index++)); do
+    if ((index >= ${#actual_parts[@]})); then return 0; fi
+    if ((index >= ${#minimum_parts[@]})); then return 1; fi
+    actual_part=${actual_parts[index]}
+    minimum_part=${minimum_parts[index]}
+    [[ "$actual_part" == "$minimum_part" ]] && continue
+    if [[ "$actual_part" =~ ^[0-9]+$ && "$minimum_part" =~ ^[0-9]+$ ]]; then
+      ((10#$actual_part < 10#$minimum_part))
+      return
+    fi
+    if [[ "$actual_part" =~ ^[0-9]+$ ]]; then return 0; fi
+    if [[ "$minimum_part" =~ ^[0-9]+$ ]]; then return 1; fi
+    [[ "$actual_part" < "$minimum_part" ]]
+    return
+  done
+  return 1
+}
+
 require_supported_version() {
   local tool=$1 actual=$2 minimum=$3 raw=$4
   local actual_key minimum_key
@@ -73,8 +119,7 @@ require_supported_version() {
     printf 'axyndra: invalid minimum %s version: %s\n' "$tool" "$minimum" >&2
     exit 2
   }
-  if [[ "$actual_key" < "$minimum_key" ||
-        ( "$actual_key" == "$minimum_key" && "$actual" == *-* && "$minimum" != *-* ) ]]; then
+  if version_is_less "$actual" "$minimum" "$actual_key" "$minimum_key"; then
     printf 'axyndra: unsupported %s; require >= %s, got: %s\n' \
       "$tool" "$minimum" "${raw//$'\n'/; }" >&2
     exit 2

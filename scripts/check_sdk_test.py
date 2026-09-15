@@ -57,6 +57,24 @@ class CheckSdkTest(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("require >= 1.1.0", result.stderr)
 
+    def test_compares_prerelease_identifiers_for_configured_minimum(self) -> None:
+        cases = [
+            ("1.2.0-alpha.1", 2),
+            ("1.2.0-alpha.2", 0),
+            ("1.2.0-alpha.10", 0),
+            ("1.2.0-beta.1", 0),
+            ("1.2.0", 0),
+        ]
+        for version, returncode in cases:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                sdk = self.make_sdk(Path(directory), version, version)
+                result = self.run_check(
+                    sdk,
+                    AXYNDRA_MIN_CJC_VERSION="1.2.0-alpha.2",
+                    AXYNDRA_MIN_CJPM_VERSION="1.2.0-alpha.2",
+                )
+                self.assertEqual(result.returncode, returncode, result.stderr)
+
     def test_exact_release_mode_keeps_reproducible_pin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdk = self.make_sdk(Path(directory), "1.1.4", "1.1.4")
