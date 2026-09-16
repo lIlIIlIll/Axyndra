@@ -5,6 +5,9 @@ cd "$root"
 python3 scripts/product_unit_gate_test.py
 python3 scripts/ci_evidence_test.py
 bash scripts/check_atomic_workspace.sh
+# Keep this gate self-contained. Earlier CI stages and focused contracts may use
+# separate target trees or clean/rebuild workspace artifacts.
+"$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 python3 support_tests/frontend_regressions/check.py all
 python3 support_tests/process_broker_blackbox/check.py --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"
 (

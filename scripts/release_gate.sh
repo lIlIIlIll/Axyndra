@@ -38,7 +38,11 @@ done
 cd "$root"
 python3 scripts/tracked_artifact_gate.py
 python3 scripts/docs_gate.py
-sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
+exact_toolchain=0
+if [[ "$gate_kind" == release ]]; then
+  exact_toolchain=1
+fi
+sdk_root=$(AXYNDRA_REQUIRE_EXACT_TOOLCHAIN="$exact_toolchain" DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
 source "$root/scripts/sdk_paths.sh"
 stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
 # Freeze the already validated, canonical SDK root for every nested
