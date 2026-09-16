@@ -4,7 +4,7 @@
   organization = ""
   version = "1.0.0"
   output-type = "executable"
-  link-option = "--whole-archive /usr/lib/llvm15/lib/clang/15.0.7/lib/linux/libclang_rt.profile-x86_64.a --no-whole-archive"
+  link-option = "--whole-archive -L${AXYNDRA_CLANG_RUNTIME_PATH} -lclang_rt.profile-x86_64 --no-whole-archive"
 
 [dependencies]
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

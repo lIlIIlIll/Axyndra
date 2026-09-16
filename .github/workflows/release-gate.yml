@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 120
     env:
       AXYNDRA_CI_EXPECTED_CJPM_VERSION: 1.1.3
+      AXYNDRA_NATIVE_CC: /usr/bin/clang-15
+      AXYNDRA_NATIVE_AR: /usr/bin/llvm-ar-15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -21,7 +23,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes clang-15 ripgrep unzip python3-yaml bubblewrap
-          sudo ln -sfnT /usr/lib/llvm-15 /usr/lib/llvm15
           # The workspace sandbox executes every tool through bubblewrap;
           # ubuntu-24.04 images restrict unprivileged user namespaces by default.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
