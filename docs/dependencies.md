@@ -153,9 +153,9 @@ persistence_runtime
 
 - `scripts/sdk_paths.sh` 只有在目标 stdx 目录存在 `libstdx.net.http.so` 时才接受它。`CANGJIE_STDX_PATH` 是 fallback，匹配选定 SDK 的相邻 stdx 时优先使用相邻目录。
 - `scripts/pinned_cangjie` 先通过 `scripts/check_sdk.sh` 校验 SDK，再解析 stdx，设置 `CANGJIE_STDX_PATH`，并无条件调用 `scripts/prepare_native_deps.sh`。
-- `scripts/prepare_native_deps.sh` 要求 `/usr/lib/llvm15/bin/clang`，把 `libs/process4cj/native/process4cj_native.c` 构建为 `libs/process4cj/native/libprocess4cj_native.so`。
+- `scripts/check_native_compiler.sh` 是 native compiler validation 的单一入口：它使用 `AXYNDRA_NATIVE_CC` 或 `PATH` 中的 `clang`，要求 LLVM/Clang >= 15，并执行 C11/Linux capability probe。开发构建和 source-package staging 都在编译 `process4cj_native.c` 前调用该检查；LLVM 15 是 reference/release baseline，而非唯一兼容版本。
 - `scripts/package_candidate.sh` 先验证 SDK、完整 stdx、构建出的产品 executable 和 `patchelf`，再以 `ldd` 递归收集 process-native、SDK、tools 和 stdx 动态库，并检查最终诊断中没有 `not found`。
-- `.github/workflows/pr-gate.yml` 安装 `clang-15`，设置与 pinned Cangjie 匹配的 stdx，并把 SDK/stdx 检查放在 workspace check、unit tests 和产品构建之前。
+- `.github/workflows/pr-gate.yml` 以 LLVM 15 和 STS 1.1.3 作为 reference baseline；nightly gate 以匹配的 nightly SDK/stdx 和 LLVM 18 覆盖前向兼容，并把 SDK/stdx 检查放在构建测试之前。
 
 `SecureRandom` 是 ID 和 retry jitter 的现有安全随机实现，与 stdx 到 Wirestack/sse4cj/yjson 的网络和 framing 迁移无关。迁移不能以删除安全随机为代价，也不在本轮提出随机数替代方案。
 
@@ -165,7 +165,7 @@ persistence_runtime
 
 | 要求 | 消费者与触发功能 | 证据和范围 |
 | --- | --- | --- |
-| Linux x86_64 + glibc | `process4cj` 运行时；所有使用本地 process backend 的产品/合同 | `packaging/public-packages.toml` 将 `process4cj` 标为 `linux-x86_64`、`glibc`；其 C shim 由 `/usr/lib/llvm15/bin/clang` 构建。 |
+| Linux x86_64 + glibc；支持 C11/Linux headers 的 Clang | `process4cj` 运行时；所有使用本地 process backend 的产品/合同 | `packaging/public-packages.toml` 将 `process4cj` 标为 `linux-x86_64`、`glibc`；其 C shim 使用 `AXYNDRA_NATIVE_CC` 或从 `PATH` 发现的 `clang` 构建。 |
 | SQLite | `agent_store`、`agent_product`、`agent_rpc`、`agent_app` 以及相应聚合合同 | manifest 的 `link-option = "-lsqlite3"`；静态依赖的链接选项不自动传递。 |
 | bubblewrap | `sandbox4cj` / `agent_product` 的 workspace sandbox | `libs/sandbox4cj/src/sandbox.cj` 默认使用 `/usr/bin/bwrap`，并验证 namespace 隔离；Linux 或 bubblewrap 不可用时返回 `Unsupported`，不退回裸执行。 |
 | `timeout` | sandbox command 的 deadline wrapper | 默认 executable 为 `/usr/bin/timeout`；缺失时 sandbox availability 失败。 |

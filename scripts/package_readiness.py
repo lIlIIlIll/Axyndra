@@ -31,6 +31,28 @@ PATH_DEPENDENCY = re.compile(
 )
 
 
+def native_tool(name: str, fallback: str) -> str | None:
+    configured = os.environ.get(name, "").strip()
+    if configured:
+        return configured
+    return shutil.which(fallback)
+
+
+def validate_native_compiler(compiler: Path) -> Path:
+    completed = subprocess.run(
+        [str(ROOT / "scripts" / "check_native_compiler.sh"), str(compiler)],
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or "native compiler validation failed"
+        raise ValueError(detail)
+    canonical = completed.stdout.strip()
+    if not canonical:
+        raise ValueError("native compiler validation returned no compiler path")
+    return Path(canonical)
+
+
 def load_toml(path: Path) -> dict[str, object]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
@@ -225,7 +247,7 @@ def toolchain_identity() -> dict[str, str]:
     commands = {
         "cjc": [str(Path(sdk_root) / "bin" / "cjc"), "-v"] if sdk_root else [],
         "cjpm": [str(Path(sdk_root) / "tools" / "bin" / "cjpm"), "--version"] if sdk_root else [],
-        "nativeCompiler": ["/usr/lib/llvm15/bin/clang++", "--version"],
+        "nativeCompiler": [native_tool("AXYNDRA_NATIVE_CC", "clang") or "", "--version"],
     }
     for key, command in commands.items():
         if not command or not Path(command[0]).is_file():
@@ -281,10 +303,16 @@ def stage(destination: Path) -> None:
             native_root = package_root / "native"
             native_root.mkdir()
             shutil.copy2(source_root / "native" / "process4cj_native.c", native_root / "process4cj_native.c")
-            compiler = Path("/usr/lib/llvm15/bin/clang++")
-            archiver = Path("/usr/lib/llvm15/bin/llvm-ar")
-            if not compiler.is_file() or not archiver.is_file():
-                raise ValueError("process4cj source packaging requires /usr/lib/llvm15/bin/clang++ and llvm-ar")
+            compiler_value = native_tool("AXYNDRA_NATIVE_CC", "clang")
+            archiver_value = native_tool("AXYNDRA_NATIVE_AR", "llvm-ar")
+            compiler = Path(compiler_value) if compiler_value else Path()
+            archiver = Path(archiver_value) if archiver_value else Path()
+            if not compiler_value or not archiver_value or not compiler.is_file() or not archiver.is_file():
+                raise ValueError(
+                    "process4cj source packaging requires clang and llvm-ar; "
+                    "set AXYNDRA_NATIVE_CC/AXYNDRA_NATIVE_AR to override discovery"
+                )
+            compiler = validate_native_compiler(compiler)
             object_file = native_root / "process4cj_native.o"
             subprocess.run([
                 str(compiler), "-x", "c", "-std=c11", "-O2", "-fPIC", "-c",
