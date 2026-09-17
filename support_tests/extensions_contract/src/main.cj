@@ -1,6 +1,7 @@
 package extensions_contract
 
 import agent_domain.*
+import agent_runtime.*
 import agent_extensions.*
 import agent_sdk.*
 import agent_testkit.*
@@ -34,7 +35,7 @@ main(): Int64 {
     expect(installer.setEnabled("axyndra.workspace-search", true, catalog).isOk(),
         "read-only extension re-enables")
 
-    let operations = MemoryOperationRepository()
+    let operations = InMemoryOperationRuntimePort()
     let audit = RecordingAuditPort()
     let pipeline = ToolPipeline(
         catalog,
@@ -52,7 +53,7 @@ main(): Int64 {
         ])
     )
 
-    match (pipeline.invoke(allowed, ToolCall(
+    match (executePipelineCall(pipeline, allowed, ToolCall(
         "search-call",
         "grep",
         objectValue([ValueField("pattern", textValue("needle"))])
@@ -64,7 +65,7 @@ main(): Int64 {
         case _ => throw IllegalStateException("read-only SDK tool did not complete")
     }
 
-    let pending = match (pipeline.invoke(allowed, ToolCall(
+    let pending = match (executePipelineCall(pipeline, allowed, ToolCall(
         "write-call",
         "write",
         objectValue([
@@ -75,8 +76,8 @@ main(): Int64 {
         case Result.Ok(ToolInvocationResult.NeedsApproval(value)) => value
         case _ => throw IllegalStateException("side-effect SDK tool bypassed approval")
     }
-    expect(host.writeExecutions == 0 && operations.receiptCount() == 1,
-        "preparation creates only the read receipt; write host has not executed")
+    expect(host.writeExecutions == 0 && operations.preparedOperationCount() == 2,
+        "preparation creates only canonical prepared operations; write host has not executed")
 
     match (pipeline.decide(allowed, pending.operationId, ApprovalDecision.Reject)) {
         case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
@@ -85,10 +86,10 @@ main(): Int64 {
         )
         case _ => throw IllegalStateException("approval rejection did not deny SDK write")
     }
-    expect(host.writeExecutions == 0 && operations.receiptCount() == 2,
-        "denied side effect cannot invoke host or forge a success receipt")
+    expect(host.writeExecutions == 0 && operations.preparedOperationCount() == 2,
+        "denied side effect cannot invoke host or forge a terminal outcome")
 
-    let approved = match (pipeline.invoke(allowed, ToolCall(
+    let approved = match (executePipelineCall(pipeline, allowed, ToolCall(
         "write-approved",
         "write",
         objectValue([
@@ -106,13 +107,13 @@ main(): Int64 {
         )
         case _ => throw IllegalStateException("approved SDK write did not complete")
     }
-    expect(host.writeExecutions == 1 && operations.receiptCount() == 3,
-        "approved SDK write executes once and host-owned output is not a receipt")
+    expect(host.writeExecutions == 1 && operations.preparedOperationCount() == 3,
+        "approved SDK write executes once while canonical operation ownership remains durable")
 
     let denied = ToolInvocationContext(
         RunId("run-denied"), SessionId("session-denied"), CapabilitySet()
     )
-    match (pipeline.invoke(denied, ToolCall(
+    match (executePipelineCall(pipeline, denied, ToolCall(
         "write-capability-denied",
         "write",
         objectValue([
@@ -123,10 +124,10 @@ main(): Int64 {
         case Result.Ok(ToolInvocationResult.Denied(_)) => ()
         case _ => throw IllegalStateException("missing capability did not deny SDK write")
     }
-    expect(host.writeExecutions == 1 && operations.receiptCount() == 3,
-        "capability denial cannot execute or create receipt")
+    expect(host.writeExecutions == 1 && operations.preparedOperationCount() == 3,
+        "capability denial cannot execute or create a prepared operation")
 
-    let lifecycleOperations = MemoryOperationRepository()
+    let lifecycleOperations = InMemoryOperationRuntimePort()
     let lifecyclePipeline = ToolPipeline(
         catalog,
         lifecycleOperations,
@@ -142,7 +143,7 @@ main(): Int64 {
             Capability(CapabilityKind.WorkspaceWrite, resource: "notes/new.txt")
         ])
     )
-    let pendingAcrossDeactivate = match (lifecyclePipeline.invoke(lifecycleContext, ToolCall(
+    let pendingAcrossDeactivate = match (executePipelineCall(lifecyclePipeline, lifecycleContext, ToolCall(
         "write-deactivate",
         "write",
         objectValue([
@@ -155,7 +156,7 @@ main(): Int64 {
     }
     expect(installer.setEnabled("axyndra.workspace-write", false, catalog).isOk(),
         "deactivation hides extension from new preparation")
-    expect(match (lifecyclePipeline.invoke(lifecycleContext, ToolCall(
+    expect(match (executePipelineCall(lifecyclePipeline, lifecycleContext, ToolCall(
         "write-after-deactivate", "write", objectValue([
             ValueField("path", textValue("notes/new.txt")),
             ValueField("content", textValue("blocked"))
@@ -170,7 +171,7 @@ main(): Int64 {
         case Result.Ok(ToolInvocationResult.Completed(_)) => ()
         case _ => throw IllegalStateException("prepared operation lost ownership on deactivation")
     }
-    expect(host.writeExecutions == 2 && lifecycleOperations.receiptCount() == 1,
+    expect(host.writeExecutions == 2 && lifecycleOperations.preparedOperationCount() == 1,
         "prepared operation continues under ToolPipeline ownership")
     expect(installer.setEnabled("axyndra.workspace-write", true, catalog).isOk(),
         "deactivated extension re-enables without replacing durable registration")
@@ -188,40 +189,40 @@ func migratedAuthorityContracts(): Unit {
     expect(installer.install(WebSearchExtension(), catalog).isOk(), "web extension installs through SDK adapter")
     expect(installer.install(TamperExtension(), catalog).isOk(), "binding fixtures install through the same SDK adapter")
 
-    let operations = MemoryOperationRepository()
+    let operations = InMemoryOperationRuntimePort()
     let pipeline = ToolPipeline(
         catalog, operations, RecordingAuditPort(), DeterministicIds(prefix: "sdk-migrated"),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
     )
     let denied = ToolInvocationContext(RunId("network-denied"), SessionId("network-denied"), CapabilitySet())
-    expect(match (pipeline.invoke(denied, ToolCall(
+    expect(match (executePipelineCall(pipeline, denied, ToolCall(
         "web-denied", "web_search", objectValue([ValueField("query", textValue("cangjie"))])
     ))) {
         case Result.Ok(ToolInvocationResult.Denied(_)) => true
         case _ => false
     }, "manifest network declaration does not grant network authority")
-    expect(host.hostOperationExecutions == 0 && operations.receiptCount() == 0,
-        "network denial cannot execute or forge a receipt")
+    expect(host.hostOperationExecutions == 0 && operations.preparedOperationCount() == 0,
+        "network denial cannot execute or forge a terminal outcome")
 
     let allowed = ToolInvocationContext(
         RunId("network-allowed"), SessionId("network-allowed"),
         CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)])
     )
-    expect(match (pipeline.invoke(allowed, ToolCall(
+    expect(match (executePipelineCall(pipeline, allowed, ToolCall(
         "web-allowed", "web_search", objectValue([ValueField("query", textValue("cangjie"))])
     ))) {
         case Result.Ok(ToolInvocationResult.Completed(result)) => !result.isError && result.receiptId != ""
         case _ => false
-    }, "authorized network intent executes through host and receives pipeline receipt")
-    expect(host.hostOperationExecutions == 1 && operations.receiptCount() == 1,
-        "network execution and receipt remain host owned")
+    }, "authorized network operation executes through host and receives a canonical result")
+    expect(host.hostOperationExecutions == 1 && operations.preparedOperationCount() == 1,
+        "network execution remains host owned")
 
     let readAllowed = ToolInvocationContext(
         RunId("tamper"), SessionId("tamper"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
     )
     for (name in ["tamper_operation", "tamper_payload"]) {
-        expect(match (pipeline.invoke(readAllowed, ToolCall(
+    expect(match (executePipelineCall(pipeline, readAllowed, ToolCall(
             name, name, objectValue([ValueField("path", textValue("approved"))])
         ))) {
             case Result.Ok(ToolInvocationResult.Completed(result)) => result.isError
@@ -323,6 +324,7 @@ class RecordingHost <: ExtensionOperationHost {
 
     public func execute(
         _context: ToolInvocationContext,
+        _prepared: PreparedToolInvocation,
         intent: OperationIntent
     ): Result<ExecutionResult> {
         let _ = _context

@@ -15,7 +15,7 @@ class WorkspaceWriteExtensionTests {
         @Expect(
             definition.inputSchema.field("properties").getOrThrow()
                 .field("content").getOrThrow()
-                .field("maxLength").getOrThrow().number,
+                .field("maxLength").getOrThrow().asNumberText(),
             "32768"
         )
     }

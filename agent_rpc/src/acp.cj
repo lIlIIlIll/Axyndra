@@ -1542,7 +1542,7 @@ func acpBool(
     match (value.field(name)) {
         case Some(item) =>
             if (item.unifiedKind == ValueKind.Boolean) {
-                item.boolean
+                item.asBool()
             } else {
                 fallback
             }
@@ -1561,7 +1561,7 @@ func acpInteger(
                 return fallback
             }
             try {
-                Int64.parse(item.number)
+                Int64.parse(item.asNumberText())
             } catch (_: Exception) {
                 fallback
             }

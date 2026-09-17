@@ -18,6 +18,7 @@ import model_adapters.*
 import persistence_runtime.*
 import run_control.*
 import tool_runtime.*
+import sandbox4cj.*
 import std.collection.*
 import std.env.*
 import std.convert.*
@@ -37,6 +38,7 @@ public class ProductConfig {
     public let approvalMode: ApprovalMode
     public let approvalRoutingModeOverride: ?ApprovalRoutingMode
     public let modelOverride: String
+    public let shellNetworkModeOverride: ?ShellNetworkMode
     public let asyncEnabled: Bool
     public let wallTimeoutMillis: Int64
     public let modelAttemptRecovery: ModelAttemptRecoveryPolicy
@@ -54,6 +56,7 @@ public class ProductConfig {
         approvalMode!: ApprovalMode = ApprovalMode.AlwaysAsk,
         approvalRoutingModeOverride!: ?ApprovalRoutingMode = None,
         modelOverride!: String = "",
+        shellNetworkModeOverride!: ?ShellNetworkMode = None,
         asyncEnabled!: Bool = true,
         wallTimeoutMillis!: Int64 = 0,
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
@@ -75,6 +78,7 @@ public class ProductConfig {
         this.approvalMode = approvalMode
         this.approvalRoutingModeOverride = approvalRoutingModeOverride
         this.modelOverride = modelOverride
+        this.shellNetworkModeOverride = shellNetworkModeOverride
         this.asyncEnabled = asyncEnabled
         // 0 = no wall-clock limit (OMP behavior: a stream that keeps emitting
         // tokens is never cut off; only idle hangs are interrupted).
@@ -214,6 +218,8 @@ public class ProductRuntime {
     public let stateRoot: String
     public let asyncEnabled: Bool
     public let wallTimeoutMillis: Int64
+    public let shellNetworkMode: ShellNetworkMode
+    public let sandboxCaBundle: String
     public let approvalSettings: ProductApprovalSettings
     public let compactionSettings: ProductCompactionSettings
     public var theme: String
@@ -255,6 +261,8 @@ public class ProductRuntime {
         stateRoot: String,
         asyncEnabled: Bool,
         wallTimeoutMillis: Int64,
+        shellNetworkMode: ShellNetworkMode,
+        sandboxCaBundle: String,
         approvalSettings: ProductApprovalSettings,
         compactionSettings: ProductCompactionSettings,
         theme: String,
@@ -293,6 +301,8 @@ public class ProductRuntime {
         this.stateRoot = stateRoot
         this.asyncEnabled = asyncEnabled
         this.wallTimeoutMillis = wallTimeoutMillis
+        this.shellNetworkMode = shellNetworkMode
+        this.sandboxCaBundle = sandboxCaBundle
         this.approvalSettings = approvalSettings
         this.compactionSettings = compactionSettings
         this.theme = theme
@@ -650,8 +660,8 @@ public class ProductRuntime {
             catalog,
             pipeline,
             ids,
-            options,
-            productToolContext(workspace.rootPath())
+            vnext,
+            options
         )
     }
 
@@ -681,26 +691,22 @@ public class ProductRuntime {
         skillStack!: SkillStackSnapshot = SkillStackSnapshot([], [])
     ): Result<ToolResult> {
         let callId = "cli-" + name + "-" + ids.nextOperationId().value
-        let context = ToolInvocationContext(
-            ids.nextRunId(),
-            sessionId,
-            CapabilitySet(
-                values: [
-                    Capability(CapabilityKind.WorkspaceRead),
-                    Capability(CapabilityKind.WorkspaceWrite),
-                    Capability(CapabilityKind.ProcessSpawn),
-                    Capability(CapabilityKind.NetworkAccess),
-                    Capability(CapabilityKind.ExtensionInvoke),
-                    Capability(CapabilityKind.PeerMessage),
-                    Capability(CapabilityKind.Delegate)
-                ]
-            ),
-            toolContext: productToolContext(workspace.rootPath()),
-            skills: skillStack
+        let capabilities = CapabilitySet(
+            values: [
+                Capability(CapabilityKind.WorkspaceRead),
+                Capability(CapabilityKind.WorkspaceWrite),
+                Capability(CapabilityKind.ProcessSpawn),
+                Capability(CapabilityKind.NetworkAccess),
+                Capability(CapabilityKind.ExtensionInvoke),
+                Capability(CapabilityKind.PeerMessage),
+                Capability(CapabilityKind.Delegate)
+            ]
         )
-        match (pipeline.invoke(
-            context,
-            ToolCall(callId, name, arguments)
+        match (vnext.executeCanonicalTool(
+            sessionId,
+            capabilities,
+            ToolCall(callId, name, arguments),
+            skillStack: skillStack
         )) {
             case Result.Ok(ToolInvocationResult.Completed(result)) =>
                 if (result.isError) {
@@ -730,7 +736,8 @@ public class ProductRuntime {
     public func executePersistentShell(
         sessionId: SessionId,
         command: String,
-        timeoutMillis!: Int64 = 30000
+        timeoutMillis!: Int64 = 30000,
+        networkPolicy!: ?NetworkPolicy = None
     ): Result<ProcessResult> {
         if (command.trimAscii() == "") {
             return Result.Err(
@@ -741,17 +748,59 @@ public class ProductRuntime {
                 )
             )
         }
-        processes.executeShell(
-            sessionId,
-            ProcessRequest(
-                "/bin/bash",
-                operationId: ids.nextOperationId(),
-                arguments: [command],
-                workingDirectory: workspace.rootPath(),
-                timeoutMillis: max(1, timeoutMillis),
-                sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-            )
+        let policy = match (resolveShellNetworkPolicy(networkPolicy)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let request = ProcessRequest(
+            "/bin/bash",
+            operationId: ids.nextOperationId(),
+            arguments: ["--noprofile", "--norc", "-lc", command],
+            workingDirectory: workspace.rootPath(),
+            timeoutMillis: max(1, timeoutMillis),
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(policy)
         )
+        if (!networkPolicyModeIsDenied(policy.mode)) {
+            // HostNetwork and mediated Bash commands are one-shot process
+            // trees. They must never inherit a cached shell's cwd/export state.
+            return processes.execute(request)
+        }
+        processes.executeShell(sessionId, request)
+    }
+
+    private func resolveShellNetworkPolicy(
+        requested: ?NetworkPolicy
+    ): Result<NetworkPolicy> {
+        match (requested) {
+            case Some(policy) =>
+                if (shellNetworkMode == ShellNetworkMode.Proxy &&
+                    networkPolicyModeIsHost(policy.mode)) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.PermissionDenied,
+                        "network.mode_denied",
+                        "proxy shell mode forbids HostNetwork",
+                        retryable: false,
+                        fallbackAllowed: false
+                    ))
+                }
+                if (networkPolicyModeIsMediated(policy.mode) && !policy.publish.isEmpty()) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.InvalidInput,
+                        "network.publish_not_supported",
+                        "Bash does not accept publish rules",
+                        retryable: false,
+                        fallbackAllowed: false
+                    ))
+                }
+                Result.Ok(policy)
+            case None =>
+                Result.Ok(match (shellNetworkMode) {
+                    case ShellNetworkMode.Restricted => NetworkPolicy(NetworkPolicyMode.Denied)
+                    case ShellNetworkMode.Proxy => NetworkPolicy(NetworkPolicyMode.Mediated)
+                    case ShellNetworkMode.TrustedHost => NetworkPolicy(NetworkPolicyMode.HostNetwork)
+                })
+        }
     }
 
     public func registerTool(
@@ -1413,11 +1462,16 @@ public class ProductRuntime {
 
     public func executeBash(
         command: String,
-        operationId: OperationId
+        operationId: OperationId,
+        networkPolicy!: ?NetworkPolicy = None
     ): Result<ProcessResult> {
         if (processes.reservedOperationCancelled(operationId)) {
             return Result.Err(AgentError(AgentErrorKind.Cancelled,
                 "application.bash_cancelled", "bash command was cancelled"))
+        }
+        let policy = match (resolveShellNetworkPolicy(networkPolicy)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
         }
         // This is an explicitly user-authored application/RPC control command,
         // not a model tool invocation, so it does not mint an approval grant or
@@ -1430,7 +1484,8 @@ public class ProductRuntime {
                 arguments: ["--noprofile", "--norc", "-lc", command],
                 workingDirectory: workspace.rootPath(),
                 timeoutMillis: 120000,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
+                sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+                networkPolicy: Some(policy)
             )
         )
     }
@@ -1648,9 +1703,10 @@ public class ProductRuntime {
                     "axyndra-clipboard",
                     path
                 ],
-                timeoutMillis: 5000
-            )
-        )) {
+                timeoutMillis: 5000,
+                sandboxMode: ProcessSandboxMode.Host,
+                networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        ))) {
             case Result.Ok(result) =>
                 if (result.exitCode == 0 && result.stdout.trimAscii() != "") {
                     result.stdout.trimAscii()
@@ -1699,6 +1755,8 @@ public class ProductRuntime {
                         path
                     ],
                     timeoutMillis: 5000,
+                    sandboxMode: ProcessSandboxMode.Host,
+                    networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)),
                     displayServerAccess: true
                 )
             )) {
@@ -2643,6 +2701,9 @@ public class ProductRuntime {
     ): Result<ToolResult> {
         let fields = ArrayList<ValueField>()
         fields.add(ValueField("query", textValue(query)))
+        if (provider != "") {
+            fields.add(ValueField("provider", textValue(provider)))
+        }
         if (recency != "") {
             fields.add(ValueField("recency", textValue(recency)))
         }
@@ -2655,16 +2716,37 @@ public class ProductRuntime {
             "web_search",
             objectValue(fields.toArray())
         )
-        webSearchRuntime.executeSelected(
-            ToolInvocationContext(
-                ids.nextRunId(),
-                sessionId,
-                CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
-                toolContext: productToolContext(workspace.rootPath())
-            ),
-            call,
-            provider
-        )
+        let capabilities = CapabilitySet(values: [
+            Capability(CapabilityKind.WorkspaceRead),
+            Capability(CapabilityKind.ProcessSpawn),
+            Capability(CapabilityKind.NetworkAccess),
+            Capability(CapabilityKind.ExtensionInvoke)
+        ])
+        match (vnext.executeCanonicalTool(
+            sessionId,
+            capabilities,
+            call
+        )) {
+            case Result.Ok(ToolInvocationResult.Completed(result)) =>
+                if (result.isError) {
+                    Result.Err(productToolResultError(result))
+                } else {
+                    Result.Ok(result)
+                }
+            case Result.Ok(ToolInvocationResult.NeedsApproval(approval)) => Result.Err(
+                AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "cli.tool_approval_required",
+                    "CLI tool invocation requires approval",
+                    fields: [
+                        ErrorField("operation_id", approval.operationId.value),
+                        ErrorField("tool", "web_search")
+                    ]
+                )
+            )
+            case Result.Ok(ToolInvocationResult.Denied(denial)) => Result.Err(denial.reason)
+            case Result.Err(error) => Result.Err(error)
+        }
     }
 
     public func setAutoRetry(enabled: Bool): Unit {
@@ -2706,7 +2788,6 @@ public class ProductRuntime {
             }
             vnextDatabase.backupTo(archiveRoot + ".state.db")
             vnextDatabase.transaction<Unit>({ transaction =>
-                transaction.execute("DELETE FROM tool_operation_intents")
                 transaction.execute("DELETE FROM session_permission_grants")
                 transaction.execute("DELETE FROM thread_metadata")
                 transaction.execute("DELETE FROM audit_events")
@@ -3318,7 +3399,7 @@ func argumentText(value: AgentValue, name: String): String {
 func argumentNumber(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(item) =>
-            if (item.unifiedKind == ValueKind.Number) { item.number } else { "" }
+            if (item.unifiedKind == ValueKind.Number) { item.asNumberText() } else { "" }
         case None => ""
     }
 }
@@ -3486,6 +3567,11 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         model: chooseOverride(config.modelOverride, loadedSettings.model),
         asyncEnabled: config.asyncEnabled && loadedSettings.asyncEnabled,
         theme: loadedSettings.theme,
+        shellNetworkMode: match (config.shellNetworkModeOverride) {
+            case Some(value) => value
+            case None => loadedSettings.shellNetworkMode
+        },
+        sandboxCaBundle: loadedSettings.sandboxCaBundle,
         approval: approvalSettings,
         compaction: match (config.compactionOverride) {
             case Some(value) => value
@@ -3538,7 +3624,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
     }
     let sessionMetadata = SqliteSessionMetadataRepository(vnextDatabase)
     let runs = SqliteRunRepository(vnextDatabase)
-    let operations = SqliteToolOperationRepository(vnextDatabase)
+    let operations = DurableOperationStore(vnextDatabase)
     let audit = SqliteAuditRepository(vnextDatabase)
     let permissions = SqlitePermissionRepository(vnextDatabase)
     let threadRuntimes = SqliteThreadRuntimeRegistry(
@@ -3549,14 +3635,33 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
     let ids = ProductIds()
     let workspace = LocalWorkspace(config.workspaceRoot)
     let sandboxToolchain = configuredProductSandboxToolchain()
+    let sandboxCaBundle = match (resolveProductSandboxCaBundle(settings.sandboxCaBundle)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let sandboxMounts = ArrayList<SandboxReadOnlyMount>()
+    sandboxMounts.add(all: sandboxToolchain.mounts)
+    if (sandboxCaBundle != "") {
+        try {
+            sandboxMounts.add(SandboxReadOnlyMount(sandboxCaBundle))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                error.message
+            ))
+        }
+    }
     let processes = LocalProcessPort(
         workspace,
         // Model-triggered process requests are fail-closed unless the
         // workspace sandbox is enabled. Fixture transports exercise the same
         // execution boundary instead of silently switching to host execution.
         sandboxEnabled: true,
-        sandboxReadOnlyMounts: sandboxToolchain.mounts,
-        sandboxPathEntries: sandboxToolchain.pathEntries
+        sandboxReadOnlyMounts: sandboxMounts.toArray(),
+        sandboxCaBundle: sandboxCaBundle,
+        sandboxPathEntries: sandboxToolchain.pathEntries,
+        networkGateway: Some(LocalNetworkGatewayPort())
     )
     let artifactStore = ProductArtifactStore(
         config.stateRoot,
@@ -3612,7 +3717,9 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         memoryRuntime: Some(memoryRuntime),
         skillRuntime: Some(skillRuntime),
         artifactStore: Some(artifactStore),
-        allowUnsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests
+        allowUnsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
+        shellNetworkMode: settings.shellNetworkMode,
+        sandboxCaBundle: sandboxCaBundle
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -3655,7 +3762,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         pipeline,
         catalog,
         threadRuntimes: Some(threadRuntimes),
-        operationRuntime: Some(DurableOperationStore(vnextDatabase)),
+        operationRuntime: Some(operations),
         modelDecisionRuntime: Some(SqliteModelDecisionStore(vnextDatabase)),
         contextManifestRuntime: Some(ProductContextManifestRuntime(vnextDatabase)),
         modelAttemptRecovery: config.modelAttemptRecovery
@@ -3675,7 +3782,8 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             config.settingsRoot,
             workspace.rootPath(),
             catalog,
-            extensions
+            extensions,
+            sandboxCaBundle: sandboxCaBundle
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -3690,6 +3798,8 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         config.stateRoot,
         settings.asyncEnabled,
         config.wallTimeoutMillis,
+        settings.shellNetworkMode,
+        sandboxCaBundle,
         approvalSettings,
         settings.compaction,
         settings.theme,
@@ -3719,7 +3829,9 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         threadRuntimes,
         ProductVnextControl(
             vnextDatabase, catalog, pipeline, ids, threadRuntimes,
-            workspace.rootPath(), processes, config.extensionSignatureVerifier
+            operations,
+            workspace.rootPath(), processes,
+            extensionSignatureVerifier: config.extensionSignatureVerifier
         ),
         fixtureProbe: fixtureProbe
     )
@@ -3930,6 +4042,7 @@ public func configuredProfileModelPort(
             profile.provider,
             profile.baseUrl,
             profile.apiKeyEnv,
+            allowInsecureHttp: profile.allowInsecureHttp,
             authentication: profile.authentication,
             credentialFile: credentialPath(settingsRoot, profile.id),
             timeoutMillis: profile.timeoutMillis,
@@ -4143,7 +4256,7 @@ func productToolResultError(result: ToolResult): AgentError {
         code,
         productToolResultText(result, "message", code),
         retryable: match (result.output.field("retryable")) {
-            case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
+            case Some(value) => value.unifiedKind == ValueKind.Boolean && value.asBool()
             case None => false
         }
     )

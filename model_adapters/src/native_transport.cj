@@ -53,11 +53,25 @@ public class NativeProviderTransport <: ProviderTransport {
         requestId: String,
         chunks: (String) -> Unit
     ): domain.Result<String> {
-        if (!secureNativeProviderUrl(provider.baseUrl)) {
+        match (provider.networkPolicy.mode) {
+            case domain.NetworkPolicyMode.Denied =>
+                return domain.Result.Err(domain.networkAddressDeniedError(
+                    provider.baseUrl,
+                    reason: "provider network access is denied by the frozen request policy"
+                ))
+            case domain.NetworkPolicyMode.Mediated =>
+                return domain.Result.Err(domain.networkGatewayUnavailableError())
+            case domain.NetworkPolicyMode.HostNetwork => ()
+        }
+        if (!secureNativeProviderUrl(
+            provider.baseUrl,
+            allowInsecureHttp: provider.allowInsecureHttp
+        )) {
             return domain.Result.Err(domain.AgentError(
                 domain.AgentErrorKind.Configuration,
                 "model.insecure_provider_url",
-                "provider base URL must use HTTPS or loopback HTTP",
+                "provider base URL must use HTTPS or loopback HTTP; " +
+                    "set allow_insecure_http: true to opt in to remote HTTP",
                 fields: [domain.ErrorField("provider_id", provider.id)]
             ))
         }
@@ -371,18 +385,24 @@ func nativeProviderRequiresTls(value: String): Bool {
     value.startsWith("https://")
 }
 
-private func secureNativeProviderUrl(value: String): Bool {
+func secureNativeProviderUrl(
+    value: String,
+    allowInsecureHttp!: Bool = false
+): Bool {
     if (value.startsWith("https://")) {
         let authority = nativeProviderUrlAuthority(value, "https://")
         return authority != "" && authority.trimAscii() == authority &&
             authority.indexOf("@").isNone()
     }
     if (!value.startsWith("http://")) { return false }
-    nativeProviderLoopbackAuthority(
-        nativeProviderUrlAuthority(value, "http://")
-    )
-}
+    let authority = nativeProviderUrlAuthority(value, "http://")
+    if (nativeProviderLoopbackAuthority(authority)) {
+        return true
+    }
+    if (!allowInsecureHttp) { return false }
+    authority != "" && authority.trimAscii() == authority && authority.indexOf("@").isNone()
 
+}
 private func nativeProviderUrlAuthority(value: String, prefix: String): String {
     let remainder = value[prefix.size..]
     var end = remainder.size

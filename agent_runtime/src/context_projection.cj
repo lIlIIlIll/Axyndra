@@ -245,8 +245,8 @@ func contextParts(parts: Array<ThreadMessagePart>): String {
 func contextValue(value: AgentValue): String {
     match (value.unifiedKind) {
         case ValueKind.Null => "n"
-        case ValueKind.Boolean => if (value.boolean) { "t" } else { "f" }
-        case ValueKind.Number => "d" + contextFrame(value.number)
+        case ValueKind.Boolean => if (value.asBool()) { "t" } else { "f" }
+        case ValueKind.Number => "d" + contextFrame(value.asNumberText())
         case ValueKind.Text => "s" + contextFrame(value.text)
         case ValueKind.List =>
             var result = "l" + contextFrame(value.items.size.toString())

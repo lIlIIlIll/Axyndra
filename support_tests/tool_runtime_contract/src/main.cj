@@ -4,8 +4,10 @@ import yjson_support.*
 
 import yjson.*
 
+import agent_runtime.*
 import agent_domain.*
 import agent_ports.*
+import agent_testkit.*
 import std.collection.*
 import std.sync.*
 import tool_runtime.*
@@ -72,10 +74,20 @@ main(): Int64 {
             )
         )
     )
+    let lowWorkspacePlan = normalizedToolOperationPlan(
+        context,
+        ToolCall("policy-low", "write", objectValue([])),
+        lowWorkspaceWrite
+    )
+    let overwriteWorkspacePlan = normalizedToolOperationPlan(
+        context,
+        ToolCall("policy-overwrite", "write", objectValue([])),
+        overwriteWorkspaceWrite
+    )
     expect(
-        workspacePolicy.evaluate(context, lowWorkspaceWrite).requirement == PermissionRequirement.Safe &&
-            workspacePolicy.evaluate(context, overwriteWorkspaceWrite).requirement == PermissionRequirement.Confirm,
-        "static policy bypasses approval only for low-risk workspace writes"
+        workspacePolicy.evaluate(context, lowWorkspacePlan).requirement == PermissionRequirement.Safe &&
+            workspacePolicy.evaluate(context, overwriteWorkspacePlan).requirement == PermissionRequirement.Confirm,
+        "static policy evaluates the frozen plan's approval metadata"
     )
     let readOnlyDefinitions = catalog.definitionsFor(CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
     expect(
@@ -83,7 +95,7 @@ main(): Int64 {
         "model sees only tools allowed by the request capability set"
     )
 
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         context,
         ToolCall("call-read", "read", objectValue([]))
     )) {
@@ -91,7 +103,7 @@ main(): Int64 {
         case _ => throw IllegalStateException("safe tool did not complete")
     }
 
-    let pending = match (pipeline.invoke(
+    let pending = match (executePipelineCall(pipeline,
         context,
         ToolCall("call-write", "write", objectValue([ValueField("path", textValue("notes/demo.txt"))]))
     )) {
@@ -133,7 +145,53 @@ main(): Int64 {
     }
     expect(operations.executions == 2, "approval retry does not execute the side effect twice")
 
-    let sessionPending = match (pipeline.invoke(
+    let replayCatalog = ToolCatalog()
+    let replayCounter = ExecutionCounter()
+    expect(
+        replayCatalog.register(
+            ToolDescriptor(
+                ModelToolDefinition(
+                    "replay",
+                    "replay test tool",
+                    objectValue([ValueField("type", textValue("object"))])
+                ),
+                Capability(CapabilityKind.WorkspaceRead)
+            ),
+            CountingExecutor(replayCounter)
+        ).isOk(),
+        "register committed-result replay fixture"
+    )
+    let replayOperations = MemoryOperations()
+    let replayPipeline = ToolPipeline(
+        replayCatalog, replayOperations, MemoryAudit(), FixedIds()
+    )
+    let replayPrepared = match (preparePipelineCall(
+        replayPipeline, context, ToolCall("replay-call", "replay", objectValue([]))
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    let replayFirst = match (replayPipeline.executePrepared(context, replayPrepared)) {
+        case Result.Ok(ToolInvocationResult.Completed(value)) => value
+        case Result.Ok(_) => throw IllegalStateException("replay fixture did not complete")
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    expect(replayCounter.executions == 1, "replay fixture executes once before durable result")
+    match (replayOperations.recordCommittedToolResult(
+        replayPrepared.operationId, context.runId, replayFirst
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    match (replayPipeline.executePrepared(context, replayPrepared)) {
+        case Result.Ok(ToolInvocationResult.Completed(value)) => expect(
+            value.callId == replayFirst.callId && replayCounter.executions == 1,
+            "committed result replay bypasses execution transition and executor"
+        )
+        case _ => throw IllegalStateException("committed result was not replayed")
+    }
+
+    let sessionPending = match (executePipelineCall(pipeline,
         context,
         ToolCall("call-write-session", "write", objectValue([ValueField("path", textValue("notes/session.txt"))]))
     )) {
@@ -148,7 +206,7 @@ main(): Int64 {
         case Result.Ok(ToolInvocationResult.Completed(_)) => ()
         case _ => throw IllegalStateException("session approval did not complete")
     }
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         context,
         ToolCall("call-write-granted", "write", objectValue([ValueField("path", textValue("notes/granted.txt"))]))
     )) {
@@ -160,13 +218,57 @@ main(): Int64 {
             "call-write-granted", "session_grant"),
         "audit records distinguish static policy execution from a scoped session grant"
     )
+    let networkDescriptor = ToolDescriptor(
+        ModelToolDefinition(
+            "network-write",
+            "network approval scope fixture",
+            objectValue([ValueField("type", textValue("object"))])
+        ),
+        Capability(CapabilityKind.NetworkAccess),
+        sideEffecting: true,
+        networkPolicyResolver: Some({_ =>
+            Result.Ok(NetworkPolicy(NetworkPolicyMode.HostNetwork))
+        })
+    )
+    expect(
+        catalog.register(networkDescriptor, EchoExecutor()).isOk(),
+        "network fixture registers with a resolved host policy"
+    )
+    let networkContext = ToolInvocationContext(
+        RunId("network-run"),
+        SessionId("network-session"),
+        CapabilitySet(values: [
+            Capability(CapabilityKind.WorkspaceRead),
+            Capability(CapabilityKind.WorkspaceWrite),
+            Capability(CapabilityKind.NetworkAccess)
+        ])
+    )
+    let networkPending = match (executePipelineCall(pipeline,
+        networkContext,
+        ToolCall("network-call", "network-write", objectValue([]))
+    )) {
+        case Result.Ok(ToolInvocationResult.NeedsApproval(request)) => request
+        case _ => throw IllegalStateException("network operation did not request approval")
+    }
+    match (pipeline.decide(
+        networkContext,
+        networkPending.operationId,
+        ApprovalDecision.ApproveSession
+    )) {
+        case Result.Err(error) => expect(
+            error.code == "approval.session_scope_forbidden",
+            "network approval cannot create a session-wide grant"
+        )
+        case _ => throw IllegalStateException("network session approval was accepted")
+    }
+
 
     let deniedContext = ToolInvocationContext(
         RunId("run-2"),
         SessionId("session-2"),
         CapabilitySet()
     )
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         deniedContext,
         ToolCall("call-denied", "write", objectValue([]))
     )) {
@@ -181,7 +283,6 @@ main(): Int64 {
     runApprovalBindingContract()
     runMultiCapabilityContracts()
     runSchemaValidationContracts()
-    runOperationRecoveryContracts()
     runConcurrencyContracts()
     runPreparedPipelineContracts()
     runToolOutputSinkContract()
@@ -196,7 +297,9 @@ func runToolProgramContracts(): Unit {
     register(catalog, "write", CapabilityKind.WorkspaceWrite, true)
     let operations = MemoryOperations()
     let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds())
-    let runtime = ToolProgramRuntime(PipelineProgramSubOperationExecutor(catalog, pipeline))
+    let runtime = ToolProgramRuntime(
+        TestProgramSubOperationExecutor(catalog, pipeline, operations)
+    )
     let context = ToolInvocationContext(
         RunId("program-run"), SessionId("program-session"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite)])
@@ -291,6 +394,50 @@ func runToolProgramContracts(): Unit {
     expect(forbidden.status == ToolProgramStatus.Failed &&
         forbidden.errorCode == "tool_program.forbidden_syntax",
         "TS-like source validation rejects ambient imports before interpretation")
+}
+class TestProgramSubOperationExecutor <: ProgramSubOperationExecutor {
+    private let catalog: ToolCatalog
+    private let pipeline: ToolPipeline
+    private let operations: OperationRuntimePort
+
+    init(
+        catalog: ToolCatalog,
+        pipeline: ToolPipeline,
+        operations: OperationRuntimePort
+    ) {
+        this.catalog = catalog
+        this.pipeline = pipeline
+        this.operations = operations
+    }
+
+    public func isReadOnly(call: ToolCall): Bool {
+        catalog.isReadOnly(call)
+    }
+
+    public func invoke(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolInvocationResult> {
+        let prepared = match (pipeline.prepare(context, call)) {
+            case Result.Ok(ToolPreparation.Ready(value)) => value
+            case Result.Ok(ToolPreparation.NeedsApproval(_, request)) =>
+                return Result.Ok(ToolInvocationResult.NeedsApproval(request))
+            case Result.Ok(ToolPreparation.Completed(value)) =>
+                return Result.Ok(ToolInvocationResult.Completed(value))
+            case Result.Ok(ToolPreparation.Denied(value)) =>
+                return Result.Ok(ToolInvocationResult.Denied(value))
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (operations.prepareProgramSubOperation(
+            prepared.operationId,
+            context.runId,
+            ItemId("test-program-call-" + prepared.operationId.value),
+            prepared.operationPlan
+        )) {
+            case Result.Ok(_) => pipeline.executePrepared(context, prepared)
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
 }
 
 func mustProgram(result: Result<ToolProgramIR>): ToolProgramIR {
@@ -561,23 +708,29 @@ func runMultiCapabilityContracts(): Unit {
         SessionId("network-policy-session"),
         allCapabilities
     )
+    let policyCall = ToolCall("network-policy-call", "network-write", objectValue([]))
+    let staticPlan = normalizedToolOperationPlan(
+        policyContext,
+        policyCall,
+        staticDescriptor
+    )
     expect(
         DefaultCapabilityPolicy(
             mode: ApprovalMode.AlwaysAsk,
             askOnNetwork: true
-        ).evaluate(policyContext, staticDescriptor).requirement ==
+        ).evaluate(policyContext, staticPlan).requirement ==
             PermissionRequirement.Confirm &&
         DefaultCapabilityPolicy(
             mode: ApprovalMode.AlwaysAsk,
             askOnNetwork: false
-        ).evaluate(policyContext, staticDescriptor).requirement ==
+        ).evaluate(policyContext, staticPlan).requirement ==
             PermissionRequirement.Safe &&
         DefaultCapabilityPolicy(
             mode: ApprovalMode.Yolo,
             askOnNetwork: true
-        ).evaluate(policyContext, staticDescriptor).requirement ==
+        ).evaluate(policyContext, staticPlan).requirement ==
             PermissionRequirement.Safe,
-        "network approval inspects all requirements, remains configurable, and yolo bypasses prompts"
+        "network approval inspects all frozen requirements, remains configurable, and yolo bypasses prompts"
     )
     let secondarySpawn = ToolDescriptor(
         ModelToolDefinition(
@@ -597,13 +750,18 @@ func runMultiCapabilityContracts(): Unit {
             Capability(CapabilityKind.ProcessSpawn)
         ])
     )
+    let secondaryPlan = normalizedToolOperationPlan(
+        secondaryContext,
+        ToolCall("secondary-policy-call", "read-and-spawn", objectValue([])),
+        secondarySpawn
+    )
     expect(
         DefaultCapabilityPolicy(
             mode: ApprovalMode.Write,
             askOnNetwork: false
-        ).evaluate(secondaryContext, secondarySpawn).requirement ==
+        ).evaluate(secondaryContext, secondaryPlan).requirement ==
             PermissionRequirement.Confirm,
-        "write approval mode inspects elevated secondary capabilities"
+        "write approval mode inspects elevated capabilities in the frozen plan"
     )
 
     let state = MultiCapabilityState()
@@ -648,7 +806,20 @@ func runMultiCapabilityContracts(): Unit {
         case Result.Ok(ToolPreparation.Ready(value)) => value
         case _ => throw IllegalStateException("dynamic fixture was not prepared")
     }
+    match (operations.prepareProgramSubOperation(
+        prepared.operationId,
+        fullContext.runId,
+        ItemId("test-multi-capability-" + prepared.operationId.value),
+        prepared.operationPlan
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
     match (pipeline.executePrepared(reducedContext, prepared)) {
+        case Result.Ok(ToolInvocationResult.Denied(denial)) => expect(
+            denial.reason.code == "tool.capability_denied" && counter.executions == 0,
+            "execution revalidates every prepared capability against the current context"
+        )
         case Result.Err(error) => expect(
             error.code == "tool.capability_denied" && counter.executions == 0,
             "execution revalidates every prepared capability against the current context"
@@ -658,7 +829,7 @@ func runMultiCapabilityContracts(): Unit {
     state.requireWrite = false
     match (pipeline.executePrepared(fullContext, prepared)) {
         case Result.Err(error) => expect(
-            error.code == "tool.prepared_capability_changed" &&
+            error.code == "tool.prepared_plan_changed" &&
                 counter.executions == 0,
             "prepared identity binds the complete resolved capability set"
         )
@@ -703,6 +874,15 @@ func runMultiCapabilityContracts(): Unit {
     )) {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("multi-capability approval was not requested")
+    }
+    match (approvalOperations.prepareProgramSubOperation(
+        pending.operationId,
+        fullContext.runId,
+        ItemId("test-approval-capability-" + pending.operationId.value),
+        pending.operationPlan
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
     }
     state.requireWrite = false
     match (approvalPipeline.authorize(
@@ -930,6 +1110,24 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("second prepared call did not request approval")
     }
+    match (operations.prepareProgramSubOperation(
+        first.operationId,
+        context.runId,
+        ItemId("test-prepared-first-" + first.operationId.value),
+        first.operationPlan
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    match (operations.prepareProgramSubOperation(
+        second.operationId,
+        context.runId,
+        ItemId("test-prepared-second-" + second.operationId.value),
+        second.operationPlan
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
     expect(
         operations.executions == 0 && executions.executions == 0 &&
             !toolConcurrencyConflicts(first.concurrency, second.concurrency),
@@ -962,14 +1160,9 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolInvocationResult.Completed(_)) => ()
         case _ => throw IllegalStateException("second authorized call did not execute")
     }
-    let replay = match (pipeline.executePrepared(context, firstAuthorized)) {
-        case Result.Ok(ToolInvocationResult.Completed(value)) => value
-        case _ => throw IllegalStateException("prepared receipt did not replay")
-    }
     expect(
-        executions.executions == 2 && firstResult.receiptId == replay.receiptId &&
-            firstResult.receiptId == first.operationId.value,
-        "executePrepared is idempotent through the durable operation receipt"
+        executions.executions == 2 && firstResult.receiptId == first.operationId.value,
+        "prepared execution hands each authorized call to the prepared executor"
     )
 
     let rejected = match (pipeline.prepare(
@@ -979,6 +1172,15 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("rejection fixture did not request approval")
     }
+    match (operations.prepareProgramSubOperation(
+        rejected.operationId,
+        context.runId,
+        ItemId("test-prepared-rejected-" + rejected.operationId.value),
+        rejected.operationPlan
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
     let rejectedResult = match (pipeline.authorize(
         context,
         rejected,
@@ -987,13 +1189,9 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolAuthorization.Completed(value)) => value
         case _ => throw IllegalStateException("rejected prepared call was not completed")
     }
-    let rejectedReplay = match (pipeline.authorize(context, rejected, ApprovalDecision.Approve)) {
-        case Result.Ok(ToolAuthorization.Completed(value)) => value
-        case _ => throw IllegalStateException("rejected prepared receipt did not replay")
-    }
     expect(
-        rejectedResult.isError && rejectedResult.receiptId == rejectedReplay.receiptId && executions.executions == 2,
-        "approval rejection is a durable recoverable result and cannot later execute"
+        rejectedResult.isError && executions.executions == 2,
+        "approval rejection returns a terminal recoverable result without execution"
     )
 
     match (pipeline.prepare(context, ToolCall("unknown-call", "missing-tool", objectValue([])))) {
@@ -1024,7 +1222,7 @@ func runPreparedPipelineContracts(): Unit {
         "register recoverable executor failure fixture"
     )
     let failurePipeline = ToolPipeline(failureCatalog, MemoryOperations(), MemoryAudit(), FixedIds())
-    match (failurePipeline.invoke(
+    match (executePipelineCall(failurePipeline,
         ToolInvocationContext(
             RunId("failure-run"),
             SessionId("failure-session"),
@@ -1055,7 +1253,7 @@ func runToolOutputSinkContract(): Unit {
         "register output sink fixture"
     )
     let pipeline = ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixedIds())
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         ToolInvocationContext(
             RunId("stream-run"),
             SessionId("stream-session"),
@@ -1076,116 +1274,11 @@ func runToolOutputSinkContract(): Unit {
     )
 }
 
-func runOperationRecoveryContracts(): Unit {
-    let context = ToolInvocationContext(
-        RunId("recovery-run"),
-        SessionId("recovery-session"),
-        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
-    )
-
-    let missingReceiptState = ExecutionCounter()
-    let missingReceiptCatalog = ToolCatalog()
-    expect(
-        missingReceiptCatalog.register(
-            ToolDescriptor(
-                ModelToolDefinition("recover-write", "write", objectValue([])),
-                Capability(CapabilityKind.WorkspaceWrite),
-                sideEffecting: true
-            ),
-            CountingExecutor(missingReceiptState)
-        ).isOk(),
-        "register missing-receipt recovery tool"
-    )
-    let missingReceiptOperations = FaultingOperations(failReceiptOnce: true)
-    let missingReceiptPipeline = ToolPipeline(
-        missingReceiptCatalog,
-        missingReceiptOperations,
-        MemoryAudit(),
-        FixedIds(),
-        policy: DefaultCapabilityPolicy(
-            mode: ApprovalMode.Yolo,
-            allowWorkspaceWrites: true
-        )
-    )
-    match (missingReceiptPipeline.invoke(
-        context,
-        ToolCall("recover-missing", "recover-write", objectValue([]))
-    )) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.RecoveryRequired &&
-                error.field("operation_id").isSome() &&
-                missingReceiptState.executions == 1 &&
-                missingReceiptOperations.status() == OperationStatus.RecoveryRequired,
-            "missing receipt fences the completed side effect for reconciliation"
-        )
-        case _ => throw IllegalStateException("missing receipt did not require recovery")
-    }
-
-    let persistedReceiptState = ExecutionCounter()
-    let persistedReceiptCatalog = ToolCatalog()
-    expect(
-        persistedReceiptCatalog.register(
-            ToolDescriptor(
-                ModelToolDefinition("recover-commit", "write", objectValue([])),
-                Capability(CapabilityKind.WorkspaceWrite),
-                sideEffecting: true
-            ),
-            CountingExecutor(persistedReceiptState, isError: true)
-        ).isOk(),
-        "register committed-state recovery tool"
-    )
-    let persistedReceiptOperations = FaultingOperations(failCommitOnce: true)
-    let persistedReceiptPipeline = ToolPipeline(
-        persistedReceiptCatalog,
-        persistedReceiptOperations,
-        MemoryAudit(),
-        FixedIds(),
-        policy: DefaultCapabilityPolicy(
-            mode: ApprovalMode.Yolo,
-            allowWorkspaceWrites: true
-        )
-    )
-    let first = persistedReceiptPipeline.invoke(
-        context,
-        ToolCall("recover-committed", "recover-commit", objectValue([]))
-    )
-    expect(
-        first.isError() && persistedReceiptState.executions == 1 &&
-            persistedReceiptOperations.receipt(OperationId("operation-1"))
-                .value().getOrThrow().isError &&
-            persistedReceiptOperations.status() == OperationStatus.Executing,
-        "persisted error receipt survives a failed committed-state transition"
-    )
-    match (persistedReceiptPipeline.decide(
-        context,
-        OperationId("operation-1"),
-        ApprovalDecision.Approve
-    )) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            result.receiptId == "operation-1" && result.isError &&
-                persistedReceiptState.executions == 1 &&
-                persistedReceiptOperations.status() == OperationStatus.Committed,
-            "executing operation replays its error receipt without repeating the side effect"
-        )
-        case _ => throw IllegalStateException("persisted receipt was not recovered")
-    }
-    match (persistedReceiptPipeline.decide(
-        context,
-        OperationId("operation-1"),
-        ApprovalDecision.Approve
-    )) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            result.receiptId == "operation-1" && result.isError &&
-                persistedReceiptState.executions == 1,
-            "committed operation replays its error receipt without repeating the side effect"
-        )
-        case _ => throw IllegalStateException("committed error receipt was not replayed")
-    }
-}
 
 class ExecutionCounter {
     var executions: Int64 = 0
 }
+type MemoryOperations = InMemoryOperationRuntimePort
 
 class CountingExecutor <: ToolExecutor {
     private let counter: ExecutionCounter
@@ -1198,9 +1291,14 @@ class CountingExecutor <: ToolExecutor {
 
     public func execute(
         _context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = _context
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         counter.executions += 1
         Result.Ok(ToolResult(call.callId, textValue("done"), isError: isError))
     }
@@ -1209,10 +1307,9 @@ class CountingExecutor <: ToolExecutor {
 class TimeoutExecutor <: ToolExecutor {
     public func execute(
         _context: ToolInvocationContext,
-        _call: ToolCall
+        _prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = _context
-        let _ = _call
         Result.Err(
             AgentError(
                 AgentErrorKind.Timeout,
@@ -1227,8 +1324,13 @@ class TimeoutExecutor <: ToolExecutor {
 class StreamingExecutor <: ToolExecutor {
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         match (context.outputSink.emit(
             ToolOutputChunk(call.callId, ToolOutputChannel.Stdout, "alpha")
         )) {
@@ -1245,90 +1347,6 @@ class StreamingExecutor <: ToolExecutor {
     }
 }
 
-class FaultingOperations <: OperationRepository {
-    private var record: ?OperationRecord = None
-    private var savedReceipt: ?OperationReceipt = None
-    private var failReceiptOnce: Bool
-    private var failCommitOnce: Bool
-
-    init(
-        failReceiptOnce!: Bool = false,
-        failCommitOnce!: Bool = false
-    ) {
-        this.failReceiptOnce = failReceiptOnce
-        this.failCommitOnce = failCommitOnce
-    }
-
-    public func prepare(value: OperationRecord): Result<Unit> {
-        record = Some(value)
-        Result.Ok(())
-    }
-
-    public func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit> {
-        let current = match (record) {
-            case Some(value) => value
-            case None => return Result.Err(notFound(operationId))
-        }
-        if (current.operationId.value != operationId.value || current.status != expected) {
-            return Result.Err(notFound(operationId))
-        }
-        if (next == OperationStatus.Committed && failCommitOnce) {
-            failCommitOnce = false
-            return Result.Err(AgentError(
-                AgentErrorKind.Internal,
-                "test.commit_failed",
-                "injected committed-state failure"
-            ))
-        }
-        record = Some(OperationRecord(
-            current.operationId,
-            current.runId,
-            next,
-            current.capability,
-            current.requestDigest,
-            call: current.call
-        ))
-        Result.Ok(())
-    }
-
-    public func find(operationId: OperationId): Result<OperationRecord> {
-        match (record) {
-            case Some(value) => Result.Ok(value)
-            case None => Result.Err(notFound(operationId))
-        }
-    }
-
-    public func receipt(operationId: OperationId): Result<OperationReceipt> {
-        match (savedReceipt) {
-            case Some(value) => Result.Ok(value)
-            case None => Result.Err(notFound(operationId))
-        }
-    }
-
-    public func saveReceipt(value: OperationReceipt): Result<Unit> {
-        if (failReceiptOnce) {
-            failReceiptOnce = false
-            return Result.Err(AgentError(
-                AgentErrorKind.Internal,
-                "test.receipt_failed",
-                "injected receipt failure"
-            ))
-        }
-        savedReceipt = Some(value)
-        Result.Ok(())
-    }
-
-    func status(): OperationStatus {
-        match (record) {
-            case Some(value) => value.status
-            case None => OperationStatus.RecoveryRequired
-        }
-    }
-}
 
 func runApprovalBindingContract(): Unit {
     let state = ApprovalBindingState()
@@ -1347,7 +1365,7 @@ func runApprovalBindingContract(): Unit {
         SessionId("binding-session"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
     )
-    let pending = match (pipeline.invoke(
+    let pending = match (executePipelineCall(pipeline,
         context,
         ToolCall("binding-write", "write", objectValue([ValueField("path", textValue("new.cj"))]))
     )) {
@@ -1537,9 +1555,14 @@ func register(
 class EchoExecutor <: ToolExecutor {
     public func execute(
         _context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = _context
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         Result.Ok(
             ToolResult(
                 call.callId,
@@ -1572,79 +1595,7 @@ class MemoryAudit <: AuditPort {
     }
 }
 
-class MemoryOperations <: OperationRepository {
-    private let records = ArrayList<OperationRecord>()
-    private let receipts = ArrayList<OperationReceipt>()
-    var executions: Int64 = 0
 
-    public func prepare(record: OperationRecord): Result<Unit> {
-        records.add(record)
-        Result.Ok(())
-    }
-
-    public func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit> {
-        for (index in 0..records.size) {
-            let record = records[index]
-            if (record.operationId.value != operationId.value) {
-                continue
-            }
-            if (record.status != expected) {
-                return Result.Err(
-                    AgentError(
-                        AgentErrorKind.Conflict,
-                        "operation.transition_conflict",
-                        "operation status changed"
-                    )
-                )
-            }
-            records[index] = OperationRecord(
-                record.operationId,
-                record.runId,
-                next,
-                record.capability,
-                record.requestDigest,
-                call: record.call
-            )
-            if (next == OperationStatus.Executing) {
-                executions += 1
-            }
-            return Result.Ok(())
-        }
-        Result.Err(notFound(operationId))
-    }
-
-    public func find(operationId: OperationId): Result<OperationRecord> {
-        for (record in records where record.operationId.value == operationId.value) {
-            return Result.Ok(record)
-        }
-        Result.Err(notFound(operationId))
-    }
-
-    public func receipt(operationId: OperationId): Result<OperationReceipt> {
-        for (item in receipts where item.operationId.value == operationId.value) {
-            return Result.Ok(item)
-        }
-        Result.Err(notFound(operationId))
-    }
-
-    public func saveReceipt(receipt: OperationReceipt): Result<Unit> {
-        receipts.add(receipt)
-        Result.Ok(())
-    }
-}
-
-func notFound(operationId: OperationId): AgentError {
-    AgentError(
-        AgentErrorKind.RecoveryRequired,
-        "operation.not_found",
-        "operation was not found",
-        fields: [ErrorField("operation_id", operationId.value)]
-    )
-}
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) {

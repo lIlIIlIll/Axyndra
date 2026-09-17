@@ -137,9 +137,11 @@ public class NormalizedOperationPlan {
     public let canonicalArguments: AgentValue
     public let resolvedPaths: Array<String>
     public let resolvedHosts: Array<String>
+    public let networkPolicy: NetworkPolicy
     public let cwd: String
     public let relevantEnvironment: Array<ValueField>
     public let requiredCapabilities: Array<Capability>
+    public let approvalMetadata: ToolApprovalMetadata
     public let effectClass: OperationEffectClass
     public let retryDisposition: OperationRetryDisposition
     public let idempotencyKey: String
@@ -156,8 +158,10 @@ public class NormalizedOperationPlan {
         bindingDigest: String,
         resolvedPaths!: Array<String> = [],
         resolvedHosts!: Array<String> = [],
+        networkPolicy!: ?NetworkPolicy = None,
         cwd!: String = "",
         relevantEnvironment!: Array<ValueField> = [],
+        approvalMetadata!: ?ToolApprovalMetadata = None,
         idempotencyKey!: String = "",
         replayDisposition!: ?ReplayDisposition = None,
         toolVersion!: String = "legacy-v1",
@@ -183,9 +187,21 @@ public class NormalizedOperationPlan {
         this.canonicalArguments = canonicalArguments
         this.resolvedPaths = resolvedPaths
         this.resolvedHosts = resolvedHosts
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.cwd = cwd
         this.relevantEnvironment = relevantEnvironment
         this.requiredCapabilities = requiredCapabilities
+        this.approvalMetadata = match (approvalMetadata) {
+            case Some(value) => value
+            case None => defaultToolApprovalMetadata(if (requiredCapabilities.isEmpty()) {
+                Capability(CapabilityKind.WorkspaceRead)
+            } else {
+                requiredCapabilities[0]
+            })
+        }
         this.effectClass = effectClass
         this.retryDisposition = retryDisposition
         this.idempotencyKey = idempotencyKey.trimAscii()
@@ -436,6 +452,15 @@ func operationFailureOutcome(
 ): OperationOutcome {
     if (error.kind == AgentErrorKind.RecoveryRequired) {
         return OperationOutcome.Unknown
+    }
+    // Address/mode denials are authorization results, never transport
+    // failures. They are produced only after the frozen policy has been
+    // checked and must not trigger a model retry or a permission escalation.
+    if (error.code == "network.address_denied" ||
+        error.code == "network.mode_denied" ||
+        error.code == "network.policy_invalid" ||
+        error.code == "network.gateway_unavailable") {
+        return OperationOutcome.Rejected
     }
     if (stage == OperationAttemptStage.Executing && effect != OperationEffectClass.ReadOnly) {
         return OperationOutcome.Unknown

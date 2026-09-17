@@ -68,8 +68,13 @@ public class ProductGoalRuntime {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         lock.lock()
         try {
             let op = match (goalOperation(call)) {
@@ -650,9 +655,9 @@ class GoalTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.execute(context, call)
+        runtime.execute(context, prepared)
     }
 }
 
@@ -892,8 +897,8 @@ func goalOptionalPositiveInteger(
                 )
             }
             try {
-                let parsed = Int64.parse(value.number)
-                if (parsed <= 0 || parsed.toString() != value.number) {
+                let parsed = Int64.parse(value.asNumberText())
+                if (parsed <= 0 || parsed.toString() != value.asNumberText()) {
                     return goalError<?Int64>(
                         "tool.goal_argument_value",
                         name + " must be a positive integer when provided"
@@ -964,7 +969,7 @@ func goalStateInteger(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == ValueKind.Number) {
-                try { Int64.parse(field.number) } catch (_: Exception) { 0 }
+                try { Int64.parse(field.asNumberText()) } catch (_: Exception) { 0 }
             } else {
                 0
             }
@@ -980,7 +985,7 @@ func goalStateOptionalInteger(
         case Some(field) =>
             if (field.unifiedKind == ValueKind.Number) {
                 try {
-                    Some(Int64.parse(field.number))
+                    Some(Int64.parse(field.asNumberText()))
                 } catch (_: Exception) {
                     None
                 }
@@ -994,7 +999,7 @@ func goalStateOptionalInteger(
 func goalStateBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            field.unifiedKind == ValueKind.Boolean && field.boolean
+            field.unifiedKind == ValueKind.Boolean && field.asBool()
         case None => false
     }
 }

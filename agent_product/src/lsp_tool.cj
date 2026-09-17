@@ -19,8 +19,13 @@ class LspTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let action = match (requiredString(call, "action")) {
             case Result.Ok(value) => value.trimAscii()
             case Result.Err(error) => return Result.Err(error)
@@ -63,7 +68,8 @@ class LspTool <: ToolExecutor {
                 context,
                 call,
                 action,
-                timeoutSeconds * 1000
+                timeoutSeconds * 1000,
+                prepared.operationPlan.networkPolicy
             )
         }
         if (action == "rename_file") {
@@ -73,14 +79,18 @@ class LspTool <: ToolExecutor {
                 workspace,
                 runtime,
                 authored,
-                timeoutSeconds * 1000
+                timeoutSeconds * 1000,
+                prepared.operationPlan.networkPolicy
             )
         }
         let path = match (workspace.resolve(authored)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let client = match (runtime.clientFor(path)) {
+        let client = match (runtime.clientFor(
+            path,
+            networkPolicy: Some(prepared.operationPlan.networkPolicy)
+        )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -119,7 +129,10 @@ class LspTool <: ToolExecutor {
         }
         if (action == "reload") {
             client.close()
-            let restarted = match (runtime.clientFor(path)) {
+            let restarted = match (runtime.clientFor(
+                path,
+                networkPolicy: Some(prepared.operationPlan.networkPolicy)
+            )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
@@ -232,7 +245,8 @@ class LspTool <: ToolExecutor {
         context: ToolInvocationContext,
         call: ToolCall,
         action: String,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        networkPolicy: NetworkPolicy
     ): Result<ToolResult> {
         if (action == "status") {
             return Result.Ok(lspToolResult(
@@ -337,7 +351,10 @@ class LspTool <: ToolExecutor {
             let lines = ArrayList<String>()
             let names = ArrayList<String>()
             for (path in files) {
-                let client = match (runtime.clientFor(path)) {
+                let client = match (runtime.clientFor(
+                    path,
+                    networkPolicy: Some(networkPolicy)
+                )) {
                     case Result.Ok(value) => value
                     case Result.Err(_) => continue
                 }
@@ -947,7 +964,8 @@ func executeLspRenameFile(
     workspace: LocalWorkspace,
     runtime: LspRuntime,
     authoredSource: String,
-    timeoutMillis: Int64
+    timeoutMillis: Int64,
+    networkPolicy: NetworkPolicy
 ): Result<ToolResult> {
     let authoredDestination = optionalString(
         call,
@@ -1005,7 +1023,10 @@ func executeLspRenameFile(
     if (pairs.isEmpty()) {
         return invalidArgument(call, "file", "no files to rename")
     }
-    let client = match (runtime.clientFor(pairs[0].source)) {
+    let client = match (runtime.clientFor(
+        pairs[0].source,
+        networkPolicy: Some(networkPolicy)
+    )) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
@@ -2228,7 +2249,7 @@ func lspJsonBoolean(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == UnifiedJsonKind.Boolean) {
-                field.boolean
+                field.asBool()
             } else {
                 fallback
             }

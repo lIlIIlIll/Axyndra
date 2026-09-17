@@ -149,8 +149,8 @@ func mcpLibraryError(error: library.McpError): AgentError {
             if (accepted >= 32 || isMcpEnvelopeField(field.name)) { continue }
             let value: ?String = match (field.value.unifiedKind) {
                 case ValueKind.Text => Some(field.value.text)
-                case ValueKind.Number => Some(field.value.number)
-                case ValueKind.Boolean => Some(if (field.value.boolean) { "true" } else { "false" })
+                case ValueKind.Number => Some(field.value.asNumberText())
+                case ValueKind.Boolean => Some(if (field.value.asBool()) { "true" } else { "false" })
                 case _ => None<String>
             }
             match (value) {

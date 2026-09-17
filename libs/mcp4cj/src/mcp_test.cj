@@ -90,8 +90,8 @@ class Mcp4CjTests {
         @Expect(notifications.size, 1)
         @Expect(notifications[0].method, "notifications/progress")
         @Expect(notifications[0].params.field("progressToken").getOrThrow().text, "progress-1")
-        @Expect(notifications[0].params.field("progress").getOrThrow().number, "50.000000")
-        @Expect(notifications[0].params.field("total").getOrThrow().number, "100.000000")
+        @Expect(notifications[0].params.field("progress").getOrThrow().asNumberText(), "50.000000")
+        @Expect(notifications[0].params.field("total").getOrThrow().asNumberText(), "100.000000")
     }
 
     @TestCase
@@ -256,7 +256,7 @@ class Mcp4CjTests {
         }
         match (transport.request(JsonRpcRequest(jsonRpcNumberId(1), MCP_METHOD_DISCOVER))) {
             case McpResult.Ok(response) => match (response.payload) {
-                case JsonRpcResponsePayload.Success(value) => @Expect(value.field("ok").getOrThrow().boolean, true)
+                case JsonRpcResponsePayload.Success(value) => @Expect(value.field("ok").getOrThrow().asBool(), true)
                 case _ => @Fail("expected successful response")
             }
             case McpResult.Err(error) => @Fail(error.message)

@@ -6,6 +6,9 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
+import agent_ports.*
+import agent_runtime.*
+import agent_testkit.*
 import agent_store.*
 import persistence_runtime.*
 import std.collection.*
@@ -149,9 +152,9 @@ func verifyDurableLifecycle(root: String): Unit {
     let createdGoal = created.output.field("goal").getOrThrow()
     expect(
         createdGoal.field("status").getOrThrow().text == "active" &&
-        createdGoal.field("tokensUsed").getOrThrow().number == "0" &&
+        createdGoal.field("tokensUsed").getOrThrow().asNumberText() == "0" &&
         created.output.field("remainingTokens")
-            .getOrThrow().number == "10",
+            .getOrThrow().asNumberText() == "10",
         "create persists an active budgeted goal"
     )
     expect(
@@ -160,7 +163,8 @@ func verifyDurableLifecycle(root: String): Unit {
         "active goals contribute a continuation prompt"
     )
     expect(
-        runtime.execute(
+        executeGoal(
+            runtime,
             context,
             call(
                 "duplicate",
@@ -172,7 +176,6 @@ func verifyDurableLifecycle(root: String): Unit {
         ).isError(),
         "create refuses to replace an unfinished goal"
     )
-
     database.execute(
         "INSERT INTO threads VALUES ('goal-contract',0,'workspace','open',1,NULL)"
     )
@@ -203,9 +206,9 @@ func verifyDurableLifecycle(root: String): Unit {
         budgetLimited.output.field("goal").getOrThrow()
             .field("status").getOrThrow().text == "budget-limited" &&
         budgetLimited.output.field("goal").getOrThrow()
-            .field("tokensUsed").getOrThrow().number == "12" &&
+            .field("tokensUsed").getOrThrow().asNumberText() == "12" &&
         budgetLimited.output.field("remainingTokens")
-            .getOrThrow().number == "0",
+            .getOrThrow().asNumberText() == "0",
         "real run usage transitions the goal to budget-limited"
     )
 
@@ -305,7 +308,8 @@ func verifyDurableLifecycle(root: String): Unit {
     )
 
     expect(
-        runtime.execute(
+        executeGoal(
+            runtime,
             context,
             call(
                 "bad-budget",
@@ -316,7 +320,8 @@ func verifyDurableLifecycle(root: String): Unit {
                 ]
             )
         ).isError() &&
-        runtime.execute(
+        executeGoal(
+            runtime,
             context,
             call("bad-op", "pause")
         ).isError(),
@@ -330,13 +335,125 @@ func invoke(
     context: ToolInvocationContext,
     value: ToolCall
 ): ToolResult {
-    match (runtime.execute(context, value)) {
+    match (executeGoal(runtime, context, value)) {
         case Result.Ok(result) => result
         case Result.Err(error) =>
             throw IllegalStateException(
                 error.code + ": " + error.message
             )
     }
+}
+
+func executeGoal(
+    runtime: ProductGoalRuntime,
+    context: ToolInvocationContext,
+    value: ToolCall
+): Result<ToolResult> {
+    let catalog = ToolCatalog()
+    let registration = catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "goal",
+                "Create, inspect, complete, resume, or drop a durable goal.",
+                goalContractSchema()
+            ),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        GoalContractExecutor(runtime)
+    )
+    match (registration) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
+    let pipeline = ToolPipeline(
+        catalog,
+        InMemoryOperationRuntimePort(),
+        GoalContractAudit(),
+        GoalContractIds(),
+        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
+    )
+    match (executePipelineCall(pipeline, context, value)) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(ToolInvocationResult.Completed(result)) =>
+            if (result.isError) {
+                Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "goal.contract_tool_error",
+                    "goal operation returned an error result"
+                ))
+            } else {
+                Result.Ok(result)
+            }
+        case Result.Ok(ToolInvocationResult.NeedsApproval(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "goal.contract_approval_required",
+                "goal contract fixture unexpectedly requires approval"
+            ))
+        case Result.Ok(ToolInvocationResult.Denied(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "goal.contract_denied",
+                "goal contract fixture unexpectedly denied the operation"
+            ))
+    }
+}
+
+class GoalContractExecutor <: ToolExecutor {
+    private let runtime: ProductGoalRuntime
+
+    init(runtime: ProductGoalRuntime) {
+        this.runtime = runtime
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.execute(context, prepared)
+    }
+}
+
+class GoalContractAudit <: AuditPort {
+    public func append(event: AgentEvent): Result<Unit> {
+        let _ = event
+        Result.Ok(())
+    }
+}
+
+class GoalContractIds <: IdGenerator {
+    private var operation: Int64 = 0
+
+    public func nextRunId(): RunId { RunId("goal-contract-run") }
+    public func nextSessionId(): SessionId { SessionId("goal-contract-session") }
+    public func nextOperationId(): OperationId {
+        operation += 1
+        OperationId("goal-contract-operation-" + operation.toString())
+    }
+}
+
+func goalContractSchema(): AgentValue {
+    let operations = ArrayList<AgentValue>()
+    for (operation in ["create", "get", "complete", "resume", "drop"]) {
+        operations.add(textValue(operation))
+    }
+    objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([
+            ValueField("op", objectValue([
+                ValueField("type", textValue("string")),
+                ValueField("enum", listValue(operations.toArray()))
+            ])),
+            ValueField("objective", objectValue([
+                ValueField("type", textValue("string"))
+            ])),
+            ValueField("token_budget", objectValue([
+                ValueField("type", textValue("integer"))
+            ]))
+        ])),
+        ValueField("required", listValue([textValue("op")])),
+        ValueField("additionalProperties", boolValue(false))
+    ])
 }
 
 func call(

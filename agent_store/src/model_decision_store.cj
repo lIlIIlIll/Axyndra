@@ -836,7 +836,7 @@ func decodeStoredModelUsage(source: String): ModelUsage {
         costMicros: if (cost.unifiedKind == ValueKind.Null) {
             None
         } else if (cost.unifiedKind == ValueKind.Number) {
-            Some(parseModelDecisionInt(cost.number, "Decision usage cost"))
+            Some(parseModelDecisionInt(cost.asNumberText(), "Decision usage cost"))
         } else {
             throw IllegalStateException("Decision usage cost has invalid type")
         },

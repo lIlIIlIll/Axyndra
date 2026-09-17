@@ -233,6 +233,20 @@ public class ScriptedToolExecutor <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
+        executeCall(context, call)
+    }
+
+    // Raw calls are retained only as a fixture helper for cancellation
+    // contracts; production ToolExecutor dispatch is prepared-only.
+    public func executeCall(
+        context: ToolInvocationContext,
         call: ToolCall
     ): Result<ToolResult> {
         lock.lock()

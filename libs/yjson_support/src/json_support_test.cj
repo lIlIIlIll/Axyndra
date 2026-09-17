@@ -10,8 +10,8 @@ class YJsonSupportTests {
     func parsesWithStableKindsAndNumberLiterals() {
         let value = parseUnifiedJson("{\"n\":1e0,\"ok\":true}")
         @Expect(value.unifiedKind == UnifiedJsonKind.Object, true)
-        @Expect(value.field("n").getOrThrow().number, "1e0")
-        @Expect(value.field("ok").getOrThrow().boolean, true)
+        @Expect(value.field("n").getOrThrow().asNumberText(), "1e0")
+        @Expect(value.field("ok").getOrThrow().asBool(), true)
     }
 
     @TestCase
@@ -25,12 +25,18 @@ class YJsonSupportTests {
     }
 
     @TestCase
-    func exposesStableArrayStorage() {
-        let value = parseUnifiedJson("[1,2]")
-        let items = value.items
-        value.add(jsonNumber("3"))
-        @Expect(items.size, 3)
-        @Expect(items[2].number, "3")
+    func arrayViewsRemainLive() {
+        let first = parseUnifiedJson("[1,2]")
+        let second = parseUnifiedJson("[1,2]")
+        let firstItems = first.items
+        first.add(jsonNumber("3"))
+        second.add(jsonNumber("4"))
+        @Expect(firstItems.size, 3)
+        @Expect(firstItems[2].asNumberText(), "3")
+        @Expect(first.items.size, 3)
+        @Expect(first.items[2].asNumberText(), "3")
+        @Expect(second.items.size, 3)
+        @Expect(second.items[2].asNumberText(), "4")
     }
 
     @TestCase
@@ -80,6 +86,38 @@ class YJsonSupportTests {
             parseUnifiedJson("{}")
         ).getOrThrow()
         @Expect(malformed.keyword, "schema")
+    }
+    @TestCase
+    func gatesValidationVocabularyWithoutDisablingApplicators() {
+        let dialect = "https://example.test/dialect"
+        let registry = JsonSchemaRegistry()
+        registry.register(dialect,
+            "{\"$vocabulary\":{\"https://json-schema.org/draft/2020-12/vocab/core\":true," +
+                "\"https://json-schema.org/draft/2020-12/vocab/applicator\":true}}")
+        let config = JsonSchemaConfig(resolver: Some<UriResolver>(registry))
+
+        let validationOnly = JsonSchema.fromValue(parseUnifiedJson(
+            "{\"$schema\":\"https://example.test/dialect\",\"enum\":[1],\"const\":1,\"type\":\"integer\"," +
+                "\"minLength\":4,\"maxLength\":8,\"pattern\":\"^z$\",\"required\":[\"missing\"]}"
+        ), config: config)
+        @Expect(validationOnly.isValid(parseUnifiedJson("\"x\"")), true)
+
+        let objectValidation = JsonSchema.fromValue(parseUnifiedJson(
+            "{\"$schema\":\"https://example.test/dialect\",\"minProperties\":2,\"required\":[\"missing\"]," +
+                "\"dependentRequired\":{\"present\":[\"missing\"]}}"
+        ), config: config)
+        @Expect(objectValidation.isValid(parseUnifiedJson("{\"present\":true}")), true)
+
+        let arrayValidation = JsonSchema.fromValue(parseUnifiedJson(
+            "{\"$schema\":\"https://example.test/dialect\",\"minItems\":2,\"uniqueItems\":true," +
+                "\"minContains\":2,\"contains\":{}}"
+        ), config: config)
+        @Expect(arrayValidation.isValid(parseUnifiedJson("[1]")), true)
+
+        let applicator = JsonSchema.fromValue(parseUnifiedJson(
+            "{\"$schema\":\"https://example.test/dialect\",\"enum\":[1],\"not\":{}}"
+        ), config: config)
+        @Expect(applicator.isValid(parseUnifiedJson("1")), false)
     }
 }
 

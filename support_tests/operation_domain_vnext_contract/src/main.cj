@@ -7,6 +7,7 @@ import yjson.*
 import agent_domain.*
 
 main(): Int64 {
+    networkPolicyContract()
     let writePlan = NormalizedOperationPlan(
         "write", objectValue([]),
         [Capability(CapabilityKind.WorkspaceWrite, resource: "/repo/file")],
@@ -51,6 +52,81 @@ main(): Int64 {
     println("vNext operation domain contract passed")
     0
 }
+func networkPolicyContract(): Unit {
+    let raw = objectValue([
+        ValueField("mode", textValue("proxy")),
+        ValueField(
+            "egress",
+            listValue([
+                objectValue([
+                    ValueField("host", textValue("API.Example.COM.")),
+                    ValueField("port", integerValue(443)),
+                    ValueField(
+                        "private_addresses",
+                        listValue([textValue("10.0.0.1")])
+                    )
+                ])
+            ])
+        ),
+        ValueField(
+            "publish",
+            listValue([
+                objectValue([
+                    ValueField("host_port", integerValue(8080)),
+                    ValueField("target_port", integerValue(8081))
+                ])
+            ])
+        )
+    ])
+    let policy = match (parseNetworkPolicy(raw)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    expect(networkPolicyModeIsMediated(policy.mode) &&
+        policy.egress[0].host == "api.example.com" &&
+        policy.egress[0].port == 443u16 &&
+        policy.egress[0].privateAddresses == ["10.0.0.1"] &&
+        policy.publish[0].hostPort == 8080u16 &&
+        policy.publish[0].targetPort == 8081u16,
+        "proxy policy normalizes and freezes egress and publish rules")
+    let canonical = networkPolicyCanonicalValue(policy)
+    expect(canonical.field("mode").getOrThrow().text == "proxy" &&
+        networkPolicyCapabilityResources(policy).size == 2,
+        "proxy policy canonical value carries concrete capability resources")
+
+    match (parseNetworkPolicy(boolValue(true))) {
+        case Result.Err(error) => expect(error.code == "network.policy_invalid", "boolean network input is rejected")
+        case Result.Ok(_) => throw IllegalStateException("boolean network input was accepted")
+    }
+    match (parseNetworkPolicy(objectValue([
+        ValueField("mode", textValue("host")),
+        ValueField("egress", listValue([]))
+    ]))) {
+        case Result.Err(error) => expect(
+            error.code == "network.policy_rules_forbidden",
+            "host rules are rejected"
+        )
+        case Result.Ok(_) => throw IllegalStateException("host egress was accepted")
+    }
+
+    let networkPlan = NormalizedOperationPlan(
+        "read", objectValue([]), [Capability(CapabilityKind.NetworkAccess)],
+        OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe, "network-digest",
+        networkPolicy: Some(policy)
+    )
+    let denied = terminal(resolveOperationAttempt(
+        OperationId("network-denied"), CanonicalToolCallId("network-call"),
+        networkPlan, OperationAttemptStage.Prepared,
+        Result<ToolInvocationResult>.Err(networkAddressDeniedError(
+            "api.example.com", port: 443u16, reason: "test"
+        )),
+        "network-receipt", 15
+    ))
+    expect(denied.receipt.outcome == OperationOutcome.Rejected &&
+        denied.retryDecision == OperationRetryDecision.Stop,
+        "network authorization denial is rejected without retry")
+}
+
 
 func replayDispositionContract(): Unit {
     let frozen = ToolImplementationIdentity(
@@ -112,7 +188,7 @@ func operationResolutionContract(writePlan: NormalizedOperationPlan): Unit {
         unknown.toolResult.getOrThrow().isError &&
         unknown.toolResult.getOrThrow().output.field(
             "reconciliation_required"
-        ).getOrThrow().boolean,
+        ).getOrThrow().asBool(),
         "executing mutation timeout becomes Unknown and requires reconciliation")
 
     let readPlan = NormalizedOperationPlan(

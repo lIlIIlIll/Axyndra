@@ -22,7 +22,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YJSON_COMMIT = "92858f75aedc3dd6f7322789117854514549e62c"
+YJSON_TAG = "0.1.0"
 INVENTORY_PATH = ROOT / "packaging" / "public-packages.toml"
 IMPORT = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 PATH_DEPENDENCY = re.compile(
@@ -243,6 +243,11 @@ def git_identity() -> tuple[str, bool]:
 
 def toolchain_identity() -> dict[str, str]:
     sdk_root = os.environ.get("AXYNDRA_SDK_ROOT", "").strip()
+    sdk_env = dict(os.environ)
+    if sdk_root:
+        sdk_env["PATH"] = ":".join(
+            [str(Path(sdk_root) / "bin"), str(Path(sdk_root) / "tools" / "bin"), sdk_env.get("PATH", "")]
+        )
     result = {"cjc": "not supplied", "cjpm": "not supplied", "nativeCompiler": "not supplied"}
     commands = {
         "cjc": [str(Path(sdk_root) / "bin" / "cjc"), "-v"] if sdk_root else [],
@@ -252,7 +257,13 @@ def toolchain_identity() -> dict[str, str]:
     for key, command in commands.items():
         if not command or not Path(command[0]).is_file():
             continue
-        completed = subprocess.run(command, text=True, capture_output=True, check=True)
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=True,
+            env=sdk_env,
+        )
         output = (completed.stdout + completed.stderr).strip().splitlines()
         result[key] = output[0] if output else "unknown"
     return result
@@ -303,6 +314,7 @@ def stage(destination: Path) -> None:
             native_root = package_root / "native"
             native_root.mkdir()
             shutil.copy2(source_root / "native" / "process4cj_native.c", native_root / "process4cj_native.c")
+            shutil.copy2(source_root / "native" / "sandbox_net_bridge.c", native_root / "sandbox_net_bridge.c")
             compiler_value = native_tool("AXYNDRA_NATIVE_CC", "clang")
             archiver_value = native_tool("AXYNDRA_NATIVE_AR", "llvm-ar")
             compiler = Path(compiler_value) if compiler_value else Path()
@@ -514,7 +526,7 @@ def consumer_manifest(name: str, version: str, stage_root: Path, dependencies: l
         if dependency == "yjson":
             lines.append(
                 '  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", '
-                f'commitId = "{YJSON_COMMIT}", output-type = "static" }}'
+                f'tag = "{YJSON_TAG}", output-type = "static" }}'
             )
             continue
         dependency_manifest = load_toml(next(stage_root.glob(f"{dependency}-*/cjpm.toml")))

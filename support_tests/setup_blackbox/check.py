@@ -109,7 +109,7 @@ def main() -> None:
     )
     assert "1) OpenAI" in output
     assert "protocol [" not in output
-    assert config.strip() == 'default_model: "openai-official/gpt-5"'
+    assert config.strip() == 'schema_version: 1\ndefault_model: "openai-official/gpt-5"'
     assert "No API key was configured" in output
     assert 'id: "gpt-5"' in models
     assert 'provider: "openai-official"' in models
@@ -119,7 +119,7 @@ def main() -> None:
         "2\n1\n\n1\n\n2\n"
     )
     assert config.strip() == (
-        'default_model: "anthropic-official/'
+        'schema_version: 1\ndefault_model: "anthropic-official/'
         'claude-sonnet-4-20250514"'
     )
     assert "ANTHROPIC_API_KEY='your-api-key'" in output
@@ -130,7 +130,7 @@ def main() -> None:
         "deepseek-anthropic\n1\nDEEPSEEK_API_KEY\n3\n"
     )
     assert config.strip() == (
-        'default_model: "deepseek-anthropic/'
+        'schema_version: 1\ndefault_model: "deepseek-anthropic/'
         'claude-sonnet-4-20250514"'
     )
     assert 'protocol: "messages"' in providers
@@ -146,7 +146,7 @@ def main() -> None:
     assert "Please enter 1, 2, or 3." in output
     assert "Please enter 1 or 2." in output
     assert "Enter a URL beginning with http:// or https://." in output
-    assert config.strip() == 'default_model: "local-openai/local-model"'
+    assert config.strip() == 'schema_version: 1\ndefault_model: "local-openai/local-model"'
     assert 'protocol: "completions"' in providers
     assert 'base_url: "http://127.0.0.1:11434"' in providers
     assert 'api_key_env: "LOCAL_API_KEY"' in providers

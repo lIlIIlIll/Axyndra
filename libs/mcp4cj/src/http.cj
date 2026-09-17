@@ -1547,10 +1547,10 @@ func mcpHeaderScalar(schema: JsonNode, value: JsonNode): McpResult<String> {
     let kind = mcpText(schema, "type")
     if (kind == "string" && value.unifiedKind == UnifiedJsonKind.Text) { return McpResult.Ok(value.text) }
     if (kind == "boolean" && value.unifiedKind == UnifiedJsonKind.Boolean) {
-        return McpResult.Ok(if (value.boolean) { "true" } else { "false" })
+        return McpResult.Ok(if (value.asBool()) { "true" } else { "false" })
     }
-    if (kind == "integer" && value.unifiedKind == UnifiedJsonKind.Number && mcpIntegerText(value.number)) {
-        return McpResult.Ok(value.number)
+    if (kind == "integer" && value.unifiedKind == UnifiedJsonKind.Number && mcpIntegerText(value.asNumberText())) {
+        return McpResult.Ok(value.asNumberText())
     }
     invalidMcp<String>("mcp.http_header_value_invalid", "x-mcp-header value does not match string, integer, or boolean schema")
 }

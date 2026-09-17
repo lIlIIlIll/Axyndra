@@ -641,7 +641,7 @@ func taskPersistInteger(value: AgentValue, name: String): Int64 {
         throw IllegalArgumentException("task persistence field is not an integer: " + name)
     }
     try {
-        Int64.parse(item.number)
+        Int64.parse(item.asNumberText())
     } catch (_: Exception) {
         throw IllegalArgumentException("task persistence field is not an integer: " + name)
     }
@@ -668,7 +668,7 @@ func taskPersistBoolean(value: AgentValue, name: String): Bool {
     if (item.unifiedKind != ValueKind.Boolean) {
         throw IllegalArgumentException("task persistence field is not boolean: " + name)
     }
-    item.boolean
+    item.asBool()
 }
 
 func taskPersistList(value: AgentValue, name: String): Array<AgentValue> {

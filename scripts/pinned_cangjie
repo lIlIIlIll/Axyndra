@@ -9,6 +9,63 @@ export CANGJIE_SDK_ROOT="$sdk_root"
 export AXYNDRA_SDK_ROOT="$sdk_root"
 export AXYNDRA_STDX_ROOT="$stdx_root"
 export AXYNDRA_NATIVE_ROOT="$root/libs/process4cj/native"
+
+prepare_network_bridge() (
+  umask 077
+  source_path="$AXYNDRA_NATIVE_ROOT/sandbox-net-bridge"
+  if [[ ! -x "$source_path" ]]; then
+    printf 'axyndra: built network bridge is missing: %s\n' "$source_path" >&2
+    exit 1
+  fi
+  if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    runtime_dir="$XDG_RUNTIME_DIR/axyndra"
+  elif [[ -n "${HOME:-}" ]]; then
+    runtime_dir="$HOME/.cache/axyndra"
+  else
+    printf 'axyndra: no product-owned runtime directory is available\n' >&2
+    exit 1
+  fi
+  if [[ "$runtime_dir" != /* ]]; then
+    printf 'axyndra: runtime directory must be absolute\n' >&2
+    exit 1
+  fi
+  mkdir -p -- "$runtime_dir"
+  chmod 0700 -- "$runtime_dir"
+  runtime_dir=$(readlink -f -- "$runtime_dir")
+  root_real=$(readlink -f -- "$root")
+  case "$runtime_dir" in
+    "$root_real"|"$root_real"/*)
+      printf 'axyndra: network bridge runtime directory is inside the workspace\n' >&2
+      exit 1
+      ;;
+  esac
+  owner=$(stat -c '%u' -- "$runtime_dir")
+  mode=$(stat -c '%a' -- "$runtime_dir")
+  if [[ "$owner" != "$(id -u)" || "$mode" != "700" ]]; then
+    printf 'axyndra: network bridge runtime directory is not product-owned\n' >&2
+    exit 1
+  fi
+  destination="$runtime_dir/sandbox-net-bridge"
+  temporary="$destination.$$"
+  rm -f -- "$temporary"
+  install -m 0755 -- "$source_path" "$temporary"
+  if ! cmp -s -- "$source_path" "$temporary"; then
+    rm -f -- "$temporary"
+    printf 'axyndra: copied network bridge failed verification\n' >&2
+    exit 1
+  fi
+  mv -f -- "$temporary" "$destination"
+  chmod 0755 -- "$destination"
+  if ! cmp -s -- "$source_path" "$destination" ||
+      [[ "$(stat -c '%u' -- "$destination")" != "$(id -u)" ]] ||
+      [[ "$(stat -c '%a' -- "$destination")" != "755" ]]; then
+    rm -f -- "$destination"
+    printf 'axyndra: installed network bridge failed verification\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "$destination"
+)
+
 export DISABLE_ZOXIDE=1
 export CANGJIE_HOME="$sdk_root"
 export CANGJIE_ROOT="$sdk_root"
@@ -18,6 +75,7 @@ export PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH"
 export LD_LIBRARY_PATH="$AXYNDRA_NATIVE_ROOT:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 
 "$root/scripts/prepare_native_deps.sh"
+export AXYNDRA_NETWORK_BRIDGE="$(prepare_network_bridge)"
 native_compiler=${AXYNDRA_NATIVE_CC:-$(command -v clang || true)}
 if [[ -n "$native_compiler" ]]; then
   clang_resource_dir=$("$native_compiler" --print-resource-dir 2>/dev/null || true)

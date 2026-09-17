@@ -115,8 +115,8 @@ private func projectTuiValue(
     }
     match (value.unifiedKind) {
         case ValueKind.Null => nullValue()
-        case ValueKind.Boolean => boolValue(value.boolean)
-        case ValueKind.Number => numberValue(value.number)
+        case ValueKind.Boolean => boolValue(value.asBool())
+        case ValueKind.Number => numberValue(value.asNumberText())
         case ValueKind.Text =>
             let maximum = max(1, min(2048, budget.remaining))
             let preview = boundedTerminalPreview(value.text, maximumBytes: maximum,
@@ -154,8 +154,8 @@ private func valueText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) => match (field.unifiedKind) {
             case ValueKind.Text => field.text
-            case ValueKind.Number => field.number
-            case ValueKind.Boolean => field.boolean.toString()
+            case ValueKind.Number => field.asNumberText()
+            case ValueKind.Boolean => field.asBool().toString()
             case _ => ""
         }
         case None => ""
@@ -175,7 +175,7 @@ private func valueInteger(value: AgentValue, name: String, fallback: Int64): Int
 private func valueBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) => match (field.unifiedKind) {
-            case ValueKind.Boolean => field.boolean
+            case ValueKind.Boolean => field.asBool()
             case ValueKind.Text => field.text == "true"
             case _ => false
         }

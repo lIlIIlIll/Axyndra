@@ -40,29 +40,44 @@ public class DurableOperationStore <: OperationRuntimePort {
                     [runId.value],
                     "Program Operation does not own a canonical ToolCall"
                 )
-                transaction.execute(
-                    "INSERT INTO operations " +
-                        "(id,run_id,tool_call_item_id,normalized_plan,capability_requirement," +
-                        "resource_scope,effect_class,retry_disposition,idempotency_key,state,revision) " +
-                        "VALUES (?,?,?,?,?,?,?,?,?,'prepared',1)",
-                    [
-                        SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value),
-                        SqlParameter.Text(toolCallItemId.value), SqlParameter.Text(encodedPlan),
-                        SqlParameter.Text(encodeCapabilities(plan.requiredCapabilities)),
-                        SqlParameter.Text(encodeResourceScope(plan)),
-                        SqlParameter.Text(storeEffectName(plan.effectClass)),
-                        SqlParameter.Text(storeRetryName(plan.retryDisposition)),
-                        if (plan.idempotencyKey == "") {
-                            SqlParameter.Null
-                        } else {
-                            SqlParameter.Text(plan.idempotencyKey)
-                        }
-                    ]
+                let existing = transaction.query(
+                    "SELECT run_id,tool_call_item_id,normalized_plan FROM operations WHERE id=" +
+                        sqliteText(operationId.value)
                 )
-                insertOperationEffectRecord(
-                    transaction, operationId, runId, toolCallItemId, plan, encodedPlan
-                )
-            }
+                if (!existing.isEmpty()) {
+                    if (existing.size != 1 ||
+                        existing[0].required(0) != runId.value ||
+                        existing[0].required(1) != toolCallItemId.value ||
+                        existing[0].required(2) != encodedPlan) {
+                        throw IllegalStateException(
+                            "Program Operation already has a different canonical binding"
+                        )
+                    }
+                } else {
+                    transaction.execute(
+                        "INSERT INTO operations " +
+                            "(id,run_id,tool_call_item_id,normalized_plan,capability_requirement," +
+                            "resource_scope,effect_class,retry_disposition,idempotency_key,state,revision) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,'prepared',1)",
+                        [
+                            SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value),
+                            SqlParameter.Text(toolCallItemId.value), SqlParameter.Text(encodedPlan),
+                            SqlParameter.Text(encodeCapabilities(plan.requiredCapabilities)),
+                            SqlParameter.Text(encodeResourceScope(plan)),
+                            SqlParameter.Text(storeEffectName(plan.effectClass)),
+                            SqlParameter.Text(storeRetryName(plan.retryDisposition)),
+                            if (plan.idempotencyKey == "") {
+                                SqlParameter.Null
+                            } else {
+                                SqlParameter.Text(plan.idempotencyKey)
+                            }
+                        ]
+                    )
+                    insertOperationEffectRecord(
+                        transaction, operationId, runId, toolCallItemId, plan, encodedPlan
+                    )
+                }
+                }
             Result.Ok(())
         } catch (error: Exception) {
             operationStoreError("operation.program_prepare_failed", operationId, error)
@@ -378,6 +393,16 @@ public class DurableOperationStore <: OperationRuntimePort {
                     sqliteText(operationId.value) + " AND run_id=" + sqliteText(runId.value)
             )
             if (rows.size != 1) {
+                let owner = database.query(
+                    "SELECT id FROM operations WHERE id=" + sqliteText(operationId.value)
+                )
+                if (owner.size == 1) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "tool.approval_run_mismatch",
+                        "Operation belongs to another Run"
+                    ))
+                }
                 return Result.Err(AgentError(
                     AgentErrorKind.InvalidInput,
                     "operation.not_found",
@@ -387,6 +412,118 @@ public class DurableOperationStore <: OperationRuntimePort {
             Result.Ok(decodeOperationPlan(rows[0].required(0)))
         } catch (error: Exception) {
             operationStoreError("operation.plan_load_failed", operationId, error)
+        }
+    }
+
+    public func loadCommittedToolResult(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<?ToolResult> {
+        try {
+            let stateRows = database.query(
+                "SELECT state FROM operations WHERE id=" + sqliteText(operationId.value) +
+                    " AND run_id=" + sqliteText(runId.value)
+            )
+            if (stateRows.size != 1) {
+                let owner = database.query(
+                    "SELECT id FROM operations WHERE id=" + sqliteText(operationId.value)
+                )
+                if (owner.size == 1) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "tool.approval_run_mismatch",
+                        "Operation belongs to another Run"
+                    ))
+                }
+                return Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "operation.not_found",
+                    "Operation was not found"
+                ))
+            }
+            if (stateRows[0].required(0) != "committed") {
+                return Result.Ok(None)
+            }
+            let rows = database.query(
+                "SELECT items.payload FROM operations " +
+                    "JOIN runs ON runs.id=operations.run_id " +
+                    "JOIN items ON items.thread_id=runs.thread_id AND items.turn_id=runs.turn_id " +
+                    "WHERE operations.id=" + sqliteText(operationId.value) +
+                    " AND operations.run_id=" + sqliteText(runId.value) +
+                    " AND items.kind='tool_result'"
+            )
+            var committed: ?ToolResult = None
+            for (row in rows) {
+                match (decodeStoredThreadContent(row.required(0))) {
+                    case ThreadItemContent.ToolResult(
+                        callId, resultOperationId, receiptId, output, isError
+                    ) =>
+                        if (resultOperationId.value == operationId.value) {
+                            if (committed.isSome()) {
+                                throw IllegalStateException(
+                                    "Operation has multiple canonical ToolResults"
+                                )
+                            }
+                            committed = Some(ToolResult(
+                                callId.value,
+                                output,
+                                isError: isError,
+                                receiptId: receiptId
+                            ))
+                        }
+                    case _ => ()
+                }
+            }
+            Result.Ok(committed)
+        } catch (error: Exception) {
+            operationStoreError("operation.result_load_failed", operationId, error)
+        }
+    }
+
+    public func loadCall(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<ToolCall> {
+        try {
+            let rows = database.query(
+                "SELECT items.payload FROM operations " +
+                    "JOIN runs ON runs.id=operations.run_id " +
+                    "JOIN items ON items.id=operations.tool_call_item_id " +
+                    "WHERE operations.id=" + sqliteText(operationId.value) +
+                    " AND operations.run_id=" + sqliteText(runId.value) +
+                    " AND items.kind='tool_call' AND items.thread_id=runs.thread_id " +
+                    "AND items.turn_id=runs.turn_id"
+            )
+            if (rows.size != 1) {
+                let owner = database.query(
+                    "SELECT id FROM operations WHERE id=" + sqliteText(operationId.value)
+                )
+                if (owner.size == 1) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "tool.approval_run_mismatch",
+                        "Operation belongs to another Run"
+                    ))
+                }
+                return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "operation.call_not_found",
+                    "canonical ToolCall is not available for this Operation",
+                    fields: [ErrorField("operation_id", operationId.value)]
+                ))
+            }
+            match (decodeStoredThreadContent(rows[0].required(0))) {
+                case ThreadItemContent.ToolCall(callId, name, arguments) =>
+                    Result.Ok(ToolCall(callId.value, name, arguments))
+                case _ => Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "operation.call_not_canonical",
+                    "Operation source Item is not a canonical ToolCall",
+                    fields: [ErrorField("operation_id", operationId.value)]
+                ))
+            }
+        } catch (error: Exception) {
+            operationStoreError("operation.call_load_failed", operationId, error)
         }
     }
 
@@ -491,28 +628,51 @@ public class OperationRecoveryPlanner {
 
     public func inspect(threadId: ThreadId): Array<RecoveryAction> {
         let snapshot = SqliteThreadCommitSink(database).loadThread(threadId)
-        let activeTurnId = match (snapshot.thread.activeTurnId) {
-            case Some(value) => value
-            case None => return []
-        }
-        let activeRunId = snapshot.activeRunId.getOrThrow()
         let results = ArrayList<OperationId>()
-        for (item in snapshot.items where item.turnId.value == activeTurnId.value) {
+        for (item in snapshot.items) {
             match (item.content) {
                 case ThreadItemContent.ToolResult(_, operationId, _, _, _) => results.add(operationId)
                 case _ => ()
             }
         }
         let actions = ArrayList<RecoveryAction>()
-        for (item in snapshot.items where item.turnId.value == activeTurnId.value) {
+        for (item in snapshot.items) {
             match (item.content) {
                 case ThreadItemContent.ToolCall(_, _, _) => inspectCall(
-                    threadId, activeTurnId, activeRunId, item.id, results, actions
+                    threadId,
+                    item.turnId,
+                    recoveryRunId(threadId, item.turnId, item.id),
+                    item.id,
+                    results,
+                    actions
                 )
                 case _ => ()
             }
         }
         actions.toArray()
+    }
+
+    private func recoveryRunId(
+        threadId: ThreadId,
+        turnId: SemanticTurnId,
+        callItemId: ItemId
+    ): RunId {
+        let operationRows = database.query(
+            "SELECT run_id FROM operations WHERE tool_call_item_id=" +
+                sqliteText(callItemId.value)
+        )
+        if (!operationRows.isEmpty()) {
+            return RunId(operationRows[0].required(0))
+        }
+        let runRows = database.query(
+            "SELECT id FROM runs WHERE thread_id=" + sqliteText(threadId.value) +
+                " AND turn_id=" + sqliteText(turnId.value) +
+                " ORDER BY epoch DESC"
+        )
+        if (!runRows.isEmpty()) {
+            return RunId(runRows[0].required(0))
+        }
+        RunId("recovery-" + callItemId.value)
     }
 
     private func inspectCall(
@@ -647,7 +807,6 @@ public class OperationRecoveryPlanner {
         }
     }
 }
-
 func recoveryAction(
     kind: RecoveryActionKind,
     threadId: ThreadId,
@@ -658,13 +817,23 @@ func recoveryAction(
     reason!: String = ""
 ): RecoveryAction {
     RecoveryAction(
-        kind, threadId, turnId, runId, callItemId,
-        operationId: operationId, reason: reason
+        kind,
+        threadId,
+        turnId,
+        runId,
+        callItemId,
+        operationId: operationId,
+        reason: reason
     )
 }
 
-func containsOperation(values: ArrayList<OperationId>, target: OperationId): Bool {
-    for (value in values where value.value == target.value) { return true }
+func containsOperation(
+    values: ArrayList<OperationId>,
+    target: OperationId
+): Bool {
+    for (value in values where value.value == target.value) {
+        return true
+    }
     false
 }
 
@@ -675,8 +844,10 @@ func encodeOperationPlan(plan: NormalizedOperationPlan): String {
         ValueField("capabilities", capabilityValues(plan.requiredCapabilities)),
         ValueField("paths", stringValues(plan.resolvedPaths)),
         ValueField("hosts", stringValues(plan.resolvedHosts)),
+        ValueField("network", networkPolicyCanonicalValue(plan.networkPolicy)),
         ValueField("cwd", textValue(plan.cwd)),
         ValueField("environment", objectValue(plan.relevantEnvironment)),
+        ValueField("approval", storedApprovalMetadata(plan.approvalMetadata)),
         ValueField("effect", textValue(storeEffectName(plan.effectClass))),
         ValueField("retry", textValue(storeRetryName(plan.retryDisposition))),
         ValueField("replay", replayDispositionValue(plan.replayDisposition)),
@@ -710,6 +881,10 @@ func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
         environment.add(ValueField(field.name, field.value))
     }
     let bindingDigest = value.field("digest").getOrThrow().text
+    let networkPolicy = match (value.field("network")) {
+        case Some(raw) => requireNetworkPolicy(raw)
+        case None => NetworkPolicy(NetworkPolicyMode.Denied)
+    }
     NormalizedOperationPlan(
         value.field("tool").getOrThrow().text,
         value.field("arguments").getOrThrow(),
@@ -719,8 +894,13 @@ func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
         bindingDigest,
         resolvedPaths: storeStringItems(value.field("paths").getOrThrow()),
         resolvedHosts: storeStringItems(value.field("hosts").getOrThrow()),
+        networkPolicy: Some(networkPolicy),
         cwd: value.field("cwd").getOrThrow().text,
         relevantEnvironment: environment.toArray(),
+        approvalMetadata: match (value.field("approval")) {
+            case Some(raw) => Some(parseStoredApprovalMetadata(raw))
+            case None => None
+        },
         idempotencyKey: value.field("idempotency_key").getOrThrow().text,
         replayDisposition: match (value.field("replay")) {
             case Some(raw) => Some(parseReplayDisposition(raw))
@@ -737,6 +917,51 @@ func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
         replayContractVersion: storedReplayContractVersion(value)
     )
 }
+func storedApprovalMetadata(value: ToolApprovalMetadata): AgentValue {
+    objectValue([
+        ValueField("capability_label", textValue(value.capabilityLabel)),
+        ValueField("risk", textValue(approvalRiskLevelName(value.assessment.level))),
+        ValueField("flags", stringValues(value.assessment.flags)),
+        ValueField("reasons", stringValues(value.assessment.reasons)),
+        ValueField("grant", objectValue([
+            ValueField("capability", textValue(value.grantScope.capability)),
+            ValueField("path_prefix", textValue(value.grantScope.pathPrefix)),
+            ValueField("tool_name", textValue(value.grantScope.toolName)),
+            ValueField("host", textValue(value.grantScope.host)),
+            ValueField("session_only", boolValue(value.grantScope.sessionOnly))
+        ]))
+    ])
+}
+
+func parseStoredApprovalMetadata(value: AgentValue): ToolApprovalMetadata {
+    let grant = value.field("grant").getOrThrow()
+    ToolApprovalMetadata(
+        value.field("capability_label").getOrThrow().text,
+        RiskAssessment(
+            parseStoredApprovalRisk(value.field("risk").getOrThrow().text),
+            flags: storeStringItems(value.field("flags").getOrThrow()),
+            reasons: storeStringItems(value.field("reasons").getOrThrow())
+        ),
+        ApprovalGrantScope(
+            grant.field("capability").getOrThrow().text,
+            pathPrefix: grant.field("path_prefix").getOrThrow().text,
+            toolName: grant.field("tool_name").getOrThrow().text,
+            host: grant.field("host").getOrThrow().text,
+            sessionOnly: grant.field("session_only").getOrThrow().asBool()
+        )
+    )
+}
+
+func parseStoredApprovalRisk(value: String): ApprovalRiskLevel {
+    match (value) {
+        case "low" => ApprovalRiskLevel.Low
+        case "medium" => ApprovalRiskLevel.Medium
+        case "high" => ApprovalRiskLevel.High
+        case "critical" => ApprovalRiskLevel.Critical
+        case _ => throw IllegalStateException("unknown stored approval risk")
+    }
+}
+
 
 func replayDispositionValue(value: ReplayDisposition): AgentValue {
     match (value) {
@@ -794,7 +1019,7 @@ func optionalStoreText(value: AgentValue, name: String, fallback: String): Strin
 
 func storedReplayContractVersion(value: AgentValue): UInt32 {
     match (value.field("replay_contract_version")) {
-        case Some(raw) => if (raw.unifiedKind == ValueKind.Number && raw.number == "1") {
+        case Some(raw) => if (raw.unifiedKind == ValueKind.Number && raw.asNumberText() == "1") {
             1u32
         } else {
             throw IllegalStateException("unsupported replay contract version")

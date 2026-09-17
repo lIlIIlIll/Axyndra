@@ -56,6 +56,7 @@ public class ProviderSpec {
     public let model: String
     public let baseUrl: String
     public let apiKeyEnv: String
+    public let allowInsecureHttp: Bool
     public let credentialFile: String
     public let timeoutMillis: Int64
     public let messagesFastMode: Bool
@@ -64,6 +65,7 @@ public class ProviderSpec {
     public let capabilities: domain.ModelCapabilities
     public let profileHeaders: Array<ProviderHeader>
     public let modelHeaders: Array<ProviderHeader>
+    public let networkPolicy: domain.NetworkPolicy
 
     public init(
         id: String,
@@ -71,6 +73,7 @@ public class ProviderSpec {
         model: String,
         baseUrl: String,
         apiKeyEnv: String,
+        allowInsecureHttp!: Bool = false,
         credentialFile!: String = "",
         timeoutMillis!: Int64 = 120000,
         provider!: String = "",
@@ -79,7 +82,8 @@ public class ProviderSpec {
         endpointMaxOutputTokens!: ?Int64 = None,
         capabilities!: domain.ModelCapabilities = defaultProviderCapabilities(),
         profileHeaders!: Array<ProviderHeader> = [],
-        modelHeaders!: Array<ProviderHeader> = []
+        modelHeaders!: Array<ProviderHeader> = [],
+        networkPolicy!: ?domain.NetworkPolicy = None
     ) {
         if (id.trimAscii() == "") {
             throw IllegalArgumentException("provider id must not be empty")
@@ -107,6 +111,7 @@ public class ProviderSpec {
         this.protocol = protocol
         this.model = model
         this.baseUrl = baseUrl.trimAscii().removeSuffix("/")
+        this.allowInsecureHttp = allowInsecureHttp
         this.apiKeyEnv = apiKeyEnv
         this.credentialFile = credentialFile
         this.timeoutMillis = timeoutMillis
@@ -127,6 +132,10 @@ public class ProviderSpec {
         this.capabilities = capabilities
         this.profileHeaders = profileHeaders
         this.modelHeaders = modelHeaders
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => domain.NetworkPolicy(domain.NetworkPolicyMode.HostNetwork)
+        }
     }
 
     public func endpoint(): String {
@@ -321,6 +330,16 @@ public class CurlProviderTransport <: ProviderTransport {
         requestId: String,
         chunks: (String) -> Unit
     ): domain.Result<String> {
+        match (provider.networkPolicy.mode) {
+            case domain.NetworkPolicyMode.Denied =>
+                return domain.Result.Err(domain.networkAddressDeniedError(
+                    provider.baseUrl,
+                    reason: "provider network access is denied by the frozen request policy"
+                ))
+            case domain.NetworkPolicyMode.Mediated =>
+                return domain.Result.Err(domain.networkGatewayUnavailableError())
+            case domain.NetworkPolicyMode.HostNetwork => ()
+        }
         try {
             let apiKey = match (credentials.resolve(provider, requestId)) {
                 case domain.Result.Ok(value) => value
@@ -1046,7 +1065,9 @@ public class ProviderModelPort <: ports.ModelPort {
             endpointMaxOutputTokens: provider.endpointMaxOutputTokens,
             capabilities: provider.capabilities,
             profileHeaders: provider.profileHeaders,
-            modelHeaders: requestHeaders.toArray()
+            allowInsecureHttp: provider.allowInsecureHttp,
+            modelHeaders: requestHeaders.toArray(),
+            networkPolicy: Some(provider.networkPolicy)
         )
         let projection: ?ProviderStreamProjection = if (request.streaming) {
             Some(ProviderStreamProjection(codec, provider.protocol, events))
@@ -2560,6 +2581,14 @@ func fixtureHubProcessBlock(prompt: String): ?domain.ModelBlock {
                     domain.textValue("fixture-daemon")
                 )
             )
+            fields.add(
+                domain.ValueField(
+                    "network",
+                    domain.objectValue([
+                        domain.ValueField("mode", domain.textValue("denied"))
+                    ])
+                )
+            )
         case "ps" => op = "ps"
         case "stop" =>
             op = "stop"
@@ -3117,25 +3146,33 @@ func resemblesNativeReplayEnvelope(value: JsonNode): Bool {
 func nativeReplayMatches(
     state: domain.OpaqueProviderState,
     dialect: ProviderDialect,
-    providerId: String
+    providerId: String,
+    model!: String = ""
 ): Bool {
     if ((providerId != "" && state.providerId != providerId) ||
         state.protocol.toAsciiLower() != legacyReplayProtocol(dialect)) {
         return false
     }
     if (!resemblesNativeReplayEnvelope(parseUnifiedJson(state.payload))) { return true }
-    restoreNativeReplay(state, dialect).dialectId == legacyReplayDialectId(dialect)
+    let replay = restoreNativeReplay(state, dialect)
+    if (replay.dialectId != legacyReplayDialectId(dialect)) { return false }
+    match (replay.modelConstraint) {
+        case Some(value) => if (model != "" && value != model) { return false }
+        case None => ()
+    }
+    true
 }
 
 func toLlmWireBlock(
     block: domain.ModelBlock,
     dialect: ProviderDialect,
-    providerId: String
+    providerId: String,
+    model!: String = ""
 ): LlmWireBlock {
     match (block.kind) {
         case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.Unknown =>
             match (block.opaqueState) {
-                case Some(value) => if (nativeReplayMatches(value, dialect, providerId)) {
+                case Some(value) => if (nativeReplayMatches(value, dialect, providerId, model: model)) {
                     return LlmWireBlock.NativeReplay(restoreNativeReplay(value, dialect))
                 }
                 case None => ()
@@ -3161,7 +3198,7 @@ func toLlmWireBlock(
             case None => throw IllegalArgumentException("image model block is missing image content")
         }
         case domain.ModelBlockKind.Reasoning =>
-            LlmWireBlock.Reasoning(LlmWireReasoningBlock(block.text))
+            throw IllegalArgumentException("display-only reasoning cannot be projected safely by llm4cj v0.2")
         case domain.ModelBlockKind.ToolCall => LlmWireBlock.ToolCall(LlmWireToolCallBlock(
             block.callId,
             block.name,
@@ -3180,6 +3217,7 @@ func toLlmWireBlock(
             throw IllegalArgumentException("model block cannot be represented safely by llm4cj v0.2")
     }
 }
+
 
 func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServiceTier {
     if (match (dialect) {
@@ -3220,35 +3258,42 @@ func toLlmWireRequest(
         for (index in 0..message.blocks.size) {
             let block = message.blocks[index]
             if (let domain.ModelBlockKind.Reasoning <- block.kind) {
-                if (block.opaqueState.isNone() &&
-                    canonicalReasoningHasReplayCounterpart(
-                        message.blocks, index, dialect, providerId
-                    )) {
-                    continue
+                let replayable = match (block.opaqueState) {
+                    case Some(state) => nativeReplayMatches(
+                        state, dialect, providerId, model: request.model
+                    )
+                    case None => false
                 }
+                // llm4cj rejects display-only reasoning on request input.
+                // Only compatible provider-native replay state is encodable.
+                if (!replayable) { continue }
             }
             match (block.kind) {
                 case domain.ModelBlockKind.ToolCall =>
                     pendingToolCalls.add(block.callId)
                     match (block.opaqueState) {
-                        case Some(state) => if (nativeReplayMatches(state, dialect, providerId)) {
+                        case Some(state) => if (nativeReplayMatches(
+                            state, dialect, providerId, model: request.model
+                        )) {
                             blocks.add(LlmWireBlock.NativeReplay(restoreNativeReplay(state, dialect)))
                         }
                         case None => ()
                     }
-                    blocks.add(toLlmWireBlock(block, dialect, providerId))
+                    blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
                 case domain.ModelBlockKind.ToolResult =>
                     if (pendingToolCalls.contains(block.callId)) {
                         pendingToolCalls.remove(block.callId)
-                        blocks.add(toLlmWireBlock(block, dialect, providerId))
+                        blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
                     }
                 case domain.ModelBlockKind.Unknown => match (block.opaqueState) {
-                    case Some(state) => if (nativeReplayMatches(state, dialect, providerId)) {
-                        blocks.add(toLlmWireBlock(block, dialect, providerId))
+                    case Some(state) => if (nativeReplayMatches(
+                        state, dialect, providerId, model: request.model
+                    )) {
+                        blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
                     }
-                    case None => blocks.add(toLlmWireBlock(block, dialect, providerId))
+                    case None => blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
                 }
-                case _ => blocks.add(toLlmWireBlock(block, dialect, providerId))
+                case _ => blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
             }
         }
         if (!blocks.isEmpty()) {
@@ -3360,24 +3405,6 @@ func toLlmWireToolChoice(
     }
 }
 
-func canonicalReasoningHasReplayCounterpart(
-    blocks: Array<domain.ModelBlock>,
-    index: Int64,
-    dialect: ProviderDialect,
-    providerId: String
-): Bool {
-    if (index + 1 >= blocks.size) { return false }
-    let next = blocks[index + 1]
-    match (next.opaqueState) {
-        case Some(state) => match (next.kind) {
-            case domain.ModelBlockKind.Reasoning | domain.ModelBlockKind.ToolCall |
-                domain.ModelBlockKind.Unknown =>
-                nativeReplayMatches(state, dialect, providerId)
-            case _ => false
-        }
-        case None => false
-    }
-}
 
 func toLlmWireThinkingCapabilities(value: domain.ThinkingCapabilities): LlmWireThinkingCapabilities {
     let modes = match (value.mode) {

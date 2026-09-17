@@ -16,47 +16,31 @@ public enum PreparedAuthorization {
 
 // This is the durable hand-off between preparation/approval and execution.
 // Batch coordinators can collect these values, finish every approval decision,
-// calculate conflict-free waves, and only then call executePrepared.
+// calculate conflict-free waves, and only then call the executor.
 public class PreparedToolInvocation {
     public let operationId: OperationId
+    // Identity/display only. Authority-relevant arguments live in
+    // operationPlan.canonicalArguments.
     public let call: ToolCall
-    public let capability: Capability
     public let concurrency: ToolConcurrencyProfile
     public let authorization: PreparedAuthorization
     public let approval: ?ApprovalRequest
-    public let requiredCapabilities: Array<Capability>
-    public let bindingHash: String
     public let operationPlan: NormalizedOperationPlan
 
     init(
         operationId: OperationId,
         call: ToolCall,
-        capability: Capability,
         concurrency: ToolConcurrencyProfile,
         authorization: PreparedAuthorization,
-        approval!: ?ApprovalRequest = None,
-        requiredCapabilities!: Array<Capability> = [],
-        bindingHash!: String = "",
-        operationPlan!: ?NormalizedOperationPlan = None
+        operationPlan: NormalizedOperationPlan,
+        approval!: ?ApprovalRequest = None
     ) {
         this.operationId = operationId
         this.call = call
-        this.capability = capability
         this.concurrency = concurrency
         this.authorization = authorization
         this.approval = approval
-        this.requiredCapabilities = if (requiredCapabilities.isEmpty()) {
-            [capability]
-        } else {
-            requiredCapabilities
-        }
-        this.bindingHash = bindingHash
-        this.operationPlan = match (operationPlan) {
-            case Some(value) => value
-            case None => throw IllegalArgumentException(
-                "prepared tool invocation requires a normalized Operation plan"
-            )
-        }
+        this.operationPlan = operationPlan
     }
 }
 
@@ -185,6 +169,12 @@ func toolErrorKindName(kind: AgentErrorKind): String {
 }
 
 func recoverableExecutorError(error: AgentError): Bool {
+    if (error.code == "network.address_denied" ||
+        error.code == "network.mode_denied" ||
+        error.code == "network.policy_invalid" ||
+        error.code == "network.gateway_unavailable") {
+        return false
+    }
     match (error.kind) {
         case AgentErrorKind.Configuration | AgentErrorKind.Cancelled | AgentErrorKind.BudgetExceeded
             | AgentErrorKind.RecoveryRequired | AgentErrorKind.Internal => false

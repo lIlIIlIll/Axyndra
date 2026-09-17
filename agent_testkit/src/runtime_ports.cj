@@ -540,124 +540,6 @@ public class MemoryRunRepository <: RunRepository {
     }
 }
 
-class MemoryOperationRecord {
-    var value: OperationRecord
-    var receiptValue: ?OperationReceipt = None
-
-    init(value: OperationRecord) { this.value = value }
-}
-
-public class MemoryOperationRepository <: OperationRepository {
-    private let lock = Mutex()
-    private let records = ArrayList<MemoryOperationRecord>()
-
-    public init() {}
-
-    public func prepare(record: OperationRecord): Result<Unit> {
-        lock.lock()
-        try {
-            match (entry(record.operationId.value)) {
-                case Some(existing) => if (existing.value.requestDigest == record.requestDigest) {
-                    Result.Ok(())
-                } else {
-                    memoryConflict<Unit>("operation digest changed")
-                }
-                case None =>
-                    records.add(MemoryOperationRecord(record))
-                    Result.Ok(())
-            }
-        } finally { lock.unlock() }
-    }
-
-    public func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit> {
-        lock.lock()
-        try {
-            let item = match (entry(operationId.value)) {
-                case Some(value) => value
-                case None => return missingMemoryValue<Unit>("operation", operationId.value)
-            }
-            if (item.value.status != expected) {
-                return memoryConflict<Unit>("operation state changed")
-            }
-            let current = item.value
-            item.value = OperationRecord(
-                current.operationId,
-                current.runId,
-                next,
-                current.capability,
-                current.requestDigest,
-                call: current.call
-            )
-            Result.Ok(())
-        } finally { lock.unlock() }
-    }
-
-    public func find(operationId: OperationId): Result<OperationRecord> {
-        lock.lock()
-        try {
-            match (entry(operationId.value)) {
-                case Some(value) => Result.Ok(value.value)
-                case None => missingMemoryValue<OperationRecord>("operation", operationId.value)
-            }
-        } finally { lock.unlock() }
-    }
-
-    public func receipt(operationId: OperationId): Result<OperationReceipt> {
-        lock.lock()
-        try {
-            match (entry(operationId.value)) {
-                case Some(item) => match (item.receiptValue) {
-                    case Some(value) => Result.Ok(value)
-                    case None => missingMemoryValue<OperationReceipt>("receipt", operationId.value)
-                }
-                case None => missingMemoryValue<OperationReceipt>("operation", operationId.value)
-            }
-        } finally { lock.unlock() }
-    }
-
-    public func saveReceipt(receipt: OperationReceipt): Result<Unit> {
-        lock.lock()
-        try {
-            match (entry(receipt.operationId.value)) {
-                case Some(item) => match (item.receiptValue) {
-                    case Some(existing) => if (
-                        existing.committed == receipt.committed &&
-                        existing.isError == receipt.isError &&
-                        agentValuesEqual(existing.detail, receipt.detail)
-                    ) {
-                        Result.Ok(())
-                    } else {
-                        memoryConflict<Unit>("operation receipt cannot be overwritten")
-                    }
-                    case None =>
-                        item.receiptValue = Some(receipt)
-                        Result.Ok(())
-                }
-                case None => missingMemoryValue<Unit>("operation", receipt.operationId.value)
-            }
-        } finally { lock.unlock() }
-    }
-
-    public func receiptCount(): Int64 {
-        lock.lock()
-        try {
-            var count: Int64 = 0
-            for (item in records) {
-                if (item.receiptValue.isSome()) { count += 1 }
-            }
-            count
-        } finally { lock.unlock() }
-    }
-
-    private func entry(operationId: String): ?MemoryOperationRecord {
-        for (value in records where value.value.operationId.value == operationId) { return Some(value) }
-        None
-    }
-}
 
 public class RecordingAuditPort <: AuditPort {
     private let lock = Mutex()
@@ -683,8 +565,8 @@ func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
     if (left.unifiedKind != right.unifiedKind) { return false }
     match (left.unifiedKind) {
         case ValueKind.Null => true
-        case ValueKind.Boolean => left.boolean == right.boolean
-        case ValueKind.Number => left.number == right.number
+        case ValueKind.Boolean => left.asBool() == right.asBool()
+        case ValueKind.Number => left.asNumberText() == right.asNumberText()
         case ValueKind.Text => left.text == right.text
         case ValueKind.List =>
             if (left.items.size != right.items.size) { return false }

@@ -42,8 +42,8 @@ main(): Int64 {
     expectInvalidCertificateRejected(transport, "https://127.0.0.1:" + arguments[2])
 
     println(
-        "native provider security contract passed: loopback HTTP, remote HTTP denial, " +
-        "invalid-certificate TLS failure, error/stream/exception credential redaction"
+        "native provider security contract passed: loopback HTTP, remote HTTP denial without opt-in, " +
+        "explicit opt-in, invalid-certificate TLS failure, error/stream/exception credential redaction"
     )
     0
 }
@@ -217,6 +217,18 @@ func expectProductProfileUrlPolicy(loopbackBase: String): Unit {
             !error.message.contains(TEST_API_KEY)
     }
     expect(rejected, "ProviderProfile rejects credentialed remote HTTP")
+    let optedIn = ProviderProfile(
+        "remote-plaintext-opt-in",
+        "fixture",
+        "responses",
+        "http://198.51.100.20",
+        TEST_API_KEY_ENV,
+        allowInsecureHttp: true
+    )
+    expect(
+        optedIn.allowInsecureHttp,
+        "ProviderProfile permits remote HTTP only with explicit opt-in"
+    )
 }
 
 func expectLoopbackUsable(

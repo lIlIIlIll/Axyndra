@@ -30,7 +30,7 @@ main(): Int64 {
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 21, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 22, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -271,8 +271,8 @@ func v19ToV20ContinuationColumnContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 21,
-            "v19 database migrates through schema v21")
+        expect(migrated.scalarInt("PRAGMA user_version") == 22,
+            "v19 database migrates through schema v22")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
         ) == 0, "v20 removes the legacy continuation column from canonical Runs")
@@ -313,8 +313,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 21,
-            "v6 database migrates through schema v7 to v21")
+        expect(migrated.scalarInt("PRAGMA user_version") == 22,
+            "v6 database migrates through schema v7 to v22")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -349,8 +349,8 @@ func v7ToV16MigrationContract(): Unit {
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 21,
-            "v7 database migrates through schema v8 to v21")
+        expect(migrated.scalarInt("PRAGMA user_version") == 22,
+            "v7 database migrates through schema v8 to v22")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"

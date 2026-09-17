@@ -53,11 +53,20 @@ class ProductProcessBroker {
     private let stateRoot: String
     private let workspace: String
     private let executable: String
+    private let shellNetworkMode: ShellNetworkMode
+    private let sandboxCaBundle: String
     private let paths: ProductProcessBrokerPaths
 
-    init(stateRoot: String, workspace: String) {
+    init(
+        stateRoot: String,
+        workspace: String,
+        shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
+        sandboxCaBundle!: String = ""
+    ) {
         this.stateRoot = Path(stateRoot).normalize().toString()
         this.workspace = workspace
+        this.shellNetworkMode = shellNetworkMode
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         this.executable = currentBrokerExecutable()
         this.paths = ProductProcessBrokerPaths(this.stateRoot, workspace)
     }
@@ -271,6 +280,10 @@ class ProductProcessBroker {
                     stateRoot,
                     "--workspace",
                     workspace,
+                    "--shell-network-mode",
+                    shellNetworkModeName(shellNetworkMode),
+                    "--sandbox-ca-bundle",
+                    sandboxCaBundle,
                     "--lease-token",
                     leaseToken
                 ],
@@ -349,6 +362,16 @@ public func runProductProcessBrokerWorker(
     let stateRoot = brokerCliArgument(arguments, "--state-root")
     let authoredWorkspace = brokerCliArgument(arguments, "--workspace")
     let leaseToken = brokerCliArgument(arguments, "--lease-token")
+    let authoredNetworkMode = brokerCliArgument(arguments, "--shell-network-mode")
+    let sandboxCaBundle = brokerCliArgument(arguments, "--sandbox-ca-bundle")
+    let shellNetworkMode = if (authoredNetworkMode == "") {
+        ShellNetworkMode.Restricted
+    } else {
+        match (parseShellNetworkMode(authoredNetworkMode)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => return 2
+        }
+    }
     if (stateRoot == "" || authoredWorkspace == "" || leaseToken == "") {
         return 2
     }
@@ -414,7 +437,9 @@ public func runProductProcessBrokerWorker(
         let supervisor = ProductProcessSupervisor(
             workspace,
             brokerRoot: paths.runtimeRoot,
-            sandboxEnabled: true
+            sandboxEnabled: true,
+            shellNetworkMode: shellNetworkMode,
+            sandboxCaBundle: sandboxCaBundle
         )
         serveProcessBroker(
             server,
@@ -1665,7 +1690,7 @@ func brokerInteger(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind != ValueKind.Number) { return fallback }
-            try { Int64.parse(field.number) } catch (_: Exception) { fallback }
+            try { Int64.parse(field.asNumberText()) } catch (_: Exception) { fallback }
         case None => fallback
     }
 }
@@ -1677,7 +1702,7 @@ func brokerBoolean(
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
+            if (field.unifiedKind == ValueKind.Boolean) { field.asBool() } else { fallback }
         case None => fallback
     }
 }

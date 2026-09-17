@@ -14,8 +14,13 @@ class SkillReferenceTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let skillId = skillToolString(call, "skill_id")
         let referenceId = skillToolString(call, "reference_id")
         if (skillId == "" || referenceId == "") {

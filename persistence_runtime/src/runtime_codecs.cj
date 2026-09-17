@@ -525,7 +525,7 @@ func requiredOptionalInteger(
                 Result.Ok(None)
             } else if (raw.unifiedKind == ValueKind.Number) {
                 try {
-                    Result.Ok(Some(Int64.parse(raw.number)))
+                    Result.Ok(Some(Int64.parse(raw.asNumberText())))
                 } catch (_: Exception) {
                     codecError("field is not an integer or null: " + name)
                 }
@@ -1365,7 +1365,7 @@ func strictOptionalInteger(
         case Some(raw) => match (raw.unifiedKind) {
             case ValueKind.Null => Result.Ok(None)
             case ValueKind.Number => try {
-                Result.Ok(Some(Int64.parse(raw.number)))
+                Result.Ok(Some(Int64.parse(raw.asNumberText())))
             } catch (_: Exception) {
                 codecError("field is not an integer: " + name)
             }
@@ -1465,7 +1465,7 @@ func lenientBudgetInteger(
     match (value.field(name)) {
         case Some(raw) => match (raw.unifiedKind) {
             case ValueKind.Number => try {
-                Int64.parse(raw.number)
+                Int64.parse(raw.asNumberText())
             } catch (_: Exception) {
                 throw IllegalArgumentException("field is not an integer: " + name)
             }
@@ -1976,115 +1976,6 @@ func eventPayloadName(payload: AgentEventPayload): String {
     }
 }
 
-func encodeOperation(operation: OperationRecord): String {
-    encodeAgentValue(
-        objectValue(
-            [
-                ValueField(
-                    "operation_id",
-                    textValue(operation.operationId.value)
-                ),
-                ValueField("run_id", textValue(operation.runId.value)),
-                ValueField("status", textValue(operationStatusName(operation.status))),
-                ValueField("capability", capabilityValue(operation.capability)),
-                ValueField("request_digest", textValue(operation.requestDigest)),
-                ValueField("call", match (operation.call) {
-                    case Some(call) => toolCallValue(call)
-                    case None => nullValue()
-                })
-            ]
-        )
-    )
-}
-
-func decodeOperation(source: String): Result<OperationRecord> {
-    let value = match (decodeAgentValue(source, maxBytes: 67108864)) {
-        case Result.Ok(item) => item
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let status = match (operationStatusFrom(textOr(value, "status"))) {
-        case Some(item) => item
-        case None => return codecError("unknown operation status")
-    }
-    let capability = match (value.field("capability")) {
-        case Some(raw) => capabilityFrom(raw)
-        case None => Capability(CapabilityKind.WorkspaceRead)
-    }
-    let call: ?ToolCall = match (value.field("call")) {
-        case Some(raw) =>
-            if (raw.unifiedKind == ValueKind.Null) {
-                None
-            } else {
-                Some(toolCallFrom(raw))
-            }
-        case None => None
-    }
-    Result.Ok(
-        OperationRecord(
-            OperationId(textOr(value, "operation_id")),
-            RunId(textOr(value, "run_id")),
-            status,
-            capability,
-            textOr(value, "request_digest"),
-            call: call
-        )
-    )
-}
-
-func encodeReceipt(receipt: OperationReceipt): String {
-    encodeAgentValue(
-        objectValue(
-            [
-                ValueField(
-                    "operation_id",
-                    textValue(receipt.operationId.value)
-                ),
-                ValueField("committed", boolValue(receipt.committed)),
-                ValueField("is_error", boolValue(receipt.isError)),
-                ValueField("detail", receipt.detail)
-            ]
-        )
-    )
-}
-
-func decodeReceipt(source: String): Result<OperationReceipt> {
-    let value = match (decodeAgentValue(source, maxBytes: 67108864)) {
-        case Result.Ok(item) => item
-        case Result.Err(error) => return Result.Err(error)
-    }
-    Result.Ok(
-        OperationReceipt(
-            OperationId(textOr(value, "operation_id")),
-            boolOr(value, "committed"),
-            match (value.field("detail")) {
-                case Some(item) => item
-                case None => objectValue([])
-            },
-            isError: boolOr(value, "is_error")
-        )
-    )
-}
-
-func toolCallValue(call: ToolCall): AgentValue {
-    objectValue(
-        [
-            ValueField("call_id", textValue(call.callId)),
-            ValueField("name", textValue(call.name)),
-            ValueField("arguments", call.arguments)
-        ]
-    )
-}
-
-func toolCallFrom(value: AgentValue): ToolCall {
-    ToolCall(
-        textOr(value, "call_id"),
-        textOr(value, "name"),
-        match (value.field("arguments")) {
-            case Some(item) => item
-            case None => objectValue([])
-        }
-    )
-}
 
 func capabilityValue(capability: Capability): AgentValue {
     objectValue(
@@ -2095,12 +1986,6 @@ func capabilityValue(capability: Capability): AgentValue {
     )
 }
 
-func capabilityFrom(value: AgentValue): Capability {
-    Capability(
-        capabilityKindFrom(textOr(value, "kind")),
-        resource: textOr(value, "resource")
-    )
-}
 
 func strictCapabilityFrom(value: AgentValue): Result<Capability> {
     if (value.unifiedKind != ValueKind.Object) {
@@ -2743,7 +2628,7 @@ func requiredBoolean(value: AgentValue, name: String): Result<Bool> {
     match (value.field(name)) {
         case Some(item) =>
             if (item.unifiedKind == ValueKind.Boolean) {
-                Result.Ok(item.boolean)
+                Result.Ok(item.asBool())
             } else {
                 codecError("field is not boolean: " + name)
             }
@@ -2758,7 +2643,7 @@ func requiredInteger(value: AgentValue, name: String): Result<Int64> {
                 return codecError("field is not an integer: " + name)
             }
             try {
-                Result.Ok(Int64.parse(item.number))
+                Result.Ok(Int64.parse(item.asNumberText()))
             } catch (_: Exception) {
                 codecError("field is not an integer: " + name)
             }
@@ -2874,7 +2759,7 @@ func textOr(value: AgentValue, name: String): String {
 
 func boolOr(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.boolean
+        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.asBool()
         case None => false
     }
 }
@@ -2882,7 +2767,7 @@ func boolOr(value: AgentValue, name: String): Bool {
 func boolOrDefault(value: AgentValue, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
         case Some(item) => if (item.unifiedKind == ValueKind.Boolean) {
-            item.boolean
+            item.asBool()
         } else {
             fallback
         }
@@ -2895,7 +2780,7 @@ func integerOr(value: AgentValue, name: String): Int64 {
         case Some(item) =>
             if (item.unifiedKind == ValueKind.Number) {
                 try {
-                    Int64.parse(item.number)
+                    Int64.parse(item.asNumberText())
                 } catch (_: Exception) {
                     0
                 }
@@ -3091,28 +2976,6 @@ func eventKindFrom(value: String): ?AgentEventKind {
     }
 }
 
-func operationStatusName(status: OperationStatus): String {
-    match (status) {
-        case OperationStatus.Prepared => "prepared"
-        case OperationStatus.Approved => "approved"
-        case OperationStatus.Executing => "executing"
-        case OperationStatus.Committed => "committed"
-        case OperationStatus.Failed => "failed"
-        case OperationStatus.RecoveryRequired => "recovery_required"
-    }
-}
-
-func operationStatusFrom(value: String): ?OperationStatus {
-    match (value) {
-        case "prepared" => Some(OperationStatus.Prepared)
-        case "approved" => Some(OperationStatus.Approved)
-        case "executing" => Some(OperationStatus.Executing)
-        case "committed" => Some(OperationStatus.Committed)
-        case "failed" => Some(OperationStatus.Failed)
-        case "recovery_required" => Some(OperationStatus.RecoveryRequired)
-        case _ => None
-    }
-}
 
 func capabilityKindName(kind: CapabilityKind): String {
     match (kind) {

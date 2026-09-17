@@ -130,6 +130,23 @@ providers:
     api_key_env: "DEEPSEEK_API_KEY"
 ```
 
+如果远程 Provider 只能提供明文 HTTP，可以对单个 Profile 显式允许该连接：
+
+```yaml
+# ~/.axyndra/providers.yml
+providers:
+  - id: "legacy-http"
+    provider: "legacy"
+    protocol: "completions"
+    dialect: "generic_chat"
+    base_url: "http://10.0.0.5:8080"
+    api_key_env: "LEGACY_API_KEY"
+    allow_insecure_http: true
+```
+
+`allow_insecure_http` 默认是 `false`。启用后，API Key、prompt 和工具参数会以明文经过网络，
+启动时会显示警告。`base_url` 仍填写服务根地址，程序会自动追加协议路径；不要重复写 `/v1`。
+
 模型通过 `profile/model` 唯一定位 Provider：
 
 ```yaml

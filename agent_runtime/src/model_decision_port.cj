@@ -233,11 +233,11 @@ func sameDecisionValue(left: AgentValue, right: AgentValue): Bool {
             case _ => false
         }
         case ValueKind.Boolean => match (right.unifiedKind) {
-            case ValueKind.Boolean => left.boolean == right.boolean
+            case ValueKind.Boolean => left.asBool() == right.asBool()
             case _ => false
         }
         case ValueKind.Number => match (right.unifiedKind) {
-            case ValueKind.Number => left.number == right.number
+            case ValueKind.Number => left.asNumberText() == right.asNumberText()
             case _ => false
         }
         case ValueKind.Text => match (right.unifiedKind) {

@@ -180,6 +180,7 @@ public class LocalWorkspace <: WorkspacePort {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+
         if (target.sensitive) {
             return workspaceError(
                 AgentErrorKind.PermissionDenied,
@@ -187,12 +188,42 @@ public class LocalWorkspace <: WorkspacePort {
                 "sensitive path writes are not supported by the write tool"
             )
         }
+        let parentPath = Path(target.realParentPath)
+        if (!exists(parentPath)) {
+            return workspaceError(
+                AgentErrorKind.InvalidInput,
+                "workspace.parent_missing",
+                "parent directory does not exist"
+            )
+        }
+        if (!FileInfo(parentPath).isDirectory()) {
+            return workspaceError(
+                AgentErrorKind.InvalidInput,
+                "workspace.parent_not_directory",
+                "parent path is not a directory"
+            )
+        }
+        if (target.exists && !FileInfo(Path(target.normalizedPath)).isRegular()) {
+            return workspaceError(
+                AgentErrorKind.InvalidInput,
+                "workspace.not_regular",
+                "write target must be a regular file"
+            )
+        }
+
         var temporary = ""
+        var phase = "staging"
         try {
             temporary = workspaceTemporary(target.normalizedPath, content)
+            phase = "publish"
             workspacePublish(temporary, target.normalizedPath, target.exists)
+            phase = "confirm"
+            let info = FileInfo(Path(target.normalizedPath))
             let contentBytes = unsafe { content.rawData() }
             let bytes = contentBytes.size
+            if (!info.isRegular() || info.size != bytes) {
+                throw Exception("published target did not match the requested file shape")
+            }
             Result.Ok(
                 objectValue(
                     [
@@ -214,7 +245,25 @@ public class LocalWorkspace <: WorkspacePort {
             )
         } catch (error: Exception) {
             if (temporary != "") { let _ = removeIfExists(temporary) }
-            workspaceError(AgentErrorKind.Internal, "workspace.write", error.message)
+            let outcomeKind = if (phase == "staging") {
+                AgentErrorKind.Internal
+            } else {
+                AgentErrorKind.RecoveryRequired
+            }
+            let outcomeMessage = if (phase == "staging") {
+                error.message
+            } else {
+                "workspace publish outcome is unknown: " + error.message
+            }
+            Result.Err(AgentError(
+                outcomeKind,
+                "workspace.write",
+                outcomeMessage,
+                fields: [
+                    ErrorField("phase", phase),
+                    ErrorField("path", target.normalizedPath)
+                ]
+            ))
         }
     }
 
@@ -1138,6 +1187,46 @@ func configuredProductSandboxToolchain(): ProductSandboxToolchain {
     }
     ProductSandboxToolchain(mounts.toArray(), paths.toArray())
 }
+func resolveProductSandboxCaBundle(authored: String): Result<String> {
+    let requested = authored.trimAscii()
+    let candidates = if (requested != "") {
+        [requested]
+    } else {
+        [
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/cert.pem",
+            "/etc/ca-certificates/extracted/tls-ca-bundle.pem",
+            "/etc/pki/tls/certs/ca-bundle.crt"
+        ]
+    }
+    for (candidate in candidates) {
+        if (!Path(candidate).isAbsolute() || !exists(Path(candidate))) {
+            continue
+        }
+        try {
+            let content = String.fromUtf8(File.readFrom(candidate)).trimAscii()
+            if (content != "" && content.contains("-----BEGIN CERTIFICATE-----")) {
+                return Result.Ok(Path(candidate).normalize().toString())
+            }
+        } catch (_: Exception) {}
+        if (requested != "") {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                "configured sandbox.ca_bundle is not a readable PEM certificate bundle"
+            ))
+        }
+    }
+    if (requested != "") {
+        Result.Err(AgentError(
+            AgentErrorKind.Configuration,
+            "sandbox.ca_unavailable",
+            "configured sandbox.ca_bundle is unavailable"
+        ))
+    } else {
+        Result.Ok("")
+    }
+}
 
 private func addProductToolchainRoot(
     authored: String,
@@ -1176,6 +1265,9 @@ public class LocalProcessPort <: ProcessPort {
     private let sandboxResourcesValue: SandboxResourceLimits
     private let sandboxReadOnlyMountsValue: Array<SandboxReadOnlyMount>
     private let sandboxPathEntriesValue: Array<String>
+    private let sandboxCaBundleValue: String
+    private let sandboxCaBundleMountValue: ?SandboxReadOnlyMount
+    private let networkGatewayValue: ?NetworkGatewayPort
     private let activeLock = Mutex()
     private let active = ArrayList<ActiveLocalProcess>()
     private let reserved = HashMap<String, Bool>()
@@ -1183,13 +1275,14 @@ public class LocalProcessPort <: ProcessPort {
     private let shells = ArrayList<PersistentShell>()
     private let evalLock = Mutex()
     private let evalKernels = ArrayList<PersistentEvalKernel>()
-
     public init(
         workspace: LocalWorkspace,
         sandboxEnabled!: Bool = false,
         sandboxResources!: SandboxResourceLimits = defaultProductSandboxResourceLimits(),
         sandboxReadOnlyMounts!: Array<SandboxReadOnlyMount> = [],
-        sandboxPathEntries!: Array<String> = []
+        sandboxPathEntries!: Array<String> = [],
+        sandboxCaBundle!: String = "",
+        networkGateway!: ?NetworkGatewayPort = None
     ) {
         this.workspace = workspace
         this.sandboxEnabledValue = sandboxEnabled
@@ -1198,6 +1291,17 @@ public class LocalProcessPort <: ProcessPort {
         for (mount in sandboxReadOnlyMounts) { mounts.add(SandboxReadOnlyMount(mount.path)) }
         this.sandboxReadOnlyMountsValue = mounts.toArray()
         this.sandboxPathEntriesValue = sandboxPathEntries.clone()
+        this.sandboxCaBundleValue = sandboxCaBundle.trimAscii()
+        this.sandboxCaBundleMountValue = if (this.sandboxCaBundleValue == "") {
+            None
+        } else {
+            try {
+                Some(SandboxReadOnlyMount(this.sandboxCaBundleValue))
+            } catch (_: Exception) {
+                None
+            }
+        }
+        this.networkGatewayValue = networkGateway
     }
 
     public func sandboxEnabled(): Bool { sandboxEnabledValue }
@@ -1268,6 +1372,20 @@ public class LocalProcessPort <: ProcessPort {
     }
 
     public func execute(request: ProcessRequest): Result<ProcessResult> {
+        let requiresSandbox = request.sandboxMode != ProcessSandboxMode.Host ||
+            networkPolicyModeIsMediated(request.networkPolicy.mode) ||
+            networkPolicyModeIsDenied(request.networkPolicy.mode)
+        if (requiresSandbox &&
+            !networkPolicyModeIsDenied(request.networkPolicy.mode) &&
+            (sandboxCaBundleValue == "" || sandboxCaBundleMountValue.isNone())) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                "no readable sandbox CA bundle is available",
+                retryable: false,
+                fallbackAllowed: false
+            ))
+        }
         if (reservedOperationCancelled(request.operationId)) {
             return Result.Err(AgentError(AgentErrorKind.Cancelled, "process.cancelled", "process operation was cancelled before launch"))
         }
@@ -1282,11 +1400,21 @@ public class LocalProcessPort <: ProcessPort {
                 case Result.Err(error) => return Result.Err(error)
             }
         }
-        if (request.sandboxMode != ProcessSandboxMode.Host) {
+        if (requiresSandbox) {
             if (!sandboxEnabledValue) {
                 return sandboxRequired<ProcessResult>(request)
             }
-            return executeSandboxed(request, workingDirectory)
+            let gatewayLease = match (acquireNetworkGateway(request)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            let result = executeSandboxed(
+                request,
+                workingDirectory,
+                networkLease: gatewayLease
+            )
+            releaseNetworkGateway(gatewayLease)
+            return result
         }
         try {
             let arguments = ArrayList<String>()
@@ -1362,11 +1490,29 @@ public class LocalProcessPort <: ProcessPort {
         sessionId: SessionId,
         request: ProcessRequest
     ): Result<ProcessResult> {
+        if (networkPolicyModeIsMediated(request.networkPolicy.mode) ||
+            networkPolicyModeIsHost(request.networkPolicy.mode)) {
+            // Networked shell commands are one-shot so the gateway lease and
+            // process tree end with the approved command.
+            return execute(request)
+        }
         let command = match (persistentShellCommand(request)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let shell = match (if (request.sandboxMode == ProcessSandboxMode.Host) {
+        if (request.sandboxMode != ProcessSandboxMode.Host &&
+            !networkPolicyModeIsDenied(request.networkPolicy.mode) &&
+            (sandboxCaBundleValue == "" || sandboxCaBundleMountValue.isNone())) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                "no readable sandbox CA bundle is available",
+                retryable: false,
+                fallbackAllowed: false
+            ))
+        }
+        let shell = match (if (request.sandboxMode == ProcessSandboxMode.Host &&
+            networkPolicyModeIsHost(request.networkPolicy.mode)) {
             // Host mode is reserved for product-authored maintenance paths.
             // Model-triggered BashTool requests always select a workspace
             // sandbox before they reach this boundary.
@@ -1396,6 +1542,32 @@ public class LocalProcessPort <: ProcessPort {
         }
     }
 
+    private func acquireNetworkGateway(
+        request: ProcessRequest
+    ): Result<?NetworkGatewayLease> {
+        if (!networkPolicyModeIsMediated(request.networkPolicy.mode)) {
+            return Result.Ok(None)
+        }
+        match (networkGatewayValue) {
+            case Some(gateway) =>
+                match (gateway.acquire(request.operationId, request.networkPolicy)) {
+                    case Result.Ok(value) => Result.Ok(Some(value))
+                    case Result.Err(error) => Result.Err(error)
+                }
+            case None => Result.Err(networkGatewayUnavailableError())
+        }
+
+    }
+    private func releaseNetworkGateway(lease: ?NetworkGatewayLease): Unit {
+        match (lease) {
+            case None => ()
+            case Some(value) =>
+                match (networkGatewayValue) {
+                    case Some(gateway) => let _ = gateway.release(value)
+                    case None => ()
+                }
+        }
+    }
     private func persistentShellCommand(request: ProcessRequest): Result<String> {
         if (request.arguments.size == 1) {
             return Result.Ok(request.arguments[0])
@@ -1416,20 +1588,32 @@ public class LocalProcessPort <: ProcessPort {
 
     private func executeSandboxed(
         request: ProcessRequest,
-        workingDirectory: String
+        workingDirectory: String,
+        networkLease!: ?NetworkGatewayLease = None
     ): Result<ProcessResult> {
-        let filesystem = if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
+        let filesystem = if (request.sandboxMode == ProcessSandboxMode.Host) {
+            FilesystemIsolationMode.Host
+        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
             FilesystemIsolationMode.WorkspaceReadOnly
         } else {
             FilesystemIsolationMode.WorkspaceReadWrite
         }
-        let sandbox = processSandbox(request, filesystem)
+        let sandbox = processSandbox(request, filesystem, networkLease: networkLease)
         let execution = sandbox.execute(
             WorkspaceSandboxCommand(
                 request.executable,
                 arguments: request.arguments,
                 workingDirectory: workingDirectory,
-                timeoutMillis: request.timeoutMillis
+                environment: sandboxEnvironment(request),
+                timeoutMillis: request.timeoutMillis,
+                networkBridgeExecutable: match (networkLease) {
+                    case Some(value) => value.bridgeExecutable
+                    case None => ""
+                },
+                networkBridgeSocket: match (networkLease) {
+                    case Some(value) => value.bridgeSocket
+                    case None => ""
+                }
             ),
             onStarted: Some({process => register(request.operationId, process)})
         )
@@ -1466,11 +1650,33 @@ public class LocalProcessPort <: ProcessPort {
                 "PATH"
             ])
         }
+        if (sandboxCaBundleValue != "") {
+            allowed.add("SSL_CERT_FILE")
+            allowed.add("CURL_CA_BUNDLE")
+        }
         // EnvironmentFilter requires secret names to be present in both
         // allowlists, keeping an explicit secret grant as the only path to
         // credential injection.
         allowed.add(all: request.secretEnvironmentAllowlist)
         allowed.toArray()
+    }
+    private func sandboxEnvironment(
+        request: ProcessRequest
+    ): Array<SandboxEnvironmentEntry> {
+        let _ = request
+        if (sandboxCaBundleValue == "") {
+            return []
+        }
+        [
+            SandboxEnvironmentEntry(
+                "SSL_CERT_FILE",
+                sandboxCaBundleValue
+            ),
+            SandboxEnvironmentEntry(
+                "CURL_CA_BUNDLE",
+                sandboxCaBundleValue
+            )
+        ]
     }
 
     private func scopedDisplayServerEnvironment(
@@ -1522,7 +1728,8 @@ public class LocalProcessPort <: ProcessPort {
 
     private func processSandbox(
         request: ProcessRequest,
-        filesystem: FilesystemIsolationMode
+        filesystem: FilesystemIsolationMode,
+        networkLease!: ?NetworkGatewayLease = None
     ): WorkspaceSandbox {
         let allowed = processEnvironmentAllowlist(
             request,
@@ -1531,6 +1738,21 @@ public class LocalProcessPort <: ProcessPort {
         let mounts = ArrayList<SandboxReadOnlyMount>()
         for (mount in sandboxReadOnlyMountsValue) {
             mounts.add(mount)
+        }
+        match (sandboxCaBundleMountValue) {
+            case Some(caMount) =>
+                var duplicate = false
+                for (existing in mounts where existing.path == caMount.path) {
+                    duplicate = true
+                }
+                if (!duplicate) { mounts.add(caMount) }
+            case None => ()
+        }
+        match (networkLease) {
+            case Some(value) =>
+                mounts.add(SandboxReadOnlyMount(value.bridgeExecutable))
+                mounts.add(SandboxReadOnlyMount(Path(value.bridgeSocket).parent.toString()))
+            case None => ()
         }
         if (request.displayServerAccess) {
             // Mount only the explicitly selected runtime directory. The
@@ -1558,10 +1780,10 @@ public class LocalProcessPort <: ProcessPort {
             workspace.rootPath(),
             filesystem: filesystem,
             process: ProcessIsolationMode.Isolated,
-            network: if (request.networkAccess) {
-                NetworkIsolationMode.Allowed
-            } else {
-                NetworkIsolationMode.Denied
+            network: match (request.networkPolicy.mode) {
+                case NetworkPolicyMode.HostNetwork => NetworkIsolationMode.Allowed
+                case NetworkPolicyMode.Mediated => NetworkIsolationMode.Mediated
+                case NetworkPolicyMode.Denied => NetworkIsolationMode.Denied
             },
             environment: EnvironmentFilter(
                 allowlist: allowed,
@@ -1582,7 +1804,7 @@ public class LocalProcessPort <: ProcessPort {
         request: ProcessRequest
     ): Result<EvalExecutionResult> {
         if (request.sandboxMode != ProcessSandboxMode.WorkspaceReadWrite ||
-            request.networkAccess) {
+            !networkPolicyModeIsDenied(request.networkPolicy.mode)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Configuration,
                 "sandbox.eval_profile_invalid",
@@ -1781,7 +2003,9 @@ public class LocalProcessPort <: ProcessPort {
         if (!sandboxEnabledValue) {
             return sandboxRequired<PersistentShell>(request)
         }
-        let filesystem = if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
+        let filesystem = if (request.sandboxMode == ProcessSandboxMode.Host) {
+            FilesystemIsolationMode.Host
+        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
             FilesystemIsolationMode.WorkspaceReadOnly
         } else {
             FilesystemIsolationMode.WorkspaceReadWrite

@@ -41,8 +41,20 @@ public interface ExtensionOperationHost {
         input: AgentValue
     ): ToolApprovalMetadata
 
+    func resolveNetworkPolicy(
+        requirement: CapabilityRequirement,
+        input: AgentValue
+    ): Result<NetworkPolicy> {
+        let _ = input
+        if (requirement.name == "network.http") {
+            return Result.Ok(NetworkPolicy(NetworkPolicyMode.HostNetwork))
+        }
+        Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+
     func execute(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         intent: OperationIntent
     ): Result<ExecutionResult>
 
@@ -123,11 +135,15 @@ class SdkToolExecutor <: ToolExecutor {
         this.tool = tool
         this.host = host
     }
-
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         match (context.cancellation.check()) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
@@ -158,7 +174,7 @@ class SdkToolExecutor <: ToolExecutor {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        let execution = match (host.execute(context, intent)) {
+        let execution = match (host.execute(context, prepared, intent)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(value) => value
         }
@@ -217,7 +233,7 @@ func sdkFieldText(value: AgentValue, name: String, fallback!: String = ""): Stri
 
 func sdkFieldBool(value: AgentValue, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
-        case Some(field) => if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
+        case Some(field) => if (field.unifiedKind == ValueKind.Boolean) { field.asBool() } else { fallback }
         case None => fallback
     }
 }
@@ -225,7 +241,7 @@ func sdkFieldBool(value: AgentValue, name: String, fallback: Bool): Bool {
 func sdkFieldInteger(value: AgentValue, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
         case Some(field) => if (field.unifiedKind == ValueKind.Number) {
-            try { Int64.parse(field.number) } catch (_: Exception) { fallback }
+            try { Int64.parse(field.asNumberText()) } catch (_: Exception) { fallback }
         } else { fallback }
         case None => fallback
     }
@@ -253,6 +269,11 @@ public class ExtensionInstaller {
         }
         let registered = ArrayList<String>()
         for (tool in extension.tools()) {
+            match (validateSdkToolCapabilities(tool.definition())) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) =>
+                    return rollbackRegistration(catalog, registered, error)
+            }
             match (catalog.register(sdkDescriptor(tool, host), SdkToolExecutor(tool, host))) {
                 case Result.Ok(_) => registered.add(tool.definition().name)
                 case Result.Err(error) =>
@@ -344,13 +365,33 @@ public class ExtensionInstaller {
         None
     }
 }
+func validateSdkToolCapabilities(definition: ExtensionToolDefinition): Result<Unit> {
+    var networkCount = 0
+    for (requirement in definition.capabilities) {
+        if (requirement.name == "network.http") { networkCount += 1 }
+    }
+    if (networkCount > 1) {
+        return extensionConfigurationError(
+            "sdk.duplicate_network_capability",
+            "SDK tools must declare at most one network.http capability"
+        )
+    }
+    Result.Ok(())
+}
 
+func sdkNetworkRequirement(definition: ExtensionToolDefinition): ?CapabilityRequirement {
+    for (requirement in definition.capabilities) {
+        if (requirement.name == "network.http") { return Some(requirement) }
+    }
+    None
+}
 func sdkDescriptor(tool: ExtensionTool, host: ExtensionOperationHost): ToolDescriptor {
     let definition = tool.definition()
     let first = definition.capabilities[0]
     let additional: Array<CapabilityRequirement> = if (definition.capabilities.size > 1) {
         definition.capabilities[1..]
     } else { [] }
+    let networkRequirement = sdkNetworkRequirement(definition)
     ToolDescriptor(
         ModelToolDefinition(definition.name, definition.description, definition.inputSchema),
         host.resolveCapability(first, objectValue([])),
@@ -367,6 +408,12 @@ func sdkDescriptor(tool: ExtensionTool, host: ExtensionOperationHost): ToolDescr
                 values.add(host.resolveCapability(requirement, call.arguments))
             }
             values.toArray()
+        },
+        networkPolicyResolver: {call =>
+            match (networkRequirement) {
+                case Some(requirement) => host.resolveNetworkPolicy(requirement, call.arguments)
+                case None => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }
         },
         approvalMetadataResolver: {call => host.approvalMetadata(first, call.arguments)}
     )

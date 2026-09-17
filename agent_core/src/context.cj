@@ -324,7 +324,7 @@ func estimateImageTokens(image: ModelImage): Int64 {
 func estimateAgentValueTokens(value: AgentValue): Int64 {
     match (value.unifiedKind) {
         case ValueKind.Null | ValueKind.Boolean => 1
-        case ValueKind.Number => max(1, estimateTextTokens(value.number, 3))
+        case ValueKind.Number => max(1, estimateTextTokens(value.asNumberText(), 3))
         case ValueKind.Text => estimateTextTokens(value.text, 3) + 2
         case ValueKind.List =>
             var tokens: Int64 = 2

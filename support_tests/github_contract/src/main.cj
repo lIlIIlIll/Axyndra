@@ -7,6 +7,8 @@ import yjson.*
 import agent_domain.*
 import agent_ports.*
 import agent_product.*
+import agent_runtime.*
+import agent_testkit.*
 import std.collection.*
 import std.fs.*
 import tool_runtime.*
@@ -201,7 +203,8 @@ func verifyRealCommandMapping(root: String): Unit {
         "run_watch invokes the blocking Actions watch command"
     )
     expect(
-        runtime.execute(
+        invocationFailed(
+            runtime,
             context,
             call(
                 "escape",
@@ -211,11 +214,12 @@ func verifyRealCommandMapping(root: String): Unit {
                     ValueField("path", textValue("../secret"))
                 ]
             )
-        ).isError() &&
-        runtime.execute(
+        ) &&
+        invocationFailed(
+            runtime,
             context,
             call("missing-pr", "pr_checkout", [])
-        ).isError(),
+        ),
         "GitHub paths and required PR targets fail closed"
     )
     expect(
@@ -236,10 +240,11 @@ func verifyRealCommandMapping(root: String): Unit {
         gitExecutable: "/bin/false"
     )
     expect(
-        failing.execute(
+        invocationFailed(
+            failing,
             context,
             call("failure", "repo_view", [])
-        ).isError(),
+        ),
         "non-zero GitHub commands propagate a real tool failure"
     )
 }
@@ -257,7 +262,14 @@ class RecordingGithubProcessPort <: ProcessPort {
         Result.Ok(ProcessResult(
             exitCode,
             stdout: if (exitCode == 0) {
-                joinArguments(request.arguments) + "\n"
+                if (request.arguments.size >= 3 &&
+                    request.arguments[request.arguments.size - 3] == "remote" &&
+                    request.arguments[request.arguments.size - 2] == "get-url" &&
+                    request.arguments[request.arguments.size - 1] == "origin") {
+                    "https://github.com/acme/demo.git\n"
+                } else {
+                    joinArguments(request.arguments) + "\n"
+                }
             } else {
                 ""
             },
@@ -281,7 +293,9 @@ func joinArguments(arguments: Array<String>): String {
 }
 
 func requestsHaveNetwork(requests: Array<ProcessRequest>): Bool {
-    for (request in requests where !request.networkAccess) { return false }
+    for (request in requests where networkPolicyModeIsDenied(request.networkPolicy.mode)) {
+        return false
+    }
     true
 }
 
@@ -315,7 +329,123 @@ func invoke(
     context: ToolInvocationContext,
     call: ToolCall
 ): ToolResult {
-    runtime.execute(context, call).value().getOrThrow()
+    invokeResult(runtime, context, call).value().getOrThrow()
+}
+
+func invocationFailed(
+    runtime: ProductGithubRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall
+): Bool {
+    match (invokeResult(runtime, context, call)) {
+        case Result.Err(_) => true
+        case Result.Ok(result) => result.isError
+    }
+}
+
+func invokeResult(
+    runtime: ProductGithubRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall
+): Result<ToolResult> {
+    let catalog = ToolCatalog()
+    let registration = catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "github",
+                "GitHub contract fixture.",
+                githubContractSchema()
+            ),
+            Capability(CapabilityKind.NetworkAccess),
+            sideEffecting: true,
+            networkPolicyResolver: Some({_value =>
+                Result.Ok(githubContractNetworkPolicy(""))
+            })
+        ),
+        GithubContractExecutor(runtime)
+    )
+    match (registration) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
+    let pipeline = ToolPipeline(
+        catalog,
+        InMemoryOperationRuntimePort(),
+        GithubContractAudit(),
+        GithubContractIds(call.callId),
+        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
+    )
+    match (executePipelineCall(pipeline, context, call)) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(ToolInvocationResult.Completed(result)) =>
+            Result.Ok(result)
+        case Result.Ok(ToolInvocationResult.NeedsApproval(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "github.contract_approval_required",
+                "github contract fixture unexpectedly requires approval"
+            ))
+        case Result.Ok(ToolInvocationResult.Denied(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "github.contract_denied",
+                "github contract fixture unexpectedly denied the operation"
+            ))
+    }
+}
+
+class GithubContractExecutor <: ToolExecutor {
+    private let runtime: ProductGithubRuntime
+
+    init(runtime: ProductGithubRuntime) {
+        this.runtime = runtime
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.execute(context, prepared)
+    }
+}
+
+class GithubContractAudit <: AuditPort {
+    public func append(event: AgentEvent): Result<Unit> {
+        let _ = event
+        Result.Ok(())
+    }
+}
+
+class GithubContractIds <: IdGenerator {
+    private let operationName: String
+
+    init(operationName: String) {
+        this.operationName = operationName
+    }
+
+    public func nextRunId(): RunId { RunId("github-contract-run") }
+    public func nextSessionId(): SessionId { SessionId("github-contract-session") }
+    public func nextOperationId(): OperationId {
+        OperationId("github-" + operationName)
+    }
+}
+
+func githubContractSchema(): AgentValue {
+    objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("required", listValue([textValue("op")]))
+    ])
+}
+
+func githubContractNetworkPolicy(operation: String): NetworkPolicy {
+    let _ = operation
+    NetworkPolicy(
+        NetworkPolicyMode.Mediated,
+        egress: [
+            NetworkEgressRule("api.github.com", 443u16),
+            NetworkEgressRule("github.com", 443u16)
+        ]
+    )
 }
 
 func call(

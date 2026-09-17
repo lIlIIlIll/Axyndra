@@ -1770,7 +1770,7 @@ func productTextField(value: AgentValue, name: String): String {
 func productIntegerField(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
         case Some(item) => try {
-            Int64.parse(item.number)
+            Int64.parse(item.asNumberText())
         } catch (_: Exception) {
             0
         }
@@ -1780,7 +1780,7 @@ func productIntegerField(value: AgentValue, name: String): Int64 {
 
 func productBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.boolean
+        case Some(item) => item.unifiedKind == ValueKind.Boolean && item.asBool()
         case None => false
     }
 }

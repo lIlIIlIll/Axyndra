@@ -36,7 +36,8 @@ public func installLocalTools(
     skillRuntime!: ?ProductSkillRuntime = None,
     webSearchRuntime!: ?ProductWebSearchRuntime = None,
     artifactStore!: ?ProductArtifactStore = None,
-    allowUnsafeDirectLaunchForTests!: Bool = false
+    allowUnsafeDirectLaunchForTests!: Bool = false,
+    sandboxCaBundle!: String = ""
 ): Result<Unit> {
     let astEdits = AstEditRuntime(workspace, processes)
     let extensions = ExtensionInstaller(
@@ -70,7 +71,8 @@ public func installLocalTools(
         memoryRuntime: memoryRuntime,
         skillRuntime: skillRuntime,
         artifactStore: artifactStore,
-        allowUnsafeDirectLaunchForTests: allowUnsafeDirectLaunchForTests
+        allowUnsafeDirectLaunchForTests: allowUnsafeDirectLaunchForTests,
+        sandboxCaBundle: sandboxCaBundle
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -92,7 +94,9 @@ func installLocalToolsWithExtensions(
     memoryRuntime!: ?ProductMemoryRuntime = None,
     skillRuntime!: ?ProductSkillRuntime = None,
     artifactStore!: ?ProductArtifactStore = None,
-    allowUnsafeDirectLaunchForTests!: Bool = false
+    allowUnsafeDirectLaunchForTests!: Bool = false,
+    shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
+    sandboxCaBundle!: String = ""
 ): Result<Unit> {
     match (installRequiredToolGroups(
         catalog,
@@ -104,7 +108,9 @@ func installLocalToolsWithExtensions(
         checkpointDatabase,
         askRuntime,
         artifactStore,
-        allowUnsafeDirectLaunchForTests
+        allowUnsafeDirectLaunchForTests,
+        shellNetworkMode,
+        sandboxCaBundle
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -119,7 +125,8 @@ func installLocalToolsWithExtensions(
         taskRuntime,
         goalRuntime,
         memoryRuntime,
-        skillRuntime
+        skillRuntime,
+        shellNetworkMode
     )
 }
 
@@ -133,7 +140,9 @@ func installRequiredToolGroups(
     checkpointDatabase: ?SqliteDatabase,
     askRuntime: AskRuntime,
     artifactStore: ?ProductArtifactStore,
-    allowUnsafeDirectLaunchForTests: Bool
+    allowUnsafeDirectLaunchForTests: Bool,
+    shellNetworkMode: ShellNetworkMode,
+    sandboxCaBundle: String
 ): Result<Unit> {
     match (installWorkspaceTools(
         catalog,
@@ -153,7 +162,8 @@ func installRequiredToolGroups(
         processes,
         extensions,
         taskRuntime,
-        artifactStore
+        artifactStore,
+        shellNetworkMode
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -166,7 +176,8 @@ func installRequiredToolGroups(
         catalog,
         workspace,
         sandboxEnabled: processes.sandboxEnabled(),
-        allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests
+        allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests,
+        sandboxCaBundle: sandboxCaBundle
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -175,7 +186,8 @@ func installRequiredToolGroups(
         catalog,
         workspace,
         sandboxEnabled: processes.sandboxEnabled(),
-        allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests
+        allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests,
+        sandboxCaBundle: sandboxCaBundle
     )
 }
 
@@ -185,7 +197,8 @@ func installOptionalToolGroups(
     taskRuntime: ?ProductTaskRuntime,
     goalRuntime: ?ProductGoalRuntime,
     memoryRuntime: ?ProductMemoryRuntime,
-    skillRuntime: ?ProductSkillRuntime
+    skillRuntime: ?ProductSkillRuntime,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     match (installGoalTools(catalog, goalRuntime)) {
         case Result.Ok(_) => ()
@@ -206,7 +219,7 @@ func installOptionalToolGroups(
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
-    installTaskTools(catalog, taskRuntime)
+    installTaskTools(catalog, taskRuntime, shellNetworkMode)
 }
 
 func installWorkspaceTools(
@@ -254,8 +267,13 @@ func registerPlanTool(catalog: ToolCatalog): Result<Unit> {
 class PlanWriteTool <: ToolExecutor {
     public func execute(
         _: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let content = match (call.arguments.field("content")) {
             case Some(value) => value.text.trimAscii()
             case None => ""
@@ -337,6 +355,12 @@ func registerGithubTool(
             sideEffecting: true,
             capabilityResolver: githubCapabilityFor,
             additionalCapabilityResolver: githubAdditionalCapabilities,
+            networkPolicyResolver: Some({call =>
+                Result.Ok(githubNetworkPolicy(
+                    optionalString(call, "op", ""),
+                    repo: optionalString(call, "repo", "")
+                ))
+            }),
             sideEffectResolver: githubSideEffecting
         ),
         GithubTool(ProductGithubRuntime(processes))
@@ -376,14 +400,22 @@ func installProcessTools(
     processes: LocalProcessPort,
     extensions: ExtensionInstaller,
     taskRuntime: ?ProductTaskRuntime,
-    artifactStore: ?ProductArtifactStore
+    artifactStore: ?ProductArtifactStore,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     let _ = extensions
     match (registerGlobTool(catalog, processes)) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
-    match (registerBashTool(catalog, workspace, processes, taskRuntime, artifactStore)) {
+    match (registerBashTool(
+        catalog,
+        workspace,
+        processes,
+        taskRuntime,
+        artifactStore,
+        shellNetworkMode
+    )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
@@ -519,9 +551,33 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
             return Capability(CapabilityKind.WorkspaceRead)
         }
         if (requirement.name == "network.http") {
-            return Capability(CapabilityKind.NetworkAccess)
+            return if (requirement.resource == "web_search") {
+                Capability(CapabilityKind.NetworkAccess)
+            } else {
+                Capability(CapabilityKind.NetworkAccess, resource: "host")
+            }
         }
         Capability(CapabilityKind.ExtensionInvoke, resource: requirement.name)
+    }
+
+    public func resolveNetworkPolicy(
+        requirement: CapabilityRequirement,
+        input: AgentValue
+    ): Result<NetworkPolicy> {
+        if (requirement.name != "network.http") {
+            return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+        }
+        if (requirement.resource == "web_search") {
+            return match (webSearch) {
+                case Some(tool) => tool.networkPolicy(input)
+                case None => Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "extension.web_search_unavailable",
+                    "web search host runtime is unavailable"
+                ))
+            }
+        }
+        Result.Ok(NetworkPolicy(NetworkPolicyMode.HostNetwork))
     }
 
     public func approvalMetadata(
@@ -539,38 +595,17 @@ class ProductExtensionOperationHost <: ExtensionOperationHost {
 
     public func execute(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         intent: OperationIntent
     ): Result<ExecutionResult> {
         let result = match (intent) {
-            case OperationIntent.WorkspaceSearch(value) => grep.execute(
-                context,
-                ToolCall("sdk-workspace-search-" + context.runId.value + "-" + context.nextAuditSequence().toString(), "grep", objectValue([
-                    ValueField("pattern", textValue(value.pattern)),
-                    ValueField("path", textValue(value.path)),
-                    ValueField("case", boolValue(value.caseSensitive)),
-                    ValueField("gitignore", boolValue(value.respectGitignore)),
-                    ValueField("skip", integerValue(value.skip)),
-                    ValueField("count", boolValue(value.countOnly))
-                ]))
-            )
-            case OperationIntent.WorkspaceWrite(value) => write.execute(
-                context,
-                ToolCall("sdk-workspace-write", "write", objectValue([
-                    ValueField("path", textValue(value.path)),
-                    ValueField("content", textValue(value.content))
-                ]))
-            )
+            case OperationIntent.WorkspaceSearch(_) => grep.execute(context, prepared)
+            case OperationIntent.WorkspaceWrite(_) => write.execute(context, prepared)
             case OperationIntent.HostOperation(value) => match (value.operation) {
-                case "ast_grep" => astGrep.execute(context, ToolCall(
-                    "sdk-ast-grep", "ast_grep", value.input
-                ))
-                case "ast_edit" => astEdit.execute(context, ToolCall(
-                    "sdk-ast-edit", "ast_edit", value.input
-                ))
+                case "ast_grep" => astGrep.execute(context, prepared)
+                case "ast_edit" => astEdit.execute(context, prepared)
                 case "web_search" => match (webSearch) {
-                    case Some(tool) => tool.execute(context, ToolCall(
-                        "sdk-web-search-" + context.runId.value + "-" + context.nextAuditSequence().toString(), "web_search", value.input
-                    ))
+                    case Some(tool) => tool.execute(context, prepared)
                     case None => Result<ToolResult>.Err(AgentError(
                         AgentErrorKind.Configuration,
                         "extension.web_search_unavailable",
@@ -639,7 +674,8 @@ func registerBashTool(
     workspace: LocalWorkspace,
     processes: LocalProcessPort,
     taskRuntime: ?ProductTaskRuntime,
-    artifactStore: ?ProductArtifactStore
+    artifactStore: ?ProductArtifactStore,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     catalog.register(
         ToolDescriptor(
@@ -653,19 +689,24 @@ func registerBashTool(
                         schemaProperty("timeout", "number"),
                         schemaProperty("cwd", "string"),
                         schemaProperty("pty", "boolean"),
-                        schemaProperty("async", "boolean")
+                        schemaProperty("async", "boolean"),
+                        schemaNetworkPolicyProperty()
                     ],
                     ["command"]
-                )
+            ),
             ),
             Capability(CapabilityKind.ProcessSpawn),
-            sideEffecting: true
+            sideEffecting: true,
+            networkPolicyResolver: Some({ call =>
+                bashToolNetworkPolicy(shellNetworkMode, call)
+            })
         ),
         BashTool(
             workspace,
             processes,
             taskRuntime: taskRuntime,
-            artifactStore: artifactStore
+            artifactStore: artifactStore,
+            shellNetworkMode: shellNetworkMode
         )
     )
 }
@@ -720,8 +761,13 @@ class BashReadonlyTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let command = match (requiredString(call, "command")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -751,7 +797,7 @@ class BashReadonlyTool <: ToolExecutor {
             processes,
             artifactStore: artifactStore,
             readOnly: true
-        ).execute(context, call)
+        ).execute(context, prepared)
     }
 }
 
@@ -870,7 +916,8 @@ func installLspTools(
     catalog: ToolCatalog,
     workspace: LocalWorkspace,
     sandboxEnabled!: Bool = false,
-    allowUnsafeTestBypass!: Bool = false
+    allowUnsafeTestBypass!: Bool = false,
+    sandboxCaBundle!: String = ""
 ): Result<Unit> {
     catalog.register(
         ToolDescriptor(
@@ -916,6 +963,9 @@ func installLspTools(
             additionalCapabilityResolver: {
                 call => lspAdditionalCapabilitiesFor(workspace, call)
             },
+            networkPolicyResolver: Some({
+                call => lspNetworkPolicyFor(workspace, call)
+            }),
             sideEffectResolver: lspSideEffecting
         ),
         LspTool(
@@ -923,7 +973,8 @@ func installLspTools(
             LspRuntime(
                 workspace,
                 sandboxEnabled: sandboxEnabled,
-                allowUnsafeTestBypass: allowUnsafeTestBypass
+                allowUnsafeTestBypass: allowUnsafeTestBypass,
+                sandboxCaBundle: sandboxCaBundle
             )
         )
     )
@@ -933,7 +984,8 @@ func installDebugTools(
     catalog: ToolCatalog,
     workspace: LocalWorkspace,
     sandboxEnabled!: Bool = false,
-    allowUnsafeTestBypass!: Bool = false
+    allowUnsafeTestBypass!: Bool = false,
+    sandboxCaBundle!: String = ""
 ): Result<Unit> {
     catalog.register(
         ToolDescriptor(
@@ -944,12 +996,16 @@ func installDebugTools(
             additionalCapabilityResolver: {
                 call => debugAdditionalCapabilities(workspace, call)
             },
+            networkPolicyResolver: Some({
+                call => debugNetworkPolicyFor(workspace, call)
+            }),
             sideEffectResolver: debugSideEffecting
         ),
         DebugTool(DebugRuntime(
             workspace,
             sandboxEnabled: sandboxEnabled,
-            allowUnsafeTestBypass: allowUnsafeTestBypass
+            allowUnsafeTestBypass: allowUnsafeTestBypass,
+            sandboxCaBundle: sandboxCaBundle
         ))
     )
 }
@@ -1180,23 +1236,29 @@ func installTodoTools(
 
 func installTaskTools(
     catalog: ToolCatalog,
-    taskRuntime: ?ProductTaskRuntime
+    taskRuntime: ?ProductTaskRuntime,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     match (taskRuntime) {
-        case Some(runtime) => installTaskRegistrations(catalog, runtime)
+        case Some(runtime) => installTaskRegistrations(
+            catalog,
+            runtime,
+            shellNetworkMode
+        )
         case None => Result.Ok(())
     }
 }
 
 func installTaskRegistrations(
     catalog: ToolCatalog,
-    runtime: ProductTaskRuntime
+    runtime: ProductTaskRuntime,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     match (registerProductTaskTool(catalog, runtime)) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
-    match (registerProductHubTool(catalog, runtime)) {
+    match (registerProductHubTool(catalog, runtime, shellNetworkMode)) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
@@ -1234,7 +1296,8 @@ func productTaskToolDefinition(): ModelToolDefinition {
 
 func registerProductHubTool(
     catalog: ToolCatalog,
-    runtime: ProductTaskRuntime
+    runtime: ProductTaskRuntime,
+    shellNetworkMode: ShellNetworkMode
 ): Result<Unit> {
     catalog.register(
         ToolDescriptor(
@@ -1242,6 +1305,9 @@ func registerProductHubTool(
             Capability(CapabilityKind.PeerMessage),
             capabilityResolver: Some(hubCapabilityFor),
             additionalCapabilityResolver: Some(hubAdditionalCapabilities),
+            networkPolicyResolver: Some({ call =>
+                hubToolNetworkPolicy(shellNetworkMode, call)
+            }),
             sideEffectResolver: Some(hubSideEffecting)
         ),
         ProductHubTool(runtime)
@@ -1285,7 +1351,7 @@ func productHubToolDefinition(): ModelToolDefinition {
                 schemaStringMapProperty("env"),
                 schemaStringMapProperty("env_from"),
                 schemaStringMapProperty("secret_env"),
-                schemaProperty("network", "boolean"),
+                schemaNetworkPolicyProperty(),
                 schemaProperty("cwd", "string"),
                 schemaProperty("pty", "boolean"),
                 schemaHubReadyProperty(),
@@ -1345,11 +1411,22 @@ func registerProductYieldTool(
     )
 }
 
+class EvalActiveOperation {
+    let runId: RunId
+    let operationId: OperationId
+
+    init(runId: RunId, operationId: OperationId) {
+        this.runId = runId
+        this.operationId = operationId
+    }
+}
+
 class EvalTool <: ToolExecutor {
     private let processes: LocalProcessPort
     private let artifactStore: ?ProductArtifactStore
     private let cancellationLock = Mutex()
     private let cancelledRuns = ArrayList<String>()
+    private let activeOperations = ArrayList<EvalActiveOperation>()
 
     init(
         processes: LocalProcessPort,
@@ -1361,8 +1438,13 @@ class EvalTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let language = match (requiredString(call, "language")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1391,23 +1473,29 @@ class EvalTool <: ToolExecutor {
         } else {
             timeoutSeconds * 1000
         }
-        let execution = processes.executeEval(
-            context.sessionId,
-            language,
-            code,
-            optionalBoolean(call, "reset", false),
-            ProcessRequest(
-                match (language) {
-                    case "py" => "/usr/bin/python3"
-                    case "js" => "/usr/bin/bun"
-                    case "rb" => "/usr/bin/ruby"
-                    case _ => "/usr/bin/julia"
-                },
-                operationId: evalOperationId(context.runId),
-                timeoutMillis: timeoutMillis,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
+        registerEvalOperation(context.runId, prepared.operationId)
+        let execution = try {
+            processes.executeEval(
+                context.sessionId,
+                language,
+                code,
+                optionalBoolean(call, "reset", false),
+                ProcessRequest(
+                    match (language) {
+                        case "py" => "/usr/bin/python3"
+                        case "js" => "/usr/bin/bun"
+                        case "rb" => "/usr/bin/ruby"
+                        case _ => "/usr/bin/julia"
+                    },
+                    operationId: prepared.operationId,
+                    timeoutMillis: timeoutMillis,
+                    sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+                    networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                )
             )
-        )
+        } finally {
+            unregisterEvalOperation(context.runId)
+        }
         let cancelled = takeEvalCancellation(context.runId)
         let result = match (execution) {
             case Result.Ok(value) => if (cancelled) {
@@ -1491,7 +1579,11 @@ class EvalTool <: ToolExecutor {
 
     public func cancel(runId: RunId): Result<Unit> {
         markEvalCancellation(runId)
-        match (processes.cancel(evalOperationId(runId))) {
+        let operationId = match (evalOperationIdForRun(runId)) {
+            case Some(value) => value
+            case None => return Result.Ok(())
+        }
+        match (processes.cancel(operationId)) {
             case Result.Ok(_) => Result.Ok(())
             case Result.Err(error) =>
                 if (error.code == "process.operation_not_running") {
@@ -1500,6 +1592,44 @@ class EvalTool <: ToolExecutor {
                     let _ = takeEvalCancellation(runId)
                     Result.Err(error)
                 }
+        }
+    }
+
+    private func registerEvalOperation(
+        runId: RunId,
+        operationId: OperationId
+    ): Unit {
+        cancellationLock.lock()
+        try {
+            activeOperations.add(EvalActiveOperation(runId, operationId))
+        } finally {
+            cancellationLock.unlock()
+        }
+    }
+
+    private func unregisterEvalOperation(runId: RunId): Unit {
+        cancellationLock.lock()
+        try {
+            for (index in 0..activeOperations.size) {
+                if (activeOperations[index].runId.value == runId.value) {
+                    activeOperations.remove(at: index)
+                    break
+                }
+            }
+        } finally {
+            cancellationLock.unlock()
+        }
+    }
+
+    private func evalOperationIdForRun(runId: RunId): ?OperationId {
+        cancellationLock.lock()
+        try {
+            for (value in activeOperations where value.runId.value == runId.value) {
+                return Some(value.operationId)
+            }
+            None
+        } finally {
+            cancellationLock.unlock()
         }
     }
 
@@ -1546,8 +1676,13 @@ class ReadTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let authoredPath = match (requiredString(call, "path")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1971,8 +2106,13 @@ class WriteTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let path = match (requiredString(call, "path")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2273,8 +2413,13 @@ class GrepTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let query = match (requiredString(call, "pattern")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2334,13 +2479,14 @@ class GrepTool <: ToolExecutor {
         if (paths.isEmpty() && !globs.isEmpty()) {
             arguments.add(".")
         }
-        let result = match (operations.execute(context, call, { operationId => processes.execute(
+        let result = match (operations.execute(context, prepared, { operationId => processes.execute(
             ProcessRequest(
                 "rg",
                 operationId: operationId,
                 arguments: arguments.toArray(),
                 timeoutMillis: 15000,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
+                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+                networkPolicy: Some(prepared.operationPlan.networkPolicy)
             )
         ) })) {
             case Result.Ok(value) => value
@@ -2459,10 +2605,14 @@ class GlobTool <: ToolExecutor {
     }
 
     public func execute(
-        _context: ToolInvocationContext,
-        call: ToolCall
+        _: ToolInvocationContext,
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        let _ = _context
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let patternArg = optionalString(call, "pattern", "")
         let pattern = if (patternArg != "") {
             patternArg
@@ -2497,9 +2647,11 @@ class GlobTool <: ToolExecutor {
         let result = match (processes.execute(
             ProcessRequest(
                 "rg",
+                operationId: prepared.operationId,
                 arguments: arguments.toArray(),
                 timeoutMillis: 15000,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
+                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+                networkPolicy: Some(prepared.operationPlan.networkPolicy)
             )
         )) {
             case Result.Ok(value) => value
@@ -2547,8 +2699,13 @@ class HashlineEditTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        preparedInvocation: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            preparedInvocation.call.callId,
+            preparedInvocation.call.name,
+            preparedInvocation.operationPlan.canonicalArguments
+        )
         let input = match (requiredString(call, "input")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2567,7 +2724,7 @@ class HashlineEditTool <: ToolExecutor {
             let value = prepared[index]
             mutations.add(
                 WorkspaceMutation(
-                    OperationId("edit-" + context.runId.value + "-" + call.callId + "-" + index.toString()),
+                    OperationId(preparedInvocation.operationId.value + "-edit-" + index.toString()),
                     value.path,
                     value.expected,
                     value.replacement
@@ -2602,6 +2759,55 @@ class HashlineEditTool <: ToolExecutor {
     }
 }
 
+func bashToolNetworkPolicy(
+    shellNetworkMode: ShellNetworkMode,
+    call: ToolCall
+): Result<NetworkPolicy> {
+    let requested: ?NetworkPolicy = match (call.arguments.field("network")) {
+        case Some(_) =>
+            match (networkPolicyForToolCall(call)) {
+                case Result.Ok(value) => Some(value)
+                case Result.Err(error) => return Result.Err(error)
+            }
+        case None => None
+    }
+    bashNetworkPolicy(shellNetworkMode, requested)
+}
+
+func bashNetworkPolicy(
+    shellNetworkMode: ShellNetworkMode,
+    requested: ?NetworkPolicy
+): Result<NetworkPolicy> {
+    match (requested) {
+        case Some(policy) =>
+            if (shellNetworkMode == ShellNetworkMode.Proxy &&
+                networkPolicyModeIsHost(policy.mode)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "network.mode_denied",
+                    "proxy shell mode forbids HostNetwork",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            if (networkPolicyModeIsMediated(policy.mode) && !policy.publish.isEmpty()) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "network.publish_not_supported",
+                    "shell processes cannot publish mediated ports",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            Result.Ok(policy)
+        case None =>
+            Result.Ok(match (shellNetworkMode) {
+                case ShellNetworkMode.Restricted => NetworkPolicy(NetworkPolicyMode.Denied)
+                case ShellNetworkMode.Proxy => NetworkPolicy(NetworkPolicyMode.Mediated)
+                case ShellNetworkMode.TrustedHost => NetworkPolicy(NetworkPolicyMode.HostNetwork)
+            })
+    }
+}
 func bashSandboxMode(
     _processes: LocalProcessPort,
     readOnly: Bool
@@ -2620,24 +2826,34 @@ class BashTool <: ToolExecutor {
     private let taskRuntime: ?ProductTaskRuntime
     private let artifactStore: ?ProductArtifactStore
     private let readOnly: Bool
+    private let shellNetworkMode: ShellNetworkMode
+    private let bashOperations: ProductProcessOperations
     init(
         workspace: LocalWorkspace,
         processes: LocalProcessPort,
         taskRuntime!: ?ProductTaskRuntime = None,
         artifactStore!: ?ProductArtifactStore = None,
-        readOnly!: Bool = false
+        readOnly!: Bool = false,
+        shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted
     ) {
         this.workspace = workspace
         this.processes = processes
         this.taskRuntime = taskRuntime
         this.artifactStore = artifactStore
         this.readOnly = readOnly
+        this.shellNetworkMode = shellNetworkMode
+        this.bashOperations = processOperations(processes, "bash")
     }
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let asynchronous = optionalBoolean(call, "async", false)
         if (asynchronous && optionalBoolean(call, "pty", false)) {
             return invalidArgument(
@@ -2663,25 +2879,26 @@ class BashTool <: ToolExecutor {
             }
             return runtime.startBashJob(
                 context,
-                call,
+                prepared,
                 command,
                 {
-                    operationId => executeSync(context, call, operationId)
+                    jobPrepared, operationId => executeSync(context, jobPrepared, operationId)
                 }
             )
         }
-        executeSync(
-            context,
-            call,
-            bashOperationId(context.runId)
-        )
+        executeSync(context, prepared, prepared.operationId)
     }
 
     private func executeSync(
         context: ToolInvocationContext,
-        call: ToolCall,
+        prepared: PreparedToolInvocation,
         operationId: OperationId
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let command = match (requiredString(call, "command")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2699,42 +2916,65 @@ class BashTool <: ToolExecutor {
         } else {
             timeoutSeconds * 1000
         }
-        let prepared = match (prepareShellCommand(
+        let networkPolicy = prepared.operationPlan.networkPolicy
+        let requestedCwd = optionalString(call, "cwd", "")
+        let resolvedCwd = if (requestedCwd == "") {
+            workspace.rootPath()
+        } else {
+            match (workspace.resolve(requestedCwd, allowDirectory: true)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
+        let persistent = networkPolicyModeIsDenied(networkPolicy.mode)
+        let preparedCommand = match (prepareShellCommand(
             call,
             command,
-            workspace
+            workspace,
+            includeCwd: persistent
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
         let pty = optionalBoolean(call, "pty", false)
-        let shellArguments = ["--noprofile", "--norc", "-lc", prepared]
+        let shellArguments = ["--noprofile", "--norc", "-lc", preparedCommand]
         let request = if (pty) {
             ProcessRequest(
                 "script",
                 operationId: operationId,
                 arguments: [
                     "-qefc",
-                    "/bin/bash --noprofile --norc -lc " + shellQuote(prepared),
+                    "/bin/bash --noprofile --norc -lc " + shellQuote(preparedCommand),
                     "/dev/null"
                 ],
+                workingDirectory: if (persistent) { "" } else { resolvedCwd },
                 timeoutMillis: timeoutMillis,
-                sandboxMode: bashSandboxMode(processes, readOnly)
+                sandboxMode: bashSandboxMode(processes, readOnly),
+                networkPolicy: Some(networkPolicy)
             )
         } else {
             ProcessRequest(
                 "/bin/bash",
                 operationId: operationId,
                 arguments: shellArguments,
+                workingDirectory: if (persistent) { "" } else { resolvedCwd },
                 timeoutMillis: timeoutMillis,
-                sandboxMode: bashSandboxMode(processes, readOnly)
+                sandboxMode: bashSandboxMode(processes, readOnly),
+                networkPolicy: Some(networkPolicy)
             )
         }
-        let result = match (if (pty) {
-            processes.execute(request)
-        } else {
-            processes.executeShell(context.sessionId, request)
-        }) {
+        let result = match (bashOperations.executeWithOperation(
+            context,
+            prepared,
+            operationId,
+            { _ =>
+                if (pty || !persistent) {
+                    processes.execute(request)
+                } else {
+                    processes.executeShell(context.sessionId, request)
+                }
+            }
+        )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -2769,31 +3009,34 @@ class BashTool <: ToolExecutor {
                         ValueField("pty", boolValue(pty))
                     ]
                 ),
-                isError: result.exitCode != 0
+                isError: result.exitCode != 0 || result.timedOut,
+                receiptId: operationId.value
             )
         )
     }
 
+
     public func cancel(runId: RunId): Result<Unit> {
-        match (processes.cancel(bashOperationId(runId))) {
-            case Result.Ok(_) => Result.Ok(())
-            case Result.Err(error) =>
-                if (error.code == "process.operation_not_running") {
-                    Result.Ok(())
-                } else {
-                    Result.Err(error)
+        // Async Bash owns a managed job operation id; synchronous prepared
+        // Bash owns the canonical operation id. The shared registry tracks
+        // both by Run ownership and cancels the operation actually executing.
+        match (taskRuntime) {
+            case Some(runtime) =>
+                match (runtime.cancelBashJobs(runId)) {
+                    case Result.Ok(_) => ()
+                    case Result.Err(error) => return Result.Err(error)
                 }
+            case None => ()
         }
+        bashOperations.cancel(runId)
     }
 }
+
 
 func bashOperationId(runId: RunId): OperationId {
     OperationId("bash-" + runId.value)
 }
 
-func evalOperationId(runId: RunId): OperationId {
-    OperationId("eval-" + runId.value)
-}
 
 func requiredString(call: ToolCall, name: String): Result<String> {
     match (call.arguments.field(name)) {
@@ -2824,7 +3067,7 @@ func optionalInteger(call: ToolCall, name: String, fallback: Int64): Int64 {
         case Some(value) =>
             if (value.unifiedKind == ValueKind.Number) {
                 try {
-                    Int64.parse(value.number)
+                    Int64.parse(value.asNumberText())
                 } catch (_: Exception) {
                     fallback
                 }
@@ -2839,7 +3082,7 @@ func optionalBoolean(call: ToolCall, name: String, fallback: Bool): Bool {
     match (call.arguments.field(name)) {
         case Some(value) =>
             if (value.unifiedKind == ValueKind.Boolean) {
-                value.boolean
+                value.asBool()
             } else {
                 fallback
             }
@@ -2850,11 +3093,12 @@ func optionalBoolean(call: ToolCall, name: String, fallback: Bool): Bool {
 func prepareShellCommand(
     call: ToolCall,
     command: String,
-    workspace: LocalWorkspace
+    workspace: LocalWorkspace,
+    includeCwd!: Bool = true
 ): Result<String> {
     var prefix = ""
     let cwd = optionalString(call, "cwd", "")
-    if (cwd != "") {
+    if (includeCwd && cwd != "") {
         let resolved = match (workspace.resolve(
             cwd,
             allowDirectory: true
@@ -3096,16 +3340,80 @@ func hubCapabilityFor(call: ToolCall): Capability {
     }
 }
 
-func hubAdditionalCapabilities(call: ToolCall): Array<Capability> {
+func hubToolNetworkPolicy(
+    shellNetworkMode: ShellNetworkMode,
+    call: ToolCall
+): Result<NetworkPolicy> {
     let op = optionalString(call, "op", "")
-    if ((op == "start" && optionalBoolean(call, "network", false)) ||
-        op == "restart") {
-        [Capability(CapabilityKind.NetworkAccess)]
-    } else {
-        []
+    if (op == "restart") {
+        match (call.arguments.field("network")) {
+            case Some(_) => ()
+            case None => return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "network.restart_policy_required",
+                "hub.restart must restate the persisted network policy",
+                retryable: false,
+                fallbackAllowed: false
+            ))
+        }
+    }
+    if (op != "start" && op != "restart") {
+        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    let requested: ?NetworkPolicy = match (call.arguments.field("network")) {
+        case Some(value) =>
+            match (parseNetworkPolicy(value)) {
+                case Result.Ok(policy) => Some(policy)
+                case Result.Err(error) => return Result.Err(error)
+            }
+        case None => None
+    }
+    match (requested) {
+        case Some(policy) =>
+            if (shellNetworkMode == ShellNetworkMode.Proxy &&
+                networkPolicyModeIsHost(policy.mode)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "network.mode_denied",
+                    "proxy shell mode forbids HostNetwork",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            if (networkPolicyModeIsMediated(policy.mode) && !policy.publish.isEmpty()) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "network.publish_not_supported",
+                    "the mediated network gateway does not support published ports",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            Result.Ok(policy)
+        case None =>
+            Result.Ok(match (shellNetworkMode) {
+                case ShellNetworkMode.Restricted => NetworkPolicy(NetworkPolicyMode.Denied)
+                case ShellNetworkMode.Proxy => NetworkPolicy(NetworkPolicyMode.Mediated)
+                case ShellNetworkMode.TrustedHost => NetworkPolicy(NetworkPolicyMode.HostNetwork)
+            })
     }
 }
 
+func hubAdditionalCapabilities(call: ToolCall): Array<Capability> {
+    let op = optionalString(call, "op", "")
+    if (op != "start" && op != "restart") {
+        return []
+    }
+    let policy = match (networkPolicyForToolCall(call)) {
+        case Result.Ok(value) => value
+        case Result.Err(_) => return []
+    }
+    let required = ArrayList<Capability>()
+    for (resource in networkPolicyCapabilityResources(policy)) {
+        required.add(Capability(CapabilityKind.NetworkAccess, resource: resource))
+    }
+    required.toArray()
+}
 func lspCapabilityFor(call: ToolCall): Capability {
     if (lspReadOnlyAction(optionalString(call, "action", ""))) {
         Capability(CapabilityKind.WorkspaceRead)
@@ -3342,6 +3650,74 @@ func taskItemsSchemaProperty(): ValueField {
     )
 }
 
+func schemaNetworkPolicyProperty(): ValueField {
+    let egressItem = objectValue([
+        ValueField("type", textValue("object")),
+        ValueField(
+            "properties",
+            objectValue([
+                schemaProperty("host", "string"),
+                schemaProperty("port", "number"),
+                ValueField(
+                    "private_addresses",
+                    objectValue([
+                        ValueField("type", textValue("array")),
+                        ValueField(
+                            "items",
+                            objectValue([ValueField("type", textValue("string"))])
+                        )
+                    ])
+                )
+            ])
+        ),
+        ValueField("required", listValue([textValue("host"), textValue("port")])),
+        ValueField("additionalProperties", boolValue(false))
+    ])
+    let publishItem = objectValue([
+        ValueField("type", textValue("object")),
+        ValueField(
+            "properties",
+            objectValue([
+                schemaProperty("host_port", "number"),
+                schemaProperty("target_port", "number")
+            ])
+        ),
+        ValueField(
+            "required",
+            listValue([textValue("host_port"), textValue("target_port")])
+        ),
+        ValueField("additionalProperties", boolValue(false))
+    ])
+    ValueField(
+        "network",
+        objectValue([
+            ValueField("type", textValue("object")),
+            ValueField(
+                "properties",
+                objectValue([
+                    schemaEnumProperty("mode", ["denied", "proxy", "host"]),
+                    ValueField(
+                        "egress",
+                        objectValue([
+                            ValueField("type", textValue("array")),
+                            ValueField("items", egressItem)
+                        ])
+                    ),
+                    ValueField(
+                        "publish",
+                        objectValue([
+                            ValueField("type", textValue("array")),
+                            ValueField("items", publishItem)
+                        ])
+                    )
+                ])
+            ),
+            ValueField("required", listValue([textValue("mode")])),
+            ValueField("additionalProperties", boolValue(false))
+        ])
+    )
+}
+
 func objectSchema(
     properties: Array<ValueField>,
     required: Array<String>
@@ -3441,44 +3817,68 @@ class ProductProcessOperation {
 class ProductProcessOperations {
     private let lock = Mutex()
     private let active = ArrayList<ProductProcessOperation>()
-    private var sequence: Int64 = 0
-    private let prefix: String
     private let reserve: (OperationId) -> Unit
     private let release: (OperationId) -> Unit
     private let stop: (OperationId) -> Result<Unit>
     init(prefix: String, reserve: (OperationId) -> Unit,
         release: (OperationId) -> Unit, stop: (OperationId) -> Result<Unit>) {
-        this.prefix = prefix; this.reserve = reserve; this.release = release; this.stop = stop
+        let _ = prefix
+        this.reserve = reserve
+        this.release = release
+        this.stop = stop
     }
-    func execute(context: ToolInvocationContext, call: ToolCall,
+    func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         action: (OperationId) -> Result<ProcessResult>): Result<ProcessResult> {
-        match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
-        let operation: ProductProcessOperation
+        match (context.cancellation.check()) {
+            case Result.Err(error) => return Result.Err(error)
+            case _ => ()
+        }
+        executeWithOperation(context, prepared, prepared.operationId, action)
+    }
+
+    func executeWithOperation(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
+        operationId: OperationId,
+        action: (OperationId) -> Result<ProcessResult>
+    ): Result<ProcessResult> {
+        let _ = prepared
+        let operation = ProductProcessOperation(operationId, context.runId)
         lock.lock()
         try {
-            sequence += 1
-            operation = ProductProcessOperation(OperationId(prefix + "-" + safeOperationPart(context.runId.value) +
-                "-" + safeOperationPart(call.callId) + "-" + sequence.toString()), context.runId)
             reserve(operation.id)
             active.add(operation)
-        } finally { lock.unlock() }
+        } finally {
+            lock.unlock()
+        }
         let registration = context.cancellation.onCancel({ _ => let _ = cancelOperation(operation) })
         try {
-            match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
+            match (context.cancellation.check()) {
+                case Result.Err(error) => return Result.Err(error)
+                case _ => ()
+            }
             if (wasCancelled(operation)) { return cancelledResult() }
             let result = action(operation.id)
             if (wasCancelled(operation)) { return cancelledResult() }
-            match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case _ => () }
+            match (context.cancellation.check()) {
+                case Result.Err(error) => return Result.Err(error)
+                case _ => ()
+            }
             result
         } finally {
             registration.dispose()
             lock.lock()
             try {
                 for (index in 0..active.size) {
-                    if (active[index].id.value == operation.id.value) { active.remove(at: index); break }
+                    if (active[index].id.value == operation.id.value) {
+                        active.remove(at: index)
+                        break
+                    }
                 }
                 release(operation.id)
-            } finally { lock.unlock() }
+            } finally {
+                lock.unlock()
+            }
         }
     }
     private func cancelledResult(): Result<ProcessResult> {

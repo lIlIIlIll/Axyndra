@@ -220,9 +220,9 @@ if [[ -d "$ROOT/libs/llm4cj" || -d "$ROOT/libs/json4cj" ]]; then
   fail "extracted llm4cj/json4cj source remains in the Axyndra workspace"
 fi
 
-if ! rg_matches -n '"llm4cj".*git = "https://github.com/lIlIIlIll/llm4cj.git".*branch = "main"' \
+if ! rg_matches -n 'llm4cj.*git = "https://github.com/lIlIIlIll/llm4cj.git".*tag = "v0.1.0"' \
   "$ROOT/model_adapters/cjpm.toml" >/dev/null; then
-  fail "model_adapters does not depend on llm4cj main from the standalone repository"
+  fail "model_adapters does not depend on llm4cj v0.1.0 from the standalone repository"
 fi
 python3 "$ROOT/scripts/dependency_pin_gate.py"
 

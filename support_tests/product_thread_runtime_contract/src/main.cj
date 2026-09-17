@@ -525,7 +525,7 @@ func isolatedPluginHostContract(workspace: String): Unit {
     expect(processResult.isOk() && processPort.requests.size == 1 &&
         processPort.requests[0].executable == workspace + "/plugins/reviewer" &&
         processPort.requests[0].sandboxMode == ProcessSandboxMode.WorkspaceReadOnly &&
-        !processPort.requests[0].networkAccess &&
+        networkPolicyModeIsDenied(processPort.requests[0].networkPolicy.mode) &&
         processPort.requests[0].environmentAllowlist.isEmpty() &&
         processPort.requests[0].arguments.size == 2 &&
         processPort.requests[0].arguments[1].contains("axyndra-extension-v1"),
@@ -550,12 +550,12 @@ func isolatedPluginHostContract(workspace: String): Unit {
     let wasmManifest = SignedExtensionPackageManifest(
         "review.wasm", "1.0.0", ">=1.0.0 <2.0.0", "1",
         "plugins/reviewer.wasm", ["review"], [],
-        ["workspace.write", "network.access"], 1u32, "compatible",
+        ["workspace.write", "network.access:api.example.com:443"], 1u32, "compatible",
         "sha256:wasm", "signature-wasm"
     )
     let wasmLaunch = match (validateIsolatedPluginPackage(
         wasmManifest, ExtensionExecutionKind.WasmComponent, 8u64,
-        ["workspace.write", "network.access"], FixedPluginSignatureVerifier(true)
+        ["workspace.write", "network.access:api.example.com:443"], FixedPluginSignatureVerifier(true)
     )) {
         case SafeLifecycleResult.Ok(value) => value
         case SafeLifecycleResult.Err(error) => throw IllegalStateException(error)
@@ -571,8 +571,11 @@ func isolatedPluginHostContract(workspace: String): Unit {
         wasmPort.requests[0].executable == "wasmtime-fixture" &&
         wasmPort.requests[0].arguments[0] == workspace + "/plugins/reviewer.wasm" &&
         wasmPort.requests[0].sandboxMode == ProcessSandboxMode.WorkspaceReadWrite &&
-        wasmPort.requests[0].networkAccess,
-        "WASM plugin uses the fixed runtime and only its explicitly granted authorities")
+        networkPolicyModeIsMediated(wasmPort.requests[0].networkPolicy.mode) &&
+        wasmPort.requests[0].networkPolicy.egress.size == 1 &&
+        wasmPort.requests[0].networkPolicy.egress[0].host == "api.example.com" &&
+        wasmPort.requests[0].networkPolicy.egress[0].port == 443u16,
+        "WASM plugin uses the fixed runtime and its explicitly granted mediated authority")
 
     let truncated = RecordingPluginProcessPort("{}", truncated: true)
     let truncatedHost = ProductIsolatedPluginHost(truncated, workspace)

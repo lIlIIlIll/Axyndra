@@ -7,6 +7,8 @@ import yjson.*
 import agent_domain.*
 import agent_ports.*
 import agent_product.*
+import agent_runtime.*
+import agent_testkit.*
 import std.collection.*
 import std.env.*
 import std.fs.*
@@ -43,7 +45,7 @@ func verifySchema(root: String): Unit {
     let definition = toolDefinition(product, "web_search")
     expect(
         sameStringSet(propertyNames(definition.inputSchema), [
-            "query", "recency", "limit", "max_tokens", "temperature",
+            "query", "provider", "recency", "limit", "max_tokens", "temperature",
             "num_search_results"
         ]) &&
         sameStringSet(requiredNames(definition.inputSchema), ["query"]) &&
@@ -68,11 +70,14 @@ func verifyProviders(root: String): Unit {
         ).execute(
             ["--header", "Authorization: Bearer curl-secret"],
             OperationId("search-curl-profile"),
+            webSearchContractNetworkPolicy(""),
             ["curl-secret"]
         ).isOk() && processTransport.requests.size == 1 &&
             processTransport.requests[0].sandboxMode ==
                 ProcessSandboxMode.WorkspaceReadOnly &&
-            processTransport.requests[0].networkAccess &&
+            networkPolicyModeIsMediated(
+                processTransport.requests[0].networkPolicy.mode
+            ) &&
             containsArgument(
                 processTransport.requests[0].redactedValues,
                 "curl-secret"
@@ -80,6 +85,16 @@ func verifyProviders(root: String): Unit {
         "curl transport grants read-only workspace plus network and binds authored secrets to output redaction"
     )
     let runtime = ProductWebSearchRuntime(transport, root + "/settings")
+    let missingBravePolicy = match (runtime.networkPolicy(objectValue([
+        ValueField("provider", textValue("brave"))
+    ]))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    expect(
+        networkPolicyModeIsDenied(missingBravePolicy.mode),
+        "unconfigured web search providers do not acquire network access"
+    )
     let context = ToolInvocationContext(
         RunId("search-run"),
         SessionId("search-session"),
@@ -98,21 +113,25 @@ func verifyProviders(root: String): Unit {
         unconfigured.output.field("provider").getOrThrow().text == "none",
         "an absent provider reports the pinned explicit error"
     )
-    let forcedMissing = runtime.executeSelected(
+    let forcedMissing = invokeSelected(
+        runtime,
         context,
         searchCall("forced-missing", "Cangjie"),
-        "brave"
-    ).value().getOrThrow()
+        "brave",
+        "forced-missing"
+    )
     expect(
         forcedMissing.output.field("content").getOrThrow().text ==
             "Error: Brave is not configured.",
         "an explicitly selected provider must be configured"
     )
-    let unsupported = runtime.executeSelected(
+    let unsupported = invokeSelected(
+        runtime,
         context,
         searchCall("unsupported", "Cangjie"),
-        "perplexity"
-    ).value().getOrThrow()
+        "perplexity",
+        "unsupported"
+    )
     expect(
         unsupported.output.field("content").getOrThrow().text
             .contains("is not available in this axyndra build"),
@@ -120,6 +139,19 @@ func verifyProviders(root: String): Unit {
     )
 
     setVariable("BRAVE_API_KEY", "brave-secret")
+    let bravePolicy = match (runtime.networkPolicy(objectValue([
+        ValueField("provider", textValue("brave"))
+    ]))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    expect(
+        networkPolicyModeIsMediated(bravePolicy.mode) &&
+            bravePolicy.egress.size == 1 &&
+            bravePolicy.egress[0].host == "api.search.brave.com" &&
+            bravePolicy.egress[0].port == 443u16,
+        "Brave policy is mediated and limited to its API endpoint"
+    )
     transport.response = """
         {"web":{"results":[
           {"title":"Cangjie docs","url":"https://example.test/docs",
@@ -143,7 +175,7 @@ func verifyProviders(root: String): Unit {
     )
     expect(
         transport.arguments[0] == "-q" && brave.output.field("provider").getOrThrow().text == "brave" &&
-        brave.output.field("count").getOrThrow().number == "1" &&
+        brave.output.field("count").getOrThrow().asNumberText() == "1" &&
         brave.output.field("content").getOrThrow().text
             .contains("[1] Cangjie docs (2026-07-30)") &&
         containsArgument(transport.arguments, "q=Cangjie language") &&
@@ -196,6 +228,42 @@ func verifyProviders(root: String): Unit {
 
     removeVariable("TAVILY_API_KEY")
     setVariable("SEARXNG_URL", "https://search.example.test/")
+    let searxPolicy = match (runtime.networkPolicy(objectValue([
+        ValueField("provider", textValue("searxng"))
+    ]))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    expect(
+        networkPolicyModeIsMediated(searxPolicy.mode) &&
+            searxPolicy.egress.size == 1 &&
+            searxPolicy.egress[0].host == "search.example.test" &&
+            searxPolicy.egress[0].port == 443u16,
+        "SearXNG policy is mediated and follows the configured endpoint"
+    )
+    setVariable("SEARXNG_URL", "http://localhost:8080/")
+    let loopbackSearxPolicy = match (runtime.networkPolicy(objectValue([
+        ValueField("provider", textValue("searxng"))
+    ]))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+    var hasLoopbackV4 = false
+    var hasLoopbackV6 = false
+    for (address in loopbackSearxPolicy.egress[0].privateAddresses) {
+        if (address == "127.0.0.1") { hasLoopbackV4 = true }
+        if (address == "::1") { hasLoopbackV6 = true }
+    }
+    expect(
+        networkPolicyModeIsMediated(loopbackSearxPolicy.mode) &&
+            loopbackSearxPolicy.egress.size == 1 &&
+            loopbackSearxPolicy.egress[0].host == "localhost" &&
+            loopbackSearxPolicy.egress[0].port == 8080u16 &&
+            loopbackSearxPolicy.egress[0].privateAddresses.size == 2 &&
+            hasLoopbackV4 && hasLoopbackV6,
+        "SearXNG localhost policy permits both loopback address families"
+    )
+    setVariable("SEARXNG_URL", "https://search.example.test/")
     transport.response = """
         {"results":[{"title":"Result","url":"https://example.test/result",
         "content":"SearXNG snippet"}]}
@@ -246,7 +314,8 @@ func verifyProviders(root: String): Unit {
         "malformed provider JSON cannot masquerade as empty success"
     )
     expect(
-        runtime.execute(
+        invocationFailed(
+            runtime,
             context,
             ToolCall(
                 "empty",
@@ -255,7 +324,7 @@ func verifyProviders(root: String): Unit {
                     ValueField("query", textValue(""))
                 ])
             )
-        ).isError(),
+        ),
         "empty queries fail schema-level execution validation"
     )
 }
@@ -280,12 +349,13 @@ class FakeSearchTransport <: WebSearchTransport {
     public var error: String = ""
     public var arguments: Array<String> = []
     public var secretValues: Array<String> = []
-
     public func execute(
         arguments: Array<String>,
         operationId: OperationId,
+        networkPolicy: NetworkPolicy,
         secretValues: Array<String>
     ): Result<ProcessResult> {
+        let _ = networkPolicy
         let _ = operationId
         this.arguments = arguments
         this.secretValues = secretValues
@@ -302,7 +372,170 @@ func invoke(
     context: ToolInvocationContext,
     call: ToolCall
 ): ToolResult {
-    runtime.execute(context, call).value().getOrThrow()
+    invokeSelected(runtime, context, call, "", call.callId)
+}
+
+func invokeSelected(
+    runtime: ProductWebSearchRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall,
+    providerOverride: String,
+    operationName: String
+): ToolResult {
+    match (invokeSelectedResult(
+        runtime,
+        context,
+        call,
+        providerOverride,
+        operationName
+    )) {
+        case Result.Ok(result) => result
+        case Result.Err(error) => recoverableToolResult(call, error)
+    }
+}
+
+func invocationFailed(
+    runtime: ProductWebSearchRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall
+): Bool {
+    invocationFailedSelected(runtime, context, call, "", call.callId)
+}
+
+func invocationFailedSelected(
+    runtime: ProductWebSearchRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall,
+    providerOverride: String,
+    operationName: String
+): Bool {
+    match (invokeSelectedResult(
+        runtime,
+        context,
+        call,
+        providerOverride,
+        operationName
+    )) {
+        case Result.Err(_) => true
+        case Result.Ok(result) => result.isError
+    }
+}
+
+func invokeSelectedResult(
+    runtime: ProductWebSearchRuntime,
+    context: ToolInvocationContext,
+    call: ToolCall,
+    providerOverride: String,
+    operationName: String
+): Result<ToolResult> {
+    let catalog = ToolCatalog()
+    let registration = catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "web_search",
+                "Web Search contract fixture.",
+                webSearchContractSchema()
+            ),
+            Capability(CapabilityKind.NetworkAccess),
+            sideEffecting: true,
+            networkPolicyResolver: Some({_value =>
+                Result.Ok(webSearchContractExecutionNetworkPolicy(operationName))
+            })
+        ),
+        WebSearchContractExecutor(runtime, providerOverride)
+    )
+    match (registration) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
+    let pipeline = ToolPipeline(
+        catalog,
+        InMemoryOperationRuntimePort(),
+        WebSearchContractAudit(),
+        WebSearchContractIds(operationName),
+        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
+    )
+    match (executePipelineCall(pipeline, context, call)) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(ToolInvocationResult.Completed(result)) =>
+            Result.Ok(result)
+        case Result.Ok(ToolInvocationResult.NeedsApproval(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "web_search.contract_approval_required",
+                "web search contract fixture unexpectedly requires approval"
+            ))
+        case Result.Ok(ToolInvocationResult.Denied(_)) =>
+            Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "web_search.contract_denied",
+                "web search contract fixture unexpectedly denied the operation"
+            ))
+    }
+}
+
+class WebSearchContractExecutor <: ToolExecutor {
+    private let runtime: ProductWebSearchRuntime
+    private let providerOverride: String
+
+    init(runtime: ProductWebSearchRuntime, providerOverride: String) {
+        this.runtime = runtime
+        this.providerOverride = providerOverride
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.executeSelected(context, prepared, providerOverride)
+    }
+}
+
+class WebSearchContractAudit <: AuditPort {
+    public func append(event: AgentEvent): Result<Unit> {
+        let _ = event
+        Result.Ok(())
+    }
+}
+
+class WebSearchContractIds <: IdGenerator {
+    private let operationName: String
+
+    init(operationName: String) {
+        this.operationName = operationName
+    }
+
+    public func nextRunId(): RunId { RunId("web-search-contract-run") }
+    public func nextSessionId(): SessionId { SessionId("web-search-contract-session") }
+    public func nextOperationId(): OperationId {
+        OperationId("web-search-" + operationName)
+    }
+}
+
+func webSearchContractSchema(): AgentValue {
+    objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("required", listValue([textValue("query")]))
+    ])
+}
+
+func webSearchContractExecutionNetworkPolicy(operation: String): NetworkPolicy {
+    if (operation.startsWith("local-")) {
+        return NetworkPolicy(NetworkPolicyMode.HostNetwork)
+    }
+    webSearchContractNetworkPolicy(operation)
+}
+
+func webSearchContractNetworkPolicy(operation: String): NetworkPolicy {
+    let _ = operation
+    NetworkPolicy(
+        NetworkPolicyMode.Mediated,
+        egress: [
+            NetworkEgressRule("api.search.brave.com", 443u16),
+            NetworkEgressRule("api.tavily.com", 443u16),
+            NetworkEgressRule("search.example.test", 443u16)
+        ]
+    )
 }
 
 func searchCall(id: String, query: String): ToolCall {
