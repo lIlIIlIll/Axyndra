@@ -404,6 +404,7 @@ class PreparedModelRequest {
 class ModelAttemptExecution {
     let result: Result<ModelReply>
     let provisionalEvents: Array<ModelEvent>
+    var replayBarrier = ModelAttemptReplayBarrier.NoBarrier
 
     init(result: Result<ModelReply>, provisionalEvents: Array<ModelEvent>) {
         this.result = result
@@ -966,6 +967,16 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(_) => ()
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        match (persistDeferredModelAttemptBarrier(
+            execution, attemptId, checkpoint.semanticRequestId,
+            context, control, sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return fail(
+                durableRequest, context, control, error, sink,
+                counter: Some(counter)
             )
         }
         match (settleProvisionalModelEvents(
@@ -3040,6 +3051,13 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
+            match (persistDeferredModelAttemptBarrier(
+                execution, attemptId, semanticRequestId,
+                context, control, sink
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
             match (settleProvisionalModelEvents(
                 execution.provisionalEvents, true, context, control,
                 semanticRequestId, attemptId, sink
@@ -3167,6 +3185,13 @@ public class AgentCore <: AgentRunner {
                         case Result.Ok(_) => return Result.Err(error)
                         case Result.Err(settleError) => return Result.Err(settleError)
                     }
+            }
+            match (persistDeferredModelAttemptBarrier(
+                execution, attemptId, semanticRequestId,
+                context, control, sink
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
             }
             let durableResult = durableResultForAttempt(
                 request, semanticRequestId, attemptId, result,
@@ -3655,6 +3680,10 @@ public class AgentCore <: AgentRunner {
                 {
                     event => if (activity.record(event)) {
                         match (modelEventReplayBarrier(event)) {
+                            case Some(ModelAttemptReplayBarrier.ProviderTerminal) =>
+                                let _ = activity.claimReplayBarrier(
+                                    ModelAttemptReplayBarrier.ProviderTerminal
+                                )
                             case Some(barrier) => match (persistFirstModelAttemptBarrier(
                                 activity, attemptId, semanticRequestId, barrier,
                                 context, control, sink
@@ -3882,6 +3911,7 @@ public class AgentCore <: AgentRunner {
             case None => ()
         }
         let provisionalEvents = activity.takeProvisionalOutput()
+        let observedBarrier = activity.observedReplayBarrier()
         match (result) {
             case Result.Err(error) =>
                 // Partial deltas stay attempt-scoped and diagnostic-only. The
@@ -3889,7 +3919,7 @@ public class AgentCore <: AgentRunner {
                 // barrier, so the retry resolver will reject replay even when
                 // the provider later returns a retryable transport failure.
                 let partial = activity.hasEvents()
-                if (error.retryable && partial) {
+                let execution = if (error.retryable && partial) {
                     let fields = ArrayList<ErrorField>()
                     for (field in error.fields where field.name != "partial_stream") {
                         fields.add(field)
@@ -3909,18 +3939,18 @@ public class AgentCore <: AgentRunner {
                 } else {
                     ModelAttemptExecution(Result.Err(error), provisionalEvents)
                 }
-            case Result.Ok(reply) => match (persistFirstModelAttemptBarrier(
-                activity, attemptId, semanticRequestId,
-                ModelAttemptReplayBarrier.ProviderTerminal,
-                context, control, sink
-            )) {
-                case Result.Ok(_) => ModelAttemptExecution(
+                execution.replayBarrier = observedBarrier
+                execution
+            case Result.Ok(reply) =>
+                let execution = ModelAttemptExecution(
                     Result.Ok(reply), provisionalEvents
                 )
-                case Result.Err(error) => ModelAttemptExecution(
-                    Result.Err(error), provisionalEvents
-                )
-            }
+                execution.replayBarrier = if (
+                    observedBarrier == ModelAttemptReplayBarrier.NoBarrier
+                ) {
+                    ModelAttemptReplayBarrier.ProviderTerminal
+                } else { observedBarrier }
+                execution
         }
     }
 
@@ -4840,6 +4870,22 @@ public class AgentCore <: AgentRunner {
                 attemptId, semanticRequestId, barrier, context, control, sink
             )
         })
+    }
+    private func persistDeferredModelAttemptBarrier(
+        execution: ModelAttemptExecution,
+        attemptId: ModelAttemptId,
+        semanticRequestId: SemanticModelRequestId,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        if (execution.replayBarrier != ModelAttemptReplayBarrier.ProviderTerminal) {
+            return Result.Ok(())
+        }
+        markModelAttemptBarrier(
+            attemptId, semanticRequestId, execution.replayBarrier,
+            context, control, sink
+        )
     }
 
     private func fail(
