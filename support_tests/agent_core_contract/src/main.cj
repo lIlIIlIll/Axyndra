@@ -771,6 +771,10 @@ func preparedAttemptResumeContract(): Unit {
             "calls=" + model.calls.toString() +
             " attempts=" + runs.modelAttempts.size.toString()
     )
+    expect(
+        eventIndex(runs.eventLog, "model.attempt_started") >= 0,
+        "R1 resumed Prepared attempt emits its provider-start lifecycle event"
+    )
 }
 
 func claimedAttemptRestartContract(): Unit {
