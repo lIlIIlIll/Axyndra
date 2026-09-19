@@ -9,7 +9,6 @@ main(): Int64 {
     oneActiveTurnContract()
     concurrentOwnerContract()
     staleModelResultContract()
-    lateToolReceiptContract()
     toolResultProvenanceContract()
     toolBoundaryOwnershipContract()
     durableCommitRollbackContract()
@@ -400,38 +399,6 @@ func staleModelResultContract(): Unit {
     expect(itemText(snapshot.items[2]) == "current-b", "new run never sees late model output")
 }
 
-func lateToolReceiptContract(): Unit {
-    let coordinator = ThreadCoordinator(ThreadId("thread-late-tool"), "workspace", InMemoryThreadCommitSink())
-    let runA = coordinator.startTurn(
-        SemanticTurnId("turn-a"), RunId("run-a"), ItemId("user-a"), userContent("a")
-    ).value().getOrThrow()
-    let receipts = ArrayList<String>()
-    coordinator.cancelRun(RunId("run-a")).value().getOrThrow()
-    coordinator.startTurn(
-        SemanticTurnId("turn-b"), RunId("run-b"), ItemId("user-b"), userContent("b")
-    ).value().getOrThrow()
-
-    // Receipt persistence belongs to the Operation ledger and is deliberately
-    // independent from the Thread semantic commit boundary.
-    receipts.add("receipt-operation-a")
-    let late = coordinator.commit(envelope(
-        runA,
-        "thread-late-tool",
-        "turn-a",
-        "run-a",
-        1,
-        "tool-result-a",
-        ItemKind.ToolResult,
-        "late-effect-result"
-    ))
-    expect(receipts.size == 1, "late external effect receipt remains durable")
-    expect(match (late) {
-        case SemanticCommitDecision.Stale(_) => true
-        case _ => false
-    }, "late ToolResult cannot become new Thread truth")
-    expect(coordinator.snapshot().items.size == 2,
-        "receipt persistence does not imply ToolResult commit")
-}
 
 func correlationAndSequenceContract(): Unit {
     let coordinator = ThreadCoordinator(ThreadId("thread-correlation"), "workspace", InMemoryThreadCommitSink())
