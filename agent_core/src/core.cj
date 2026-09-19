@@ -860,6 +860,7 @@ public class AgentCore <: AgentRunner {
         }
         var attemptId = storedAttempt.id
         var attemptNo = storedAttempt.attemptNo
+        var executionPolicyReason = storedAttempt.policyReason
         var modelRequest = match (modelRequestFromCheckpoint(
             checkpoint.canonicalRequest, checkpoint.stableRequestId
         )) {
@@ -885,6 +886,7 @@ public class AgentCore <: AgentRunner {
             let policy = attemptPolicyFor(
                 modelRequest, AttemptPolicyReason.Retry, modelAttemptRecovery
             )
+            executionPolicyReason = attemptPolicyReasonName(policy.reason)
             match (persistModelAttemptBeforeRequest(
                 durableRequest, checkpoint.semanticRequestId, attemptId, attemptNo,
                 Some(storedAttempt.id), policy, modelRequest, counter,
@@ -943,6 +945,14 @@ public class AgentCore <: AgentRunner {
                 )
             }
         }
+        let _ = emitAttemptLifecycle(
+            context, control, checkpoint.semanticRequestId, attemptId,
+            "model.attempt_started", sink,
+            fields: [
+                ValueField("attempt_no", integerValue(attemptNo)),
+                ValueField("policy_reason", textValue(executionPolicyReason))
+            ]
+        )
         let started = MonoTime.now()
         let execution = executeModelWithinBudget(
             durableRequest, counter, modelRequest, checkpoint.semanticRequestId,
