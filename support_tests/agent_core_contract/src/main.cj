@@ -22,6 +22,10 @@ func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
 }
 
 main(): Int64 {
+    match (maybeRunDurableCoreTraceWorker()) {
+        case Some(code) => return code
+        case None => ()
+    }
     let conversations = MemoryConversations()
     let runs = MemoryRuns()
     let operations = MemoryOperations()
@@ -113,9 +117,8 @@ main(): Int64 {
     toolContextApprovalResumeContract()
     approvalResumeContract()
     nonPendingDecisionDoesNotPersistContract()
-    // SQLite receipt/ToolResult crash windows and approval cancellation are
-    // covered by the vNext recovery and chaos contracts, not legacy
-    // Durable semantic append faults.
+    // Legacy semantic append fault fixtures remain out of scope; durable model
+    // dispatch, receipt replay, and unknown-effect traces run below.
     // Corrupt legacy ModelMessage histories are no longer imported into the
     // canonical Thread. Tool-pair rejection/repair now belongs to the
     // ContextProjector and recovery-planner contracts.
@@ -175,6 +178,7 @@ main(): Int64 {
     zeroUsageFailureThenPricedSuccessContract()
     contextCompactionContract()
     contextBoundaryContract()
+    durableCoreTrajectoriesContract()
     println("agent_core contract passed")
     0
 }
@@ -255,8 +259,13 @@ func deadlineRetryExactReplayContract(): Unit {
     expect(first.semanticRequestId.value == second.semanticRequestId.value &&
         first.id.value != second.id.value &&
         second.parentAttemptId.getOrThrow().value == first.id.value &&
-        first.attemptNo == 1 && second.attemptNo == 2,
-        "T6 retries preserve SemanticRequest identity and link a new AttemptId")
+        first.attemptNo == 1 && second.attemptNo == 2 &&
+        first.semanticRequestDigest == second.semanticRequestDigest &&
+        first.wirePolicyDigest == second.wirePolicyDigest &&
+        first.providerRequestId == model.requests[0].requestId &&
+        second.providerRequestId == model.requests[1].requestId &&
+        model.requests[1].requestId == model.requests[0].requestId + "-retry-1",
+        "T6 retries preserve semantic and wire identity, provider binding, and parent Attempt")
     expect(model.requests[0].thinking == ThinkingLevel.Medium &&
         model.requests[1].thinking == ThinkingLevel.Medium,
         "T7 idle recovery retries the same effective thinking policy")
@@ -301,6 +310,59 @@ func deadlineRetryExactReplayContract(): Unit {
     }
     expect(scopedDeltas == 2 && starts == 2 && aborted == 1 && committed == 1,
         "U1/U2/U3 provisional and lifecycle events retain durable Attempt identity")
+    let a1Policy = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_policy_applied", first.id)
+    let a1Dispatch = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_dispatch_claimed", first.id)
+    let a1Started = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_started", first.id)
+    let a1Completed = requestAttemptIndex(runs.eventLog, 1,
+        ModelRequestOutcome.Failed)
+    let a1Aborted = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_aborted", first.id)
+    let retryScheduled = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_retry_scheduled", first.id)
+    let a2Policy = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_policy_applied", second.id)
+    let a2Dispatch = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_dispatch_claimed", second.id)
+    let a2Started = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_started", second.id)
+    let a2Completed = requestAttemptIndex(runs.eventLog, 2,
+        ModelRequestOutcome.Succeeded)
+    let a2Barrier = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_replay_barrier", second.id)
+    let decisionPersisted = eventIndexForAttempt(runs.eventLog,
+        "model.decision_persisted", second.id)
+    let decisionCommitted = eventIndexForAttempt(runs.eventLog,
+        "model.decision_committed", second.id)
+    let runCompleted = eventIndex(runs.eventLog, "run.completed")
+    let (succeeded, failed, cancelled) = requestOutcomeCounts(runs.eventLog)
+    expect(
+        a1Policy >= 0 && a1Dispatch >= 0 && a1Started >= 0 &&
+            a1Completed >= 0 && a1Aborted >= 0 && retryScheduled >= 0 &&
+            a2Policy >= 0 && a2Dispatch >= 0 && a2Started >= 0 &&
+            a2Completed >= 0 && a2Barrier >= 0 && decisionPersisted >= 0 &&
+            decisionCommitted >= 0 && runCompleted >= 0,
+        "T8 retry trace contains every required Attempt and commit event"
+    )
+    expect(
+        a1Policy < a1Dispatch && a1Dispatch < a1Started &&
+            a1Started < a1Completed && a1Completed < a1Aborted &&
+            a1Aborted < retryScheduled && retryScheduled < a2Policy &&
+            a2Policy < a2Dispatch && a2Dispatch < a2Started &&
+            a2Started < a2Completed && a2Completed < a2Barrier &&
+            a2Barrier < decisionPersisted && decisionPersisted < decisionCommitted &&
+            decisionCommitted < runCompleted,
+        "T8 retry trace preserves the required cross-attempt event order"
+    )
+    expect(
+        eventCount(runs.eventLog, "model.attempt_started") == 2 &&
+            eventCount(runs.eventLog, "model.attempt_replay_barrier") == 1 &&
+            eventCount(runs.eventLog, "model.request_attempt_completed") == 2 &&
+            succeeded == 1 && failed == 1 && cancelled == 0,
+        "T8 retry trace emits two starts, one provider barrier, and typed failed/succeeded outcomes"
+    )
 }
 
 class DeadlineThenAnswerModel <: ModelPort {
@@ -495,7 +557,9 @@ func cancellationAndRunDeadlineBarriersContract(): Unit {
         sleep(Duration.millisecond)
     }
     let admissionCancel = spawn { admissionCore.cancel(admissionRunId) }
-    sleep(Duration.millisecond * 20)
+    while (!admissionModel.cancellationRequested()) {
+        sleep(Duration.millisecond)
+    }
     admissionRuns.releaseInitialSave()
     expect(admissionCancel.get().isOk() && admissionFuture.get().isError() &&
         admissionModel.calls == 0,
@@ -594,6 +658,10 @@ class CancellationBarrierModel <: ModelPort {
     func hasStarted(): Bool {
         lock.lock()
         try { started } finally { lock.unlock() }
+    }
+    func cancellationRequested(): Bool {
+        lock.lock()
+        try { cancelled } finally { lock.unlock() }
     }
 
     private func isCancelled(): Bool {
@@ -765,15 +833,18 @@ func preparedAttemptResumeContract(): Unit {
             "R1 resume failed: " + error.code + ": " + error.message
         )
     }
+    let r1Snapshot = runs.find(request.runId).value().getOrThrow()
     expect(
-        resumed.isOk() && model.calls == 1 && runs.modelAttempts.size == 1,
-        "R1 Prepared A1 resumes exactly once without creating A2 " +
-            "calls=" + model.calls.toString() +
-            " attempts=" + runs.modelAttempts.size.toString()
+        resumed.isOk() && model.calls == 1 && runs.modelAttempts.size == 1 &&
+            r1Snapshot.status == RunState.Completed &&
+            r1Snapshot.modelRequests == 1 && runs.savedContinuation.isNone(),
+        "R1 Prepared A1 resumes once, completes, and clears its continuation"
     )
     expect(
-        eventIndex(runs.eventLog, "model.attempt_started") >= 0,
-        "R1 resumed Prepared attempt emits its provider-start lifecycle event"
+        eventCount(runs.eventLog, "model.restart_retry_possible_duplicate") == 0 &&
+            eventIndexForAttempt(runs.eventLog, "model.attempt_started",
+                runs.modelAttempts[0].id) >= 0,
+        "R1 reuses A1 without a duplicate warning and emits provider start"
     )
 }
 
@@ -802,11 +873,32 @@ func claimedAttemptRestartContract(): Unit {
         catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-resume-second")),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
-    expect(resumed.isOk() && model.calls == 1 && runs.modelAttempts.size == 2 &&
-        runs.modelAttempts[0].lifecycle == ModelAttemptLifecycle.Abandoned &&
-        runs.modelAttempts[1].attemptNo == 2 &&
-        hasEvent(runs.eventLog, "model.restart_retry_possible_duplicate"),
-        "R2 A1 to A2 restart boundary commits and dispatches once")
+    let r2Attempt = runs.modelAttempts[1]
+    let r2Policy = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_policy_applied", r2Attempt.id)
+    let r2Duplicate = eventIndexForAttempt(runs.eventLog,
+        "model.restart_retry_possible_duplicate", r2Attempt.id)
+    let r2Dispatch = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_dispatch_claimed", r2Attempt.id)
+    let r2Started = eventIndexForAttempt(runs.eventLog,
+        "model.attempt_started", r2Attempt.id)
+    let r2Completed = requestAttemptIndex(runs.eventLog, 2,
+        ModelRequestOutcome.Succeeded)
+    let r2Snapshot = runs.find(request.runId).value().getOrThrow()
+    expect(
+        resumed.isOk() && model.calls == 1 && runs.modelAttempts.size == 2 &&
+            runs.modelAttempts[0].lifecycle == ModelAttemptLifecycle.Abandoned &&
+            r2Attempt.attemptNo == 2 && r2Snapshot.status == RunState.Completed &&
+            r2Snapshot.modelRequests == 1 && runs.savedContinuation.isNone() &&
+            r2Policy >= 0 && r2Duplicate >= 0 && r2Dispatch >= 0 &&
+            r2Started >= 0 && r2Completed >= 0,
+        "R2 A1 to A2 restart boundary commits, dispatches, and completes once"
+    )
+    expect(
+        r2Policy < r2Duplicate && r2Duplicate < r2Dispatch &&
+            r2Dispatch < r2Started && r2Started < r2Completed,
+        "R2 restart trace orders policy, duplicate warning, claim, start, and completion"
+    )
 }
 
 func claimedA2NeverCreatesA3Contract(): Unit {
@@ -842,9 +934,24 @@ func claimedA2NeverCreatesA3Contract(): Unit {
         catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-a2-third")),
         modelDecisionRuntime: Some(decisions)
     )
-    expect(thirdCore.resume(request).isError() && model.calls == 0 &&
-        runs.modelAttempts.size == 2,
-        "R3 claimed A2 fails recovery without creating A3 or provider I/O")
+    let eventsBeforeReject = runs.eventLog.size
+    let rejected = thirdCore.resume(request)
+    let continuationKeepsA2 = match (runs.savedContinuation) {
+        case Some(value) => match (value.runningModel) {
+            case Some(checkpoint) => checkpoint.activeAttemptId.value ==
+                runs.modelAttempts[1].id.value
+            case None => false
+        }
+        case None => false
+    }
+    expect(
+        rejected.isError() && match (rejected.error()) {
+            case Some(error) => error.code == "model.restart_retry_not_allowed"
+            case None => false
+        } && model.calls == 0 && runs.modelAttempts.size == 2 &&
+            runs.eventLog.size == eventsBeforeReject && continuationKeepsA2,
+        "R3 claimed A2 rejects replay without A3, provider I/O, or new events"
+    )
 }
 
 func durableDecisionResumeStartsNoProviderContract(): Unit {
@@ -889,9 +996,16 @@ func durableDecisionResumeStartsNoProviderContract(): Unit {
         catalog, threadRuntimes: Some(resumeThreadRegistry("durable-resume-second")),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
-    expect(resumed.isOk() && model.calls == 0 && runs.modelAttempts.size == 1 &&
-        decisions.projected,
-        "R4 durable Decision resumes with zero provider starts")
+    let r4Snapshot = runs.find(request.runId).value().getOrThrow()
+    expect(
+        resumed.isOk() && model.calls == 0 && runs.modelAttempts.size == 1 &&
+            r4Snapshot.status == RunState.Completed &&
+            r4Snapshot.modelRequests == 1 && runs.savedContinuation.isNone() &&
+            decisions.projected &&
+            eventCount(runs.eventLog, "model.restart_retry_possible_duplicate") == 0 &&
+            eventCount(runs.eventLog, "model.attempt_started") == 0,
+        "R4 durable Decision commits directly with zero provider starts or A2"
+    )
 }
 
 func resumeThreadRegistry(name: String): ThreadRuntimeRegistry {
@@ -1634,7 +1748,6 @@ func partialWaveHandoffFailureContract(): Unit {
         catalog,
         operationRuntime: Some(operations)
     )
-    let startedAt = MonoTime.now()
     let result = core.start(AgentRunRequest(
         RunId("handoff-failure-run"),
         SessionId("handoff-failure-session"),
@@ -1643,16 +1756,31 @@ func partialWaveHandoffFailureContract(): Unit {
         capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
         budget: ResourceBudget(maxConcurrentTools: 2)
     ))
-    let ids = transcriptToolResultIds(coreMessages(
+    let results = transcriptToolResults(coreMessages(
         core, SessionId("handoff-failure-session")
     ))
-    var hasStartedResult = false
-    for (id in ids where id == "handoff-call-a") { hasStartedResult = true }
-    expect(result.isError() && result.error().getOrThrow().code ==
-        "fixture.execution_handoff_failed" &&
-        started.completed.load() && skipped.executions == 0 && hasStartedResult &&
-        (MonoTime.now() - startedAt).toMilliseconds() >= 50,
-        "a later handoff failure joins and commits already-started siblings before returning")
+    let snapshot = runs.find(RunId("handoff-failure-run")).value().getOrThrow()
+    let createdRunning = stateTransitionIndex(runs.eventLog,
+        RunState.Created, RunState.Running)
+    let failed = stateTransitionIndexAfter(runs.eventLog,
+        RunState.Running, RunState.Failed, createdRunning)
+    expect(
+        result.isError() && result.error().getOrThrow().code ==
+            "fixture.execution_handoff_failed" &&
+            started.executions.load() == 1 && skipped.executions == 0 &&
+            operations.markExecutingCalls.load() == 2 &&
+            operations.handoffCalls.load() == 1 && results.size == 2 &&
+            results[0].callId == "handoff-call-a" && !results[0].isError &&
+            results[1].callId == "handoff-call-b" && results[1].isError &&
+            snapshot.status == RunState.Failed && snapshot.modelRequests == 1 &&
+            snapshot.turns == 1 && snapshot.toolCalls == 2 &&
+            eventCount(runs.eventLog, "tool.execution_completed") == 1,
+        "handoff failure joins the started sibling and persists one success plus one error"
+    )
+    expect(
+        createdRunning >= 0 && failed >= 0 && createdRunning < failed,
+        "handoff failure leaves the run in the Created-to-Running-to-Failed lifecycle"
+    )
 }
 
 func approvalBatchBarrierContract(): Unit {
@@ -1694,27 +1822,70 @@ func approvalBatchBarrierContract(): Unit {
             Capability(CapabilityKind.WorkspaceWrite)
         ])
     )
-    let approval = match (core.start(request).value().getOrThrow()) {
+    let pending = core.start(request).value().getOrThrow()
+    let approval = match (pending) {
         case AgentRunOutcome.AwaitingApproval(_, value) => value
         case _ => throw IllegalStateException("approval batch did not pause")
     }
-    expect(
-        approval.callId == "approval-call-b" && safe.executions == 1 && write.executions == 0 &&
-            transcriptToolResultIds(coreMessages(
-                core, SessionId("approval-batch-session")
-            )).size == 1,
-        "the first approval is a barrier and later calls remain unprepared"
-    )
-    let completed = core.decide(request, approval, ApprovalDecision.Approve)
-    expect(completed.isOk(), "approval batch resumes and completes")
-    let ids = transcriptToolResultIds(coreMessages(
+    let pendingSnapshot = match (pending) {
+        case AgentRunOutcome.AwaitingApproval(snapshot, _) => snapshot
+        case _ => throw IllegalStateException("approval batch snapshot missing")
+    }
+    let pendingIds = transcriptToolResultIds(coreMessages(
         core, SessionId("approval-batch-session")
     ))
     expect(
-        safe.executions == 2 && write.executions == 1 && ids.size == 3 &&
-            ids[0] == "approval-call-a" && ids[1] == "approval-call-b" &&
-            ids[2] == "approval-call-c" && model.observedStableResultOrder,
-        "approval resume executes deferred calls once and preserves original result order"
+        approval.callId == "approval-call-b" && safe.executions == 1 &&
+            write.executions == 0 && model.calls == 1 && pendingIds.size == 1 &&
+            pendingIds[0] == "approval-call-a" &&
+            pendingSnapshot.status == RunState.WaitingApproval &&
+            pendingSnapshot.modelRequests == 1 && pendingSnapshot.turns == 1 &&
+            pendingSnapshot.toolCalls == 2,
+        "approval barrier admits A only and snapshots WaitingApproval before B"
+    )
+    let completed = core.decide(request, approval, ApprovalDecision.Approve)
+    let completedSnapshot = completedSnapshotOrThrow(
+        completed, "approval batch resumes and completes"
+    )
+    let ids = transcriptToolResultIds(coreMessages(
+        core, SessionId("approval-batch-session")
+    ))
+    let aResult = eventIndex(runs.eventLog, "tool.execution_completed")
+    let approvalRequested = eventIndex(runs.eventLog, "approval.requested")
+    let waiting = stateTransitionIndex(runs.eventLog,
+        RunState.Running, RunState.WaitingApproval)
+    let resumedRunning = stateTransitionIndexAfter(
+        runs.eventLog, RunState.WaitingApproval, RunState.Running, waiting)
+    let approvalApproved = eventIndexAfter(runs.eventLog,
+        "approval.approved", waiting)
+    let bResult = eventIndexAfter(runs.eventLog,
+        "tool.execution_completed", approvalApproved)
+    let cStart = eventIndexAfter(runs.eventLog,
+        "tool.execution_started", bResult)
+    let cResult = eventIndexAfter(runs.eventLog,
+        "tool.execution_completed", cStart)
+    let completedState = stateTransitionIndexAfter(runs.eventLog,
+        RunState.Running, RunState.Completed, cResult)
+    let runCompleted = eventIndexAfter(runs.eventLog, "run.completed", cResult)
+    expect(
+        safe.executions == 2 && write.executions == 1 && model.calls == 2 &&
+            ids.size == 3 && ids[0] == "approval-call-a" &&
+            ids[1] == "approval-call-b" && ids[2] == "approval-call-c" &&
+            model.observedStableResultOrder && completedSnapshot.status == RunState.Completed &&
+            completedSnapshot.modelRequests == 2 && completedSnapshot.turns == 2 &&
+            completedSnapshot.toolCalls == 3,
+        "approval resume executes deferred calls once with cumulative snapshot budgets"
+    )
+    expect(
+        aResult >= 0 && approvalRequested >= 0 && waiting >= 0 &&
+            resumedRunning >= 0 && approvalApproved >= 0 && bResult >= 0 &&
+            cStart >= 0 && cResult >= 0 && completedState >= 0 &&
+            runCompleted >= 0 &&
+            aResult < approvalRequested && approvalRequested < waiting &&
+            waiting < resumedRunning && resumedRunning < approvalApproved &&
+            approvalApproved < bResult && bResult < cStart && cStart < cResult &&
+            cResult < completedState && completedState < runCompleted,
+        "approval barrier preserves result, approval, state, and completion event order"
     )
 }
 
@@ -1787,9 +1958,35 @@ func toolContextApprovalResumeContract(): Unit {
     )
     expect(core.cancel(request.runId).isOk(), "active resumed run can be cancelled")
     let resumedResult = resumed.get()
+    let invocationIds = probe.invocationIds()
+    let snapshot = runs.find(request.runId).value().getOrThrow()
+    let (succeeded, failed, cancelled) = requestOutcomeCounts(runs.eventLog)
+    let createdRunning = stateTransitionIndex(runs.eventLog,
+        RunState.Created, RunState.Running)
+    let waiting = stateTransitionIndex(runs.eventLog,
+        RunState.Running, RunState.WaitingApproval)
+    let resumedRunning = stateTransitionIndexAfter(runs.eventLog,
+        RunState.WaitingApproval, RunState.Running, waiting)
+    let cancelling = stateTransitionIndexAfter(runs.eventLog,
+        RunState.Running, RunState.Cancelling, resumedRunning)
+    let cancelledState = stateTransitionIndexAfter(runs.eventLog,
+        RunState.Cancelling, RunState.Cancelled, cancelling)
     expect(
-        resumedResult.isError() && probe.cancelledInvocationCount() == 3,
-        "start and approval-resume contexts share the current run cancellation source"
+        resumedResult.isError() && probe.cancelledInvocationCount() == 3 &&
+            invocationIds.size == 3 && invocationIds[0] == "approval-call-a" &&
+            invocationIds[1] == "approval-call-b" && invocationIds[2] == "approval-call-c" &&
+            model.callCount() == 2 && succeeded == 1 && failed == 0 && cancelled == 1 &&
+            snapshot.status == RunState.Cancelled && snapshot.modelRequests == 2 &&
+            snapshot.turns == 2 && snapshot.toolCalls == 3,
+        "cancellation joins every deferred tool and records one cancelled model attempt"
+    )
+    expect(
+        createdRunning >= 0 && waiting >= 0 && resumedRunning >= 0 &&
+            cancelling >= 0 && cancelledState >= 0 &&
+            createdRunning < waiting && waiting < resumedRunning &&
+            resumedRunning < cancelling && cancelling < cancelledState &&
+            eventCount(runs.eventLog, "run.completed") == 0,
+        "cancellation preserves Created/Running/WaitingApproval/Running/Cancelling/Cancelled trace"
     )
 }
 
@@ -1798,13 +1995,14 @@ func partialToolWaveFailureContract(): Unit {
     let runs = MemoryRuns()
     let catalog = ToolCatalog()
     let successful = EchoTool()
+    let fatal = FatalWaveTool()
     expect(catalog.register(
         ToolDescriptor(
             ModelToolDefinition("wave_fatal", "fatal wave tool", objectValue([])),
             Capability(CapabilityKind.WorkspaceRead),
             concurrency: sharedToolConcurrency()
         ),
-        FatalWaveTool()
+        fatal
     ).isOk(), "fatal wave registration")
     expect(catalog.register(
         ToolDescriptor(
@@ -1828,19 +2026,28 @@ func partialToolWaveFailureContract(): Unit {
         capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
         budget: ResourceBudget(maxConcurrentTools: 2)
     ))
-    let ids = transcriptToolResultIds(coreMessages(
+    let results = transcriptToolResults(coreMessages(
         core, SessionId("partial-wave-session")
     ))
-    var hasSuccessfulResult = false
-    for (id in ids where id == "partial-call-success") {
-        hasSuccessfulResult = true
-    }
+    let snapshot = runs.find(RunId("partial-wave-run")).value().getOrThrow()
+    let createdRunning = stateTransitionIndex(runs.eventLog,
+        RunState.Created, RunState.Running)
+    let failed = stateTransitionIndexAfter(runs.eventLog,
+        RunState.Running, RunState.Failed, createdRunning)
     expect(
-        result.isError() && match (result.error()) {
-            case Some(error) => error.code == "fixture.wave_fatal"
-            case None => false
-        } && successful.executions == 1 && hasSuccessfulResult,
-        "a fatal sibling fails the run only after every sibling has a canonical terminal result"
+        result.isError() && result.error().getOrThrow().code == "fixture.wave_fatal" &&
+            fatal.executions.load() == 1 && successful.executions == 1 &&
+            successful.persistedResults == 1 && results.size == 2 &&
+            results[0].callId == "partial-call-fatal" && results[0].isError &&
+            results[1].callId == "partial-call-success" && !results[1].isError &&
+            snapshot.status == RunState.Failed && snapshot.modelRequests == 1 &&
+            snapshot.turns == 1 && snapshot.toolCalls == 2 &&
+            eventCount(runs.eventLog, "tool.execution_completed") == 1,
+        "a fatal sibling fails only after both calls have canonical terminal results"
+    )
+    expect(
+        createdRunning >= 0 && failed >= 0 && createdRunning < failed,
+        "fatal wave leaves the run in the Created-to-Running-to-Failed lifecycle"
     )
 }
 
@@ -2199,12 +2406,13 @@ func durableDecisionRecoveryDoesNotInvokeProviderContract(): Unit {
     let model = NeverInvokedRecoveryModel()
     let decisionPort = RecoverableDecisionPort()
     let catalog = ToolCatalog()
+    let runs = MemoryRuns()
     let threads = InMemoryThreadRuntimeRegistry(
         ContextProjector("decision-recovery-contract", ConservativeThreadTokenEstimator()),
         { => agentUtcMillis() }
     )
     let result = AgentCore(
-        model, MemoryRuns(),
+        model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
         catalog, threadRuntimes: Some(threads),
         modelDecisionRuntime: Some(decisionPort)
@@ -2215,12 +2423,19 @@ func durableDecisionRecoveryDoesNotInvokeProviderContract(): Unit {
     let snapshot = threads.acquire(
         ThreadId("decision-recovery-session"), "agent-core"
     ).value().getOrThrow().threadSnapshot()
-    expect(result.isOk() && model.calls == 0 && decisionPort.projected &&
-        snapshot.items.size == 2 && snapshot.items[1].id.value ==
-            "decision-item-recovery-decision-block-0",
-        "durable Decision with missing canonical projection is reprojected without provider invocation")
+    let runSnapshot = runs.find(RunId("decision-recovery-run")).value().getOrThrow()
+    let decisionCommitted = eventIndex(runs.eventLog, "model.decision_committed")
+    let runCompleted = eventIndex(runs.eventLog, "run.completed")
+    expect(
+        result.isOk() && model.calls == 0 && decisionPort.projected &&
+            runSnapshot.status == RunState.Completed &&
+            runSnapshot.modelRequests == 0 && snapshot.items.size == 2 &&
+            snapshot.items[1].id.value == "decision-item-recovery-decision-block-0" &&
+            decisionCommitted >= 0 && runCompleted >= 0 &&
+            decisionCommitted < runCompleted,
+        "fresh-start durable Decision commits before run completion without provider invocation"
+    )
 }
-
 func terminalDecisionPersistenceFailureContract(): Unit {
     let model = PolicyCaptureModel()
     let decisions = RecordingModelDecisionPort(rejectPersistence: true)
@@ -3375,10 +3590,7 @@ func countBudgetSignals(
 ): Int64 {
     var count: Int64 = 0
     for (event in events) {
-        match (event.detail.field("code")) {
-            case Some(value) => if (value.text == code) { count += 1 }
-            case None => ()
-        }
+        if (eventCode(event) == code) { count += 1 }
     }
     count
 }
@@ -3550,7 +3762,7 @@ func drainProviderFailureStopsBoundedContract(): Unit {
 
 func resumeRestoresWorkBudgetContinuityContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 3)
-    let decisions = RecordingModelDecisionPort()
+    let decisions = InMemoryModelDecisionRuntimePort()
     let catalog = ToolCatalog()
     expect(catalog.register(
         ToolDescriptor(
@@ -3596,9 +3808,12 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     )
     expect(
         completed.status == RunState.Completed && completed.turns == 4 &&
-            model.workRequests == 4 && checkpointPreservesWorkBucket,
-        "resume restores the consumed work budget and allows exactly the " +
-            "remaining one work turn plus the drain"
+            completed.modelRequests == 5 && completed.toolCalls == 4 &&
+            model.calls == 5 && model.workRequests == 4 &&
+            model.drainWireCalls == 1 && checkpointPreservesWorkBucket &&
+            countBudgetSignals(runs.eventLog, "budget.pressure") == 1 &&
+            countBudgetSignals(runs.eventLog, "budget.draining") == 1,
+        "resume restores work and drain buckets with one bounded drain request"
     )
 }
 
@@ -3606,7 +3821,7 @@ func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 2)
     let catalog = ToolCatalog()
     let model = BudgetProbeModel()
-    let decisions = RecordingModelDecisionPort()
+    let decisions = InMemoryModelDecisionRuntimePort()
     expect(catalog.register(
         ToolDescriptor(
             ModelToolDefinition("echo", "echo text", objectValue([])),
@@ -3647,9 +3862,12 @@ func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
         resumed, "the last ordinary work turn must resume as work"
     )
     expect(first.isError() && checkpointIsWork &&
-        completed.status == RunState.Completed && model.workRequests == 2 &&
-        model.drainWireCalls == 1,
-        "a crash on the last ordinary work request does not misclassify it as drain")
+        completed.status == RunState.Completed && completed.turns == 2 &&
+        completed.modelRequests == 3 && completed.toolCalls == 2 &&
+        model.calls == 3 && model.workRequests == 2 && model.drainWireCalls == 1 &&
+        countBudgetSignals(runs.eventLog, "budget.pressure") == 1 &&
+        countBudgetSignals(runs.eventLog, "budget.draining") == 1,
+        "a crash on the last ordinary work request preserves Work mode before one drain")
 }
 
 func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
@@ -3658,7 +3876,7 @@ func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 3)
     let catalog = ToolCatalog()
     let model = BudgetProbeModel()
-    let decisions = RecordingModelDecisionPort()
+    let decisions = InMemoryModelDecisionRuntimePort()
     expect(catalog.register(
         ToolDescriptor(
             ModelToolDefinition("echo", "echo text", objectValue([])),
@@ -3704,9 +3922,12 @@ func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
         resumed, "drain request bucket continuity must permit recovery"
     )
     expect(first.isError() && checkpointPreservesDrainBucket &&
-        completed.status == RunState.Completed && model.workRequests == 2 &&
-        model.drainWireCalls == 2,
-        "resume restores work and drain request counts independently")
+        completed.status == RunState.Completed && completed.turns == 2 &&
+        completed.modelRequests == 3 && completed.toolCalls == 2 &&
+        model.calls == 3 && model.workRequests == 2 && model.drainWireCalls == 1 &&
+        countBudgetSignals(runs.eventLog, "budget.pressure") == 1 &&
+        countBudgetSignals(runs.eventLog, "budget.draining") == 1,
+        "resume restores separate Work and Drain request buckets")
 }
 
 func drainRespectsRunDeadlineContract(): Unit {
@@ -4411,29 +4632,106 @@ func approvalResumeContract(): Unit {
     }
 }
 
+func eventCode(event: AgentEvent): String {
+    match (eventProtocolDetail(event).field("code")) {
+        case Some(value) => if (value.unifiedKind == ValueKind.Text) { value.text } else { "" }
+        case None => ""
+    }
+}
+
 func eventIndex(events: ArrayList<AgentEvent>, code: String): Int64 {
     for (index in 0..events.size) {
-        if (typedEventMatches(events[index], code)) { return index }
-        match (events[index].detail.field("code")) {
-            case Some(value) => if (value.text == code) { return index }
-            case None => ()
+        if (eventCode(events[index]) == code) { return index }
+    }
+    0 - 1
+}
+func eventIndexAfter(
+    events: ArrayList<AgentEvent>,
+    code: String,
+    after: Int64
+): Int64 {
+    for (index in 0..events.size) {
+        if (index > after && eventCode(events[index]) == code) { return index }
+    }
+    0 - 1
+}
+
+func stateTransitionIndex(
+    events: ArrayList<AgentEvent>,
+    from: RunState,
+    to: RunState
+): Int64 {
+    for (index in 0..events.size) {
+        match (events[index].payload) {
+            case AgentEventPayload.RunStateChanged(actualFrom, actualTo, _) =>
+                if (actualFrom == from && actualTo == to) { return index }
+            case _ => ()
         }
     }
-    -1
+    0 - 1
+}
+
+func stateTransitionIndexAfter(
+    events: ArrayList<AgentEvent>,
+    from: RunState,
+    to: RunState,
+    after: Int64
+): Int64 {
+    for (index in 0..events.size) {
+        if (index <= after) { continue }
+        match (events[index].payload) {
+            case AgentEventPayload.RunStateChanged(actualFrom, actualTo, _) =>
+                if (actualFrom == from && actualTo == to) { return index }
+            case _ => ()
+        }
+    }
+    0 - 1
+}
+
+func eventCount(events: ArrayList<AgentEvent>, code: String): Int64 {
+    var count: Int64 = 0
+    for (event in events) {
+        if (eventCode(event) == code) { count += 1 }
+    }
+    count
 }
 
 func hasEvent(events: ArrayList<AgentEvent>, code: String): Bool {
-    for (event in events) {
-        if (typedEventMatches(event, code)) { return true }
-        match (event.detail.field("code")) {
-            case Some(value) =>
-                if (value.text == code) {
-                    return true
-                }
+    eventIndex(events, code) >= 0
+}
+
+func eventIndexForAttempt(
+    events: ArrayList<AgentEvent>,
+    code: String,
+    attemptId: ModelAttemptId
+): Int64 {
+    for (index in 0..events.size) {
+        match (events[index].meta.attemptId) {
+            case Some(value) => if (value.value == attemptId.value &&
+                eventCode(events[index]) == code) {
+                return index
+            }
             case None => ()
         }
     }
-    false
+    0 - 1
+}
+
+func requestAttemptIndex(
+    events: ArrayList<AgentEvent>,
+    attemptNo: Int64,
+    outcome: ModelRequestOutcome
+): Int64 {
+    for (index in 0..events.size) {
+        match (events[index].payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                if (value.attempt == attemptNo && value.outcome == outcome) {
+                    return index
+                }
+            case _ => ()
+        }
+    }
+    0 - 1
 }
 
 func requestOutcomeCounts(
@@ -4454,15 +4752,6 @@ func requestOutcomeCounts(
         }
     }
     (succeeded, failed, cancelled)
-}
-
-func typedEventMatches(event: AgentEvent, code: String): Bool {
-    match (event.payload) {
-        case AgentEventPayload.TextDelta(_) => code == "model.text_delta"
-        case AgentEventPayload.ReasoningDelta(_) => code == "model.reasoning_delta"
-        case AgentEventPayload.ModelUsageUpdated(_) => code == "model.usage"
-        case _ => false
-    }
 }
 
 func expect(condition: Bool, message: String): Unit {
@@ -4985,6 +5274,7 @@ class ToolContextProbe <: ToolExecutor {
     private let registrations = ArrayList<CancellationRegistration>()
     private var invocations: Int64 = 0
     private var cancelledInvocations: Int64 = 0
+    private let invokedCallIds = ArrayList<String>()
     private var valid = true
 
     init(expectedRoot: String) {
@@ -4999,7 +5289,7 @@ class ToolContextProbe <: ToolExecutor {
         lock.lock()
         try {
             invocations += 1
-            valid = valid && context.workspaceRoot == expectedRoot &&
+            invokedCallIds.add(call.callId)
                 context.cwd == expectedRoot + "/src" &&
                 context.environment.value("CONTEXT_VISIBLE") == Some("explicit") &&
                 context.services.contains(ToolServiceKind.Custom, name: "context-probe") &&
@@ -5014,6 +5304,10 @@ class ToolContextProbe <: ToolExecutor {
     func invocationCount(): Int64 {
         lock.lock()
         try { invocations } finally { lock.unlock() }
+    }
+    func invocationIds(): Array<String> {
+        lock.lock()
+        try { invokedCallIds.toArray() } finally { lock.unlock() }
     }
 
     func cancelledInvocationCount(): Int64 {
@@ -5334,7 +5628,7 @@ class OrderedConflictBatchModel <: ModelPort {
 
 class DelayedHandoffTool <: ToolExecutor {
     private let delayMillis: Int64
-    let completed = AtomicBool(false)
+    let executions = AtomicInt64(0)
 
     init(delayMillis: Int64) { this.delayMillis = delayMillis }
 
@@ -5344,8 +5638,8 @@ class DelayedHandoffTool <: ToolExecutor {
     ): Result<ToolResult> {
         let call = preparedToolCall(prepared)
         let _ = context
+        let _ = executions.fetchAdd(1)
         sleep(Duration.millisecond * delayMillis)
-        completed.store(true)
         Result.Ok(ToolResult(call.callId, call.arguments))
     }
 }
@@ -5376,6 +5670,8 @@ class HandoffFailureBatchModel <: ModelPort {
 
 class FailingSecondExecutionRuntime <: OperationRuntimePort {
     private let delegate = InMemoryOperationRuntimePort()
+    let markExecutingCalls = AtomicInt64(0)
+    let handoffCalls = AtomicInt64(0)
     private var failingOperationId: ?OperationId = None
 
     public func prepare(
@@ -5428,6 +5724,7 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         nowMillis: Int64,
         approvalRequired: Bool
     ): Result<Unit> {
+        let _ = markExecutingCalls.fetchAdd(1)
         if (failingOperationId.isSome() &&
             failingOperationId.getOrThrow().value == operationId.value) {
             return Result.Err(AgentError(
@@ -5447,6 +5744,7 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         threadId: ThreadId,
         observedAtMillis: Int64
     ): Result<Unit> {
+        let _ = handoffCalls.fetchAdd(1)
         delegate.markExecutionHandoff(
             operationId, runId, threadId, observedAtMillis
         )
@@ -5473,12 +5771,14 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
 }
 
 class FatalWaveTool <: ToolExecutor {
+    let executions = AtomicInt64(0)
     public func execute(
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = context
         let _ = prepared
+        let _ = executions.fetchAdd(1)
         Result.Err(AgentError(
             AgentErrorKind.Internal,
             "fixture.wave_fatal",
@@ -5610,6 +5910,10 @@ class BlockingApprovalBatchModel <: ModelPort {
     func resumeModelStarted(): Bool {
         lock.lock()
         try { resumed } finally { lock.unlock() }
+    }
+    func callCount(): Int64 {
+        lock.lock()
+        try { calls } finally { lock.unlock() }
     }
 
     private func nextCall(): Int64 {

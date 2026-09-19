@@ -53,39 +53,72 @@ func stateMachineContract(): Unit {
 
 func structuredCancellationContract(): Unit {
     let lifecycle = RunLifecycle()
-    lifecycle.start().value().getOrThrow()
+    let started = lifecycle.start().value().getOrThrow()
     let childToken = lifecycle.scope.childToken()
     let worker = spawn {
         while (!childToken.isCancelled()) { sleep(Duration.millisecond) }
     }
     lifecycle.scope.own("tool/process", worker).value().getOrThrow()
-    lifecycle.requestCancel().value().getOrThrow()
+    let cancelling = lifecycle.requestCancel().value().getOrThrow()
     expect(childToken.isCancelled(), "parent Run cancellation reaches child token")
     let (transition, report) = lifecycle.settleCancelled(1000)
-    expect(transition.to == RunState.Cancelled,
-        "cancel is terminal only after bounded join")
-    expect(report.settlements.size == 1 &&
-        report.settlements[0].outcome == OwnedTaskOutcome.Joined,
-        "cooperative child is joined")
-    expect(lifecycle.scope.own("late", spawn {}).isError(),
-        "settled run scope rejects detached late work")
+    let (state, sequence) = lifecycle.machine.snapshot()
+    let late = lifecycle.scope.own("late", spawn {})
+    let lateCode = match (late) {
+        case Result.Err(error) => error.code
+        case Result.Ok(_) => ""
+    }
+    expect(
+        started.sequence == 1 && started.from == RunState.Created &&
+            started.to == RunState.Running && started.reason == "" &&
+            cancelling.sequence == 2 && cancelling.from == RunState.Running &&
+            cancelling.to == RunState.Cancelling &&
+            cancelling.reason == "cancel_requested" &&
+            transition.sequence == 3 && transition.from == RunState.Cancelling &&
+            transition.to == RunState.Cancelled && transition.reason == "joined" &&
+            state == RunState.Cancelled && sequence == 3,
+        "cancellation emits the exact Created/Running/Cancelling/Cancelled trace"
+    )
+    expect(
+        report.settlements.size == 1 &&
+            report.settlements[0].name == "tool/process" &&
+            report.settlements[0].outcome == OwnedTaskOutcome.Joined &&
+            lateCode == "run.scope_settling",
+        "cooperative cancellation joins its worker and rejects late ownership"
+    )
 }
 
 func quarantineContract(): Unit {
     let lifecycle = RunLifecycle()
-    lifecycle.start().value().getOrThrow()
+    let started = lifecycle.start().value().getOrThrow()
     let release = AtomicBool(false)
     let stubborn = spawn {
         while (!release.load()) { sleep(Duration.millisecond) }
     }
     lifecycle.scope.own("mcp/ambiguous", stubborn).value().getOrThrow()
-    lifecycle.requestCancel().value().getOrThrow()
+    let cancelling = lifecycle.requestCancel().value().getOrThrow()
     let (transition, report) = lifecycle.settleCancelled(5)
-    expect(report.quarantinedCount() == 1 &&
-        transition.to == RunState.RecoveryRequired,
-        "uncooperative child is quarantined and forces recovery")
+    expect(
+        started.sequence == 1 && cancelling.sequence == 2 &&
+            cancelling.from == RunState.Running &&
+            cancelling.to == RunState.Cancelling &&
+            cancelling.reason == "cancel_requested" && transition.sequence == 3 &&
+            transition.from == RunState.Cancelling &&
+            transition.to == RunState.RecoveryRequired &&
+            transition.reason == "quarantined=1" &&
+            report.settlements.size == 1 &&
+            report.settlements[0].name == "mcp/ambiguous" &&
+            report.settlements[0].outcome == OwnedTaskOutcome.Quarantined,
+        "uncooperative cancellation records one quarantined MCP worker"
+    )
     release.store(true)
     stubborn.get()
+    let (state, sequence) = lifecycle.machine.snapshot()
+    expect(
+        state == RunState.RecoveryRequired && sequence == 3 &&
+            lifecycle.scope.own("late", spawn {}).isError(),
+        "quarantine remains RecoveryRequired after the worker eventually exits"
+    )
 }
 
 func expect(condition: Bool, message: String): Unit {
