@@ -4,7 +4,9 @@ import yjson_support.*
 
 import yjson.*
 
+import std.collection.*
 import agent_domain.*
+
 
 main(): Int64 {
     let ok: Result<String> = Result.Ok("ready")
@@ -38,6 +40,72 @@ main(): Int64 {
         case None => false
     }, "structured value lookup")
 
+
+    let deniedPolicy = parseNetworkPolicy(objectValue([
+        ValueField("mode", textValue("denied"))
+    ])).value().getOrThrow()
+    expect(deniedPolicy.mode == NetworkPolicyMode.Denied &&
+        deniedPolicy.egress.isEmpty() && deniedPolicy.publish.isEmpty(),
+        "network policy defaults to an explicit denied value")
+    let proxyPolicy = parseNetworkPolicy(objectValue([
+        ValueField("mode", textValue("proxy")),
+        ValueField("egress", listValue([
+            objectValue([
+                ValueField("host", textValue("API.Example.com.")),
+                ValueField("port", integerValue(443)),
+                ValueField("private_addresses", listValue([]))
+            ])
+        ])),
+        ValueField("publish", listValue([]))
+    ])).value().getOrThrow()
+    expect(proxyPolicy.mode == NetworkPolicyMode.Mediated &&
+        proxyPolicy.egress[0].host == "api.example.com" &&
+        proxyPolicy.egress[0].port == 443u16,
+        "proxy rules normalize host and retain the exact port")
+    expect(networkPolicyCapabilityResources(proxyPolicy).size == 1 &&
+        networkPolicyCapabilityResources(proxyPolicy)[0] ==
+            "[\"egress\",\"api.example.com\",443,[]]",
+        "network capability resources are derived from the frozen rule")
+    expect(parseNetworkPolicy(objectValue([
+        ValueField("mode", textValue("denied")),
+        ValueField("egress", listValue([]))
+    ])).isError(), "denied policy rejects network rule fields")
+    expect(parseNetworkPolicy(objectValue([
+        ValueField("mode", textValue("proxy")),
+        ValueField("egress", listValue([
+            objectValue([
+                ValueField("host", textValue("127.0.0.1")),
+                ValueField("port", integerValue(80)),
+                ValueField("private_addresses", listValue([]))
+            ])
+        ]))
+    ])).isError(), "proxy policy rejects private destinations without exception")
+    expect(parseNetworkPolicy(boolValue(true)).isError(),
+        "boolean network authorization is not accepted")
+    expect(networkPoliciesEqual(proxyPolicy, parseNetworkPolicy(
+        networkPolicyCanonicalValue(proxyPolicy)
+    ).value().getOrThrow()), "canonical network policy round trip is stable")
+    let tooManyRules = ArrayList<NetworkEgressRule>()
+    for (_ in 0..(NETWORK_GATEWAY_MAX_RULES + 1)) {
+        tooManyRules.add(NetworkEgressRule("api.example.com", 443u16))
+    }
+    expect(rejects({ => NetworkPolicy(
+        NetworkPolicyMode.Mediated,
+        egress: tooManyRules.toArray()
+    ) }), "network policy rejects more rules than the native gateway")
+    let tooManyPrivateAddresses = ArrayList<String>()
+    for (index in 0..(NETWORK_GATEWAY_MAX_PRIVATE_ADDRESSES + 1)) {
+        tooManyPrivateAddresses.add("10.0.0." + (index + 1).toString())
+    }
+    let tooManyPrivateRule = NetworkEgressRule(
+        "api.example.com",
+        443u16,
+        privateAddresses: tooManyPrivateAddresses.toArray()
+    )
+    expect(rejects({ => NetworkPolicy(
+        NetworkPolicyMode.Mediated,
+        egress: [tooManyPrivateRule]
+    ) }), "network policy rejects too many private-address exceptions")
     let capabilities = CapabilitySet(values: [
         Capability(
             CapabilityKind.WorkspaceRead,
@@ -72,24 +140,6 @@ main(): Int64 {
     expect(page.events.size == 1 && page.nextSequence == 2,
            "typed event page")
 
-    let operationId = OperationId("operation-1")
-    let operation = OperationRecord(
-        operationId,
-        runId,
-        OperationStatus.Prepared,
-        Capability(
-            CapabilityKind.WorkspaceWrite,
-            resource: "notes/demo.txt"
-        ),
-        "digest"
-    )
-    expect(operation.status == OperationStatus.Prepared,
-           "operation state")
-    let receipt = OperationReceipt(
-        operationId, true,
-        objectValue([ValueField("changed", boolValue(true))])
-    )
-    expect(receipt.committed, "operation receipt")
 
     let partialBudget = ThinkingCapabilities(
         ThinkingControlMode.Budget,

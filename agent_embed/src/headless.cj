@@ -627,14 +627,14 @@ func encodeAgentValue(value: AgentValue, redact: JsonTextRedactor): String {
 func redactAgentValue(value: AgentValue, redact: JsonTextRedactor): JsonNode {
     match (value.unifiedKind) {
         case ValueKind.Null => jsonNull()
-        case ValueKind.Boolean => jsonBool(value.boolean)
-        case ValueKind.Number => if (validJsonNumber(value.number)) {
-            jsonNumber(value.number)
+        case ValueKind.Boolean => jsonBool(value.asBool())
+        case ValueKind.Number => if (validJsonNumber(value.asNumberText())) {
+            jsonNumber(value.asNumberText())
         } else {
             // AgentValue is an extension boundary and older callers could
             // construct an invalid numeric token. Preserve the payload as a
             // string rather than emitting malformed JSONL.
-            jsonString(redact(value.number))
+            jsonString(redact(value.asNumberText()))
         }
         case ValueKind.Text => jsonString(redact(value.text))
         case ValueKind.List =>
@@ -739,8 +739,8 @@ public func defaultJsonTextRedaction(value: String): String {
 public func redactJsonAgentValue(value: AgentValue): AgentValue {
     match (value.unifiedKind) {
         case ValueKind.Null => nullValue()
-        case ValueKind.Boolean => boolValue(value.boolean)
-        case ValueKind.Number => numberValue(value.number)
+        case ValueKind.Boolean => boolValue(value.asBool())
+        case ValueKind.Number => numberValue(value.asNumberText())
         case ValueKind.Text => textValue(defaultJsonTextRedaction(value.text))
         case ValueKind.List =>
             let values = ArrayList<AgentValue>()

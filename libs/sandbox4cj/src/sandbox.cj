@@ -42,7 +42,7 @@ public enum SandboxResult<T> {
 
 @Derive[Equatable]
 public enum FilesystemIsolationMode {
-    WorkspaceReadOnly | WorkspaceReadWrite
+    Host | WorkspaceReadOnly | WorkspaceReadWrite
 }
 
 @Derive[Equatable]
@@ -52,7 +52,7 @@ public enum ProcessIsolationMode {
 
 @Derive[Equatable]
 public enum NetworkIsolationMode {
-    Denied | Allowed
+    Denied | Mediated | Allowed
 }
 
 public class SandboxEnvironmentEntry {
@@ -307,19 +307,26 @@ public class WorkspaceSandboxCommand {
     public let workingDirectory: String
     public let environment: Array<SandboxEnvironmentEntry>
     public let timeoutMillis: Int64
+    public let networkBridgeExecutable: String
+    public let networkBridgeSocket: String
 
     public init(
         executable: String,
         arguments!: Array<String> = [],
         workingDirectory!: String = "",
         environment!: Array<SandboxEnvironmentEntry> = [],
-        timeoutMillis!: Int64 = 60000
+        timeoutMillis!: Int64 = 60000,
+        networkBridgeExecutable!: String = "",
+        networkBridgeSocket!: String = ""
     ) {
         if (executable.trimAscii() == "" || executable.contains("\u{0000}")) {
             throw IllegalArgumentException("sandbox executable must not be empty or contain NUL")
         }
         if (timeoutMillis < 1) {
             throw IllegalArgumentException("sandbox timeout must be positive")
+        }
+        if ((networkBridgeExecutable.trimAscii() == "") != (networkBridgeSocket.trimAscii() == "")) {
+            throw IllegalArgumentException("sandbox network bridge values must be provided together")
         }
         for (argument in arguments where argument.contains("\u{0000}")) {
             throw IllegalArgumentException("sandbox arguments must not contain NUL")
@@ -330,9 +337,10 @@ public class WorkspaceSandboxCommand {
         this.workingDirectory = workingDirectory
         this.environment = environment
         this.timeoutMillis = timeoutMillis
+        this.networkBridgeExecutable = networkBridgeExecutable.trimAscii()
+        this.networkBridgeSocket = networkBridgeSocket.trimAscii()
     }
 }
-
 public class SandboxLaunchPlan {
     public let launcherExecutable: String
     public let launcherArguments: Array<String>
@@ -399,7 +407,11 @@ public class WorkspaceSandbox {
             case SandboxResult.Err(error) => return SandboxResult.Err(error)
             case SandboxResult.Ok(_) => ()
         }
-        let cwd = match (resolveWorkingDirectory(policy.workspaceRoot, command.workingDirectory)) {
+        let cwd = match (resolveWorkingDirectory(
+            policy.workspaceRoot,
+            command.workingDirectory,
+            allowOutside: policy.filesystem == FilesystemIsolationMode.Host
+        )) {
             case SandboxResult.Ok(value) => value
             case SandboxResult.Err(error) => return SandboxResult.Err(error)
         }
@@ -414,7 +426,15 @@ public class WorkspaceSandbox {
         let ambient = policy.environment.filterCurrent()
         let requested = policy.environment.filter(command.environment)
         let sanitized = mergeEnvironment(ambient.entries, requested.entries, policy)
-        let arguments = buildSandboxArguments(policy, cwd, executable, command.arguments, sanitized)
+        let arguments = buildSandboxArguments(
+            policy,
+            cwd,
+            executable,
+            command.arguments,
+            sanitized,
+            bridgeExecutable: command.networkBridgeExecutable,
+            bridgeSocket: command.networkBridgeSocket
+        )
         let launcherArguments = ArrayList<String>()
         launcherArguments.add("--signal=TERM")
         launcherArguments.add("--kill-after=1s")
@@ -549,7 +569,9 @@ func buildSandboxArguments(
     cwd: String,
     executable: String,
     commandArguments: Array<String>,
-    environment: Array<SandboxEnvironmentEntry>
+    environment: Array<SandboxEnvironmentEntry>,
+    bridgeExecutable!: String = "",
+    bridgeSocket!: String = ""
 ): Array<String> {
     let arguments = ArrayList<String>()
     arguments.add("--die-with-parent")
@@ -566,24 +588,31 @@ func buildSandboxArguments(
         case ProcessIsolationMode.Shared => ()
     }
     match (policy.network) {
-        case NetworkIsolationMode.Denied => arguments.add("--unshare-net")
+        case NetworkIsolationMode.Denied | NetworkIsolationMode.Mediated =>
+            arguments.add("--unshare-net")
         case NetworkIsolationMode.Allowed => ()
     }
-    arguments.add("--ro-bind")
-    arguments.add("/usr")
-    arguments.add("/usr")
-    addOptionalReadOnlyBind(arguments, "/bin")
-    addOptionalReadOnlyBind(arguments, "/lib")
-    addOptionalReadOnlyBind(arguments, "/lib64")
-    arguments.add("--dir")
-    arguments.add("/etc")
-    addOptionalReadOnlyBind(arguments, "/etc/ld.so.cache")
-    addOptionalReadOnlyBind(arguments, "/etc/passwd")
-    addOptionalReadOnlyBind(arguments, "/etc/group")
-    addOptionalReadOnlyBind(arguments, "/etc/nsswitch.conf")
-    if (policy.network == NetworkIsolationMode.Allowed) {
-        addOptionalReadOnlyBind(arguments, "/etc/resolv.conf")
-        addOptionalReadOnlyBind(arguments, "/etc/hosts")
+    if (policy.filesystem == FilesystemIsolationMode.Host) {
+        arguments.add("--bind")
+        arguments.add("/")
+        arguments.add("/")
+    } else {
+        arguments.add("--ro-bind")
+        arguments.add("/usr")
+        arguments.add("/usr")
+        addOptionalReadOnlyBind(arguments, "/bin")
+        addOptionalReadOnlyBind(arguments, "/lib")
+        addOptionalReadOnlyBind(arguments, "/lib64")
+        arguments.add("--dir")
+        arguments.add("/etc")
+        addOptionalReadOnlyBind(arguments, "/etc/ld.so.cache")
+        addOptionalReadOnlyBind(arguments, "/etc/passwd")
+        addOptionalReadOnlyBind(arguments, "/etc/group")
+        addOptionalReadOnlyBind(arguments, "/etc/nsswitch.conf")
+        if (policy.network == NetworkIsolationMode.Allowed) {
+            addOptionalReadOnlyBind(arguments, "/etc/resolv.conf")
+            addOptionalReadOnlyBind(arguments, "/etc/hosts")
+        }
     }
     arguments.add("--proc")
     arguments.add("/proc")
@@ -604,7 +633,8 @@ func buildSandboxArguments(
         }
     }
     addDestinationParents(arguments, policy.workspaceRoot)
-    arguments.add(if (policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
+    arguments.add(if (policy.filesystem == FilesystemIsolationMode.Host ||
+        policy.filesystem == FilesystemIsolationMode.WorkspaceReadWrite) {
         "--bind"
     } else {
         "--ro-bind"
@@ -625,8 +655,20 @@ func buildSandboxArguments(
         addResourceLimitArguments(arguments, policy.resources)
         arguments.add("--")
     }
-    arguments.add(executable)
-    arguments.add(all: commandArguments)
+    let launchExecutable = if (bridgeExecutable == "") { executable } else { bridgeExecutable }
+    let launchArguments = ArrayList<String>()
+    if (bridgeExecutable == "") {
+        launchArguments.add(all: commandArguments)
+    } else {
+        launchArguments.add("--bridge")
+        launchArguments.add("--socket")
+        launchArguments.add(bridgeSocket)
+        launchArguments.add("--")
+        launchArguments.add(executable)
+        launchArguments.add(all: commandArguments)
+    }
+    arguments.add(launchExecutable)
+    arguments.add(all: launchArguments.toArray())
     arguments.toArray()
 }
 
@@ -655,7 +697,11 @@ func addDestinationParents(arguments: ArrayList<String>, path: String): Unit {
     }
 }
 
-func resolveWorkingDirectory(root: String, authored: String): SandboxResult<String> {
+func resolveWorkingDirectory(
+    root: String,
+    authored: String,
+    allowOutside!: Bool = false
+): SandboxResult<String> {
     let candidate = if (authored.trimAscii() == "") {
         root
     } else if (Path(authored).isAbsolute()) {
@@ -679,7 +725,7 @@ func resolveWorkingDirectory(root: String, authored: String): SandboxResult<Stri
                 "sandbox working directory must be a directory"
             )
         }
-        if (!withinPath(resolved, root)) {
+        if (!allowOutside && !withinPath(resolved, root)) {
             return sandboxError<String>(
                 SandboxErrorKind.PermissionDenied,
                 "sandbox.path_escape",
@@ -719,7 +765,8 @@ func resolveCommandExecutable(
         try {
             let resolved = canonicalize(candidate).toString()
             if (FileInfo(Path(resolved)).isDirectory()) { continue }
-            if (withinPath(resolved, policy.workspaceRoot) || withinPath(resolved, "/usr") ||
+            if (policy.filesystem == FilesystemIsolationMode.Host ||
+                withinPath(resolved, policy.workspaceRoot) || withinPath(resolved, "/usr") ||
                 withinPath(resolved, "/bin") || withinPath(resolved, "/lib") ||
                 withinPath(resolved, "/lib64") || withinReadOnlyMount(resolved, policy.readOnlyMounts)) {
                 return SandboxResult.Ok(resolved)

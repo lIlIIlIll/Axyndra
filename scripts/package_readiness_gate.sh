@@ -84,12 +84,13 @@ fi
 
 process_package="$work_root/packages/process4cj-0.1.0"
 [[ -f "$process_package/native/process4cj_native.c" ]]
+[[ -f "$process_package/native/sandbox_net_bridge.c" ]]
 [[ -f "$process_package/native/libprocess4cj_native.a" ]]
 if find "$process_package" -name '*.so' -print -quit | "$GREP" -q .; then
+
   printf 'package readiness: process4cj candidate unexpectedly contains a dynamic library\n' >&2
   exit 1
 fi
-
 process_binary="$work_root/consumers/process4cj/target/release/bin/main"
 if readelf -d "$process_binary" | "$GREP" -E 'RPATH|RUNPATH' | "$GREP" -q '/home/|learn_agent_cj'; then
   printf 'package readiness: process consumer has an absolute developer RPATH\n' >&2

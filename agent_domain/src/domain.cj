@@ -1783,40 +1783,6 @@ public class EventPage {
     }
 }
 
-@Derive[Equatable]
-public enum OperationStatus {
-    Prepared
-    | Approved
-    | Executing
-    | Committed
-    | Failed
-    | RecoveryRequired
-}
-
-public class OperationRecord {
-    public let operationId: OperationId
-    public let runId: RunId
-    public let status: OperationStatus
-    public let capability: Capability
-    public let requestDigest: String
-    public let call: ?ToolCall
-
-    public init(
-        operationId: OperationId,
-        runId: RunId,
-        status: OperationStatus,
-        capability: Capability,
-        requestDigest: String,
-        call!: ?ToolCall = None
-    ) {
-        this.operationId = operationId
-        this.runId = runId
-        this.status = status
-        this.capability = capability
-        this.requestDigest = requestDigest
-        this.call = call
-    }
-}
 
 public class OperationReceipt {
     public let operationId: OperationId
@@ -1884,7 +1850,9 @@ public class ProcessRequest {
     public let workingDirectory: String
     public let timeoutMillis: Int64
     public let sandboxMode: ProcessSandboxMode
-    public let networkAccess: Bool
+    // Every process request carries an explicit, frozen network policy.
+    // The policy is the only authorization source for process network access.
+    public let networkPolicy: NetworkPolicy
     // Sandboxed processes inherit no ambient environment by default. These
     // names are code-authored grants; secret-looking variables additionally
     // require an entry in secretEnvironmentAllowlist.
@@ -1904,8 +1872,8 @@ public class ProcessRequest {
         arguments!: Array<String> = [],
         workingDirectory!: String = "",
         timeoutMillis!: Int64 = 60000,
-        sandboxMode!: ProcessSandboxMode = ProcessSandboxMode.Host,
-        networkAccess!: Bool = false,
+        sandboxMode!: ProcessSandboxMode = ProcessSandboxMode.WorkspaceReadOnly,
+        networkPolicy!: ?NetworkPolicy = None,
         environmentAllowlist!: Array<String> = [],
         secretEnvironmentAllowlist!: Array<String> = [],
         redactedValues!: Array<String> = [],
@@ -1923,7 +1891,10 @@ public class ProcessRequest {
         this.workingDirectory = workingDirectory
         this.timeoutMillis = timeoutMillis
         this.sandboxMode = sandboxMode
-        this.networkAccess = networkAccess
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.environmentAllowlist = environmentAllowlist
         this.secretEnvironmentAllowlist = secretEnvironmentAllowlist
         this.redactedValues = redactedValues

@@ -307,7 +307,7 @@ func sshTextField(value: AgentValue, name: String): String {
 func sshBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(item) =>
-            item.unifiedKind == ValueKind.Boolean && item.boolean
+            item.unifiedKind == ValueKind.Boolean && item.asBool()
         case None => false
     }
 }
@@ -317,7 +317,7 @@ func sshPortField(value: AgentValue): ?Int64 {
         case Some(item) =>
             if (item.unifiedKind != ValueKind.Number) { return None }
             try {
-                Some(Int64.parse(item.number))
+                Some(Int64.parse(item.asNumberText()))
             } catch (_: Exception) {
                 None
             }

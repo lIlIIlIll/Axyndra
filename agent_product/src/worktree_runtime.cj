@@ -301,7 +301,9 @@ class ProductWorktreeRuntime {
                     "-C", entry.parentRepo,
                     "worktree", "remove", "--force", entry.path
                 ],
-                timeoutMillis: 30000
+                timeoutMillis: 30000,
+                sandboxMode: ProcessSandboxMode.Host,
+                networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
             ))
             match (result) {
                 case Result.Ok(value) =>
@@ -347,7 +349,9 @@ class ProductWorktreeRuntime {
                 "worktree-prune-" + safeOperationPart(parent)
             ),
             arguments: ["-C", parent, "worktree", "prune"],
-            timeoutMillis: 30000
+            timeoutMillis: 30000,
+            sandboxMode: ProcessSandboxMode.Host,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
         ))
     }
 }
@@ -383,7 +387,7 @@ func hasLiveIsolationOwner(directory: String): Bool {
         case Some(field) =>
             if (field.unifiedKind != ValueKind.Number) { return false }
             try {
-                Int64.parse(field.number)
+                Int64.parse(field.asNumberText())
             } catch (_: Exception) {
                 return false
             }

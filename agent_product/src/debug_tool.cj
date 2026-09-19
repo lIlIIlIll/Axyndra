@@ -12,6 +12,7 @@ class DebugRuntime {
     private let workspace: LocalWorkspace
     private let sandboxEnabled: Bool
     private let allowUnsafeTestBypass: Bool
+    private let sandboxCaBundle: String
     private let lock = Mutex()
     private let sessions = ArrayList<ProductDapSession>()
     private var activeSessionId = ""
@@ -20,20 +21,27 @@ class DebugRuntime {
     init(
         workspace: LocalWorkspace,
         sandboxEnabled!: Bool = false,
-        allowUnsafeTestBypass!: Bool = false
+        allowUnsafeTestBypass!: Bool = false,
+        sandboxCaBundle!: String = ""
     ) {
         this.workspace = workspace
         this.sandboxEnabled = sandboxEnabled
         this.allowUnsafeTestBypass = allowUnsafeTestBypass
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
     }
 
     func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         lock.lock()
         try {
-            executeLocked(context, call)
+            executeLocked(context, call, prepared.operationPlan.networkPolicy)
         } finally {
             lock.unlock()
         }
@@ -41,7 +49,8 @@ class DebugRuntime {
 
     private func executeLocked(
         context: ToolInvocationContext,
-        call: ToolCall
+        call: ToolCall,
+        networkPolicy: NetworkPolicy
     ): Result<ToolResult> {
         let action = match (requiredString(call, "action")) {
             case Result.Ok(value) => value.trimAscii().toAsciiLower()
@@ -65,13 +74,9 @@ class DebugRuntime {
         let timeoutMillis = timeoutSeconds * 1000
         match (action) {
             case "launch" =>
-                launchSession(context, call, timeoutMillis)
+                launchSession(context, call, timeoutMillis, networkPolicy)
             case "attach" =>
-                attachSession(context, call, timeoutMillis)
-            case "sessions" =>
-                Result.Ok(debugSessionsResult(call, sessions.toArray()))
-            case "terminate" =>
-                terminateSession(context, call, timeoutMillis)
+                attachSession(context, call, timeoutMillis, networkPolicy)
             case "output" =>
                 withActive({ session =>
                     Result.Ok(debugResult(
@@ -156,6 +161,10 @@ class DebugRuntime {
                 evaluate(context, call, timeoutMillis)
             case "stack_trace" =>
                 stackTrace(context, call, timeoutMillis)
+            case "sessions" =>
+                Result.Ok(debugSessionsResult(call, sessions.toArray()))
+            case "terminate" =>
+                terminateSession(context, call, timeoutMillis)
             case "threads" =>
                 simpleRequest(
                     context,
@@ -195,11 +204,11 @@ class DebugRuntime {
                 )
         }
     }
-
     private func launchSession(
         context: ToolInvocationContext,
         call: ToolCall,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        networkPolicy: NetworkPolicy
     ): Result<ToolResult> {
         if (liveActiveSession()) {
             return debugError<ToolResult>(
@@ -238,7 +247,9 @@ class DebugRuntime {
             workspace,
             cwd,
             sandboxEnabled,
-            allowUnsafeTestBypass
+            allowUnsafeTestBypass,
+            networkPolicy,
+            sandboxCaBundle: sandboxCaBundle
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -282,11 +293,11 @@ class DebugRuntime {
                 Result.Err(error)
         }
     }
-
     private func attachSession(
         context: ToolInvocationContext,
         call: ToolCall,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        networkPolicy: NetworkPolicy
     ): Result<ToolResult> {
         if (liveActiveSession()) {
             return debugError<ToolResult>(
@@ -316,7 +327,7 @@ class DebugRuntime {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        if (port >= 0 && !adapter.networkAllowed) {
+        if (port >= 0 && networkPolicyModeIsDenied(adapter.networkPolicy.mode)) {
             return debugError<ToolResult>(
                 AgentErrorKind.PermissionDenied,
                 "tool.debug_network_profile_required",
@@ -328,7 +339,9 @@ class DebugRuntime {
             workspace,
             cwd,
             sandboxEnabled,
-            allowUnsafeTestBypass
+            allowUnsafeTestBypass,
+            networkPolicy,
+            sandboxCaBundle: sandboxCaBundle
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -1504,9 +1517,9 @@ class DebugTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.execute(context, call)
+        runtime.execute(context, prepared)
     }
 }
 
@@ -1603,6 +1616,25 @@ func debugCapabilityFor(call: ToolCall): Capability {
     }
 }
 
+func debugNetworkPolicyFor(
+    workspace: LocalWorkspace,
+    call: ToolCall
+): Result<NetworkPolicy> {
+    let action = optionalString(call, "action", "").toAsciiLower()
+    if (action != "launch" && action != "attach") {
+        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    let adapter = match (selectDapAdapter(
+        workspace.rootPath(),
+        optionalString(call, "adapter", ""),
+        optionalString(call, "program", "")
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(_) => return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    Result.Ok(adapter.networkPolicy)
+}
+
 func debugAdditionalCapabilities(
     workspace: LocalWorkspace,
     call: ToolCall
@@ -1614,7 +1646,10 @@ func debugAdditionalCapabilities(
     let required = ArrayList<Capability>()
     required.add(Capability(CapabilityKind.WorkspaceWrite))
     if (action == "attach" && optionalInteger(call, "port", -1) >= 0) {
-        required.add(Capability(CapabilityKind.NetworkAccess))
+        required.add(Capability(
+            CapabilityKind.NetworkAccess,
+            resource: "host"
+        ))
         return required.toArray()
     }
     let program = optionalString(call, "program", "")
@@ -1626,8 +1661,11 @@ func debugAdditionalCapabilities(
         case Result.Ok(value) => value
         case Result.Err(_) => return required.toArray()
     }
-    if (adapter.networkAllowed) {
-        required.add(Capability(CapabilityKind.NetworkAccess))
+    if (!networkPolicyModeIsDenied(adapter.networkPolicy.mode)) {
+        required.add(Capability(
+            CapabilityKind.NetworkAccess,
+            resource: "host"
+        ))
     }
     required.toArray()
 }
@@ -1744,9 +1782,9 @@ func debugJsonStringArray(call: ToolCall, name: String): JsonNode {
 func debugAgentValueToJson(value: AgentValue): JsonNode {
     match (value.unifiedKind) {
         case ValueKind.Null => jsonNull()
-        case ValueKind.Boolean => jsonBool(value.boolean)
+        case ValueKind.Boolean => jsonBool(value.asBool())
         case ValueKind.Number =>
-            jsonNumber(value.number)
+            jsonNumber(value.asNumberText())
         case ValueKind.Text => jsonString(value.text)
         case ValueKind.List =>
             let result = jsonArray([])
@@ -1769,7 +1807,7 @@ func debugAgentValueToJson(value: AgentValue): JsonNode {
 func debugJsonToAgentValue(value: JsonNode): AgentValue {
     match (value.unifiedKind) {
         case UnifiedJsonKind.Null => nullValue()
-        case UnifiedJsonKind.Boolean => boolValue(value.boolean)
+        case UnifiedJsonKind.Boolean => boolValue(value.asBool())
         case UnifiedJsonKind.Number => numberValue(value.text)
         case UnifiedJsonKind.Text => textValue(value.text)
         case UnifiedJsonKind.List =>

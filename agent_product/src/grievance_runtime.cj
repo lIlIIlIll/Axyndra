@@ -245,7 +245,7 @@ func grievanceInteger(value: AgentValue, name: String): Int64 {
         case Some(field) =>
             match (field.unifiedKind) {
                 case ValueKind.Number =>
-                    try { Int64.parse(field.number) }
+                    try { Int64.parse(field.asNumberText()) }
                     catch (_: Exception) { 0 }
                 case _ => 0
             }
@@ -257,7 +257,7 @@ func grievanceBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
             match (field.unifiedKind) {
-                case ValueKind.Boolean => field.boolean
+                case ValueKind.Boolean => field.asBool()
                 case _ => false
             }
         case None => false

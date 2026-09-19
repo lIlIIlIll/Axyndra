@@ -42,8 +42,8 @@ class ProductMcpToolHost <: McpToolHost {
     private let catalog: ToolCatalog
     private let pipeline: ToolPipeline
     private let ids: ProductIds
+    private let vnext: ProductVnextControl
     private let options: ProductMcpServerOptions
-    private let toolContext: ToolContextDescriptor
     private let active = ArrayList<ProductMcpActiveCall>()
     private let lock = Mutex()
 
@@ -51,14 +51,14 @@ class ProductMcpToolHost <: McpToolHost {
         catalog: ToolCatalog,
         pipeline: ToolPipeline,
         ids: ProductIds,
-        options: ProductMcpServerOptions,
-        toolContext: ToolContextDescriptor
+        vnext: ProductVnextControl,
+        options: ProductMcpServerOptions
     ) {
         this.catalog = catalog
         this.pipeline = pipeline
         this.ids = ids
+        this.vnext = vnext
         this.options = options
-        this.toolContext = toolContext
     }
 
     public func listTools(cursor: String): Result<McpToolListPage> {
@@ -99,17 +99,19 @@ class ProductMcpToolHost <: McpToolHost {
         }
         let runId = ids.nextRunId()
         let requestKey = productMcpRequestKey(requestId)
+        // MCP requests can overlap on one server session. Each request gets its
+        // own canonical Thread/Run owner, then the inactive ephemeral Thread is
+        // discarded after the request settles.
+        let executionSessionId = SessionId(
+            options.sessionId.value + "::mcp-request-" + runId.value
+        )
         addActive(requestId, runId)
         try {
-            let context = ToolInvocationContext(
-                runId,
-                options.sessionId,
+            match (vnext.executeCanonicalTool(
+                executionSessionId,
                 options.capabilities,
-                toolContext: toolContext
-            )
-            match (pipeline.invoke(
-                context,
-                ToolCall("mcp-server-" + requestKey, name, arguments)
+                ToolCall("mcp-server-" + requestKey, name, arguments),
+                runId: Some(runId)
             )) {
                 case Result.Err(error) => Result.Err(error)
                 case Result.Ok(ToolInvocationResult.Completed(result)) =>
@@ -142,6 +144,7 @@ class ProductMcpToolHost <: McpToolHost {
             }
         } finally {
             removeActive(requestId, runId)
+            let _ = vnext.discardInactiveThread(executionSessionId)
         }
     }
 
@@ -207,15 +210,15 @@ func buildProductMcpServer(
     catalog: ToolCatalog,
     pipeline: ToolPipeline,
     ids: ProductIds,
-    options: ProductMcpServerOptions,
-    toolContext: ToolContextDescriptor
+    vnext: ProductVnextControl,
+    options: ProductMcpServerOptions
 ): McpServer {
     McpServer(
         McpDiscoverResult(
             serverInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"),
             instructions: options.instructions
         ),
-        ProductMcpToolHost(catalog, pipeline, ids, options, toolContext),
+        ProductMcpToolHost(catalog, pipeline, ids, vnext, options),
         requestOwner: options.sessionId.value
     )
 }

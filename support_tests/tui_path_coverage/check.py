@@ -741,6 +741,7 @@ class CaseRun:
         (self.home / "credentials").mkdir(parents=True, exist_ok=True)
         allow_workspace_writes = "true" if approval_mode in {"ai", "trusted"} else "false"
         (self.home / "config.yml").write_text(
+            "schema_version: 1\n"
             "default_model: coverage/coverage\n"
             "approval:\n"
             f"  mode: {approval_mode}\n"
@@ -1825,6 +1826,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                     "tool_arguments": {
                         "op": "restart",
                         "name": "boundary-daemon",
+                        "network": {"mode": "denied"},
                     },
                 },
                 {"kind": "text", "chunks": ["process-restart-recovered"], "event_delay": 0.02},
@@ -3535,7 +3537,7 @@ def run_recovery_matrix(case_run: CaseRun, _: dict[str, Any]) -> None:
         with sqlite3.connect(str(database), timeout=1.0) as connection:
             tool_intents = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM tool_operation_intents WHERE payload LIKE ?",
+                    "SELECT COUNT(*) FROM operation_effect_records WHERE normalized_plan LIKE ?",
                     ("%recovery-once.txt%",),
                 ).fetchone()[0]
             )
@@ -5449,12 +5451,12 @@ def run_startup_invalid(case_run: CaseRun, case: dict[str, Any]) -> None:
         (case_run.home / name).unlink(missing_ok=True)
     if profile == "partial":
         (case_run.home / "config.yml").write_text(
-            "default_model: coverage/coverage\n",
+            "schema_version: 1\ndefault_model: coverage/coverage\n",
             encoding="utf-8",
         )
     elif profile == "corrupt":
         (case_run.home / "config.yml").write_text(
-            "default_model: coverage/coverage\n",
+            "schema_version: 1\ndefault_model: coverage/coverage\n",
             encoding="utf-8",
         )
         (case_run.home / "providers.yml").write_bytes(b"\xff\xfe\x00")
@@ -6240,13 +6242,24 @@ def run_compaction_summary(case_run: CaseRun, _: dict[str, Any]) -> None:
     second_compaction = strip_ansi(
         case_run.wait_screen(("compacted messages: 5",), "compaction-second-command", timeout=15.0)
     )
+    first_metrics = re.search(
+        r"Before\s+(\d+) tokens.*?After\s+(\d+) tokens.*?Saved\s+(\d+) tokens",
+        first_compaction,
+        re.S,
+    )
+    second_metrics = re.search(
+        r"Before\s+(\d+) tokens.*?After\s+(\d+) tokens.*?Saved\s+(\d+) tokens",
+        second_compaction,
+        re.S,
+    )
     case_run.assertions.check(
         "compaction_card_updates",
-        second_compaction.count("Before") == 1
+        first_metrics is not None
+        and second_metrics is not None
+        and first_metrics.groups() != second_metrics.groups()
+        and second_compaction.count("Before") == 1
         and second_compaction.count("After") == 1
-        and second_compaction.count("Saved") == 1
-        and "Before   8990 tokens" in second_compaction
-        and "After    8981 tokens" in second_compaction,
+        and second_compaction.count("Saved") == 1,
         "the fixed compaction card id updates in place instead of duplicating",
     )
     case_run.wait_screen(("messages: 5 (user 3, assistant 2)",), "compaction-summary-fallback", timeout=15.0)

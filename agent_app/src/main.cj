@@ -76,6 +76,12 @@ main(): Int64 {
         println("Error: invalid mode: " + mode)
         return 2
     }
+    let shellNetworkModeOverride = match (shellNetworkModeFrom(rawArguments)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) =>
+            printError(error)
+            return 2
+    }
     var arguments = withoutRuntimeArguments(rawArguments)
     tuiStartupStage("configuration_loading_started")
     let productConfig = ProductConfig(
@@ -89,6 +95,7 @@ main(): Int64 {
             "--cwd",
             "."
         ),
+        shellNetworkModeOverride: shellNetworkModeOverride,
         fixture: fixture,
         approvalMode: approvalMode,
         approvalRoutingModeOverride: approvalRoutingMode,
@@ -116,6 +123,7 @@ main(): Int64 {
                 unsafeDirectLaunchForTests: productConfig.unsafeDirectLaunchForTests,
                 approvalMode: productConfig.approvalMode,
                 approvalRoutingModeOverride: productConfig.approvalRoutingModeOverride,
+                shellNetworkModeOverride: productConfig.shellNetworkModeOverride,
                 modelOverride: productConfig.modelOverride,
                 asyncEnabled: productConfig.asyncEnabled,
                 wallTimeoutMillis: productConfig.wallTimeoutMillis,
@@ -327,7 +335,8 @@ func directCliCommandIndex(arguments: Array<String>): Int64 {
         }
         if (candidate == "--approval-mode" || candidate == "--mode" || candidate == "--model" || candidate == "--cwd" ||
             candidate == "--max-time" || candidate == "--model-attempt-recovery" ||
-            candidate == "--model-stream-idle-timeout-ms" || candidate == "--model-stream-fault-profile") {
+            candidate == "--model-stream-idle-timeout-ms" || candidate == "--model-stream-fault-profile" ||
+            candidate == "--shell-network-mode") {
             if (index + 1 >= arguments.size || arguments[index + 1] == "--") { return -1 }
             index += 2
             continue
@@ -499,12 +508,24 @@ func runConfigCli(
                     objectValue(
                         [
                             ValueField(
+                                "schema_version",
+                                textValue("1")
+                            ),
+                            ValueField(
                                 "default_model",
                                 textValue(settings.model)
                             ),
                             ValueField(
                                 "async.enabled",
                                 boolValue(settings.asyncEnabled)
+                            ),
+                            ValueField(
+                                "shell.network_mode",
+                                textValue(shellNetworkModeName(settings.shellNetworkMode))
+                            ),
+                            ValueField(
+                                "sandbox.ca_bundle",
+                                textValue(settings.sandboxCaBundle)
                             )
                         ]
                     )
@@ -512,12 +533,19 @@ func runConfigCli(
             )
         } else {
             println("Settings:")
+            println("  schema_version = 1")
             println("  default_model = " + if (settings.model == "") {
                 "(not set)"
             } else {
                 settings.model
             })
             println("  async.enabled = " + settings.asyncEnabled.toString())
+            println("  shell.network_mode = " + shellNetworkModeName(settings.shellNetworkMode))
+            println("  sandbox.ca_bundle = " + if (settings.sandboxCaBundle == "") {
+                "(not set)"
+            } else {
+                settings.sandboxCaBundle
+            })
         }
         return 0
     }
@@ -559,6 +587,22 @@ func runConfigCli(
                     "async.enabled",
                     ProductConfigScalar.Boolean(parsed.getOrThrow())
                 ))
+            case "shell.network_mode" =>
+                let parsed = match (parseShellNetworkMode(value)) {
+                    case Result.Ok(mode) => mode
+                    case Result.Err(error) =>
+                        println(error.message)
+                        return 1
+                }
+                edits.add(ProductConfigEdit(
+                    "shell.network_mode",
+                    ProductConfigScalar.Text(shellNetworkModeName(parsed))
+                ))
+            case "sandbox.ca_bundle" =>
+                edits.add(ProductConfigEdit(
+                    "sandbox.ca_bundle",
+                    ProductConfigScalar.Text(value.trimAscii())
+                ))
             case key =>
                 println("Unknown setting: " + key)
                 return 1
@@ -576,7 +620,8 @@ func runConfigCli(
         } else {
             ""
         }
-        if (key != "" && key != "default_model" && key != "async.enabled") {
+        if (key != "" && key != "default_model" && key != "async.enabled" &&
+            key != "shell.network_mode" && key != "sandbox.ca_bundle") {
             println("Unknown setting: " + key)
             return 1
         }
@@ -591,6 +636,18 @@ func runConfigCli(
             edits.add(ProductConfigEdit(
                 "async.enabled",
                 ProductConfigScalar.Boolean(true)
+            ))
+        }
+        if (key == "" || key == "shell.network_mode") {
+            edits.add(ProductConfigEdit(
+                "shell.network_mode",
+                ProductConfigScalar.Text("restricted")
+            ))
+        }
+        if (key == "" || key == "sandbox.ca_bundle") {
+            edits.add(ProductConfigEdit(
+                "sandbox.ca_bundle",
+                ProductConfigScalar.Text("")
             ))
         }
         return saveCliSettings(
@@ -611,8 +668,12 @@ func printConfigValue(
 ): Int64 {
     let value: AgentValue
     match (key) {
+        case "schema_version" => value = textValue("1")
         case "default_model" => value = textValue(settings.model)
         case "async.enabled" => value = boolValue(settings.asyncEnabled)
+        case "shell.network_mode" =>
+            value = textValue(shellNetworkModeName(settings.shellNetworkMode))
+        case "sandbox.ca_bundle" => value = textValue(settings.sandboxCaBundle)
         case _ =>
             println("Unknown setting: " + key)
             return 1
@@ -631,7 +692,7 @@ func printConfigValue(
     } else {
         match (value.unifiedKind) {
             case ValueKind.Text => println(value.text)
-            case ValueKind.Boolean => println(value.boolean.toString())
+            case ValueKind.Boolean => println(value.asBool().toString())
             case _ => println(encodeAgentValue(value))
         }
     }
@@ -1651,7 +1712,8 @@ func argumentParseError(arguments: Array<String>): ?String {
         "--max-time",
         "--model-attempt-recovery",
         "--model-stream-idle-timeout-ms",
-        "--model-stream-fault-profile"
+        "--model-stream-fault-profile",
+        "--shell-network-mode"
     ]
     let flagOptions = [
         "--fixture",
@@ -1720,6 +1782,17 @@ func argumentParseError(arguments: Array<String>): ?String {
     }
     None
 }
+func shellNetworkModeFrom(arguments: Array<String>): Result<?ShellNetworkMode> {
+    let raw = argumentValue(arguments, "--shell-network-mode")
+    if (raw.trimAscii() == "") {
+        return Result.Ok(None)
+    }
+    match (parseShellNetworkMode(raw)) {
+        case Result.Ok(value) => Result.Ok(Some(value))
+        case Result.Err(error) => Result.Err(error)
+    }
+}
+
 
 func withoutRuntimeArguments(arguments: Array<String>): Array<String> {
     let result = ArrayList<String>()
@@ -1741,7 +1814,8 @@ func withoutRuntimeArguments(arguments: Array<String>): Array<String> {
         if (argument == "--approval-mode" || argument == "--mode" || argument == "--model" || argument == "--cwd" ||
             argument == "--max-time" || argument == "--model-attempt-recovery" ||
             argument == "--model-stream-idle-timeout-ms" ||
-            argument == "--model-stream-fault-profile") {
+            argument == "--model-stream-fault-profile" ||
+            argument == "--shell-network-mode") {
             skipNext = true
             continue
         }
@@ -1751,7 +1825,8 @@ func withoutRuntimeArguments(arguments: Array<String>): Array<String> {
             argument.startsWith("--cwd=") || argument.startsWith("--max-time=") ||
             argument.startsWith("--model-attempt-recovery=") ||
             argument.startsWith("--model-stream-idle-timeout-ms=") ||
-            argument.startsWith("--model-stream-fault-profile=")) {
+            argument.startsWith("--model-stream-fault-profile=") ||
+            argument.startsWith("--shell-network-mode=")) {
             continue
         }
         result.add(argument)
@@ -2063,12 +2138,18 @@ func acpSessionProductConfig(
         stateRoot: config.stateRoot,
         workspaceRoot: workspaceRoot,
         fixture: config.fixture,
+        unsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
         approvalMode: config.approvalMode,
         approvalRoutingModeOverride: config.approvalRoutingModeOverride,
+        shellNetworkModeOverride: config.shellNetworkModeOverride,
         modelOverride: config.modelOverride,
         asyncEnabled: config.asyncEnabled,
         wallTimeoutMillis: config.wallTimeoutMillis,
-        startupMode: config.startupMode
+        modelAttemptRecovery: config.modelAttemptRecovery,
+        modelStreamFaultProfile: config.modelStreamFaultProfile,
+        compactionOverride: config.compactionOverride,
+        startupMode: config.startupMode,
+        extensionSignatureVerifier: config.extensionSignatureVerifier
     )
 }
 
@@ -2497,6 +2578,7 @@ func printHelp(): Unit {
             "  --cwd <path>                set workspace root\n" +
             "  --max-time <duration>       stop a turn after this duration (e.g., 120, 5m, 1h)\n" +
             "  --approval-mode <mode>      manual, ai, never, trusted\n" +
+            "  --shell-network-mode <mode> restricted, proxy, trusted-host\n" +
             "  --fixture                   explicit deterministic test provider")
 }
 
@@ -2633,13 +2715,27 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     public func welcome(): Array<TuiAgentEvent> {
-        if (session.model() == "unconfigured") {
-            [TuiAgentEvent.Setup(
-                "Run `axyndra setup`, or create " + defaultProductHome() + "/config.yml, models.yml, and providers.yml; " +
-                    "then restart axyndra. Fixture mode is never selected " + "implicitly.")]
-        } else {
-            []
+        let events = ArrayList<TuiAgentEvent>()
+        for (profile in product.providers() where profile.allowInsecureHttp) {
+            events.add(TuiAgentEvent.Warning(
+                "Insecure HTTP: " + profile.id,
+                "Provider uses plaintext HTTP at " + profile.baseUrl +
+                    "; API keys and prompts may be intercepted."
+            ))
         }
+        if (product.shellNetworkMode == ShellNetworkMode.TrustedHost) {
+            events.add(TuiAgentEvent.Warning(
+                "Trusted host network",
+                "Shell commands can reach the host network; file, environment, credentials, and approval boundaries remain active."
+            ))
+        }
+        if (session.model() == "unconfigured") {
+            events.add(TuiAgentEvent.Setup(
+                "Run `axyndra setup`, or create " + defaultProductHome() + "/config.yml, models.yml, and providers.yml; " +
+                    "then restart axyndra. Fixture mode is never selected " + "implicitly."
+            ))
+        }
+        events.toArray()
     }
 
     public func submit(
@@ -3033,6 +3129,9 @@ class ProductTuiBackend <: AgentTuiBackend {
 
     public func currentWorkMode(): String {
         session.workMode()
+    }
+    public func currentShellNetworkMode(): String {
+        shellNetworkModeName(product.shellNetworkMode)
     }
 
     public func currentTheme(): String {
@@ -4672,7 +4771,7 @@ func eventPolicyText(event: AgentEvent, name: String): String {
 func eventInteger(event: AgentEvent, name: String): Int64 {
     match (event.detail.field(name)) {
         case Some(value) => try {
-            Int64.parse(value.number)
+            Int64.parse(value.asNumberText())
         } catch (_: Exception) {
             0
         }
@@ -4682,7 +4781,7 @@ func eventInteger(event: AgentEvent, name: String): Int64 {
 
 func eventBoolean(event: AgentEvent, name: String): Bool {
     match (event.detail.field(name)) {
-        case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
+        case Some(value) => value.unifiedKind == ValueKind.Boolean && value.asBool()
         case None => false
     }
 }

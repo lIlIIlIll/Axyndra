@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import agent_runtime.*
 import agent_mcp.*
 import agent_protocol.*
 import agent_product.*
@@ -169,8 +170,13 @@ class ProductMcpIdentityTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let numeric = call.callId == "mcp-server-number:1"
         lock.lock()
         try {
@@ -348,7 +354,7 @@ func prepare(root: String): Unit {
     File.writeTo(workspace + "/note.txt", "bridge-readable\n".toArray())
     File.writeTo(
         settings + "/config.yml",
-        "default_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
+        "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
     )
     File.writeTo(
         settings + "/models.yml",

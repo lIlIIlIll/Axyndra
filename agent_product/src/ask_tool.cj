@@ -304,8 +304,13 @@ public class AskTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let questions = match (parseAskQuestions(call)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -799,7 +804,7 @@ func optionalAskBoolean(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == ValueKind.Boolean) {
-                Result.Ok(field.boolean)
+                Result.Ok(field.asBool())
             } else {
                 invalidAskAnswer(name + " must be a boolean")
             }
@@ -817,7 +822,7 @@ func optionalAskInteger(
                 return invalidAskAnswer(name + " must be a number")
             }
             try {
-                Result.Ok(Some(Int64.parse(field.number)))
+                Result.Ok(Some(Int64.parse(field.asNumberText())))
             } catch (_: Exception) {
                 invalidAskAnswer(name + " must be an integer index")
             }

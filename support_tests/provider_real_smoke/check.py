@@ -56,6 +56,7 @@ def write_provider(home: Path, spec: Provider, timeout_millis: int) -> None:
     key.write_text(spec.credential + "\n")
     key.chmod(0o600)
     (home / "config.yml").write_text(
+        f"schema_version: 1\n"
         f"default_model: {spec.profile}/{spec.model}\n"
         "approval:\n"
         "  mode: manual\n"

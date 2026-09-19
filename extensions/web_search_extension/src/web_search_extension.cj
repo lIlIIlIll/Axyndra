@@ -37,7 +37,7 @@ public class WebSearchExtensionTool <: ExtensionTool {
     public init() {}
     public func definition(): ExtensionToolDefinition {
         ExtensionToolDefinition(
-            "web_search", "Search the web for up-to-date information.", webSearchSchema(), [networkHttp()]
+            "web_search", "Search the web for up-to-date information.", webSearchSchema(), [networkHttp(resource: "web_search")]
         )
     }
     public func validate(input: JsonNode): SdkResult<JsonNode> {
@@ -70,6 +70,7 @@ public class WebSearchExtensionTool <: ExtensionTool {
 func webSearchSchema(): JsonNode {
     objectSchema([
         JsonObjectEntry("query", stringSchema()),
+        JsonObjectEntry("provider", enumSchema(["auto", "none", "brave", "tavily", "searxng"])),
         JsonObjectEntry("recency", enumSchema(["day", "week", "month", "year"])),
         JsonObjectEntry("limit", numberSchema()),
         JsonObjectEntry("max_tokens", numberSchema()),

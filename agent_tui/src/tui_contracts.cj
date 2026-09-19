@@ -599,6 +599,7 @@ public interface AgentTuiBackend {
     func currentSession(): String
     func currentThinking(): String
     func currentWorkMode(): String
+    func currentShellNetworkMode(): String
     func currentTheme(): String
     func currentBranch(): String
     func workspace(): String

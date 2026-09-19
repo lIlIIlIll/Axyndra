@@ -731,7 +731,7 @@ public class MemoryMcpToolHost <: McpToolHost {
     public func cancellations(): Array<String> { lock.lock(); try { cancelled.toArray() } finally { lock.unlock() } }
 }
 
-func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
+public func validateMcpRequestMeta(params: JsonNode): McpResult<Unit> {
     if (params.unifiedKind != UnifiedJsonKind.Object) { return invalidMcp<Unit>("mcp.params_invalid", "request params must be an object") }
     let meta = match (params.field("_meta")) {
         case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Object) { value } else {
@@ -1039,7 +1039,7 @@ func decodeMcpOptionalText(value: JsonNode, name: String): McpResult<String> {
 func decodeMcpRequestId(value: JsonNode): McpResult<JsonRpcId> {
     try { match (value.unifiedKind) {
         case UnifiedJsonKind.Text => McpResult.Ok(jsonRpcTextId(value.text))
-        case UnifiedJsonKind.Number => McpResult.Ok(JsonRpcId(JsonRpcIdKind.Number, value: value.number))
+        case UnifiedJsonKind.Number => McpResult.Ok(JsonRpcId(JsonRpcIdKind.Number, value: value.asNumberText()))
         case _ => invalidMcp<JsonRpcId>("mcp.request_id_invalid", "request id must be string or integer")
     } } catch (error: Exception) { invalidMcp<JsonRpcId>("mcp.request_id_invalid", error.message) }
 }

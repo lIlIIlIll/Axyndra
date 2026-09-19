@@ -22,7 +22,7 @@ class LspServerSpec {
     let rootMarkers: Array<String>
     let initializationOptions: JsonNode
     let settings: JsonNode
-    let networkAllowed: Bool
+    let networkPolicy: NetworkPolicy
     let environment: Array<DirectEnvironmentBinding>
 
     init(
@@ -34,7 +34,7 @@ class LspServerSpec {
         rootMarkers: Array<String>,
         initializationOptions: JsonNode,
         settings: JsonNode,
-        networkAllowed!: Bool = false,
+        networkPolicy!: ?NetworkPolicy = None,
         environment!: Array<DirectEnvironmentBinding> = []
     ) {
         this.name = name
@@ -45,7 +45,10 @@ class LspServerSpec {
         this.rootMarkers = rootMarkers
         this.initializationOptions = initializationOptions
         this.settings = settings
-        this.networkAllowed = networkAllowed
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.environment = environment
     }
 }
@@ -65,9 +68,11 @@ class OpenLspDocument {
 class LspClient {
     let spec: LspServerSpec
     let root: String
+    let networkPolicy: NetworkPolicy
     private let workspace: LocalWorkspace
     private var protocol: ?library.LspClient = None
     private let redactor: SecretRedactor
+    private let processHandle: DirectProcessHandle
     private let stateLock = Mutex()
     private let documents = ArrayList<OpenLspDocument>()
     private let diagnostics = ArrayList<LspDiagnostics>()
@@ -82,15 +87,18 @@ class LspClient {
     init(
         spec: LspServerSpec,
         workspace: LocalWorkspace,
-        process: ManagedProcess,
-        redactor: SecretRedactor
+        directHandle: DirectProcessHandle,
+        redactor: SecretRedactor,
+        networkPolicy!: NetworkPolicy = spec.networkPolicy
     ) {
         this.spec = spec
         this.workspace = workspace
         this.root = workspace.rootPath()
+        this.networkPolicy = networkPolicy
         this.redactor = redactor
+        this.processHandle = directHandle
         this.protocol = Some(library.LspClient(
-            process,
+            directHandle.process,
             notificationHandler: { method: String, params: JsonNode =>
                 handleServerNotification(method, params)
             },
@@ -98,6 +106,11 @@ class LspClient {
                 handleServerRequest(method, params)
             }
         ))
+        let monitor = spawn {
+            let _ = directHandle.process.wait()
+            directHandle.release()
+        }
+        let _ = monitor
     }
 
     private func protocolClient(): library.LspClient {
@@ -386,7 +399,9 @@ class LspClient {
         } finally {
             stateLock.unlock()
         }
-        if (shouldClose) { let _ = protocolClient().close() }
+        if (shouldClose) {
+            try { let _ = protocolClient().close() } finally { processHandle.release() }
+        }
         true
     }
 
@@ -394,9 +409,10 @@ class LspClient {
         var shouldClose = false
         stateLock.lock()
         try { shouldClose = markClosedLocked() } finally { stateLock.unlock() }
-        if (shouldClose) { let _ = protocolClient().close() }
+        if (shouldClose) {
+            try { let _ = protocolClient().close() } finally { processHandle.release() }
+        }
     }
-
     func isAlive(): Bool {
         stateLock.lock()
         try { !closed } finally { stateLock.unlock() }
@@ -673,6 +689,7 @@ class LspRuntime {
     private let workspace: LocalWorkspace
     private let sandboxEnabled: Bool
     private let allowUnsafeTestBypass: Bool
+    private let sandboxCaBundle: String
     private let lock = Mutex()
     private let clients = ArrayList<LspClient>()
     private var specs: Array<LspServerSpec>
@@ -680,15 +697,19 @@ class LspRuntime {
     init(
         workspace: LocalWorkspace,
         sandboxEnabled!: Bool = false,
-        allowUnsafeTestBypass!: Bool = false
+        allowUnsafeTestBypass!: Bool = false,
+        sandboxCaBundle!: String = ""
     ) {
         this.workspace = workspace
         this.sandboxEnabled = sandboxEnabled
         this.allowUnsafeTestBypass = allowUnsafeTestBypass
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         this.specs = loadLspServerSpecs(workspace.rootPath())
     }
-
-    func clientFor(path: String): Result<LspClient> {
+    func clientFor(
+        path: String,
+        networkPolicy!: ?NetworkPolicy = None
+    ): Result<LspClient> {
         let spec = match (serverFor(path)) {
             case Some(value) => value
             case None =>
@@ -698,19 +719,32 @@ class LspRuntime {
                     "No language server found for this file"
                 )
         }
+        let requestedPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => spec.networkPolicy
+        }
         lock.lock()
         try {
             for (client in clients where
                  client.spec.name == spec.name &&
                  client.root == workspace.rootPath() &&
                  client.isAlive()) {
+                if (!sameLspNetworkPolicy(client.networkPolicy, requestedPolicy)) {
+                    return lspError<LspClient>(
+                        AgentErrorKind.Conflict,
+                        "tool.lsp_network_policy_changed",
+                        "language server network policy changed after startup"
+                    )
+                }
                 return Result.Ok(client)
             }
             let client = match (startLspClient(
                 spec,
                 workspace,
                 sandboxEnabled,
-                allowUnsafeTestBypass
+                allowUnsafeTestBypass,
+                requestedPolicy,
+                sandboxCaBundle: sandboxCaBundle
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
@@ -846,22 +880,53 @@ func collectLspProbeFiles(
     } catch (_: Exception) {}
 }
 
+func sameLspNetworkPolicy(
+    left: NetworkPolicy,
+    right: NetworkPolicy
+): Bool {
+    if (left.mode != right.mode ||
+        left.egress.size != right.egress.size ||
+        left.publish.size != right.publish.size) {
+        return false
+    }
+    for (index in 0..left.egress.size) {
+        let a = left.egress[index]
+        let b = right.egress[index]
+        if (a.host != b.host ||
+            a.port != b.port ||
+            a.privateAddresses != b.privateAddresses) {
+            return false
+        }
+    }
+    for (index in 0..left.publish.size) {
+        let a = left.publish[index]
+        let b = right.publish[index]
+        if (a.hostPort != b.hostPort || a.targetPort != b.targetPort) {
+            return false
+        }
+    }
+    true
+}
+
 func startLspClient(
     spec: LspServerSpec,
     workspace: LocalWorkspace,
     sandboxEnabled: Bool,
-    allowUnsafeTestBypass: Bool
+    allowUnsafeTestBypass: Bool,
+    networkPolicy: NetworkPolicy,
+    sandboxCaBundle!: String = ""
 ): Result<LspClient> {
     let opened = match (launchDirectPersistentProcess(
         workspace.rootPath(),
         sandboxEnabled,
         allowUnsafeTestBypass,
         FilesystemIsolationMode.WorkspaceReadOnly,
-        spec.networkAllowed,
+        networkPolicy,
         spec.executable,
         spec.arguments,
         workspace.rootPath(),
         bindings: spec.environment,
+        sandboxCaBundle: sandboxCaBundle,
         errorCode: "tool.lsp_start"
     )) {
         case Result.Ok(value) => value
@@ -871,8 +936,9 @@ func startLspClient(
         let client = LspClient(
             spec,
             workspace,
-            opened.process,
-            opened.redactor
+            opened,
+            opened.redactor,
+            networkPolicy: networkPolicy
         )
         match (client.initialize()) {
             case Result.Ok(_) => Result.Ok(client)
@@ -881,6 +947,7 @@ func startLspClient(
                 Result.Err(error)
         }
     } catch (error: Exception) {
+        try { let _ = opened.process.close() } finally { opened.release() }
         lspError<LspClient>(
             AgentErrorKind.Configuration,
             "tool.lsp_start",
@@ -1094,6 +1161,10 @@ func loadLspConfigFile(
             case Some(value) => value
             case None => continue
         }
+        let networkPolicy = match (lspJsonNetworkPolicy(config)) {
+            case Some(value) => value
+            case None => continue
+        }
         result.add(LspServerSpec(
             member.name,
             executable,
@@ -1113,11 +1184,7 @@ func loadLspConfigFile(
                 case Some(value) => value
                 case None => jsonNull()
             },
-            networkAllowed: lspJsonBooleanValue(
-                config,
-                "network",
-                false
-            ),
+            networkPolicy: Some(networkPolicy),
             environment: environment
         ))
     }
@@ -1173,6 +1240,31 @@ func lspSpecSupports(spec: LspServerSpec, path: String): Bool {
     false
 }
 
+func lspNetworkPolicyFor(
+    workspace: LocalWorkspace,
+    call: ToolCall
+): Result<NetworkPolicy> {
+    if (optionalString(call, "action", "") == "status") {
+        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    let specs = loadLspServerSpecs(workspace.rootPath())
+    let authored = optionalString(call, "file", "")
+    if (authored == "*") {
+        for (spec in specs where !networkPolicyModeIsDenied(spec.networkPolicy.mode)) {
+            return Result.Ok(spec.networkPolicy)
+        }
+        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    let path = match (workspace.resolve(authored)) {
+        case Result.Ok(value) => value
+        case Result.Err(_) => return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    for (spec in specs where lspSpecSupports(spec, path)) {
+        return Result.Ok(spec.networkPolicy)
+    }
+    Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+}
+
 func lspAdditionalCapabilitiesFor(
     workspace: LocalWorkspace,
     call: ToolCall
@@ -1180,23 +1272,21 @@ func lspAdditionalCapabilitiesFor(
     if (optionalString(call, "action", "") == "status") { return [] }
     let required = ArrayList<Capability>()
     required.add(Capability(CapabilityKind.ProcessSpawn))
-    let authored = optionalString(call, "file", "")
-    let specs = loadLspServerSpecs(workspace.rootPath())
-    if (authored == "*") {
-        for (spec in specs where spec.networkAllowed) {
-            required.add(Capability(CapabilityKind.NetworkAccess))
-            break
-        }
-        return required.toArray()
-    }
-    let path = match (workspace.resolve(authored)) {
-        case Result.Ok(value) => value
-        case Result.Err(_) => return required.toArray()
-    }
-    for (spec in specs where
-         spec.networkAllowed && lspSpecSupports(spec, path)) {
-        required.add(Capability(CapabilityKind.NetworkAccess))
-        break
+    match (lspNetworkPolicyFor(workspace, call)) {
+        case Result.Ok(policy) =>
+            if (!networkPolicyModeIsDenied(policy.mode)) {
+                required.add(Capability(
+                    CapabilityKind.NetworkAccess,
+                    resource: if (networkPolicyModeIsHost(policy.mode)) {
+                        "host"
+                    } else if (!policy.egress.isEmpty()) {
+                        networkEgressResource(policy.egress[0])
+                    } else {
+                        "host"
+                    }
+                ))
+            }
+        case Result.Err(_) => ()
     }
     required.toArray()
 }
@@ -1241,11 +1331,42 @@ func lspJsonBooleanValue(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == UnifiedJsonKind.Boolean) {
-                field.boolean
+                field.asBool()
             } else {
                 fallback
             }
         case None => fallback
+    }
+}
+func lspJsonNetworkPolicy(value: JsonNode): ?NetworkPolicy {
+    match (value.field("network")) {
+        case None => Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        case Some(field) =>
+            if (field.unifiedKind == UnifiedJsonKind.Text) {
+                match (networkPolicyMode(field.text)) {
+                    case Result.Ok(NetworkPolicyMode.Mediated) =>
+                        throw IllegalArgumentException(
+                            "LSP network proxy requires explicit egress rules"
+                        )
+                    case Result.Ok(mode) => Some(NetworkPolicy(mode))
+                    case Result.Err(_) => None
+                }
+            } else {
+                match (parseNetworkPolicy(field)) {
+                    case Result.Ok(policy) =>
+                        if (policy.mode == NetworkPolicyMode.Mediated &&
+                            policy.egress.isEmpty()) {
+                            throw IllegalArgumentException(
+                                "LSP network proxy requires explicit egress rules"
+                            )
+                        }
+                        Some(policy)
+                    case Result.Err(error) =>
+                        throw IllegalArgumentException(
+                            "LSP network policy is invalid: " + error.message
+                        )
+                }
+            }
     }
 }
 

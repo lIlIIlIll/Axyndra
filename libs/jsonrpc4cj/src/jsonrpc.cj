@@ -172,7 +172,49 @@ public enum JsonRpcEnvelope {
 }
 
 public func encodeJsonRpc(envelope: JsonRpcEnvelope): String {
-    stringifyUnifiedJson(jsonRpcValue(envelope))
+    match (envelope) {
+        case JsonRpcEnvelope.Request(request) => encodeJsonRpcRequest(request)
+        case JsonRpcEnvelope.Notification(notification) => encodeJsonRpcNotification(notification)
+        case JsonRpcEnvelope.Response(response) => encodeJsonRpcResponse(response)
+    }
+}
+
+func encodeJsonRpcId(id: JsonRpcId): String {
+    match (id.kind) {
+        case JsonRpcIdKind.Text => quoteUnifiedJson(id.value)
+        case JsonRpcIdKind.Number => id.value
+        case JsonRpcIdKind.Null => "null"
+    }
+}
+
+func encodeJsonRpcRequest(request: JsonRpcRequest): String {
+    "{\"jsonrpc\":" + quoteUnifiedJson(JSON_RPC_VERSION) +
+        ",\"id\":" + encodeJsonRpcId(request.id) +
+        ",\"method\":" + quoteUnifiedJson(request.method) +
+        ",\"params\":" + stringifyUnifiedJson(request.params) + "}"
+}
+
+func encodeJsonRpcNotification(notification: JsonRpcNotification): String {
+    "{\"jsonrpc\":" + quoteUnifiedJson(JSON_RPC_VERSION) +
+        ",\"method\":" + quoteUnifiedJson(notification.method) +
+        ",\"params\":" + stringifyUnifiedJson(notification.params) + "}"
+}
+
+func encodeJsonRpcResponse(response: JsonRpcResponse): String {
+    let prefix = "{\"jsonrpc\":" + quoteUnifiedJson(JSON_RPC_VERSION) +
+        ",\"id\":" + encodeJsonRpcId(response.id)
+    match (response.payload) {
+        case JsonRpcResponsePayload.Success(result) =>
+            prefix + ",\"result\":" + stringifyUnifiedJson(result) + "}"
+        case JsonRpcResponsePayload.Failure(error) =>
+            let fields = ArrayList<JsonObjectEntry>()
+            fields.add(JsonObjectEntry("code", jsonNumber(error.code.toString())))
+            fields.add(JsonObjectEntry("message", jsonString(error.message)))
+            if (error.data.unifiedKind != UnifiedJsonKind.Null) {
+                fields.add(JsonObjectEntry("data", error.data))
+            }
+            prefix + ",\"error\":" + stringifyUnifiedJson(jsonObject(fields.toArray())) + "}"
+    }
 }
 
 public func jsonRpcValue(envelope: JsonRpcEnvelope): JsonNode {
@@ -221,9 +263,98 @@ public func decodeJsonRpc(source: String, maxBytes!: Int64 = 8388608): JsonRpcRe
             rpcCode: JSON_RPC_PARSE_ERROR
         )
     }
-    decodeJsonRpcValue(root)
+    restoreJsonRpcNumericId(decodeJsonRpcValue(root), source)
+}
+func jsonRpcWhitespace(byte: Byte): Bool {
+    byte == b' ' || byte == b'\t' || byte == b'\n' || byte == b'\r'
 }
 
+func extractJsonRpcNumericId(source: String): ?String {
+    let bytes = source.toArray()
+    var index: Int64 = 0
+    var depth: Int64 = 0
+    while (index < bytes.size) {
+        if (bytes[index] == b'"') {
+            let start = index
+            index++
+            var escaped = false
+            while (index < bytes.size) {
+                if (escaped) {
+                    escaped = false
+                } else if (bytes[index] == b'\\') {
+                    escaped = true
+                } else if (bytes[index] == b'"') {
+                    break
+                }
+                index++
+            }
+            if (depth == 1 && index - start == 3 &&
+                bytes[start + 1] == b'i' && bytes[start + 2] == b'd') {
+                var cursor = index + 1
+                while (cursor < bytes.size && jsonRpcWhitespace(bytes[cursor])) { cursor++ }
+                if (cursor < bytes.size && bytes[cursor] == b':') {
+                    cursor++
+                    while (cursor < bytes.size && jsonRpcWhitespace(bytes[cursor])) { cursor++ }
+                    if (cursor < bytes.size &&
+                        (bytes[cursor] == b'-' || (bytes[cursor] >= b'0' && bytes[cursor] <= b'9'))) {
+                        let valueStart = cursor
+                        while (cursor < bytes.size && bytes[cursor] != b',' && bytes[cursor] != b'}') {
+                            cursor++
+                        }
+                        var valueEnd = cursor
+                        while (valueEnd > valueStart && jsonRpcWhitespace(bytes[valueEnd - 1])) {
+                            valueEnd--
+                        }
+                        let builder = StringBuilder()
+                        for (position in valueStart..valueEnd) {
+                            builder.append(Rune(bytes[position]))
+                        }
+                        return Some(builder.toString())
+                    }
+                }
+            }
+            index++
+        } else {
+            if (bytes[index] == b'{' || bytes[index] == b'[') {
+                depth++
+            } else if (bytes[index] == b'}' || bytes[index] == b']') {
+                depth--
+            }
+            index++
+        }
+    }
+    None
+}
+
+func restoreJsonRpcNumericId(
+    result: JsonRpcResult<JsonRpcEnvelope>,
+    source: String
+): JsonRpcResult<JsonRpcEnvelope> {
+    match (extractJsonRpcNumericId(source)) {
+        case None => result
+        case Some(rawId) => match (result) {
+            case JsonRpcResult.Err(error) => JsonRpcResult.Err(error)
+            case JsonRpcResult.Ok(envelope) =>
+                JsonRpcResult.Ok(restoreJsonRpcNumericId(envelope, rawId))
+        }
+    }
+}
+
+func restoreJsonRpcNumericId(envelope: JsonRpcEnvelope, rawId: String): JsonRpcEnvelope {
+    match (envelope) {
+        case JsonRpcEnvelope.Request(request) =>
+            let id = if (request.id.kind == JsonRpcIdKind.Number) {
+                JsonRpcId(JsonRpcIdKind.Number, value: rawId)
+            } else { request.id }
+            JsonRpcEnvelope.Request(JsonRpcRequest(id, request.method, params: request.params))
+        case JsonRpcEnvelope.Notification(notification) => JsonRpcEnvelope.Notification(notification)
+        case JsonRpcEnvelope.Response(response) =>
+            let id = if (response.id.kind == JsonRpcIdKind.Number) {
+                JsonRpcId(JsonRpcIdKind.Number, value: rawId)
+            } else { response.id }
+            JsonRpcEnvelope.Response(JsonRpcResponse(id, response.payload))
+    }
+}
 public func decodeJsonRpcValue(root: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
     if (root.unifiedKind != UnifiedJsonKind.Object) {
         return invalidRequest<JsonRpcEnvelope>("JSON-RPC message must be an object")
@@ -300,7 +431,7 @@ func decodeResponse(root: JsonNode): JsonRpcResult<JsonRpcEnvelope> {
                         return invalidRequest<JsonRpcEnvelope>("error code must be an integer")
                     }
                     try {
-                        Int64.parse(item.number)
+                        Int64.parse(item.asNumberText())
                     } catch (_: Exception) {
                         return invalidRequest<JsonRpcEnvelope>("error code must be an integer")
                     }
@@ -332,7 +463,7 @@ func decodeJsonRpcId(value: JsonNode): JsonRpcResult<JsonRpcId> {
             invalidRequest<JsonRpcId>(error.message)
         }
         case UnifiedJsonKind.Number => try {
-            JsonRpcResult.Ok(JsonRpcId(JsonRpcIdKind.Number, value: value.number))
+            JsonRpcResult.Ok(JsonRpcId(JsonRpcIdKind.Number, value: value.asNumberText()))
         } catch (error: IllegalArgumentException) {
             invalidRequest<JsonRpcId>(error.message)
         }

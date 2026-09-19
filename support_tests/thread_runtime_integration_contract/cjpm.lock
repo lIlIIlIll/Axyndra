@@ -1,4 +1,4 @@
 version = 0
 
 [requires]
-  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "92858f75aedc3dd6f7322789117854514549e62c", output-type = "static"}
+  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "c91859feb77aeba392a1fad0f99d731df66be831", tag = "0.1.0", output-type = "static"}

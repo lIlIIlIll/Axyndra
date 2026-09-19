@@ -2419,7 +2419,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     productMcpTransportName(server.transport) + " · " + server.tools.size.toString() + " tools"
                 if (server.sandboxed) {
                     text += " · sandbox " + (if (server.workspaceReadOnly) { "ro" } else { "rw" }) +
-                        " · network " + (if (server.networkAllowed) { "allowed" } else { "denied" })
+                        " · network " + networkPolicyModeName(server.networkPolicy.mode)
                 }
                 if (!server.tools.isEmpty()) {
                     text += "\n  tools:"
@@ -2854,8 +2854,16 @@ public class ApplicationSession <: AgentInteractionSource {
             return invalidUsage("/settings")
         }
         Result.Ok(
-            localResponse("settings: " + product.settingsRoot + "/config.yml" + " model=" + currentModel + " theme=" +
-                theme))
+            localResponse("settings: " + product.settingsRoot + "/config.yml" +
+                " model=" + currentModel +
+                " theme=" + theme +
+                " shell.network_mode=" + shellNetworkModeName(product.shellNetworkMode) +
+                " sandbox.ca_bundle=" + if (product.sandboxCaBundle == "") {
+                    "(not set)"
+                } else {
+                    product.sandboxCaBundle
+                })
+        )
     }
 
     private func themeCommand(arguments: Array<String>): Result<ApplicationResponse> {

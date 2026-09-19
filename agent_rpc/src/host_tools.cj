@@ -89,9 +89,14 @@ class RpcHostToolBridge {
 
     func execute(
         context: ToolInvocationContext,
-        call: ToolCall,
+        prepared: PreparedToolInvocation,
         definition: RpcHostToolDefinition
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let requestId = nextId()
         let item = PendingHostToolCall(
             requestId,
@@ -275,9 +280,9 @@ class RpcHostToolExecutor <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        bridge.execute(context, call, definition)
+        bridge.execute(context, prepared, definition)
     }
 
     public func cancel(runId: RunId): Result<Unit> {
@@ -394,7 +399,7 @@ func textField(value: AgentValue, name: String): String {
 func boolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            field.unifiedKind == ValueKind.Boolean && field.boolean
+            field.unifiedKind == ValueKind.Boolean && field.asBool()
         case None => false
     }
 }

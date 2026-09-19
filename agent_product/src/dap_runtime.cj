@@ -21,7 +21,7 @@ class DapAdapterSpec {
     let fileTypes: Array<String>
     let launchDefaults: JsonNode
     let attachDefaults: JsonNode
-    let networkAllowed: Bool
+    let networkPolicy: NetworkPolicy
     let environment: Array<DirectEnvironmentBinding>
 
     init(
@@ -31,7 +31,7 @@ class DapAdapterSpec {
         fileTypes: Array<String>,
         launchDefaults: JsonNode,
         attachDefaults: JsonNode,
-        networkAllowed!: Bool = false,
+        networkPolicy!: ?NetworkPolicy = None,
         environment!: Array<DirectEnvironmentBinding> = []
     ) {
         this.name = name
@@ -40,7 +40,10 @@ class DapAdapterSpec {
         this.fileTypes = fileTypes
         this.launchDefaults = launchDefaults
         this.attachDefaults = attachDefaults
-        this.networkAllowed = networkAllowed
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.environment = environment
     }
 }
@@ -97,10 +100,12 @@ class DapClient {
     private let workspace: LocalWorkspace
     private let sandboxEnabled: Bool
     private let allowUnsafeTestBypass: Bool
+    private let sandboxCaBundle: String
     private var protocol: ?library.DapClient = None
     private let redactor: SecretRedactor
+    private let processHandle: DirectProcessHandle
     private let stateLock = Mutex()
-    private let debuggeeProcesses = ArrayList<ManagedProcess>()
+    private let debuggeeProcesses = ArrayList<DirectProcessHandle>()
     private var closed = false
     private var reaped = false
     private var transportError = ""
@@ -120,29 +125,36 @@ class DapClient {
     private var output = ""
     private var outputBytes: Int64 = 0
     private var outputTruncated = false
-
     init(
         adapter: DapAdapterSpec,
         workspace: LocalWorkspace,
         cwd: String,
-        process: ManagedProcess,
+        directHandle: DirectProcessHandle,
         redactor: SecretRedactor,
         sandboxEnabled: Bool,
-        allowUnsafeTestBypass: Bool
+        allowUnsafeTestBypass: Bool,
+        sandboxCaBundle: String
     ) {
         this.adapter = adapter
         this.workspace = workspace
         this.cwd = cwd
         this.redactor = redactor
+        this.processHandle = directHandle
         this.sandboxEnabled = sandboxEnabled
         this.allowUnsafeTestBypass = allowUnsafeTestBypass
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         this.protocol = Some(library.DapClient(
-            process,
+            directHandle.process,
             eventHandler: { event: String, body: JsonNode => handleEvent(event, body) },
             reverseRequestHandler: { command: String, arguments: JsonNode =>
                 handleReverseRequest(command, arguments)
             }
         ))
+        let monitor = spawn {
+            let _ = directHandle.process.wait()
+            directHandle.release()
+        }
+        let _ = monitor
     }
 
     private func protocolClient(): library.DapClient {
@@ -390,7 +402,7 @@ class DapClient {
     }
 
     func close(): Unit {
-        let debuggees: Array<ManagedProcess>
+        let debuggees: Array<DirectProcessHandle>
         stateLock.lock()
         try {
             if (reaped) { return }
@@ -404,15 +416,20 @@ class DapClient {
         }
         for (debuggee in debuggees) {
             try {
-                debuggee.terminate(force: true)
+                debuggee.process.terminate(force: true)
             } catch (_: Exception) {}
         }
         for (debuggee in debuggees) {
-            try { let _ = debuggee.wait() } catch (_: Exception) {}
+            try { let _ = debuggee.process.wait() } catch (_: Exception) {}
         }
-        let _ = protocolClient().close()
-        for (debuggee in debuggees) {
-            try { let _ = debuggee.close() } catch (_: Exception) {}
+        try {
+            let _ = protocolClient().close()
+        } finally {
+            for (debuggee in debuggees) {
+                try { let _ = debuggee.process.close() } catch (_: Exception) {}
+                debuggee.release()
+            }
+            processHandle.release()
         }
     }
 
@@ -560,12 +577,13 @@ class DapClient {
             sandboxEnabled,
             allowUnsafeTestBypass,
             FilesystemIsolationMode.WorkspaceReadWrite,
-            adapter.networkAllowed,
+            adapter.networkPolicy,
             executable,
             childArguments.toArray(),
             childCwd,
             bindings: adapter.environment,
             literalEnvironment: environment.toArray(),
+            sandboxCaBundle: sandboxCaBundle,
             errorCode: "tool.debug_run_in_terminal_start"
         )) {
             case Result.Ok(value) => value
@@ -581,7 +599,7 @@ class DapClient {
                 if (closed || reaped) {
                     rejected = true
                 } else {
-                    debuggeeProcesses.add(child)
+                    debuggeeProcesses.add(opened)
                 }
             } finally {
                 stateLock.unlock()
@@ -589,6 +607,8 @@ class DapClient {
             if (rejected) {
                 try { child.terminate(force: true) } catch (_: Exception) {}
                 try { let _ = child.wait() } catch (_: Exception) {}
+                try { let _ = child.close() } catch (_: Exception) {}
+                opened.release()
                 return dapError<JsonNode>(
                     AgentErrorKind.Cancelled,
                     "tool.debug_run_in_terminal_cancelled",
@@ -606,10 +626,14 @@ class DapClient {
                 })
             }
             let monitor = spawn {
-                let _ = child.wait()
-                stdout.get()
-                stderr.get()
-                removeDebuggee(child.pid)
+                try {
+                    let _ = child.wait()
+                    stdout.get()
+                    stderr.get()
+                } finally {
+                    removeDebuggee(child.pid)
+                    opened.release()
+                }
             }
             let _ = monitor
             Result.Ok(dapObject([
@@ -623,6 +647,11 @@ class DapClient {
                 )
             ]))
         } catch (error: Exception) {
+            removeDebuggee(opened.process.pid)
+            try { opened.process.terminate(force: true) } catch (_: Exception) {}
+            try { let _ = opened.process.wait() } catch (_: Exception) {}
+            try { let _ = opened.process.close() } catch (_: Exception) {}
+            opened.release()
             dapError<JsonNode>(
                 AgentErrorKind.Transport,
                 "tool.debug_run_in_terminal_start",
@@ -630,12 +659,11 @@ class DapClient {
             )
         }
     }
-
     private func removeDebuggee(pid: Int64): Unit {
         stateLock.lock()
         try {
             for (index in 0..debuggeeProcesses.size
-                 where debuggeeProcesses[index].pid == pid) {
+                 where debuggeeProcesses[index].process.pid == pid) {
                 debuggeeProcesses.remove(at: index)
                 break
             }
@@ -799,18 +827,21 @@ func startDapClient(
     workspace: LocalWorkspace,
     cwd: String,
     sandboxEnabled: Bool,
-    allowUnsafeTestBypass: Bool
+    allowUnsafeTestBypass: Bool,
+    networkPolicy: NetworkPolicy,
+    sandboxCaBundle!: String = ""
 ): Result<DapClient> {
     let opened = match (launchDirectPersistentProcess(
         workspace.rootPath(),
         sandboxEnabled,
         allowUnsafeTestBypass,
         FilesystemIsolationMode.WorkspaceReadWrite,
-        adapter.networkAllowed,
+        networkPolicy,
         adapter.executable,
         adapter.arguments,
         cwd,
         bindings: adapter.environment,
+        sandboxCaBundle: sandboxCaBundle,
         errorCode: "tool.debug_adapter_start"
     )) {
         case Result.Ok(value) => value
@@ -821,14 +852,16 @@ func startDapClient(
             adapter,
             workspace,
             cwd,
-            opened.process,
+            opened,
             opened.redactor,
             sandboxEnabled,
-            allowUnsafeTestBypass
+            allowUnsafeTestBypass,
+            sandboxCaBundle
         )
         client.start()
         Result.Ok(client)
     } catch (error: Exception) {
+        try { let _ = opened.process.close() } finally { opened.release() }
         dapError<DapClient>(
             AgentErrorKind.Configuration,
             "tool.debug_adapter_start",
@@ -957,6 +990,10 @@ func loadDapConfig(path: String): Array<DapAdapterSpec> {
             case Some(found) => found
             case None => continue
         }
+        let networkPolicy = match (dapJsonNetworkPolicy(value)) {
+            case Some(value) => value
+            case None => continue
+        }
         result.add(DapAdapterSpec(
             member.name,
             executable,
@@ -980,7 +1017,7 @@ func loadDapConfig(path: String): Array<DapAdapterSpec> {
                     }
                 case None => jsonObject([])
             },
-            networkAllowed: dapJsonBoolean(value, "network", false),
+            networkPolicy: Some(networkPolicy),
             environment: environment
         ))
     }
@@ -1065,11 +1102,42 @@ func dapJsonBoolean(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == UnifiedJsonKind.Boolean) {
-                field.boolean
+                field.asBool()
             } else {
                 fallback
             }
         case None => fallback
+    }
+}
+func dapJsonNetworkPolicy(value: JsonNode): ?NetworkPolicy {
+    match (value.field("network")) {
+        case None => Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        case Some(field) =>
+            if (field.unifiedKind == UnifiedJsonKind.Text) {
+                match (networkPolicyMode(field.text)) {
+                    case Result.Ok(NetworkPolicyMode.Mediated) =>
+                        throw IllegalArgumentException(
+                            "DAP network proxy requires explicit egress rules"
+                        )
+                    case Result.Ok(mode) => Some(NetworkPolicy(mode))
+                    case Result.Err(_) => None
+                }
+            } else {
+                match (parseNetworkPolicy(field)) {
+                    case Result.Ok(policy) =>
+                        if (policy.mode == NetworkPolicyMode.Mediated &&
+                            policy.egress.isEmpty()) {
+                            throw IllegalArgumentException(
+                                "DAP network proxy requires explicit egress rules"
+                            )
+                        }
+                        Some(policy)
+                    case Result.Err(error) =>
+                        throw IllegalArgumentException(
+                            "DAP network policy is invalid: " + error.message
+                        )
+                }
+            }
     }
 }
 

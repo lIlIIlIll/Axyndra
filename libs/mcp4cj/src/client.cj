@@ -701,7 +701,7 @@ func validateMcpPageDescriptor(fieldName: String, value: JsonNode): McpResult<Un
             case Some(size) => if (size.unifiedKind != UnifiedJsonKind.Number) {
                 return invalidMcp<Unit>("mcp.page_value_invalid", "resource size must be a non-negative integer")
             } else { try {
-                if (Int64.parse(size.number) < 0) {
+                if (Int64.parse(size.asNumberText()) < 0) {
                     return invalidMcp<Unit>("mcp.page_value_invalid", "resource size must be a non-negative integer")
                 }
             } catch (_: Exception) {
@@ -1192,7 +1192,7 @@ func lifecycleFailure<T>(code: String, message: String): McpResult<T> {
     McpResult.Err(McpError(McpErrorKind.Lifecycle, code, message))
 }
 func mcpText(value: JsonNode, name: String): String { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Text) { item.text } else { "" }; case None => "" } }
-func mcpBool(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
-func mcpInteger(value: JsonNode, name: String): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { -1 } } else { -1 }; case None => -1 } }
+func mcpBool(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.asBool() } else { fallback }; case None => fallback } }
+func mcpInteger(value: JsonNode, name: String): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.asNumberText()) } catch (_: Exception) { -1 } } else { -1 }; case None => -1 } }
 func mcpField(value: JsonNode, name: String, fallback: JsonNode): JsonNode { match (value.field(name)) { case Some(item) => item; case None => fallback } }
 func mcpObject(value: JsonNode, name: String): JsonNode { let found = mcpField(value, name, jsonObject([])); if (found.unifiedKind == UnifiedJsonKind.Object) { found } else { jsonObject([]) } }

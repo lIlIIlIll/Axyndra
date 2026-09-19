@@ -3559,15 +3559,8 @@ class AgentScreen {
                 TuiModalKind.Model,
                 backend.models()
             )
-            case TuiTurnAction.OpenBranchSelector => startBackground(
-                "loading branches",
-                {
-                    => TuiTurnResult(
-                        "",
-                        "select branch",
-                        action: TuiTurnAction.BranchesLoaded(backend.branchMessages())
-                    )
-                }
+            case TuiTurnAction.OpenBranchSelector => applyTurnAction(
+                TuiTurnAction.BranchesLoaded(backend.branchMessages())
             )
             case TuiTurnAction.OpenPlanReview(body) =>
                 resetGenericModal()
@@ -5899,7 +5892,12 @@ class AgentScreen {
                     } else if (isDocument) {
                         "↑↓/PgUp/PgDn scroll · Esc close"
                     } else {
-                        "↑↓/j/k select · Enter confirm · Esc cancel"
+                        match (kind) {
+                            case TuiModalKind.Settings =>
+                                "shell network: " + backend.currentShellNetworkMode() +
+                                    " · ↑↓/j/k select · Enter confirm · Esc cancel"
+                            case _ => "↑↓/j/k select · Enter confirm · Esc cancel"
+                        }
                     },
                     theme,
                     terminalUnicode,

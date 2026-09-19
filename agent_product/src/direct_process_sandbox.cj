@@ -1,10 +1,13 @@
 package agent_product
 
 import agent_domain.*
+import agent_ports.*
 import process4cj.*
 import sandbox4cj.*
 import std.collection.*
 import std.env.*
+import std.fs.*
+import std.sync.*
 
 // Direct-launch runtimes (LSP, DAP, and the process supervisor) cannot use
 // ProcessRequest because their children outlive one request.  They still use
@@ -48,22 +51,55 @@ class DirectResolvedEnvironment {
     }
 }
 
+class DirectNetworkLease {
+    let gateway: NetworkGatewayPort
+    let lease: NetworkGatewayLease
+
+    init(gateway: NetworkGatewayPort, lease: NetworkGatewayLease) {
+        this.gateway = gateway
+        this.lease = lease
+    }
+
+    func release(): Unit {
+        let _ = gateway.release(lease)
+    }
+}
+
 class DirectProcessHandle {
     let process: ManagedProcess
     let redactor: SecretRedactor
     let secretValues: Array<String>
     let sandboxed: Bool
+    private let releaseAction: () -> Unit
+    private let releaseLock = Mutex()
+    private var released = false
 
     init(
         process: ManagedProcess,
         redactor: SecretRedactor,
         secretValues: Array<String>,
-        sandboxed: Bool
+        sandboxed: Bool,
+        releaseAction!: () -> Unit = { => () }
     ) {
         this.process = process
         this.redactor = redactor
         this.secretValues = secretValues
         this.sandboxed = sandboxed
+        this.releaseAction = releaseAction
+    }
+
+    func release(): Unit {
+        var shouldRelease = false
+        releaseLock.lock()
+        try {
+            if (!released) {
+                released = true
+                shouldRelease = true
+            }
+        } finally {
+            releaseLock.unlock()
+        }
+        if (shouldRelease) { releaseAction() }
     }
 }
 
@@ -72,17 +108,26 @@ func launchDirectPersistentProcess(
     sandboxEnabled: Bool,
     allowUnsafeTestBypass: Bool,
     filesystem: FilesystemIsolationMode,
-    networkAllowed: Bool,
+    networkPolicy: NetworkPolicy,
     executable: String,
     arguments: Array<String>,
     cwd: String,
     bindings!: Array<DirectEnvironmentBinding> = [],
     literalEnvironment!: Array<SandboxEnvironmentEntry> = [],
+    sandboxCaBundle!: String = "",
     errorCode!: String = "direct.process_start_failed"
 ): Result<DirectProcessHandle> {
+    let caBundle = sandboxCaBundle.trimAscii()
     let resolved = match (resolveDirectEnvironment(bindings, literalEnvironment)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
+    }
+    if (networkPolicyModeIsMediated(networkPolicy.mode) && !sandboxEnabled) {
+        return Result.Err(AgentError(
+            AgentErrorKind.Configuration,
+            "sandbox.direct_launch_disabled",
+            "mediated persistent process launch requires the workspace sandbox"
+        ))
     }
     if (!sandboxEnabled && !allowUnsafeTestBypass) {
         return Result.Err(AgentError(
@@ -114,18 +159,69 @@ func launchDirectPersistentProcess(
         }
     }
 
+    let sandboxEnvironment = ArrayList<SandboxEnvironmentEntry>()
+    for (entry in resolved.entries) { sandboxEnvironment.add(entry) }
+    let configuredNames = ArrayList<String>()
+    for (entry in resolved.entries) { configuredNames.add(entry.name) }
+    var caMount: ?SandboxReadOnlyMount = None
+    if (caBundle != "") {
+        if (directContains(configuredNames, "SSL_CERT_FILE") ||
+            directContains(configuredNames, "CURL_CA_BUNDLE")) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "sandbox.environment_duplicate",
+                "configured CA bundle variables cannot be overridden"
+            ))
+        }
+        try {
+            caMount = Some(SandboxReadOnlyMount(caBundle))
+            sandboxEnvironment.add(SandboxEnvironmentEntry("SSL_CERT_FILE", caBundle))
+            sandboxEnvironment.add(SandboxEnvironmentEntry("CURL_CA_BUNDLE", caBundle))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                resolved.redactor.redact(error.message)
+            ))
+        }
+    }
+    let networkLease = match (acquireDirectNetworkLease(networkPolicy)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
     let allowedNames = ArrayList<String>()
-    for (entry in resolved.entries) { allowedNames.add(entry.name) }
+    for (entry in sandboxEnvironment) { allowedNames.add(entry.name) }
     let toolchain = configuredProductSandboxToolchain()
+    let mounts = ArrayList<SandboxReadOnlyMount>()
+    for (mount in toolchain.mounts) { mounts.add(mount) }
+    match (caMount) {
+        case Some(value) => mounts.add(value)
+        case None => ()
+    }
+    match (networkLease) {
+        case Some(value) =>
+            try {
+                addDirectSandboxMount(mounts, value.lease.bridgeExecutable)
+                addDirectSandboxMount(mounts, Path(value.lease.bridgeSocket).parent.toString())
+            } catch (error: Exception) {
+                releaseDirectNetworkLease(networkLease)
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    errorCode,
+                    resolved.redactor.redact(error.message)
+                ))
+            }
+        case None => ()
+    }
     let sandbox = try {
         WorkspaceSandbox(WorkspaceSandboxPolicy(
             workspaceRoot,
             filesystem: filesystem,
             process: ProcessIsolationMode.Isolated,
-            network: if (networkAllowed) {
-                NetworkIsolationMode.Allowed
-            } else {
-                NetworkIsolationMode.Denied
+            network: match (networkPolicy.mode) {
+                case NetworkPolicyMode.HostNetwork => NetworkIsolationMode.Allowed
+                case NetworkPolicyMode.Denied => NetworkIsolationMode.Denied
+                case NetworkPolicyMode.Mediated => NetworkIsolationMode.Mediated
             },
             environment: EnvironmentFilter(
                 allowlist: allowedNames.toArray(),
@@ -133,10 +229,11 @@ func launchDirectPersistentProcess(
                 secretValues: resolved.secretValues
             ),
             resources: defaultProductSandboxResourceLimits(),
-            readOnlyMounts: toolchain.mounts,
+            readOnlyMounts: mounts.toArray(),
             pathEntries: toolchain.pathEntries
         ))
     } catch (error: Exception) {
+        releaseDirectNetworkLease(networkLease)
         return Result.Err(AgentError(
             AgentErrorKind.Configuration,
             errorCode,
@@ -145,24 +242,29 @@ func launchDirectPersistentProcess(
     }
     match (sandbox.availability()) {
         case SandboxResult.Ok(_) => ()
-        case SandboxResult.Err(error) => return Result.Err(
-            directRedactError(sandboxAgentError(error), resolved.redactor)
-        )
+        case SandboxResult.Err(error) =>
+            releaseDirectNetworkLease(networkLease)
+            return Result.Err(directRedactError(sandboxAgentError(error), resolved.redactor))
     }
     let plan = match (sandbox.plan(WorkspaceSandboxCommand(
         executable,
         arguments: arguments,
         workingDirectory: cwd,
-        environment: resolved.entries,
-        // Persistent runtimes own request deadlines and child lifecycle.  The
-        // value is validated by WorkspaceSandboxCommand but its timeout wrapper
-        // is deliberately not launched below.
-        timeoutMillis: 60000
+        environment: sandboxEnvironment.toArray(),
+        timeoutMillis: 60000,
+        networkBridgeExecutable: match (networkLease) {
+            case Some(value) => value.lease.bridgeExecutable
+            case None => ""
+        },
+        networkBridgeSocket: match (networkLease) {
+            case Some(value) => value.lease.bridgeSocket
+            case None => ""
+        }
     ))) {
         case SandboxResult.Ok(value) => value
-        case SandboxResult.Err(error) => return Result.Err(
-            directRedactError(sandboxAgentError(error), resolved.redactor)
-        )
+        case SandboxResult.Err(error) =>
+            releaseDirectNetworkLease(networkLease)
+            return Result.Err(directRedactError(sandboxAgentError(error), resolved.redactor))
     }
     try {
         let process = startProcess(ProcessCommand(
@@ -174,9 +276,11 @@ func launchDirectPersistentProcess(
             process,
             resolved.redactor,
             resolved.secretValues,
-            true
+            true,
+            releaseAction: { => releaseDirectNetworkLease(networkLease) }
         ))
     } catch (error: Exception) {
+        releaseDirectNetworkLease(networkLease)
         Result.Err(AgentError(
             AgentErrorKind.Transport,
             errorCode,
@@ -184,6 +288,36 @@ func launchDirectPersistentProcess(
         ))
     }
 }
+
+func acquireDirectNetworkLease(
+    policy: NetworkPolicy
+): Result<?DirectNetworkLease> {
+    if (!networkPolicyModeIsMediated(policy.mode)) {
+        return Result.Ok(None)
+    }
+    let gateway: NetworkGatewayPort = LocalNetworkGatewayPort()
+    match (gateway.acquire(OperationId("direct-process"), policy)) {
+        case Result.Ok(lease) => Result.Ok(Some(DirectNetworkLease(gateway, lease)))
+        case Result.Err(error) => Result.Err(error)
+    }
+}
+
+func releaseDirectNetworkLease(lease: ?DirectNetworkLease): Unit {
+    match (lease) {
+        case Some(value) => value.release()
+        case None => ()
+    }
+}
+
+func addDirectSandboxMount(
+    mounts: ArrayList<SandboxReadOnlyMount>,
+    path: String
+): Unit {
+    let candidate = SandboxReadOnlyMount(path)
+    for (existing in mounts where existing.path == candidate.path) { return }
+    mounts.add(candidate)
+}
+
 
 func resolveDirectEnvironment(
     bindings: Array<DirectEnvironmentBinding>,

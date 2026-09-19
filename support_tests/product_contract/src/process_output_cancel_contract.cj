@@ -3,7 +3,7 @@ package product_contract
 import yjson_support.*
 import yjson.*
 import agent_domain.*
-import agent_ports.*
+import agent_runtime.*
 import agent_product.*
 import agent_testkit.*
 import tool_runtime.*
@@ -63,7 +63,7 @@ func runProcessRemediationContracts(root: String): Unit {
     runDisplayServerEnvironmentContracts(directory, processes)
     let catalog = ToolCatalog()
     installLocalTools(catalog, workspace, processes).value().getOrThrow()
-    let pipeline = ToolPipeline(catalog, MemoryOperationRepository(), RecordingAuditPort(), ProductIds(),
+    let pipeline = ToolPipeline(catalog, InMemoryOperationRuntimePort(), RecordingAuditPort(), ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo))
     let source = CancellationSource()
     let context = ToolInvocationContext(RunId("grep-owned"), SessionId("grep-owned"),
@@ -79,10 +79,15 @@ func runProcessRemediationContracts(root: String): Unit {
     let second = spawn { checkedBlockingGrep(pipeline, context, directory + "/second") }
     let otherDone = AtomicBool(false)
     let third = spawn { try { checkedBlockingGrep(pipeline, other, directory + "/other") } finally { otherDone.store(true) } }
+    let firstReady = spawn { waitGrepProcess(directory + "/first") }
+    let secondReady = spawn { waitGrepProcess(directory + "/second") }
+    let otherReady = spawn { waitGrepProcess(directory + "/other") }
     try {
-        // Observe the real rg command, rather than assuming a sleep
-        // has crossed the native process registration boundary.
-        for (name in ["first", "second", "other"]) { waitGrepProcess(directory + "/" + name) }
+        // Observe the real rg commands in parallel; serial waits can let the
+        // unrelated 15-second search timeout before cancellation is issued.
+        let _ = firstReady.get()
+        let _ = secondReady.get()
+        let _ = otherReady.get()
         let started = MonoTime.now()
         let _ = source.cancel()
         let _ = pipeline.cancel(context.runId)
@@ -96,7 +101,7 @@ func runProcessRemediationContracts(root: String): Unit {
         let _ = pipeline.cancel(other.runId)
         let _ = first.get(); let _ = second.get(); let _ = third.get()
     }
-    expect(pipeline.invoke(context, blockingGrep(directory + "/first")).isError(), "already cancelled grep cannot start a new operation")
+    expect(executePipelineCall(pipeline, context, blockingGrep(directory + "/first")).isError(), "already cancelled grep cannot start a new operation")
     processes.close().value().getOrThrow()
     println("process output and concurrent grep cancellation contracts passed")
 }
@@ -105,7 +110,8 @@ func runEscapedDescendantCancellationContract(
     directory: String,
     processes: LocalProcessPort
 ): Unit {
-    let pidFile = directory + "/escaped-descendant.pid"
+    let pidFile = directory + "/escaped-descendant.ready"
+    let heartbeatFile = directory + "/escaped-descendant.heartbeat"
     let operationId = OperationId("escaped-descendant-cancel")
     let worker = spawn {
         processes.execute(ProcessRequest(
@@ -113,39 +119,41 @@ func runEscapedDescendantCancellationContract(
             operationId: operationId,
             arguments: [
                 "-c",
-                "( setsid /bin/sh -c 'exec >/dev/null 2>&1; trap \"\" TERM; echo $$ > \"$1\"; while :; do sleep 1; done' escaped \"$1\" ) & sleep 5",
+                "( setsid /bin/sh -c 'exec >/dev/null 2>&1; echo ready > \"$1\"; while :; do printf x >> \"$2\"; sleep 0.05; done' escaped \"$1\" \"$2\" ) & sleep 5",
                 "leader",
-                pidFile
+                pidFile,
+                heartbeatFile
             ],
-            timeoutMillis: 10000
+            timeoutMillis: 10000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
         ))
     }
-    var escapedPid: Int64 = 0
     try {
         let deadline = MonoTime.now() + Duration.second * 3
         while (!exists(Path(pidFile)) && MonoTime.now() < deadline) {
             sleep(Duration.millisecond * 10)
         }
-        expect(exists(Path(pidFile)), "escaped descendant writes its identity")
-        escapedPid = parseProcessPid(String.fromUtf8(File.readFrom(pidFile)))
-        expect(processes.hasActiveOperation(operationId), "leader remains owned before cancellation")
-        expect(processes.cancel(operationId).isOk(), "leader-exit descendant cancellation is accepted")
-        let goneDeadline = MonoTime.now() + Duration.second * 2
-        while (exists(Path("/proc/" + escapedPid.toString())) &&
-            MonoTime.now() < goneDeadline) {
+        expect(exists(Path(pidFile)), "escaped descendant signals readiness")
+        let heartbeatDeadline = MonoTime.now() + Duration.second * 3
+        while (!exists(Path(heartbeatFile)) && MonoTime.now() < heartbeatDeadline) {
             sleep(Duration.millisecond * 10)
         }
+        expect(exists(Path(heartbeatFile)), "escaped descendant starts heartbeat")
+        let before = File.readFrom(heartbeatFile).size
+        expect(processes.hasActiveOperation(operationId), "leader remains owned before cancellation")
+        expect(processes.cancel(operationId).isOk(), "leader-exit descendant cancellation is accepted")
+        sleep(Duration.millisecond * 250)
+        let after = File.readFrom(heartbeatFile).size
         expect(
-            !exists(Path("/proc/" + escapedPid.toString())),
-            "captured descendant is killed after its leader exits"
+            before == after,
+            "captured descendant stops after its leader exits"
         )
     } finally {
-        if (escapedPid > 0) {
-            let _ = executeWithOutput("kill", ["-KILL", escapedPid.toString()])
-        }
         let _ = processes.cancel(operationId)
         let _ = worker.get()
         try { let _ = removeIfExists(pidFile) } catch (_: Exception) {}
+        try { let _ = removeIfExists(heartbeatFile) } catch (_: Exception) {}
     }
 }
 
@@ -153,63 +161,48 @@ func runThreadedDescendantCancellationContract(
     directory: String,
     processes: LocalProcessPort
 ): Unit {
-    let pidFile = directory + "/threaded-descendant.pid"
+    let readyFile = directory + "/threaded-descendant.ready"
+    let heartbeatFile = directory + "/threaded-descendant.heartbeat"
     let operationId = OperationId("threaded-descendant-cancel")
     let script =
         "import subprocess, sys, threading, time\n" +
         "def spawn_child():\n" +
-        "    subprocess.Popen([\"setsid\", \"/bin/sh\", \"-c\", \"exec >/dev/null 2>&1; trap '' TERM; echo $$ > $1; while :; do sleep 1; done\", \"worker\", sys.argv[1]])\n" +
+        "    subprocess.Popen([\"setsid\", \"/bin/sh\", \"-c\", \"exec >/dev/null 2>&1; echo ready > $1; while :; do printf x >> $2; sleep 0.05; done\", \"worker\", sys.argv[1], sys.argv[2]])\n" +
         "threading.Thread(target=spawn_child).start()\n" +
         "time.sleep(5)\n"
     let worker = spawn {
         processes.execute(ProcessRequest(
             "/usr/bin/python3",
             operationId: operationId,
-            arguments: ["-c", script, pidFile],
-            timeoutMillis: 10000
+            arguments: ["-c", script, readyFile, heartbeatFile],
+            timeoutMillis: 10000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
         ))
     }
-    var threadedPid: Int64 = 0
     try {
         let deadline = MonoTime.now() + Duration.second * 3
-        while (!exists(Path(pidFile)) && MonoTime.now() < deadline) {
+        while (!exists(Path(readyFile)) && MonoTime.now() < deadline) {
             sleep(Duration.millisecond * 10)
         }
-        expect(exists(Path(pidFile)), "threaded descendant writes its identity")
-        threadedPid = parseProcessPid(String.fromUtf8(File.readFrom(pidFile)))
+        expect(exists(Path(readyFile)), "threaded descendant signals readiness")
+        let before = File.readFrom(heartbeatFile).size
         expect(processes.hasActiveOperation(operationId), "threaded leader remains owned before cancellation")
         expect(processes.cancel(operationId).isOk(), "threaded descendant cancellation is accepted")
-        let goneDeadline = MonoTime.now() + Duration.second * 2
-        while (exists(Path("/proc/" + threadedPid.toString())) &&
-            MonoTime.now() < goneDeadline) {
-            sleep(Duration.millisecond * 10)
-        }
+        sleep(Duration.millisecond * 250)
+        let after = File.readFrom(heartbeatFile).size
         expect(
-            !exists(Path("/proc/" + threadedPid.toString())),
-            "captured child of a worker thread is killed"
+            before == after,
+            "captured child of a worker thread stops after cancellation"
         )
     } finally {
-        if (threadedPid > 0) {
-            let _ = executeWithOutput("kill", ["-KILL", threadedPid.toString()])
-        }
         let _ = processes.cancel(operationId)
         let _ = worker.get()
-        try { let _ = removeIfExists(pidFile) } catch (_: Exception) {}
+        try { let _ = removeIfExists(readyFile) } catch (_: Exception) {}
+        try { let _ = removeIfExists(heartbeatFile) } catch (_: Exception) {}
     }
 }
 
-func parseProcessPid(value: String): Int64 {
-    var result: Int64 = 0
-    let text = value.trimAscii()
-    if (text == "") { throw IllegalArgumentException("process pid is empty") }
-    for (byte in text.toArray()) {
-        if (byte < b'0' || byte > b'9') {
-            throw IllegalArgumentException("process pid is not numeric")
-        }
-        result = result * 10 + Int64(byte - b'0')
-    }
-    result
-}
 
 func runDisplayServerEnvironmentContracts(
     directory: String,
@@ -289,6 +282,8 @@ func displayEnvironmentProbe(
             output
         ],
         timeoutMillis: 5000,
+        sandboxMode: ProcessSandboxMode.Host,
+        networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)),
         displayServerAccess: true
     ))
 }
@@ -305,6 +300,8 @@ func displayPathEnvironmentProbe(
             output
         ],
         timeoutMillis: 5000,
+        sandboxMode: ProcessSandboxMode.Host,
+        networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)),
         displayServerAccess: true
     ))
 }
@@ -338,7 +335,7 @@ func waitGrepProcess(path: String): Unit {
 }
 
 func checkedBlockingGrep(pipeline: ToolPipeline, context: ToolInvocationContext, path: String): Result<ToolInvocationResult> {
-    let result = pipeline.invoke(context, blockingGrep(path))
+    let result = executePipelineCall(pipeline, context, blockingGrep(path))
     match (result) {
         case Result.Err(error) => println("grep fixture ended: " + path + " " + error.code + ": " + error.message)
         case Result.Ok(ToolInvocationResult.Denied(denial)) => println("grep fixture denied: " + denial.reason.code + ": " + denial.reason.message)

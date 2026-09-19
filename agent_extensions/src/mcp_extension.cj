@@ -24,8 +24,13 @@ class McpToolExecutor <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         match (client.callTool(
             remoteName,
             call.arguments,
@@ -205,8 +210,8 @@ func redactMcpValue(value: AgentValue, redact: McpTextRedactor): AgentValue {
     match (value.unifiedKind) {
         case ValueKind.Text => textValue(redact(value.text))
         case ValueKind.Number =>
-            let filtered = redact(value.number)
-            if (filtered == value.number) { value } else { textValue(filtered) }
+            let filtered = redact(value.asNumberText())
+            if (filtered == value.asNumberText()) { value } else { textValue(filtered) }
         case ValueKind.List =>
             let items = ArrayList<AgentValue>()
             for (item in value.items) { items.add(redactMcpValue(item, redact)) }

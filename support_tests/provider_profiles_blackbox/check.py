@@ -81,6 +81,7 @@ def start_server(key: str, reply: str):
 def write_configuration(home: Path, first_port: int, second_port: int):
     (home / "credentials").mkdir(parents=True)
     (home / "config.yml").write_text(
+        "schema_version: 1\n"
         "default_model: profile-one/shared-model\n"
     )
     (home / "providers.yml").write_text(

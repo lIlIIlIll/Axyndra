@@ -4,8 +4,9 @@ import yjson_support.*
 
 import yjson.*
 
-import agent_core.*
+import agent_runtime.*
 import agent_domain.*
+import agent_core.*
 import agent_embed.*
 import agent_testkit.*
 import axyndra_agent_testkit.*
@@ -201,7 +202,7 @@ func sdk(
             "1",
             "fault-injection contract"
         )))
-        .operations(MemoryOperationRepository())
+        .operations(InMemoryOperationRuntimePort())
         .audit(RecordingAuditPort())
         .ids(DeterministicIds(prefix: "chaos"))
         .capabilities(capabilities)

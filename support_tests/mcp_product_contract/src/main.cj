@@ -85,8 +85,8 @@ func runStdioCompositionContract(root: String): Unit {
     let probeUrl = "http://127.0.0.1:" + probeServer.port().toString() + "/mcp"
 
     try {
-        runStdioNetworkModeContract(root, fixtureScript, probeUrl, configuredSecret, false)
-        runStdioNetworkModeContract(root, fixtureScript, probeUrl, configuredSecret, true)
+        runStdioNetworkModeContract(root, fixtureScript, probeUrl, configuredSecret, "denied")
+        runStdioNetworkModeContract(root, fixtureScript, probeUrl, configuredSecret, "host")
     } finally {
         expect(probeServer.close().isOk(), "sandbox network probe closes")
         match (probeServing.get()) {
@@ -103,10 +103,10 @@ func runStdioNetworkModeContract(
     fixtureScript: String,
     probeUrl: String,
     configuredSecret: String,
-    networkAllowed: Bool
+    networkMode: String
 ): Unit {
-    let suffix = if (networkAllowed) { "network-allowed" } else { "network-denied" }
-    let serverId = if (networkAllowed) { "allowed" } else { "fixture" }
+    let suffix = if (networkMode == "host") { "network-allowed" } else { "network-denied" }
+    let serverId = if (networkMode == "host") { "allowed" } else { "fixture" }
     let settings = root + "/stdio-" + suffix + "-config"
     let injectionTarget = root + "/stdio-" + suffix + "-shell-injection"
     writeBaseConfiguration(settings)
@@ -117,7 +117,7 @@ func runStdioNetworkModeContract(
             "  - id: " + serverId + "\n" +
             "    enabled: true\n" +
             "    transport: stdio\n" +
-            (if (networkAllowed) { "    network: true\n" } else { "" }) +
+            (if (networkMode == "host") { "    network: host\n" } else { "" }) +
             "    command: /usr/bin/python3\n" +
             "    args:\n" +
             "      - \"-B\"\n" +
@@ -131,7 +131,7 @@ func runStdioNetworkModeContract(
             "    max_frame_bytes: 65536\n" +
             "    request_timeout_ms: 1000\n" +
             "    graceful_shutdown_ms: 1000\n" +
-            (if (!networkAllowed) {
+            (if (networkMode == "denied") {
                 "  - id: dormant\n" +
                     "    enabled: false\n" +
                     "    transport: streamable-http\n" +
@@ -158,7 +158,7 @@ func runStdioNetworkModeContract(
                 snapshot.status == ProductMcpServerStatus.Ready &&
                 snapshot.tools == ["mcp__" + serverId + "__environment"] &&
                 snapshot.sandboxed && snapshot.workspaceReadOnly &&
-                snapshot.networkAllowed == networkAllowed,
+                networkPolicyModeName(snapshot.networkPolicy.mode) == networkMode,
             "stdio MCP snapshot exposes its enforced sandbox boundary"
         )
         expect(
@@ -183,9 +183,9 @@ func runStdioNetworkModeContract(
             )
         }
         expect(
-            !structured.field("parentSecretVisible").getOrThrow().boolean &&
-                structured.field("visibleValuePresent").getOrThrow().boolean &&
-                structured.field("configuredSecretVisible").getOrThrow().boolean &&
+            !structured.field("parentSecretVisible").getOrThrow().asBool() &&
+                structured.field("visibleValuePresent").getOrThrow().asBool() &&
+                structured.field("configuredSecretVisible").getOrThrow().asBool() &&
                 structured.field("configuredSecretValue").getOrThrow().text == "[REDACTED]",
             "stdio sandbox clears ambient variables and admits scoped normal and secret mappings"
         )
@@ -196,8 +196,8 @@ func runStdioNetworkModeContract(
             "configured MCP secrets are redacted from tool content"
         )
         expect(
-            !structured.field("workspaceWriteAllowed").getOrThrow().boolean &&
-                structured.field("networkReachable").getOrThrow().boolean == networkAllowed,
+            !structured.field("workspaceWriteAllowed").getOrThrow().asBool() &&
+                structured.field("networkReachable").getOrThrow().asBool() == (networkMode != "denied"),
             "stdio sandbox enforces read-only workspace and explicit network opt-in"
         )
         expect(
@@ -207,8 +207,8 @@ func runStdioNetworkModeContract(
         let statusText = product.applicationSession().handle("/mcp").value().getOrThrow().text
         expect(
             statusText.contains("[ready] " + serverId + " · stdio · 1 tools") &&
-                statusText.contains("sandbox ro · network " + if (networkAllowed) {
-                    "allowed"
+                statusText.contains("sandbox ro · network " + if (networkMode == "host") {
+                    "host"
                 } else {
                     "denied"
                 }) && !statusText.contains("must-not-cross-the-boundary") &&
@@ -225,7 +225,7 @@ func runStdioNetworkModeContract(
                 !secretError.describe().contains(configuredSecret),
             "configured MCP secrets are redacted from remote errors"
         )
-        if (!networkAllowed) {
+        if (networkMode == "denied") {
             expect(
                 product.mcpStatus("dormant").getOrThrow().status == ProductMcpServerStatus.Disabled,
                 "disabled MCP servers remain dormant"
@@ -323,7 +323,7 @@ func runHttpCompositionContract(root: String): Unit {
         expect(
             snapshot.transport == ProductMcpTransportKind.StreamableHttp &&
                 snapshot.status == ProductMcpServerStatus.Ready &&
-                !snapshot.sandboxed && !snapshot.workspaceReadOnly && snapshot.networkAllowed &&
+                snapshot.networkPolicy.mode == NetworkPolicyMode.HostNetwork &&
                 snapshot.tools == ["mcp__remote__environment"] &&
                 commandText.contains("[ready] remote · streamable-http · 1 tools") &&
                 !commandText.contains(bearerSecret) && !commandText.contains(headerSecret),
@@ -361,7 +361,7 @@ func runHttpCompositionContract(root: String): Unit {
         )
         let modelContext = product.modelContext(session).value().getOrThrow()
         expect(
-            modelContext.isEmpty() &&
+            !modelMessagesContainSecrets(modelContext, [bearerSecret, headerSecret]) &&
                 !fileContainsSecrets(stateRoot + "/audit.jsonl", [bearerSecret, headerSecret]) &&
                 !directoryContainsSecrets(stateRoot + "/operations", [bearerSecret, headerSecret]),
             "resolved HTTP credentials never enter sessions, model context, audit JSONL, or operation receipts"
@@ -551,7 +551,7 @@ func fixtureMcpServer(
         [tool],
         {_, arguments, _ =>
             let fail = match (arguments.field("fail_with_secret")) {
-                case Some(value) => value.unifiedKind == ValueKind.Boolean && value.boolean
+                case Some(value) => value.unifiedKind == ValueKind.Boolean && value.asBool()
                 case None => false
             }
             if (fail) {
@@ -615,7 +615,7 @@ func containsAnySecret(value: String, secrets: Array<String>): Bool {
 func agentValueContainsSecrets(value: AgentValue, secrets: Array<String>): Bool {
     match (value.unifiedKind) {
         case ValueKind.Text => containsAnySecret(value.text, secrets)
-        case ValueKind.Number => containsAnySecret(value.number, secrets)
+        case ValueKind.Number => containsAnySecret(value.asNumberText(), secrets)
         case ValueKind.List =>
             for (item in value.items where agentValueContainsSecrets(item, secrets)) {
                 return true
@@ -633,10 +633,25 @@ func agentValueContainsSecrets(value: AgentValue, secrets: Array<String>): Bool 
     }
 }
 
+func modelMessagesContainSecrets(messages: Array<ModelMessage>, secrets: Array<String>): Bool {
+    for (message in messages) {
+        for (block in message.blocks) {
+            if (containsAnySecret(block.text, secrets) ||
+                containsAnySecret(block.callId, secrets) ||
+                containsAnySecret(block.name, secrets) ||
+                containsAnySecret(block.receiptId, secrets) ||
+                agentValueContainsSecrets(block.arguments, secrets)) {
+                return true
+            }
+        }
+    }
+    false
+}
+
 func agentValueContainsText(value: AgentValue, expected: String): Bool {
     match (value.unifiedKind) {
         case ValueKind.Text => value.text.contains(expected)
-        case ValueKind.Number => value.number.contains(expected)
+        case ValueKind.Number => value.asNumberText().contains(expected)
         case ValueKind.List =>
             for (item in value.items where agentValueContainsText(item, expected)) {
                 return true
@@ -658,7 +673,7 @@ func writeBaseConfiguration(root: String): Unit {
     Directory.create(root, recursive: true)
     File.writeTo(
         root + "/config.yml",
-        "default_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
+        "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
     )
     File.writeTo(
         root + "/models.yml",

@@ -337,8 +337,8 @@ func manifestCapabilityName(value: CapabilityKind): String {
 func manifestValue(value: AgentValue): String {
     match (value.unifiedKind) {
         case ValueKind.Null => "n"
-        case ValueKind.Boolean => if (value.boolean) { "t" } else { "f" }
-        case ValueKind.Number => "d" + manifestFrame(value.number)
+        case ValueKind.Boolean => if (value.asBool()) { "t" } else { "f" }
+        case ValueKind.Number => "d" + manifestFrame(value.asNumberText())
         case ValueKind.Text => "s" + manifestFrame(value.text)
         case ValueKind.List =>
             var output = "l" + manifestFrame(value.items.size.toString())

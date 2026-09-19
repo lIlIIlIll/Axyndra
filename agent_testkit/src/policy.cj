@@ -39,14 +39,14 @@ public class ScriptedCapabilityPolicy <: CapabilityPolicy {
 
     public func evaluate(
         context: ToolInvocationContext,
-        descriptor: ToolDescriptor
+        plan: NormalizedOperationPlan
     ): PolicyDecision {
         lock.lock()
         try {
             observations.add(PolicyObservation(
                 context.runId.value,
-                descriptor.definition.name,
-                descriptor.requiredCapabilities()
+                plan.toolName,
+                plan.requiredCapabilities
             ))
             if (cursor >= steps.size) {
                 return PolicyDecision(

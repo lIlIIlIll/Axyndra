@@ -203,17 +203,6 @@ public interface RunRepository {
     }
 }
 
-public interface OperationRepository {
-    func prepare(record: OperationRecord): Result<Unit>
-    func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit>
-    func find(operationId: OperationId): Result<OperationRecord>
-    func receipt(operationId: OperationId): Result<OperationReceipt>
-    func saveReceipt(receipt: OperationReceipt): Result<Unit>
-}
 
 public interface PermissionRepository {
     func allows(sessionId: SessionId, scope: ApprovalGrantScope): Result<Bool>
@@ -245,6 +234,48 @@ public interface WorkspacePort {
 public interface ProcessPort {
     func execute(request: ProcessRequest): Result<ProcessResult>
     func cancel(operationId: OperationId): Result<Unit>
+}
+
+public class NetworkGatewayLease {
+    public let operationId: OperationId
+    public let proxyHost: String
+    public let proxyPort: UInt16
+    public let caBundle: String
+    // The proxy endpoint is local to the sandbox bridge. The bridge socket and
+    // executable are host-selected composition values, not model input.
+    public let bridgeSocket: String
+    public let bridgeExecutable: String
+
+    public init(
+        operationId: OperationId,
+        proxyHost: String,
+        proxyPort: UInt16,
+        caBundle!: String = "",
+        bridgeSocket!: String = "",
+        bridgeExecutable!: String = ""
+    ) {
+        if (proxyHost.trimAscii() == "" || proxyPort == 0u16) {
+            throw IllegalArgumentException("network gateway endpoint is invalid")
+        }
+        if ((bridgeSocket.trimAscii() == "") != (bridgeExecutable.trimAscii() == "")) {
+            throw IllegalArgumentException("network gateway bridge values must be provided together")
+        }
+        this.operationId = operationId
+        this.proxyHost = proxyHost.trimAscii()
+        this.proxyPort = proxyPort
+        this.caBundle = caBundle.trimAscii()
+        this.bridgeSocket = bridgeSocket.trimAscii()
+        this.bridgeExecutable = bridgeExecutable.trimAscii()
+    }
+}
+// The gateway owns all mediated egress. A process in NetworkPolicyMode.Mediated
+// is never allowed to fall back to HostNetwork when this port is unavailable.
+public interface NetworkGatewayPort {
+    func acquire(
+        operationId: OperationId,
+        policy: NetworkPolicy
+    ): Result<NetworkGatewayLease>
+    func release(lease: NetworkGatewayLease): Result<Unit>
 }
 
 public interface AuditPort {

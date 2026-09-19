@@ -5,6 +5,7 @@ import agent_product.*
 import sandbox4cj.*
 import std.env.*
 import std.fs.*
+import std.process.*
 
 main(): Int64 {
     let root = prepareWorkspace()
@@ -17,10 +18,58 @@ main(): Int64 {
     if (!realBubblewrapSmokeWhenSupported(root)) { return 1 }
     if (!processPortRequiresSandbox(root)) { return 1 }
     if (!realProcessPortSmokeWhenSupported(root)) { return 1 }
+    if (!mediatedNetworkGatewaySmoke(root)) { return 1 }
     println("sandbox_contract: all contracts passed")
     0
 }
 
+func mediatedNetworkGatewaySmoke(root: String): Bool {
+    let serverRoot = root + "/mediated-gateway-server"
+    Directory.create(serverRoot, recursive: true)
+    File.writeTo(serverRoot + "/index.html", "mediated-gateway-ok".toArray())
+    let server = try {
+        launch(
+            "/usr/bin/python3",
+            ["-m", "http.server", "18772", "--bind", "127.0.0.1", "--directory", serverRoot],
+            stdOut: ProcessRedirect.Discard,
+            stdErr: ProcessRedirect.Discard
+        )
+    } catch (error: Exception) {
+        return expect(false, "could not start mediated gateway fixture: " + error.message)
+    }
+    sleep(Duration.millisecond * 100)
+    let processes = LocalProcessPort(
+        LocalWorkspace(root),
+        sandboxEnabled: true,
+        sandboxCaBundle: "/etc/ssl/certs/ca-certificates.crt",
+        networkGateway: Some(LocalNetworkGatewayPort())
+    )
+    let result = processes.execute(ProcessRequest(
+        "/usr/bin/curl",
+        operationId: OperationId("mediated-gateway-smoke"),
+        arguments: ["-q", "-fsS", "http://127.0.0.1:18772/"],
+        timeoutMillis: 10000,
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        networkPolicy: Some(NetworkPolicy(
+            NetworkPolicyMode.Mediated,
+            egress: [NetworkEgressRule(
+                "127.0.0.1",
+                18772u16,
+                privateAddresses: ["127.0.0.1"]
+            )]
+        ))
+    ))
+    try { server.terminate(force: true) } catch (_: Exception) {}
+    try { server.wait() } catch (_: Exception) {}
+    removeIfExists(Path(serverRoot), recursive: true)
+    match (result) {
+        case Result.Ok(value) => expect(
+            value.exitCode == 0 && value.stdout.contains("mediated-gateway-ok"),
+            "mediated ProcessPort requests cross the sandbox only through the policy gateway"
+        )
+        case Result.Err(error) => expect(false, "mediated ProcessPort gateway request failed: " + error.message)
+    }
+}
 func processPortRequiresSandbox(root: String): Bool {
     let processes = LocalProcessPort(
         LocalWorkspace(root),

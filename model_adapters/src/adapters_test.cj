@@ -78,19 +78,49 @@ class NativeReplayRegressionTests {
     }
 
     @TestCase
-    func opaqueReplaySuppressesCanonicalReasoningCounterpart(): Unit {
+    func displayOnlyReasoningIsDroppedFromProjection(): Unit {
+        let request = toLlmWireRequest(domain.ModelRequest(
+            "fixture",
+            [domain.ModelMessage(domain.ModelRole.Assistant, [
+                domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "portable summary"),
+                domain.ModelBlock(domain.ModelBlockKind.Text, text: "portable answer")
+            ])]
+        ), ProviderDialect.OpenAiResponses, "openai")
+        @Expect(request.messages.size, 1)
+        @Expect(request.messages[0].blocks.size, 1)
+        match (request.messages[0].blocks[0]) {
+            case LlmWireBlock.Text(value) => @Expect(value.text, "portable answer")
+            case _ => @Fail("display-only reasoning was projected into request history")
+        }
+    }
+
+    @TestCase
+    func providerSwitchDropsForeignReasoningReplay(): Unit {
         let blocks = [
-            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "why"),
+            domain.ModelBlock(
+                domain.ModelBlockKind.Reasoning,
+                text: "foreign reasoning",
+                opaqueState: Some(domain.OpaqueProviderState(
+                    "anthropic", "messages", "{}", itemId: "thinking", replayRequired: true
+                ))
+            ),
             domain.ModelBlock(
                 domain.ModelBlockKind.Unknown,
                 opaqueState: Some(domain.OpaqueProviderState(
-                    "primary", "messages", "{}", itemId: "thinking", replayRequired: true
+                    "anthropic", "messages", "{}", itemId: "thinking", replayRequired: true
                 ))
-            )
+            ),
+            domain.ModelBlock(domain.ModelBlockKind.Text, text: "visible answer")
         ]
-        @Expect(canonicalReasoningHasReplayCounterpart(
-            blocks, 0, ProviderDialect.AnthropicMessages, "primary"
-        ), true)
+        let request = toLlmWireRequest(domain.ModelRequest(
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, blocks)]
+        ), ProviderDialect.DeepSeekMessages, "volengine")
+        @Expect(request.messages.size, 1)
+        @Expect(request.messages[0].blocks.size, 1)
+        match (request.messages[0].blocks[0]) {
+            case LlmWireBlock.Text(value) => @Expect(value.text, "visible answer")
+            case _ => @Fail("foreign provider replay was projected into request history")
+        }
     }
 
     @TestCase
@@ -118,26 +148,6 @@ class NativeReplayRegressionTests {
         }
     }
 
-    @TestCase
-    func providerSwitchRetainsCanonicalReasoningAndDropsForeignReplay(): Unit {
-        let blocks = [
-            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "portable summary"),
-            domain.ModelBlock(
-                domain.ModelBlockKind.Unknown,
-                opaqueState: Some(domain.OpaqueProviderState(
-                    "anthropic", "messages", "{}", itemId: "thinking", replayRequired: true
-                ))
-            )
-        ]
-        @Expect(canonicalReasoningHasReplayCounterpart(
-            blocks, 0, ProviderDialect.OpenAiResponses, "openai"
-        ), false)
-        let request = toLlmWireRequest(domain.ModelRequest(
-            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, blocks)]
-        ), ProviderDialect.OpenAiResponses, "openai")
-        @Expect(request.messages.size, 1)
-        @Expect(request.messages[0].blocks.size, 1)
-    }
 
     @TestCase
     func standaloneReplayMatchesCompatibleProtocolWithoutProfileIdentity(): Unit {
@@ -163,6 +173,21 @@ class NativeReplayRegressionTests {
             ""
         ), false)
     }
+    @TestCase
+    func currentReplayRequiresCompatibleModel(): Unit {
+        let state = domain.OpaqueProviderState(
+            "primary", "messages",
+            "{\"protocol\":\"messages\",\"dialect_id\":\"anthropic.messages.v1\",\"native_type\":\"thinking\",\"schema_version\":1,\"scope\":\"assistant_turn\",\"assistant_turn_index\":0,\"block_order\":0,\"complete\":true,\"model_constraint\":\"source-model\",\"payload\":{\"type\":\"thinking\",\"thinking\":\"why\",\"signature\":\"sig\"}}",
+            itemId: "thinking", replayRequired: true
+        )
+        @Expect(nativeReplayMatches(
+            state, ProviderDialect.AnthropicMessages, "primary", model: "target-model"
+        ), false)
+        @Expect(nativeReplayMatches(
+            state, ProviderDialect.AnthropicMessages, "primary", model: "source-model"
+        ), true)
+    }
+
 
     @TestCase
     func malformedCurrentReplayEnvelopeDoesNotFallBackToLegacy(): Unit {
@@ -215,9 +240,6 @@ class NativeReplayRegressionTests {
                 opaqueState: Some(replayState)
             )
         ]
-        @Expect(canonicalReasoningHasReplayCounterpart(
-            reconstructed, 0, ProviderDialect.AnthropicMessages, "primary"
-        ), true)
         let projected = toLlmWireRequest(domain.ModelRequest(
             "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, reconstructed)]
         ), ProviderDialect.AnthropicMessages, "primary")
@@ -350,6 +372,18 @@ class NativeProviderTlsConfigurationTests {
             http.close()
             https.close()
         }
+    }
+    @TestCase
+    func remotePlainHttpRequiresExplicitOptIn(): Unit {
+        @Expect(secureNativeProviderUrl("http://provider.example"), false)
+        @Expect(
+            secureNativeProviderUrl("http://provider.example", allowInsecureHttp: true),
+            true
+        )
+        @Expect(
+            secureNativeProviderUrl("http://user@provider.example", allowInsecureHttp: true),
+            false
+        )
     }
 
     @TestCase

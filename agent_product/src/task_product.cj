@@ -405,7 +405,7 @@ public class ProductAsyncJobEvent {
 
 public type ProductAsyncJobEventSink = (ProductAsyncJobEvent) -> Unit
 
-type ProductBashJobAction = (OperationId) -> Result<ToolResult>
+type ProductBashJobAction = (PreparedToolInvocation, OperationId) -> Result<ToolResult>
 
 class ProductAsyncJobListener {
     let id: Int64
@@ -659,9 +659,16 @@ public class ProductTaskRuntime {
             processSupervisor = Some(ProductProcessSupervisor(
                 value.workspace,
                 sandboxEnabled: value.directProcessSandboxEnabled(),
-                allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests
+                allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests,
+                shellNetworkMode: value.shellNetworkMode,
+                sandboxCaBundle: value.sandboxCaBundle
             ))
-            processBroker = Some(ProductProcessBroker(value.stateRoot, value.workspace.rootPath()))
+            processBroker = Some(ProductProcessBroker(
+                value.stateRoot,
+                value.workspace.rootPath(),
+                shellNetworkMode: value.shellNetworkMode,
+                sandboxCaBundle: value.sandboxCaBundle
+            ))
             if (taskPersistence.isNone()) {
                 taskPersistence = Some(persistence)
                 let restoredRoots = persistence.loadAll()
@@ -1431,10 +1438,15 @@ public class ProductTaskRuntime {
 
     func startBashJob(
         context: ToolInvocationContext,
-        call: ToolCall,
+        prepared: PreparedToolInvocation,
         command: String,
         action: ProductBashJobAction
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let job: ProductAsyncJobState
         let key: ProductAsyncJobKey
         let operationId: OperationId
@@ -1454,7 +1466,7 @@ public class ProductTaskRuntime {
             }
             jobCounter += 1
             let id = "bash-" + nowMillis().toString() + "-" + jobCounter.toString()
-            operationId = OperationId("bash-job-" + id)
+            operationId = prepared.operationId
             job = ProductAsyncJobState(
                 id,
                 "",
@@ -1499,7 +1511,7 @@ public class ProductTaskRuntime {
                     context,
                     call,
                     key,
-                    action(operationId)
+                    action(prepared, operationId)
                 )
             }
         })) {
@@ -1858,6 +1870,25 @@ public class ProductTaskRuntime {
             sleep(Duration.millisecond * 10)
         }
         []
+    }
+
+    public func cancelBashJobs(runId: RunId): Result<Unit> {
+        let runtime = match (attachedProduct()) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let keys = ArrayList<ProductAsyncJobKey>()
+        lock.lock()
+        try {
+            for (job in jobs where job.jobType == "bash" &&
+                job.ownerRunId.value == runId.value && job.status == "running") {
+                keys.add(job.key())
+            }
+        } finally {
+            lock.unlock()
+        }
+        cancelJobKeys(runtime, keys.toArray())
+        Result.Ok(())
     }
 
     public func cancelJobs(
@@ -4033,8 +4064,13 @@ public class ProductTaskTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         runtime.executeTask(context, call)
     }
 
@@ -4061,8 +4097,13 @@ public class ProductYieldTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         runtime.submitYield(context, call)
     }
 }
@@ -4076,8 +4117,13 @@ public class ProductHubTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let op = match (productTaskText(call, "op", true)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -4200,6 +4246,7 @@ public class ProductHubTool <: ToolExecutor {
         }
         Result.Ok(ToolResult(call.callId, objectValue(fields.toArray())))
     }
+
 }
 
 class TaskSchemaValidation {
@@ -4225,7 +4272,7 @@ func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
         }
     }
     for (field in call.arguments.fields) {
-        if (field.name != "context" && field.name != "tasks") {
+        if (field.name != "context" && field.name != "tasks" && field.name != "network") {
             return taskError<ProductTaskBatch>(
                 "task.invalid_arguments",
                 "batch task only accepts context and tasks"
@@ -4294,7 +4341,8 @@ func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
 func parseProductTask(call: ToolCall): Result<ProductTaskSpec> {
     for (field in call.arguments.fields) {
         if (field.name != "name" && field.name != "agent" && field.name != "task" && field.name != "effort" &&
-            field.name != "context" && field.name != "outputSchema" && field.name != "schemaMode") {
+            field.name != "context" && field.name != "outputSchema" && field.name != "schemaMode" &&
+            field.name != "network") {
             return taskError<ProductTaskSpec>(
                 "task.invalid_arguments",
                 "unknown task argument: " + field.name
@@ -4692,7 +4740,7 @@ func taskEventInteger(value: AgentValue, name: String): Int64 {
         case Some(field) =>
             if (field.unifiedKind == ValueKind.Number) {
                 try {
-                    Int64.parse(field.number)
+                    Int64.parse(field.asNumberText())
                 } catch (_: Exception) {
                     0
                 }
@@ -4790,7 +4838,7 @@ func validateTaskSchema(
         case None => TaskSchemaValidation(true)
         case Some(value) =>
             if (value.unifiedKind == ValueKind.Boolean) {
-                return if (value.boolean) {
+                return if (value.asBool()) {
                     TaskSchemaValidation(true)
                 } else {
                     TaskSchemaValidation(false, error: "schema rejects all values")
@@ -5122,7 +5170,7 @@ func jobTimeout(call: ToolCall): Result<Int64> {
         )
     }
     let timeout = try {
-        Int64.parse(value.number)
+        Int64.parse(value.asNumberText())
     } catch (_: Exception) {
         return taskError<Int64>(
             "hub.timeout_invalid",

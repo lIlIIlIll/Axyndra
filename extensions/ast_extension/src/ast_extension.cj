@@ -166,7 +166,7 @@ func textField(value: JsonNode, name: String): String {
 }
 func integerField(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(field.number) } catch (_: Exception) { fallback } } else { fallback }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(field.asNumberText()) } catch (_: Exception) { fallback } } else { fallback }
         case None => fallback
     }
 }

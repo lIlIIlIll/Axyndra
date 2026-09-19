@@ -10,7 +10,7 @@ func runConfigPreservationContract(root: String): Unit {
     let preserved = "# retain comment\nasync:\n  enabled: false\napproval:\n  mode: never\n" +
         "compaction:\n  enabled: false\nmodel_roles:\n  approval: old/reviewer\nfuture_setting: keep-me\n"
     let path = settings + "/config.yml"
-    File.writeTo(path, ("default_model: old/model\ntheme: dark\n" + preserved).toArray())
+    File.writeTo(path, ("schema_version: 1\ndefault_model: old/model\ntheme: dark\n" + preserved).toArray())
     let originalProfile = ProviderProfile("old", "openai", "responses", "https://api.openai.com",
         "CONFIG_CONTRACT_UNSET_KEY", dialect: "openai_responses")
     upsertProviderProfile(settings, originalProfile).value().getOrThrow()

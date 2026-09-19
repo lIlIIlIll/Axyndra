@@ -129,7 +129,7 @@ func validMcpTaskError(error: JsonNode): Bool {
     if (error.unifiedKind != UnifiedJsonKind.Object) { return false }
     match (error.field("code")) {
         case Some(value) => if (value.unifiedKind != UnifiedJsonKind.Number) { return false } else {
-            try { let _ = Int64.parse(value.number) } catch (_: Exception) { return false }
+            try { let _ = Int64.parse(value.asNumberText()) } catch (_: Exception) { return false }
         }
         case None => return false
     }
@@ -197,7 +197,7 @@ public func decodeMcpTask(value: JsonNode): McpResult<McpTask> {
     let ttl: ?Int64 = match (value.field("ttlMs")) {
         case Some(item) => match (item.unifiedKind) {
             case UnifiedJsonKind.Null => None
-            case UnifiedJsonKind.Number => try { Some(Int64.parse(item.number)) } catch (_: Exception) {
+            case UnifiedJsonKind.Number => try { Some(Int64.parse(item.asNumberText())) } catch (_: Exception) {
                 return invalidMcp<McpTask>("mcp.tasks.ttl_invalid", "MCP task ttlMs must be an integer or null")
             }
             case _ => return invalidMcp<McpTask>("mcp.tasks.ttl_invalid", "MCP task ttlMs must be an integer or null")
@@ -206,7 +206,7 @@ public func decodeMcpTask(value: JsonNode): McpResult<McpTask> {
     }
     let poll: ?Int64 = match (value.field("pollIntervalMs")) {
         case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) {
-            try { Some(Int64.parse(item.number)) } catch (_: Exception) {
+            try { Some(Int64.parse(item.asNumberText())) } catch (_: Exception) {
                 return invalidMcp<McpTask>("mcp.tasks.poll_invalid", "MCP task pollIntervalMs must be an integer")
             }
         } else { return invalidMcp<McpTask>("mcp.tasks.poll_invalid", "MCP task pollIntervalMs must be an integer") }

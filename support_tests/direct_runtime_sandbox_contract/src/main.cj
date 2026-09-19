@@ -160,7 +160,9 @@ func runHub(product: ProductRuntime, workspace: String): Unit {
                 )
             ])),
             ValueField("pty", boolValue(false)),
-            ValueField("network", boolValue(false))
+            ValueField("network", objectValue([
+                ValueField("mode", textValue("denied"))
+            ]))
         ])
         ),
         "Hub start"
@@ -236,7 +238,7 @@ func prepare(root: String): Unit {
     )
     File.writeTo(
         settings + "/config.yml",
-        "default_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
+        "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
     )
     File.writeTo(
         settings + "/models.yml",

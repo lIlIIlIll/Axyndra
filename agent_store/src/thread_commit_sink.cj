@@ -114,26 +114,40 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
     ): Result<Unit> {
         try {
             database.transaction { transaction =>
-                requireStoreRow(
-                    transaction,
+                let rows = transaction.query(
                     "SELECT run_id,state FROM operations WHERE id=" +
-                        sqliteText(receipt.operationId.value),
-                    [runId.value, "executing"],
-                    "Operation is not the expected executing operation"
+                        sqliteText(receipt.operationId.value)
                 )
-                insertOperationReceipt(transaction, receipt)
-                let state = if (receipt.outcome == OperationOutcome.Unknown) {
-                    "recovery_required"
-                } else {
-                    "failed"
+                if (rows.size != 1 || rows[0].required(0) != runId.value ||
+                    (rows[0].required(1) != "executing" &&
+                        rows[0].required(1) != "rejected")) {
+                    throw IllegalStateException(
+                        "Operation is not the expected executing or rejected operation"
+                    )
                 }
-                transaction.execute(
-                    "UPDATE operations SET state=" + sqliteText(state) +
-                        ",revision=revision+1 WHERE id=" + sqliteText(receipt.operationId.value) +
-                        " AND state='executing'"
-                )
-                requireStoreChanged(transaction, "Operation receipt lost its executing owner")
-                mirrorOperationState(transaction, receipt.operationId, state)
+                insertOperationReceipt(transaction, receipt)
+                let state = rows[0].required(1)
+                if (state == "executing") {
+                    let nextState = if (receipt.outcome == OperationOutcome.Unknown) {
+                        "recovery_required"
+                    } else {
+                        "failed"
+                    }
+                    transaction.execute(
+                        "UPDATE operations SET state=" + sqliteText(nextState) +
+                            ",revision=revision+1 WHERE id=" + sqliteText(receipt.operationId.value) +
+                            " AND state='executing'"
+                    )
+                    requireStoreChanged(transaction, "Operation receipt lost its executing owner")
+                    mirrorOperationState(transaction, receipt.operationId, nextState)
+                } else {
+                    transaction.execute(
+                        "UPDATE operations SET revision=revision+1 WHERE id=" +
+                            sqliteText(receipt.operationId.value) + " AND state='rejected'"
+                    )
+                    requireStoreChanged(transaction, "Rejected Operation receipt lost its owner")
+                    mirrorOperationState(transaction, receipt.operationId, "rejected")
+                }
             }
             Result.Ok(())
         } catch (error: Exception) {

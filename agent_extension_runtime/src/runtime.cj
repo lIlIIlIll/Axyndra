@@ -834,7 +834,7 @@ func requiredInteger(value: JsonNode, name: String): ExtensionRuntimeResult<Int6
             if (field.unifiedKind != UnifiedJsonKind.Number) {
                 validationError("", "", name, "${name} must be an integer")
             } else {
-                try { ExtensionRuntimeResult.Ok(Int64.parse(field.number)) }
+                try { ExtensionRuntimeResult.Ok(Int64.parse(field.asNumberText())) }
                 catch (_: Exception) { validationError("", "", name, "${name} must be an integer") }
             }
         case None => validationError("", "", name, "${name} is required")

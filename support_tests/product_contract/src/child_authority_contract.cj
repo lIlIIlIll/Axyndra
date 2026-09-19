@@ -147,7 +147,7 @@ func runChildApprovalOutputContract(root: String): Unit {
     let workspace = root + "/child-approval-output"
     Directory.create(workspace + "/settings", recursive: true)
     File.writeTo(workspace + "/settings/config.yml",
-        "approval:\n  mode: ai\n  policy:\n    allow_workspace_writes: true\n".toArray())
+        "schema_version: 1\napproval:\n  mode: ai\n  policy:\n    allow_workspace_writes: true\n".toArray())
     let product = openProduct(config: ProductConfig(
         settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
         workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.AlwaysAsk,
@@ -242,7 +242,7 @@ func runChildApprovalCancellationContracts(root: String): Unit {
         let workspace = root + "/child-approval-cancel-" + automatic.toString()
         Directory.create(workspace + "/settings", recursive: true)
         File.writeTo(workspace + "/settings/config.yml",
-            "approval:\n  policy:\n    allow_workspace_writes: true\n".toArray())
+            "schema_version: 1\napproval:\n  policy:\n    allow_workspace_writes: true\n".toArray())
         let product = openProduct(config: ProductConfig(
             settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
             workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.AlwaysAsk,
@@ -288,7 +288,7 @@ func runChildApprovalCancellationContracts(root: String): Unit {
         expect(cancelled.status == "cancelled", "approval continuation cancellation remains terminal: " + automatic.toString())
         let taskResult = toolResultValue(product.messages(parent.sessionId).value().getOrThrow(),
             "fixture-task-write-call").getOrThrow()
-        expect(taskResult.field("results").getOrThrow().items[0].field("exitCode").getOrThrow().number != "0",
+        expect(taskResult.field("results").getOrThrow().items[0].field("exitCode").getOrThrow().asNumberText() != "0",
             "a cancelled child is not returned as a successful task")
         expect(taskResult.field("results").getOrThrow().items[0].field("stderr").getOrThrow().text != "",
             "unsuccessful child task explains its final state")

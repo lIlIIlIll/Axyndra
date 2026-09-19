@@ -14,11 +14,13 @@ import std.sync.*
 import std.process.*
 
 public interface ToolExecutor {
+    // Executors receive only the immutable prepared invocation. The original
+    // call is retained for identity/display; all authority-relevant values
+    // come from operationPlan.
     func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult>
-
     func cancel(runId: RunId): Result<Unit> {
         let _ = runId
         Result.Ok(())
@@ -43,6 +45,7 @@ public interface ToolArgumentValidator {
 
 public type ToolCapabilityResolver = (ToolCall) -> Capability
 public type ToolAdditionalCapabilityResolver = (ToolCall) -> Array<Capability>
+public type ToolNetworkPolicyResolver = (ToolCall) -> Result<NetworkPolicy>
 
 public type ToolSideEffectResolver = (ToolCall) -> Bool
 
@@ -108,6 +111,7 @@ public class ToolDescriptor {
     public let concurrency: ToolConcurrencyProfile
     public let additionalCapabilities: Array<Capability>
     private let capabilityResolver: ?ToolCapabilityResolver
+    private let networkPolicyResolver: ?ToolNetworkPolicyResolver
     private let additionalCapabilityResolver: ?ToolAdditionalCapabilityResolver
     private let sideEffectResolver: ?ToolSideEffectResolver
     private let approvalMetadataResolver: ?ToolApprovalMetadataResolver
@@ -123,6 +127,7 @@ public class ToolDescriptor {
         additionalCapabilityResolver!: ?ToolAdditionalCapabilityResolver = None,
         sideEffectResolver!: ?ToolSideEffectResolver = None,
         approvalMetadataResolver!: ?ToolApprovalMetadataResolver = None,
+        networkPolicyResolver!: ?ToolNetworkPolicyResolver = None,
         approvalMetadataValue!: ?ToolApprovalMetadata = None
     ) {
         this.definition = definition
@@ -135,6 +140,7 @@ public class ToolDescriptor {
         this.sideEffectResolver = sideEffectResolver
         this.approvalMetadataResolver = approvalMetadataResolver
         this.approvalMetadataValue = approvalMetadataValue
+        this.networkPolicyResolver = networkPolicyResolver
     }
 
     public func resolved(call: ToolCall): ToolDescriptor {
@@ -153,6 +159,7 @@ public class ToolDescriptor {
             },
             concurrency: concurrency,
             additionalCapabilities: resolvedAdditional.toArray(),
+            networkPolicyResolver: networkPolicyResolver,
             approvalMetadataResolver: approvalMetadataResolver,
             approvalMetadataValue: Some(match (approvalMetadataResolver) {
                 case Some(resolve) => resolve(call)
@@ -178,7 +185,24 @@ public class ToolDescriptor {
             }
             case None => ()
         }
+        let networkPolicy = match (networkPolicy(call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalArgumentException(error.message)
+        }
+        for (resource in networkPolicyCapabilityResources(networkPolicy)) {
+            addRequiredCapability(
+                values,
+                Capability(CapabilityKind.NetworkAccess, resource: resource)
+            )
+        }
         values.toArray()
+    }
+
+    public func networkPolicy(call: ToolCall): Result<NetworkPolicy> {
+        match (networkPolicyResolver) {
+            case Some(resolve) => resolve(call)
+            case None => networkPolicyForToolCall(call)
+        }
     }
 
     public func requiredCapabilities(): Array<Capability> {
@@ -242,6 +266,38 @@ func missingCapabilityError(
             ErrorField("resource", missing.resource)
         ]
     )
+}
+
+class PlanWriteTool <: ToolExecutor {
+    public func execute(
+        _: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
+        let content = match (call.arguments.field("content")) {
+            case Some(value) => value.text.trimAscii()
+            case None => ""
+        }
+        if (content == "") {
+            return Result.Err(
+                AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "plan_write.empty",
+                    "plan_write requires a non-empty content field"
+                )
+            )
+        }
+        Result.Ok(
+            ToolResult(
+                call.callId,
+                textValue("Plan recorded for review. The user reviews it via /plan-review before execution.")
+            )
+        )
+    }
 }
 
 class ToolRegistration {
@@ -450,7 +506,7 @@ public class PolicyDecision {
 public interface CapabilityPolicy {
     func evaluate(
         context: ToolInvocationContext,
-        descriptor: ToolDescriptor
+        plan: NormalizedOperationPlan
     ): PolicyDecision
 }
 
@@ -471,9 +527,9 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
 
     public func evaluate(
         context: ToolInvocationContext,
-        descriptor: ToolDescriptor
+        plan: NormalizedOperationPlan
     ): PolicyDecision {
-        for (capability in descriptor.requiredCapabilities()) {
+        for (capability in plan.requiredCapabilities) {
             if (!context.capabilities.allows(
                 capability.kind,
                 resource: capability.resource
@@ -485,8 +541,9 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
                 )
             }
         }
-        let metadata = descriptor.approvalMetadata(ToolCall("policy", descriptor.definition.name, objectValue([])))
-        if (allowWorkspaceWrites && descriptor.sideEffecting && metadata.capabilityLabel == "workspace.write" &&
+        let metadata = plan.approvalMetadata
+        if (allowWorkspaceWrites && plan.effectClass != OperationEffectClass.ReadOnly &&
+            metadata.capabilityLabel == "workspace.write" &&
             metadata.assessment.level == ApprovalRiskLevel.Low) {
             return PolicyDecision(
                 PermissionRequirement.Safe,
@@ -494,7 +551,7 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
             )
         }
         if (requiresPrompt(
-            descriptor,
+            plan,
             context.approvalModeOverride
         )) {
             PolicyDecision(
@@ -507,7 +564,7 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
     }
 
     private func requiresPrompt(
-        descriptor: ToolDescriptor,
+        plan: NormalizedOperationPlan,
         override: ?ApprovalMode
     ): Bool {
         let effective = match (override) {
@@ -518,15 +575,16 @@ public class DefaultCapabilityPolicy <: CapabilityPolicy {
             case ApprovalMode.Yolo => false
             case _ =>
                 if (askOnNetwork && requiresCapability(
-                    descriptor.requiredCapabilities(),
+                    plan.requiredCapabilities,
                     CapabilityKind.NetworkAccess
                 )) {
                     return true
                 }
                 match (effective) {
-                    case ApprovalMode.AlwaysAsk => descriptor.sideEffecting
+                    case ApprovalMode.AlwaysAsk =>
+                        plan.effectClass != OperationEffectClass.ReadOnly
                     case ApprovalMode.Write => requiresPromptingCapability(
-                        descriptor.requiredCapabilities()
+                        plan.requiredCapabilities
                     )
                     case ApprovalMode.Yolo => false
                 }
@@ -560,14 +618,14 @@ public class ToolPipeline {
     private let catalog: ToolCatalog
     private let validator: ToolArgumentValidator
     private let policy: CapabilityPolicy
-    private let operations: OperationRepository
+    private let operations: OperationRuntimePort
     private let audit: AuditPort
     private let ids: IdGenerator
     private let permissions: PermissionRepository
 
     public init(
         catalog: ToolCatalog,
-        operations: OperationRepository,
+        operations: OperationRuntimePort,
         audit: AuditPort,
         ids: IdGenerator,
         validator!: ToolArgumentValidator = ObjectArgumentValidator(),
@@ -582,20 +640,10 @@ public class ToolPipeline {
         this.ids = ids
         this.permissions = permissions
     }
-
-    public func invoke(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolInvocationResult> {
-        match (prepare(context, call)) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(ToolPreparation.Ready(prepared)) => executePrepared(context, prepared)
-            case Result.Ok(ToolPreparation.NeedsApproval(_, request)) =>
-                Result.Ok(ToolInvocationResult.NeedsApproval(request))
-            case Result.Ok(ToolPreparation.Completed(result)) => Result.Ok(ToolInvocationResult.Completed(result))
-            case Result.Ok(ToolPreparation.Denied(denial)) => Result.Ok(ToolInvocationResult.Denied(denial))
-        }
+    public func operationRuntime(): OperationRuntimePort {
+        operations
     }
+
 
     // Sole production AgentCore entry. A CommittedToolCallRef can only be
     // minted after a validated durable Decision has been atomically projected
@@ -615,11 +663,12 @@ public class ToolPipeline {
     }
 
     // Direct SDK preparation surface. Production AgentCore must use
-    // prepareCommitted; this raw API cannot enter OperationRuntimePort.
+    // prepareCommitted; this raw API is plan-only and cannot enter
+    // OperationRuntimePort without a canonical ToolCall Item.
     // Preparation resolves the catalog entry, validates arguments, applies
-    // permanent safety rules and policy, and persists an OperationRecord. It
-    // deliberately never calls the executor. Batch coordinators therefore
-    // have a real all-approval barrier instead of a UI convention.
+    // permanent safety rules and policy, and deliberately never calls the
+    // executor. Batch coordinators therefore have a real all-approval barrier
+    // instead of a UI convention.
     public func prepare(
         context: ToolInvocationContext,
         call: ToolCall
@@ -642,6 +691,16 @@ public class ToolPipeline {
                     fields: [ErrorField("tool", call.name)]
                 )
                 return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+        }
+        // Freeze and validate network authorization before schema-dependent
+        // resolution or any executor can observe the call. A gateway error
+        // must never become a permission request or a retry trigger.
+        match (registration.descriptor.networkPolicy(call)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                return Result.Ok(ToolPreparation.Denied(
+                    ToolDenial(call.callId, call.name, error)
+                ))
         }
         match (validator.validate(call, registration.descriptor.definition)) {
             case Result.Ok(_) => ()
@@ -684,7 +743,8 @@ public class ToolPipeline {
                 )
             )
         }
-        let metadata = effective.approvalMetadata(call)
+        let plan = normalizedToolOperationPlan(context, call, effective)
+        let metadata = plan.approvalMetadata
         let riskFlags = mergedApprovalFlags(
             approvalRiskFlags(call, effective.capability),
             metadata.assessment.flags
@@ -729,10 +789,12 @@ public class ToolPipeline {
         }
         let evaluated = policy.evaluate(
             context,
-            effective
+            plan
         )
-        let granted = evaluated.requirement == PermissionRequirement.Confirm && persistedGrantAllows(context.sessionId,
-            metadata.grantScope)
+        let networkSessionEligible = networkPolicyModeIsDenied(plan.networkPolicy.mode)
+        let granted = networkSessionEligible &&
+            evaluated.requirement == PermissionRequirement.Confirm &&
+            persistedGrantAllows(context.sessionId, metadata.grantScope)
         let policyDecision = if (granted) {
             PolicyDecision(
                 PermissionRequirement.Safe,
@@ -821,155 +883,150 @@ public class ToolPipeline {
     public func authorize(
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
-        decision: ApprovalDecision
+        decision: ApprovalDecision,
+        decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.User
     ): Result<ToolAuthorization> {
-        let operation = match (operations.find(prepared.operationId)) {
+        if (prepared.authorization != PreparedAuthorization.ApprovalRequired) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "tool.approval_not_required",
+                "the prepared tool invocation is not awaiting approval"
+            ))
+        }
+        let plan = match (operations.loadPlan(prepared.operationId, context.runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (validatePreparedIdentity(context, prepared, operation)) {
+        if (!sameNormalizedOperationPlan(plan, prepared.operationPlan)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "tool.approval_context_changed",
+                "the canonical Operation plan changed while approval was pending"
+            ))
+        }
+        let registration = match (catalog.findRegistered(prepared.call.name)) {
+            case Some(value) => value
+            case None => return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "tool.pending_registration_missing",
+                "pending tool is no longer registered",
+                fields: [ErrorField("tool", prepared.call.name)]
+            ))
+        }
+        let currentPlan = normalizedToolOperationPlan(
+            context,
+            prepared.call,
+            registration.descriptor.resolved(prepared.call)
+        )
+        if (!sameNormalizedOperationPlan(plan, currentPlan)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "tool.approval_context_changed",
+                "normalized Operation changed while approval was pending"
+            ))
+        }
+        let approved = match (decision) {
+            case ApprovalDecision.Reject | ApprovalDecision.RejectWithReason(_) => false
+            case ApprovalDecision.Approve | ApprovalDecision.ApproveSession => true
+        }
+        if (approved && match (decision) {
+            case ApprovalDecision.ApproveSession => !networkPolicyModeIsDenied(plan.networkPolicy.mode)
+            case _ => false
+        }) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "approval.session_scope_forbidden",
+                "network-enabled operations require one-time approval"
+            ))
+        }
+        match (missingRequiredCapability(context, plan.requiredCapabilities)) {
+            case Some(missing) => return Result.Err(
+                missingCapabilityError(prepared.call, missing, "approval")
+            )
+            case None => ()
+        }
+        if (approved && match (decision) {
+            case ApprovalDecision.ApproveSession => match (
+                permissions.grant(context.sessionId, plan.approvalMetadata.grantScope)
+            ) {
+                case Result.Ok(_) => false
+                case Result.Err(error) => return Result.Err(error)
+            }
+            case _ => false
+        }) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Internal,
+                "tool.approval_grant_unreachable",
+                "session approval grant did not complete"
+            ))
+        }
+        let source = approvalDecisionSourceName(decisionSource)
+        match (operations.recordApproval(
+            "approval-" + prepared.operationId.value,
+            prepared.operationId,
+            context.runId,
+            plan,
+            CapabilitySet(values: plan.requiredCapabilities),
+            approved,
+            source,
+            None
+        )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        let call = match (operation.call) {
-            case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.pending_call_missing",
-                    "pending operation does not contain its tool call"
-                )
+        if (!approved) {
+            let reason = match (decision) {
+                case ApprovalDecision.Reject => ""
+                case ApprovalDecision.RejectWithReason(value) => value
+                case _ => ""
+            }
+            let error = AgentError(
+                AgentErrorKind.PermissionDenied,
+                "tool.approval_rejected",
+                if (reason.trimAscii() == "") {
+                    "user rejected the pending tool operation"
+                } else {
+                    "user rejected the pending tool operation: " + reason
+                },
+                fields: rejectionFields(prepared.call.name, reason)
             )
-        }
-        let registration = match (catalog.findRegistered(call.name)) {
-            case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.pending_registration_missing",
-                    "pending tool is no longer registered",
-                    fields: [ErrorField("tool", call.name)]
-                )
+            let result = recoverableToolResult(
+                prepared.call,
+                error,
+                receiptId: prepared.operationId.value
             )
-        }
-        match (operation.status) {
-            case OperationStatus.Committed => return replayAuthorization(prepared.operationId, call)
-            case OperationStatus.Executing => return outcomeToAuthorization(recoverExecuting(
+            let _ = appendAudit(
                 context,
-                prepared.operationId,
-                call,
-                operation.capability
-            ))
-            case OperationStatus.Approved => return Result.Ok(
-                ToolAuthorization.Ready(
-                    preparedWithAuthorization(prepared, PreparedAuthorization.Approved)
-                )
+                "tool.approval_rejected",
+                prepared.call,
+                primaryPlanCapability(plan)
             )
-            case OperationStatus.RecoveryRequired => return Result.Err(
-                recoveryRequired(
-                    prepared.operationId,
-                    "tool operation requires explicit reconciliation before it can continue"
-                )
-            )
-            case OperationStatus.Failed => return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.operation_already_failed",
-                    "pending operation already reached a failed terminal state"
-                )
-            )
-            case OperationStatus.Prepared =>
-                // A rejection receipt may have been durably written just
-                // before a process failed to finalize the terminal state.
-                match (operations.receipt(prepared.operationId)) {
-                    case Result.Ok(receipt) =>
-                        if (receipt.isError && !receipt.committed) {
-                            match (operations.transition(
-                                prepared.operationId,
-                                OperationStatus.Prepared,
-                                OperationStatus.Committed
-                            )) {
-                                case Result.Ok(_) => return replayAuthorization(prepared.operationId, call)
-                                case Result.Err(error) => return Result.Err(error)
-                            }
-                        }
-                    case Result.Err(_) => ()
-                }
+            return Result.Ok(ToolAuthorization.Completed(result))
         }
-        if (prepared.authorization != PreparedAuthorization.ApprovalRequired) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.approval_not_required",
-                    "the prepared tool invocation is not awaiting approval"
-                )
-            )
-        }
-        match (decision) {
-            case ApprovalDecision.Reject => rejectAuthorization(context, prepared, operation, "")
-            case ApprovalDecision.RejectWithReason(reason) => rejectAuthorization(
-                context,
-                prepared,
-                operation,
-                reason
-            )
-            case ApprovalDecision.ApproveSession =>
-                let current = match (validateApprovalBinding(context, operation, call, registration)) {
-                    case Result.Ok(value) => value
-                    case Result.Err(error) => return Result.Err(error)
-                }
-                match (missingRequiredCapability(
-                    context,
-                    current.requiredCapabilities()
-                )) {
-                    case Some(missing) => return Result.Err(
-                        missingCapabilityError(call, missing, "approval")
-                    )
-                    case None => ()
-                }
-                let metadata = current.approvalMetadata(call)
-                match (permissions.grant(context.sessionId, metadata.grantScope)) {
-                    case Result.Ok(_) => ()
-                    case Result.Err(error) => return Result.Err(error)
-                }
-                approveAuthorization(prepared)
-            case ApprovalDecision.Approve =>
-                let current = match (validateApprovalBinding(context, operation, call, registration)) {
-                    case Result.Ok(value) => value
-                    case Result.Err(error) => return Result.Err(error)
-                }
-                match (missingRequiredCapability(
-                    context,
-                    current.requiredCapabilities()
-                )) {
-                    case Some(missing) => return Result.Err(
-                        missingCapabilityError(call, missing, "approval")
-                    )
-                    case None => ()
-                }
-                approveAuthorization(prepared)
-        }
+        Result.Ok(ToolAuthorization.Ready(
+            preparedWithAuthorization(prepared, PreparedAuthorization.Approved)
+        ))
     }
 
     public func decide(
         context: ToolInvocationContext,
         operationId: OperationId,
         decision: ApprovalDecision,
-        beforeExecute: (PreparedToolInvocation) -> Result<Unit>
+        afterHandoff: (PreparedToolInvocation) -> Result<Unit>,
+        decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.User
     ): Result<ToolInvocationResult> {
         let prepared = match (loadPreparedForApproval(context, operationId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (authorize(context, prepared, decision)) {
+        match (authorize(context, prepared, decision, decisionSource: decisionSource)) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(ToolAuthorization.Ready(value)) =>
-                match (beforeExecute(value)) {
-                    case Result.Ok(_) => executePrepared(context, value)
-                    case Result.Err(error) => Result.Err(error)
-                }
-            case Result.Ok(ToolAuthorization.Completed(result)) => Result.Ok(ToolInvocationResult.Completed(result))
-            case Result.Ok(ToolAuthorization.Denied(denial)) => Result.Ok(ToolInvocationResult.Denied(denial))
+                executePrepared(context, value, afterHandoff)
+            case Result.Ok(ToolAuthorization.Completed(result)) =>
+                Result.Ok(ToolInvocationResult.Completed(result))
+            case Result.Ok(ToolAuthorization.Denied(denial)) =>
+                Result.Ok(ToolInvocationResult.Denied(denial))
         }
     }
 
@@ -981,197 +1038,11 @@ public class ToolPipeline {
         decide(context, operationId, decision, {_ => Result.Ok(())})
     }
 
-    // Rebuilds the exact normalized plan from the current Tool context. The
-    // caller uses this snapshot for durable approval before authorize() repeats
-    // the same validation and hands the prepared invocation to the executor.
     public func approvalPlan(
         context: ToolInvocationContext,
         operationId: OperationId
     ): Result<NormalizedOperationPlan> {
-        match (loadPreparedForApproval(context, operationId)) {
-            case Result.Ok(value) => Result.Ok(value.operationPlan)
-            case Result.Err(error) => Result.Err(error)
-        }
-    }
-
-    // An executor may have completed its side effect before the process failed
-    // to persist the receipt or final state. Never execute that operation a
-    // second time. A durable receipt proves completion and can be replayed;
-    // without one the outcome is deliberately fenced for reconciliation.
-    private func recoverExecuting(
-        context: ToolInvocationContext,
-        operationId: OperationId,
-        call: ToolCall,
-        capability: Capability
-    ): Result<ToolInvocationResult> {
-        let receipt = match (operations.receipt(operationId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) =>
-                if (error.code != "persistence.not_found" && error.code != "operation.not_found") {
-                    return Result.Err(error)
-                }
-                let _ = operations.transition(
-                    operationId,
-                    OperationStatus.Executing,
-                    OperationStatus.RecoveryRequired
-                )
-                return Result.Err(
-                    recoveryRequired(
-                        operationId,
-                        "tool side effect completed without a durable receipt; manual reconciliation is required"
-                    )
-                )
-        }
-        if (!receipt.committed) {
-            let _ = operations.transition(
-                operationId,
-                OperationStatus.Executing,
-                OperationStatus.RecoveryRequired
-            )
-            return Result.Err(
-                recoveryRequired(
-                    operationId,
-                    "tool receipt does not prove a committed side effect"
-                )
-            )
-        }
-        match (operations.transition(
-            operationId,
-            OperationStatus.Executing,
-            OperationStatus.Committed
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let _ = appendAudit(
-            context,
-            "tool.commit_recovered",
-            call,
-            capability
-        )
-        Result.Ok(
-            ToolInvocationResult.Completed(
-                ToolResult(
-                    call.callId,
-                    receipt.detail,
-                    isError: receipt.isError,
-                    receiptId: operationId.value
-                )
-            )
-        )
-    }
-
-    private func rejectAuthorization(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation,
-        operation: OperationRecord,
-        reason: String
-    ): Result<ToolAuthorization> {
-        let call = prepared.call
-        let error = AgentError(
-            AgentErrorKind.PermissionDenied,
-            "tool.approval_rejected",
-            if (reason.trimAscii() == "") {
-                "user rejected the pending tool operation"
-            } else {
-                "user rejected the pending tool operation: " + reason
-            },
-            fields: rejectionFields(call.name, reason)
-        )
-        let result = recoverableToolResult(call, error, receiptId: prepared.operationId.value)
-        match (operations.saveReceipt(
-            OperationReceipt(
-                prepared.operationId,
-                false,
-                result.output,
-                isError: true
-            )
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (operations.transition(
-            prepared.operationId,
-            OperationStatus.Prepared,
-            OperationStatus.Committed
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(
-                recoveryRequired(
-                    prepared.operationId,
-                    "tool rejection receipt was persisted but its terminal state could not be finalized",
-                    cause: error.code
-                )
-            )
-        }
-        let _ = appendAudit(
-            context,
-            "tool.approval_rejected",
-            call,
-            operation.capability
-        )
-        Result.Ok(ToolAuthorization.Completed(result))
-    }
-
-    private func approveAuthorization(
-        prepared: PreparedToolInvocation
-    ): Result<ToolAuthorization> {
-        match (operations.transition(
-            prepared.operationId,
-            OperationStatus.Prepared,
-            OperationStatus.Approved
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolAuthorization.Ready(
-                preparedWithAuthorization(prepared, PreparedAuthorization.Approved)
-            )
-        )
-    }
-
-    private func validatePreparedIdentity(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation,
-        operation: OperationRecord
-    ): Result<Unit> {
-        if (operation.runId.value != context.runId.value) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.approval_run_mismatch",
-                    "prepared operation belongs to a different agent run"
-                )
-            )
-        }
-        let persistedCall = match (operation.call) {
-            case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.pending_call_missing",
-                    "prepared operation does not contain its tool call"
-                )
-            )
-        }
-        if (requestDigest(persistedCall) != requestDigest(prepared.call) ||
-            requiredCapabilitiesArgumentHash(
-                persistedCall,
-                prepared.requiredCapabilities
-            ) != requiredCapabilitiesArgumentHash(
-                prepared.call,
-                prepared.requiredCapabilities
-            ) || operation.requestDigest != prepared.bindingHash) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.prepared_binding_changed",
-                    "prepared tool call or capability no longer matches its durable operation"
-                )
-            )
-        }
-        Result.Ok(())
+        operations.loadPlan(operationId, context.runId)
     }
 
     private func preparedWithAuthorization(
@@ -1181,13 +1052,10 @@ public class ToolPipeline {
         PreparedToolInvocation(
             prepared.operationId,
             prepared.call,
-            prepared.capability,
             prepared.concurrency,
             authorization,
-            approval: prepared.approval,
-            requiredCapabilities: prepared.requiredCapabilities,
-            bindingHash: prepared.bindingHash,
-            operationPlan: Some(prepared.operationPlan)
+            prepared.operationPlan,
+            approval: prepared.approval
         )
     }
 
@@ -1195,119 +1063,58 @@ public class ToolPipeline {
         context: ToolInvocationContext,
         operationId: OperationId
     ): Result<PreparedToolInvocation> {
-        let operation = match (operations.find(operationId)) {
+        let plan = match (operations.loadPlan(operationId, context.runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        if (operation.runId.value != context.runId.value) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.approval_run_mismatch",
-                    "pending approval belongs to a different agent run"
-                )
-            )
-        }
-        let call = match (operation.call) {
-            case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.pending_call_missing",
-                    "pending operation does not contain its tool call"
-                )
-            )
+        let call = match (operations.loadCall(operationId, context.runId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
         }
         let registration = match (catalog.findRegistered(call.name)) {
             case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.pending_registration_missing",
-                    "pending tool is no longer registered",
-                    fields: [ErrorField("tool", call.name)]
-                )
-            )
+            case None => return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "tool.pending_registration_missing",
+                "pending tool is no longer registered",
+                fields: [ErrorField("tool", call.name)]
+            ))
         }
-        let effective = registration.descriptor.resolved(call)
-        let required = effective.requiredCapabilities()
-        let plan = normalizedToolOperationPlan(context, call, effective)
-        if (operation.requestDigest != plan.bindingDigest) {
+        let currentPlan = normalizedToolOperationPlan(
+            context,
+            call,
+            registration.descriptor.resolved(call)
+        )
+        if (!sameNormalizedOperationPlan(plan, currentPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
                 "tool.approval_context_changed",
                 "normalized Operation changed while approval was pending"
             ))
         }
-        let metadata = effective.approvalMetadata(call)
+        let capability = primaryPlanCapability(plan)
         let request = ApprovalRequest(
             operationId,
             call.callId,
             call.name,
-            effective.capability,
-            preview: call.arguments,
+            capability,
+            preview: plan.canonicalArguments,
             sessionId: context.sessionId.value,
-            argumentHash: requiredCapabilitiesArgumentHash(call, required),
+            argumentHash: requiredCapabilitiesArgumentHash(call, plan.requiredCapabilities),
             riskFlags: mergedApprovalFlags(
-                approvalRiskFlags(call, effective.capability),
-                metadata.assessment.flags
+                approvalRiskFlags(call, capability),
+                plan.approvalMetadata.assessment.flags
             ),
-            metadata: metadata
+            metadata: plan.approvalMetadata
         )
-        Result.Ok(
-            PreparedToolInvocation(
-                operationId,
-                call,
-                effective.capability,
-                effective.concurrency,
-                if (operation.status == OperationStatus.Approved) {
-                    PreparedAuthorization.Approved
-                } else {
-                    PreparedAuthorization.ApprovalRequired
-                },
-                approval: Some(request),
-                requiredCapabilities: required,
-                bindingHash: operation.requestDigest,
-                operationPlan: Some(plan)
-            )
-        )
-    }
-
-    private func replayAuthorization(
-        operationId: OperationId,
-        call: ToolCall
-    ): Result<ToolAuthorization> {
-        let receipt = match (operations.receipt(operationId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolAuthorization.Completed(
-                ToolResult(
-                    call.callId,
-                    receipt.detail,
-                    isError: receipt.isError,
-                    receiptId: operationId.value
-                )
-            )
-        )
-    }
-
-    private func outcomeToAuthorization(
-        outcome: Result<ToolInvocationResult>
-    ): Result<ToolAuthorization> {
-        match (outcome) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(ToolInvocationResult.Completed(result)) => Result.Ok(ToolAuthorization.Completed(result))
-            case Result.Ok(ToolInvocationResult.Denied(denial)) => Result.Ok(ToolAuthorization.Denied(denial))
-            case Result.Ok(ToolInvocationResult.NeedsApproval(_)) => Result.Err(
-                AgentError(
-                    AgentErrorKind.Internal,
-                    "tool.recovery_requested_approval",
-                    "recovering an executing tool cannot request approval"
-                )
-            )
-        }
+        Result.Ok(PreparedToolInvocation(
+            operationId,
+            call,
+            registration.descriptor.concurrency,
+            PreparedAuthorization.ApprovalRequired,
+            plan,
+            approval: Some(request)
+        ))
     }
 
     private func persistedGrantAllows(
@@ -1327,26 +1134,13 @@ public class ToolPipeline {
         metadata: ToolApprovalMetadata,
         requestedOperationId!: ?OperationId = None
     ): Result<ToolPreparation> {
-        let capability = descriptor.capability
-        let required = descriptor.requiredCapabilities()
         let operationId = match (requestedOperationId) {
             case Some(value) => value
             case None => ids.nextOperationId()
         }
         let plan = normalizedToolOperationPlan(context, call, descriptor)
-        let bindingHash = plan.bindingDigest
-        let record = OperationRecord(
-            operationId,
-            context.runId,
-            OperationStatus.Prepared,
-            capability,
-            bindingHash,
-            call: Some(call)
-        )
-        match (operations.prepare(record)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
+        let capability = primaryPlanCapability(plan)
+        let required = plan.requiredCapabilities
         let _ = appendAudit(
             context,
             "tool.approval_requested",
@@ -1358,7 +1152,7 @@ public class ToolPipeline {
             call.callId,
             call.name,
             capability,
-            preview: call.arguments,
+            preview: plan.canonicalArguments,
             sessionId: context.sessionId.value,
             argumentHash: requiredCapabilitiesArgumentHash(call, required),
             riskFlags: mergedApprovalFlags(
@@ -1370,38 +1164,12 @@ public class ToolPipeline {
         let prepared = PreparedToolInvocation(
             operationId,
             call,
-            capability,
             descriptor.concurrency,
             PreparedAuthorization.ApprovalRequired,
-            approval: Some(request),
-            requiredCapabilities: required,
-            bindingHash: bindingHash,
-            operationPlan: Some(plan)
+            plan,
+            approval: Some(request)
         )
         Result.Ok(ToolPreparation.NeedsApproval(prepared, request))
-    }
-
-    private func validateApprovalBinding(
-        context: ToolInvocationContext,
-        operation: OperationRecord,
-        call: ToolCall,
-        registration: ToolRegistration
-    ): Result<ToolDescriptor> {
-        let current = registration.descriptor.resolved(call)
-        if (operation.requestDigest != normalizedToolOperationPlan(
-            context,
-            call,
-            current
-        ).bindingDigest) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.approval_context_changed",
-                    "the resolved path, write action, risk, or capability changed after approval was requested"
-                )
-            )
-        }
-        Result.Ok(current)
     }
 
     private func prepareReady(
@@ -1417,26 +1185,12 @@ public class ToolPipeline {
             case Some(value) => value
             case None => ids.nextOperationId()
         }
-        let required = descriptor.requiredCapabilities()
         let plan = normalizedToolOperationPlan(context, call, descriptor)
-        let bindingHash = plan.bindingDigest
-        let record = OperationRecord(
-            operationId,
-            context.runId,
-            OperationStatus.Prepared,
-            capability,
-            bindingHash,
-            call: Some(call)
-        )
-        match (operations.prepare(record)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
         let _ = appendAudit(
             context,
             "tool.approval_bypassed",
             call,
-            capability,
+            primaryPlanCapability(plan),
             decisionSource: decisionSource,
             metadata: metadata
         )
@@ -1445,299 +1199,164 @@ public class ToolPipeline {
                 PreparedToolInvocation(
                     operationId,
                     call,
-                    capability,
                     descriptor.concurrency,
                     if (decisionSource == ApprovalDecisionSource.SessionGrant) {
                         PreparedAuthorization.SessionGrant
                     } else {
                         PreparedAuthorization.StaticPolicy
                     },
-                    requiredCapabilities: required,
-                    bindingHash: bindingHash,
-                    operationPlan: Some(plan)
+                    plan
+                )
                 )
             )
-        )
     }
 
     public func executePrepared(
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolInvocationResult> {
-        let operation = match (operations.find(prepared.operationId)) {
+        executePrepared(context, prepared, {_ => Result.Ok(())})
+    }
+
+    public func executePrepared(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
+        afterHandoff: (PreparedToolInvocation) -> Result<Unit>
+    ): Result<ToolInvocationResult> {
+        if (prepared.authorization == PreparedAuthorization.ApprovalRequired) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "tool.prepared_not_authorized",
+                "prepared tool invocation has not passed its approval barrier",
+                fields: [ErrorField("operation_id", prepared.operationId.value)]
+            ))
+        }
+        let storedPlan = match (operations.loadPlan(
+            prepared.operationId,
+            context.runId
+        )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (validatePreparedIdentity(context, prepared, operation)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
+        if (!sameNormalizedOperationPlan(storedPlan, prepared.operationPlan)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "tool.prepared_plan_changed",
+                "the canonical Operation plan changed before execution",
+                fields: [ErrorField("operation_id", prepared.operationId.value)]
+            ))
         }
-        match (operation.status) {
-            case OperationStatus.Committed => return replayOutcome(prepared.operationId, prepared.call)
-            case OperationStatus.Executing => return recoverExecuting(
-                context,
-                prepared.operationId,
-                prepared.call,
-                prepared.capability
-            )
-            case OperationStatus.RecoveryRequired => return Result.Err(
-                recoveryRequired(
-                    prepared.operationId,
-                    "tool operation requires explicit reconciliation before it can continue"
-                )
-            )
-            case OperationStatus.Failed => return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.operation_already_failed",
-                    "prepared tool operation already failed"
-                )
-            )
-            case _ => ()
+        match (operations.loadCommittedToolResult(prepared.operationId, context.runId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(Some(result)) =>
+                if (result.callId != prepared.call.callId) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "operation.semantic_replay_drift",
+                        "Operation already committed a different canonical ToolResult",
+                        fields: [ErrorField("operation_id", prepared.operationId.value)]
+                    ))
+                }
+                return Result.Ok(ToolInvocationResult.Completed(result))
+            case Result.Ok(None) => ()
         }
         let registration = match (catalog.findRegistered(prepared.call.name)) {
             case Some(value) => value
-            case None => return Result.Err(
-                AgentError(
-                    AgentErrorKind.RecoveryRequired,
-                    "tool.prepared_registration_missing",
-                    "prepared tool is no longer registered",
-                    fields: [ErrorField("tool", prepared.call.name)]
-                )
-            )
+            case None => return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "tool.prepared_registration_missing",
+                "prepared tool is no longer registered",
+                fields: [ErrorField("tool", prepared.call.name)]
+            ))
         }
         let current = registration.descriptor.resolved(prepared.call)
-        let currentRequired = current.requiredCapabilities()
-        if (requiredCapabilitiesArgumentHash(prepared.call, currentRequired) !=
-            requiredCapabilitiesArgumentHash(
-                prepared.call,
-                prepared.requiredCapabilities
-            )) {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.prepared_capability_changed",
-                    "the resolved capability changed after tool preparation"
-                )
-            )
+        let currentPlan = normalizedToolOperationPlan(context, prepared.call, current)
+        if (!sameNormalizedOperationPlan(currentPlan, storedPlan)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "tool.prepared_plan_changed",
+                "the resolved tool plan changed before execution",
+                fields: [ErrorField("operation_id", prepared.operationId.value)]
+            ))
         }
-        match (missingRequiredCapability(context, currentRequired)) {
-            case Some(missing) => return Result.Err(AgentError(
-                AgentErrorKind.PermissionDenied,
-                "tool.capability_denied",
-                "required capability is no longer granted at execution",
-                fields: [
-                    ErrorField("tool", prepared.call.name),
-                    ErrorField("capability", capabilityName(missing.kind)),
-                    ErrorField("resource", missing.resource)
-                ]
+        match (missingRequiredCapability(context, storedPlan.requiredCapabilities)) {
+            case Some(missing) => return Result.Ok(ToolInvocationResult.Denied(
+                ToolDenial(
+                    prepared.call.callId,
+                    prepared.call.name,
+                    AgentError(
+                        AgentErrorKind.PermissionDenied,
+                        "tool.capability_denied",
+                        "required capability is no longer granted at execution",
+                        fields: [
+                            ErrorField("tool", prepared.call.name),
+                            ErrorField("capability", capabilityName(missing.kind)),
+                            ErrorField("resource", missing.resource)
+                        ]
+                    )
+                )
             ))
             case None => ()
         }
-        if (operation.status == OperationStatus.Approved) {
-            match (validateApprovalBinding(context, operation, prepared.call, registration)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    let _ = operations.transition(
-                        prepared.operationId,
-                        OperationStatus.Approved,
-                        OperationStatus.Failed
-                    )
-                    return Result.Err(error)
-            }
-        }
-        let expected = match (operation.status) {
-            case OperationStatus.Committed => return replayOutcome(prepared.operationId, prepared.call)
-            case OperationStatus.Executing => return recoverExecuting(
-                context,
-                prepared.operationId,
-                prepared.call,
-                prepared.capability
-            )
-            case OperationStatus.RecoveryRequired => return Result.Err(
-                recoveryRequired(
-                    prepared.operationId,
-                    "tool operation requires explicit reconciliation before it can continue"
-                )
-            )
-            case OperationStatus.Failed => return Result.Err(
-                AgentError(
-                    AgentErrorKind.Conflict,
-                    "tool.operation_already_failed",
-                    "prepared tool operation already failed"
-                )
-            )
-            case OperationStatus.Approved =>
-                if (prepared.authorization != PreparedAuthorization.Approved) {
-                    return Result.Err(notAuthorized(prepared.operationId))
-                }
-                OperationStatus.Approved
-            case OperationStatus.Prepared =>
-                if (prepared.authorization != PreparedAuthorization.StaticPolicy &&
-                    prepared.authorization != PreparedAuthorization.SessionGrant) {
-                    return Result.Err(notAuthorized(prepared.operationId))
-                }
-                OperationStatus.Prepared
-        }
-        executePreparedRegistration(
-            context,
-            prepared,
-            expected,
-            registration
-        )
-    }
-
-    private func executePreparedRegistration(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation,
-        expected: OperationStatus,
-        registration: ToolRegistration
-    ): Result<ToolInvocationResult> {
-        let operationId = prepared.operationId
-        let call = prepared.call
-        match (operations.transition(
-            operationId,
-            expected,
-            OperationStatus.Executing
+        match (operations.markExecuting(
+            prepared.operationId,
+            context.runId,
+            storedPlan,
+            agentUtcMillis(),
+            prepared.authorization == PreparedAuthorization.Approved
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        let execution = registration.executor.execute(context, call)
-        let result = match (execution) {
+        match (operations.markExecutionHandoff(
+            prepared.operationId,
+            context.runId,
+            ThreadId(context.sessionId.value),
+            agentUtcMillis()
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (afterHandoff(prepared)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let execution = match (registration.executor.execute(context, prepared)) {
             case Result.Ok(value) =>
-                if (value.callId != call.callId) {
-                    let error = AgentError(
+                if (value.callId != prepared.call.callId) {
+                    return Result.Err(AgentError(
                         AgentErrorKind.Internal,
                         "tool.result_call_mismatch",
                         "tool executor returned a result for a different call id"
-                    )
-                    let _ = operations.transition(
-                        operationId,
-                        OperationStatus.Executing,
-                        OperationStatus.Failed
-                    )
-                    return Result.Err(error)
+                    ))
                 }
                 value
             case Result.Err(error) =>
                 if (recoverableExecutorError(error)) {
-                    recoverableToolResult(call, error)
-                } else {
-                    let _ = operations.transition(
-                        operationId,
-                        OperationStatus.Executing,
-                        OperationStatus.Failed
-                    )
-                    let _ = appendAudit(
-                        context,
-                        "tool.failed",
-                        call,
-                        prepared.capability
-                    )
-                    return Result.Err(error)
+                    return Result.Ok(ToolInvocationResult.Completed(
+                        recoverableToolResult(
+                            prepared.call,
+                            error,
+                            receiptId: prepared.operationId.value
+                        )
+                    ))
                 }
+                return Result.Err(error)
         }
-        let receipt = OperationReceipt(
-            operationId,
-            true,
-            result.output,
-            isError: result.isError
-        )
-        match (operations.saveReceipt(receipt)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) =>
-                let _ = operations.transition(
-                    operationId,
-                    OperationStatus.Executing,
-                    OperationStatus.RecoveryRequired
-                )
-                return Result.Err(
-                    recoveryRequired(
-                        operationId,
-                        "tool execution completed but its receipt could not be persisted",
-                        cause: error.code
-                    )
-                )
-        }
-        match (operations.transition(
-            operationId,
-            OperationStatus.Executing,
-            OperationStatus.Committed
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(
-                recoveryRequired(
-                    operationId,
-                    "tool receipt was persisted but the committed state could not be finalized",
-                    cause: error.code
-                )
+        Result.Ok(ToolInvocationResult.Completed(
+            ToolResult(
+                prepared.call.callId,
+                execution.output,
+                isError: execution.isError,
+                receiptId: if (execution.receiptId == "") {
+                    prepared.operationId.value
+                } else {
+                    execution.receiptId
+                }
             )
-        }
-        let _ = appendAudit(
-            context,
-            if (result.isError) { "tool.completed_with_error" } else { "tool.committed" },
-            call,
-            prepared.capability
-        )
-        Result.Ok(
-            ToolInvocationResult.Completed(
-                ToolResult(
-                    call.callId,
-                    result.output,
-                    isError: result.isError,
-                    receiptId: operationId.value
-                )
-            )
-        )
+        ))
     }
 
-    private func replayOutcome(
-        operationId: OperationId,
-        call: ToolCall
-    ): Result<ToolInvocationResult> {
-        let receipt = match (operations.receipt(operationId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolInvocationResult.Completed(
-                ToolResult(
-                    call.callId,
-                    receipt.detail,
-                    isError: receipt.isError,
-                    receiptId: operationId.value
-                )
-            )
-        )
-    }
-
-    private func notAuthorized(operationId: OperationId): AgentError {
-        AgentError(
-            AgentErrorKind.PermissionDenied,
-            "tool.prepared_not_authorized",
-            "prepared tool invocation has not passed its approval barrier",
-            fields: [ErrorField("operation_id", operationId.value)]
-        )
-    }
-
-    private func recoveryRequired(
-        operationId: OperationId,
-        message: String,
-        cause!: String = ""
-    ): AgentError {
-        let fields = ArrayList<ErrorField>()
-        fields.add(ErrorField("operation_id", operationId.value))
-        if (cause != "") {
-            fields.add(ErrorField("cause", cause))
-        }
-        AgentError(
-            AgentErrorKind.RecoveryRequired,
-            "tool.operation_recovery_required",
-            message,
-            fields: fields.toArray()
-        )
-    }
 
     private func appendAudit(
         context: ToolInvocationContext,
@@ -1835,8 +1454,24 @@ class MemoryApprovalGrant {
     }
 }
 
-func requestDigest(call: ToolCall): String {
-    approvalHash(call.name + "\u{001f}" + call.callId + "\u{001f}" + canonicalApprovalValue(call.arguments))
+public func networkPolicyForToolCall(call: ToolCall): Result<NetworkPolicy> {
+    if (call.arguments.unifiedKind != ValueKind.Object) {
+        return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+    match (call.arguments.field("network")) {
+        case Some(value) => parseNetworkPolicy(value)
+        case None => Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+    }
+}
+
+func networkPolicyForNormalizedCall(
+    call: ToolCall,
+    descriptor: ToolDescriptor
+): NetworkPolicy {
+    match (descriptor.networkPolicy(call)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalArgumentException(error.message)
+    }
 }
 
 public func normalizedToolOperationPlan(
@@ -1844,7 +1479,9 @@ public func normalizedToolOperationPlan(
     call: ToolCall,
     descriptor: ToolDescriptor
 ): NormalizedOperationPlan {
-    let required = descriptor.requiredCapabilities()
+    let networkPolicy = networkPolicyForNormalizedCall(call, descriptor)
+    let canonicalArguments = canonicalToolArguments(call.arguments)
+    let required = descriptor.requiredCapabilities(call)
     let paths = ArrayList<String>()
     let hosts = ArrayList<String>()
     let capabilities = ArrayList<AgentValue>()
@@ -1895,10 +1532,11 @@ public func normalizedToolOperationPlan(
     }
     let bindingValue = objectValue([
         ValueField("tool", textValue(call.name)),
-        ValueField("arguments", call.arguments),
+        ValueField("arguments", canonicalArguments),
         ValueField("capabilities", listValue(capabilities.toArray())),
         ValueField("paths", operationStringList(paths.toArray())),
         ValueField("hosts", operationStringList(hosts.toArray())),
+        ValueField("network", networkPolicyCanonicalValue(networkPolicy)),
         ValueField("cwd", textValue(cwd)),
         ValueField("environment", objectValue(environment.toArray())),
         ValueField("approval", objectValue([
@@ -1924,16 +1562,118 @@ public func normalizedToolOperationPlan(
     ])
     NormalizedOperationPlan(
         call.name,
-        call.arguments,
+        canonicalArguments,
         required,
         effect,
         retry,
         approvalHash(canonicalApprovalValue(bindingValue)),
         resolvedPaths: paths.toArray(),
+        networkPolicy: Some(networkPolicy),
         resolvedHosts: hosts.toArray(),
         cwd: cwd,
-        relevantEnvironment: environment.toArray()
+        relevantEnvironment: environment.toArray(),
+        approvalMetadata: Some(metadata)
     )
+}
+func primaryPlanCapability(plan: NormalizedOperationPlan): Capability {
+    if (plan.requiredCapabilities.isEmpty()) {
+        Capability(CapabilityKind.WorkspaceRead)
+    } else {
+        plan.requiredCapabilities[0]
+    }
+}
+
+func sameNormalizedOperationPlan(
+    left: NormalizedOperationPlan,
+    right: NormalizedOperationPlan
+): Bool {
+    left.toolName == right.toolName &&
+        canonicalApprovalValue(left.canonicalArguments) == canonicalApprovalValue(right.canonicalArguments) &&
+        sameStringArray(left.resolvedPaths, right.resolvedPaths) &&
+        sameStringArray(left.resolvedHosts, right.resolvedHosts) &&
+        canonicalApprovalValue(networkPolicyCanonicalValue(left.networkPolicy)) ==
+            canonicalApprovalValue(networkPolicyCanonicalValue(right.networkPolicy)) &&
+        left.cwd == right.cwd &&
+        canonicalApprovalValue(objectValue(left.relevantEnvironment)) ==
+            canonicalApprovalValue(objectValue(right.relevantEnvironment)) &&
+        sameCapabilities(left.requiredCapabilities, right.requiredCapabilities) &&
+        sameApprovalMetadata(left.approvalMetadata, right.approvalMetadata) &&
+        left.effectClass == right.effectClass &&
+        left.retryDisposition == right.retryDisposition &&
+        left.idempotencyKey == right.idempotencyKey &&
+        left.bindingDigest == right.bindingDigest &&
+        sameReplayDisposition(left.replayDisposition, right.replayDisposition) &&
+        left.implementation.toolId == right.implementation.toolId &&
+        left.implementation.toolVersion == right.implementation.toolVersion &&
+        left.implementation.implementationFingerprint ==
+            right.implementation.implementationFingerprint &&
+        left.implementation.schemaDigest == right.implementation.schemaDigest &&
+        left.implementation.effectiveArgumentsDigest ==
+            right.implementation.effectiveArgumentsDigest &&
+        left.implementation.replayContractVersion ==
+            right.implementation.replayContractVersion
+}
+
+func sameStringArray(left: Array<String>, right: Array<String>): Bool {
+    if (left.size != right.size) { return false }
+    for (index in 0..left.size where left[index] != right[index]) {
+        return false
+    }
+    true
+}
+
+func sameCapabilities(left: Array<Capability>, right: Array<Capability>): Bool {
+    if (left.size != right.size) { return false }
+    for (index in 0..left.size) {
+        if (left[index].kind != right[index].kind ||
+            left[index].resource != right[index].resource) {
+            return false
+        }
+    }
+    true
+}
+
+func sameApprovalMetadata(
+    left: ToolApprovalMetadata,
+    right: ToolApprovalMetadata
+): Bool {
+    left.capabilityLabel == right.capabilityLabel &&
+        left.assessment.level == right.assessment.level &&
+        sameStringArray(left.assessment.flags, right.assessment.flags) &&
+        sameStringArray(left.assessment.reasons, right.assessment.reasons) &&
+        left.grantScope.capability == right.grantScope.capability &&
+        left.grantScope.pathPrefix == right.grantScope.pathPrefix &&
+        left.grantScope.toolName == right.grantScope.toolName &&
+        left.grantScope.host == right.grantScope.host &&
+        left.grantScope.sessionOnly == right.grantScope.sessionOnly
+}
+
+func sameReplayDisposition(
+    left: ReplayDisposition,
+    right: ReplayDisposition
+): Bool {
+    match ((left, right)) {
+        case (ReplayDisposition.Pure, ReplayDisposition.Pure) => true
+        case (ReplayDisposition.SafeReplay, ReplayDisposition.SafeReplay) => true
+        case (ReplayDisposition.Idempotent(a), ReplayDisposition.Idempotent(b)) => a == b
+        case (ReplayDisposition.RecoverByProbe(a), ReplayDisposition.RecoverByProbe(b)) =>
+            a.value == b.value
+        case (ReplayDisposition.Compensatable(a), ReplayDisposition.Compensatable(b)) =>
+            a.value == b.value
+        case (ReplayDisposition.AtMostOnce, ReplayDisposition.AtMostOnce) => true
+        case (ReplayDisposition.NeverReplay, ReplayDisposition.NeverReplay) => true
+        case _ => false
+    }
+}
+
+func canonicalToolArguments(arguments: AgentValue): AgentValue {
+    let fields = ArrayList<ValueField>()
+    if (arguments.unifiedKind == ValueKind.Object) {
+        for (field in arguments.fields) {
+            fields.add(field)
+        }
+    }
+    objectValue(fields.toArray())
 }
 
 func addUniqueOperationResource(values: ArrayList<String>, candidate: String): Unit {
@@ -2201,12 +1941,12 @@ func canonicalApprovalValue(value: AgentValue): String {
     match (value.unifiedKind) {
         case ValueKind.Null => "null"
         case ValueKind.Boolean =>
-            if (value.boolean) {
+            if (value.asBool()) {
                 "true"
             } else {
                 "false"
             }
-        case ValueKind.Number => value.number
+        case ValueKind.Number => value.asNumberText()
         case ValueKind.Text => "t:" + value.text
         case ValueKind.List =>
             var text = "["

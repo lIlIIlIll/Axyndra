@@ -10,4 +10,5 @@
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
+  "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }

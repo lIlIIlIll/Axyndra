@@ -91,6 +91,11 @@ For a DeepSeek Responses agent loop, use:
 
 Other API ids are `openai_responses` and `anthropic_messages`. Ambiguous or incompatible combinations fail closed. Secrets remain credential references or resolved runtime values; they are not copied into model requests, sessions, or diagnostics.
 
+Provider Profile URLs use HTTPS by default; loopback HTTP remains available for local fixtures
+and local gateways. A profile may set `allow_insecure_http: true` to connect to a remote
+HTTP-only endpoint. This opt-in exposes credentials and request contents to the network and
+produces a startup warning.
+
 Profiles and models may declare typed `default_headers` entries such as
 `["x-route: canary"]`. Header precedence is profile, then model, then adapter-owned
 request headers. Authentication and transport-control headers are not part of that

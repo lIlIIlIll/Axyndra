@@ -43,10 +43,20 @@ func verifyLocalProcessContracts(root: String): Unit {
     let context = ToolInvocationContext(RunId("local-curl"), SessionId("local-curl"),
         CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)]))
     for (provider in ["brave", "tavily", "searxng"]) {
-        expect(local.executeSelected(context, searchCall(provider, "curl-config"), provider).isOk(),
+        expect(invokeSelectedResult(
+            local,
+            context,
+            searchCall(provider, "curl-config"),
+            provider,
+            "local-" + provider
+        ).isOk(),
             "local provider request completed")
     }
-    let processes = LocalProcessPort(LocalWorkspace(root), sandboxEnabled: true)
+    let processes = LocalProcessPort(
+        LocalWorkspace(root),
+        sandboxEnabled: true,
+        sandboxCaBundle: "/etc/ssl/certs/ca-certificates.crt"
+    )
     let runtime = ProductWebSearchRuntime(CurlWebSearchTransport(processes), root)
     setVariable("SEARXNG_URL", endpoint + "/slow")
     let owned = ToolInvocationContext(RunId("slow-owned"), SessionId("slow-owned"),
@@ -76,9 +86,9 @@ func verifyLocalProcessContracts(root: String): Unit {
         while (heartbeatProcess.stdOutPipe.read(buffer) > 0) {}
         let _ = heartbeatProcess.wait()
     }
-    let first = spawn { runtime.executeSelected(owned, searchCall("same-call", "first"), "searxng") }
-    let second = spawn { runtime.executeSelected(owned, searchCall("same-call", "second"), "searxng") }
-    let third = spawn { try { runtime.executeSelected(other, searchCall("same-call", "other"), "searxng") }
+    let first = spawn { invokeSelected(runtime, owned, searchCall("same-call", "first"), "searxng", "local-first") }
+    let second = spawn { invokeSelected(runtime, owned, searchCall("same-call", "second"), "searxng", "local-second") }
+    let third = spawn { try { invokeSelected(runtime, other, searchCall("same-call", "other"), "searxng", "local-other") }
         finally { otherDone.store(true) } }
     try {
         let markersStarted = MonoTime.now()
@@ -99,7 +109,7 @@ func verifyLocalProcessContracts(root: String): Unit {
         runtime.cancel(owned.runId).value().getOrThrow()
         let firstResult = first.get()
         let secondResult = second.get()
-        expect(firstResult.isError() && secondResult.isError(),
+        expect(firstResult.isError && secondResult.isError,
             "run cancellation stops every matching curl operation")
         expect(!otherDone.load(),
             "same call IDs remain isolated across runs and calls")
@@ -119,7 +129,13 @@ func verifyLocalProcessContracts(root: String): Unit {
     let _ = source.cancel()
     let cancelled = ToolInvocationContext(RunId("early-web"), SessionId("early-web"),
         CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)]), cancellation: source.token)
-    expect(runtime.executeSelected(cancelled, searchCall("early", "early"), "searxng").isError(),
+    expect(invocationFailedSelected(
+        runtime,
+        cancelled,
+        searchCall("early", "early"),
+        "searxng",
+        "local-early"
+    ),
         "early cancellation rejects provider launch")
     expect(!exists(Path(fixtureRoot + "/early")), "early cancellation sends no provider request")
     expect(runtime.cancel(owned.runId).isOk(), "completed web operations release cancellation registrations")

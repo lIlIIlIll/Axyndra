@@ -2,6 +2,7 @@ package agent_product
 
 import agent_domain.*
 import std.collection.*
+import std.deriving.*
 import std.convert.*
 import std.env.*
 import std.fs.*
@@ -11,10 +12,38 @@ import std.time.*
 
 let productConfigLockSequence = AtomicInt64(0)
 
+@Derive[Equatable]
+public enum ShellNetworkMode {
+    Restricted | Proxy | TrustedHost
+}
+
+public func parseShellNetworkMode(value: String): Result<ShellNetworkMode> {
+    match (value.trimAscii().toAsciiLower()) {
+        case "restricted" => Result.Ok(ShellNetworkMode.Restricted)
+        case "proxy" => Result.Ok(ShellNetworkMode.Proxy)
+        case "trusted-host" => Result.Ok(ShellNetworkMode.TrustedHost)
+        case _ => Result.Err(AgentError(
+            AgentErrorKind.Configuration,
+            "config.invalid",
+            "shell.network_mode must be restricted, proxy, or trusted-host"
+        ))
+    }
+}
+
+public func shellNetworkModeName(mode: ShellNetworkMode): String {
+    match (mode) {
+        case ShellNetworkMode.Restricted => "restricted"
+        case ShellNetworkMode.Proxy => "proxy"
+        case ShellNetworkMode.TrustedHost => "trusted-host"
+    }
+}
+
 public class ProductSettings {
     public let model: String
     public let asyncEnabled: Bool
     public let theme: String
+    public let shellNetworkMode: ShellNetworkMode
+    public let sandboxCaBundle: String
 
     public let approval: ProductApprovalSettings
     public let compaction: ProductCompactionSettings
@@ -23,6 +52,8 @@ public class ProductSettings {
         model!: String = "",
         asyncEnabled!: Bool = true,
         theme!: String = "axyndra",
+        shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
+        sandboxCaBundle!: String = "",
         approval!: ProductApprovalSettings = ProductApprovalSettings(),
         compaction!: ProductCompactionSettings = ProductCompactionSettings()
     ) {
@@ -30,6 +61,8 @@ public class ProductSettings {
         this.asyncEnabled = asyncEnabled
         this.approval = approval
         this.compaction = compaction
+        this.shellNetworkMode = shellNetworkMode
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         this.theme = if (theme.trimAscii() == "") {
             "axyndra"
         } else {
@@ -277,6 +310,7 @@ public class ProviderProfile {
     public let protocol: String
     public let baseUrl: String
     public let apiKeyEnv: String
+    public let allowInsecureHttp: Bool
     public let authentication: String
     public let timeoutMillis: Int64
     public let dialect: String
@@ -289,6 +323,7 @@ public class ProviderProfile {
         protocol: String,
         baseUrl: String,
         apiKeyEnv: String,
+        allowInsecureHttp!: Bool = false,
         authentication!: String = "api-key",
         timeoutMillis!: Int64 = 120000,
         dialect!: String = "",
@@ -311,9 +346,10 @@ public class ProviderProfile {
             "chat-completions") {
             throw IllegalArgumentException("provider profile protocol must be messages, responses, or completions")
         }
-        if (!secureProviderProfileUrl(baseUrl)) {
+        if (!secureProviderProfileUrl(baseUrl, allowInsecureHttp: allowInsecureHttp)) {
             throw IllegalArgumentException(
-                "provider profile base URL must use HTTPS or loopback HTTP"
+                "provider profile base URL must use HTTPS or loopback HTTP; " +
+                    "set allow_insecure_http: true to opt in to remote HTTP"
             )
         }
         if (timeoutMillis < 1) {
@@ -345,6 +381,7 @@ public class ProviderProfile {
         this.protocol = protocol
         this.baseUrl = baseUrl.removeSuffix("/")
         this.apiKeyEnv = apiKeyEnv
+        this.allowInsecureHttp = allowInsecureHttp
         this.authentication = authentication
         this.timeoutMillis = timeoutMillis
         this.dialect = dialect
@@ -353,18 +390,24 @@ public class ProviderProfile {
     }
 }
 
-func secureProviderProfileUrl(value: String): Bool {
+func secureProviderProfileUrl(
+    value: String,
+    allowInsecureHttp!: Bool = false
+): Bool {
     if (value.startsWith("https://")) {
         let authority = providerProfileUrlAuthority(value, "https://")
         return authority != "" && authority.trimAscii() == authority &&
             authority.indexOf("@").isNone()
     }
     if (!value.startsWith("http://")) { return false }
-    providerProfileLoopbackAuthority(
-        providerProfileUrlAuthority(value, "http://")
-    )
-}
+    let authority = providerProfileUrlAuthority(value, "http://")
+    if (providerProfileLoopbackAuthority(authority)) {
+        return true
+    }
+    if (!allowInsecureHttp) { return false }
+    authority != "" && authority.trimAscii() == authority && authority.indexOf("@").isNone()
 
+}
 func providerProfileUrlAuthority(value: String, prefix: String): String {
     let remainder = value[prefix.size..]
     var end = remainder.size
@@ -679,26 +722,45 @@ public func loadProductSettings(root: String): Result<ProductSettings> {
     }
     try {
         let source = String.fromUtf8(File.readFrom(path))
-        validateProductConfigKeys(source)
+        validateProductConfigSource(source)
         Result.Ok(
             ProductSettings(
                 model: topLevelSetting(source, "default_model"),
                 asyncEnabled: parseAsyncEnabled(source),
                 theme: topLevelSetting(source, "theme"),
+                shellNetworkMode: parseShellNetworkModeSource(source),
+                sandboxCaBundle: parseSandboxCaBundleSource(source),
                 approval: parseApprovalSettings(source),
                 compaction: parseCompactionSettings(source)
             )
         )
     } catch (error: Exception) {
+        let code = if (error.message.startsWith("config.unsupported_version")) {
+            "config.unsupported_version"
+        } else {
+            "config.invalid"
+        }
         Result.Err(
             AgentError(
                 AgentErrorKind.Configuration,
-                "config.invalid",
+                code,
                 "cannot read product configuration: " + error.message,
                 fields: [ErrorField("path", path)]
             )
         )
     }
+}
+
+func parseShellNetworkModeSource(source: String): ShellNetworkMode {
+    let value = parseNestedProductConfigScalar(source, "shell", "network_mode", "restricted")
+    match (parseShellNetworkMode(value)) {
+        case Result.Ok(mode) => mode
+        case Result.Err(error) => throw IllegalArgumentException(error.message)
+    }
+}
+
+func parseSandboxCaBundleSource(source: String): String {
+    parseNestedProductConfigScalar(source, "sandbox", "ca_bundle", "")
 }
 
 // Apply all edits as one read/validate/patch/write transaction. The source is
@@ -723,7 +785,7 @@ public func updateProductConfig(
     }
     try {
         let path = root + "/config.yml"
-        let source = try {
+        var source = try {
             if (exists(Path(path))) {
                 String.fromUtf8(File.readFrom(path))
             } else {
@@ -736,13 +798,19 @@ public func updateProductConfig(
                 path
             ))
         }
-        // Future keys are ignored by the typed reader, while malformed values
-        // for fields we do understand remain hard failures.
+        if (source.trimAscii() == "") {
+            source = "schema_version: 1\n"
+        }
         try {
             validateProductConfigSource(source)
         } catch (error: Exception) {
+            let code = if (error.message.startsWith("config.unsupported_version")) {
+                "config.unsupported_version"
+            } else {
+                "config.invalid"
+            }
             return Result.Err(productConfigMutationError(
-                "config.invalid",
+                code,
                 "cannot read product configuration: " + error.message,
                 path
             ))
@@ -754,8 +822,13 @@ public func updateProductConfig(
         try {
             validateProductConfigSource(updated)
         } catch (error: Exception) {
+            let code = if (error.message.startsWith("config.unsupported_version")) {
+                "config.unsupported_version"
+            } else {
+                "config.invalid"
+            }
             return Result.Err(productConfigMutationError(
-                "config.invalid",
+                code,
                 "cannot write invalid product configuration: " + error.message,
                 path
             ))
@@ -768,11 +841,97 @@ public func updateProductConfig(
 
 func validateProductConfigSource(source: String): Unit {
     validateProductConfigKeys(source)
+    validateProductSchemaVersion(source)
     _ = topLevelSetting(source, "default_model")
     _ = topLevelSetting(source, "theme")
     _ = parseAsyncEnabled(source)
+    _ = parseShellNetworkModeSource(source)
+    _ = parseSandboxCaBundleSource(source)
     _ = parseApprovalSettings(source)
     _ = parseCompactionSettings(source)
+}
+
+func validateProductSchemaVersion(source: String): Unit {
+    if (source.trimAscii() == "") {
+        return
+    }
+    var count = 0
+    var value = ""
+    for (line in source.split("\n")) {
+        let trimmed = line.trimAscii()
+        if (trimmed == "" || trimmed.startsWith("#") || yamlIndent(line) != 0) {
+            continue
+        }
+        let separator = trimmed.indexOf(":")
+        if (separator.isNone()) {
+            continue
+        }
+        let key = trimmed[..separator.getOrThrow()].trimAscii()
+        if (key != "schema_version") {
+            continue
+        }
+        count += 1
+        value = yamlScalar(stripInlineYamlComment(
+            trimmed[separator.getOrThrow() + 1..].trimAscii()
+        ))
+    }
+    if (count == 0) {
+        throw IllegalArgumentException("config.unsupported_version: schema_version is required")
+    }
+    if (count != 1 || value != "1") {
+        throw IllegalArgumentException("config.unsupported_version: schema_version must be 1")
+    }
+}
+
+func parseNestedProductConfigScalar(
+    source: String,
+    section: String,
+    expected: String,
+    fallback: String
+): String {
+    var inSection = false
+    var sectionCount = 0
+    var found = false
+    var result = fallback
+    for (line in source.split("\n")) {
+        let trimmed = line.trimAscii()
+        if (trimmed == "" || trimmed.startsWith("#")) {
+            continue
+        }
+        let indent = yamlIndent(line)
+        let separator = trimmed.indexOf(":")
+        if (separator.isNone()) {
+            continue
+        }
+        let key = trimmed[..separator.getOrThrow()].trimAscii()
+        let rawValue = stripInlineYamlComment(trimmed[separator.getOrThrow() + 1..].trimAscii())
+        if (indent == 0) {
+            inSection = key == section
+            if (inSection) {
+                sectionCount += 1
+                if (rawValue != "") {
+                    throw IllegalArgumentException(section + " must be a mapping")
+                }
+            }
+            continue
+        }
+        if (!inSection || indent != 2) {
+            continue
+        }
+        if (key == expected) {
+            if (found) {
+                throw IllegalArgumentException("duplicate config key '" + section + "." + expected + "'")
+            }
+            found = true
+            result = yamlScalar(rawValue)
+        } else {
+            throw IllegalArgumentException("unknown config key '" + section + "." + key + "'")
+        }
+    }
+    if (sectionCount > 1) {
+        throw IllegalArgumentException("duplicate config section '" + section + "'")
+    }
+    result
 }
 
 class ProductConfigYamlLine {
@@ -1183,8 +1342,8 @@ func validateProductConfigKeys(source: String): Unit {
                     "' is not supported in config.yml; use providers.yml and models.yml"
             )
         }
-        if (key == "async" || key == "approval" || key == "compaction" || key == "model_roles" || key ==
-            "modelRoles") {
+        if (key == "async" || key == "approval" || key == "compaction" || key == "model_roles" ||
+            key == "modelRoles" || key == "shell" || key == "sandbox") {
             let value = stripInlineYamlComment(trimmed[separator.getOrThrow() + 1..].trimAscii())
             if (value != "") {
                 throw IllegalArgumentException(key + " must be a mapping")
@@ -1560,16 +1719,29 @@ func encodeProductSettings(
     model: String,
     asyncEnabled: Bool,
     theme!: String = "axyndra",
+    shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
+    sandboxCaBundle!: String = "",
     approval!: ProductApprovalSettings = ProductApprovalSettings(),
     compaction!: ProductCompactionSettings = ProductCompactionSettings()
 ): String {
-    var result = "default_model: " + configYamlQuote(model) + "\n" + "theme: " + configYamlQuote(theme) + "\n" + "async:\n" +
-        "  enabled: " + asyncEnabled.toString() + "\n" + "approval:\n" + "  mode: " + approvalRoutingModeName(
-        approval.mode) + "\n" + "  failure_policy: " + approvalFailurePolicyName(approval.failurePolicy) + "\n" +
-        "  timeout_ms: " + approval.timeoutMillis.toString() + "\n" + "  log_decisions: " +
-        approval.logDecisions.toString() + "\n" + "  reviewer_model: " + configYamlQuote(approval.reviewerModel) + "\n" +
-        "  reasoning_effort: " + thinkingConfigName(approval.reasoning) + "\n" + "  allow_workspace_writes: " +
-        approval.allowWorkspaceWrites.toString() + "\n" + "  ask_on_network: " + approval.askOnNetwork.toString() + "\n" +
+    var result = "schema_version: 1\n" +
+        "default_model: " + configYamlQuote(model) + "\n" +
+        "theme: " + configYamlQuote(theme) + "\n" +
+        "shell:\n" +
+        "  network_mode: " + shellNetworkModeName(shellNetworkMode) + "\n" +
+        "sandbox:\n" +
+        "  ca_bundle: " + configYamlQuote(sandboxCaBundle) + "\n" +
+        "async:\n" +
+        "  enabled: " + asyncEnabled.toString() + "\n" +
+        "approval:\n" +
+        "  mode: " + approvalRoutingModeName(approval.mode) + "\n" +
+        "  failure_policy: " + approvalFailurePolicyName(approval.failurePolicy) + "\n" +
+        "  timeout_ms: " + approval.timeoutMillis.toString() + "\n" +
+        "  log_decisions: " + approval.logDecisions.toString() + "\n" +
+        "  reviewer_model: " + configYamlQuote(approval.reviewerModel) + "\n" +
+        "  reasoning_effort: " + thinkingConfigName(approval.reasoning) + "\n" +
+        "  allow_workspace_writes: " + approval.allowWorkspaceWrites.toString() + "\n" +
+        "  ask_on_network: " + approval.askOnNetwork.toString() + "\n" +
         "  ask_on_outside_workspace_write: " + approval.askOnOutsideWorkspaceWrite.toString() + "\n" +
         "  ask_on_destructive_commands: " + approval.askOnDestructiveCommands.toString() + "\n" +
         "compaction:\n" +
@@ -1954,6 +2126,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
         var dialect = ""
         var endpointMaxOutputTokens: ?Int64 = None
         var defaultHeaders: Array<ProviderDefaultHeader> = []
+        var allowInsecureHttp = false
         for (line in String.fromUtf8(File.readFrom(path)).split("\n")) {
             let trimmed = line.trimAscii()
             if (trimmed.startsWith("- id:")) {
@@ -1967,6 +2140,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                     authentication,
                     timeoutMillis,
                     dialect,
+                    allowInsecureHttp,
                     endpointMaxOutputTokens,
                     defaultHeaders
                 )
@@ -1978,6 +2152,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                 authentication = "api-key"
                 timeoutMillis = 120000
                 dialect = ""
+                allowInsecureHttp = false
                 endpointMaxOutputTokens = None
                 defaultHeaders = []
             } else if (trimmed.startsWith("provider:")) {
@@ -1997,6 +2172,11 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
                 )
             } else if (trimmed.startsWith("dialect:")) {
                 dialect = yamlScalar(trimmed[8..].trimAscii())
+            } else if (trimmed.startsWith("allow_insecure_http:")) {
+                allowInsecureHttp = parseConfigBool(
+                    "allow_insecure_http",
+                    yamlScalar(trimmed[20..].trimAscii())
+                )
             } else if (trimmed.startsWith("endpoint_max_output_tokens:")) {
                 endpointMaxOutputTokens = parseCatalogInteger(
                     yamlScalar(trimmed[27..].trimAscii()),
@@ -2019,6 +2199,7 @@ public func loadProviderProfiles(root: String): Result<Array<ProviderProfile>> {
             authentication,
             timeoutMillis,
             dialect,
+            allowInsecureHttp,
             endpointMaxOutputTokens,
             defaultHeaders
         )
@@ -2210,6 +2391,7 @@ func appendProviderProfile(
     authentication: String,
     timeoutMillis: Int64,
     dialect: String,
+    allowInsecureHttp: Bool,
     endpointMaxOutputTokens: ?Int64,
     defaultHeaders: Array<ProviderDefaultHeader>
 ): Unit {
@@ -2230,6 +2412,7 @@ func appendProviderProfile(
             authentication: authentication,
             timeoutMillis: timeoutMillis,
             dialect: dialect,
+            allowInsecureHttp: allowInsecureHttp,
             endpointMaxOutputTokens: endpointMaxOutputTokens,
             defaultHeaders: defaultHeaders
         )
@@ -2244,6 +2427,9 @@ func encodeProviderProfiles(values: Array<ProviderProfile>): String {
             value.baseUrl) + "\n" + "    api_key_env: " + configYamlQuote(value.apiKeyEnv) + "\n" +
             "    authentication: " + configYamlQuote(value.authentication) + "\n" + "    timeout_millis: " +
             value.timeoutMillis.toString() + "\n"
+        if (value.allowInsecureHttp) {
+            source += "    allow_insecure_http: true\n"
+        }
         if (value.dialect != "") {
             source += "    dialect: " + configYamlQuote(value.dialect) + "\n"
         }

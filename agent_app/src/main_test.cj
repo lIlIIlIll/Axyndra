@@ -442,7 +442,7 @@ class ProductTuiBackendMcpStatusTests {
             Directory.create(workspace, recursive: true)
             File.writeTo(
                 settings + "/config.yml",
-                "default_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
+                "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
             )
             File.writeTo(
                 settings + "/models.yml",

@@ -345,6 +345,6 @@ public class DapClient {
 }
 
 func textField(value: JsonNode, name: String): String { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Text) { item.text } else { "" }; case None => "" } }
-func integerField(value: JsonNode, name: String, fallback: Int64): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }; case None => fallback } }
-func boolField(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.boolean } else { fallback }; case None => fallback } }
+func integerField(value: JsonNode, name: String, fallback: Int64): Int64 { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.asNumberText()) } catch (_: Exception) { fallback } } else { fallback }; case None => fallback } }
+func boolField(value: JsonNode, name: String, fallback: Bool): Bool { match (value.field(name)) { case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Boolean) { item.asBool() } else { fallback }; case None => fallback } }
 func objectField(value: JsonNode, name: String): JsonNode { match (value.field(name)) { case Some(item) => item; case None => jsonObject([]) } }

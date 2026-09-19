@@ -250,9 +250,16 @@ class CheckpointTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.checkpoint(context, call)
+        runtime.checkpoint(
+            context,
+            ToolCall(
+                prepared.call.callId,
+                prepared.call.name,
+                prepared.operationPlan.canonicalArguments
+            )
+        )
     }
 }
 
@@ -263,9 +270,16 @@ class RewindTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.rewind(context, call)
+        runtime.rewind(
+            context,
+            ToolCall(
+                prepared.call.callId,
+                prepared.call.name,
+                prepared.operationPlan.canonicalArguments
+            )
+        )
     }
 
     public func afterResultPersisted(

@@ -556,7 +556,7 @@ func fieldText(value: JsonNode, name: String): String {
 func fieldInt(value: JsonNode, name: String): Int64 {
     match (value.field(name)) {
         case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) {
-            try { Int64.parse(item.number) } catch (_: Exception) { 0 }
+            try { Int64.parse(item.asNumberText()) } catch (_: Exception) { 0 }
         } else { 0 }
         case None => 0
     }

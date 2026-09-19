@@ -658,8 +658,14 @@ class MemoryRetainTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.retain(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.retain(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 func memoryV3AddContextHits(
@@ -769,8 +775,14 @@ class MemoryRecallTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.recall(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.recall(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 class MemoryReflectTool <: ToolExecutor {
@@ -778,8 +790,14 @@ class MemoryReflectTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.reflect(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.reflect(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 class MemoryEditTool <: ToolExecutor {
@@ -787,8 +805,14 @@ class MemoryEditTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.edit(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.edit(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 class LearnTool <: ToolExecutor {
@@ -796,8 +820,14 @@ class LearnTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.learn(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.learn(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 class ManageSkillTool <: ToolExecutor {
@@ -805,8 +835,14 @@ class ManageSkillTool <: ToolExecutor {
     init(runtime: ProductMemoryRuntime) { this.runtime = runtime }
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> { runtime.manageSkill(context, call) }
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        runtime.manageSkill(context, ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        ))
+    }
 }
 
 func memoryRetainDefinition(): ModelToolDefinition {
@@ -1478,7 +1514,7 @@ func memoryV3ImportanceFromValue(
                 return memoryToolError<Int64>(call, "importance", "importance must be a number")
             }
             try {
-                let parsed = Float64.parse(raw.number)
+                let parsed = Float64.parse(raw.asNumberText())
                 let clamped = if (parsed < 0.0) {
                     0.0
                 } else if (parsed > 1.0) {
@@ -1505,7 +1541,7 @@ func memoryV3ExpiresAtFromValue(
                 return memoryToolError<Int64>(call, "expires_at", "expires_at must be an integer")
             }
             try {
-                let parsed = Int64.parse(raw.number)
+                let parsed = Int64.parse(raw.asNumberText())
                 if (parsed < 0) {
                     memoryToolError<Int64>(
                         call,
@@ -1589,7 +1625,7 @@ func memoryV3SearchOptions(
                 )
             }
             try {
-                Int64.parse(raw.number)
+                Int64.parse(raw.asNumberText())
             } catch (_: Exception) {
                 return memoryToolError<MemoryV3SearchOptions>(
                     call,
