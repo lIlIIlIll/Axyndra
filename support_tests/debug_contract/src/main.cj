@@ -4,9 +4,11 @@ import yjson_support.*
 
 import yjson.*
 
+import agent_runtime.*
 import agent_domain.*
 import agent_product.*
 import agent_store.*
+import agent_testkit.*
 import persistence_runtime.*
 import tool_runtime.*
 import std.collection.*
@@ -51,7 +53,7 @@ main(): Int64 {
         let database = SqliteDatabase(root + "/state.db")
         let pipeline = ToolPipeline(
             catalog,
-            SqliteToolOperationRepository(database),
+            InMemoryOperationRuntimePort(),
             SqliteAuditRepository(database),
             ProductIds(),
             policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -96,7 +98,7 @@ main(): Int64 {
         expect(
             launchSnapshot.field("status").getOrThrow().text ==
                 "stopped" &&
-            launchSnapshot.field("threadId").getOrThrow().number == "7" &&
+            launchSnapshot.field("threadId").getOrThrow().asNumberText() == "7" &&
             launchSnapshot.field("sourcePath").getOrThrow().text ==
                 root + "/note.txt",
             "launch completes initialize, reverse runInTerminal, " +
@@ -343,7 +345,7 @@ func assertAction(
     let result = run(pipeline, context, call)
     expect(
         !result.isError &&
-        result.output.field("success").getOrThrow().boolean,
+        result.output.field("success").getOrThrow().asBool(),
         "debug action completes: " +
             call.arguments.field("action").getOrThrow().text
     )
@@ -354,7 +356,7 @@ func run(
     context: ToolInvocationContext,
     call: ToolCall
 ): ToolResult {
-    match (pipeline.invoke(context, call)) {
+    match (executePipelineCall(pipeline, context, call)) {
         case Result.Ok(ToolInvocationResult.Completed(value)) => value
         case Result.Ok(_) =>
             throw IllegalStateException(

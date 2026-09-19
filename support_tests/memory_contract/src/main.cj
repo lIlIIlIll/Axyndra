@@ -78,7 +78,7 @@ func verifyRegisteredSchemas(root: String): Unit {
     let items = retain.inputSchema.field("properties").getOrThrow()
         .field("items").getOrThrow()
     expect(
-        items.field("minItems").getOrThrow().number == "1" &&
+        items.field("minItems").getOrThrow().asNumberText() == "1" &&
         sameStringSet(propertyNames(items.field("items").getOrThrow()),
             [
                 "content", "context", "importance", "kind", "scope",
@@ -175,7 +175,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         retainedRecords[0].field("kind").getOrThrow().text == "project_fact" &&
         retainedRecords[0].field("scope").getOrThrow().text == "workspace" &&
         retainedRecords[1].field("scope").getOrThrow().text == "session" &&
-        retainedRecords[2].field("expiresAt").getOrThrow().number == "1",
+        retainedRecords[2].field("expiresAt").getOrThrow().asNumberText() == "1",
         "retain writes real Memory v3 kind, scope, and expiry records"
     )
 
@@ -196,7 +196,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         )
     )
     expect(
-        recalled.output.field("count").getOrThrow().number == "1" &&
+        recalled.output.field("count").getOrThrow().asNumberText() == "1" &&
         recalled.output.field("content").getOrThrow().text
             .contains("(id: " + ids[0].text + ")") &&
         recalled.output.field("memories").getOrThrow().items[0]
@@ -224,7 +224,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         )
     )
     expect(
-        sessionRecall.output.field("count").getOrThrow().number == "1" &&
+        sessionRecall.output.field("count").getOrThrow().asNumberText() == "1" &&
         sessionRecall.output.field("memories").getOrThrow().items[0]
             .field("scope").getOrThrow().text == "session",
         "recall can explicitly access the active session scope"
@@ -291,7 +291,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         )
     )
     expect(
-        expiredRecall.output.field("count").getOrThrow().number == "0" &&
+        expiredRecall.output.field("count").getOrThrow().asNumberText() == "0" &&
         restarted.repository().get(ids[2].text)
             .value().getOrThrow().getOrThrow().status == MemoryStatus.Expired,
         "expired memories stay auditable but are withheld from real product recall"
@@ -410,7 +410,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         correctedId != ids[0].text &&
         correctedMemory.field("correctionOf").getOrThrow().text == ids[0].text &&
         correctedMemory.field("kind").getOrThrow().text == "decision" &&
-        correctedMemory.field("importance").getOrThrow().number == "1.000" &&
+        correctedMemory.field("importance").getOrThrow().asNumberText() == "1.000" &&
         original.status == MemoryStatus.Corrected &&
         original.replacementId == correctedId,
         "memory_edit correct appends a replacement and preserves the old record"
@@ -430,7 +430,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
         )
     )
     expect(
-        correctedRecall.output.field("count").getOrThrow().number == "1" &&
+        correctedRecall.output.field("count").getOrThrow().asNumberText() == "1" &&
         correctedRecall.output.field("memories").getOrThrow().items[0]
             .field("id").getOrThrow().text == correctedId,
         "recall returns the active correction rather than the corrected record"
@@ -506,7 +506,7 @@ func verifyDurableMemoryLifecycle(root: String): Unit {
     expect(
         conflicted.output.field("status").getOrThrow().text == "conflicted" &&
         conflicted.output.field("memories").getOrThrow().items.size == 2 &&
-        conflictRecall.output.field("count").getOrThrow().number == "0",
+        conflictRecall.output.field("count").getOrThrow().asNumberText() == "0",
         "mark_conflict withholds unresolved product memories from recall"
     )
     let resolved = invoke(
@@ -679,7 +679,7 @@ func verifyManagedSkills(root: String): Unit {
     )
     expect(
         shadowed.isError &&
-        shadowed.output.field("shadowed").getOrThrow().boolean &&
+        shadowed.output.field("shadowed").getOrThrow().asBool() &&
         runtime.repository().list().value().getOrThrow().size ==
             before + 1 &&
         !exists(Path(

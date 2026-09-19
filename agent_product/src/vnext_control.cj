@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import std.collection.*
+import std.convert.*
 import std.sync.*
 import agent_domain.*
 import agent_extension_runtime.*
@@ -25,6 +26,7 @@ public class ProductVnextControl {
     private let pipeline: ToolPipeline
     private let ids: ProductIds
     private let threadRuntimes: ThreadRuntimeRegistry
+    private let operations: OperationRuntimePort
     private let workspaceRoot: String
     private let extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
     public let storageService: ServiceRegistry<String>
@@ -36,15 +38,17 @@ public class ProductVnextControl {
         pipeline: ToolPipeline,
         ids: ProductIds,
         threadRuntimes: ThreadRuntimeRegistry,
+        operations: OperationRuntimePort,
         workspaceRoot: String,
         processes: ProcessPort,
-        extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
+        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None
     ) {
         this.database = database
         this.catalog = catalog
         this.pipeline = pipeline
         this.ids = ids
         this.threadRuntimes = threadRuntimes
+        this.operations = operations
         this.workspaceRoot = workspaceRoot
         this.extensionSignatureVerifier = extensionSignatureVerifier
         isolatedPlugins = ProductIsolatedPluginHost(
@@ -221,6 +225,77 @@ public class ProductVnextControl {
             case Result.Err(error) => Result.Err(error)
         }
     }
+ 
+    // Direct SDK, CLI, MCP, and extension hosts enter the same canonical
+    // Thread/Run boundary as a program child operation. They never hand a raw
+    // ToolCall to ToolPipeline without a committed canonical source item.
+    public func executeCanonicalTool(
+        sessionId: SessionId,
+        capabilities: CapabilitySet,
+        call: ToolCall,
+        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], []),
+        runId!: ?RunId = None
+    ): Result<ToolInvocationResult> {
+        let effectiveRunId = match (runId) {
+            case Some(value) => value
+            case None => ids.nextRunId()
+        }
+        let runtime = match (threadRuntimes.acquire(
+            ThreadId(sessionId.value), workspaceRoot
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (runtime.startTurn(
+            SemanticTurnId("direct-tool-turn-" + effectiveRunId.value),
+            effectiveRunId,
+            ItemId("direct-tool-input-" + effectiveRunId.value),
+            ThreadItemContent.UserMessage([
+                ThreadMessagePart.Text("direct tool: " + call.name)
+            ]),
+            programModelLane(effectiveRunId, capabilities),
+            skillStack,
+            createdAtMillis: agentUtcMillis(),
+            runBudgetSnapshot: objectValue([
+                ValueField("run_kind", textValue("direct_tool")),
+                ValueField("read_only", boolValue(false))
+            ])
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let execution = ProductProgramSubOperationExecutor(
+            catalog, pipeline, operations, runtime
+        ).invoke(
+            ToolInvocationContext(
+                effectiveRunId,
+                sessionId,
+                capabilities,
+                toolContext: productToolContext(workspaceRoot),
+                skills: skillStack
+            ),
+            call
+        )
+        let terminal = match (execution) {
+            case Result.Ok(ToolInvocationResult.Completed(_)) => RunState.Completed
+            case _ => RunState.Failed
+        }
+        match (runtime.finish(
+            terminal, 1000,
+            reason: if (terminal == RunState.Completed) {
+                "direct tool completed"
+            } else {
+                "direct tool did not complete"
+            }
+        )) {
+            case Result.Ok(_) => execution
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    public func discardInactiveThread(sessionId: SessionId): Result<Bool> {
+        threadRuntimes.discardInactive(ThreadId(sessionId.value))
+    }
 
     private func executeProgramRun(
         program: ToolProgramIR,
@@ -256,7 +331,7 @@ public class ProductVnextControl {
         }
         let result = ToolProgramRuntime(
             ProductProgramSubOperationExecutor(
-                catalog, pipeline, DurableOperationStore(database), runtime
+                catalog, pipeline, operations, runtime
             )
         ).execute(
             program,
@@ -264,10 +339,7 @@ public class ProductVnextControl {
                 runId,
                 sessionId,
                 capabilities,
-                toolContext: ToolContextDescriptor(
-                    workspaceRoot: workspaceRoot,
-                    cwd: workspaceRoot
-                )
+                toolContext: productToolContext(workspaceRoot),
             ),
             limits: limits
         )
@@ -329,7 +401,6 @@ public class ProductVnextControl {
                 "remote Operation source is not a canonical ToolCall"
             ))
         }
-        let operations = DurableOperationStore(database)
         let plan = match (operations.loadPlan(request.operationId, envelope.runId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -599,7 +670,10 @@ public class ProductIsolatedPluginHost {
             } else {
                 ProcessSandboxMode.WorkspaceReadOnly
             },
-            networkAccess: launch.grantedCapabilities.contains("network.access")
+            networkPolicy: match (isolatedPluginNetworkPolicy(launch)) {
+                case Result.Ok(value) => Some(value)
+                case Result.Err(error) => return Result.Err(error)
+            }
         ))
         let result = match (execution) {
             case Result.Ok(value) => value
@@ -666,16 +740,112 @@ func isolatedPluginError<T>(code: String, message: String): Result<T> {
     Result.Err(AgentError(AgentErrorKind.Protocol, code, message))
 }
 
+func isolatedPluginNetworkError<T>(code: String, message: String): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.InvalidInput, code, message))
+}
+
+func isolatedPluginEgressRule(value: String): Result<NetworkEgressRule> {
+    let endpoint = value.trimAscii()
+    let host: String
+    let portText: String
+    if (endpoint.startsWith("[")) {
+        let close = match (endpoint.indexOf("]")) {
+            case Some(index) => index
+            case None => return isolatedPluginNetworkError<NetworkEgressRule>(
+                "extension.network_rule_invalid",
+                "network.access rule has an invalid IPv6 host"
+            )
+        }
+        let suffix = endpoint[close + 1..]
+        if (close <= 1 || !suffix.startsWith(":")) {
+            return isolatedPluginNetworkError<NetworkEgressRule>(
+                "extension.network_rule_invalid",
+                "network.access rule must use [host]:port"
+            )
+        }
+        host = endpoint[1..close]
+        portText = suffix[1..]
+    } else {
+        let parts = endpoint.split(":")
+        if (parts.size != 2 || parts[0] == "" || parts[1] == "") {
+            return isolatedPluginNetworkError<NetworkEgressRule>(
+                "extension.network_rule_invalid",
+                "network.access rule must use host:port"
+            )
+        }
+        host = parts[0]
+        portText = parts[1]
+    }
+    let port: UInt16
+    try {
+        let parsed = Int64.parse(portText)
+        if (parsed < 1 || parsed > 65535 || parsed.toString() != portText) {
+            return isolatedPluginNetworkError<NetworkEgressRule>(
+                "extension.network_rule_invalid",
+                "network.access rule has an invalid port"
+            )
+        }
+        port = UInt16(parsed)
+    } catch (_: Exception) {
+        return isolatedPluginNetworkError<NetworkEgressRule>(
+            "extension.network_rule_invalid",
+            "network.access rule has an invalid port"
+        )
+    }
+    try {
+        Result.Ok(NetworkEgressRule(host, port))
+    } catch (error: Exception) {
+        isolatedPluginNetworkError<NetworkEgressRule>(
+            "extension.network_rule_invalid",
+            error.message
+        )
+    }
+}
+
+func isolatedPluginNetworkPolicy(
+    launch: IsolatedPluginLaunchRequest
+): Result<NetworkPolicy> {
+    let prefix = "network.access:"
+    let rules = ArrayList<NetworkEgressRule>()
+    var requested = false
+    for (capability in launch.grantedCapabilities) {
+        if (capability == "network.access") {
+            return isolatedPluginNetworkError<NetworkPolicy>(
+                "extension.network_rules_missing",
+                "network.access requires one or more explicit host:port rules"
+            )
+        }
+        if (capability.startsWith(prefix)) {
+            requested = true
+            let rule = match (isolatedPluginEgressRule(capability[prefix.size..])) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            rules.add(rule)
+        }
+    }
+    if (!requested) { return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied)) }
+    try {
+        Result.Ok(NetworkPolicy(NetworkPolicyMode.Mediated, egress: rules.toArray()))
+    } catch (error: Exception) {
+        isolatedPluginNetworkError<NetworkPolicy>(
+            "extension.network_rules_invalid",
+            error.message
+        )
+    }
+}
+
+
 class ProductProgramSubOperationExecutor <: ProgramSubOperationExecutor {
     private let catalog: ToolCatalog
     private let pipeline: ToolPipeline
-    private let operations: DurableOperationStore
+    private let operations: OperationRuntimePort
     private let runtime: AgentThreadRuntime
 
     init(
         catalog: ToolCatalog,
         pipeline: ToolPipeline,
-        operations: DurableOperationStore,
+        operations: OperationRuntimePort,
         runtime: AgentThreadRuntime
     ) {
         this.catalog = catalog
@@ -728,25 +898,6 @@ class ProductProgramSubOperationExecutor <: ProgramSubOperationExecutor {
         }
         match (operations.prepareProgramSubOperation(
             prepared.operationId, context.runId, callItemId, prepared.operationPlan
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (operations.markExecuting(
-            prepared.operationId,
-            context.runId,
-            prepared.operationPlan,
-            agentUtcMillis(),
-            false
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (operations.markExecutionHandoff(
-            prepared.operationId,
-            context.runId,
-            ThreadId(context.sessionId.value),
-            agentUtcMillis()
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)

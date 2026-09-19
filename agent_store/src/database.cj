@@ -280,6 +280,7 @@ public class SqliteDatabase {
 
     private func migrate(): Unit {
         let version = scalarIntLocked("PRAGMA user_version")
+        if (version == 22) { return }
         if (version == 0) {
             executeLocked("BEGIN IMMEDIATE")
             try {
@@ -287,7 +288,8 @@ public class SqliteDatabase {
                 for (statement in v19Migration()) { executeLocked(statement) }
                 for (statement in v20Migration()) { executeLocked(statement) }
                 for (statement in v21Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=21")
+                for (statement in v22Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=22")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -603,6 +605,19 @@ public class SqliteDatabase {
             try {
                 for (statement in v21Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=21")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v22 removes the retired operation intent and receipt tables. Keep
+        // this separate so databases already at v21 can be upgraded safely.
+        if (version >= 1 && version <= 21) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v22Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=22")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}

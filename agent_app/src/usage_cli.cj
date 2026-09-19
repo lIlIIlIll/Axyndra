@@ -377,7 +377,7 @@ func usageIntegerOr(value: AgentValue, name: String): Int64 {
         case Some(item) =>
             if (item.unifiedKind == ValueKind.Number) {
                 try {
-                    Int64.parse(item.number)
+                    Int64.parse(item.asNumberText())
                 } catch (_: Exception) {
                     0
                 }

@@ -23,7 +23,7 @@ class ProductDaemonSpec {
     let arguments: Array<String>
     let environment: HashMap<String, String>
     let environmentBindings: Array<DirectEnvironmentBinding>
-    let networkAllowed: Bool
+    let networkPolicy: NetworkPolicy
     let cwd: String
     let pty: Bool
     let readyLog: String
@@ -40,7 +40,7 @@ class ProductDaemonSpec {
         arguments: Array<String>,
         environment: HashMap<String, String>,
         environmentBindings: Array<DirectEnvironmentBinding>,
-        networkAllowed: Bool,
+        networkPolicy: NetworkPolicy,
         cwd: String,
         pty: Bool,
         readyLog: String,
@@ -56,7 +56,7 @@ class ProductDaemonSpec {
         this.arguments = arguments
         this.environment = environment
         this.environmentBindings = environmentBindings
-        this.networkAllowed = networkAllowed
+        this.networkPolicy = networkPolicy
         this.cwd = cwd
         this.pty = pty
         this.readyLog = readyLog
@@ -75,6 +75,7 @@ class ProductDaemonState {
     let owner: String
     let createdAt: Int64
     var process: ?ManagedProcess = None
+    var processHandle: ?DirectProcessHandle = None
     var state: String = "starting"
     var pid: Int64 = 0
     var exitCode: ?Int64 = None
@@ -117,6 +118,8 @@ class ProductProcessSupervisor {
     private let workspace: LocalWorkspace
     private let sandboxEnabled: Bool
     private let allowUnsafeTestBypass: Bool
+    private let shellNetworkMode: ShellNetworkMode
+    private let sandboxCaBundle: String
     private let lock = Mutex()
     private let daemons = ArrayList<ProductDaemonState>()
     private let maxLogBytes: Int64 = 1048576
@@ -130,13 +133,17 @@ class ProductProcessSupervisor {
         workspace: LocalWorkspace,
         brokerRoot!: String = "",
         sandboxEnabled!: Bool = false,
-        allowUnsafeTestBypass!: Bool = false
+        allowUnsafeTestBypass!: Bool = false,
+        shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
+        sandboxCaBundle!: String = ""
     ) {
         this.workspace = workspace
         this.sandboxEnabled = sandboxEnabled
         this.allowUnsafeTestBypass = allowUnsafeTestBypass
         this.brokerRoot = brokerRoot
         this.brokerMode = brokerRoot != ""
+        this.shellNetworkMode = shellNetworkMode
+        this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         if (brokerMode) {
             let daemonsRoot = brokerRoot + "/daemons"
             let logsRoot = brokerRoot + "/logs"
@@ -371,6 +378,25 @@ class ProductProcessSupervisor {
         let state = match (stateByName(name)) {
             case Some(value) => value
             case None => return missingDaemon<ToolResult>(name)
+        }
+        let requestedNetwork = match (call.arguments.field("network")) {
+            case Some(_) => match (daemonNetworkPolicy(
+                call,
+                defaultMode: shellNetworkMode
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            case None => return supervisorError<ToolResult>(
+                "network.restart_policy_required",
+                "hub.restart must restate the persisted network policy"
+            )
+        }
+        if (!networkPoliciesEqual(requestedNetwork, state.spec.networkPolicy)) {
+            return supervisorError<ToolResult>(
+                "hub.process_network_policy_changed",
+                "restart network policy does not match the persisted service specification"
+            )
         }
         match (stopState(state, 5000)) {
             case Result.Ok(_) => ()
@@ -625,7 +651,13 @@ class ProductProcessSupervisor {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let networkAllowed = daemonBoolean(call, "network", false)
+        let networkPolicy = match (daemonNetworkPolicy(
+            call,
+            defaultMode: shellNetworkMode
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
         let authoredCwd = daemonText(call, "cwd")
         let cwd = match (workspace.resolve(
             if (authoredCwd == "") {
@@ -664,6 +696,12 @@ class ProductProcessSupervisor {
                         "ready requires log or port"
                     )
                 }
+                if (ready.field("host").isSome() && readyHost != "127.0.0.1") {
+                    return supervisorError<ProductDaemonSpec>(
+                        "hub.process_ready_host_invalid",
+                        "ready.host must be 127.0.0.1"
+                    )
+                }
                 if (ready.field("port").isSome() &&
                     (readyPort < 1 || readyPort > 65535)) {
                     return supervisorError<ProductDaemonSpec>(
@@ -671,10 +709,10 @@ class ProductProcessSupervisor {
                         "ready.port must be an integer from 1 to 65535"
                     )
                 }
-                if (readyPort != 0 && !networkAllowed) {
+                if (readyPort != 0 && networkPolicyModeIsDenied(networkPolicy.mode)) {
                     return supervisorError<ProductDaemonSpec>(
                         "hub.process_ready_network_required",
-                        "ready.port requires network: true and NetworkAccess authorization"
+                        "ready.port requires a non-denied network policy"
                     )
                 }
                 if (readyLog != "") {
@@ -709,7 +747,7 @@ class ProductProcessSupervisor {
             arguments,
             environment,
             environmentBindings,
-            networkAllowed,
+            networkPolicy,
             cwd,
             if (detached) {
                 false
@@ -744,6 +782,7 @@ class ProductProcessSupervisor {
             generation = state.generation
             state.launching = true
         } finally { lock.unlock() }
+        var openedForCleanup: ?DirectProcessHandle = None
         try {
             let spec = state.spec
             lock.lock()
@@ -784,23 +823,28 @@ class ProductProcessSupervisor {
                 sandboxEnabled,
                 allowUnsafeTestBypass,
                 FilesystemIsolationMode.WorkspaceReadWrite,
-                spec.networkAllowed,
+                spec.networkPolicy,
                 launchExecutable,
                 launchArguments.toArray(),
                 spec.cwd,
                 bindings: spec.environmentBindings,
                 literalEnvironment: daemonLiteralEnvironment(spec.environment),
+                sandboxCaBundle: sandboxCaBundle,
                 errorCode: "hub.process_start_failed"
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return failDaemonLaunch(state, generation, error)
             }
+            openedForCleanup = Some(opened)
             let process = opened.process
             lock.lock()
             try {
                 if (state.generation != generation || state.stopRequested) {
                     lock.unlock()
-                    try { let _ = process.close() } finally { lock.lock() }
+                    try { let _ = process.close() } finally {
+                        opened.release()
+                        lock.lock()
+                    }
                     settleStoppedLaunchLocked(state)
                     lock.unlock()
                     try { persistState(state) } finally { lock.lock() }
@@ -808,6 +852,7 @@ class ProductProcessSupervisor {
                 }
                 state.launching = false
                 state.process = Some(process)
+                state.processHandle = Some(opened)
                 state.state = if (hasReadiness(spec)) {
                     "starting"
                 } else {
@@ -852,7 +897,8 @@ class ProductProcessSupervisor {
                 let code = process.wait().code
                 output.get()
                 error.get()
-                let _ = process.close()
+                try { let _ = process.close() } catch (_: Exception) {}
+                opened.release()
                 finishProcess(state, generation, code)
             }
             let _ = monitor
@@ -862,6 +908,12 @@ class ProductProcessSupervisor {
             }
             Result.Ok(generation)
         } catch (error: Exception) {
+            match (openedForCleanup) {
+                case Some(opened) =>
+                    try { let _ = opened.process.close() } catch (_: Exception) {}
+                    opened.release()
+                case None => ()
+            }
             failDaemonLaunch(state, generation, AgentError(
                 AgentErrorKind.Transport, "hub.process_start_failed", error.message))
         }
@@ -907,6 +959,7 @@ class ProductProcessSupervisor {
         try {
             if (state.generation != generation) { return }
             state.process = None
+            state.processHandle = None
             state.exitCode = Some(code)
             state.exitedAt = nowMillis()
             state.pid = 0
@@ -1334,7 +1387,7 @@ class ProductProcessSupervisor {
                     true
                 )
             ),
-            ValueField("network", boolValue(spec.networkAllowed)),
+            ValueField("network", networkPolicyCanonicalValue(spec.networkPolicy)),
             ValueField("ready", daemonReadyValue(spec)),
             ValueField("restart", textValue(spec.restartPolicy)),
             ValueField("persist", boolValue(spec.persist)),
@@ -1691,11 +1744,15 @@ func decodeDaemonSpecRecord(
         case Some(items) => items
         case None => return None
     }
-    let networkAllowed = daemonRecordBoolean(value, "network", false)
+    let networkPolicy = match (daemonRecordNetworkPolicy(value)) {
+        case Some(policy) => policy
+        case None => return None
+    }
     let ready = value.field("ready")
     var readyLog = ""
     var readyPort: Int64 = 0
     var readyHost = "127.0.0.1"
+    var readyHostProvided = false
     var readyTimeoutMillis: Int64 = 30000
     match (ready) {
         case Some(item) =>
@@ -1703,7 +1760,10 @@ func decodeDaemonSpecRecord(
                 readyLog = daemonRecordText(item, "log")
                 readyPort = daemonRecordInteger(item, "port", 0)
                 let host = daemonRecordText(item, "host")
-                if (host != "") { readyHost = host }
+                if (host != "") {
+                    readyHost = host
+                    readyHostProvided = true
+                }
                 readyTimeoutMillis = daemonRecordInteger(
                     item,
                     "timeoutMs",
@@ -1714,11 +1774,14 @@ func decodeDaemonSpecRecord(
             }
         case None => ()
     }
+    if (readyHostProvided && readyHost != "127.0.0.1") {
+        return None
+    }
     if (readyPort < 0 || readyPort > 65535 ||
         readyTimeoutMillis < 1 || readyTimeoutMillis > 3600000) {
         return None
     }
-    if (readyPort != 0 && !networkAllowed) { return None }
+    if (readyPort != 0 && networkPolicyModeIsDenied(networkPolicy.mode)) { return None }
     if (readyLog != "") {
         try {
             let _ = Regex(readyLog, [])
@@ -1740,7 +1803,7 @@ func decodeDaemonSpecRecord(
         arguments,
         environment,
         environmentBindings,
-        networkAllowed,
+        networkPolicy,
         cwd,
         if (detached) { false } else {
             daemonRecordBoolean(value, "pty", false)
@@ -1771,7 +1834,7 @@ func daemonRecordInteger(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind != ValueKind.Number) { return fallback }
-            try { Int64.parse(field.number) } catch (_: Exception) { fallback }
+            try { Int64.parse(field.asNumberText()) } catch (_: Exception) { fallback }
         case None => fallback
     }
 }
@@ -1783,7 +1846,7 @@ func daemonRecordOptionalInteger(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind != ValueKind.Number) { return None }
-            try { Some(Int64.parse(field.number)) } catch (_: Exception) { None }
+            try { Some(Int64.parse(field.asNumberText())) } catch (_: Exception) { None }
         case None => None
     }
 }
@@ -1795,7 +1858,7 @@ func daemonRecordBoolean(
 ): Bool {
     match (value.field(name)) {
         case Some(field) =>
-            if (field.unifiedKind == ValueKind.Boolean) { field.boolean } else { fallback }
+            if (field.unifiedKind == ValueKind.Boolean) { field.asBool() } else { fallback }
         case None => fallback
     }
 }
@@ -1949,7 +2012,7 @@ func daemonInteger(
     match (call.arguments.field(name)) {
         case Some(value) =>
             try {
-                Int64.parse(value.number)
+                Int64.parse(value.asNumberText())
             } catch (_: Exception) {
                 fallback
             }
@@ -1965,7 +2028,7 @@ func daemonValueInteger(
     match (value.field(name)) {
         case Some(field) =>
             try {
-                Int64.parse(field.number)
+                Int64.parse(field.asNumberText())
             } catch (_: Exception) {
                 fallback
             }
@@ -1981,14 +2044,62 @@ func daemonBoolean(
     match (call.arguments.field(name)) {
         case Some(value) =>
             if (value.unifiedKind == ValueKind.Boolean) {
-                value.boolean
+                value.asBool()
             } else {
                 fallback
             }
         case None => fallback
     }
 }
+func daemonNetworkPolicy(
+    call: ToolCall,
+    defaultMode!: ShellNetworkMode = ShellNetworkMode.Restricted
+): Result<NetworkPolicy> {
+    match (call.arguments.field("network")) {
+        case None =>
+            Result.Ok(match (defaultMode) {
+                case ShellNetworkMode.Restricted => NetworkPolicy(NetworkPolicyMode.Denied)
+                case ShellNetworkMode.Proxy => NetworkPolicy(NetworkPolicyMode.Mediated)
+                case ShellNetworkMode.TrustedHost => NetworkPolicy(NetworkPolicyMode.HostNetwork)
+            })
+        case Some(value) =>
+            let policy = match (parseNetworkPolicy(value)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            if (defaultMode == ShellNetworkMode.Proxy &&
+                networkPolicyModeIsHost(policy.mode)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "network.mode_denied",
+                    "proxy shell mode forbids HostNetwork",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            if (networkPolicyModeIsMediated(policy.mode) && !policy.publish.isEmpty()) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "network.publish_not_supported",
+                    "the mediated network gateway does not support published ports",
+                    retryable: false,
+                    fallbackAllowed: false
+                ))
+            }
+            Result.Ok(policy)
+    }
+}
 
+func daemonRecordNetworkPolicy(value: AgentValue): ?NetworkPolicy {
+    match (value.field("network")) {
+        case None => Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        case Some(raw) =>
+            match (parseNetworkPolicy(raw)) {
+                case Result.Ok(policy) => Some(policy)
+                case Result.Err(_) => None
+            }
+    }
+}
 func daemonStringList(
     call: ToolCall,
     name: String

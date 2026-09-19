@@ -20,10 +20,10 @@ public func encodeStoredValue(value: AgentValue): String {
 func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
     match (value.unifiedKind) {
         case ValueKind.Null => output.add(b'n')
-        case ValueKind.Boolean => output.add(if (value.boolean) { b't' } else { b'f' })
+        case ValueKind.Boolean => output.add(if (value.asBool()) { b't' } else { b'f' })
         case ValueKind.Number =>
             output.add(b'd')
-            appendStoredFrame(output, value.number)
+            appendStoredFrame(output, value.asNumberText())
         case ValueKind.Text =>
             output.add(b's')
             appendStoredFrame(output, value.text)
@@ -266,7 +266,7 @@ func storedBoolField(value: AgentValue, name: String): Bool {
     if (field.unifiedKind != ValueKind.Boolean) {
         throw IllegalStateException("stored field is not boolean: " + name)
     }
-    field.boolean
+    field.asBool()
 }
 
 func storedIntField(value: AgentValue, name: String): Int64 {
@@ -274,7 +274,7 @@ func storedIntField(value: AgentValue, name: String): Int64 {
     if (field.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("stored field is not numeric: " + name)
     }
-    parseStoredInt(field.number, "stored field is not an integer: " + name)
+    parseStoredInt(field.asNumberText(), "stored field is not an integer: " + name)
 }
 
 class StoredValueParser {

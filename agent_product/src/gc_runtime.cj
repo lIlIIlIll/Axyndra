@@ -580,8 +580,6 @@ func collectRequiredBlobReferences(database: SqliteDatabase): GcBlobReferenceSca
         "SELECT payload FROM run_journal",
         "SELECT payload FROM app_run_events",
         "SELECT payload FROM approval_decisions",
-        "SELECT payload FROM tool_operation_intents",
-        "SELECT payload FROM tool_operation_intent_receipts",
         "SELECT payload FROM session_permission_grants",
         "SELECT summary||draft||todo_payload||goal_payload FROM thread_metadata",
         "SELECT lane_snapshot||skill_snapshot||budget||usage||COALESCE(app_snapshot,'') FROM runs",

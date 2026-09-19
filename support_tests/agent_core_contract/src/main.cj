@@ -13,6 +13,13 @@ import std.collection.*
 import std.sync.*
 import std.time.*
 import tool_runtime.*
+func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
+    ToolCall(
+        prepared.call.callId,
+        prepared.call.name,
+        prepared.operationPlan.canonicalArguments
+    )
+}
 
 main(): Int64 {
     let conversations = MemoryConversations()
@@ -136,6 +143,7 @@ main(): Int64 {
     terminalDecisionPersistenceFailureContract()
     durableDecisionRecoveryDoesNotInvokeProviderContract()
     invalidArgumentContinuesRunContract()
+    invalidNetworkPolicyResultBoundaryContract()
     permissionDeniedToolContinuesBatchContract()
     capabilityDenialLoopContract()
     // Failure and cancellation are Run state/events, never fabricated
@@ -263,8 +271,8 @@ func deadlineRetryExactReplayContract(): Unit {
     expect(
         second.policyReason == "retry" &&
         second.policy.field("thinking").getOrThrow().text == "medium" &&
-        second.policy.field("soft_deadline_ms").getOrThrow().number == "0" &&
-        second.policy.field("hard_deadline_ms").getOrThrow().number == "0",
+        second.policy.field("soft_deadline_ms").getOrThrow().asNumberText() == "0" &&
+        second.policy.field("hard_deadline_ms").getOrThrow().asNumberText() == "0",
         "T7 durable AttemptPolicy records an idle-only same-policy retry")
     var scopedDeltas: Int64 = 0
     var starts: Int64 = 0
@@ -1596,6 +1604,7 @@ func orderedConflictWaveContract(): Unit {
 func partialWaveHandoffFailureContract(): Unit {
     let runs = MemoryRuns()
     let catalog = ToolCatalog()
+    let operations = FailingSecondExecutionRuntime()
     let started = DelayedHandoffTool(60)
     let skipped = EchoTool()
     expect(catalog.register(
@@ -1617,9 +1626,9 @@ func partialWaveHandoffFailureContract(): Unit {
     let core = AgentCore(
         HandoffFailureBatchModel(),
         runs,
-        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()),
         catalog,
-        operationRuntime: Some(FailingSecondExecutionRuntime())
+        operationRuntime: Some(operations)
     )
     let startedAt = MonoTime.now()
     let result = core.start(AgentRunRequest(
@@ -1992,7 +2001,7 @@ func attemptPolicyAppliedContract(): Unit {
         model.request.getOrThrow().maxOutputTokens == 4321 &&
         policy.field("thinking").getOrThrow().text == "low" &&
         policy.field("tool_choice").getOrThrow().text == "auto" &&
-        policy.field("max_output_tokens").getOrThrow().number == "4321",
+        policy.field("max_output_tokens").getOrThrow().asNumberText() == "4321",
         "durable AttemptPolicy exactly matches the effective adapter request")
 }
 
@@ -2790,6 +2799,53 @@ func invalidArgumentContinuesRunContract(): Unit {
         "invalid tool arguments become is_error tool results"
     )
 }
+func invalidNetworkPolicyResultBoundaryContract(): Unit {
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    expect(
+        catalog.register(
+            ToolDescriptor(
+                ModelToolDefinition(
+                    "invalid-network",
+                    "invalid network policy tool",
+                    objectValue([])
+                ),
+                Capability(CapabilityKind.WorkspaceRead),
+                networkPolicyResolver: Some({_ =>
+                    parseNetworkPolicy(boolValue(true))
+                })
+            ),
+            EchoTool()
+        ).isOk(),
+        "invalid-network tool registration"
+    )
+    let model = InvalidNetworkPolicyModel()
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let outcome = core.start(AgentRunRequest(
+        RunId("invalid-network-run"),
+        SessionId("invalid-network-session"),
+        "fixture",
+        "start invalid network policy contract",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+    ))
+    expect(
+        outcome.isOk(),
+        "invalid network policy becomes a canonical denial instead of escaping Result"
+    )
+    expect(
+        match (outcome.value().getOrThrow()) {
+            case AgentRunOutcome.Completed(snapshot) =>
+                isCompleted(snapshot.status) && snapshot.turns == 2
+            case _ => false
+        },
+        "run completes after invalid network policy denial"
+    )
+}
 
 func permissionDeniedToolContinuesBatchContract(): Unit {
     let conversations = MemoryConversations()
@@ -2986,8 +3042,9 @@ class InvalidArgumentTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         executions += 1
         Result.Err(AgentError(
             AgentErrorKind.InvalidInput,
@@ -3001,7 +3058,7 @@ class InvalidArgumentTool <: ToolExecutor {
 class PermissionDeniedTool <: ToolExecutor {
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         Result.Err(AgentError(
             AgentErrorKind.PermissionDenied,
@@ -3080,6 +3137,33 @@ class InvalidArgumentModel <: ModelPort {
                     stopReason: "end_turn"
                 )
             )
+        }
+    }
+}
+
+class InvalidNetworkPolicyModel <: ModelPort {
+    var calls: Int64 = 0
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        calls += 1
+        events(ModelEvent.Completed)
+        if (calls == 1) {
+            Result.Ok(contractModelReply([
+                ModelBlock(
+                    ModelBlockKind.ToolCall,
+                    callId: "call-invalid-network",
+                    name: "invalid-network",
+                    arguments: objectValue([])
+                )
+            ]))
+        } else {
+            Result.Ok(contractModelReply(
+                [ModelBlock(ModelBlockKind.Text, text: "done")],
+                stopReason: "end_turn"
+            ))
         }
     }
 }
@@ -4834,8 +4918,9 @@ class StalledModel <: ModelPort {
 class SleepEchoTool <: ToolExecutor {
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         sleep(Duration.millisecond * 200)
         Result.Ok(ToolResult(call.callId, call.arguments))
     }
@@ -4863,8 +4948,9 @@ class EchoTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         executions += 1
         Result.Ok(
             ToolResult(
@@ -4903,8 +4989,9 @@ class ToolContextProbe <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         lock.lock()
         try {
             invocations += 1
@@ -4952,8 +5039,9 @@ class DecisionBoundTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         let _ = context
         executions += 1
         decisionDurableAtExecution = runs.savedDecision.isSome()
@@ -5030,8 +5118,9 @@ class SteeringTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         let _ = context
         executions += 1
         if (executions == 1) {
@@ -5088,8 +5177,9 @@ class WaveTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         let _ = context
         probe.entered(name)
         sleep(Duration.millisecond * delayMillis)
@@ -5182,8 +5272,9 @@ class OrderedConflictTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         let _ = context
         probe.entered(name)
         sleep(Duration.millisecond * delayMillis)
@@ -5245,8 +5336,9 @@ class DelayedHandoffTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         let _ = context
         sleep(Duration.millisecond * delayMillis)
         completed.store(true)
@@ -5280,7 +5372,7 @@ class HandoffFailureBatchModel <: ModelPort {
 
 class FailingSecondExecutionRuntime <: OperationRuntimePort {
     private let delegate = InMemoryOperationRuntimePort()
-    private var executions: Int64 = 0
+    private var failingOperationId: ?OperationId = None
 
     public func prepare(
         operationId: OperationId,
@@ -5288,7 +5380,18 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         toolCall: CommittedToolCallRef,
         plan: NormalizedOperationPlan
     ): Result<Unit> {
+        if (toolCall.block.callId == "handoff-call-b") {
+            failingOperationId = Some(operationId)
+        }
         delegate.prepare(operationId, runId, toolCall, plan)
+    }
+    public func prepareProgramSubOperation(
+        operationId: OperationId,
+        runId: RunId,
+        toolCallItemId: ItemId,
+        plan: NormalizedOperationPlan
+    ): Result<Unit> {
+        delegate.prepareProgramSubOperation(operationId, runId, toolCallItemId, plan)
     }
 
     public func waitForApproval(
@@ -5321,8 +5424,8 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         nowMillis: Int64,
         approvalRequired: Bool
     ): Result<Unit> {
-        executions += 1
-        if (executions == 2) {
+        if (failingOperationId.isSome() &&
+            failingOperationId.getOrThrow().value == operationId.value) {
             return Result.Err(AgentError(
                 AgentErrorKind.Internal,
                 "fixture.execution_handoff_failed",
@@ -5351,15 +5454,27 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
     ): Result<NormalizedOperationPlan> {
         delegate.loadPlan(operationId, runId)
     }
+    public func loadCall(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<ToolCall> {
+        delegate.loadCall(operationId, runId)
+    }
+    public func loadCommittedToolResult(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<?ToolResult> {
+        delegate.loadCommittedToolResult(operationId, runId)
+    }
 }
 
 class FatalWaveTool <: ToolExecutor {
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let _ = context
-        let _ = call
+        let _ = prepared
         Result.Err(AgentError(
             AgentErrorKind.Internal,
             "fixture.wave_fatal",
@@ -6140,8 +6255,8 @@ func fixtureAgentValuesEqual(left: AgentValue, right: AgentValue): Bool {
     if (left.unifiedKind != right.unifiedKind) { return false }
     match (left.unifiedKind) {
         case ValueKind.Null => true
-        case ValueKind.Boolean => left.boolean == right.boolean
-        case ValueKind.Number => left.number == right.number
+        case ValueKind.Boolean => left.asBool() == right.asBool()
+        case ValueKind.Number => left.asNumberText() == right.asNumberText()
         case ValueKind.Text => left.text == right.text
         case ValueKind.List =>
             if (left.items.size != right.items.size) { return false }
@@ -6220,98 +6335,7 @@ func sameFixtureDecision(
         left.argumentHash == right.argumentHash && left.decision == right.decision
 }
 
-class MemoryOperations <: OperationRepository {
-    private let lock = Mutex()
-    private let records = ArrayList<OperationRecord>()
-    private let receipts = ArrayList<OperationReceipt>()
-
-    public func prepare(value: OperationRecord): Result<Unit> {
-        lock.lock()
-        try {
-            for (record in records where record.operationId.value == value.operationId.value) {
-                return Result.Err(AgentError(
-                    AgentErrorKind.Conflict,
-                    "operation.exists",
-                    "operation already exists"
-                ))
-            }
-            records.add(value)
-            Result.Ok(())
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    public func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit> {
-        lock.lock()
-        try {
-            for (index in 0..records.size where records[index].operationId.value == operationId.value) {
-                let old = records[index]
-                if (old.status != expected) {
-                    return Result.Err(AgentError(
-                        AgentErrorKind.Conflict,
-                        "operation.status_conflict",
-                        "operation status changed"
-                    ))
-                }
-                records[index] = OperationRecord(
-                    old.operationId,
-                    old.runId,
-                    next,
-                    old.capability,
-                    old.requestDigest,
-                    call: old.call
-                )
-                return Result.Ok(())
-            }
-            Result.Err(missing("operation"))
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    public func find(operationId: OperationId): Result<OperationRecord> {
-        lock.lock()
-        try {
-            for (value in records where value.operationId.value == operationId.value) {
-                return Result.Ok(value)
-            }
-            Result.Err(missing("operation"))
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    public func receipt(operationId: OperationId): Result<OperationReceipt> {
-        lock.lock()
-        try {
-            for (value in receipts where value.operationId.value == operationId.value) {
-                return Result.Ok(value)
-            }
-            Result.Err(missing("receipt"))
-        } finally {
-            lock.unlock()
-        }
-    }
-
-    public func saveReceipt(value: OperationReceipt): Result<Unit> {
-        lock.lock()
-        try {
-            for (index in 0..receipts.size where receipts[index].operationId.value == value.operationId.value) {
-                receipts[index] = value
-                return Result.Ok(())
-            }
-            receipts.add(value)
-            Result.Ok(())
-        } finally {
-            lock.unlock()
-        }
-    }
-}
+type MemoryOperations = InMemoryOperationRuntimePort
 
 class FixtureIds <: IdGenerator {
     var operation: Int64 = 0
@@ -6472,7 +6496,8 @@ class ConflictWaveTool <: ToolExecutor {
         this.state = state
     }
 
-    public func execute(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+    public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
+        let call = preparedToolCall(prepared)
         if (name == "wave_b") {
             state.bFinished.store(true)
         }

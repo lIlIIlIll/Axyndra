@@ -1102,23 +1102,49 @@ main(): Int64 {
     expect(activeStreamTransport.timeoutMillis == 0,
         "T6 active Core streams omit the provider whole-request timeout")
     let deepSeekReplay = domain.ModelRequest(
-        "deepseek", [domain.ModelMessage(domain.ModelRole.Assistant, [
-            domain.ModelBlock(domain.ModelBlockKind.Reasoning, text: "opaque reasoning"),
-            domain.ModelBlock(
-                domain.ModelBlockKind.ToolCall,
-                callId: "replay-call", name: "echo", arguments: domain.objectValue([])
-            )
-        ])],
+        "DeepSeek-V4-Flash-0731", [
+            domain.ModelMessage(domain.ModelRole.User, [
+                domain.ModelBlock(domain.ModelBlockKind.Text, text: "question")
+            ]),
+            domain.ModelMessage(domain.ModelRole.Assistant, [
+                domain.ModelBlock(
+                    domain.ModelBlockKind.Reasoning,
+                    text: "foreign reasoning",
+                    opaqueState: Some(domain.OpaqueProviderState(
+                        "DEEPSEEK", "chat_completions", "{}",
+                        itemId: "reasoning_content", replayRequired: true
+                    ))
+                ),
+                domain.ModelBlock(domain.ModelBlockKind.Text, text: "portable answer")
+            ])
+        ],
         thinking: domain.ThinkingLevel.High
     )
-    var displayReasoningReplayRejected = false
-    try {
-        let _ = encodeDeepSeekChatRequest(deepSeekReplay)
-    } catch (_: Exception) {
-        displayReasoningReplayRejected = true
+    let switchTransport = RecordingTransport(
+        "{\"id\":\"switch-reply\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"switched\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}"
+    )
+    let switchPort: ports.ModelPort = providerModelPort(
+        ProviderSpec(
+            "volengine",
+            ProviderProtocol.Completions,
+            "DeepSeek-V4-Flash-0731",
+            "https://fixture.invalid",
+            "FIXTURE_API_KEY",
+            dialect: Some(ProviderDialect.DeepSeekChat)
+        ),
+        transport: switchTransport
+    )
+    var switchPathSucceeded = false
+    match (switchPort.execute(deepSeekReplay, { _ => () })) {
+        case domain.Result.Ok(_) => switchPathSucceeded = true
+        case domain.Result.Err(_) => switchPathSucceeded = false
     }
-    expect(displayReasoningReplayRejected,
-        "DeepSeek Chat rejects display-only reasoning without native replay state")
+    expect(
+        switchPathSucceeded &&
+            switchTransport.lastPayload.contains("portable answer") &&
+            !switchTransport.lastPayload.contains("foreign reasoning"),
+        "cross-provider model switch materializes request without foreign reasoning replay"
+    )
     let partialToolStream =
         "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking\",\"tool_calls\":[{\"index\":0,\"id\":\"partial\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\"}}]},\"finish_reason\":null}],\"usage\":null}\n\n" +
         "data: {\"id\":\"limited\",\"model\":\"deepseek\",\"choices\":[{\"index\":0,\"delta\":null,\"finish_reason\":\"length\"}],\"usage\":{\"completion_tokens\":100,\"completion_tokens_details\":{\"reasoning_tokens\":90}}}\n\n" +
@@ -1284,6 +1310,7 @@ func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
         ),
         RuntimeProviderProfile(
             "gateway-b", "gateway", "https://fixture.invalid", "KEY_B",
+            allowInsecureHttp: true,
             defaultHeaders: [ProviderHeader("x-profile", "b")]
         )
     ]
@@ -1372,7 +1399,9 @@ func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
         transport.headers[0].contains("x-route:model") &&
         transport.headers[0].contains("content-type:application/json") &&
         transport.headers[3].contains("x-profile:b") &&
-        !transport.headers[3].contains("x-profile:a"),
+        !transport.headers[3].contains("x-profile:a") &&
+        transport.insecureFlags[0] == false && transport.insecureFlags[1] == false &&
+        transport.insecureFlags[2] == false && transport.insecureFlags[3] == true,
         "profiles reuse one API adapter while one profile dispatches mixed APIs with typed DeepSeek lowering"
     )
     let deepSeekResponses = models[2]
@@ -1425,6 +1454,7 @@ class DispatchTransport <: ProviderTransport {
     let profileIds = ArrayList<String>()
     let payloads = ArrayList<String>()
     let headers = ArrayList<String>()
+    let insecureFlags = ArrayList<Bool>()
 
     public func post(
         provider: ProviderSpec,
@@ -1437,6 +1467,7 @@ class DispatchTransport <: ProviderTransport {
         let _ = requestId
         let _ = chunks
         profileIds.add(provider.id)
+        insecureFlags.add(provider.allowInsecureHttp)
         payloads.add(payload)
         var merged = ""
         for (header in effectiveProviderHeaders(provider, streaming)) {

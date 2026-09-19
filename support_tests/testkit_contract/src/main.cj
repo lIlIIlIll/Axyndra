@@ -1,6 +1,8 @@
 package testkit_contract
 
 import agent_domain.*
+import agent_ports.*
+import agent_runtime.*
 import agent_testkit.*
 import tool_runtime.*
 
@@ -31,9 +33,14 @@ func scriptedPolicyContract(): Unit {
         SessionId("policy-session"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
     )
-    expect(policy.evaluate(context, descriptor).requirement == PermissionRequirement.Confirm,
+    let plan = normalizedToolOperationPlan(
+        context,
+        ToolCall("policy-call", "policy_fixture", objectValue([])),
+        descriptor
+    )
+    expect(policy.evaluate(context, plan).requirement == PermissionRequirement.Confirm,
         "scripted policy returns its first production-domain decision")
-    expect(policy.evaluate(context, descriptor).requirement == PermissionRequirement.Deny,
+    expect(policy.evaluate(context, plan).requirement == PermissionRequirement.Deny,
         "scripted policy advances deterministically")
     expect(policy.calls().size == 2 && policy.calls()[0].toolName == "policy_fixture",
         "scripted policy records read-only request projections")
@@ -79,10 +86,10 @@ func scriptedToolContract(): Unit {
         SessionId("session-1"),
         CapabilitySet()
     )
-    expect(tool.execute(context, ToolCall("call-1", "fixture", objectValue([]))).isOk(),
+    expect(tool.executeCall(context, ToolCall("call-1", "fixture", objectValue([]))).isOk(),
         "scripted tool returns its configured result")
     let waiting = spawn {
-        tool.execute(context, ToolCall("call-2", "fixture", objectValue([])))
+        tool.executeCall(context, ToolCall("call-2", "fixture", objectValue([])))
     }
     sleep(Duration.millisecond * 5)
     let _ = tool.cancel(RunId("run-1"))
@@ -173,29 +180,28 @@ func memoryPortsContract(): Unit {
         errorKind(runs.pendingContinuation(session)) == Some(AgentErrorKind.RecoveryRequired),
         "multiple pending approval runs are rejected as ambiguous")
 
-    let operations = MemoryOperationRepository()
+    let operations = InMemoryOperationRuntimePort()
     let operation = OperationId("memory-operation")
-    let record = OperationRecord(
-        operation,
-        run,
-        OperationStatus.Prepared,
-        Capability(CapabilityKind.WorkspaceRead),
+    let plan = NormalizedOperationPlan(
+        "read",
+        objectValue([]),
+        [Capability(CapabilityKind.WorkspaceRead)],
+        OperationEffectClass.ReadOnly,
+        OperationRetryDisposition.Never,
         "digest"
     )
-    expect(operations.prepare(record).isOk(), "memory operation repository prepares work")
-    expect(operations.transition(operation, OperationStatus.Prepared, OperationStatus.Approved).isOk(),
-        "memory operation repository enforces expected transitions")
-    let receipt = OperationReceipt(operation, true, objectValue([]))
-    expect(operations.saveReceipt(receipt).isOk() && operations.receipt(operation).isOk(),
-        "memory operation repository retains receipts")
-    expect(operations.saveReceipt(receipt).isOk(),
-        "an identical operation receipt can be replayed")
-    expect(operations.saveReceipt(OperationReceipt(
-        operation,
-        false,
-        textValue("different"),
-        isError: true
-    )).isError(), "an operation receipt cannot be overwritten")
+    let item = ItemId("memory-tool-call")
+    expect(operations.prepareProgramSubOperation(
+        operation, run, item, plan
+    ).isOk(), "memory operation runtime prepares canonical work")
+    expect(operations.loadPlan(operation, run).isOk(),
+        "memory operation runtime retains normalized plans")
+    expect(operations.prepareProgramSubOperation(
+        operation, run, item, plan
+    ).isOk(), "identical canonical preparation is idempotent")
+    expect(operations.prepareProgramSubOperation(
+        operation, run, ItemId("other-tool-call"), plan
+    ).isError(), "canonical ToolCall Item binding cannot drift")
 
     let audit = RecordingAuditPort()
     expect(audit.append(AgentEvent(

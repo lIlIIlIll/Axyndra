@@ -148,7 +148,7 @@ func textField(value: JsonNode, name: String, fallback!: String = ""): String {
 
 func boolField(value: JsonNode, name: String, fallback: Bool): Bool {
     match (value.field(name)) {
-        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Boolean) { field.boolean } else { fallback }
+        case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Boolean) { field.asBool() } else { fallback }
         case None => fallback
     }
 }
@@ -156,7 +156,7 @@ func boolField(value: JsonNode, name: String, fallback: Bool): Bool {
 func integerField(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
         case Some(field) => if (field.unifiedKind == UnifiedJsonKind.Number) {
-            try { Int64.parse(field.number) } catch (_: Exception) { fallback }
+            try { Int64.parse(field.asNumberText()) } catch (_: Exception) { fallback }
         } else { fallback }
         case None => fallback
     }

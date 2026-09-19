@@ -506,7 +506,7 @@ public class AgentCore <: AgentRunner {
         }
         this.operationRuntime = match (operationRuntime) {
             case Some(value) => value
-            case None => InMemoryOperationRuntimePort()
+            case None => tools.operationRuntime()
         }
         this.modelDecisionRuntime = match (modelDecisionRuntime) {
             case Some(value) => value
@@ -545,7 +545,7 @@ public class AgentCore <: AgentRunner {
         }
         this.operationRuntime = match (operationRuntime) {
             case Some(value) => value
-            case None => InMemoryOperationRuntimePort()
+            case None => tools.operationRuntime()
         }
         this.modelDecisionRuntime = match (modelDecisionRuntime) {
             case Some(value) => value
@@ -1199,49 +1199,16 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink
             )
         }
-        match (operationRuntime.recordApproval(
-            "approval-" + durableApproval.operationId.value,
-            durableApproval.operationId,
-            durableRequest.runId,
-            approvedPlan,
-            durableRequest.capabilities,
-            !isRejectedDecision(decision),
-            approvalDecisionSourceName(approval.decisionSource),
-            None
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return fail(
-                durableRequest, context, control, error, sink
-            )
-        }
         let executionHandoff = CoreExecutionHandoffState()
         let outcomeAttempt = tools.decide(
             context,
             durableApproval.operationId,
             decision,
-            { prepared =>
-                match (operationRuntime.markExecuting(
-                    prepared.operationId,
-                    durableRequest.runId,
-                    prepared.operationPlan,
-                    agentUtcMillis(),
-                    true
-                )) {
-                    case Result.Ok(_) =>
-                        match (operationRuntime.markExecutionHandoff(
-                            prepared.operationId,
-                            durableRequest.runId,
-                            ThreadId(durableRequest.sessionId.value),
-                            agentUtcMillis()
-                        )) {
-                            case Result.Ok(_) =>
-                                executionHandoff.started = true
-                                Result.Ok(())
-                            case Result.Err(error) => Result.Err(error)
-                        }
-                    case Result.Err(error) => Result.Err(error)
-                }
-            }
+            { _ =>
+                executionHandoff.started = true
+                Result.Ok(())
+            },
+            decisionSource: durableApproval.decisionSource
         )
         let outcome = match (outcomeAttempt) {
             case Result.Ok(value) => value
@@ -1264,9 +1231,20 @@ public class AgentCore <: AgentRunner {
                     case Result.Ok(_) => return fail(
                         durableRequest, context, control, error, sink
                     )
-                    case Result.Err(commitError) => return fail(
-                        durableRequest, context, control, commitError, sink
-                    )
+                    case Result.Err(commitError) =>
+                        let diagnostic = AgentError(
+                            commitError.kind,
+                            commitError.code,
+                            commitError.message + "; original tool error: " +
+                                error.code + " (" + error.message + ")",
+                            retryable: commitError.retryable,
+                            fallbackAllowed: commitError.fallbackAllowed,
+                            fields: commitError.fields,
+                            attemptFailure: commitError.attemptFailure
+                        )
+                        return fail(
+                            durableRequest, context, control, diagnostic, sink
+                        )
                 }
             }
         }
@@ -2617,7 +2595,7 @@ public class AgentCore <: AgentRunner {
             context,
             preparation,
             control.source.token,
-            { work => beginCanonicalExecution(context, work.prepared) },
+            { _ => Result.Ok(()) },
             { count =>
                 match (reserveBudget(
                     control,
@@ -2857,41 +2835,35 @@ public class AgentCore <: AgentRunner {
         block: ModelBlock
     ): NormalizedOperationPlan {
         let call = ToolCall(block.callId, block.name, block.arguments)
-        match (catalog.resolvedDescriptor(call)) {
-            case Some(descriptor) => normalizedToolOperationPlan(
-                context, call, descriptor
-            )
-            case None => NormalizedOperationPlan(
-                block.name,
-                block.arguments,
-                [],
-                OperationEffectClass.ReadOnly,
-                OperationRetryDisposition.Never,
-                "rejected-" + context.runId.value + "-" + block.callId
-            )
+        try {
+            match (catalog.resolvedDescriptor(call)) {
+                case Some(descriptor) => normalizedToolOperationPlan(
+                    context, call, descriptor
+                )
+                case None => canonicalRejectedPlan(context, block)
+            }
+        } catch (_: IllegalArgumentException) {
+            // Invalid resolver output is already a denied ToolPreparation. Keep
+            // that denial inside the canonical Operation boundary instead of
+            // rethrowing while deriving the immediate fallback plan.
+            canonicalRejectedPlan(context, block)
         }
     }
 
-    private func beginCanonicalExecution(
+    private func canonicalRejectedPlan(
         context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<Unit> {
-        match (operationRuntime.markExecuting(
-            prepared.operationId,
-            context.runId,
-            prepared.operationPlan,
-            agentUtcMillis(),
-            false
-        )) {
-            case Result.Ok(_) => operationRuntime.markExecutionHandoff(
-                prepared.operationId,
-                context.runId,
-                ThreadId(context.sessionId.value),
-                agentUtcMillis()
-            )
-            case Result.Err(error) => Result.Err(error)
-        }
+        block: ModelBlock
+    ): NormalizedOperationPlan {
+        NormalizedOperationPlan(
+            block.name,
+            block.arguments,
+            [],
+            OperationEffectClass.ReadOnly,
+            OperationRetryDisposition.Never,
+            "rejected-" + context.runId.value + "-" + block.callId
+        )
     }
+
 
     private func commitCanonicalToolAttempt(
         control: CoreRunControl,
@@ -5067,6 +5039,10 @@ public class AgentCore <: AgentRunner {
                         "run.cancelled",
                         "execution was cancelled by the user"
                     )
+                    // Signal executors immediately. The cancellation token
+                    // callback is asynchronous; managed jobs have a distinct
+                    // process operation and cannot wait for that callback.
+                    let _ = tools.cancel(runId)
                     for (_ in 0..100) {
                         let terminal = match (runs.find(runId)) {
                             case Result.Ok(value) => isTerminalRunState(value.status)
@@ -5685,7 +5661,7 @@ func requiredCoreValueField(value: AgentValue, name: String): AgentValue {
 
 func requiredCoreBoolField(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
-        case Some(item) => if (item.unifiedKind == ValueKind.Boolean) { item.boolean }
+        case Some(item) => if (item.unifiedKind == ValueKind.Boolean) { item.asBool() }
             else { throw IllegalArgumentException("durable field is not boolean: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -5693,7 +5669,7 @@ func requiredCoreBoolField(value: AgentValue, name: String): Bool {
 
 func requiredCoreIntegerField(value: AgentValue, name: String): Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.unifiedKind == ValueKind.Number) { Int64.parse(item.number) }
+        case Some(item) => if (item.unifiedKind == ValueKind.Number) { Int64.parse(item.asNumberText()) }
             else { throw IllegalArgumentException("durable field is not an integer: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -5702,7 +5678,7 @@ func requiredCoreIntegerField(value: AgentValue, name: String): Int64 {
 func optionalCoreIntegerField(value: AgentValue, name: String): ?Int64 {
     match (value.field(name)) {
         case Some(item) => if (item.unifiedKind == ValueKind.Null) { None }
-            else if (item.unifiedKind == ValueKind.Number) { Some(Int64.parse(item.number)) }
+            else if (item.unifiedKind == ValueKind.Number) { Some(Int64.parse(item.asNumberText())) }
             else { throw IllegalArgumentException("durable field is not an optional integer: " + name) }
         case None => throw IllegalArgumentException("durable field is missing: " + name)
     }
@@ -6525,7 +6501,7 @@ func resolutionValueFromValue(
             if (value.unifiedKind != ValueKind.Number) {
                 throw IllegalArgumentException("durable output constraint value must be an integer")
             }
-            ResolutionValue.TokenLimit(Int64.parse(value.number))
+            ResolutionValue.TokenLimit(Int64.parse(value.asNumberText()))
         case ResolutionConstraintTarget.ThinkingLevel =>
             if (value.unifiedKind != ValueKind.Text) {
                 throw IllegalArgumentException("durable thinking constraint value must be text")
@@ -6836,8 +6812,8 @@ func decisionFrame(value: String): String { value.size.toString() + ":" + value 
 func canonicalAgentValue(value: AgentValue): String {
     match (value.unifiedKind) {
         case ValueKind.Null => "null"
-        case ValueKind.Boolean => if (value.boolean) { "true" } else { "false" }
-        case ValueKind.Number => "n" + decisionFrame(value.number)
+        case ValueKind.Boolean => if (value.asBool()) { "true" } else { "false" }
+        case ValueKind.Number => "n" + decisionFrame(value.asNumberText())
         case ValueKind.Text => "s" + decisionFrame(value.text)
         case ValueKind.List =>
             var output = "["

@@ -57,6 +57,40 @@ class PrepareNativeDepsTest(unittest.TestCase):
             stamp = Path(f"{output}.compiler-id").read_text()
             self.assertIn(str(second), stamp)
 
+    def test_builds_gateway_helper_with_compiler_stamp(self) -> None:
+        real_clang = shutil.which("clang")
+        if real_clang is None:
+            self.skipTest("clang is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "libprocess4cj_native.so"
+            bridge = root / "sandbox-net-bridge"
+            log = root / "compiler.log"
+            compiler = root / "clang-17"
+            self.make_compiler(compiler, 17, real_clang, log)
+            environment = {
+                **os.environ,
+                "AXYNDRA_NATIVE_CC": str(compiler),
+                "AXYNDRA_NATIVE_OUTPUT": str(output),
+                "AXYNDRA_NETWORK_BRIDGE_OUTPUT": str(bridge),
+            }
+            for _ in range(2):
+                result = subprocess.run(
+                    [str(PREPARE)],
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(bridge.is_file())
+            self.assertTrue(os.access(bridge, os.X_OK))
+            self.assertIn(str(compiler), Path(f"{bridge}.compiler-id").read_text())
+            bridge_builds = [
+                line for line in log.read_text().splitlines()
+                if "sandbox_net_bridge.c" in line
+            ]
+            self.assertEqual(len(bridge_builds), 1)
+
     def test_rejects_non_clang_and_older_clang(self) -> None:
         real_clang = shutil.which("clang")
         if real_clang is None:

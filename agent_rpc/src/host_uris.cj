@@ -441,7 +441,7 @@ func optionalBoolean(
     match (value.field(name)) {
         case Some(field) =>
             if (field.unifiedKind == ValueKind.Boolean) {
-                field.boolean
+                field.asBool()
             } else {
                 fallback
             }

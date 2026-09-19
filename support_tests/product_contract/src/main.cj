@@ -1,8 +1,9 @@
 package product_contract
 
-import yjson_support.*
+import agent_runtime.*
 
 import yjson.*
+import yjson_support.*
 
 import agent_core.*
 import agent_domain.*
@@ -38,6 +39,12 @@ main(): Int64 {
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("config-preservation")) {
             runConfigPreservationContract(root)
             println("product config preservation contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("provider-configuration")) {
+            prepareContractFiles(root)
+            runProviderConfigurationContracts(root)
+            println("product provider configuration contract passed")
             return 0
         }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("atomic-rollback")) {
@@ -219,7 +226,7 @@ func runNetworkApprovalProductContracts(root: String): Unit {
     Directory.create(disabledSettings, recursive: true)
     File.writeTo(
         disabledSettings + "/config.yml",
-        ("approval:\n" + "  policy:\n" +
+        ("schema_version: 1\n" + "approval:\n" + "  policy:\n" +
             "    ask_on_network: false\n").toArray()
     )
     let disabled = openProduct(config: ProductConfig(
@@ -418,11 +425,10 @@ func prepareContractFiles(root: String): Unit {
     Directory.create(root + "/config", recursive: true)
     File.writeTo(
         root + "/config/config.yml",
-        ("default_model: local-openai/local-model\n" + "theme: contract\n" + "async:\n" + "  enabled: false\n" +
-            "approval:\n" + "  mode: ai\n" + "  failure_policy: deny\n" + "  timeout_ms: 1200\n" +
+        ("schema_version: 1\n" + "default_model: local-openai/local-model\n" + "theme: contract\n" + "async:\n" + "  enabled: false\n" +
+            "approval:\n" + "  mode: ai\n  failure_policy: deny\n  timeout_ms: 1200\n" +
             "  log_decisions: true\n" + "  reviewer:\n" + "    model: local-openai/backup-model\n" +
             "    reasoning_effort: medium\n" + "  policy:\n" + "    allow_workspace_writes: true\n" +
-            "    ask_on_network: true\n" + "model_roles:\n" + "  approval: local-openai/backup-model\n" +
             "compaction:\n" + "  max_input_tokens: 120000\n" + "  trigger_percent: 87\n" +
             "  target_percent: 59\n" + "  emergency_max_messages: 600\n" +
             "  keep_recent_tokens: 52000\n" + "  summary_strategy: hybrid\n" +
@@ -869,6 +875,7 @@ func runConfigFileContracts(root: String): Unit {
     let fallbackCompaction = settings.compaction.resolvedForModel("local-openai/backup-model")
     expect(
         settings.model == "local-openai/local-model" && !settings.asyncEnabled && settings.theme == "contract" &&
+            settings.shellNetworkMode == ShellNetworkMode.Restricted && settings.sandboxCaBundle == "" &&
             settings.approval.mode == ApprovalRoutingMode.Ai && settings.approval.failurePolicy == ApprovalFailurePolicy
             .Deny && settings.approval.timeoutMillis == 1200 && settings.approval.reviewerModel ==
             "local-openai/backup-model" && settings.compaction.maxInputTokens == 120000 &&
@@ -882,12 +889,38 @@ func runConfigFileContracts(root: String): Unit {
             localCompaction.targetPercent == 64 && localCompaction.summaryStrategy == "hybrid" &&
             localCompaction.summaryModel == "local-openai/backup-model" && fallbackCompaction.maxInputTokens == 120000 &&
             fallbackCompaction.triggerPercent == 87 && fallbackCompaction.targetPercent == 59,
-        "config.yml selects global defaults and exact-model compaction watermarks"
+        "config.yml selects global defaults, network mode, and exact-model compaction watermarks"
+    )
+    Directory.create(root + "/network-config", recursive: true)
+    File.writeTo(
+        root + "/network-config/config.yml",
+        ("schema_version: 1\n" +
+            "shell:\n" +
+            "  network_mode: proxy\n" +
+            "sandbox:\n" +
+            "  ca_bundle: /etc/ssl/certs/ca-certificates.crt\n").toArray()
+    )
+    let networkSettings = loadProductSettings(root + "/network-config").value().getOrThrow()
+    expect(
+        networkSettings.shellNetworkMode == ShellNetworkMode.Proxy &&
+            networkSettings.sandboxCaBundle == "/etc/ssl/certs/ca-certificates.crt",
+        "config.yml freezes the proxy shell mode and selected CA bundle"
+    )
+    Directory.create(root + "/missing-schema-config", recursive: true)
+    let missingSchemaPath = root + "/missing-schema-config/config.yml"
+    let missingSchemaSource = "default_model: existing/model\n"
+    File.writeTo(missingSchemaPath, missingSchemaSource.toArray())
+    let missingSchema = loadProductSettings(root + "/missing-schema-config")
+    expect(
+        missingSchema.isError() &&
+            missingSchema.error().getOrThrow().code == "config.unsupported_version" &&
+            String.fromUtf8(File.readFrom(missingSchemaPath)) == missingSchemaSource,
+        "missing config schema is rejected without rewriting the user's file"
     )
     Directory.create(root + "/legacy-config", recursive: true)
     File.writeTo(
         root + "/legacy-config/config.yml",
-        ("provider: local-openai\n" + "model: local-model\n" + "base_url: http://127.0.0.1:11434\n").toArray()
+        ("schema_version: 1\n" + "provider: local-openai\n" + "model: local-model\n" + "base_url: http://127.0.0.1:11434\n").toArray()
     )
     expect(
         loadProductSettings(root + "/legacy-config").isError(),
@@ -896,7 +929,7 @@ func runConfigFileContracts(root: String): Unit {
     Directory.create(root + "/pre-compaction-config", recursive: true)
     File.writeTo(
         root + "/pre-compaction-config/config.yml",
-        "default_model: existing/model\n".toArray()
+        "schema_version: 1\ndefault_model: existing/model\n".toArray()
     )
     let preCompaction = loadProductSettings(root + "/pre-compaction-config").value().getOrThrow()
     expect(
@@ -912,7 +945,7 @@ func runConfigFileContracts(root: String): Unit {
     Directory.create(root + "/invalid-model-compaction", recursive: true)
     File.writeTo(
         root + "/invalid-model-compaction/config.yml",
-        ("compaction:\n" + "  models:\n" + "    provider/model:\n" + "      trigger_percent: 55\n" +
+        ("schema_version: 1\n" + "compaction:\n" + "  models:\n" + "    provider/model:\n" + "      trigger_percent: 55\n" +
             "      target_percent: 60\n").toArray()
     )
     expect(
@@ -922,7 +955,7 @@ func runConfigFileContracts(root: String): Unit {
     Directory.create(root + "/invalid-summary-compaction", recursive: true)
     File.writeTo(
         root + "/invalid-summary-compaction/config.yml",
-        ("compaction:\n" + "  summary_strategy: model_only\n").toArray()
+        ("schema_version: 1\n" + "compaction:\n" + "  summary_strategy: model_only\n").toArray()
     )
     expect(
         loadProductSettings(root + "/invalid-summary-compaction").isError(),
@@ -1066,7 +1099,7 @@ func runConfigFileContracts(root: String): Unit {
     Directory.create(root + "/unsafe-approval-config", recursive: true)
     File.writeTo(
         root + "/unsafe-approval-config/config.yml",
-        ("approval:\n" + "  mode: ai\n" + "  failurePolicy: approve\n").toArray()
+        ("schema_version: 1\n" + "approval:\n" + "  mode: ai\n" + "  failurePolicy: approve\n").toArray()
     )
     expect(
         loadProductSettings(root + "/unsafe-approval-config").isError(),
@@ -1294,7 +1327,7 @@ func runProviderProfileContracts(root: String): Unit {
         ).isOk(), "custom legacy thinking fixture is configured")
     File.writeTo(
         customLegacyRoot + "/config.yml",
-        "default_model: pretend-anthropic/custom-model\n".toArray()
+        "schema_version: 1\ndefault_model: pretend-anthropic/custom-model\n".toArray()
     )
     let rejectedLegacy = openProduct(config: ProductConfig(
         settingsRoot: customLegacyRoot,
@@ -1317,6 +1350,28 @@ func runProviderProfileContracts(root: String): Unit {
             ))
         )
     ).isOk(), "custom endpoint declares explicit thinking capability")
+    let insecureProfileRoot = profileRoot + "/insecure-http"
+    let insecureProfile = ProviderProfile(
+        "remote-plaintext",
+        "fixture",
+        "responses",
+        "http://198.51.100.20",
+        "REMOTE_HTTP_TEST_KEY",
+        allowInsecureHttp: true
+    )
+    expect(
+        ensureProductLayout(insecureProfileRoot).isOk() &&
+            upsertProviderProfile(insecureProfileRoot, insecureProfile).isOk(),
+        "explicitly opted-in remote HTTP profile persists"
+    )
+    let loadedInsecureProfile = loadProviderProfiles(insecureProfileRoot).value().getOrThrow()
+    expect(
+        loadedInsecureProfile.size == 1 &&
+            loadedInsecureProfile[0].allowInsecureHttp &&
+            String.fromUtf8(File.readFrom(insecureProfileRoot + "/providers.yml"))
+                .contains("allow_insecure_http: true"),
+        "remote HTTP opt-in survives provider profile round-trip"
+    )
     let explicitProduct = openProduct(config: ProductConfig(
         settingsRoot: customLegacyRoot,
         stateRoot: root + "/custom-legacy-thinking-explicit-state",
@@ -1326,7 +1381,7 @@ func runProviderProfileContracts(root: String): Unit {
     explicitProduct.close()
     File.writeTo(
         profileRoot + "/config.yml",
-        "default_model: anthropic-official/shared-model\n".toArray()
+        "schema_version: 1\ndefault_model: anthropic-official/shared-model\n".toArray()
     )
     let profiledProduct = openProduct(config: ProductConfig(
         settingsRoot: profileRoot,
@@ -1413,7 +1468,7 @@ func runProviderAuthenticationContracts(root: String): Unit {
     )
     File.writeTo(
         oauthRoot + "/config.yml",
-        "default_model: oauth-provider/oauth-model\n".toArray()
+        "schema_version: 1\ndefault_model: oauth-provider/oauth-model\n".toArray()
     )
     let oauthProduct = openProduct(
         config: ProductConfig(
@@ -1438,7 +1493,7 @@ func runProviderAuthenticationContracts(root: String): Unit {
     }
     File.writeTo(
         profileRoot + "/config.yml",
-        "default_model: deepseek-anthropic/shared-model\n".toArray()
+        "schema_version: 1\ndefault_model: deepseek-anthropic/shared-model\n".toArray()
     )
     let profiledProduct = match (openProduct(
         config: ProductConfig(
@@ -1514,7 +1569,7 @@ func runToolContracts(root: String): Unit {
     expectOrchestrationToolSchemas(workspace, processes)
     let pipeline = ToolPipeline(
         catalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.AlwaysAsk),
@@ -1671,7 +1726,7 @@ func runReadApprovalClassificationContracts(root: String): Unit {
     )
     let pipeline = ToolPipeline(
         catalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.AlwaysAsk)
@@ -1682,7 +1737,7 @@ func runReadApprovalClassificationContracts(root: String): Unit {
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
     )
     let missingReadFailed = toolOutcomeFailed(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-missing-workspace",
@@ -1696,7 +1751,7 @@ func runReadApprovalClassificationContracts(root: String): Unit {
         "missing workspace reads fail as tool results without opening an external-path approval"
     )
     let outsideApproval = approvalFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-temp",
@@ -1718,7 +1773,7 @@ func runReadApprovalClassificationContracts(root: String): Unit {
         "an approved temporary read executes the originally reviewed path"
     )
 
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         context,
         ToolCall(
             "read-sensitive",
@@ -1797,7 +1852,7 @@ func expectCoreToolSchemas(catalog: ToolCatalog): Unit {
     expectToolSchema(
         catalog,
         "bash",
-        ["command", "env", "timeout", "cwd", "pty", "async"],
+        ["command", "env", "timeout", "cwd", "pty", "async", "network"],
         ["command"]
     )
     expectToolSchema(
@@ -1922,7 +1977,7 @@ func runAskToolContracts(
     context: ToolInvocationContext,
     askRuntime: AskRuntime
 ): Unit {
-    let headlessAsk = pipeline.invoke(
+    let headlessAsk = executePipelineCall(pipeline,
         context,
         askSingleCall("ask-headless")
     )
@@ -1933,7 +1988,7 @@ func runAskToolContracts(
     )
     askRuntime.setInteractive(context.sessionId, true)
     let askFuture = spawn {
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             askSingleCall("ask-single")
         )
@@ -2000,7 +2055,7 @@ func runTimedAndMultipleAskContracts(
     askRuntime: AskRuntime
 ): Unit {
     let timedAskFuture = spawn {
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             askSingleCall("ask-timeout")
         )
@@ -2027,11 +2082,11 @@ func runTimedAndMultipleAskContracts(
             .output
             .field("timedOut")
             .getOrThrow()
-            .boolean,
+            .asBool(),
         "ask timeout selects the recommended option"
     )
     let multipleAskFuture = spawn {
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             askMultipleCall("ask-multiple")
         )
@@ -2076,7 +2131,7 @@ func runAskResolutionContracts(
     askRuntime: AskRuntime
 ): Unit {
     let chatAskFuture = spawn {
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             askSingleCall("ask-chat")
         )
@@ -2092,12 +2147,12 @@ func runAskResolutionContracts(
     )
     let chatAsk = completedFrom(chatAskFuture.get())
     expect(
-        chatAsk.output.field("chatRedirect").getOrThrow().boolean &&
+        chatAsk.output.field("chatRedirect").getOrThrow().asBool() &&
             chatAsk.output.field("content").getOrThrow().text.contains("chat about this"),
         "ask returns a structured chat redirect"
     )
     let cancelledAskFuture = spawn {
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             askSingleCall("ask-cancel")
         )
@@ -2119,7 +2174,7 @@ func runAskResolutionContracts(
         cancelledAsk.isError() && cancelledAsk.error().getOrThrow().kind == AgentErrorKind.Cancelled,
         "ask cancellation aborts instead of returning fake success"
     )
-    match (pipeline.invoke(
+    match (executePipelineCall(pipeline,
         context,
         askReservedLabelCall()
     )) {
@@ -2137,7 +2192,7 @@ func runAstSearchContracts(
     context: ToolInvocationContext
 ): ToolResult {
     let initializedTodos = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "todo-init",
@@ -2184,7 +2239,7 @@ func runAstSearchContracts(
         )
     )
     let astMatches = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "ast-grep-contract",
@@ -2202,15 +2257,15 @@ func runAstSearchContracts(
         )
     )
     expect(
-        !astMatches.isError && astMatches.output.field("match_count").getOrThrow().number == "2" &&
-            astMatches.output.field("file_count").getOrThrow().number == "1" &&
+        !astMatches.isError && astMatches.output.field("match_count").getOrThrow().asNumberText() == "2" &&
+            astMatches.output.field("file_count").getOrThrow().asNumberText() == "1" &&
             astMatches.output.field("content").getOrThrow().text.contains("[ast/sample.py#") &&
             astMatches.output.field("content").getOrThrow().text.contains("meta: VALUE=value") &&
             astMatches.output.field("content").getOrThrow().text.contains("meta: VALUE=42"),
         "ast_grep performs structural search with hashline anchors"
     )
     let astPaged = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "ast-grep-page",
@@ -2229,14 +2284,14 @@ func runAstSearchContracts(
         )
     )
     expect(
-        astPaged.output.field("match_count").getOrThrow().number == "2" &&
-            astPaged.output.field("visible_count").getOrThrow().number == "1" &&
+        astPaged.output.field("match_count").getOrThrow().asNumberText() == "2" &&
+            astPaged.output.field("visible_count").getOrThrow().asNumberText() == "1" &&
             !astPaged.output.field("content").getOrThrow().text.contains("VALUE=value") &&
             astPaged.output.field("content").getOrThrow().text.contains("VALUE=42"),
         "ast_grep applies the stable match offset"
     )
     let astEmpty = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "ast-grep-empty",
@@ -2257,12 +2312,12 @@ func runAstSearchContracts(
         )
     )
     expect(
-        !astEmpty.isError && astEmpty.output.field("match_count").getOrThrow().number == "0" &&
+        !astEmpty.isError && astEmpty.output.field("match_count").getOrThrow().asNumberText() == "0" &&
             astEmpty.output.field("content").getOrThrow().text == "No matches found",
         "ast_grep treats zero structural matches as a successful result"
     )
     expect(
-        toolOutcomeFailed(pipeline.invoke(
+        toolOutcomeFailed(executePipelineCall(pipeline,
             context,
             ToolCall(
                 "ast-grep-escape",
@@ -2296,7 +2351,7 @@ func runAstEditContracts(
     )
     let astEditPipeline = ToolPipeline(
         astEditCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -2308,7 +2363,7 @@ func runAstEditContracts(
     )
     let astOriginal = String.fromUtf8(File.readFrom(root + "/ast/sample.py"))
     let preview = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             astEditCall(
                 "ast-edit-preview",
@@ -2319,15 +2374,15 @@ func runAstEditContracts(
         )
     )
     expect(
-        !preview.isError && !preview.output.field("applied").getOrThrow().boolean &&
-            preview.output.field("total_replacements").getOrThrow().number == "2" &&
+        !preview.isError && !preview.output.field("applied").getOrThrow().asBool() &&
+            preview.output.field("total_replacements").getOrThrow().asNumberText() == "2" &&
             preview.output.field("content").getOrThrow().text.contains("files NOT modified yet") &&
             preview.output.field("content").getOrThrow().text.contains("[ast/sample.py#") &&
             String.fromUtf8(File.readFrom(root + "/ast/sample.py")) == astOriginal,
         "ast_edit stages a hashline preview without modifying files"
     )
     let rejected = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             resolutionWrite(
                 "ast-edit-reject",
@@ -2343,7 +2398,7 @@ func runAstEditContracts(
         "xd://reject discards the pending AST edit"
     )
     let _ = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             astEditCall(
                 "ast-edit-stale-preview",
@@ -2359,7 +2414,7 @@ func runAstEditContracts(
         externallyChanged.toArray()
     )
     let staleResolution = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             resolutionWrite(
                 "ast-edit-stale-resolve",
@@ -2375,7 +2430,7 @@ func runAstEditContracts(
         "ast_edit rejects stale previews before any file is modified"
     )
     let _ = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             resolutionWrite(
                 "ast-edit-stale-reject",
@@ -2386,7 +2441,7 @@ func runAstEditContracts(
     )
     File.writeTo(root + "/ast/sample.py", astOriginal.toArray())
     let _ = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             astEditCall(
                 "ast-edit-apply-preview",
@@ -2397,7 +2452,7 @@ func runAstEditContracts(
         )
     )
     let applied = completedFrom(
-        astEditPipeline.invoke(
+        executePipelineCall(astEditPipeline,
             astEditContext,
             resolutionWrite(
                 "ast-edit-apply",
@@ -2408,13 +2463,13 @@ func runAstEditContracts(
     )
     let appliedSource = String.fromUtf8(File.readFrom(root + "/ast/sample.py"))
     expect(
-        applied.output.field("applied").getOrThrow().boolean && applied.output.field("action").getOrThrow().text ==
+        applied.output.field("applied").getOrThrow().asBool() && applied.output.field("action").getOrThrow().text ==
             "apply" && applied.output.field("content").getOrThrow().text.contains("Applied 2 replacements in 1 file.") &&
             applied.output.field("content").getOrThrow().text.contains("[ast/sample.py#") && appliedSource.contains(
             "return wrap(value)") && appliedSource.contains("return wrap(42)"),
         "xd://resolve atomically applies the reviewed AST edit"
     )
-    match (astEditPipeline.invoke(
+    match (executePipelineCall(astEditPipeline,
         astEditContext,
         resolutionWrite(
             "ast-edit-duplicate-resolve",
@@ -2429,7 +2484,7 @@ func runAstEditContracts(
         )
         case _ => throw IllegalStateException("duplicate AST resolve was not denied")
     }
-    match (astEditPipeline.invoke(
+    match (executePipelineCall(astEditPipeline,
         astEditContext,
         astEditCallWithOps(
             "ast-edit-duplicate-pattern",
@@ -2467,7 +2522,7 @@ func runLspContracts(
     )
     let lspPipeline = ToolPipeline(
         lspCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -2493,7 +2548,7 @@ func runLspQueryContracts(
     lspContext: ToolInvocationContext
 ): Unit {
     let lspStatus = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall("lsp-status", "status")
         )
@@ -2508,7 +2563,7 @@ func runLspQueryContracts(
         "lsp status distinguishes configured and started servers"
     )
     let lspDefinition = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-definition",
@@ -2524,7 +2579,7 @@ func runLspQueryContracts(
         "lsp definition comes from the live pyright server"
     )
     let lspReferences = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-references",
@@ -2540,7 +2595,7 @@ func runLspQueryContracts(
         "lsp references executes the project-aware request"
     )
     let lspHover = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-hover",
@@ -2556,7 +2611,7 @@ func runLspQueryContracts(
         "lsp hover returns server type information"
     )
     let lspSymbols = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-symbols",
@@ -2570,7 +2625,7 @@ func runLspQueryContracts(
         "lsp document symbols are structured and rendered"
     )
     let lspCapabilities = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-capabilities",
@@ -2584,7 +2639,7 @@ func runLspQueryContracts(
         "lsp capabilities report the initialized server response"
     )
     let lspRaw = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-raw",
@@ -2608,7 +2663,7 @@ func runLspMutationContracts(
     let root = workspace.rootPath()
     let beforeRename = String.fromUtf8(File.readFrom(root + "/lsp/helper.py"))
     let renamePreview = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-rename-preview",
@@ -2627,7 +2682,7 @@ func runLspMutationContracts(
         "lsp rename preview does not mutate files"
     )
     let renameApplied = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-rename-apply",
@@ -2650,7 +2705,7 @@ func runLspMutationContracts(
             .text
     )
     let lspDiagnostics = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-diagnostics",
@@ -2665,7 +2720,7 @@ func runLspMutationContracts(
         "lsp diagnostics consumes live publishDiagnostics results"
     )
     let lspCodeActions = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-code-actions",
@@ -2680,7 +2735,7 @@ func runLspMutationContracts(
         "lsp code_actions queries the live server without fake actions"
     )
     let workspaceSymbols = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-workspace-symbols",
@@ -2695,7 +2750,7 @@ func runLspMutationContracts(
         "lsp workspace symbols aggregate initialized project servers"
     )
     let renameFilePreview = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-rename-file-preview",
@@ -2715,7 +2770,7 @@ func runLspMutationContracts(
             renameFilePreview.output.stringify()
     )
     let renameFileApplied = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-rename-file-apply",
@@ -2731,7 +2786,7 @@ func runLspMutationContracts(
         "lsp rename_file applies the reviewed filesystem rename"
     )
     let lspReload = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-reload",
@@ -2753,7 +2808,7 @@ func runLspResourceContracts(
 ): Unit {
     let root = workspace.rootPath()
     let lspResourceEdit = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-resource-edit",
@@ -2772,7 +2827,7 @@ func runLspResourceContracts(
             !exists(Path(root + "/lsp/delete_me.txt")),
         "lsp applies ordered create, text, rename, and delete operations"
     )
-    let lspResourceRollback = lspPipeline.invoke(
+    let lspResourceRollback = executePipelineCall(lspPipeline,
         lspContext,
         lspCall(
             "lsp-resource-rollback",
@@ -2794,7 +2849,7 @@ func runLspResourceContracts(
         "lsp rolls back prior resource operations when a later edit fails"
     )
     let lspServerApply = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-server-apply",
@@ -2812,7 +2867,7 @@ func runLspResourceContracts(
         "write LSP actions honor real workspace/applyEdit requests"
     )
     let lspReadOnlyApply = completedFrom(
-        lspPipeline.invoke(
+        executePipelineCall(lspPipeline,
             lspContext,
             lspCall(
                 "lsp-readonly-apply",
@@ -2874,7 +2929,7 @@ func runCheckpointContracts(
     )
     let checkpointPipeline = ToolPipeline(
         checkpointCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -2885,7 +2940,7 @@ func runCheckpointContracts(
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
     )
     expect(
-        toolOutcomeFailed(checkpointPipeline.invoke(
+        toolOutcomeFailed(executePipelineCall(checkpointPipeline,
             checkpointContext,
             ToolCall(
                 "checkpoint-nested",
@@ -2898,11 +2953,12 @@ func runCheckpointContracts(
                         )
                     ]
                 )
-            )
+            ),
+            persistResult: false
         )),
         "checkpoint rejects a nested active checkpoint"
     )
-    expect(!toolOutcomeFailed(checkpointPipeline.invoke(
+    let rewindAttempt = executePipelineCall(checkpointPipeline,
         checkpointContext,
         ToolCall(
             "rewind-call",
@@ -2910,8 +2966,21 @@ func runCheckpointContracts(
             objectValue([ValueField(
                 "report", textValue("The parser boundary is in decode().")
             )])
+        ),
+        persistResult: false
+    )
+    match (rewindAttempt) {
+        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
+            !result.isError,
+            "active canonical checkpoint accepts rewind: " + result.output.stringify()
         )
-    )), "active canonical checkpoint accepts rewind")
+        case Result.Ok(_) => throw IllegalStateException(
+            "active canonical checkpoint returned a non-completed result"
+        )
+        case Result.Err(error) => throw IllegalStateException(
+            "active canonical checkpoint failed: " + error.code + ": " + error.message
+        )
+    }
     database.close()
     runRewindContract(workspace, processes)
 }
@@ -2941,7 +3010,7 @@ func runRewindContract(
     )
     let restartedCheckpointPipeline = ToolPipeline(
         restartedCheckpointCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -3001,7 +3070,7 @@ func runRewindContract(
         "rewind saves a disposable projection while preserving canonical exploration"
     )
     expect(
-        toolOutcomeFailed(restartedCheckpointPipeline.invoke(
+        toolOutcomeFailed(executePipelineCall(restartedCheckpointPipeline,
             checkpointContext,
             ToolCall(
                 "rewind-repeat",
@@ -3093,11 +3162,11 @@ func runTodoMutationContracts(
         !initializedTodos.isError && initializedTodos.output.field("op").getOrThrow().text == "init" &&
             initializedPhases.size == 2 && initializedPhases[0].tasks[0].status == TodoStatus.InProgress &&
             initializedPhases[0].tasks[1].status == TodoStatus.Pending,
-        "todo initializes explicitly and promotes the first pending task"
+        "todo initializes explicitly and promotes the first pending task: " + initializedTodos.output.stringify()
     )
     expect(
         completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 todoCall(
                     "todo-start",
@@ -3119,7 +3188,7 @@ func runTodoMutationContracts(
         "todo start selects exactly one active task"
     )
     let doneResult = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall("todo-done", "done", task: "Wire")
         )
@@ -3131,7 +3200,7 @@ func runTodoMutationContracts(
         "todo done reports completion and advances pending work"
     )
     let blockedResult = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall(
                 "todo-block",
@@ -3148,7 +3217,7 @@ func runTodoMutationContracts(
         "todo block normalizes its reason and advances other work"
     )
     let unblockedPhases = decodeTodoPhases(completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall(
                 "todo-unblock",
@@ -3163,7 +3232,7 @@ func runTodoMutationContracts(
     )
     expect(
         completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 todoCall(
                     "todo-append",
@@ -3176,7 +3245,7 @@ func runTodoMutationContracts(
         "todo append adds tasks to an existing phase"
     )
     let duplicateAppend = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall(
                 "todo-append-duplicate",
@@ -3193,7 +3262,7 @@ func runTodoMutationContracts(
     )
     expect(
         !completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 todoCall(
                     "todo-drop",
@@ -3205,7 +3274,7 @@ func runTodoMutationContracts(
         "todo drop closes every task in a phase"
     )
     let removedTaskPhases = decodeTodoPhases(completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall("todo-rm-task", "rm", task: "Wire")
         )
@@ -3216,7 +3285,7 @@ func runTodoMutationContracts(
     )
     expect(
         !completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 todoCall(
                     "todo-append-cleanup",
@@ -3226,7 +3295,7 @@ func runTodoMutationContracts(
                 )
             )
         ).isError && !completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 todoCall(
                     "todo-rm-phase",
@@ -3268,7 +3337,7 @@ func runTodoViewContracts(
         "prepare unnormalized persisted todo state"
     )
     let viewed = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall("todo-view", "view")
         )
@@ -3283,7 +3352,7 @@ func runTodoViewContracts(
         "todo view is pure and does not normalize or rewrite state"
     )
     let clearedTodos = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             todoCall("todo-rm-all", "rm")
         )
@@ -3294,7 +3363,7 @@ func runTodoViewContracts(
         "todo rm clears all tasks and state survives repository restart"
     )
     expect(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-1",
@@ -3306,7 +3375,7 @@ func runTodoViewContracts(
     )
     expect(
         completedFrom(
-            pipeline.invoke(
+            executePipelineCall(pipeline,
                 context,
                 ToolCall(
                     "read-extensionless",
@@ -3356,7 +3425,7 @@ func runWorkspaceReadContracts(
 ): Unit {
     let largePrefix = largeLinesPrefix()
     let rangedRead = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-range",
@@ -3376,11 +3445,11 @@ func runWorkspaceReadContracts(
             .output
             .field("truncated")
             .getOrThrow()
-            .boolean,
+            .asBool(),
         "read honors line ranges and reports truncation"
     )
     let inlineRead = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-inline",
@@ -3394,7 +3463,7 @@ func runWorkspaceReadContracts(
         "read accepts the OMP inline line selector"
     )
     let lateRangeRead = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-late-range",
@@ -3421,7 +3490,7 @@ func runWorkspaceReadContracts(
         "read ranges beyond one MiB retain a full-file hashline anchor"
     )
     let directoryRead = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "read-dir",
@@ -3432,19 +3501,19 @@ func runWorkspaceReadContracts(
     )
     expect(
         directoryRead.output.field("entries").getOrThrow().text.contains("lines.txt") &&
-            directoryRead.output.field("total_count").getOrThrow().number == directoryRead
+            directoryRead.output.field("total_count").getOrThrow().asNumberText() == directoryRead
             .output
             .field("count")
             .getOrThrow()
-            .number && directoryRead.output.field("returned_bytes").isSome() &&
-            !directoryRead.output.field("truncated").getOrThrow().boolean,
+            .asNumberText() && directoryRead.output.field("returned_bytes").isSome() &&
+            !directoryRead.output.field("truncated").getOrThrow().asBool(),
         "read lists directories with bounded-output metadata"
     )
     expect(
         hashlineTag("before\n") == "F27C",
         "hashline tag matches the pinned OMP xxHash32 format"
     )
-    let searchResult = pipeline.invoke(
+    let searchResult = executePipelineCall(pipeline,
         context,
         ToolCall(
             "search-1",
@@ -3471,7 +3540,7 @@ func runWorkspaceEditAndBashContracts(
     runHashlineContractAlignment(workspace)
     let root = workspace.rootPath()
     let editApproval = approvalFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "edit-1",
@@ -3510,7 +3579,7 @@ func runWorkspaceEditAndBashContracts(
     File.writeTo(root + "/multi-a.txt", "alpha\n".toArray())
     File.writeTo(root + "/multi-b.txt", "beta\n".toArray())
     let multiEdit = approvalFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "edit-multi",
@@ -3540,7 +3609,7 @@ func runWorkspaceEditAndBashContracts(
     File.writeTo(root + "/multi-a.txt", "fresh-a\n".toArray())
     File.writeTo(root + "/multi-b.txt", "fresh-b\n".toArray())
     let staleApproval = approvalFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "edit-stale-multi",
@@ -3568,7 +3637,7 @@ func runWorkspaceEditAndBashContracts(
         "one stale anchor prevents every file in the transaction"
     )
     let bashApproval = approvalFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-1",
@@ -3703,7 +3772,7 @@ func runEvalContracts(
     processes: LocalProcessPort
 ): Unit {
     let pythonFirst = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-py-first",
@@ -3718,7 +3787,7 @@ func runEvalContracts(
         "python eval executes a real cell"
     )
     let pythonPersistent = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-py-persistent",
@@ -3732,7 +3801,7 @@ func runEvalContracts(
         "python eval preserves state across calls"
     )
     let pythonTimeout = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-py-timeout",
@@ -3743,12 +3812,12 @@ func runEvalContracts(
         )
     )
     expect(
-        pythonTimeout.isError && pythonTimeout.output.field("timed_out").getOrThrow().boolean &&
+        pythonTimeout.isError && pythonTimeout.output.field("timed_out").getOrThrow().asBool() &&
             pythonTimeout.output.field("content").getOrThrow().text.contains("timed out"),
         "python eval enforces the cell timeout"
     )
     let pythonAfterTimeout = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-py-after-timeout",
@@ -3780,7 +3849,7 @@ func runEvalCancellationContract(
     )
     let cancelPipeline = ToolPipeline(
         cancelCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
@@ -3790,21 +3859,25 @@ func runEvalCancellationContract(
         SessionId("eval-cancel-contract"),
         CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn)])
     )
+    let cancelCall = evalCall(
+        "eval-py-cancel",
+        "py",
+        "import time\ntime.sleep(10)"
+    )
+    let preparedEval = match (preparePipelineCall(
+        cancelPipeline,
+        cancelContext,
+        cancelCall
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
     let cancelledEvalFuture = spawn {
-        cancelPipeline.invoke(
-            cancelContext,
-            evalCall(
-                "eval-py-cancel",
-                "py",
-                "import time\ntime.sleep(10)"
-            )
-        )
+        cancelPipeline.executePrepared(cancelContext, preparedEval)
     }
     var activeObserved = false
     for (_ in 0..500) {
-        if (processes.hasActiveOperation(
-            OperationId("eval-" + cancelContext.runId.value)
-        )) {
+        if (processes.hasActiveOperation(preparedEval.operationId)) {
             activeObserved = true
             break
         }
@@ -3818,7 +3891,7 @@ func runEvalCancellationContract(
     expect(
         cancelledEval.isError &&
             cancelledEval.output.field("status").getOrThrow().text == "error" &&
-            cancelledEval.output.field("exit_code").getOrThrow().number != "0",
+            cancelledEval.output.field("exit_code").getOrThrow().asNumberText() != "0",
         "cancelled eval reports a failed cell instead of fake success"
     )
 }
@@ -3828,7 +3901,7 @@ func runEvalLanguageContracts(
     context: ToolInvocationContext
 ): Unit {
     let pythonReset = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-py-reset",
@@ -3843,7 +3916,7 @@ func runEvalLanguageContracts(
         "python eval reset clears only the selected runtime"
     )
     let javascriptFirst = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-js-first",
@@ -3854,7 +3927,7 @@ func runEvalLanguageContracts(
         )
     )
     let javascriptPersistent = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-js-persistent",
@@ -3870,7 +3943,7 @@ func runEvalLanguageContracts(
         "javascript eval executes and preserves VM bindings"
     )
     let javascriptFailure = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-js-error",
@@ -3889,7 +3962,7 @@ func runEvalLanguageContracts(
         "javascript eval surfaces runtime failures as tool errors"
     )
     let rubyFirst = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-rb-first",
@@ -3900,7 +3973,7 @@ func runEvalLanguageContracts(
         )
     )
     let rubyPersistent = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             evalCall(
                 "eval-rb-persistent",
@@ -3922,7 +3995,7 @@ func runPersistentShellContracts(
     processes: LocalProcessPort
 ): Unit {
     let persistedShell = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-2",
@@ -3947,7 +4020,7 @@ func runPersistentShellContracts(
         "sandboxed persistent bash retains session state inside one isolation profile"
     )
     let emptyInputCommand = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-empty-input",
@@ -3969,7 +4042,7 @@ func runPersistentShellContracts(
         "persistent shell does not consume completion markers as command stdin"
     )
     let binaryOutput = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-binary-output",
@@ -4002,7 +4075,7 @@ func runPersistentShellContracts(
         "persistent shell recognizes completion markers after binary stdout and stderr"
     )
     let boundaryOutput = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-binary-boundary",
@@ -4032,7 +4105,7 @@ func runPersistentShellContracts(
         "persistent shell handles invalid UTF-8 across read boundaries and marker-like output"
     )
     let largeOutput = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-large-output",
@@ -4058,7 +4131,7 @@ func runPersistentShellContracts(
         "large stdout does not delay persistent shell completion marker recognition"
     )
     let nonzeroOutput = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-nonzero-output",
@@ -4068,7 +4141,7 @@ func runPersistentShellContracts(
         )
     )
     let signalledOutput = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-signalled-output",
@@ -4078,7 +4151,7 @@ func runPersistentShellContracts(
         )
     )
     expect(
-        nonzeroOutput.isError && nonzeroOutput.output.field("exit_code").getOrThrow().number == "1" && nonzeroOutput
+        nonzeroOutput.isError && nonzeroOutput.output.field("exit_code").getOrThrow().asNumberText() == "1" && nonzeroOutput
             .output
             .field("stdout")
             .getOrThrow()
@@ -4086,7 +4159,7 @@ func runPersistentShellContracts(
             .output
             .field("exit_code")
             .getOrThrow()
-            .number == "143",
+            .asNumberText() == "143",
         "persistent shell parses normal nonzero and signal termination statuses"
     )
     let timeoutStarted = MonoTime.now()
@@ -4107,7 +4180,7 @@ func runPersistentShellContracts(
         "persistent shell uses a monotonic deadline and preserves partial output on timeout"
     )
     let ptyResult = completedFrom(
-        pipeline.invoke(
+        executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-pty",
@@ -4130,11 +4203,11 @@ func runPersistentShellContracts(
             .output
             .field("pty")
             .getOrThrow()
-            .boolean,
+            .asBool(),
         "bash supports an explicitly requested PTY"
     )
     expect(
-        toolOutcomeFailed(pipeline.invoke(
+        toolOutcomeFailed(executePipelineCall(pipeline,
             context,
             ToolCall(
                 "bash-escape-cwd",
@@ -4171,13 +4244,13 @@ func runRestartedPermissionContracts(
     )
     let restartedPipeline = ToolPipeline(
         restartedCatalog,
-        MemoryOperationRepository(),
+        InMemoryOperationRuntimePort(),
         RecordingAuditPort(),
         ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.AlwaysAsk),
         permissions: SqlitePermissionRepository(database)
     )
-    match (restartedPipeline.invoke(
+    match (executePipelineCall(restartedPipeline,
         context,
         ToolCall(
             "bash-after-restart",
@@ -4243,14 +4316,14 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     var globAllCount = ""
     match (globPatternResult) {
         case Result.Ok(result) => match (result.output.field("count")) {
-            case Some(value) => globPatternCount = value.number
+            case Some(value) => globPatternCount = value.asNumberText()
             case None => ()
         }
         case _ => ()
     }
     match (globAllResult) {
         case Result.Ok(result) => match (result.output.field("count")) {
-            case Some(value) => globAllCount = value.number
+            case Some(value) => globAllCount = value.asNumberText()
             case None => ()
         }
         case _ => ()
@@ -4334,7 +4407,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     expect(
         match (grepCount) {
             case Result.Ok(result) => match (result.output.field("total")) {
-                case Some(value) => value.number == "1"
+                case Some(value) => value.asNumberText() == "1"
                 case None => false
             }
             case _ => false
@@ -4427,7 +4500,7 @@ func runApplicationContracts(root: String): Unit {
         "tool_context_contract",
         objectValue([])
     )) {
-        case Result.Ok(value) => value.output.boolean
+        case Result.Ok(value) => value.output.asBool()
         case _ => false
     }
     let contextRemoved = product.unregisterTool("tool_context_contract")
@@ -4524,8 +4597,13 @@ func runApplicationContracts(root: String): Unit {
 class NetworkContractTool <: ToolExecutor {
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let _ = context
         Result.Ok(ToolResult(call.callId, textValue("network-ok")))
     }
@@ -4540,8 +4618,13 @@ class ToolContextContractTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let valid = context.workspaceRoot == expectedRoot && context.cwd == expectedRoot &&
             productToolEnvironmentIsSafe(context.environment) &&
             context.environment.value("AXYNDRA_CONTEXT_SECRET").isNone() &&
@@ -4804,7 +4887,7 @@ func runSlashCommandContracts(
     let sshHelp = application.handle("/ssh help").value().getOrThrow()
     let emptySsh = application.handle("/ssh list").value().getOrThrow()
     let addedSsh = application
-        .handle("/ssh add alpha --host example.com --user elliot " + "--port 2222")
+        .handle("/ssh add alpha --host example.com --user fixture-user " + "--port 2222")
         .value()
         .getOrThrow()
     let listedSsh = application.handle("/ssh list").value().getOrThrow()
@@ -4824,9 +4907,10 @@ func runSlashCommandContracts(
             stats.text.contains("session stats:") && !sshHelp.agentInvoked && sshHelp.text.contains("/ssh add") &&
             !emptySsh.agentInvoked && emptySsh.text == "No SSH hosts configured." && !addedSsh.agentInvoked &&
             addedSsh.text == "Added SSH host \"alpha\" (project)." && listedSsh.text ==
-            "alpha | example.com | elliot | 2222 [project]" && removedSsh.text ==
-            "Removed SSH host \"alpha\" from project config." && !emptyDump.agentInvoked && emptyDump.text ==
-            "No messages to dump yet." && !exported.agentInvoked && exported.text == "Session exported to: " + exportPath &&
+            "alpha | example.com | fixture-user | 2222 [project]" && removedSsh.text ==
+            "Removed SSH host \"alpha\" from project config." && !emptyDump.agentInvoked &&
+            emptyDump.text.contains("## Configuration") && emptyDump.text.contains("direct tool: ask") &&
+            !exported.agentInvoked && exported.text == "Session exported to: " + exportPath &&
             exists(Path(exportPath)) && String
             .fromUtf8(File.readFrom(exportPath))
             .contains("<title>axyndra session</title>"),
@@ -5414,7 +5498,7 @@ func runProcessHubContracts(
     ).getOrThrow()
     let startedDaemon = processStartResult.field("daemon").getOrThrow()
     expect(
-        processStart.agentInvoked && !processStartResult.field("readyTimedOut").getOrThrow().boolean &&
+        processStart.agentInvoked && !processStartResult.field("readyTimedOut").getOrThrow().asBool() &&
             startedDaemon.field("state").getOrThrow().text == "ready" &&
             startedDaemon.field("readyMatch").getOrThrow().text == "READY" &&
             startedDaemon.field("pid").getOrThrow().unifiedKind == ValueKind.Number &&
@@ -5428,7 +5512,7 @@ func runProcessHubContracts(
     ).getOrThrow()
     expect(
         processLogs.agentInvoked && processLogResult.field("text").getOrThrow().text.contains("READY") &&
-            processLogResult.field("cursor").getOrThrow().number != "0",
+            processLogResult.field("cursor").getOrThrow().asNumberText() != "0",
         "hub logs exposes bounded output and a monotonic byte cursor"
     )
     expect(
@@ -5441,7 +5525,7 @@ func runProcessHubContracts(
         "fixture-hub-process-wait-call"
     ).getOrThrow()
     expect(
-        processWait.agentInvoked && !processWaitResult.field("timedOut").getOrThrow().boolean &&
+        processWait.agentInvoked && !processWaitResult.field("timedOut").getOrThrow().asBool() &&
             processWaitResult.field("matched").getOrThrow().text == "ECHO:hello",
         "hub wait observes a regex produced after stdin delivery"
     )
@@ -5455,7 +5539,7 @@ func runProcessHubContracts(
             processSpec.field("restart").getOrThrow().text == "no" && !processSpec
             .field("persist")
             .getOrThrow()
-            .boolean && !processSpec.field("detached").getOrThrow().boolean,
+            .asBool() && !processSpec.field("detached").getOrThrow().asBool(),
         "hub describe returns the immutable launch specification"
     )
     let processRestart = processApplication.handle("fixture hub process restart").value().getOrThrow()
@@ -5465,7 +5549,7 @@ func runProcessHubContracts(
     ).getOrThrow().field("daemon").getOrThrow()
     expect(
         processRestart.agentInvoked && restartedDaemon.field("state").getOrThrow().text == "ready" &&
-            restartedDaemon.field("restartCount").getOrThrow().number == "0",
+            restartedDaemon.field("restartCount").getOrThrow().asNumberText() == "0",
         "manual hub restart relaunches without counting as an automatic " + "restart"
     )
     let processPs = processApplication.handle("fixture hub process ps").value().getOrThrow()
@@ -6982,6 +7066,21 @@ func rejectsIllegalArgument(action: () -> Unit): Bool {
 
 func runAtomicWorkspaceContracts(root: String): Unit {
     let workspace = LocalWorkspace(root)
+    match (workspace.writeFile("missing-parent/file", "blocked")) {
+        case Result.Err(error) => expect(
+            error.code == "workspace.parent_missing",
+            "write rejects a missing parent before staging"
+        )
+        case _ => throw IllegalStateException("write created a missing parent")
+    }
+    Directory.create(root + "/directory-target")
+    match (workspace.writeFile("directory-target", "blocked")) {
+        case Result.Err(error) => expect(
+            error.code == "workspace.not_regular",
+            "write rejects a directory target before staging"
+        )
+        case _ => throw IllegalStateException("write replaced a directory target")
+    }
     let path = root + "/atomic-mode.txt"
     let other = root + "/atomic-other.txt"
     File.writeTo(path, "old".toArray())
@@ -7020,10 +7119,10 @@ func runAtomicWorkspaceContracts(root: String): Unit {
     let requirements = catalog.resolvedDescriptor(call).getOrThrow().requiredCapabilities()
     expect(requirements.size == 2 && requirements[0].resource != requirements[1].resource,
         "multi edit declares a distinct capability for each path")
-    let pipeline = ToolPipeline(catalog, MemoryOperationRepository(), RecordingAuditPort(), ProductIds())
+    let pipeline = ToolPipeline(catalog, InMemoryOperationRuntimePort(), RecordingAuditPort(), ProductIds())
     let context = ToolInvocationContext(RunId("atomic-capability"), SessionId("atomic-capability"),
         CapabilitySet(values: [requirements[0]]))
-    expect(match (pipeline.invoke(context, call)) {
+    expect(match (executePipelineCall(pipeline, context, call)) {
         case Result.Ok(ToolInvocationResult.Denied(_)) => true
         case _ => false
     }, "first-path-only grant cannot authorize multi-path edit")

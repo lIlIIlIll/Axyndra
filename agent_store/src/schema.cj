@@ -10,8 +10,6 @@ func v1Schema(): Array<String> {
         "CREATE TABLE app_run_events (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, sequence_start INTEGER NOT NULL, sequence_end INTEGER NOT NULL, payload TEXT NOT NULL, accounting INTEGER NOT NULL, event_class TEXT NOT NULL, stream_key TEXT NOT NULL, delta_count INTEGER NOT NULL, char_count INTEGER NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(run_id, sequence))",
         "CREATE TABLE app_run_event_heads (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, last_sequence INTEGER NOT NULL)",
         "CREATE TABLE approval_decisions (operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
-        "CREATE TABLE tool_operation_intents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, revision INTEGER NOT NULL)",
-        "CREATE TABLE tool_operation_intent_receipts (operation_id TEXT PRIMARY KEY REFERENCES tool_operation_intents(id) ON DELETE CASCADE, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE session_permission_grants (thread_id TEXT NOT NULL, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,digest))",
         "CREATE TABLE thread_metadata (thread_id TEXT PRIMARY KEY, name TEXT NOT NULL, summary TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, model TEXT NOT NULL, workspace_root TEXT NOT NULL, cwd TEXT NOT NULL, fast_mode INTEGER NOT NULL, parent_thread_ref TEXT NOT NULL, work_mode TEXT NOT NULL, draft TEXT NOT NULL, todo_payload TEXT NOT NULL, goal_payload TEXT NOT NULL)",
         "CREATE TABLE run_model_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, request_sequence INTEGER NOT NULL, role TEXT NOT NULL, estimated_input_tokens INTEGER NOT NULL, actual_input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL, cost_micros INTEGER, created_at_millis INTEGER NOT NULL, UNIQUE(run_id, request_sequence))",
@@ -57,7 +55,6 @@ func v1Schema(): Array<String> {
         "CREATE INDEX app_run_events_run ON app_run_events(run_id, sequence)",
         "CREATE INDEX app_run_events_class ON app_run_events(run_id,event_class,sequence)",
         "CREATE INDEX approval_decisions_run ON approval_decisions(run_id)",
-        "CREATE INDEX tool_operation_intents_run ON tool_operation_intents(run_id)",
         "CREATE INDEX operations_run ON operations(run_id)",
         "CREATE INDEX run_model_usage_run ON run_model_usage(run_id, request_sequence)",
         "CREATE INDEX operations_tool_call ON operations(tool_call_item_id)",
@@ -92,10 +89,8 @@ func v2Migration(): Array<String> {
 
 func v3Migration(): Array<String> {
     [
-        "CREATE TABLE tool_operation_intents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, revision INTEGER NOT NULL)",
-        "CREATE TABLE tool_operation_intent_receipts (operation_id TEXT PRIMARY KEY REFERENCES tool_operation_intents(id) ON DELETE CASCADE, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
-        "CREATE TABLE session_permission_grants (thread_id TEXT NOT NULL, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,digest))",
-        "CREATE INDEX tool_operation_intents_run ON tool_operation_intents(run_id)"
+        "DROP TABLE IF EXISTS tool_operation_receipts",
+        "DROP TABLE IF EXISTS tool_operation_intents"
     ]
 }
 
@@ -266,5 +261,13 @@ func v20Migration(): Array<String> {
 func v21Migration(): Array<String> {
     [
         "ALTER TABLE run_continuations ADD COLUMN active_attempt_id TEXT REFERENCES model_attempts(id)"
+    ]
+}
+
+func v22Migration(): Array<String> {
+    [
+        "DROP TABLE IF EXISTS tool_operation_receipts",
+        "DROP TABLE IF EXISTS tool_operation_intents",
+        "DROP TABLE IF EXISTS tool_operation_intent_receipts"
     ]
 }

@@ -643,7 +643,7 @@ main(): Int64 {
         Directory.create(providerRoot, recursive: true)
         File.writeTo(
             providerRoot + "/config.yml",
-            "default_model: local-a/a-model\n".toArray()
+            "schema_version: 1\ndefault_model: local-a/a-model\n".toArray()
         )
         File.writeTo(
             providerRoot + "/models.yml",

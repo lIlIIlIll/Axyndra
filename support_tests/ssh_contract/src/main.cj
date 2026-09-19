@@ -31,7 +31,7 @@ main(): Int64 {
             ProductSshHost(
                 "alpha",
                 "example.com",
-                username: "elliot",
+                username: "test-user",
                 port: Some(2222),
                 keyPath: "/tmp/key",
                 description: "demo",
@@ -49,7 +49,7 @@ main(): Int64 {
             listed.project[0].name == "beta" &&
             listed.user.size == 1 &&
             listed.user[0].name == "alpha" &&
-            listed.user[0].username == "elliot" &&
+            listed.user[0].username == "test-user" &&
             listed.user[0].port == Some(2222) &&
             listed.user[0].compat,
             "round-trips every public host field"

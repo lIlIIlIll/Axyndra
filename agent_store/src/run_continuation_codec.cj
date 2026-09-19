@@ -269,7 +269,7 @@ func continuationInt(value: AgentValue, name: String): Int64 {
     if (field.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("durable continuation integer expected: " + name)
     }
-    try { Int64.parse(field.number) } catch (_: Exception) {
+    try { Int64.parse(field.asNumberText()) } catch (_: Exception) {
         throw IllegalStateException("durable continuation integer is invalid: " + name)
     }
 }

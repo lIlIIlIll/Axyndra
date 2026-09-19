@@ -212,7 +212,7 @@ func compositionText(value: AgentValue, name: String): String {
 func compositionInt(value: AgentValue, name: String): Int64 {
     let field = compositionField(value, name)
     if (field.unifiedKind != ValueKind.Number) { throw IllegalStateException("Composition integer expected") }
-    try { Int64.parse(field.number) } catch (_: Exception) {
+    try { Int64.parse(field.asNumberText()) } catch (_: Exception) {
         throw IllegalStateException("Composition integer is invalid")
     }
 }

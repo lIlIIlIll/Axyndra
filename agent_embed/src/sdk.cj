@@ -96,7 +96,7 @@ public class AgentBuilder {
     private var policyValue: ?OriginValue<PolicyBinding> = None
     private var budgetValue: ?OriginValue<ResourceBudget> = None
     private var promptValue: ?OriginValue<PromptBuild> = None
-    private var operationsValue: ?OperationRepository = None
+    private var operationsValue: ?OperationRuntimePort = None
     private var auditValue: ?AuditPort = None
     private var idsValue: ?IdGenerator = None
     private var permissionsValue: ?PermissionRepository = None
@@ -236,8 +236,8 @@ public class AgentBuilder {
         this
     }
 
-    public func operations(repository: OperationRepository): AgentBuilder {
-        operationsValue = Some(repository)
+    public func operations(runtime: OperationRuntimePort): AgentBuilder {
+        operationsValue = Some(runtime)
         this
     }
 
@@ -434,7 +434,8 @@ public class AgentBuilder {
             runs.value.repository,
             pipeline,
             tools.value.catalog,
-            threadRuntimes: Some(threadRuntimes)
+            threadRuntimes: Some(threadRuntimes),
+            operationRuntime: Some(operations)
         )
         let configuration = AgentSdkConfiguration(
             stringOrigin(provider, provider.value.label),
@@ -475,7 +476,7 @@ public class AgentBuilder {
         if (policyValue.isNone()) { values.add("policy") }
         if (budgetValue.isNone()) { values.add("budget") }
         if (promptValue.isNone()) { values.add("prompt") }
-        if (operationsValue.isNone()) { values.add("operation_repository") }
+        if (operationsValue.isNone()) { values.add("operation_runtime") }
         if (auditValue.isNone()) { values.add("audit") }
         if (idsValue.isNone()) { values.add("ids") }
         values.toArray()

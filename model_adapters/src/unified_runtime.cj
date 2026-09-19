@@ -45,6 +45,7 @@ public class RuntimeProviderProfile {
     public let provider: String
     public let baseUrl: String
     public let apiKeyEnv: String
+    public let allowInsecureHttp: Bool
     public let authentication: String
     public let credentialFile: String
     public let timeoutMillis: Int64
@@ -56,6 +57,7 @@ public class RuntimeProviderProfile {
         provider: String,
         baseUrl: String,
         apiKeyEnv: String,
+        allowInsecureHttp!: Bool = false,
         authentication!: String = "api-key",
         credentialFile!: String = "",
         timeoutMillis!: Int64 = 120000,
@@ -72,6 +74,7 @@ public class RuntimeProviderProfile {
         this.id = id.trimAscii()
         this.provider = provider.trimAscii()
         this.baseUrl = baseUrl.trimAscii().removeSuffix("/")
+        this.allowInsecureHttp = allowInsecureHttp
         this.apiKeyEnv = apiKeyEnv.trimAscii()
         this.authentication = authentication
         this.credentialFile = credentialFile
@@ -136,6 +139,7 @@ abstract class TypedLlmApiAdapter <: LlmApiAdapter {
         ProviderModelPort(ProviderSpec(
             profile.id, protocol, model.wireModelId, profile.baseUrl,
             profile.apiKeyEnv,
+            allowInsecureHttp: profile.allowInsecureHttp,
             credentialFile: profile.credentialFile,
             timeoutMillis: profile.timeoutMillis,
             provider: profile.provider,

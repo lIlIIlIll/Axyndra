@@ -17,16 +17,23 @@ let AST_EDIT_PREVIEW_NOTICE =
 class AstGrepTool <: ToolExecutor {
     private let workspace: LocalWorkspace
     private let processes: ProcessPort
+    private let operations: ProductProcessOperations
 
     init(workspace: LocalWorkspace, processes: ProcessPort) {
         this.workspace = workspace
         this.processes = processes
+        this.operations = processOperations(processes, "ast-grep")
     }
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let pattern = match (requiredString(call, "pat")) {
             case Result.Ok(value) => value.trimAscii()
             case Result.Err(error) => return Result.Err(error)
@@ -70,13 +77,18 @@ class AstGrepTool <: ToolExecutor {
                 case None => ()
             }
             arguments.add(target.basePath)
-            let result = match (processes.execute(ProcessRequest(
-                "/usr/bin/ast-grep",
-                operationId: astGrepOperationId(context.runId),
-                arguments: arguments.toArray(),
-                timeoutMillis: 30000,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
-            ))) {
+            let result = match (operations.execute(
+                context,
+                prepared,
+                { operationId => processes.execute(ProcessRequest(
+                    "/usr/bin/ast-grep",
+                    operationId: operationId,
+                    arguments: arguments.toArray(),
+                    timeoutMillis: 30000,
+                    sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+                    networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                )) }
+            )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
@@ -164,15 +176,7 @@ class AstGrepTool <: ToolExecutor {
     }
 
     public func cancel(runId: RunId): Result<Unit> {
-        match (processes.cancel(astGrepOperationId(runId))) {
-            case Result.Ok(_) => Result.Ok(())
-            case Result.Err(error) =>
-                if (error.code == "process.operation_not_running") {
-                    Result.Ok(())
-                } else {
-                    Result.Err(error)
-                }
-        }
+        operations.cancel(runId)
     }
 }
 
@@ -181,16 +185,23 @@ class AstEditRuntime {
     private let processes: ProcessPort
     private let lock = Mutex()
     private let pending = ArrayList<PendingAstEdit>()
+    private let operations: ProductProcessOperations
 
     init(workspace: LocalWorkspace, processes: ProcessPort) {
         this.workspace = workspace
         this.processes = processes
+        this.operations = processOperations(processes, "ast-edit")
     }
 
     func preview(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let ops = match (decodeAstEditOps(call)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -226,13 +237,18 @@ class AstEditRuntime {
                     case None => ()
                 }
                 arguments.add(target.basePath)
-                let result = match (processes.execute(ProcessRequest(
-                    "/usr/bin/ast-grep",
-                    operationId: astEditOperationId(context.runId),
-                    arguments: arguments.toArray(),
-                    timeoutMillis: 30000,
-                    sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
-                ))) {
+                let result = match (operations.execute(
+                    context,
+                    prepared,
+                    { operationId => processes.execute(ProcessRequest(
+                        "/usr/bin/ast-grep",
+                        operationId: operationId,
+                        arguments: arguments.toArray(),
+                        timeoutMillis: 30000,
+                        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+                        networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                    )) }
+                )) {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result.Err(error)
                 }
@@ -421,15 +437,7 @@ class AstEditRuntime {
     }
 
     func cancel(runId: RunId): Result<Unit> {
-        match (processes.cancel(astEditOperationId(runId))) {
-            case Result.Ok(_) => Result.Ok(())
-            case Result.Err(error) =>
-                if (error.code == "process.operation_not_running") {
-                    Result.Ok(())
-                } else {
-                    Result.Err(error)
-                }
-        }
+        operations.cancel(runId)
     }
 
     private func stage(value: PendingAstEdit): Unit {
@@ -456,9 +464,9 @@ class AstEditTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.preview(context, call)
+        runtime.preview(context, prepared)
     }
 
     public func cancel(runId: RunId): Result<Unit> {

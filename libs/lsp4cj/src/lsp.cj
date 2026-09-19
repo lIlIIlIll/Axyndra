@@ -363,7 +363,7 @@ public class LspClient {
 
 func jsonInteger(value: JsonNode, name: String, fallback: Int64): Int64 {
     match (value.field(name)) {
-        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.number) } catch (_: Exception) { fallback } } else { fallback }
+        case Some(item) => if (item.unifiedKind == UnifiedJsonKind.Number) { try { Int64.parse(item.asNumberText()) } catch (_: Exception) { fallback } } else { fallback }
         case None => fallback
     }
 }

@@ -81,6 +81,7 @@ write_config() {
   local timeout_millis="$1"
   local base_url="${2:-http://127.0.0.1:$port}"
   printf '%s\n' \
+    'schema_version: 1' \
     'default_model: mock-responses/blackbox-model' \
     > "$home/config.yml"
   printf '%s\n' \

@@ -219,18 +219,6 @@ public interface ProgramSubOperationExecutor {
     func invoke(context: ToolInvocationContext, call: ToolCall): Result<ToolInvocationResult>
 }
 
-public class PipelineProgramSubOperationExecutor <: ProgramSubOperationExecutor {
-    private let catalog: ToolCatalog
-    private let pipeline: ToolPipeline
-    public init(catalog: ToolCatalog, pipeline: ToolPipeline) {
-        this.catalog = catalog
-        this.pipeline = pipeline
-    }
-    public func isReadOnly(call: ToolCall): Bool { catalog.isReadOnly(call) }
-    public func invoke(context: ToolInvocationContext, call: ToolCall): Result<ToolInvocationResult> {
-        pipeline.invoke(context, call)
-    }
-}
 
 public class ProgramSubOperationTrace {
     public let index: UInt64
@@ -502,7 +490,7 @@ func setBinding(values: ArrayList<ProgramBinding>, name: String, value: AgentVal
 func truthy(value: AgentValue): Bool {
     match (value.unifiedKind) {
         case ValueKind.Null => false
-        case ValueKind.Boolean => value.boolean
+        case ValueKind.Boolean => value.asBool()
         case ValueKind.Text | ValueKind.Number => !value.text.isEmpty() && value.text != "0"
         case ValueKind.List => !value.items.isEmpty()
         case ValueKind.Object => !value.fields.isEmpty()

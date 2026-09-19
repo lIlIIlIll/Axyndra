@@ -328,7 +328,7 @@ def main() -> None:
             "--host",
             "example.com",
             "--user",
-            "elliot",
+            "test-user",
             "--port",
             "2222",
             "--key",
@@ -347,7 +347,7 @@ def main() -> None:
         listed_ssh_payload = json.loads(listed_ssh.stdout)
         assert listed_ssh_payload["user"]["alpha"] == {
             "host": "example.com",
-            "username": "elliot",
+            "username": "test-user",
             "port": 2222,
             "keyPath": "/tmp/key",
             "description": "demo",
@@ -522,8 +522,11 @@ def main() -> None:
         listed = config("list", "--json")
         assert listed.returncode == 0
         assert json.loads(listed.stdout) == {
+            "schema_version": "1",
             "default_model": "deepseek/main",
             "async.enabled": False,
+            "shell.network_mode": "restricted",
+            "sandbox.ca_bundle": "",
         }
 
         reset = config("reset", "async.enabled", "--json")

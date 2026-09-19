@@ -7,16 +7,18 @@ import agent_ports.*
 import tool_runtime.*
 import std.collection.*
 import std.env.*
+import std.convert.*
 import std.fs.*
 
 public interface WebSearchTransport {
     func execute(
         arguments: Array<String>,
         operationId: OperationId,
+        networkPolicy: NetworkPolicy,
         secretValues: Array<String>
     ): Result<ProcessResult>
-}
 
+}
 public interface WebSearchOperationControl {
     func reserve(id: OperationId): Unit
     func release(id: OperationId): Unit
@@ -53,6 +55,7 @@ public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationCo
     public func execute(
         arguments: Array<String>,
         operationId: OperationId,
+        networkPolicy: NetworkPolicy,
         secretValues: Array<String>
     ): Result<ProcessResult> {
         processes.execute(ProcessRequest(
@@ -61,7 +64,7 @@ public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationCo
             arguments: arguments,
             timeoutMillis: 120000,
             sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
-            networkAccess: true,
+            networkPolicy: Some(networkPolicy),
             redactedValues: secretValues
         ))
     }
@@ -123,16 +126,21 @@ public class ProductWebSearchRuntime {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        executeSelected(context, call, "")
+        executeSelected(context, prepared, "")
     }
 
     public func executeSelected(
         context: ToolInvocationContext,
-        call: ToolCall,
+        prepared: PreparedToolInvocation,
         providerOverride: String
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let query = match (requiredString(call, "query")) {
             case Result.Ok(value) => value.trimAscii()
             case Result.Err(error) => return Result.Err(error)
@@ -168,7 +176,12 @@ public class ProductWebSearchRuntime {
         }
         let provider = if (providerOverride == "" ||
             providerOverride == "auto") {
-            resolveWebSearchProvider()
+            let requested = optionalString(call, "provider", "")
+            if (requested == "" || requested == "auto") {
+                resolveWebSearchProvider()
+            } else {
+                requested
+            }
         } else {
             providerOverride
         }
@@ -226,9 +239,16 @@ public class ProductWebSearchRuntime {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let result = match (operations.execute(context, call, { operationId => transport.execute(
-            request, operationId, webSearchSecretValues(provider)
-        ) })) {
+        let result = match (operations.execute(
+            context,
+            prepared,
+            { operationId => transport.execute(
+                request,
+                operationId,
+                prepared.operationPlan.networkPolicy,
+                webSearchSecretValues(provider)
+            ) }
+        )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -267,6 +287,53 @@ public class ProductWebSearchRuntime {
             ))
         }
         Result.Ok(webSearchResult(call, parsed))
+    }
+
+    public func networkPolicy(input: AgentValue): Result<NetworkPolicy> {
+        let requested = match (input.field("provider")) {
+            case Some(value) => if (value.unifiedKind == ValueKind.Text) {
+                value.text.trimAscii()
+            } else { "" }
+            case None => ""
+        }
+        let provider = if (requested == "" || requested == "auto") {
+            resolveWebSearchProvider()
+        } else {
+            requested
+        }
+        if (provider == "none") {
+            return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+        }
+        if (provider == "brave") {
+            if (webSearchVariable("BRAVE_API_KEY") == "") {
+                return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }
+            return Result.Ok(NetworkPolicy(
+                NetworkPolicyMode.Mediated,
+                egress: [NetworkEgressRule("api.search.brave.com", 443u16)]
+            ))
+        }
+        if (provider == "tavily") {
+            if (webSearchVariable("TAVILY_API_KEY") == "") {
+                return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }
+            return Result.Ok(NetworkPolicy(
+                NetworkPolicyMode.Mediated,
+                egress: [NetworkEgressRule("api.tavily.com", 443u16)]
+            ))
+        }
+        if (provider == "searxng") {
+            let endpoint = webSearchVariable("SEARXNG_URL")
+            if (endpoint == "") {
+                return Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }
+            return webSearchEndpointNetworkPolicy(endpoint)
+        }
+        Result.Err(AgentError(
+            AgentErrorKind.InvalidInput,
+            "network.web_search_provider_invalid",
+            "unsupported web search provider: " + provider
+        ))
     }
 
     private func webSearchSecretValues(provider: String): Array<String> {
@@ -378,7 +445,7 @@ public class ProductWebSearchRuntime {
                         if (value.unifiedKind == ValueKind.Number) {
                             payload.put(
                                 "max_tokens",
-                                jsonNumber(value.number)
+                                jsonNumber(value.asNumberText())
                             )
                         }
                     case None => ()
@@ -418,13 +485,163 @@ class WebSearchTool <: ToolExecutor {
     private let runtime: ProductWebSearchRuntime
     init(runtime: ProductWebSearchRuntime) { this.runtime = runtime }
 
+    public func networkPolicy(input: AgentValue): Result<NetworkPolicy> {
+        runtime.networkPolicy(input)
+    }
+
     public func cancel(runId: RunId): Result<Unit> { runtime.cancel(runId) }
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.execute(context, call)
+        runtime.execute(context, prepared)
+    }
+}
+
+func webSearchNetworkError<T>(code: String, message: String): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.InvalidInput, code, message))
+}
+
+func webSearchEndpointNetworkPolicy(endpoint: String): Result<NetworkPolicy> {
+    let value = endpoint.trimAscii()
+    let schemeLength: Int64
+    let defaultPort: UInt16
+    if (value.startsWith("https://")) {
+        schemeLength = 8
+        defaultPort = 443u16
+    } else if (value.startsWith("http://")) {
+        schemeLength = 7
+        defaultPort = 80u16
+    } else {
+        return webSearchNetworkError<NetworkPolicy>(
+            "network.web_search_endpoint_invalid",
+            "SEARXNG_URL must use http:// or https://"
+        )
+    }
+    var authorityEnd = value.size
+    let remainder = value[schemeLength..]
+    for (marker in ["/", "?", "#"]) {
+        match (remainder.indexOf(marker)) {
+            case Some(index) =>
+                let absolute = schemeLength + index
+                if (absolute < authorityEnd) { authorityEnd = absolute }
+            case None => ()
+        }
+    }
+    if (authorityEnd <= schemeLength) {
+        return webSearchNetworkError<NetworkPolicy>(
+            "network.web_search_endpoint_invalid",
+            "SEARXNG_URL must contain a host"
+        )
+    }
+    let authority = value[schemeLength..authorityEnd]
+    let host: String
+    let portText: String
+    if (authority.startsWith("[")) {
+        let close = match (authority.indexOf("]")) {
+            case Some(index) => index
+            case None => return webSearchNetworkError<NetworkPolicy>(
+                "network.web_search_endpoint_invalid",
+                "SEARXNG_URL has an invalid IPv6 authority"
+            )
+        }
+        if (close <= 1) {
+            return webSearchNetworkError<NetworkPolicy>(
+                "network.web_search_endpoint_invalid",
+                "SEARXNG_URL has an empty IPv6 host"
+            )
+        }
+        host = authority[1..close]
+        let remainder = authority[close + 1..]
+        if (remainder == "") {
+            portText = ""
+        } else if (remainder.startsWith(":")) {
+            portText = remainder[1..]
+        } else {
+            return webSearchNetworkError<NetworkPolicy>(
+                "network.web_search_endpoint_invalid",
+                "SEARXNG_URL has invalid authority suffix"
+            )
+        }
+    } else {
+        let parts = authority.split(":")
+        if (parts.isEmpty() || parts.size > 2 || parts[0] == "") {
+            return webSearchNetworkError<NetworkPolicy>(
+                "network.web_search_endpoint_invalid",
+                "SEARXNG_URL must use a bracketed IPv6 host"
+            )
+        }
+        host = parts[0]
+        portText = if (parts.size == 2) { parts[1] } else { "" }
+    }
+    let port = match (webSearchEndpointPort(portText, defaultPort)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let privateAddresses = webSearchPrivateAddresses(host)
+    try {
+        let rule = NetworkEgressRule(
+            host,
+            port,
+            privateAddresses: privateAddresses
+        )
+        Result.Ok(NetworkPolicy(NetworkPolicyMode.Mediated, egress: [rule]))
+    } catch (error: Exception) {
+        webSearchNetworkError<NetworkPolicy>(
+            "network.web_search_endpoint_invalid",
+            error.message
+        )
+    }
+}
+
+func webSearchEndpointPort(
+    value: String,
+    fallback: UInt16
+): Result<UInt16> {
+    if (value == "") { return Result.Ok(fallback) }
+    try {
+        let parsed = Int64.parse(value)
+        if (parsed < 1 || parsed > 65535 || parsed.toString() != value) {
+            return webSearchNetworkError<UInt16>(
+                "network.web_search_endpoint_invalid",
+                "SEARXNG_URL has an invalid port"
+            )
+        }
+        Result.Ok(UInt16(parsed))
+    } catch (_: Exception) {
+        webSearchNetworkError<UInt16>(
+            "network.web_search_endpoint_invalid",
+            "SEARXNG_URL has an invalid port"
+        )
+    }
+}
+
+func webSearchPrivateAddresses(value: String): Array<String> {
+    let lower = value.toAsciiLower()
+    if (lower == "localhost") {
+        return ["127.0.0.1", "::1"]
+    }
+    if (webSearchPrivateLiteral(value)) { return [value] }
+    []
+}
+
+func webSearchPrivateLiteral(value: String): Bool {
+    if (value.contains(":")) {
+        let lower = value.toAsciiLower()
+        return lower == "::1" || lower.startsWith("fc") || lower.startsWith("fd")
+    }
+    let parts = value.split(".")
+    if (parts.size != 4) { return false }
+    try {
+        let first = Int64.parse(parts[0])
+        let second = Int64.parse(parts[1])
+        (first == 10) || (first == 127) ||
+            (first == 192 && second == 168) ||
+            (first == 172 && second >= 16 && second <= 31) ||
+            (first == 100 && second >= 64 && second <= 127)
+    } catch (_: Exception) {
+        false
     }
 }
 

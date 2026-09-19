@@ -239,7 +239,7 @@ func runStdioAdmissionAndShutdownContracts(): Unit {
                             let maximum = error.data.field("max_concurrent_requests").getOrThrow()
                             busy = error.code == JSON_RPC_INTERNAL_ERROR &&
                                 requiredText(error.data, "code") == "mcp.stdio_server_busy" &&
-                                maximum.unifiedKind == ValueKind.Number && maximum.number == "2" &&
+                                maximum.unifiedKind == ValueKind.Number && maximum.asNumberText() == "2" &&
                                 line.size <= 512
                         }
                 }

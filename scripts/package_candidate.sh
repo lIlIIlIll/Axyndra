@@ -24,9 +24,18 @@ if ! command -v patchelf >/dev/null 2>&1; then
   printf 'axyndra: patchelf is required to package a relocatable candidate\n' >&2
   exit 2
 fi
+network_bridge="$root/libs/process4cj/native/sandbox-net-bridge"
+if [[ ! -x "$network_bridge" ]]; then
+  "$root/scripts/prepare_native_deps.sh" >/dev/null
+fi
+if [[ ! -x "$network_bridge" ]]; then
+  printf 'axyndra: mediated network gateway helper is missing: %s\n' "$network_bridge" >&2
+  exit 2
+fi
 
 mkdir -p -- "$package_root/bin" "$package_root/lib" "$package_root/diagnostics"
 cp -f -- "$source_binary" "$package_root/bin/axyndra"
+cp -f -- "$network_bridge" "$package_root/bin/sandbox-net-bridge"
 
 runtime_paths=(
   "$root/libs/process4cj/native"

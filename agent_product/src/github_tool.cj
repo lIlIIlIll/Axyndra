@@ -8,7 +8,22 @@ import agent_domain.*
 import agent_ports.*
 import tool_runtime.*
 import std.collection.*
+import std.convert.*
+
 import std.fs.*
+import std.env.*
+
+class GithubRemoteEndpoint {
+    let scheme: String
+    let host: String
+    let port: UInt16
+
+    init(scheme: String, host: String, port: UInt16) {
+        this.scheme = scheme
+        this.host = host
+        this.port = port
+    }
+}
 
 public class ProductGithubRuntime {
     private let processes: ProcessPort
@@ -38,52 +53,43 @@ public class ProductGithubRuntime {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         let op = match (requiredString(call, "op")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
         match (op) {
             case "repo_view" => runGh(
-                context,
-                call,
-                repoViewArguments(call)
+                context, prepared, call, repoViewArguments(call)
             )
-            case "file_read" => fileRead(context, call)
+            case "file_read" => fileRead(context, prepared, call)
             case "pr_create" => runGh(
-                context,
-                call,
-                prCreateArguments(call)
+                context, prepared, call, prCreateArguments(call)
             )
-            case "pr_checkout" => prCheckout(context, call)
-            case "pr_push" => prPush(context, call)
+            case "pr_checkout" => prCheckout(context, prepared, call)
+            case "pr_push" => prPush(context, prepared, call)
             case "search_issues" => runGh(
-                context,
-                call,
-                searchArguments(call, "issues")
+                context, prepared, call, searchArguments(call, "issues")
             )
             case "search_prs" => runGh(
-                context,
-                call,
-                searchArguments(call, "prs")
+                context, prepared, call, searchArguments(call, "prs")
             )
             case "search_code" => runGh(
-                context,
-                call,
-                searchArguments(call, "code")
+                context, prepared, call, searchArguments(call, "code")
             )
             case "search_commits" => runGh(
-                context,
-                call,
-                searchArguments(call, "commits")
+                context, prepared, call, searchArguments(call, "commits")
             )
             case "search_repos" => runGh(
-                context,
-                call,
-                searchArguments(call, "repos")
+                context, prepared, call, searchArguments(call, "repos")
             )
-            case "run_watch" => runWatch(context, call)
+            case "run_watch" => runWatch(context, prepared, call)
             case _ => githubArgumentError<ToolResult>(
                 call,
                 "op",
@@ -94,6 +100,7 @@ public class ProductGithubRuntime {
 
     private func fileRead(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall
     ): Result<ToolResult> {
         let path = match (requiredString(call, "path")) {
@@ -107,7 +114,7 @@ public class ProductGithubRuntime {
                 "path must be a safe repository-relative path"
             )
         }
-        let repo = match (resolveRepo(context, call)) {
+        let repo = match (resolveRepo(context, prepared, call)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -118,6 +125,7 @@ public class ProductGithubRuntime {
         }
         runGh(
             context,
+            prepared,
             call,
             [
                 "api",
@@ -130,6 +138,7 @@ public class ProductGithubRuntime {
 
     private func prCheckout(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall
     ): Result<ToolResult> {
         let targets = match (githubPullRequests(call)) {
@@ -148,6 +157,7 @@ public class ProductGithubRuntime {
             }
             let result = match (executeProcess(
                 context,
+                prepared,
                 call,
                 ghExecutable,
                 arguments.toArray(),
@@ -179,8 +189,31 @@ public class ProductGithubRuntime {
 
     private func prPush(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall
     ): Result<ToolResult> {
+        let remote = match (pushRemoteEndpoint(context, prepared, call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (remote.scheme != "https") {
+            return githubArgumentError<ToolResult>(
+                call,
+                "origin",
+                "pr_push requires an HTTPS origin; SSH and non-HTTPS remotes have no approved proxy connector"
+            )
+        }
+        if (!githubNetworkPolicyAllows(
+            prepared.operationPlan.networkPolicy,
+            remote.host,
+            remote.port
+        )) {
+            return githubArgumentError<ToolResult>(
+                call,
+                "origin",
+                "the actual HTTPS origin is not covered by the frozen GitHub egress policy"
+            )
+        }
         let arguments = ArrayList<String>()
         // Keep authentication inside the sandbox. The gh credential helper
         // consumes only the explicitly granted GH/GitHub token variables.
@@ -198,6 +231,7 @@ public class ProductGithubRuntime {
         if (branch != "") { arguments.add(branch) }
         let result = match (executeProcess(
             context,
+            prepared,
             call,
             gitExecutable,
             arguments.toArray(),
@@ -226,6 +260,7 @@ public class ProductGithubRuntime {
 
     private func runWatch(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall
     ): Result<ToolResult> {
         let run = match (requiredString(call, "run")) {
@@ -247,6 +282,7 @@ public class ProductGithubRuntime {
         appendRepo(arguments, call)
         runGh(
             context,
+            prepared,
             call,
             arguments.toArray(),
             timeoutMillis: 1800000
@@ -255,12 +291,14 @@ public class ProductGithubRuntime {
 
     private func resolveRepo(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall
     ): Result<String> {
         let explicit = optionalString(call, "repo", "").trimAscii()
         if (explicit != "") { return Result.Ok(explicit) }
         let result = match (executeProcess(
             context,
+            prepared,
             call,
             ghExecutable,
             [
@@ -287,12 +325,14 @@ public class ProductGithubRuntime {
 
     private func runGh(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall,
         arguments: Array<String>,
         timeoutMillis!: Int64 = 120000
     ): Result<ToolResult> {
         let result = match (executeProcess(
             context,
+            prepared,
             call,
             ghExecutable,
             arguments,
@@ -319,8 +359,36 @@ public class ProductGithubRuntime {
         ))
     }
 
+    private func pushRemoteEndpoint(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
+        call: ToolCall
+    ): Result<GithubRemoteEndpoint> {
+        let result = match (executeProcess(
+            context,
+            prepared,
+            call,
+            gitExecutable,
+            ["remote", "get-url", "origin"],
+            30000
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (result.exitCode != 0) {
+            return githubProcessError<GithubRemoteEndpoint>(
+                call,
+                result,
+                gitExecutable,
+                ["remote", "get-url", "origin"]
+            )
+        }
+        parseGithubRemoteEndpoint(result.stdout)
+    }
+
     private func executeProcess(
         context: ToolInvocationContext,
+        prepared: PreparedToolInvocation,
         call: ToolCall,
         executable: String,
         arguments: Array<String>,
@@ -330,9 +398,7 @@ public class ProductGithubRuntime {
         let operation = optionalString(call, "op", "")
         processes.execute(ProcessRequest(
             executable,
-            operationId: OperationId(
-                "github-" + safeOperationPart(call.callId)
-            ),
+            operationId: prepared.operationId,
             arguments: arguments,
             timeoutMillis: timeoutMillis,
             sandboxMode: if (githubWorkspaceWriteOperation(operation)) {
@@ -340,7 +406,7 @@ public class ProductGithubRuntime {
             } else {
                 ProcessSandboxMode.WorkspaceReadOnly
             },
-            networkAccess: true,
+            networkPolicy: Some(prepared.operationPlan.networkPolicy),
             environmentAllowlist: ["GH_HOST"],
             secretEnvironmentAllowlist: githubSecretEnvironment()
         ))
@@ -354,9 +420,9 @@ class GithubTool <: ToolExecutor {
 
     public func execute(
         context: ToolInvocationContext,
-        call: ToolCall
+        prepared: PreparedToolInvocation
     ): Result<ToolResult> {
-        runtime.execute(context, call)
+        runtime.execute(context, prepared)
     }
 }
 
@@ -400,9 +466,204 @@ func githubToolDefinition(): ModelToolDefinition {
     )
 }
 
+func githubRemoteError<T>(message: String): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool.github_remote_invalid", message))
+}
+
+func githubRemotePort(value: String, fallback: UInt16): Result<UInt16> {
+    if (value == "") { return Result.Ok(fallback) }
+    try {
+        let parsed = Int64.parse(value)
+        if (parsed < 1 || parsed > 65535 || parsed.toString() != value) {
+            return githubRemoteError<UInt16>("Git remote has an invalid port")
+        }
+        Result.Ok(UInt16(parsed))
+    } catch (_: Exception) {
+        githubRemoteError<UInt16>("Git remote has an invalid port")
+    }
+}
+
+func githubRemoteUrlEndpoint(
+    scheme: String,
+    authority: String,
+    defaultPort: UInt16
+): Result<GithubRemoteEndpoint> {
+    let userHost = match (authority.indexOf("@")) {
+        case Some(index) => authority[index + 1..]
+        case None => authority
+    }
+    if (userHost == "") {
+        return githubRemoteError<GithubRemoteEndpoint>("Git remote has an empty host")
+    }
+    let host: String
+    let portText: String
+    if (userHost.startsWith("[")) {
+        let close = match (userHost.indexOf("]")) {
+            case Some(index) => index
+            case None => return githubRemoteError<GithubRemoteEndpoint>(
+                "Git remote has an invalid IPv6 authority"
+            )
+        }
+        if (close <= 1) {
+            return githubRemoteError<GithubRemoteEndpoint>("Git remote has an empty host")
+        }
+        host = userHost[1..close]
+        let suffix = userHost[close + 1..]
+        if (suffix == "") {
+            portText = ""
+        } else if (suffix.startsWith(":")) {
+            portText = suffix[1..]
+        } else {
+            return githubRemoteError<GithubRemoteEndpoint>("Git remote has an invalid authority")
+        }
+    } else {
+        let parts = userHost.split(":")
+        if (parts.isEmpty() || parts.size > 2 || parts[0] == "") {
+            return githubRemoteError<GithubRemoteEndpoint>(
+                "Git remote IPv6 hosts must use brackets"
+            )
+        }
+        host = parts[0]
+        portText = if (parts.size == 2) { parts[1] } else { "" }
+    }
+    let port = match (githubRemotePort(portText, defaultPort)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    try {
+        let normalized = NetworkEgressRule(host, port)
+        Result.Ok(GithubRemoteEndpoint(scheme, normalized.host, normalized.port))
+    } catch (error: Exception) {
+        githubRemoteError<GithubRemoteEndpoint>(error.message)
+    }
+}
+
+func parseGithubRemoteEndpoint(remote: String): Result<GithubRemoteEndpoint> {
+    let value = remote.trimAscii()
+    if (value == "") {
+        return githubRemoteError<GithubRemoteEndpoint>("Git remote must be a single endpoint")
+    }
+    var scheme = ""
+    var schemeLength: Int64 = 0
+    var defaultPort: UInt16 = 0u16
+    if (value.startsWith("https://")) {
+        scheme = "https"
+        schemeLength = 8
+        defaultPort = 443u16
+    } else if (value.startsWith("http://")) {
+        scheme = "http"
+        schemeLength = 7
+        defaultPort = 80u16
+    } else if (value.startsWith("ssh://")) {
+        scheme = "ssh"
+        schemeLength = 6
+        defaultPort = 22u16
+    } else {
+        match (value.indexOf(":")) {
+            case Some(index) =>
+                let left = value[..index]
+                let path = value[index + 1..]
+                let host = match (left.indexOf("@")) {
+                    case Some(at) => left[at + 1..]
+                    case None => left
+                }
+                if (host == "" || path == "" || host.contains("/")) {
+                    return githubRemoteError<GithubRemoteEndpoint>(
+                        "Git remote has an invalid SSH scp-style endpoint"
+                    )
+                }
+                return githubRemoteUrlEndpoint("ssh", host + ":22", 22u16)
+            case None => return githubRemoteError<GithubRemoteEndpoint>(
+                "Git remote must use HTTPS or SSH"
+            )
+        }
+    }
+    var authorityEnd = value.size
+    let remainder = value[schemeLength..]
+    for (marker in ["/", "?", "#"]) {
+        match (remainder.indexOf(marker)) {
+            case Some(index) =>
+                let absolute = schemeLength + index
+                if (absolute < authorityEnd) { authorityEnd = absolute }
+            case None => ()
+        }
+    }
+    if (authorityEnd <= schemeLength) {
+        return githubRemoteError<GithubRemoteEndpoint>("Git remote has an empty authority")
+    }
+    githubRemoteUrlEndpoint(
+        scheme,
+        value[schemeLength..authorityEnd],
+        defaultPort
+    )
+}
+
+func githubNetworkPolicyAllows(
+    policy: NetworkPolicy,
+    host: String,
+    port: UInt16
+): Bool {
+    for (rule in policy.egress where rule.host == host && rule.port == port) {
+        return true
+    }
+    false
+}
+
+func githubNetworkPolicy(operation: String, repo!: String = ""): NetworkPolicy {
+    let apiOnly = match (operation) {
+        case "repo_view" | "file_read" | "pr_create" | "search_issues" |
+            "search_prs" | "search_code" | "search_commits" |
+            "search_repos" | "run_watch" => true
+        case _ => false
+    }
+    // gh accepts HOST/OWNER/REPO in --repo. owner/repo uses the public
+    // forge, which is the only default available before execution.
+    let host = githubRepositoryHost(repo)
+    let apiHost = if (host == "github.com") { "api.github.com" } else { host }
+    let egress = ArrayList<NetworkEgressRule>()
+    egress.add(NetworkEgressRule(apiHost, 443u16))
+    if (operation == "pr_push" || !apiOnly) {
+        if (host != apiHost) { egress.add(NetworkEgressRule(host, 443u16)) }
+    }
+    if (!apiOnly && operation != "pr_push" && host == "github.com") {
+        egress.add(NetworkEgressRule("raw.githubusercontent.com", 443u16))
+        egress.add(NetworkEgressRule("objects.githubusercontent.com", 443u16))
+    }
+    NetworkPolicy(NetworkPolicyMode.Mediated, egress: egress.toArray())
+}
+
+func githubConfiguredForgeHost(): String {
+    match (getVariable("GH_HOST")) {
+        case Some(value) =>
+            let host = value.trimAscii()
+            if (host != "" && !host.contains("/") && !host.contains(" ")) {
+                host
+            } else {
+                ""
+            }
+        case None => ""
+    }
+}
+
+func githubRepositoryHost(repo: String): String {
+    let parts = repo.trimAscii().split("/")
+    if (parts.size >= 3 && parts[0].trimAscii() != "") {
+        return parts[0].trimAscii()
+    }
+    let configured = githubConfiguredForgeHost()
+    if (configured != "") { return configured }
+    "github.com"
+}
 func githubCapabilityFor(call: ToolCall): Capability {
-    let _ = call
-    Capability(CapabilityKind.NetworkAccess)
+    let operation = optionalString(call, "op", "")
+    let resources = networkPolicyCapabilityResources(githubNetworkPolicy(
+        operation,
+        repo: optionalString(call, "repo", "")
+    ))
+    Capability(
+        CapabilityKind.NetworkAccess,
+        resource: if (resources.isEmpty()) { "" } else { resources[0] }
+    )
 }
 
 func githubAdditionalCapabilities(call: ToolCall): Array<Capability> {

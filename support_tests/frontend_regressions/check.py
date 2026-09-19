@@ -135,7 +135,7 @@ def cli(root):
     settings.mkdir(exist_ok=True)
     tail = '# preserve comment\ntheme: light\nasync:\n  enabled: false\napproval:\n  mode: never\ncompaction:\n  enabled: false\nmodel_roles:\n  approval: old/reviewer\nfuture_setting: keep-me\n'
     config = settings / 'config.yml'
-    config.write_text('default_model: old/model\n' + tail)
+    config.write_text('schema_version: 1\ndefault_model: old/model\n' + tail)
     result = subprocess.run([str(BINARY), 'setup'], cwd=root, env=environment(root),
         input='1\n1\nregression-profile\n1\nREGRESSION_UNSET_KEY\n3\n',
         capture_output=True, text=True, timeout=10)

@@ -512,7 +512,7 @@ def mcp_result(request_id: Any, *, text: str = "fixture MCP result") -> dict[str
             "structuredContent": {
                 "case": "tui-path-coverage",
                 "workspaceReadOnly": True,
-                "networkAllowed": False,
+                "networkMode": "denied",
             },
             "isError": False,
             "_meta": {

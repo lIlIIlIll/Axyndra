@@ -237,7 +237,12 @@ def run_lifecycle_and_recovery(scope: BrokerScope) -> None:
         call_id="wait-B",
     )
     require(waited.get("timedOut") is False and waited.get("matched") == "ECHO:hello", f"send/wait failed: {waited}")
-    restarted = scope.request("restart", {"name": name}, owner="client-B", call_id="restart-B")
+    restarted = scope.request(
+        "restart",
+        {"name": name, "network": {"mode": "denied"}},
+        owner="client-B",
+        call_id="restart-B",
+    )
     restarted_daemon = restarted.get("daemon")
     require(
         isinstance(restarted_daemon, dict)
@@ -724,6 +729,8 @@ def run_deadlines_and_generations(scope: BrokerScope) -> None:
     def request(op, name, **extra):
         if op == "start":
             extra = {"persist": True, "pty": False, **extra}
+        if op == "restart":
+            extra = {"network": {"mode": "denied"}, **extra}
         return scope.request(op, {"name": name, **extra}, owner="deadline-contract",
                              call_id=f"{op}-{name}", timeout=30)
 

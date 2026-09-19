@@ -3,6 +3,7 @@ package agent_product
 import agent_domain.*
 import agent_extensions.*
 import agent_mcp.*
+import agent_ports.*
 import sandbox4cj.*
 import tool_runtime.*
 import std.collection.*
@@ -29,7 +30,7 @@ public class ProductMcpServerSnapshot {
     public let status: ProductMcpServerStatus
     public let sandboxed: Bool
     public let workspaceReadOnly: Bool
-    public let networkAllowed: Bool
+    public let networkPolicy: NetworkPolicy
     public let tools: Array<String>
     public let errorCode: String
 
@@ -40,7 +41,7 @@ public class ProductMcpServerSnapshot {
         status: ProductMcpServerStatus,
         sandboxed!: Bool = false,
         workspaceReadOnly!: Bool = false,
-        networkAllowed!: Bool = false,
+        networkPolicy!: ?NetworkPolicy = None,
         tools!: Array<String> = [],
         errorCode!: String = ""
     ) {
@@ -50,7 +51,10 @@ public class ProductMcpServerSnapshot {
         this.status = status
         this.sandboxed = sandboxed
         this.workspaceReadOnly = workspaceReadOnly
-        this.networkAllowed = networkAllowed
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.tools = tools
         this.errorCode = errorCode
     }
@@ -73,12 +77,11 @@ public func productMcpStatusName(status: ProductMcpServerStatus): String {
         case ProductMcpServerStatus.Stopped => "stopped"
     }
 }
-
 class ProductMcpServerConfig {
     let id: String
     let enabled: Bool
     let transport: ProductMcpTransportKind
-    let networkAllowed: Bool
+    let networkPolicy: NetworkPolicy
     let secretEnvironmentTargets: Array<String>
     let trustedReadOnlyTools: Array<String>
     let stdio: ?McpStdioTransportConfig
@@ -88,7 +91,7 @@ class ProductMcpServerConfig {
         id: String,
         enabled: Bool,
         transport: ProductMcpTransportKind,
-        networkAllowed!: Bool = false,
+        networkPolicy!: ?NetworkPolicy = None,
         secretEnvironmentTargets!: Array<String> = [],
         trustedReadOnlyTools!: Array<String> = [],
         stdio!: ?McpStdioTransportConfig = None,
@@ -97,7 +100,10 @@ class ProductMcpServerConfig {
         this.id = id
         this.enabled = enabled
         this.transport = transport
-        this.networkAllowed = networkAllowed
+        this.networkPolicy = match (networkPolicy) {
+            case Some(value) => value
+            case None => NetworkPolicy(NetworkPolicyMode.Denied)
+        }
         this.secretEnvironmentTargets = secretEnvironmentTargets
         this.trustedReadOnlyTools = trustedReadOnlyTools
         this.stdio = stdio
@@ -110,6 +116,7 @@ class ProductMcpRecord {
     var status: ProductMcpServerStatus
     var client: ?McpClient = None
     var tools: Array<String> = []
+    var releaseTransport: () -> Unit = { => () }
     var errorCode: String = ""
 
     init(config: ProductMcpServerConfig) {
@@ -140,9 +147,16 @@ class ProductMcpRuntime {
         try { records.toArray() } finally { lock.unlock() }
     }
 
-    func attach(record: ProductMcpRecord, client: McpClient): Unit {
+    func attach(
+        record: ProductMcpRecord,
+        client: McpClient,
+        releaseAction!: () -> Unit = { => () }
+    ): Unit {
         lock.lock()
-        try { record.client = Some(client) } finally { lock.unlock() }
+        try {
+            record.client = Some(client)
+            record.releaseTransport = releaseAction
+        } finally { lock.unlock() }
     }
 
     func markReady(record: ProductMcpRecord, tools: Array<String>): Unit {
@@ -178,7 +192,7 @@ class ProductMcpRuntime {
                     record.status,
                     sandboxed: record.config.transport == ProductMcpTransportKind.Stdio,
                     workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio,
-                    networkAllowed: record.config.networkAllowed,
+                    networkPolicy: Some(record.config.networkPolicy),
                     tools: record.tools,
                     errorCode: record.errorCode
                 ))
@@ -200,7 +214,7 @@ class ProductMcpRuntime {
                     record.status,
                     sandboxed: record.config.transport == ProductMcpTransportKind.Stdio,
                     workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio,
-                    networkAllowed: record.config.networkAllowed,
+                    networkPolicy: Some(record.config.networkPolicy),
                     tools: record.tools,
                     errorCode: record.errorCode
                 ))
@@ -250,7 +264,10 @@ class ProductMcpRuntime {
                 match (record.client) {
                     case Some(client) =>
                         record.status = ProductMcpServerStatus.Stopping
-                        match (client.close()) {
+                        let closeResult = client.close()
+                        record.releaseTransport()
+                        record.releaseTransport = { => () }
+                        match (closeResult) {
                             case Result.Ok(_) =>
                                 record.status = ProductMcpServerStatus.Stopped
                                 record.errorCode = ""
@@ -320,7 +337,7 @@ class ProductMcpServerDraft {
     let environment = ArrayList<ProductMcpNameBinding>()
     let secretEnvironment = ArrayList<ProductMcpNameBinding>()
     let trustedReadOnlyTools = ArrayList<String>()
-    var networkAllowed: Bool = false
+    var networkMode: String = ""
     var url: String = ""
     var bearerTokenEnvironment: String = ""
     var origin: String = ""
@@ -564,7 +581,14 @@ func applyProductMcpServerField(
         case "transport" => draft.transport = value
         case "command" => draft.command = value
         case "cwd" => draft.cwd = value
-        case "network" => draft.networkAllowed = parseConfigBool("MCP network", value)
+        case "network" =>
+            if (value == "true" || value == "false") {
+                throw IllegalArgumentException("MCP network must be denied, proxy, or host; boolean values are unsupported")
+            }
+            match (networkPolicyMode(value)) {
+                case Result.Ok(mode) => draft.networkMode = networkPolicyModeName(mode)
+                case Result.Err(error) => throw IllegalArgumentException(error.message)
+            }
         case "url" => draft.url = value
         case "bearer_token_env" => draft.bearerTokenEnvironment = value
         case "origin" => draft.origin = value
@@ -581,6 +605,20 @@ func productMcpInteger(name: String, value: String): Int64 {
         Int64.parse(value)
     } catch (_: Exception) {
         throw IllegalArgumentException("MCP " + name + " must be an integer")
+    }
+}
+
+func productMcpNetworkPolicy(draft: ProductMcpServerDraft): NetworkPolicy {
+    if (!draft.has("network")) {
+        return NetworkPolicy(NetworkPolicyMode.Denied)
+    }
+    match (networkPolicyMode(draft.networkMode)) {
+        case Result.Ok(NetworkPolicyMode.Mediated) =>
+            throw IllegalArgumentException(
+                "MCP stdio proxy network requires explicit egress rules"
+            )
+        case Result.Ok(mode) => NetworkPolicy(mode)
+        case Result.Err(error) => throw IllegalArgumentException(error.message)
     }
 }
 
@@ -628,7 +666,7 @@ func finalizeProductMcpServer(draft: ProductMcpServerDraft): ProductMcpServerCon
                 draft.id,
                 enabled,
                 ProductMcpTransportKind.Stdio,
-                networkAllowed: draft.networkAllowed,
+                networkPolicy: Some(productMcpNetworkPolicy(draft)),
                 secretEnvironmentTargets: secretTargets.toArray(),
                 trustedReadOnlyTools: draft.trustedReadOnlyTools.toArray(),
                 stdio: Some(McpStdioTransportConfig(
@@ -658,7 +696,7 @@ func finalizeProductMcpServer(draft: ProductMcpServerDraft): ProductMcpServerCon
                 draft.id,
                 enabled,
                 ProductMcpTransportKind.StreamableHttp,
-                networkAllowed: true,
+                networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.HostNetwork)),
                 trustedReadOnlyTools: draft.trustedReadOnlyTools.toArray(),
                 http: Some(McpStreamableHttpClientConfig(
                     draft.url,
@@ -706,27 +744,95 @@ class ProductMcpResolvedEnvironment {
     }
 }
 
+class ProductMcpNetworkLease {
+    let gateway: NetworkGatewayPort
+    let lease: NetworkGatewayLease
+    private let lock = Mutex()
+    private var released = false
+
+    init(gateway: NetworkGatewayPort, lease: NetworkGatewayLease) {
+        this.gateway = gateway
+        this.lease = lease
+    }
+
+    func release(): Unit {
+        lock.lock()
+        try {
+            if (released) { return }
+            released = true
+        } finally { lock.unlock() }
+        let _ = gateway.release(lease)
+    }
+}
+
 class ProductMcpTransportHandle {
     let transport: McpTransport
     let redactor: SecretRedactor
+    private let releaseAction: () -> Unit
+    private let releaseLock = Mutex()
+    private var released = false
 
-    init(transport: McpTransport, redactor: SecretRedactor) {
+    init(
+        transport: McpTransport,
+        redactor: SecretRedactor,
+        releaseAction!: () -> Unit = { => () }
+    ) {
         this.transport = transport
         this.redactor = redactor
+        this.releaseAction = releaseAction
+    }
+
+    func release(): Unit {
+        var shouldRelease = false
+        releaseLock.lock()
+        try {
+            if (!released) {
+                released = true
+                shouldRelease = true
+            }
+        } finally { releaseLock.unlock() }
+        if (shouldRelease) { releaseAction() }
+    }
+}
+
+func acquireProductMcpNetworkLease(
+    serverId: String,
+    policy: NetworkPolicy
+): Result<?ProductMcpNetworkLease> {
+    if (!networkPolicyModeIsMediated(policy.mode)) {
+        return Result.Ok(None)
+    }
+    let gateway: NetworkGatewayPort = LocalNetworkGatewayPort()
+    match (gateway.acquire(
+        OperationId("mcp-stdio-" + serverId),
+        policy
+    )) {
+        case Result.Ok(lease) => Result.Ok(Some(ProductMcpNetworkLease(gateway, lease)))
+        case Result.Err(error) => Result.Err(error)
+    }
+}
+
+func releaseProductMcpNetworkLease(lease: ?ProductMcpNetworkLease): Unit {
+    match (lease) {
+        case Some(value) => value.release()
+        case None => ()
     }
 }
 
 func openProductMcpTransport(
     config: ProductMcpServerConfig,
-    workspaceRoot: String
+    workspaceRoot: String,
+    sandboxCaBundle!: String = ""
 ): Result<ProductMcpTransportHandle> {
     match (config.transport) {
         case ProductMcpTransportKind.Stdio => match (config.stdio) {
             case Some(stdio) => match (openSandboxedProductMcpStdio(
+                config.id,
                 stdio,
                 workspaceRoot,
-                config.networkAllowed,
-                config.secretEnvironmentTargets
+                config.networkPolicy,
+                config.secretEnvironmentTargets,
+                sandboxCaBundle: sandboxCaBundle
             )) {
                 case Result.Ok(value) => Result.Ok(value)
                 case Result.Err(error) => Result.Err(error)
@@ -736,10 +842,10 @@ func openProductMcpTransport(
         case ProductMcpTransportKind.StreamableHttp => match (config.http) {
             case Some(http) =>
                 // The HTTP transport resolves bearer and custom-header values
-                // from the process environment.  Bind those same values to the
+                // from the process environment. Bind those same values to the
                 // product redaction boundary before discovery can project any
                 // remote-authored text into the catalog, pipeline, persistence,
-                // or model context.  Only the redactor escapes this function;
+                // or model context. Only the redactor escapes this function;
                 // resolved credentials never enter config/status snapshots.
                 let redactor = productMcpHttpSecretRedactor(http)
                 match (openStreamableHttpMcpTransport(http)) {
@@ -777,10 +883,12 @@ func productMcpAddEnvironmentSecret(
 }
 
 func openSandboxedProductMcpStdio(
+    serverId: String,
     config: McpStdioTransportConfig,
     workspaceRoot: String,
-    networkAllowed: Bool,
-    secretTargets: Array<String>
+    networkPolicy: NetworkPolicy,
+    secretTargets: Array<String>,
+    sandboxCaBundle!: String = ""
 ): Result<ProductMcpTransportHandle> {
     let resolved = match (resolveProductMcpEnvironment(
         config.environment,
@@ -789,18 +897,81 @@ func openSandboxedProductMcpStdio(
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
+    let sandboxEnvironment = ArrayList<SandboxEnvironmentEntry>()
+    for (entry in resolved.entries) { sandboxEnvironment.add(entry) }
+    let caBundle = sandboxCaBundle.trimAscii()
+    var caMount: ?SandboxReadOnlyMount = None
+    if (caBundle != "") {
+        for (entry in resolved.entries) {
+            if (entry.name == "SSL_CERT_FILE" || entry.name == "CURL_CA_BUNDLE") {
+                return Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "sandbox.environment_duplicate",
+                    "configured CA bundle variables cannot be overridden"
+                ))
+            }
+        }
+        try {
+            caMount = Some(SandboxReadOnlyMount(caBundle))
+            sandboxEnvironment.add(SandboxEnvironmentEntry("SSL_CERT_FILE", caBundle))
+            sandboxEnvironment.add(SandboxEnvironmentEntry("CURL_CA_BUNDLE", caBundle))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "mcp.product_ca_unavailable",
+                resolved.redactor.redact(error.message)
+            ))
+        }
+    }
     let allowedNames = ArrayList<String>()
-    for (entry in resolved.entries) { allowedNames.add(entry.name) }
+    for (entry in sandboxEnvironment) { allowedNames.add(entry.name) }
     let toolchain = configuredProductSandboxToolchain()
+    let mounts = ArrayList<SandboxReadOnlyMount>()
+    mounts.add(all: toolchain.mounts)
+    match (caMount) {
+        case Some(value) => mounts.add(value)
+        case None => ()
+    }
+    let networkLease = match (acquireProductMcpNetworkLease(serverId, networkPolicy)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    match (networkLease) {
+        case Some(value) =>
+            try {
+                let executableMount = SandboxReadOnlyMount(value.lease.bridgeExecutable)
+                var executableDuplicate = false
+                for (existing in mounts where existing.path == executableMount.path) {
+                    executableDuplicate = true
+                }
+                if (!executableDuplicate) { mounts.add(executableMount) }
+                let socketMount = SandboxReadOnlyMount(
+                    Path(value.lease.bridgeSocket).parent.toString()
+                )
+                var socketDuplicate = false
+                for (existing in mounts where existing.path == socketMount.path) {
+                    socketDuplicate = true
+                }
+                if (!socketDuplicate) { mounts.add(socketMount) }
+            } catch (error: Exception) {
+                releaseProductMcpNetworkLease(networkLease)
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "mcp.product_sandbox_invalid",
+                    resolved.redactor.redact(error.message)
+                ))
+            }
+        case None => ()
+    }
     let sandbox = try {
         WorkspaceSandbox(WorkspaceSandboxPolicy(
             workspaceRoot,
             filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
             process: ProcessIsolationMode.Isolated,
-            network: if (networkAllowed) {
-                NetworkIsolationMode.Allowed
-            } else {
-                NetworkIsolationMode.Denied
+            network: match (networkPolicy.mode) {
+                case NetworkPolicyMode.HostNetwork => NetworkIsolationMode.Allowed
+                case NetworkPolicyMode.Denied => NetworkIsolationMode.Denied
+                case NetworkPolicyMode.Mediated => NetworkIsolationMode.Mediated
             },
             environment: EnvironmentFilter(
                 allowlist: allowedNames.toArray(),
@@ -808,10 +979,11 @@ func openSandboxedProductMcpStdio(
                 secretValues: productMcpSecretValues(resolved.entries, resolved.secretTargets)
             ),
             resources: defaultProductSandboxResourceLimits(),
-            readOnlyMounts: toolchain.mounts,
+            readOnlyMounts: mounts.toArray(),
             pathEntries: toolchain.pathEntries
         ))
     } catch (error: Exception) {
+        releaseProductMcpNetworkLease(networkLease)
         return Result.Err(AgentError(
             AgentErrorKind.Configuration,
             "mcp.product_sandbox_invalid",
@@ -820,17 +992,29 @@ func openSandboxedProductMcpStdio(
     }
     match (sandbox.availability()) {
         case SandboxResult.Ok(_) => ()
-        case SandboxResult.Err(error) => return Result.Err(productMcpRedactError(sandboxAgentError(error), resolved.redactor))
+        case SandboxResult.Err(error) =>
+            releaseProductMcpNetworkLease(networkLease)
+            return Result.Err(productMcpRedactError(sandboxAgentError(error), resolved.redactor))
     }
     let plan = match (sandbox.plan(WorkspaceSandboxCommand(
         config.command,
         arguments: config.arguments,
         workingDirectory: config.cwd,
-        environment: resolved.entries,
-        timeoutMillis: config.framing.requestTimeoutMillis
+        environment: sandboxEnvironment.toArray(),
+        timeoutMillis: config.framing.requestTimeoutMillis,
+        networkBridgeExecutable: match (networkLease) {
+            case Some(value) => value.lease.bridgeExecutable
+            case None => ""
+        },
+        networkBridgeSocket: match (networkLease) {
+            case Some(value) => value.lease.bridgeSocket
+            case None => ""
+        }
     ))) {
         case SandboxResult.Ok(value) => value
-        case SandboxResult.Err(error) => return Result.Err(productMcpRedactError(sandboxAgentError(error), resolved.redactor))
+        case SandboxResult.Err(error) =>
+            releaseProductMcpNetworkLease(networkLease)
+            return Result.Err(productMcpRedactError(sandboxAgentError(error), resolved.redactor))
     }
     // A persistent MCP server is not a one-shot command. Deliberately launch
     // the raw bwrap plan rather than its GNU timeout wrapper; individual MCP
@@ -844,6 +1028,7 @@ func openSandboxedProductMcpStdio(
             framing: config.framing
         )
     } catch (error: Exception) {
+        releaseProductMcpNetworkLease(networkLease)
         return Result.Err(AgentError(
             AgentErrorKind.Configuration,
             "mcp.product_sandbox_plan_invalid",
@@ -851,8 +1036,14 @@ func openSandboxedProductMcpStdio(
         ))
     }
     match (openStdioMcpTransport(sandboxed)) {
-        case Result.Ok(value) => Result.Ok(ProductMcpTransportHandle(value, resolved.redactor))
-        case Result.Err(error) => Result.Err(productMcpRedactError(error, resolved.redactor))
+        case Result.Ok(value) => Result.Ok(ProductMcpTransportHandle(
+            value,
+            resolved.redactor,
+            releaseAction: { => releaseProductMcpNetworkLease(networkLease) }
+        ))
+        case Result.Err(error) =>
+            releaseProductMcpNetworkLease(networkLease)
+            Result.Err(productMcpRedactError(error, resolved.redactor))
     }
 }
 
@@ -936,7 +1127,8 @@ func startProductMcp(
     settingsRoot: String,
     workspaceRoot: String,
     catalog: ToolCatalog,
-    extensions: ExtensionInstaller
+    extensions: ExtensionInstaller,
+    sandboxCaBundle!: String = ""
 ): Result<ProductMcpRuntime> {
     let configs = match (loadProductMcpConfig(settingsRoot)) {
         case Result.Ok(value) => value
@@ -945,7 +1137,11 @@ func startProductMcp(
     let runtime = ProductMcpRuntime(configs)
     let aliases = McpToolAliasRegistry()
     for (record in runtime.recordsForStartup() where record.config.enabled) {
-        let opened = match (openProductMcpTransport(record.config, workspaceRoot)) {
+        let opened = match (openProductMcpTransport(
+            record.config,
+            workspaceRoot,
+            sandboxCaBundle: sandboxCaBundle
+        )) {
             case Result.Ok(value) => value
             case Result.Err(error) =>
                 return failedProductMcpStartup(runtime, record, error)
@@ -954,7 +1150,7 @@ func startProductMcp(
             opened.transport,
             McpRequestMeta(clientInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"))
         )
-        runtime.attach(record, client)
+        runtime.attach(record, client, releaseAction: { => opened.release() })
         let extension = match (discoverMcpExtension(
             record.config.id,
             client,

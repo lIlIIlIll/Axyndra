@@ -359,7 +359,7 @@ func laneBoolField(value: AgentValue, name: String): Bool {
     if (item.unifiedKind != ValueKind.Boolean) {
         throw IllegalStateException("ModelLane snapshot field is not boolean: " + name)
     }
-    item.boolean
+    item.asBool()
 }
 
 func laneIntField(value: AgentValue, name: String): Int64 {
@@ -367,7 +367,7 @@ func laneIntField(value: AgentValue, name: String): Int64 {
     if (item.unifiedKind != ValueKind.Number) {
         throw IllegalStateException("ModelLane snapshot field is not numeric: " + name)
     }
-    try { Int64.parse(item.number) } catch (_: Exception) {
+    try { Int64.parse(item.asNumberText()) } catch (_: Exception) {
         throw IllegalStateException("ModelLane snapshot field is not an integer: " + name)
     }
 }

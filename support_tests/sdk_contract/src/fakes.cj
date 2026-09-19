@@ -4,6 +4,7 @@ import yjson_support.*
 
 import yjson.*
 
+import agent_runtime.*
 import agent_domain.*
 import agent_ports.*
 import std.collection.*
@@ -373,86 +374,7 @@ func copyFakeAttempt(
     )
 }
 
-class FakeOperationEntry {
-    var record: OperationRecord
-    var receiptValue: ?OperationReceipt = None
-
-    init(record: OperationRecord) {
-        this.record = record
-    }
-}
-
-class FakeOperationStore <: OperationRepository {
-    private let entries = ArrayList<FakeOperationEntry>()
-
-    public func prepare(record: OperationRecord): Result<Unit> {
-        match (entry(record.operationId.value)) {
-            case Some(existing) => if (existing.record.requestDigest == record.requestDigest) {
-                Result.Ok(())
-            } else {
-                conflict<Unit>("operation digest changed")
-            }
-            case None =>
-                entries.add(FakeOperationEntry(record))
-                Result.Ok(())
-        }
-    }
-
-    public func transition(
-        operationId: OperationId,
-        expected: OperationStatus,
-        next: OperationStatus
-    ): Result<Unit> {
-        let value = match (entry(operationId.value)) {
-            case Some(item) => item
-            case None => return missing<Unit>("operation", operationId.value)
-        }
-        if (value.record.status != expected) {
-            return conflict<Unit>("operation state changed")
-        }
-        let current = value.record
-        value.record = OperationRecord(
-            current.operationId,
-            current.runId,
-            next,
-            current.capability,
-            current.requestDigest,
-            call: current.call
-        )
-        Result.Ok(())
-    }
-
-    public func find(operationId: OperationId): Result<OperationRecord> {
-        match (entry(operationId.value)) {
-            case Some(value) => Result.Ok(value.record)
-            case None => missing<OperationRecord>("operation", operationId.value)
-        }
-    }
-
-    public func receipt(operationId: OperationId): Result<OperationReceipt> {
-        match (entry(operationId.value)) {
-            case Some(value) => match (value.receiptValue) {
-                case Some(receipt) => Result.Ok(receipt)
-                case None => missing<OperationReceipt>("receipt", operationId.value)
-            }
-            case None => missing<OperationReceipt>("operation", operationId.value)
-        }
-    }
-
-    public func saveReceipt(receipt: OperationReceipt): Result<Unit> {
-        match (entry(receipt.operationId.value)) {
-            case Some(value) =>
-                value.receiptValue = Some(receipt)
-                Result.Ok(())
-            case None => missing<Unit>("operation", receipt.operationId.value)
-        }
-    }
-
-    private func entry(id: String): ?FakeOperationEntry {
-        for (value in entries where value.record.operationId.value == id) { return Some(value) }
-        None
-    }
-}
+type FakeOperationStore = InMemoryOperationRuntimePort
 
 class FakeAudit <: AuditPort {
     let events = ArrayList<AgentEvent>()
@@ -802,8 +724,16 @@ class BlockingCancellationProvider <: ModelPort {
 
 class DemoTool <: ToolExecutor {
     var calls: Int64 = 0
-    public func execute(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
         let _ = context
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         calls += 1
         Result.Ok(ToolResult(call.callId, objectValue([ValueField("ok", boolValue(true))])))
     }
@@ -813,7 +743,15 @@ class ToolContextCaptureTool <: ToolExecutor {
     var calls: Int64 = 0
     var valid = false
 
-    public func execute(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let call = ToolCall(
+            prepared.call.callId,
+            prepared.call.name,
+            prepared.operationPlan.canonicalArguments
+        )
         calls += 1
         valid = context.workspaceRoot == "/sdk/explicit-workspace" &&
             context.cwd == "/sdk/explicit-workspace/src" &&

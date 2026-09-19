@@ -21,7 +21,7 @@ class McpProtocol2026Tests {
         @Expect(client.field("sampling").getOrThrow().unifiedKind == UnifiedJsonKind.Object, true)
         @Expect(client.field("sampling").getOrThrow().field("tools").isSome(), true)
         @Expect(client.field("elicitation").getOrThrow().field("url").isSome(), true)
-        @Expect(client.field("extensions").getOrThrow().field("io.example/client").getOrThrow().field("enabled").getOrThrow().boolean, true)
+        @Expect(client.field("extensions").getOrThrow().field("io.example/client").getOrThrow().field("enabled").getOrThrow().asBool(), true)
 
         let server = McpServerCapabilities(
             completion: true,
@@ -30,16 +30,16 @@ class McpProtocol2026Tests {
             tools: Some(McpCapabilityFeature(listChanged: true))
         ).toValue()
         @Expect(server.field("completions").getOrThrow().unifiedKind == UnifiedJsonKind.Object, true)
-        @Expect(server.field("resources").getOrThrow().field("subscribe").getOrThrow().boolean, true)
+        @Expect(server.field("resources").getOrThrow().field("subscribe").getOrThrow().asBool(), true)
     }
 
     @TestCase
     func serializesPromptResourceAndPageContracts() {
         let prompt = McpPrompt("review", arguments: [McpPromptArgument("topic", required: true)]).toValue()
-        @Expect(prompt.field("arguments").getOrThrow().items[0].field("required").getOrThrow().boolean, true)
+        @Expect(prompt.field("arguments").getOrThrow().items[0].field("required").getOrThrow().asBool(), true)
 
         let resource = McpResource("file:///tmp/readme", "readme", size: Some(12)).toValue()
-        @Expect(resource.field("size").getOrThrow().number, "12")
+        @Expect(resource.field("size").getOrThrow().asNumberText(), "12")
 
         let page = McpPage([resource], nextCursor: "next", ttlMillis: 100, cacheScope: "private").toValue("resources")
         @Expect(page.field("resultType").getOrThrow().text, MCP_RESULT_COMPLETE)

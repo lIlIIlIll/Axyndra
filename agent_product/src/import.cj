@@ -204,7 +204,7 @@ func importBlocks(
                     ),
                     isError: match (item.field("isError")) {
                         case Some(flag) =>
-                            flag.unifiedKind == ValueKind.Boolean && flag.boolean
+                            flag.unifiedKind == ValueKind.Boolean && flag.asBool()
                         case None => false
                     }
                 ))
