@@ -312,12 +312,18 @@ def print_case_list(cases: list[dict[str, Any]]) -> None:
 
 def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int = 0) -> dict[str, str]:
     """Build a whitelist environment and deliberately drop user credentials/UI."""
+    sdk_root = Path(
+        os.environ.get(
+            "CANGJIE_SDK_ROOT",
+            str(Path.home() / "cangjie_sdk" / "daily" / "cangjie"),
+        )
+    )
     path_entries = [
         "/usr/bin",
         "/bin",
         "/usr/local/bin",
-        "$HOME/cangjie_sdk/daily/cangjie/bin",
-        "$HOME/cangjie_sdk/daily/cangjie/tools/bin",
+        str(sdk_root / "bin"),
+        str(sdk_root / "tools" / "bin"),
     ]
     inherited_path = os.environ.get("PATH", "")
     if inherited_path:
@@ -355,15 +361,15 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
             environment[name] = value
     # The repository's daily SDK is a split installation: compiler/runtime live
     # below cangjie/, while dynamic stdx lives beside it.
-    environment.setdefault("CANGJIE_HOME", "$HOME/cangjie_sdk/daily/cangjie")
-    environment.setdefault("CANGJIE_SDK_ROOT", "$HOME/cangjie_sdk/daily/cangjie")
+    environment.setdefault("CANGJIE_HOME", str(sdk_root))
+    environment.setdefault("CANGJIE_SDK_ROOT", str(sdk_root))
     environment.setdefault(
         "CANGJIE_STDX_PATH",
-        "$HOME/cangjie_sdk/daily/linux_x86_64_cjnative/dynamic/stdx",
+        str(sdk_root.parent / "linux_x86_64_cjnative" / "dynamic" / "stdx"),
     )
     native = str(ROOT / "libs" / "process4cj" / "native")
-    runtime = "$HOME/cangjie_sdk/daily/cangjie/runtime/lib/linux_x86_64_cjnative"
-    tools = "$HOME/cangjie_sdk/daily/cangjie/tools/lib"
+    runtime = str(sdk_root / "runtime" / "lib" / "linux_x86_64_cjnative")
+    tools = str(sdk_root / "tools" / "lib")
     stdx = environment["CANGJIE_STDX_PATH"]
     environment.setdefault("CJ_SDK_LIBPATH", f"{stdx}:{runtime}:{tools}")
     existing_ld = environment.get("LD_LIBRARY_PATH", "")
