@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-sdk_root=${AXYNDRA_SDK_ROOT:-$HOME/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie}
+sdk_root=${AXYNDRA_SDK_ROOT:-${HOME:?HOME must be set}/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie}
 export AXYNDRA_SDK_ROOT="$sdk_root"
 work_root=$(mktemp -d /tmp/axyndra-package-readiness.XXXXXX)
 mkdir -p "$work_root/logs"
@@ -75,9 +75,7 @@ for consumer in "${public_packages[@]}"; do
   fi
 done
 
-if "$RG" -n '$HOME/playground/learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./axyndra_agent_testkit' \
-  "$work_root/packages" "$work_root/consumers" \
-  --glob '!target/**' --glob '!package-inventory.json'; then
+if "$RG" -n 'learn_agent_cj|\.\./libs/|\.\./agent_sdk|\.\./axyndra_agent_testkit' "$work_root/packages" "$work_root/consumers" --glob '!target/**' --glob '!package-inventory.json'; then
   printf 'package readiness: monorepo fallback found in staged package or consumer\n' >&2
   exit 1
 fi

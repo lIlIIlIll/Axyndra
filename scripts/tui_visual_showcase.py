@@ -32,7 +32,7 @@ DEFAULT_CANDIDATE = (
 )
 GALLERY_OVERVIEW_FILENAME = "gallery-all.png"
 DEFAULT_SDK_ROOT = Path(
-    "$HOME/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie"
+    Path.home() / "cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie"
 )
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 HEADLESS_EXPECTED = (

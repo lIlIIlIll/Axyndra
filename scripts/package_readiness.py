@@ -352,7 +352,7 @@ def stage(destination: Path) -> None:
             if path.suffix in {".so", ".a", ".o"}:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
-            if "$HOME/" in text or "BEGIN PRIVATE KEY" in text:
+            if (str(Path.home()) + "/") in text or "BEGIN PRIVATE KEY" in text:
                 forbidden.append(path.relative_to(package_root).as_posix())
         if forbidden:
             raise ValueError(f"{name}: staged files contain developer path or private key marker: {forbidden}")

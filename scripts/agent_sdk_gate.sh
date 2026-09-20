@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-: "${AXYNDRA_SDK_ROOT:=$HOME/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie}"
+: "${AXYNDRA_SDK_ROOT:=${HOME:?HOME must be set}/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie}"
 export AXYNDRA_SDK_ROOT
 
 python3 "$ROOT/scripts/check_library_boundaries.py"
