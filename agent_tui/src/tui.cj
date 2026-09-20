@@ -652,6 +652,7 @@ class AgentScreen {
     private var lastEmptyLeftTap: ?MonoTime = None
     private var agentHubOpenCount: Int64 = 0
     private var backgroundSequence: Int64 = 0
+    private var approvalCancellationPending = false
     private var completionSequence: Int64 = 0
     private var performanceStreamRemaining: Int64 = 0
     private var performanceAppendSequence: Int64 = 0
@@ -1222,6 +1223,10 @@ class AgentScreen {
     }
 
     private func submitComposer(delivery: String): UpdateResult {
+        if (approvalCancellationPending) {
+            status = "waiting for approval cancellation"
+            return UpdateResult.next()
+        }
         _ = composer.cancelCompletion()
         match (composerSlashInputError()) {
             case Some(message) =>
@@ -1574,11 +1579,26 @@ class AgentScreen {
                 }
                 consumeMailboxViewportRefresh(settled)
             case Event.AsyncCompleted(id, inner) =>
+                if (id.startsWith("tui-background-cancel-approval-")) {
+                    approvalCancellationPending = false
+                }
                 if (id.startsWith("tui-background-")) {
                     update(inner)
                 } else {
                     UpdateResult.next()
                 }
+            case Event.AsyncFailed(id, _) =>
+                if (id.startsWith("tui-background-cancel-approval-")) {
+                    approvalCancellationPending = false
+                    status = "approval cancellation failed"
+                }
+                UpdateResult.next()
+            case Event.AsyncCancelled(id) =>
+                if (id.startsWith("tui-background-cancel-approval-")) {
+                    approvalCancellationPending = false
+                    status = "approval cancellation failed"
+                }
+                UpdateResult.next()
             case Event.Message(message) =>
                 if (message.startsWith("queue-queued:")) {
                     let id = message[13..]
@@ -1771,6 +1791,7 @@ class AgentScreen {
     }
 
     private func cancelApprovalInteraction(armExit: Bool): UpdateResult {
+        approvalCancellationPending = true
         match (ui.approvalId) {
             case Some(id) => UiReducer.reduce(
                 ui,
@@ -7747,6 +7768,8 @@ class AgentScreen {
         let previousWorking = working
         let previousMainWorking = mainWorking
         let previousIdleCtrlCArmed = idleCtrlCArmed
+        let previousComposerValue = composer.area.value
+        let previousApprovalCancellationPending = approvalCancellationPending
         let previousApprovalToolCardId = approvalToolCardId
         let previousApprovalSelected = approvalSelected
         let previousApprovalSessionLabel = approvalSessionLabel
@@ -7761,6 +7784,7 @@ class AgentScreen {
         working = true
         mainWorking = true
         idleCtrlCArmed = false
+        approvalCancellationPending = false
         acceptAgentEvent(
             TuiAgentEvent.ToolStartedWithId(
                 "write",
@@ -7795,6 +7819,18 @@ class AgentScreen {
             case Some(card) => card.state == "cancelled"
             case None => false
         }
+        composer.area.setValue("next turn")
+        let blockedUntilCancellationCompletes = update(
+            Event.KeyDown(KeyEvent(KeyCode.Enter))
+        )
+        let blockedFlowContinues = match (blockedUntilCancellationCompletes.flow) {
+            case ControlFlow.Continue => true
+            case _ => false
+        }
+        let cancellationWasPending = approvalCancellationPending &&
+            composer.area.value == "next turn" &&
+            blockedFlowContinues
+        idleCtrlCArmed = true
         let second = update(Event.KeyDown(KeyEvent(KeyCode.CtrlC)))
         let exits = match ((first.flow, second.flow)) {
             case (ControlFlow.Continue, ControlFlow.Exit) => true
@@ -7830,7 +7866,9 @@ class AgentScreen {
         working = previousWorking
         mainWorking = previousMainWorking
         idleCtrlCArmed = previousIdleCtrlCArmed
+        composer.area.setValue(previousComposerValue)
         approvalToolCardId = previousApprovalToolCardId
+        approvalCancellationPending = previousApprovalCancellationPending
         approvalSelected = previousApprovalSelected
         approvalSessionLabel = previousApprovalSessionLabel
         approvalInspectTitle = previousApprovalInspectTitle
@@ -7838,7 +7876,7 @@ class AgentScreen {
         activeToolCardId = previousActiveToolCardId
         activeToolCallId = previousActiveToolCallId
         activeToolArguments = previousActiveToolArguments
-        waiting && cancelled && exits && failedNotCompleted
+        waiting && cancelled && cancellationWasPending && exits && failedNotCompleted
     }
 
     func unifiedCardChromeObserved(): Bool {
