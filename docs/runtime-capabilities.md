@@ -70,9 +70,8 @@
   artifact.
 - `vnext_contract_gate.py` explicitly excludes `provider_real_smoke`, `pty_and_tui_gates`,
   `package_readiness`, and `full_release_gate`; those exclusions remain open evidence gaps.
-- PR CI is pending until the E0-01 audit commit is published; the final revision of this
-  page will record the actual PR check URL and conclusion rather than infer CI from local
-  commands.
+- PR #38 CI: [PR gate run](https://github.com/lIlIIlIll/Axyndra/actions/runs/35452447524) concluded **success** at head `cf2b614948228db86278a66c4f8d54b7f045c002`; the single `clean-build-test` job completed all configured steps, including focused contracts, product regression fixtures, CI evidence writing and artifact upload.
+- The local baseline remains the evidence record for exact one-sample wall times. The PR run is an independent clean-build confirmation, not a replacement for the explicitly unrun provider, PTY/TUI, package-readiness, release, and later roadmap matrices.
 
 ## Security invariants
 
