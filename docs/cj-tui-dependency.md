@@ -10,7 +10,7 @@ The imported source is recorded in `vendor/cj_tui/PROVENANCE.json`:
 - commit: `ab76bc1b39ed3a9261487beb71b4d1967accc2a2`;
 - root tree: `169d78a775b7f2035c345625ca543aa214fed19f`;
 - included package trees and the generated API-contract blob are pinned;
-- a canonical SHA-256 manifest covers all 60 vendored files.
+- a canonical SHA-256 manifest covers all 62 vendored files.
 
 `scripts/check_cjtui_contract.py` verifies the provenance manifest, package
 versions, and `vendor/cj_tui/docs/api-contract-v1.txt` digest. `CJ_TUI_ROOT` remains available

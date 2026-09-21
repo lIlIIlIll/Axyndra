@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "cbde2c07457cc04e655c4969c53fe6c8a1f02142e094d73c4d5d602a13b1ea0a",
-  "vendored_files": 78,
+  "vendored_manifest_sha256": "15fc78c6a7b258b1e6d13752271e7b822143607ff84c0e159e10835dd33d8d93",
+  "vendored_files": 62,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
