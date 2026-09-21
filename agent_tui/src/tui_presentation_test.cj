@@ -183,6 +183,39 @@ class TuiPresentationTests {
     }
 
     @TestCase
+    func rawHistoryTitlesAndFootersStripTerminalControls(): Unit {
+        let snapshot = UiSnapshot()
+        UiReducer.reduce(
+            snapshot,
+            UiEvent.UpsertCard(
+                "unsafe-title-footer",
+                UiCardKind.Tool,
+                "Unsafe \u{1B}[31mtitle\u{1B}[0m\nnext",
+                "safe body",
+                "completed",
+                false,
+                "footer \u{1B}]8;;https://example.test\u{07}\nnext"
+            )
+        )
+        for (index in 1..7) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        let batch = match (source.prepareHistoryBatch(26, 80)) {
+            case Some(value) => value
+            case None => @Fail("unsafe title and footer should produce a history batch")
+        }
+        var safe = true
+        for (line in batch.lines()) {
+            safe = safe && !line.contains("\u{1B}") && !line.contains("\n") && !line.contains("\r")
+        }
+        @Expect(safe, true)
+        @Expect(batch.lines()[0].contains("Unsafe"), true)
+        @Expect(batch.lines()[0].contains("next"), true)
+        @Expect(batch.lines()[batch.lineCount() - 1].contains("footer"), true)
+    }
+
+    @TestCase
     func adapterRendersOnlyThePreparedBatch(): Unit {
         let snapshot = UiSnapshot()
         for (index in 0..8) {

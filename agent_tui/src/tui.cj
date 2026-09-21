@@ -467,17 +467,21 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         text.toString()
     }
 
+    private func historySafeLine(value: String): String {
+        stripAnsi(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    }
+
     private func historyCardLines(index: Int64, width: Int64): Array<String> {
         let item = snapshot.cards[index]
         let lines = ArrayList<String>()
         let document = renderCard(item, max(1, width - 4), "history")
-        let title = itemTitleForPhysicalIndex(index, max(1, width - 4))
+        let title = historySafeLine(itemTitleForPhysicalIndex(index, max(1, width - 4)))
         let chrome = cardUsesChrome(item.kind)
         if (chrome) {
             lines.add(if (unicode) { "╭─ " + title } else { "+- " + title })
         }
         for (line in document.lines) {
-            let body = stripAnsi(documentLineText(line)).replace("\r", "")
+            let body = historySafeLine(documentLineText(line))
             if (chrome) {
                 lines.add(if (unicode) { "│ " + body } else { "| " + body })
             } else {
@@ -491,7 +495,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
                 lines.add(title)
             }
         }
-        let footer = itemFooterForPhysicalIndex(index)
+        let footer = historySafeLine(itemFooterForPhysicalIndex(index))
         if (chrome && (footer != "" || !item.collapsed)) {
             lines.add(if (unicode) { "╰─ " + footer } else { "+- " + footer })
         }
