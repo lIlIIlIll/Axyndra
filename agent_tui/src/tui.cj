@@ -258,10 +258,10 @@ public func runAgentTui(
             let app = App(
                 backend: AnsiBackend(output: output),
                 alternateScreen: false,
-                // Primary transcript, document modals, and inline editors all
-                // consume mouse events; do not let the terminal swallow wheel
-                // input before AgentScreen can route it.
-                mouse: true,
+                // Primary transcript scrolling belongs to the terminal. The
+                // frame provider enables mouse reporting only for an interactive
+                // primary surface or a fullscreen surface.
+                mouse: false,
                 instrumentationEnabled: tuiCoreMetricsRequested()
             )
             app.attachTraceSink(trace)
@@ -273,7 +273,7 @@ public func runAgentTui(
         case None =>
             App(
                 alternateScreen: false,
-                mouse: true
+                mouse: false
             ).runWithFrameProvider(
                 externalPort,
                 screen,
@@ -505,11 +505,31 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         lines.toArray()
     }
 
+    private func cappedHistoryCardLines(cardLines: Array<String>, maxLines: Int64): Array<String> {
+        if (maxLines <= 0 || cardLines.size <= maxLines) {
+            return cardLines
+        }
+        let capped = ArrayList<String>()
+        let keep = max(0, maxLines - 1)
+        var index: Int64 = 0
+        while (index < keep) {
+            capped.add(cardLines[index])
+            index++
+        }
+        capped.add(if (unicode) { "… history truncated …" } else { "... history truncated ..." })
+        capped.toArray()
+    }
+
     private func historyLines(start: Int64, end: Int64, width: Int64, maxLines: Int64): HistoryWindow {
         let lines = ArrayList<String>()
         var index = start
         while (index < end) {
-            let cardLines = historyCardLines(index, width)
+            let rawCardLines = historyCardLines(index, width)
+            let cardLines = if (lines.isEmpty()) {
+                cappedHistoryCardLines(rawCardLines, maxLines)
+            } else {
+                rawCardLines
+            }
             if (!lines.isEmpty() && lines.size + cardLines.size > maxLines) {
                 break
             }
@@ -930,13 +950,14 @@ class AgentScreen <: TerminalFrameProvider {
         this.terminalUnicode = !asciiRailRequested()
         planReview.setTheme(themeName, customThemeDefinitions)
         let source = AgentTranscriptSource(ui, {
-            item, width, _ => renderTranscriptBodyDocument(
+            item, width, section => renderTranscriptBodyDocument(
                 item,
                 width,
                 activeProductTheme(
                     overrideName: themeName,
                     customThemes: customThemeDefinitions
-                )
+                ),
+                history: section == "history"
             )
         })
         source.unicode = terminalUnicode
@@ -1073,7 +1094,7 @@ class AgentScreen <: TerminalFrameProvider {
                 }
             case _ => ()
         }
-        if (ctrlRune(key, r'l')) {
+        if (altRune(key, r'l')) {
             status = "terminal display reset"
             return syncPlanReviewStatus(UpdateResult.withCommand(Command.ResetTerminal))
         }
@@ -5410,7 +5431,8 @@ class AgentScreen <: TerminalFrameProvider {
     private func renderTranscriptBodyDocument(
         item: UiCard,
         width: Int64,
-        theme: ProductTheme
+        theme: ProductTheme,
+        history!: Bool = false
     ): Document {
         if (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning || item.kind == UiCardKind.User) {
             return renderTranscriptCardDocument(item, width, theme)
@@ -5422,7 +5444,7 @@ class AgentScreen <: TerminalFrameProvider {
         // empty body here avoids parsing and laying out logs, file contents,
         // search results, and diffs that cannot be seen.  Expansion changes
         // the card revision and materializes the specialized renderer then.
-        if (item.collapsed || (item.kind == UiCardKind.Approval && !approvalCardIsWaiting(item.state))) {
+        if (!history && (item.collapsed || (item.kind == UiCardKind.Approval && !approvalCardIsWaiting(item.state)))) {
             if (item.kind == UiCardKind.Tool && isShellToolCard(item)) {
                 return agentCardBodyDocument(item, width, theme)
             }
@@ -5669,9 +5691,22 @@ class AgentScreen <: TerminalFrameProvider {
             fullscreen: agentHubActive || planReview.isActive() || modalFullscreen || editorFullscreen
         )
     }
+    private func mouseCaptureFor(mode: PresentationMode): Bool {
+        let documentInteractive = match (modal) {
+            case Some(TuiModalKind.Document) => true
+            case _ => false
+        }
+        let inlineAskInteractive = ask.editorActive() && ask.inlineEditorActive()
+        match (mode) {
+            case PresentationMode.Fullscreen => true
+            case PresentationMode.Primary => documentInteractive || inlineAskInteractive
+        }
+    }
+
 
     public func prepareFrame(size: Rect): PresentationFrame {
         let mode = presentationMode()
+        let mouseCapture = mouseCaptureFor(mode)
         frameProviderActive = true
         activePresentationMode = mode
         primaryScrollbackActive = match (mode) {
@@ -5695,7 +5730,8 @@ class AgentScreen <: TerminalFrameProvider {
                 case Some(adapter) => adapter.generation()
                 case None => 0
             },
-            followUp: followUp
+            followUp: followUp,
+            mouseCapture: mouseCapture
         )
     }
 
@@ -6607,7 +6643,7 @@ class AgentScreen <: TerminalFrameProvider {
             openedState.selected == 0 && openedState.focus == PlanReviewFocus.Actions &&
             status == "plan review · actions"
         let resetDisplay = handleKeyDown(
-            KeyEvent(KeyCode.Char(r'l'), modifiers: KeyModifier(ctrl: true))
+            KeyEvent(KeyCode.Char(r'l'), modifiers: KeyModifier(alt: true))
         )
         let resetCommandObserved = match (resetDisplay.command) {
             case Command.ResetTerminal => true
@@ -7101,7 +7137,7 @@ class AgentScreen <: TerminalFrameProvider {
             Event.KeyDown(
                 KeyEvent(
                     KeyCode.Char(r'l'),
-                    modifiers: KeyModifier(ctrl: true)
+                    modifiers: KeyModifier(alt: true)
                 )
             )
         )

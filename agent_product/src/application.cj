@@ -2334,7 +2334,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     "- Tab: complete a path or accept autocomplete\n" +
                     "- Esc: close autocomplete/modal; interrupt active work\n" +
                     "- Ctrl+C: clear editor; press again to exit\n" + "- Ctrl+D: exit when the editor is empty\n" +
-                    "- Ctrl+Z: suspend to the background\n" + "- Ctrl+L: reset the terminal display\n" +
+                    "- Ctrl+Z: suspend to the background\n" + "- Alt+L: reset the terminal display\n" +
                     "- Ctrl+O: toggle tool output expansion\n" + "- Ctrl+T: toggle thinking block visibility\n" +
                     "- PageUp/PageDown: scroll transcript\n" + "- Up/Down: move in selectable lists\n" +
                     "- Ctrl+S: save todo/custom-answer editor\n" + "- Paste: insert clipboard text"))

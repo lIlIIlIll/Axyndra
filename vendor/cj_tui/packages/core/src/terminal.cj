@@ -374,6 +374,7 @@ public class Terminal {
             // Start at the bottom-left so each CRLF advances through the
             // scroll region and every history line enters native scrollback.
             backend.moveTo(area.x, area.y + max(0, area.height - 1))
+            backend.write("\u{1B}[2K")
             backend.drawFrame(
                 rawPrefix,
                 buffer,
@@ -822,6 +823,26 @@ public class TerminalSession {
             backend.leaveAlternateScreen()
             alternateActive = false
             fullscreenAlternateOwned = false
+        }
+        TerminalSignalGuard.updateModes(
+            alternateScreen: alternateActive,
+            mouse: mouseActive,
+            mouseMove: mouseMoveActive,
+            focusEvents: focusActive,
+            bracketedPaste: pasteActive,
+            hideCursor: cursorHidden
+        )
+    }
+    // Primary interactive surfaces may temporarily own mouse reporting while
+    // ordinary primary-mode transcript scrolling remains native to the shell.
+    public func setPrimaryMouse(enabled: Bool): Unit {
+        if (!active || fullscreenRequested) { return }
+        if (enabled && !mouseActive) {
+            backend.enableMouse()
+            mouseActive = true
+        } else if (!enabled && mouseActive && !mouse) {
+            backend.disableMouse()
+            mouseActive = false
         }
         TerminalSignalGuard.updateModes(
             alternateScreen: alternateActive,

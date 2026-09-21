@@ -66,6 +66,7 @@ public struct PresentationFrame {
     public let viewport: Rect
     public let history: ?HistoryBatch
     public let followUp: Bool
+    public let mouseCapture: Bool
     public let generation: Int64
 
     public init(
@@ -74,7 +75,8 @@ public struct PresentationFrame {
         viewport!: Rect,
         history!: ?HistoryBatch = None,
         generation!: Int64 = 0,
-        followUp!: Bool = false
+        followUp!: Bool = false,
+        mouseCapture!: Bool = false
     ) {
         this.mode = mode
         this.terminalSize = terminalSize
@@ -82,6 +84,7 @@ public struct PresentationFrame {
         this.history = history
         this.generation = max(0, generation)
         this.followUp = followUp
+        this.mouseCapture = mouseCapture
     }
 }
 
@@ -132,7 +135,7 @@ public class PresentationBackend <: Backend {
         activeModeValue
     }
 
-    public func sync(mode: PresentationMode): Bool {
+    public func sync(mode: PresentationMode, mouseCapture!: Bool = false): Bool {
         let changed = match ((mode, activeModeValue)) {
             case (PresentationMode.Primary, PresentationMode.Primary) => false
             case (PresentationMode.Fullscreen, PresentationMode.Fullscreen) => false
@@ -144,14 +147,20 @@ public class PresentationBackend <: Backend {
                     case PresentationMode.Fullscreen => current.enterFullscreen()
                     case PresentationMode.Primary => current.leaveFullscreen()
                 }
+                match (mode) {
+                    case PresentationMode.Primary => current.setPrimaryMouse(mouseCapture)
+                    case PresentationMode.Fullscreen => ()
+                }
             case None =>
                 match ((mode, activeModeValue)) {
                     case (PresentationMode.Fullscreen, PresentationMode.Primary) =>
                         delegate.enterAlternateScreen()
                         delegate.enableMouse()
                     case (PresentationMode.Primary, PresentationMode.Fullscreen) =>
-                        delegate.disableMouse()
+                        if (!mouseCapture) { delegate.disableMouse() }
                         delegate.leaveAlternateScreen()
+                    case (PresentationMode.Primary, PresentationMode.Primary) =>
+                        if (mouseCapture) { delegate.enableMouse() } else { delegate.disableMouse() }
                     case _ => ()
                 }
         }

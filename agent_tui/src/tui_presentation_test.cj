@@ -42,6 +42,29 @@ func addLongPresentationCard(snapshot: UiSnapshot, index: Int64): Unit {
     )
 }
 
+func addOversizedPresentationCard(snapshot: UiSnapshot, index: Int64): Unit {
+    let body = StringBuilder()
+    for (line in 0..400) {
+        body.append("oversized history ")
+        body.append(index.toString())
+        body.append("-")
+        body.append(line.toString())
+        body.append("\n")
+    }
+    UiReducer.reduce(
+        snapshot,
+        UiEvent.UpsertCard(
+            "oversized-history-${index}",
+            UiCardKind.Assistant,
+            "Oversized history ${index}",
+            body.toString(),
+            "completed",
+            false,
+            ""
+        )
+    )
+}
+
 func presentationBatchKind(batch: HistoryBatch): String {
     match (batch.kind) {
         case HistoryBatchKind.Append => "append"
@@ -119,6 +142,39 @@ class TuiPresentationTests {
         }
         source.acknowledgeHistory(batch.id)
         @Expect(source.retiredCount(), 1)
+    }
+
+
+    @TestCase
+    func oversizedFirstCardIsCappedAndHistoryProgresses(): Unit {
+        let snapshot = UiSnapshot()
+        addOversizedPresentationCard(snapshot, 0)
+        addStablePresentationCard(snapshot, 1)
+        for (index in 2..8) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        let first = match (source.prepareHistoryBatch(27, 80)) {
+            case Some(value) => value
+            case None => @Fail("oversized first card should produce a bounded history batch")
+        }
+        @Expect(first.lineCount() <= 256, true)
+        var truncated = false
+        for (line in first.lines()) {
+            truncated = truncated || line.contains("history truncated")
+        }
+        @Expect(truncated, true)
+        source.acknowledgeHistory(first.id)
+        @Expect(source.retiredCount(), 1)
+        let second = match (source.prepareHistoryBatch(28, 80)) {
+            case Some(value) => value
+            case None => @Fail("history should progress to the next card after the cap")
+        }
+        var nextCardVisible = false
+        for (line in second.lines()) {
+            nextCardVisible = nextCardVisible || line.contains("history body 1")
+        }
+        @Expect(nextCardVisible, true)
     }
 
     @TestCase

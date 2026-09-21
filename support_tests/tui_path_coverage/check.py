@@ -2745,9 +2745,25 @@ def run_navigation_resize(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.wait_screen(("Enter send",), "first-frame")
     initial_terminal_bytes = case_run.terminal_path.read_bytes()
     case_run.assertions.check(
-        "primary_mouse_capture_enabled",
-        b"\x1b[?1000h" in initial_terminal_bytes and b"\x1b[?1006h" in initial_terminal_bytes,
-        "the primary TUI captures mouse input for transcript and modal interactions",
+        "primary_mouse_capture_disabled",
+        b"\x1b[?1000h" not in initial_terminal_bytes and b"\x1b[?1006h" not in initial_terminal_bytes,
+        "ordinary primary transcript scrolling leaves mouse handling to the terminal",
+    )
+    case_run.send("open-primary-document", b"/help\r")
+    case_run.wait_screen(("/tree",), "primary-document-open")
+    document_terminal_bytes = case_run.terminal_path.read_bytes()
+    case_run.assertions.check(
+        "primary_surface_mouse_capture_enabled",
+        b"\x1b[?1000h" in document_terminal_bytes and b"\x1b[?1006h" in document_terminal_bytes,
+        "an interactive primary document enables mouse routing",
+    )
+    case_run.send("close-primary-document", b"\x1b")
+    case_run.wait_screen_absent(("Type a command, or use Tab to complete it.",), "primary-document-closed")
+    after_document_bytes = case_run.terminal_path.read_bytes()
+    case_run.assertions.check(
+        "primary_surface_mouse_capture_released",
+        b"\x1b[?1006l" in after_document_bytes and b"\x1b[?1000l" in after_document_bytes,
+        "closing the primary document restores terminal-owned mouse handling",
     )
     for index in range(12):
         case_run.send(
@@ -6144,14 +6160,14 @@ def run_copy_and_suspend(case_run: CaseRun, _: dict[str, Any]) -> None:
         f"clipboard staging files are removed: {staged!r}",
     )
 
-    case_run.send("reset-terminal", b"\x0c")
+    case_run.send("reset-terminal", b"\x1bl")
     reset_frame = strip_ansi(
         case_run.wait_screen(("terminal display reset",), "terminal-reset")
     )
     case_run.assertions.check(
         "reset_terminal_visible",
         "terminal display reset" in reset_frame,
-        "Ctrl+L resets the terminal and reports the action",
+        "Alt+L resets the terminal and reports the action",
     )
 
     pid = case_run.pane_pid()

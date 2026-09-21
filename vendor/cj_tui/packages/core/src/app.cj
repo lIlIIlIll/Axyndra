@@ -1786,7 +1786,10 @@ public class App {
                             case None => None
                         }
                         let presentationChanged = match ((presentationBackend, prepared)) {
-                            case (Some(presenter), Some(value)) => presenter.sync(value.mode)
+                            case (Some(presenter), Some(value)) => presenter.sync(
+                                value.mode,
+                                mouseCapture: value.mouseCapture
+                            )
                             case _ => false
                         }
                         let historyPresented = match (prepared) {

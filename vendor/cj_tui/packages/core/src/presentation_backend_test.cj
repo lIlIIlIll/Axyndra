@@ -92,7 +92,7 @@ class PresentationBackendContractTest {
             frame.canvas().drawText(0, 0, "live", Style.default())
         }
 
-        @Expect(output.text().contains("\u{1B}[2;1Hold one\r\nold two\r\n"), true)
+        @Expect(output.text().contains("\u{1B}[2;1H\u{1B}[2Kold one\r\nold two\r\n"), true)
     }
 
     @TestCase
@@ -147,6 +147,37 @@ class PresentationBackendContractTest {
         let text = output.text()
         @Expect(countPresentationToken(text, "\u{1B}[?1049h"), 1)
         @Expect(countPresentationToken(text, "\u{1B}[?1049l"), 1)
+        @Expect(countPresentationToken(text, "\u{1B}[?1000h"), 1)
+        @Expect(countPresentationToken(text, "\u{1B}[?1000l"), 1)
+    }
+
+    @TestCase
+    func primaryMouseCaptureFollowsPreparedSurface(): Unit {
+        let output = TestOutput()
+        let backend = AnsiBackend(
+            output: output,
+            fallbackArea: Rect(0, 0, 12, 2)
+        )
+        let presenter = PresentationBackend(backend)
+        let session = TerminalSession(
+            backend,
+            rawMode: false,
+            alternateScreen: false,
+            mouse: false,
+            bracketedPaste: false,
+            hideCursor: false
+        )
+        presenter.bind(session)
+
+        session.run {
+            @Expect(presenter.sync(PresentationMode.Primary), false)
+            @Expect(presenter.sync(PresentationMode.Primary, mouseCapture: true), false)
+            @Expect(session.mouseEnabled, true)
+            @Expect(presenter.sync(PresentationMode.Primary, mouseCapture: false), false)
+            @Expect(session.mouseEnabled, false)
+        }
+
+        let text = output.text()
         @Expect(countPresentationToken(text, "\u{1B}[?1000h"), 1)
         @Expect(countPresentationToken(text, "\u{1B}[?1000l"), 1)
     }

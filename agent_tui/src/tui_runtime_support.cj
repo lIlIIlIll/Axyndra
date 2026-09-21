@@ -343,6 +343,13 @@ func ctrlRune(key: KeyEvent, expected: Rune): Bool {
     }
 }
 
+func altRune(key: KeyEvent, expected: Rune): Bool {
+    match (key.code) {
+        case KeyCode.Char(value) => key.modifiers.alt && value == expected
+        case _ => false
+    }
+}
+
 func isToolOutputCard(card: UiCard): Bool {
     card.kind == UiCardKind.Tool || card.title.startsWith("Tool result") || card.title.startsWith("Subagent") ||
         card.title.startsWith("Background")
