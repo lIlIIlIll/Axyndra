@@ -3679,7 +3679,7 @@ public class AgentCore <: AgentRunner {
                 modelRequest,
                 {
                     event => if (activity.record(event)) {
-                        match (modelEventReplayBarrier(event)) {
+                        match (modelEventImmediateReplayBarrier(event)) {
                             case Some(barrier) => match (persistFirstModelAttemptBarrier(
                                 activity, attemptId, semanticRequestId, barrier,
                                 context, control, sink
@@ -7513,6 +7513,16 @@ func modelEventReplayBarrier(event: ModelEvent): ?ModelAttemptReplayBarrier {
             case _ => None
         }
         case _ => None
+    }
+}
+
+func modelEventImmediateReplayBarrier(event: ModelEvent): ?ModelAttemptReplayBarrier {
+    // A provider stream terminal observation must be durable before the
+    // callback returns. ModelEvent.Completed remains deferred so the
+    // request-attempt completion event keeps its established ordering.
+    match (event) {
+        case ModelEvent.Completed => None
+        case _ => modelEventReplayBarrier(event)
     }
 }
 
