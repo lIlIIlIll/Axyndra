@@ -3680,10 +3680,6 @@ public class AgentCore <: AgentRunner {
                 {
                     event => if (activity.record(event)) {
                         match (modelEventReplayBarrier(event)) {
-                            case Some(ModelAttemptReplayBarrier.ProviderTerminal) =>
-                                let _ = activity.claimReplayBarrier(
-                                    ModelAttemptReplayBarrier.ProviderTerminal
-                                )
                             case Some(barrier) => match (persistFirstModelAttemptBarrier(
                                 activity, attemptId, semanticRequestId, barrier,
                                 context, control, sink
@@ -4882,8 +4878,8 @@ public class AgentCore <: AgentRunner {
         if (execution.replayBarrier != ModelAttemptReplayBarrier.ProviderTerminal) {
             return Result.Ok(())
         }
-        markModelAttemptBarrier(
-            attemptId, semanticRequestId, execution.replayBarrier,
+        ensureModelAttemptBarrier(
+            attemptId, semanticRequestId, ModelAttemptReplayBarrier.ProviderTerminal,
             context, control, sink
         )
     }

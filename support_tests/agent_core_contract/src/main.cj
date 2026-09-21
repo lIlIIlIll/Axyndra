@@ -128,6 +128,7 @@ main(): Int64 {
     toolEvidenceBlocksRetryContract()
     malformedToolArgumentsRetryContract()
     providerTerminalMissingRetryContract()
+    providerTerminalBarrierPersistsDuringCallbackContract()
     cancellationAndRunDeadlineBarriersContract()
     durableDecisionSuppressesRetryRaceContract()
     modelResumeCrashWindowMatrixContract()
@@ -534,6 +535,28 @@ func providerTerminalMissingRetryContract(): Unit {
         staleVisible && recoveredVisible &&
         hasEvent(runs.eventLog, "model.attempt_aborted"),
         "provider EOF retries after ToolEvidence while live deltas remain attempt-scoped"
+    )
+}
+
+func providerTerminalBarrierPersistsDuringCallbackContract(): Unit {
+    let runs = MemoryRuns()
+    let model = ProviderTerminalBarrierProbeModel(runs)
+    let decisions = RecordingModelDecisionPort()
+    let catalog = ToolCatalog()
+    let result = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, modelDecisionRuntime: Some(decisions)
+    ).start(AgentRunRequest(
+        RunId("provider-terminal-barrier-run"),
+        SessionId("provider-terminal-barrier-session"),
+        "fixture", "persist provider terminal before return"
+    ))
+    expect(
+        result.isOk() && model.observedDurableBarrier &&
+        runs.modelAttempts.size == 1 &&
+        runs.modelAttempts[0].replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal,
+        "provider terminal barrier is durable before execute returns"
     )
 }
 
@@ -2349,6 +2372,38 @@ class ProviderTerminalMissingThenSuccessModel <: ModelPort {
         Result.Ok(contractModelReply(
             [ModelBlock(ModelBlockKind.Text, text: "recovered")],
             stopReason: "end_turn", responseId: "provider-terminal-retry-success"
+        ))
+    }
+}
+
+class ProviderTerminalBarrierProbeModel <: ModelPort {
+    let runs: MemoryRuns
+    var observedDurableBarrier = false
+
+    public init(runs: MemoryRuns) {
+        this.runs = runs
+    }
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        events(ModelEvent.ProviderProgress(
+            ProviderStreamEvent.MessageTerminalObserved(TerminalEvidence(
+                "fixture", "message_stop", rawStopReason: "end_turn",
+                messageTerminalObserved: true, streamEofObserved: true,
+                adapterVersion: "barrier-probe-v1"
+            ))
+        ))
+        if (!runs.modelAttempts.isEmpty()) {
+            observedDurableBarrier = runs.modelAttempts[0].replayBarrier ==
+                ModelAttemptReplayBarrier.ProviderTerminal
+        }
+        events(ModelEvent.Completed)
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "barrier persisted")],
+            stopReason: "end_turn", responseId: "barrier-probe-response"
         ))
     }
 }

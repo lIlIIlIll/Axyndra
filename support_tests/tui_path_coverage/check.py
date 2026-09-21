@@ -2743,6 +2743,12 @@ def run_restart_cycle(case_run: CaseRun, _: dict[str, Any]) -> None:
 def run_navigation_resize(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.launch()
     case_run.wait_screen(("Enter send",), "first-frame")
+    initial_terminal_bytes = case_run.terminal_path.read_bytes()
+    case_run.assertions.check(
+        "primary_mouse_capture_enabled",
+        b"\x1b[?1000h" in initial_terminal_bytes and b"\x1b[?1006h" in initial_terminal_bytes,
+        "the primary TUI captures mouse input for transcript and modal interactions",
+    )
     for index in range(12):
         case_run.send(
             f"navigation-request-{index}",

@@ -258,7 +258,10 @@ public func runAgentTui(
             let app = App(
                 backend: AnsiBackend(output: output),
                 alternateScreen: false,
-                mouse: false,
+                // Primary transcript, document modals, and inline editors all
+                // consume mouse events; do not let the terminal swallow wheel
+                // input before AgentScreen can route it.
+                mouse: true,
                 instrumentationEnabled: tuiCoreMetricsRequested()
             )
             app.attachTraceSink(trace)
@@ -270,7 +273,7 @@ public func runAgentTui(
         case None =>
             App(
                 alternateScreen: false,
-                mouse: false
+                mouse: true
             ).runWithFrameProvider(
                 externalPort,
                 screen,
