@@ -65,6 +65,7 @@ public struct PresentationFrame {
     public let terminalSize: Rect
     public let viewport: Rect
     public let history: ?HistoryBatch
+    public let followUp: Bool
     public let generation: Int64
 
     public init(
@@ -72,13 +73,15 @@ public struct PresentationFrame {
         terminalSize: Rect,
         viewport!: Rect,
         history!: ?HistoryBatch = None,
-        generation!: Int64 = 0
+        generation!: Int64 = 0,
+        followUp!: Bool = false
     ) {
         this.mode = mode
         this.terminalSize = terminalSize
         this.viewport = viewport
         this.history = history
         this.generation = max(0, generation)
+        this.followUp = followUp
     }
 }
 

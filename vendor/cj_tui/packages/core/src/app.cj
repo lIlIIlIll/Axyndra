@@ -1796,6 +1796,10 @@ public class App {
                             }
                             case None => false
                         }
+                        let presentationFollowUp = match (prepared) {
+                            case Some(value) => value.followUp
+                            case None => false
+                        }
                         // Raw scrollback output moves the terminal cursor and
                         // can scroll the physical screen. Diffing against the
                         // pre-history front buffer would therefore paint the

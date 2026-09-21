@@ -211,4 +211,36 @@ class TuiPresentationTests {
         @Expect(output.contains("history body 8"), false)
         adapter.acknowledge(batch.id)
     }
+    @TestCase
+    func boundedHistoryRequestsFollowUpFrame(): Unit {
+        let snapshot = UiSnapshot()
+        addLongPresentationCard(snapshot, 0)
+        addLongPresentationCard(snapshot, 1)
+        for (index in 2..8) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        let adapter = AgentPresentationAdapter(source)
+        let first = match (adapter.prepare(Rect(0, 0, 80, 24))) {
+            case Some(value) => value
+            case None => @Fail("bounded history should prepare the first batch")
+        }
+        @Expect(adapter.hasHistoryFollowUp(), true)
+        adapter.acknowledge(first.id)
+        let second = match (adapter.prepare(Rect(0, 0, 80, 24))) {
+            case Some(value) => value
+            case None => @Fail("follow-up history should be prepared")
+        }
+        @Expect(second.id > first.id, true)
+        @Expect(adapter.hasHistoryFollowUp(), false)
+        adapter.acknowledge(second.id)
+    }
+
+    @TestCase
+    func agentHubWindowStartMatchesVisibleRows(): Unit {
+        let area = Rect(0, 0, 40, 10)
+        @Expect(agentHubWindowCapacity(area), 4)
+        @Expect(agentHubSelectionIndex(area, 6, 8, 0), 4)
+        @Expect(agentHubSelectionIndex(area, 6, 8, 2), 6)
+    }
 }

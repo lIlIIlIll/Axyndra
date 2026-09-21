@@ -180,6 +180,20 @@ func agentHubShortcut(key: KeyEvent): Bool {
     }
 }
 
+func agentHubWindowCapacity(area: Rect): Int64 {
+    max(1, max(1, area.height - 2) / 2)
+}
+
+func agentHubWindowStart(area: Rect, selected: Int64, entryCount: Int64): Int64 {
+    let capacity = agentHubWindowCapacity(area)
+    min(
+        max(0, entryCount - capacity),
+        max(0, selected - capacity / 2)
+    )
+}
+func agentHubSelectionIndex(area: Rect, selected: Int64, entryCount: Int64, row: Int64): Int64 {
+    agentHubWindowStart(area, selected, entryCount) + row
+}
 enum TuiModalKind {
     Setup
     | Model
@@ -425,14 +439,23 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         !cardIsRetirementBlocker(item)
     }
 
-    private func candidateEnd(): Int64 {
+    private func candidateEnd(start: Int64): Int64 {
         let keep = 6
         let limit = max(0, snapshot.cards.size - keep)
-        var end = min(snapshot.cards.size, retiredCountValue)
+        var end = min(snapshot.cards.size, start)
         while (end < limit && cardIsStable(snapshot.cards[end])) {
             end++
         }
         end
+    }
+
+    func hasHistoryAfterCurrentBatch(): Bool {
+        let start = if (pendingHistoryEnd >= 0) {
+            pendingHistoryEnd
+        } else {
+            retiredCountValue
+        }
+        candidateEnd(start) > start
     }
 
     private func documentLineText(line: DocumentLine): String {
@@ -497,7 +520,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
         let replaying = replay || replayRequestedValue
         let start = if (replaying) { 0 } else { retiredCountValue }
-        let end = candidateEnd()
+        let end = candidateEnd(retiredCountValue)
         if (end <= start) {
             if (replaying) { replayRequestedValue = false }
             return None
@@ -1285,10 +1308,14 @@ class AgentScreen <: TerminalFrameProvider {
             case (MouseKind.Down, MouseButton.Left) =>
                 let row = (mouse.y - area.y - 1) / 2
                 let entries = agentHubEntries()
-                if (row < 0 || row >= entries.size) {
+                if (row < 0) {
                     return UpdateResult.next()
                 }
-                modalSelected = row
+                let index = agentHubSelectionIndex(area, modalSelected, entries.size, row)
+                if (index < 0 || index >= entries.size) {
+                    return UpdateResult.next()
+                }
+                modalSelected = index
                 refreshViewport()
             case _ => UpdateResult.next()
         }
@@ -5469,14 +5496,10 @@ class AgentScreen <: TerminalFrameProvider {
                 Style(fg: theme.muted, bg: theme.background)
             )
         }
-        let contentRows = max(1, area.height - 2)
         let entries = agentHubEntries()
         if (!entries.isEmpty()) {
-            let capacity = max(1, contentRows / 2)
-            let start = min(
-                max(0, entries.size - capacity),
-                max(0, modalSelected - capacity / 2)
-            )
+            let capacity = agentHubWindowCapacity(area)
+            let start = agentHubWindowStart(area, modalSelected, entries.size)
             let end = min(entries.size, start + capacity)
             var row = area.y + 1
             for (index in start..end) {
@@ -5632,6 +5655,10 @@ class AgentScreen <: TerminalFrameProvider {
             case (PresentationMode.Primary, Some(adapter)) => adapter.prepare(size)
             case _ => None
         }
+        let followUp = match ((mode, history, presentationAdapter)) {
+            case (PresentationMode.Primary, Some(_), Some(adapter)) => adapter.hasHistoryFollowUp()
+            case _ => false
+        }
         PresentationFrame(
             mode,
             size,
@@ -5640,7 +5667,8 @@ class AgentScreen <: TerminalFrameProvider {
             generation: match (presentationAdapter) {
                 case Some(adapter) => adapter.generation()
                 case None => 0
-            }
+            },
+            followUp: followUp
         )
     }
 

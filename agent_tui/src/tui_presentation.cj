@@ -62,6 +62,9 @@ class AgentPresentationAdapter {
         }
     }
 
+    func hasHistoryFollowUp(): Bool {
+        source.hasHistoryAfterCurrentBatch()
+    }
     func requestReplay(): Unit {
         pending = None
         source.requestHistoryReplay()
