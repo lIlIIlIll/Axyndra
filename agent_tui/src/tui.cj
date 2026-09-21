@@ -183,6 +183,12 @@ func agentHubShortcut(key: KeyEvent): Bool {
 func agentHubWindowCapacity(area: Rect): Int64 {
     max(1, max(1, area.height - 2) / 2)
 }
+func agentHubSelectionRow(area: Rect, y: Int64): Int64 {
+    if (y <= area.y || y >= area.bottom) {
+        return -1
+    }
+    (y - area.y - 1) / 2
+}
 
 func agentHubWindowStart(area: Rect, selected: Int64, entryCount: Int64): Int64 {
     let capacity = agentHubWindowCapacity(area)
@@ -1426,7 +1432,7 @@ class AgentScreen <: TerminalFrameProvider {
             case (MouseKind.Scroll, MouseButton.WheelDown) =>
                 updateAgentHub(KeyEvent(KeyCode.Down))
             case (MouseKind.Down, MouseButton.Left) =>
-                let row = (mouse.y - area.y - 1) / 2
+                let row = agentHubSelectionRow(area, mouse.y)
                 let entries = agentHubEntries()
                 if (row < 0) {
                     return UpdateResult.next()

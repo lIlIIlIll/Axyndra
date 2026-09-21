@@ -372,6 +372,8 @@ class TuiPresentationTests {
     func agentHubWindowStartMatchesVisibleRows(): Unit {
         let area = Rect(0, 0, 40, 10)
         @Expect(agentHubWindowCapacity(area), 4)
+        @Expect(agentHubSelectionRow(area, area.y), -1)
+        @Expect(agentHubSelectionRow(area, area.y + 1), 0)
         @Expect(agentHubSelectionIndex(area, 6, 8, 0), 4)
         @Expect(agentHubSelectionIndex(area, 6, 8, 2), 6)
         @Expect(agentHubSelectionIndex(area, 6, 8, 4), -1)
