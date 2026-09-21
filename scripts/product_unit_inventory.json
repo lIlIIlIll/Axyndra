@@ -59,7 +59,9 @@
     "agent_tui/src/streaming_transcript_test.cj",
     "agent_tui/src/todo_controller_test.cj",
     "agent_tui/src/tool_output_preview_test.cj",
-    "agent_tui/src/tui_mailbox_test.cj"
+    "agent_tui/src/tui_mailbox_test.cj",
+    "agent_tui/src/tui_presentation_test.cj",
+    "agent_tui/src/tui_surfaces_test.cj"
   ],
   "agent_app": [
     "agent_app/src/acp_config_test.cj",

@@ -1049,7 +1049,7 @@ class AgentEventCardTests {
             case _ => UInt8(0)
         }
 
-        @Expect(transcript, UInt8(235))
+        @Expect(transcript, UInt8(233))
         @Expect(user, UInt8(234))
         @Expect(transcript != user)
     }
