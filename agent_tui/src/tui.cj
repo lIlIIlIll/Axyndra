@@ -192,7 +192,15 @@ func agentHubWindowStart(area: Rect, selected: Int64, entryCount: Int64): Int64 
     )
 }
 func agentHubSelectionIndex(area: Rect, selected: Int64, entryCount: Int64, row: Int64): Int64 {
-    agentHubWindowStart(area, selected, entryCount) + row
+    let capacity = agentHubWindowCapacity(area)
+    if (row < 0 || row >= capacity) {
+        return -1
+    }
+    let index = agentHubWindowStart(area, selected, entryCount) + row
+    if (index < 0 || index >= entryCount) {
+        return -1
+    }
+    index
 }
 enum TuiModalKind {
     Setup
@@ -349,10 +357,24 @@ class CompletedQueueWithdrawal {
 class HistoryWindow {
     let lines: Array<String>
     let end: Int64
+    let nextRow: Int64
 
-    init(lines: Array<String>, end: Int64) {
+    init(lines: Array<String>, end: Int64, nextRow!: Int64 = 0) {
         this.lines = lines
         this.end = end
+        this.nextRow = max(0, nextRow)
+    }
+}
+
+class HistorySlice {
+    let lines: Array<String>
+    let nextRow: Int64
+    let complete: Bool
+
+    init(lines: Array<String>, nextRow: Int64, complete: Bool) {
+        this.lines = lines
+        this.nextRow = max(0, nextRow)
+        this.complete = complete
     }
 }
 
@@ -364,6 +386,8 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
     private var retiredCountValue: Int64 = 0
     private var pendingHistoryId: Int64 = -1
     private var pendingHistoryEnd: Int64 = -1
+    private var pendingHistoryNextRow: Int64 = -1
+    private var historyContinuationRow: Int64 = 0
     private var pendingHistoryBatch: ?HistoryBatch = None
     private var replayRequestedValue = false
     // Focused card id for the header focus marker (›); set by the screen
@@ -387,6 +411,8 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         retiredCountValue = 0
         pendingHistoryId = -1
         pendingHistoryEnd = -1
+        pendingHistoryNextRow = -1
+        historyContinuationRow = 0
         pendingHistoryBatch = None
         replayRequestedValue = true
         generationValue++
@@ -505,35 +531,65 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         lines.toArray()
     }
 
-    private func cappedHistoryCardLines(cardLines: Array<String>, maxLines: Int64): Array<String> {
-        if (maxLines <= 0 || cardLines.size <= maxLines) {
-            return cardLines
+    private func historyCardSlice(
+        cardLines: Array<String>,
+        startRow: Int64,
+        maxLines: Int64
+    ): HistorySlice {
+        let offset = min(cardLines.size, max(0, startRow))
+        if (maxLines <= 0) {
+            return HistorySlice(ArrayList<String>().toArray(), offset, false)
         }
-        let capped = ArrayList<String>()
+        let remaining = cardLines.size - offset
+        if (remaining <= maxLines) {
+            let visible = ArrayList<String>()
+            var index = offset
+            while (index < cardLines.size) {
+                visible.add(cardLines[index])
+                index++
+            }
+            return HistorySlice(visible.toArray(), 0, true)
+        }
+        let visible = ArrayList<String>()
         let keep = max(0, maxLines - 1)
-        var index: Int64 = 0
-        while (index < keep) {
-            capped.add(cardLines[index])
+        let limit = min(cardLines.size, offset + keep)
+        var index = offset
+        while (index < limit) {
+            visible.add(cardLines[index])
             index++
         }
-        capped.add(if (unicode) { "… history truncated …" } else { "... history truncated ..." })
-        capped.toArray()
+        visible.add(if (unicode) { "… history truncated …" } else { "... history truncated ..." })
+        HistorySlice(visible.toArray(), limit, false)
     }
 
-    private func historyLines(start: Int64, end: Int64, width: Int64, maxLines: Int64): HistoryWindow {
+    private func historyLines(
+        start: Int64,
+        end: Int64,
+        width: Int64,
+        maxLines: Int64,
+        startRow!: Int64 = 0
+    ): HistoryWindow {
         let lines = ArrayList<String>()
         var index = start
+        var rowOffset = max(0, startRow)
         while (index < end) {
             let rawCardLines = historyCardLines(index, width)
-            let cardLines = if (lines.isEmpty()) {
-                cappedHistoryCardLines(rawCardLines, maxLines)
-            } else {
-                rawCardLines
+            if (lines.isEmpty()) {
+                let slice = historyCardSlice(rawCardLines, rowOffset, maxLines)
+                for (line in slice.lines) {
+                    lines.add(line)
+                }
+                if (!slice.complete) {
+                    return HistoryWindow(lines.toArray(), index, nextRow: slice.nextRow)
+                }
+                index++
+                rowOffset = 0
+                continue
             }
-            if (!lines.isEmpty() && lines.size + cardLines.size > maxLines) {
+            if (lines.size + rawCardLines.size > maxLines) {
                 break
             }
-            for (line in cardLines) {
+            for (line in rawCardLines) {
                 lines.add(line)
             }
             index++
@@ -555,7 +611,13 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
             }
             return None
         }
-        let window = historyLines(start, end, max(1, width), 256)
+        let window = historyLines(
+            start,
+            end,
+            max(1, width),
+            256,
+            startRow: if (replaying) { 0 } else { historyContinuationRow }
+        )
         if (window.lines.isEmpty()) {
             if (replaying) {
                 return Some(queueReplayReset(id, start))
@@ -570,6 +632,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         )
         pendingHistoryId = id
         pendingHistoryEnd = window.end
+        pendingHistoryNextRow = window.nextRow
         pendingHistoryBatch = Some(batch)
         replayRequestedValue = false
         generationValue++
@@ -585,6 +648,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         )
         pendingHistoryId = id
         pendingHistoryEnd = start
+        pendingHistoryNextRow = 0
         pendingHistoryBatch = Some(batch)
         replayRequestedValue = false
         generationValue++
@@ -593,9 +657,15 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
 
     func acknowledgeHistory(id: Int64): Unit {
         if (pendingHistoryId != id) { return }
-        retiredCountValue = max(retiredCountValue, pendingHistoryEnd)
+        if (pendingHistoryNextRow > 0) {
+            historyContinuationRow = pendingHistoryNextRow
+        } else {
+            historyContinuationRow = 0
+            retiredCountValue = max(retiredCountValue, pendingHistoryEnd)
+        }
         pendingHistoryId = -1
         pendingHistoryEnd = -1
+        pendingHistoryNextRow = -1
         pendingHistoryBatch = None
     }
 
@@ -603,8 +673,10 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         replayRequestedValue = true
         pendingHistoryId = -1
         pendingHistoryEnd = -1
+        pendingHistoryNextRow = -1
         pendingHistoryBatch = None
         retiredCountValue = 0
+        historyContinuationRow = 0
         generationValue++
     }
 

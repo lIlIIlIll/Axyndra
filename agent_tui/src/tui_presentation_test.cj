@@ -165,16 +165,21 @@ class TuiPresentationTests {
         }
         @Expect(truncated, true)
         source.acknowledgeHistory(first.id)
-        @Expect(source.retiredCount(), 1)
+        @Expect(source.retiredCount(), 0)
         let second = match (source.prepareHistoryBatch(28, 80)) {
             case Some(value) => value
-            case None => @Fail("history should progress to the next card after the cap")
+            case None => @Fail("history should continue the oversized card after the cap")
         }
+        var continued = false
         var nextCardVisible = false
         for (line in second.lines()) {
+            continued = continued || line.contains("oversized history 0-255")
             nextCardVisible = nextCardVisible || line.contains("history body 1")
         }
+        @Expect(continued, true)
         @Expect(nextCardVisible, true)
+        source.acknowledgeHistory(second.id)
+        @Expect(source.retiredCount(), 2)
     }
 
     @TestCase
@@ -363,12 +368,13 @@ class TuiPresentationTests {
             case None => ()
         }
     }
-
     @TestCase
     func agentHubWindowStartMatchesVisibleRows(): Unit {
         let area = Rect(0, 0, 40, 10)
         @Expect(agentHubWindowCapacity(area), 4)
         @Expect(agentHubSelectionIndex(area, 6, 8, 0), 4)
         @Expect(agentHubSelectionIndex(area, 6, 8, 2), 6)
+        @Expect(agentHubSelectionIndex(area, 6, 8, 4), -1)
+        @Expect(agentHubSelectionIndex(area, 6, 3, 3), -1)
     }
 }
