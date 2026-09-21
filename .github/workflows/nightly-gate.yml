@@ -19,13 +19,13 @@ jobs:
       AXYNDRA_NATIVE_CC: /usr/bin/clang-18
       AXYNDRA_NATIVE_AR: /usr/bin/llvm-ar-18
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           clean: true
       - name: Install native compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 ripgrep unzip bubblewrap
+          sudo apt-get install --yes clang-18 python3-yaml ripgrep unzip bubblewrap
           # The workspace sandbox executes every tool through bubblewrap;
           # ubuntu-24.04 images restrict unprivileged user namespaces by default.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -35,7 +35,7 @@ jobs:
           version=$(python3 scripts/latest_cangjie_nightly.py)
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Setup Cangjie
-        uses: Zxilly/setup-cangjie@f959b3d1078c92173ea67d398f293727639000f7
+        uses: Zxilly/setup-cangjie@127359c156369a9eaff8656423e6631165eb4f57 # v3.2.0
         with:
           channel: nightly
           version: ${{ steps.cangjie-nightly.outputs.version }}
@@ -72,7 +72,7 @@ jobs:
             --artifact-path target/release/bin/agent_app
       - name: Upload CI evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: axyndra-nightly-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/axyndra-evidence
