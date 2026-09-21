@@ -747,7 +747,7 @@ def wait_for_tui_text(
 
 def validate_tui_frame(frame: str, task: str, draft: str) -> None:
     visible = strip_ansi(frame)
-    required = ("Todo ", task, "ready", "fixture", draft, "Enter send")
+    required = ("Todo ", task, "ready", "fixture", draft, "╰─")
     missing = [value for value in required if value not in visible]
     if missing:
         raise ShowcaseError("TUI showcase frame is missing: " + ", ".join(missing))
@@ -768,7 +768,7 @@ def validate_completion_frame(frame: str, task: str) -> None:
     # The popup may cover the compact HUD row at short terminal heights.  The
     # companion composer frame proves HUD/model state; this frame proves the
     # pinned Todo, popup, and untouched draft without requiring obscured text.
-    required = ("Todo ", task, "/help", "completion", "Enter send")
+    required = ("Todo ", task, "/help", "completion", "╰─")
     missing = [value for value in required if value not in visible]
     if missing:
         raise ShowcaseError(
@@ -839,7 +839,7 @@ def capture_real_tui(
         )
         started = True
         wait_for_tui_text(
-            tmux, socket, session, environment, ("fixture", "Enter send"), timeout
+            tmux, socket, session, environment, ("fixture", "ready", "message"), timeout
         )
         tmux_checked(
             tmux,
@@ -858,7 +858,7 @@ def capture_real_tui(
             "tmux todo submit",
         )
         wait_for_tui_text(
-            tmux, socket, session, environment, ("Todo ", task, "Enter send"), timeout
+            tmux, socket, session, environment, ("Todo ", task, "ready", "message"), timeout
         )
         tmux_checked(
             tmux,
@@ -873,7 +873,7 @@ def capture_real_tui(
             socket,
             session,
             environment,
-            ("Todo ", task, draft, "Enter send"),
+            ("Todo ", task, draft),
             timeout,
         )
         frame = sanitized(frame, environment)
@@ -907,7 +907,7 @@ def capture_real_tui(
             socket,
             session,
             environment,
-            ("Todo ", task, "/help", "completion", "Enter send"),
+            ("Todo ", task, "/help", "completion"),
             timeout,
         )
         completion_frame = sanitized(completion_frame, environment)

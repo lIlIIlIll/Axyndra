@@ -21,51 +21,9 @@ func composerMaximumHeight(
     queuedRows!: Int64 = 0,
     todoRows!: Int64 = 0
 ): Int64 {
-    min(8, max(1, terminalHeight - 6 - queuedRows - todoRows))
-}
-
-func composerFooterHint(width: Int64, working: Bool, hasQueue: Bool): String {
-    if (width <= 0) {
-        return ""
-    }
-    var showNavigation = !working
-    var showEdit = hasQueue
-    var showNewline = !working
-    var showFollowUp = working
-    while (true) {
-        let parts = ArrayList<String>()
-        parts.add(if (working) { "Enter steer" } else { "Enter send" })
-        if (showNewline) {
-            parts.add("Shift+Enter newline")
-        }
-        if (showFollowUp) {
-            parts.add("Ctrl+Enter follow-up")
-        }
-        if (showEdit) {
-            parts.add("Alt+↑ edit")
-        }
-        if (showNavigation) { parts.add("Alt+j/k cards") }
-        var value = ""
-        for (part in parts) {
-            if (value != "") { value += " · " }
-            value += part
-        }
-        if (displayWidth(value) <= width) {
-            return value
-        }
-        if (showNavigation) {
-            showNavigation = false
-        } else if (showEdit) {
-            showEdit = false
-        } else if (showNewline) {
-            showNewline = false
-        } else if (showFollowUp) {
-            showFollowUp = false
-        } else {
-            return cut(value, width)
-        }
-    }
-    ""
+    let available = max(3, terminalHeight - 5 - queuedRows - todoRows)
+    let comfortable = max(4, min(14, terminalHeight / 3))
+    min(available, comfortable)
 }
 
 func drawComposerFrame(
@@ -79,9 +37,11 @@ func drawComposerFrame(
     unicode: Bool,
     theme: ProductTheme
 ): Unit {
-    if (area.width <= 0 || area.height < 2) {
+    if (area.width <= 0 || content.height <= 0) {
         return
     }
+    let _ = value
+    let _ = cursor
     let frameColor = if (working) {
         theme.warning
     } else if (hasQueue) {
@@ -89,59 +49,16 @@ func drawComposerFrame(
     } else {
         theme.accent
     }
-    let left = if (unicode) { "│" } else { "|" }
-    let right = left
-    let thumb = if (unicode) { "█" } else { "#" }
-    let width = max(1, content.width)
-    let totalRows = max(1, wrapText(value, width, WrapMode.Character).size)
-    let boundedCursor = if (cursor < 0) {
-        0
-    } else if (cursor > value.size) {
-        value.size
-    } else {
-        cursor
-    }
-    let cursorRows = max(1, wrapText(value[..boundedCursor], width, WrapMode.Character).size)
-    let cursorRow = cursorRows - 1
-    let scroll = max(0, cursorRow - content.height + 1)
-    let maximumScroll = max(0, totalRows - content.height)
-    let thumbHeight = if (maximumScroll > 0) {
-        max(1, content.height * content.height / totalRows)
-    } else {
-        0
-    }
-    let thumbStart = if (maximumScroll > 0 && content.height > thumbHeight) {
-        min(content.height - thumbHeight, scroll * (content.height - thumbHeight) / maximumScroll)
-    } else {
-        0
-    }
+    let first = if (unicode) { "╰─ " } else { "+- " }
+    let continuation = if (unicode) { "│  " } else { "|  " }
     for (row in 0..content.height) {
-        canvas.drawText(area.x, content.y + row, left, Style(fg: frameColor, bg: theme.background))
-        let rightGlyph = if (thumbHeight > 0 && row >= thumbStart && row < thumbStart + thumbHeight) {
-            thumb
-        } else {
-            right
-        }
         canvas.drawText(
-            area.right - 1,
+            area.x,
             content.y + row,
-            rightGlyph,
-            Style(fg: if (rightGlyph == thumb) { theme.secondary } else { frameColor }, bg: theme.background)
+            if (row == 0) { first } else { continuation },
+            Style(fg: frameColor, bg: theme.background)
         )
     }
-    let bottomLeft = if (unicode) { "╰" } else { "+" }
-    let bottomRight = if (unicode) { "╯" } else { "+" }
-    let horizontal = if (unicode) { "─" } else { "-" }
-    let insideWidth = max(0, area.width - 2)
-    let hint = composerFooterHint(max(0, insideWidth - 2), working, hasQueue)
-    let prefix = if (hint == "") { "" } else { horizontal + " " + hint + " " }
-    let inside = prefix + repeatedGlyph(horizontal, max(0, insideWidth - displayWidth(prefix)))
-    canvas.drawText(
-        area.x,
-        area.bottom - 1,
-        bottomLeft + inside + bottomRight,
-        Style(fg: frameColor, bg: theme.background)
-    )
 }
 
 class HeaderSegment {
@@ -180,39 +97,29 @@ func tuiHeaderSegments(
     let tokenText = if (inputTokens == 0 && outputTokens == 0) {
         ""
     } else {
-        " \u{E0B3} " + inputTokens.toString() + "↑ " + outputTokens.toString() + "↓"
+        " • " + inputTokens.toString() + "↑ " + outputTokens.toString() + "↓"
     }
     let taskText = if (task == "") {
         ""
     } else {
         " ───── " + cut(task, 32)
     }
-    let left = "╭── ◆ " + model + " · \u{F0AA5} " + mode + " \u{E0B1} \u{F115} " + compactPath(workspace) +
-        " \u{E0B1} \u{F126} " + branch + " \u{E0B1} \u{F0051} " + shortSession(session) + taskText
-    let right = tokenText + " \u{E0B3} " + status + " ──╮"
+    let left = "─ ◆ " + model + " · " + mode + " · " + compactPath(workspace) +
+        " · " + branch + " · " + shortSession(session) + taskText
+    let right = tokenText + " · " + status + " ─"
     let filler = width - displayWidth(left) - displayWidth(right)
     if (filler >= 0) {
         let segments = ArrayList<HeaderSegment>()
-        segments.add(HeaderSegment("╭── ", "border"))
+        segments.add(HeaderSegment("─ ", "border"))
         segments.add(HeaderSegment("◆ " + model, "model", strong: true))
         segments.add(HeaderSegment(" · ", "border"))
-        segments.add(HeaderSegment("\u{F0AA5} " + mode, "mode"))
-        segments.add(HeaderSegment(" \u{E0B1} ", "border"))
-        segments.add(
-            HeaderSegment(
-                "\u{F115} " + compactPath(workspace),
-                "workspace"
-            )
-        )
-        segments.add(HeaderSegment(" \u{E0B1} ", "border"))
-        segments.add(HeaderSegment("\u{F126} " + branch, "branch"))
-        segments.add(HeaderSegment(" \u{E0B1} ", "border"))
-        segments.add(
-            HeaderSegment(
-                "\u{F0051} " + shortSession(session),
-                "session"
-            )
-        )
+        segments.add(HeaderSegment(mode, "mode"))
+        segments.add(HeaderSegment(" · ", "border"))
+        segments.add(HeaderSegment(compactPath(workspace), "workspace"))
+        segments.add(HeaderSegment(" · ", "border"))
+        segments.add(HeaderSegment(branch, "branch"))
+        segments.add(HeaderSegment(" · ", "border"))
+        segments.add(HeaderSegment(shortSession(session), "session"))
         if (taskText != "") {
             segments.add(HeaderSegment(taskText, "task", strong: true))
         }
@@ -220,23 +127,23 @@ func tuiHeaderSegments(
         if (tokenText != "") {
             segments.add(HeaderSegment(tokenText, "usage"))
         }
-        segments.add(HeaderSegment(" \u{E0B3} ", "border"))
+        segments.add(HeaderSegment(" · ", "border"))
         segments.add(HeaderSegment(status, "status", strong: true))
-        segments.add(HeaderSegment(" ──╮", "border"))
+        segments.add(HeaderSegment(" ─", "border"))
         return segments.toArray()
     }
-    let compactLeft = "╭─ " + status + " \u{E0B1} ◆ " + model + " · " + mode + " \u{E0B1} " + compactPath(workspace)
-    let compactRight = " ─╮"
+    let compactLeft = "─ " + status + " · ◆ " + model + " · " + mode + " · " + compactPath(workspace)
+    let compactRight = " ─"
     let compactWidth = displayWidth(compactLeft) + displayWidth(compactRight)
     if (compactWidth <= width) {
         return [
-            HeaderSegment("╭─ ", "border"),
+            HeaderSegment("─ ", "border"),
             HeaderSegment(status, "status", strong: true),
-            HeaderSegment(" \u{E0B1} ", "border"),
-            HeaderSegment("◆ " + model, "model", strong: true),
+            HeaderSegment(" · ◆ ", "border"),
+            HeaderSegment(model, "model", strong: true),
             HeaderSegment(" · ", "border"),
             HeaderSegment(mode, "mode"),
-            HeaderSegment(" \u{E0B1} ", "border"),
+            HeaderSegment(" · ", "border"),
             HeaderSegment(compactPath(workspace), "workspace"),
             HeaderSegment(
                 repeatedGlyph("─", width - compactWidth),
@@ -246,11 +153,11 @@ func tuiHeaderSegments(
         ]
     }
     if (width <= 2) {
-        return [HeaderSegment(cut("╭╮", width), "border")]
+        return [HeaderSegment(cut("──", width), "border")]
     }
     [
         HeaderSegment(
-            cut(compactLeft + compactRight, width - 1) + "╮",
+            cut(compactLeft + compactRight, width),
             "border"
         )
     ]
@@ -322,7 +229,7 @@ func headerSegmentColor(
         case "workspace" => theme.secondary
         case "branch" => theme.warning
         case "session" => theme.success
-        case "task" => theme.text
+        case "task" => theme.accent
         case "usage" => theme.muted
         case "status" => statusHeaderColor(theme, status)
         case _ => theme.muted

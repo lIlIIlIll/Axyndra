@@ -321,25 +321,29 @@ class TodoController {
         }
     }
 
-    func renderEditor(frame: Frame, theme: ProductTheme): Unit {
+    func renderEditor(frame: Frame, theme: ProductTheme, surfaceArea!: ?Rect = None): Unit {
         if (!editingTodos) {
             todoEditorArea = Rect(0, 0, 0, 0)
             return
         }
+        let hostArea = match (surfaceArea) {
+            case Some(value) => value
+            case None => frame.area
+        }
         let canvas = frame.canvas()
-        let editorInsetX = if (frame.area.width > 4) { 2 } else { 0 }
-        let editorInsetY = if (frame.area.height > 5) { 2 } else { 0 }
+        let editorInsetX = if (hostArea.width > 4) { 2 } else { 0 }
+        let editorInsetY = if (hostArea.height > 5) { 2 } else { 0 }
         todoEditorArea = Rect(
-            frame.area.x + editorInsetX,
-            frame.area.y + editorInsetY,
-            max(1, frame.area.width - editorInsetX * 2),
-            max(1, frame.area.height - editorInsetY - 2)
+            hostArea.x + editorInsetX,
+            hostArea.y + editorInsetY,
+            max(1, hostArea.width - editorInsetX * 2),
+            max(1, hostArea.height - editorInsetY - 2)
         )
         canvas.fillRect(todoEditorArea, Style(bg: Color.Rgb(28, 31, 39)))
         frame.renderWidget(todoEditor, todoEditorArea)
         canvas.drawText(
             todoEditorArea.x,
-            min(frame.area.bottom - 1, todoEditorArea.bottom),
+            min(hostArea.bottom - 1, todoEditorArea.bottom),
             cut(
                 " Ctrl+S save · Esc cancel · markers: " + "[ ] [/] [x] [-] [!]",
                 todoEditorArea.width

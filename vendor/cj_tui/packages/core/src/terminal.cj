@@ -130,6 +130,29 @@ public interface Backend {
     func disableBracketedPaste(): Unit
     func size(): Rect
     func draw(buffer: Buffer): Unit
+    func drawWithPrefix(prefix: String, buffer: Buffer): Unit {
+        if (!prefix.isEmpty()) { write(prefix) }
+        draw(buffer)
+    }
+    func drawFrame(
+        prefix: String,
+        buffer: Buffer,
+        cursor: ?Position,
+        cursorWasVisible: Bool
+    ): Unit {
+        drawWithPrefix(prefix, buffer)
+        match (cursor) {
+            case Some(value) =>
+                if (!cursorWasVisible) { showCursor() }
+                moveTo(value.x, value.y)
+                flush()
+            case None =>
+                if (cursorWasVisible) {
+                    hideCursor()
+                    flush()
+                }
+        }
+    }
     func drawDiff(next: Buffer, plan: RenderDiffPlan): Unit
     func drawMedia(ops: Array<MediaOp>): Unit
     func write(text: String): Unit
@@ -168,12 +191,19 @@ public class Frame {
     public let area: Rect
     private let buffer: Buffer
     private let dirty: ?DirtyRects
+    private let rawWriter: ?(String) -> Unit
     private var cursor: ?Position = None
 
-    public init(area: Rect, buffer: Buffer, dirty!: ?DirtyRects = None) {
+    public init(
+        area: Rect,
+        buffer: Buffer,
+        dirty!: ?DirtyRects = None,
+        rawWriter!: ?(String) -> Unit = None
+    ) {
         this.area = area
         this.buffer = buffer
         this.dirty = dirty
+        this.rawWriter = rawWriter
     }
 
     public func renderWidget(widget: Widget, area: Rect): Unit {
@@ -226,6 +256,17 @@ public class Frame {
 
     public func getCursor(): ?Position {
         cursor
+    }
+
+    // Presentation providers use this only for the bounded native-history
+    // batch that precedes the mutable viewport. Ordinary widgets never write
+    // raw terminal bytes.
+    public func writeRaw(text: String): Unit {
+        if (text.isEmpty()) { return }
+        match (rawWriter) {
+            case Some(writer) => writer(text)
+            case None => ()
+        }
     }
 }
 
@@ -303,7 +344,13 @@ public class Terminal {
             fresh
         }
         let frameDirty: ?DirtyRects = if (partialRender) { Some(effectiveDirty) } else { None }
-        let frame = Frame(area, buffer, dirty: frameDirty)
+        let rawOutput = StringBuilder()
+        let frame = Frame(
+            area,
+            buffer,
+            dirty: frameDirty,
+            rawWriter: Some({text => rawOutput.append(text)})
+        )
         buffer.beginWorkMetrics(instrumentationEnabled)
         let totalStart = MonoTime.now()
         let renderStart = MonoTime.now()
@@ -318,53 +365,75 @@ public class Terminal {
         var dirtyCells = area.width * area.height
         var diffWrites: Int64 = if (area.height > 0) { area.height } else { 0 }
         var fullRedraw = true
-        match (renderMode) {
-            case RenderMode.Full =>
-                backend.draw(buffer)
-            case RenderMode.Diff =>
-                if (partialRender) {
-                    match (previousDirty) {
-                        case Some(prev) =>
-                            let diffStart = MonoTime.now()
-                            let plan = renderDiffPlan(prev, buffer, dirtyRects: Some(effectiveDirty))
-                            diffNanos += (MonoTime.now() - diffStart).toNanoseconds()
-                            dirtyCells = plan.dirtyCells
-                            diffWrites = plan.spans.size
-                            fullRedraw = false
-                            backend.drawDiff(buffer, plan)
-                        case None => backend.draw(buffer)
+        var cursorCoalesced = false
+        let rawPrefix = rawOutput.toString()
+        if (!rawPrefix.isEmpty()) {
+            // Native scrollback changes the physical cursor and invalidates
+            // the previous screen image. Keep history and the full viewport in
+            // one transport write so the terminal never observes a torn frame.
+            backend.drawFrame(
+                rawPrefix,
+                buffer,
+                frame.getCursor(),
+                cursorVisible
+            )
+            cursorCoalesced = true
+        } else {
+            match (renderMode) {
+                case RenderMode.Full =>
+                    backend.draw(buffer)
+                case RenderMode.Diff =>
+                    if (partialRender) {
+                        match (previousDirty) {
+                            case Some(prev) =>
+                                let diffStart = MonoTime.now()
+                                let plan = renderDiffPlan(prev, buffer, dirtyRects: Some(effectiveDirty))
+                                diffNanos += (MonoTime.now() - diffStart).toNanoseconds()
+                                dirtyCells = plan.dirtyCells
+                                diffWrites = plan.spans.size
+                                fullRedraw = false
+                                backend.drawDiff(buffer, plan)
+                            case None => backend.draw(buffer)
+                        }
+                    } else {
+                        match (front) {
+                            case Some(prev) =>
+                                let diffStart = MonoTime.now()
+                                let plan = renderDiffPlan(prev, buffer)
+                                diffNanos += (MonoTime.now() - diffStart).toNanoseconds()
+                                dirtyCells = plan.dirtyCells
+                                diffWrites = plan.spans.size
+                                fullRedraw = false
+                                backend.drawDiff(buffer, plan)
+                            case None => backend.draw(buffer)
+                        }
                     }
-                } else {
-                    match (front) {
-                        case Some(prev) =>
-                            let diffStart = MonoTime.now()
-                            let plan = renderDiffPlan(prev, buffer)
-                            diffNanos += (MonoTime.now() - diffStart).toNanoseconds()
-                            dirtyCells = plan.dirtyCells
-                            diffWrites = plan.spans.size
-                            fullRedraw = false
-                            backend.drawDiff(buffer, plan)
-                        case None => backend.draw(buffer)
-                    }
-                }
+            }
         }
         let media = buffer.mediaPlacements()
         let mediaOps = diffMediaPlacements(previousMedia, media)
         backend.drawMedia(mediaOps)
-        match (frame.getCursor()) {
-            case Some(cursor) =>
-                if (!cursorVisible) {
-                    backend.showCursor()
-                }
-                cursorVisible = true
-                backend.moveTo(cursor.x, cursor.y)
-                backend.flush()
-            case None =>
-                if (cursorVisible) {
-                    backend.hideCursor()
+        if (cursorCoalesced) {
+            cursorVisible = match (frame.getCursor()) {
+                case Some(_) => true
+                case None => false
+            }
+        } else {
+            match (frame.getCursor()) {
+                case Some(cursor) =>
+                    if (!cursorVisible) {
+                        backend.showCursor()
+                    }
+                    cursorVisible = true
+                    backend.moveTo(cursor.x, cursor.y)
                     backend.flush()
-                }
-                cursorVisible = false
+                case None =>
+                    if (cursorVisible) {
+                        backend.hideCursor()
+                        backend.flush()
+                    }
+                    cursorVisible = false
+            }
         }
         let drawDuration = MonoTime.now() - drawStart
         let drawNanos = drawDuration.toNanoseconds()
@@ -408,9 +477,16 @@ public class Terminal {
     public func clear(): Unit {
         backend.drawMedia(diffMediaPlacements(previousMedia, []))
         backend.clear()
+        invalidate()
+    }
+
+    // Surface transitions and native-history replay replace the physical
+    // presentation without clearing primary scrollback.
+    public func invalidate(): Unit {
         front = None
         back = None
         previousMedia = []
+        cursorVisible = false
     }
 
     private func frontMatches(area: Rect): Bool {
@@ -664,9 +740,15 @@ public class TerminalSession {
     private var focusActive: Bool = false
     private var pasteActive: Bool = false
     private var keyboardActive: Bool = false
+    private var fullscreenRequested: Bool = false
+    private var fullscreenAlternateOwned: Bool = false
+    private var fullscreenMouseOwned: Bool = false
     private var lastProbe: ?TerminalProbeResult = None
 
     public prop rawModeEnabled: Bool { get() { rawActive } }
+    public prop alternateScreenActive: Bool { get() { alternateActive } }
+    public prop mouseEnabled: Bool { get() { mouseActive } }
+    public prop fullscreenActive: Bool { get() { fullscreenRequested } }
 
     public init(
         backend: Backend,
@@ -696,6 +778,55 @@ public class TerminalSession {
 
     public func probeResult(): ?TerminalProbeResult {
         lastProbe
+    }
+
+    // Fullscreen surfaces are a presentation concern, not a second terminal
+    // session. The session keeps the actual mode bits so signal and suspend
+    // recovery restore exactly what is active at the time.
+    public func enterFullscreen(): Unit {
+        fullscreenRequested = true
+        if (!active) { return }
+        if (!alternateActive) {
+            backend.enterAlternateScreen()
+            alternateActive = true
+            fullscreenAlternateOwned = true
+        }
+        if (!mouseActive) {
+            backend.enableMouse()
+            mouseActive = true
+            fullscreenMouseOwned = true
+        }
+        TerminalSignalGuard.updateModes(
+            alternateScreen: alternateActive,
+            mouse: mouseActive,
+            mouseMove: mouseMoveActive,
+            focusEvents: focusActive,
+            bracketedPaste: pasteActive,
+            hideCursor: cursorHidden
+        )
+    }
+
+    public func leaveFullscreen(): Unit {
+        fullscreenRequested = false
+        if (!active) { return }
+        if (fullscreenMouseOwned && mouseActive && !mouse) {
+            backend.disableMouse()
+            mouseActive = false
+            fullscreenMouseOwned = false
+        }
+        if (fullscreenAlternateOwned && alternateActive && !alternateScreen) {
+            backend.leaveAlternateScreen()
+            alternateActive = false
+            fullscreenAlternateOwned = false
+        }
+        TerminalSignalGuard.updateModes(
+            alternateScreen: alternateActive,
+            mouse: mouseActive,
+            mouseMove: mouseMoveActive,
+            focusEvents: focusActive,
+            bracketedPaste: pasteActive,
+            hideCursor: cursorHidden
+        )
     }
 
     public func start(): Bool {
@@ -797,6 +928,9 @@ public class TerminalSession {
             try { backend.leaveAlternateScreen() } catch (error: Exception) { failures = appendCleanupFailure(failures, error) }
             alternateActive = false
         }
+        fullscreenRequested = false
+        fullscreenAlternateOwned = false
+        fullscreenMouseOwned = false
         try { backend.flush() } catch (error: Exception) { failures = appendCleanupFailure(failures, error) }
         active = false
         TerminalSignalGuard.deactivate()
@@ -921,6 +1055,23 @@ class TerminalSignalGuard {
         active = true
         restoring = false
         ensureInstalled()
+    }
+
+    static func updateModes(
+        alternateScreen!: Bool,
+        mouse!: Bool,
+        mouseMove!: Bool,
+        focusEvents!: Bool,
+        bracketedPaste!: Bool,
+        hideCursor!: Bool
+    ): Unit {
+        if (!active) { return }
+        TerminalSignalGuard.alternateScreen = alternateScreen
+        TerminalSignalGuard.mouse = mouse
+        TerminalSignalGuard.mouseMove = mouseMove
+        TerminalSignalGuard.focusEvents = focusEvents
+        TerminalSignalGuard.bracketedPaste = bracketedPaste
+        TerminalSignalGuard.hideCursor = hideCursor
     }
 
     static func deactivate(): Unit {
@@ -1191,7 +1342,12 @@ public class AnsiBackend <: Backend {
     }
 
     public func draw(buffer: Buffer): Unit {
+        drawWithPrefix("", buffer)
+    }
+
+    public func drawWithPrefix(prefix: String, buffer: Buffer): Unit {
         let batch = StringBuilder()
+        if (!prefix.isEmpty()) { batch.append(prefix) }
         var current = Style.default()
         for (y in buffer.area.y..buffer.area.bottom) {
             batch.append("${ESC}[${y + 1};${buffer.area.x + 1}H")
@@ -1205,6 +1361,38 @@ public class AnsiBackend <: Backend {
             }
         }
         batch.append(styleToAnsi(Style.default()))
+        write(batch.toString())
+        flush()
+    }
+
+    public func drawFrame(
+        prefix: String,
+        buffer: Buffer,
+        cursor: ?Position,
+        cursorWasVisible: Bool
+    ): Unit {
+        let batch = StringBuilder()
+        if (!prefix.isEmpty()) { batch.append(prefix) }
+        var current = Style.default()
+        for (y in buffer.area.y..buffer.area.bottom) {
+            batch.append("${ESC}[${y + 1};${buffer.area.x + 1}H")
+            for (x in buffer.area.x..buffer.area.right) {
+                let cell = buffer.getCell(x, y)
+                if (cell.style != current) {
+                    batch.append(styleToAnsi(cell.style))
+                    current = cell.style
+                }
+                batch.append(cell.symbol)
+            }
+        }
+        batch.append(styleToAnsi(Style.default()))
+        match (cursor) {
+            case Some(value) =>
+                if (!cursorWasVisible) { batch.append("${ESC}[?25h") }
+                batch.append("${ESC}[${value.y + 1};${value.x + 1}H")
+            case None =>
+                if (cursorWasVisible) { batch.append("${ESC}[?25l") }
+        }
         write(batch.toString())
         flush()
     }

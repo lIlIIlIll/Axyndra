@@ -95,10 +95,35 @@ class PtySession:
                 )
         raise TimeoutError("PTY output did not become quiet")
 
+    def wait_until_visible(self, expected: str) -> bytes:
+        deadline = time.monotonic() + self.timeout
+        compact_expected = "".join(expected.split())
+        output = bytearray()
+        while time.monotonic() < deadline:
+            for key, _ in self.selector.select(0.05):
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except (BlockingIOError, OSError):
+                    continue
+                if not chunk:
+                    continue
+                if key.data == "pty":
+                    output.extend(chunk)
+                    compact_output = "".join(visible_text(bytes(output)).split())
+                    if compact_expected in compact_output:
+                        return bytes(output)
+                else:
+                    self.stderr.extend(chunk)
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(
+                    f"TUI exited early with status {self.process.returncode}: "
+                    f"{self.stderr.decode(errors='replace')}"
+                )
+        raise TimeoutError(f"PTY output did not show {expected!r}")
+
     def send(self, payload: bytes, quiet: float = 0.12) -> bytes:
         os.write(self.master_fd, payload)
         return self.drain(quiet)
-
     def close(self) -> None:
         if self.process is None:
             return
@@ -161,7 +186,7 @@ def main() -> int:
 
         session = PtySession(shlex.split(args.candidate), root, workspace, state_home, args.timeout)
         try:
-            session.drain(quiet=0.25)
+            session.wait_until_visible("ready")
 
             session.send(b"/he")
             require_visible(session.send(b"\t"), "/help", "slash completion opens")

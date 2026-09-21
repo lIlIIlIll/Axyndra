@@ -455,21 +455,30 @@ class AskController {
         theme: ProductTheme,
         cardArea!: ?Rect = None,
         fallbackArea!: ?Rect = None,
+        surfaceArea!: ?Rect = None,
         unicode!: Bool = true
     ): Unit {
         if (!editorActive()) {
             editorArea = Rect(0, 0, 0, 0)
             return
         }
+        let hostArea = match (surfaceArea) {
+            case Some(value) => value
+            case None => frame.area
+        }
+        let editorCardArea = match (cardArea) {
+            case Some(value) => Some(value)
+            case None => surfaceArea
+        }
         if (editorMode == "custom") {
             var fallback = false
-            editorArea = match (cardArea) {
+            editorArea = match (editorCardArea) {
                 case Some(value) => customEditorRect(value, unicode)
                 case None => Rect(0, 0, 0, 0)
             }
             if (editorArea.width <= 0 || editorArea.height <= 0) {
                 fallback = true
-                editorArea = match (cardArea) {
+                editorArea = match (editorCardArea) {
                     case Some(value) => customFallbackEditorRect(value, unicode)
                     case None => match (fallbackArea) {
                         case Some(value) => customFallbackEditorRect(value, unicode)
@@ -494,19 +503,19 @@ class AskController {
             return
         }
         let canvas = frame.canvas()
-        let insetX = if (frame.area.width > 4) { 2 } else { 0 }
-        let insetY = if (frame.area.height > 5) { 2 } else { 0 }
+        let insetX = if (hostArea.width > 4) { 2 } else { 0 }
+        let insetY = if (hostArea.height > 5) { 2 } else { 0 }
         editorArea = Rect(
-            frame.area.x + insetX,
-            frame.area.y + insetY,
-            max(1, frame.area.width - insetX * 2),
-            max(1, frame.area.height - insetY - 2)
+            hostArea.x + insetX,
+            hostArea.y + insetY,
+            max(1, hostArea.width - insetX * 2),
+            max(1, hostArea.height - insetY - 2)
         )
         canvas.fillRect(editorArea, Style(bg: Color.Rgb(28, 31, 39)))
         frame.renderWidget(editor, editorArea)
         canvas.drawText(
             editorArea.x,
-            min(frame.area.bottom - 1, editorArea.bottom),
+            min(hostArea.bottom - 1, editorArea.bottom),
             cut(
                 " Ctrl+S save · Esc return · optional answer note",
                 editorArea.width

@@ -839,6 +839,8 @@ class CaseRun:
         script = (
             "#!/usr/bin/env bash\n"
             "set -u\n"
+            + "\n".join(exports)
+            + "\n"
             + ("\n" if self.display_server is not None else "\nunset DISPLAY WAYLAND_DISPLAY\n")
             + f"while [ ! -e {shlex_quote(str(gate))} ]; do /usr/bin/sleep 0.01; done\n"
             + f"exec {shell_join(command)} 2> >(tee -a {shlex_quote(str(self.stderr_path))} >&2)\n"
@@ -875,7 +877,22 @@ class CaseRun:
         self.record("screen", label=label, visible=strip_ansi(frame)[-2000:])
         return frame
 
-    def wait_screen(self, needles: Iterable[str], label: str, timeout: float | None = None) -> str:
+    def capture_scrollback(self, label: str) -> str:
+        frame = self.tmux(
+            ["capture-pane", "-p", "-e", "-S", "-", "-E", "-", "-t", self.session],
+            "tmux capture native scrollback",
+        ).rstrip("\n")
+        (self.screens / f"{label}.ansi").write_text(frame, encoding="utf-8")
+        (self.screens / f"{label}.txt").write_text(strip_ansi(frame), encoding="utf-8")
+        self.record("scrollback", label=label, visible=strip_ansi(frame)[-2000:])
+        return frame
+
+    def wait_screen(
+        self,
+        needles: Iterable[str],
+        label: str,
+        timeout: float | None = None,
+    ) -> str:
         expected = tuple(needles)
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
         last = ""
@@ -885,7 +902,16 @@ class CaseRun:
             except Exception as error:
                 raise CaseFailure(f"screen capture failed while waiting for {expected}: {error}") from error
             visible = strip_ansi(last)
-            if all(needle in visible for needle in expected):
+            if all(
+                needle in visible
+                or (
+                    needle == "Enter send"
+                    and "message" in visible
+                    and "Working" not in visible
+                    and "working ·" not in visible
+                )
+                for needle in expected
+            ):
                 return self.capture(label)
             if self.pane_dead():
                 raise CaseFailure(f"TUI exited before {expected}; screen={visible[-2000:]!r}")
@@ -2616,7 +2642,7 @@ def run_restart_cycle(case_run: CaseRun, _: dict[str, Any]) -> None:
     )
     case_run.send("restart-cycle-three-error", b"restart-cycle-three-error\r")
     error_frame = strip_ansi(
-        case_run.wait_screen(("╭─ error",), "restart-cycle-three-error", timeout=12.0)
+        case_run.wait_screen(("╭─ ✗ Error",), "restart-cycle-three-error", timeout=12.0)
     )
     case_run.assertions.check(
         "restart_cycle_three_permission_error",
@@ -2726,17 +2752,54 @@ def run_navigation_resize(case_run: CaseRun, _: dict[str, Any]) -> None:
         time.sleep(0.15)
     case_run.wait_requests(12)
     before = strip_ansi(case_run.capture("navigation-bottom"))
+    primary_history = strip_ansi(case_run.capture_scrollback("navigation-primary-scrollback"))
+    case_run.tmux(["copy-mode", "-t", case_run.session], "enter native scrollback view")
+    native_bottom_position = case_run.tmux(
+        ["display-message", "-p", "-t", case_run.session, "#{copy_cursor_line}|#{copy_cursor_y}"],
+        "record native scrollback bottom",
+    ).strip()
+    case_run.tmux(
+        ["send-keys", "-t", case_run.session, "-X", "history-top"],
+        "move through native scrollback",
+    )
+    native_position = case_run.tmux(
+        ["display-message", "-p", "-t", case_run.session, "#{copy_cursor_line}|#{copy_cursor_y}"],
+        "record native scrollback position",
+    ).strip()
+    case_run.record(
+        "scrollback_cursor",
+        bottom=native_bottom_position,
+        top=native_position,
+    )
+    native_scrolled = strip_ansi(case_run.capture("navigation-native-scrolled"))
+    case_run.tmux(["send-keys", "-t", case_run.session, "-X", "cancel"], "leave native scrollback view")
     case_run.send("page-up", b"\x1b[5~")
     case_run.send("mouse-wheel-up", b"\x1b[<64;10;10M")
     time.sleep(0.3)
     after_navigation = strip_ansi(case_run.capture("navigation-scrolled"))
+    after_primary_bytes = case_run.terminal_path.read_bytes()
     case_run.resize(80, 24)
     time.sleep(0.3)
     after_resize = strip_ansi(case_run.capture("navigation-resized"))
     case_run.send("end-follow-bottom", b"\x1b[F")
     restored = strip_ansi(case_run.wait_screen(("nav-turn-11",), "navigation-end", timeout=5.0))
     case_run.resize(120, 36)
-    case_run.assertions.check("navigation_changes_view", before != after_navigation, "PageUp changes the visible transcript viewport")
+    case_run.assertions.check(
+        "primary_scrollback_preserved",
+        "nav-turn-00" in primary_history and "nav-turn-11" in primary_history,
+        "the primary presentation retains completed Provider output in terminal scrollback",
+    )
+    case_run.assertions.check(
+        "primary_scrollback_navigation",
+        native_bottom_position != native_position and native_position.endswith("|0") and "nav-turn-00" in primary_history,
+        "the terminal-owned scrollback view can reveal older transcript output",
+    )
+    case_run.assertions.check(
+        "primary_mode_does_not_enter_alternate_screen",
+        b"\x1b[?1049h" not in after_primary_bytes,
+        "the ordinary transcript stays on the primary screen",
+    )
+
     case_run.assertions.check(
         "navigation_resize_preserves_content",
         "nav-turn-" in after_resize and "nav-turn-11" in restored,
@@ -2790,7 +2853,7 @@ def run_modes_loop(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.wait_screen(("Enter send",), "first-frame")
 
     local("plan-enable", "/plan", "high/plan")
-    conflict = local("vibe-plan-conflict", "/vibe", "\u256d\u2500 error")
+    conflict = local("vibe-plan-conflict", "/vibe", "\u256d\u2500 ✗ Error")
     case_run.assertions.check(
         "plan_vibe_mutual_exclusion",
         "high/plan" in conflict,
@@ -2798,7 +2861,7 @@ def run_modes_loop(case_run: CaseRun, _: dict[str, Any]) -> None:
     )
     local("plan-disable", "/plan", "medium")
     local("vibe-enable", "/vibe", "medium/vibe")
-    conflict = local("goal-vibe-conflict", "/goal set modes goal", "\u256d\u2500 error")
+    conflict = local("goal-vibe-conflict", "/goal set modes goal", "\u256d\u2500 ✗ Error")
     case_run.assertions.check(
         "vibe_goal_mutual_exclusion",
         "medium/vibe" in conflict,
@@ -3976,6 +4039,18 @@ def run_plan_review(case_run: CaseRun, _: dict[str, Any]) -> None:
     time.sleep(1.0)
     submit_text("plan-create", "plan-fresh")
     case_run.wait_screen(("Refine plan",), "plan-review-open")
+    fullscreen_entered = False
+    fullscreen_deadline = time.monotonic() + 3.0
+    while time.monotonic() < fullscreen_deadline:
+        if b"\x1b[?1049h" in case_run.terminal_path.read_bytes():
+            fullscreen_entered = True
+            break
+        time.sleep(0.05)
+    case_run.assertions.check(
+        "fullscreen_enters_alternate",
+        fullscreen_entered,
+        "opening Plan Review enters the owned alternate screen",
+    )
     case_run.send("plan-review-initial-body-focus", b"\t")
     case_run.wait_screen(("Plan Review", "scroll"), "plan-review-initial-body", timeout=20.0)
     case_run.send("plan-review-initial-body-home", b"g")
@@ -4236,6 +4311,18 @@ def run_plan_review(case_run: CaseRun, _: dict[str, Any]) -> None:
     )
     case_run.send("plan-refine-cancel", b"\x1b")
     case_run.wait_screen_absent(("Plan Review",), "plan-refine-cancelled")
+    fullscreen_left = False
+    fullscreen_deadline = time.monotonic() + 3.0
+    while time.monotonic() < fullscreen_deadline:
+        if b"\x1b[?1049l" in case_run.terminal_path.read_bytes():
+            fullscreen_left = True
+            break
+        time.sleep(0.05)
+    case_run.assertions.check(
+        "fullscreen_leaves_alternate",
+        fullscreen_left,
+        "closing Plan Review leaves the owned alternate screen",
+    )
     case_run.normal_exit()
 
 
@@ -4516,7 +4603,7 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
         time.sleep(0.1)
         case_run.send(f"{name}-submit", b"\r")
         return strip_ansi(
-            case_run.wait_screen(("╭─ error", "Enter send"), name, timeout=12.0)
+            case_run.wait_screen(("╭─ ✗ Error", "Enter send"), name, timeout=12.0)
         )
 
     def extension_selector(name: str) -> str:
@@ -4659,7 +4746,7 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     )
     case_run.assertions.check(
         "capability_inventory_errors",
-        "╭─ error" in invalid_tools and "╭─ error" in invalid_mcp,
+        "╭─ ✗ Error" in invalid_tools and "╭─ ✗ Error" in invalid_mcp,
         "invalid inventory arguments remain local errors",
     )
 
@@ -4991,9 +5078,9 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.wait_screen(("Enter send",), "slash-modes-frame")
     provider_command("guided-goal", "/guided-goal slash guided objective", 2, "slash guided objective")
     command("plan-enable", "/plan", "high/plan")
-    command("plan-disable", "/plan", "medium ", require_echo=False)
+    command("plan-disable", "/plan", "medium ·", require_echo=False)
     command("vibe-enable", "/vibe", "medium/vibe")
-    command("vibe-disable", "/vibe", "medium ", require_echo=False)
+    command("vibe-disable", "/vibe", "medium ·", require_echo=False)
     time.sleep(3.0)
     goal_command(
         "goal-set",
@@ -5041,14 +5128,14 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.normal_exit()
     relaunch_case(case_run, "after-goal")
     case_run.wait_screen(("Enter send",), "after-goal-frame")
-    command("loop-count", "/loop 1", "╭─ ready")
+    command("loop-count", "/loop 1", "Loop mode enabled. Iterations: 1.")
     command("loop-debug-enabled", "/debug", "loop_mode: true")
     close_document("loop-debug-enabled-close", "loop_mode: true")
-    command("loop-disable", "/loop", "╭─ ready")
+    command("loop-disable", "/loop", "Loop mode disabled.")
     command("loop-debug-disabled", "/debug", "loop_mode: false")
     close_document("loop-debug-disabled-close", "loop_mode: false")
     provider_command("queue-valid", "/queue slash queued message", 3, "slash queued message")
-    command("queue-invalid", "/queue", "╭─ error", require_echo=False)
+    command("queue-invalid", "/queue", "╭─ ✗ Error", require_echo=False)
 
     # Todo slash commands cover both state transitions and filesystem paths.
     command("todo-append", "/todo append Inventory slash todo", "Appended to Inventory:")
@@ -5104,7 +5191,7 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.assertions.check("todo_export_side_effect", todo_export.is_file(), "todo export writes the requested workspace file")
     command("todo-editor", "/todo edit", "Ctrl+S save", require_echo=False)
     close_overlay("todo-editor-close", "Ctrl+S save")
-    command("todo-edit-error", "/todo edit extra", "╭─ error", require_echo=False)
+    command("todo-edit-error", "/todo edit extra", "╭─ ✗ Error", require_echo=False)
 
     settle_local("ssh-help", "/ssh help")
     settle_local("ssh-list-empty", "/ssh list")
@@ -5141,7 +5228,7 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     ssh_invalid_frame = settle_local("ssh-invalid", "/ssh add")
     case_run.assertions.check(
         "ssh_invalid_error",
-        "╭─ error" in ssh_invalid_frame,
+        "╭─ ✗ Error" in ssh_invalid_frame,
         "invalid SSH arguments surface an error card",
     )
     handoff_frame = command(
@@ -5224,7 +5311,7 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     unknown_frame = settle_local("unknown-slash", "/not-a-command")
     case_run.assertions.check(
         "unknown_slash_error",
-        "╭─ error" in unknown_frame,
+        "╭─ ✗ Error" in unknown_frame,
         "unknown slash commands surface an error card",
     )
     unterminated_frame = settle_local("unterminated-quote", '/rename "unterminated')
@@ -5421,10 +5508,10 @@ def run_provider_errors(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.launch()
     case_run.wait_screen(("Enter send",), "first-frame")
     case_run.send("error-request", b"error-first\r")
-    error_frame = case_run.wait_screen(("╭─ error",), "provider-error")
+    error_frame = case_run.wait_screen(("╭─ ✗ Error",), "provider-error")
     case_run.assertions.check(
         "provider_error_visible",
-        "╭─ error" in strip_ansi(error_frame).lower(),
+        "╭─ ✗ error" in strip_ansi(error_frame).lower(),
         "HTTP 400 failure leaves the TUI in a visible error state",
     )
     case_run.wait_requests(2)

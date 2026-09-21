@@ -1575,14 +1575,39 @@ public class App {
         runWithRuntime(render, update, Some(port))
     }
 
+    // Prepared presentation is the only path that can retire native history
+    // or change the active terminal surface. It shares the normal App runtime
+    // and event waiter; no second scheduler is introduced.
+    public func runWithFrameProvider(
+        port: ExternalPort<Event>,
+        provider: TerminalFrameProvider,
+        update: (Event) -> UpdateResult
+    ): Unit {
+        runWithRuntime(
+            {_ => ()},
+            update,
+            Some(port),
+            frameProvider: Some(provider)
+        )
+    }
+
     private func runWithRuntime(
         render: (Frame) -> Unit,
         update: (Event) -> UpdateResult,
-        externalPort: ?ExternalPort<Event>
+        externalPort: ?ExternalPort<Event>,
+        frameProvider!: ?TerminalFrameProvider = None
     ): Unit {
         runStarted = true
+        let presentationBackend: ?PresentationBackend = match (frameProvider) {
+            case Some(_) => Some(PresentationBackend(backend))
+            case None => None
+        }
+        let renderBackend: Backend = match (presentationBackend) {
+            case Some(value) => value
+            case None => backend
+        }
         let terminal = Terminal(
-            backend,
+            renderBackend,
             renderMode: renderMode,
             instrumentationEnabled: instrumentationEnabled
         )
@@ -1607,6 +1632,10 @@ public class App {
             hideCursor: hideCursor,
             keyboard: keyboard
         )
+        match (presentationBackend) {
+            case Some(value) => value.bind(session)
+            case None => ()
+        }
         session.run {
             try {
                 var running = true
@@ -1752,10 +1781,59 @@ public class App {
                             case Some(trace) => trace.renderStarted()
                             case None => ()
                         }
+                        let prepared: ?PresentationFrame = match (frameProvider) {
+                            case Some(provider) => Some(provider.prepareFrame(backend.size()))
+                            case None => None
+                        }
+                        let presentationChanged = match ((presentationBackend, prepared)) {
+                            case (Some(presenter), Some(value)) => presenter.sync(value.mode)
+                            case _ => false
+                        }
+                        let historyPresented = match (prepared) {
+                            case Some(value) => match (value.history) {
+                                case Some(_) => true
+                                case None => false
+                            }
+                            case None => false
+                        }
+                        // Raw scrollback output moves the terminal cursor and
+                        // can scroll the physical screen. Diffing against the
+                        // pre-history front buffer would therefore paint the
+                        // viewport at stale rows; replay the viewport from a
+                        // clean front whenever a batch was emitted.
+                        if (presentationChanged || historyPresented) { terminal.invalidate() }
+                        let presentationRender = {frame: Frame =>
+                            match ((frameProvider, prepared)) {
+                                case (Some(provider), Some(value)) =>
+                                    match (value.history) {
+                                        case Some(batch) =>
+                                            match (presentationBackend) {
+                                                case Some(presenter) =>
+                                                    match (batch.kind) {
+                                                        case HistoryBatchKind.Replay => presenter.clearScrollback()
+                                                        case HistoryBatchKind.Append => ()
+                                                    }
+                                                case None => ()
+                                            }
+                                            provider.renderHistory(batch.id, batch.startRow, frame)
+                                        case None => ()
+                                    }
+                                    provider.renderViewport(frame)
+                                case _ => render(frame)
+                            }
+                        }
                         let renderMetrics = if (pendingDirty.isEmpty()) {
-                            terminal.draw(render)
+                            terminal.draw(presentationRender)
                         } else {
-                            terminal.draw(render, dirtyRects: Some(pendingDirty.copy()))
+                            terminal.draw(presentationRender, dirtyRects: Some(pendingDirty.copy()))
+                        }
+                        match ((frameProvider, prepared)) {
+                            case (Some(provider), Some(value)) =>
+                                match (value.history) {
+                                    case Some(batch) => provider.acknowledgeHistory(batch.id)
+                                    case None => ()
+                                }
+                            case _ => ()
                         }
                         match (metrics) {
                             case Some(m) => m.record(

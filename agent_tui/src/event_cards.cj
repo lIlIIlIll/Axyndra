@@ -964,7 +964,6 @@ func shellCommandSpans(command: String, theme: ProductTheme): Array<RichSpan> {
     let spans = ArrayList<RichSpan>()
     var token = ""
     var executable = true
-
     func flushToken(): Unit {
         if (token == "") { return }
         let trimmed = token.trimAscii()
@@ -972,10 +971,15 @@ func shellCommandSpans(command: String, theme: ProductTheme): Array<RichSpan> {
             trimmed.contains("&") || trimmed.contains(";") || trimmed.contains(">") || trimmed.contains("<")
         let quotedAtom = (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.size >= 2) ||
             (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.size >= 2)
-        let pathLike = trimmed.contains("/") || trimmed.startsWith(".") || trimmed.startsWith("~")
+        let pathCandidate = if ((trimmed.startsWith("<") || trimmed.startsWith(">")) && trimmed.size > 1) {
+            trimmed[1..]
+        } else {
+            trimmed
+        }
+        let pathLike = pathCandidate.contains("/") || pathCandidate.startsWith(".") || pathCandidate.startsWith("~")
         let color = if (executable && trimmed != "") {
             theme.toolExecutable
-        } else if (!compound && (quotedAtom || pathLike)) {
+        } else if (pathLike || (!compound && quotedAtom)) {
             theme.toolPath
         } else {
             theme.text

@@ -270,13 +270,21 @@ stdx 候选迁移的适配职责和验收门槛见 [docs/stdx-migration.md](docs
 
 ## cjtui 与本地命令
 
-无参数运行发行包中的 `bin/axyndra` 即进入 cjtui。界面通过 `ApplicationSession` 调用产品，
-模型与工具在后台执行；流式文本、reasoning、工具、审批和 token 用量增量刷新。
-运行中继续输入会进入 steer 队列。`Esc` 先关闭补全，再中断运行中的请求；
+无参数运行发行包中的 `bin/axyndra` 即进入 cjtui。普通会话使用主屏而不进入
+alternate screen；消息写入终端原生 scrollback，滚轮等终端自身的回看操作不经过
+应用内 transcript 滚动器。计划审阅、Todo 编辑、Ask 编辑和 Agent Hub 打开独立的
+全屏 surface，并在其边界内处理方向键、PageUp/PageDown 或鼠标命中。
+
+界面通过 `ApplicationSession` 调用产品，模型与工具在后台执行；流式文本、reasoning、
+工具、审批和 token 用量增量刷新。运行中继续输入会进入 steer 队列；运行中按
+`Ctrl+Enter` 发送 follow-up，`Ctrl+Q` 发送 follow-up，普通 `Enter` 发送 steer，
+`Alt+Up` 撤回最近的排队输入。`Esc` 先关闭补全，再中断运行中的请求；
 `Ctrl+C` 第一次清空编辑器、第二次退出，空编辑器也可用 `Ctrl+D` 退出。
 `Tab` 第一次打开命令、子命令或路径候选，第二次 `Tab` 或 `Enter` 接受当前项，
-`Esc` 取消候选。候选超过五项时会围绕当前项滚动，`Ctrl+L` 重置显示，`Ctrl+Z` 挂起进程，
-`Ctrl+O` 与 `Ctrl+T` 分别切换工具输出和 thinking 的可见性。
+`Esc` 取消候选。候选超过五项时会围绕当前项滚动，`Alt+L` 重置显示，`Ctrl+Z` 挂起进程，
+`Ctrl+O` 与 `Ctrl+T` 分别切换工具输出和 thinking 的可见性；
+编辑器为空时，`Alt+A` 打开 Agent Hub。普通聊天不使用应用内逐卡焦点、折叠或复制快捷键，
+终端原生滚动和选区负责主屏回看与复制。
 
 普通输入支持相对路径、绝对路径和 `~/` 补全；slash 命令中仅 `/import`、
 `/export`、`/todo import` 和 `/todo export` 的路径参数启用路径补全。含空格路径会自动使用双引号：

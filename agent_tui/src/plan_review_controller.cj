@@ -595,8 +595,8 @@ class PlanReviewController {
         handlePlanReviewMouse(mouse)
     }
 
-    func render(frame: Frame, theme: ProductTheme, terminalUnicode: Bool): Unit {
-        renderPlanReviewOverlay(frame, theme, terminalUnicode)
+    func render(frame: Frame, theme: ProductTheme, terminalUnicode: Bool, area!: ?Rect = None): Unit {
+        renderPlanReviewOverlay(frame, theme, terminalUnicode, surfaceArea: area)
     }
 
     func acceptTurnResult(
@@ -861,9 +861,16 @@ class PlanReviewController {
     }
 
 
-    private func renderPlanReviewOverlay(frame: Frame, theme: ProductTheme, terminalUnicode: Bool): Unit {
-        let area = frame.area
-        activeModalArea = area
+    private func renderPlanReviewOverlay(
+        frame: Frame,
+        theme: ProductTheme,
+        terminalUnicode: Bool,
+        surfaceArea!: ?Rect = None
+    ): Unit {
+        let area = match (surfaceArea) {
+            case Some(value) => value
+            case None => frame.area
+        }
         planReviewBodyArea = Rect(0, 0, 0, 0)
         planReviewTocArea = Rect(0, 0, 0, 0)
         planReviewTocStart = 0

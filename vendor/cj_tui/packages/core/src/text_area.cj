@@ -175,6 +175,8 @@ public class TextArea <: Widget {
     private let block: ?Block
     private let style: Style
     private let selectedStyle: Style
+    private var completionStyle: Style
+    private var completionSelectedStyle: Style
     private let placeholder: String
     private let placeholderStyle: Style
     private let lineNumbers: Bool
@@ -226,6 +228,8 @@ public class TextArea <: Widget {
         this.block = block
         this.style = style
         this.selectedStyle = selectedStyle
+        this.completionStyle = Style(fg: Color.Cyan)
+        this.completionSelectedStyle = selectedStyle
         this.placeholder = placeholder
         this.placeholderStyle = placeholderStyle
         this.lineNumbers = lineNumbers
@@ -635,6 +639,11 @@ public class TextArea <: Widget {
     public func completionRows(maximum!: Int64 = 5): Int64 {
         if (!completionOpen) { return 0 }
         min(max(0, maximum), completionItems.size)
+    }
+
+    public func setCompletionStyles(style: Style, selected: Style): Unit {
+        completionStyle = style
+        completionSelectedStyle = selected
     }
 
     public func renderCompletionOverlay(area: Rect, buffer: Buffer): Unit {
@@ -1210,9 +1219,27 @@ public class TextArea <: Widget {
     private func renderCompletion(area: Rect, buffer: Buffer): Unit {
         if (!completionOpen || completionItems.size == 0 || area.width <= 0 || area.height <= 0) { return }
         let pos = cursorPosition(Rect(area.x, area.y, area.width, area.height))
-        let startY = min(area.y + area.height - 1, pos.y + 1)
-        let maxRows = min(5, area.y + area.height - startY)
-        let visibleRows = min(maxRows, completionItems.size)
+        let below = max(0, area.bottom - pos.y - 1)
+        let above = max(0, pos.y - area.y)
+        let visibleRows = min(
+            min(5, completionItems.size),
+            if (below > 0) { below } else { above }
+        )
+        if (visibleRows <= 0) { return }
+        let startY = if (below >= visibleRows) {
+            pos.y + 1
+        } else {
+            pos.y - visibleRows
+        }
+        let popupWidth = max(0, area.right - pos.x)
+        if (popupWidth <= 0) { return }
+        buffer.fillRect(
+            pos.x,
+            startY,
+            popupWidth,
+            visibleRows,
+            style: completionStyle
+        )
         var itemStart = max(0, completionIndex - visibleRows / 2)
         if (itemStart + visibleRows > completionItems.size) {
             itemStart = max(0, completionItems.size - visibleRows)
@@ -1222,8 +1249,8 @@ public class TextArea <: Widget {
             let item = completionItems[itemIndex]
             let prefix = if (itemIndex == completionIndex) { "> " } else { "  " }
             let text = if (item.detail.isEmpty()) { prefix + item.label } else { prefix + item.label + " " + item.detail }
-            let popupStyle = if (itemIndex == completionIndex) { selectedStyle } else { Style(fg: Color.Cyan) }
-            buffer.setString(pos.x, startY + row, truncate(text, max(0, area.x + area.width - pos.x)), style: popupStyle)
+            let popupStyle = if (itemIndex == completionIndex) { completionSelectedStyle } else { completionStyle }
+            buffer.setString(pos.x, startY + row, truncate(text, popupWidth), style: popupStyle)
         }
     }
 

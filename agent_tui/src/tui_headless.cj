@@ -452,11 +452,12 @@ func runHeadless(screen: AgentScreen): Int64 {
         let grew = screen.update(Event.Paste("1\n2\n3\n4\n5\n6\n7\n8"))
         let _ = screen.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
         let shrank = screen.update(Event.KeyDown(KeyEvent(KeyCode.Backspace)))
-        if (!updateInvalidates(grew, viewport) || !updateInvalidates(shrank, viewport)) {
+        if (!updateInvalidates(grew, viewport) || !updateIntersects(shrank, viewport)) {
             println("headless cjtui composer resize invalidation failed")
             return 1
         }
     }
+
     let headerArea = Rect(0, 0, 180, 1)
     let headerBuffer = Buffer(headerArea)
     drawTuiHeader(
@@ -480,7 +481,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     let headerBorder = headerBuffer.getCell(0, 0)
     for (x in 0..headerArea.width) {
         let cell = headerBuffer.getCell(x, 0)
-        if (headerBorder.symbol == "╭" && cell.symbol == "◆" && headerBorder.style != cell.style) {
+        if (headerBorder.symbol == "─" && cell.symbol == "◆" && headerBorder.style != cell.style) {
             sawColoredHeader = true
         }
     }
@@ -631,11 +632,12 @@ func runHeadless(screen: AgentScreen): Int64 {
         if (cardMode && screen.markdownRenderingObserved()) {
             sawMarkdown = true
         }
-        let composerRail = if (screen.unicodeMode()) { "│" } else { "|" }
+        let composerGutter = if (screen.unicodeMode()) { "╰─ " } else { "+- " }
+        let composerRail = if (screen.unicodeMode()) { "│  " } else { "|  " }
         if (snapshotHasAdjacentText(
             snapshot,
-            composerRail + " 你",
-            composerRail + " from cjtui"
+            composerGutter + "你",
+            composerRail + "from cjtui"
         )) {
             sawMultilineComposer = true
         }
@@ -721,8 +723,8 @@ func runHeadless(screen: AgentScreen): Int64 {
         let promptBorder = buffer.getCell(buffer.area.x, promptY)
         let promptEnd = buffer.getCell(buffer.area.right - 1, promptY)
         let promptSide = buffer.getCell(buffer.area.x, promptY - 1)
-        if (promptBorder.symbol == expectedPromptBorder && (promptEnd.symbol == "╯" || promptEnd.symbol == "+") &&
-            (promptSide.symbol == "│" || promptSide.symbol == "|")) {
+        if (promptBorder.symbol == expectedPromptBorder && promptEnd.symbol == " " &&
+            (promptSide.symbol == "─" || promptSide.symbol == "│" || promptSide.symbol == "|")) {
             promptStyleObserved = true
         }
     }
@@ -1032,6 +1034,13 @@ func snapshotHasAdjacentText(
 func updateInvalidates(result: UpdateResult, area: Rect): Bool {
     match (result.dirtyRects) {
         case Some(rects) => rects.covers(area)
+        case None => false
+    }
+}
+
+func updateIntersects(result: UpdateResult, area: Rect): Bool {
+    match (result.dirtyRects) {
+        case Some(rects) => rects.intersects(area)
         case None => false
     }
 }

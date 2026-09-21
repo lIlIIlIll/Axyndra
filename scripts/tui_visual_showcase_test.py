@@ -163,8 +163,7 @@ class TuiVisualShowcaseTest(unittest.TestCase):
             [
                 "Todo 0/1 · [/] " + task,
                 "╭─ ready  ◆ fixture · medium ─╮",
-                "│ " + draft + " │",
-                "╰─ Enter send · Shift+Enter newline ─╯",
+                "╰─ " + draft,
             ]
         )
         SHOWCASE.validate_tui_frame(frame, task, draft)
@@ -180,12 +179,15 @@ class TuiVisualShowcaseTest(unittest.TestCase):
                 "│ /help  Show command help │",
                 "│ 1 completion │",
                 "│ /he │",
-                "╰─ Enter send · Shift+Enter newline ─╯",
+                "╰─ /he",
             ]
         )
         SHOWCASE.validate_completion_frame(frame, task)
         with self.assertRaisesRegex(SHOWCASE.ShowcaseError, "preserve"):
-            SHOWCASE.validate_completion_frame(frame.replace("│ /he │", "│ /help │"), task)
+            SHOWCASE.validate_completion_frame(
+                frame.replace("│ /he │", "│ /help │").replace("╰─ /he", "╰─ /help"),
+                task,
+            )
 
 
 if __name__ == "__main__":

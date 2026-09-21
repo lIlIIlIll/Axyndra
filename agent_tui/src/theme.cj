@@ -342,27 +342,30 @@ func hexDigit(value: Byte): Int64 {
 }
 
 func axyndraTheme(): ProductTheme {
+    // Keep the default surface close to a native terminal: near-black canvas,
+    // cool gray copy, and a small semantic palette.  The contrast comes from
+    // role changes rather than bright panels or saturated backgrounds.
     ProductTheme(
-        Color.Rgb(30, 30, 46),
+        Color.Rgb(13, 15, 16),
         Color.Reset,
-        Color.Rgb(30, 30, 46),
-        Color.Rgb(24, 24, 37),
-        Color.Rgb(205, 214, 244),
-        Color.Rgb(108, 112, 134),
-        Color.Rgb(137, 180, 250),
-        Color.Rgb(127, 132, 156),
-        Color.Rgb(166, 227, 161),
-        Color.Rgb(249, 226, 175),
-        Color.Rgb(243, 139, 168),
-        Color.Rgb(205, 214, 244),
-        Color.Rgb(127, 132, 156),
-        Color.Rgb(166, 227, 161),
-        Color.Rgb(69, 71, 90),
-        Color.Rgb(108, 112, 134),
-        Color.Rgb(137, 180, 250),
-        Color.Rgb(166, 227, 161),
-        Color.Rgb(127, 132, 156),
-        Color.Rgb(88, 91, 112)
+        Color.Rgb(13, 15, 16),
+        Color.Rgb(20, 28, 29),
+        Color.Rgb(190, 199, 201),
+        Color.Rgb(101, 113, 116),
+        Color.Rgb(116, 199, 193),
+        Color.Rgb(133, 171, 166),
+        Color.Rgb(153, 201, 155),
+        Color.Rgb(226, 177, 103),
+        Color.Rgb(218, 119, 124),
+        Color.Rgb(211, 222, 222),
+        Color.Rgb(128, 141, 143),
+        Color.Rgb(150, 185, 157),
+        Color.Rgb(58, 77, 78),
+        Color.Rgb(194, 150, 91),
+        Color.Rgb(116, 199, 193),
+        Color.Rgb(153, 201, 155),
+        Color.Rgb(147, 159, 161),
+        Color.Rgb(85, 98, 101)
     )
 }
 

@@ -4,42 +4,6 @@ import core.*
 import std.collection.*
 import std.time.*
 
-class TranscriptLine {
-    let text: String
-
-    init(text: String) {
-        this.text = text
-    }
-}
-
-func transcriptLines(
-    items: Array<UiCard>,
-    width: Int64
-): Array<TranscriptLine> {
-    let lines = ArrayList<TranscriptLine>()
-    for (item in items) {
-        if (isApprovalRejectionToolCard(item)) {
-            continue
-        }
-        if (item.kind == UiCardKind.Reasoning && item.collapsed && item.state != "streaming" && item.state != "running") {
-            continue
-        }
-        if (!lines.isEmpty()) {
-            lines.add(TranscriptLine(""))
-        }
-        if (item.kind == UiCardKind.User || item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning) {
-            for (line in wrapText(item.body, max(1, width - 2), WrapMode.Character)) {
-                lines.add(TranscriptLine("  " + line))
-            }
-            continue
-        }
-        let document = transcriptCardDocument(productTranscriptItem(item, width))
-        for (line in document.lines) {
-            lines.add(TranscriptLine(cut(documentLineText(line), width)))
-        }
-    }
-    lines.toArray()
-}
 
 func documentLineText(line: DocumentLine): String {
     var text = ""

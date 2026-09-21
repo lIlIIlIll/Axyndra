@@ -9,7 +9,34 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "9fb2dc7e192a7c1df1fbf8f6fb2528da583b4d258203b21a3843bbed7305a877",
-  "vendored_files": 60,
-  "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file"
+  "vendored_manifest_sha256": "cbde2c07457cc04e655c4969c53fe6c8a1f02142e094d73c4d5d602a13b1ea0a",
+  "vendored_files": 78,
+  "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
+  "alignment_target": {
+    "project": "oh-my-pi",
+    "version": "18.2.1",
+    "role": "behavioral reference for the local TUI integration"
+  },
+  "local_overlay": {
+    "policy": "intentional product extension; upstream identity remains immutable",
+    "core_files": [
+      "packages/core/src/presentation_backend.cj",
+      "packages/core/src/terminal.cj",
+      "packages/core/src/app.cj",
+      "packages/core/src/text_area.cj",
+      "packages/core/src/presentation_backend_test.cj"
+    ],
+    "contracts": [
+      "primary presentation writes history to native terminal scrollback",
+      "fullscreen presentation owns alternate-screen lifecycle",
+      "history batches are prepared, rendered, and acknowledged exactly once",
+      "completion overlays remain inside the bounded editor surface"
+    ],
+    "consumer_files": [
+      "agent_tui/src/tui.cj",
+      "agent_tui/src/tui_presentation.cj",
+      "agent_tui/src/tui_surfaces.cj",
+      "agent_tui/src/tui_transcript.cj"
+    ]
+  }
 }

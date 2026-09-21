@@ -132,9 +132,8 @@ func modalTitle(kind: TuiModalKind): String {
 }
 
 // Agent overlays use the same compact left event rail as transcript cards.
-// They intentionally avoid a generic four-sided framed panel: selectors,
-// confirmations, and structured documents are terminal interactions rather
-// than dashboard panels.
+// SurfaceHost supplies a bounded host area; title rails mark the active
+// surface without adding an unrelated dashboard frame.
 func renderAgentOverlay(
     frame: Frame,
     host: Rect,
@@ -147,75 +146,69 @@ func renderAgentOverlay(
     document!: Bool = false,
     itemCount!: Int64 = 0,
     documentCache!: ?DocumentWindowCache = None,
-    documentKey!: String = ""
+    documentKey!: String = "",
+    surfaceArea!: ?Rect = None
 ): Unit {
     if (host.width <= 0 || host.height <= 0) {
         return
     }
-    let area = agentOverlayArea(host, document: document, itemCount: itemCount)
+    let area = match (surfaceArea) {
+        case Some(value) => value
+        case None => agentOverlayArea(host, document: document, itemCount: itemCount)
+    }
+    if (area.width < 4 || area.height < 3) {
+        frame.canvas().drawText(
+            area.x,
+            area.y,
+            cut(title, area.width),
+            Style(fg: theme.accent, bg: theme.background, modifier: Modifier.strong())
+        )
+        return
+    }
     let canvas = frame.canvas()
     canvas.fillRect(area, Style(bg: theme.background))
-    let top = if (unicode) {
-        "╭─ "
-    } else {
-        "+- "
-    }
-    let rail = if (unicode) {
-        "│ "
-    } else {
-        "| "
-    }
-    let bottom = if (unicode) {
-        "╰─ "
-    } else {
-        "+- "
-    }
+    let horizontal = if (unicode) { "─" } else { "-" }
+    let vertical = if (unicode) { "│" } else { "|" }
+    let topLeft = if (unicode) { "╭" } else { "+" }
+    let topRight = if (unicode) { "╮" } else { "+" }
+    let bottomLeft = if (unicode) { "╰" } else { "+" }
+    let bottomRight = if (unicode) { "╯" } else { "+" }
+    let borderStyle = Style(fg: theme.muted, bg: theme.background)
     canvas.drawText(
         area.x,
         area.y,
-        top,
-        Style(fg: theme.muted, bg: theme.background)
+        topLeft + horizontal + " " + repeatedGlyph(horizontal, max(0, area.width - 4)) + topRight,
+        borderStyle
     )
     canvas.drawText(
         area.x + 3,
         area.y,
-        cut(title, max(1, area.width - 3)),
-        Style(
-            fg: theme.accent,
-            bg: theme.background,
-            modifier: Modifier.strong()
-        )
+        cut(title, max(1, area.width - 5)),
+        Style(fg: theme.accent, bg: theme.background, modifier: Modifier.strong())
     )
     for (y in (area.y + 1)..(area.bottom - 1)) {
-        canvas.drawText(
-            area.x,
-            y,
-            rail,
-            Style(fg: theme.muted, bg: theme.background)
-        )
+        canvas.drawText(area.x, y, vertical, borderStyle)
+        canvas.drawText(area.right - 1, y, vertical, borderStyle)
     }
     let bodyArea = Rect(
         area.x + 2,
         area.y + 1,
-        max(1, area.width - 2),
+        max(1, area.width - 4),
         max(0, area.height - 2)
     )
     match (documentCache) {
         case Some(cache) => frame.renderWidget(CachedDocumentViewport(cache, body, documentKey, scroll), bodyArea)
         case None => frame.renderWidget(DocumentView(body, scroll: scroll), bodyArea)
     }
-    canvas.drawText(
-        area.x,
-        area.bottom - 1,
-        bottom,
-        Style(fg: theme.muted, bg: theme.background)
-    )
+    let bottomLine = bottomLeft + horizontal + " " + repeatedGlyph(horizontal, max(0, area.width - 4)) + bottomRight
+    canvas.drawText(area.x, area.bottom - 1, bottomLine, borderStyle)
     canvas.drawText(
         area.x + 3,
         area.bottom - 1,
-        cut(footer, max(1, area.width - 3)),
+        cut(footer, max(1, area.width - 5)),
         Style(fg: theme.muted, bg: theme.background)
     )
+
 }
 
 func agentOverlayArea(host: Rect, document!: Bool, itemCount!: Int64): Rect {

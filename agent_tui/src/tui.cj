@@ -243,26 +243,25 @@ public func runAgentTui(
             let output = TuiTracingOutput(getStdOut(), trace)
             let app = App(
                 backend: AnsiBackend(output: output),
-                mouse: true,
+                alternateScreen: false,
+                mouse: false,
                 instrumentationEnabled: tuiCoreMetricsRequested()
             )
             app.attachTraceSink(trace)
-            app.runWithExternalPort(
+            app.runWithFrameProvider(
                 externalPort,
-                {frame =>
-                    screen.render(frame)
-                    if (trace.memorySampleDue()) {
-                        screen.emitMemoryState(trace)
-                    }
-                    trace.renderCompleted()
-                },
+                screen,
                 {event => screen.update(event)}
             )
-        case None => App(mouse: true).runWithExternalPort(
-            externalPort,
-            {frame => screen.render(frame)},
-            {event => screen.update(event)}
-        )
+        case None =>
+            App(
+                alternateScreen: false,
+                mouse: false
+            ).runWithFrameProvider(
+                externalPort,
+                screen,
+                {event => screen.update(event)}
+            )
     }
     0
 }
@@ -335,6 +334,11 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
     private let renderCard: (UiCard, Int64, String) -> Document
     private var theme = axyndraTheme()
     private var generationValue: Int64 = 0
+    private var retiredCountValue: Int64 = 0
+    private var pendingHistoryId: Int64 = -1
+    private var pendingHistoryEnd: Int64 = -1
+    private var pendingHistoryBatch: ?HistoryBatch = None
+    private var replayRequestedValue = false
     // Focused card id for the header focus marker (›); set by the screen
     // before each render.
     public var focusedCardId = ""
@@ -353,6 +357,11 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
 
     func setSnapshot(value: UiSnapshot): Unit {
         this.snapshot = value
+        retiredCountValue = 0
+        pendingHistoryId = -1
+        pendingHistoryEnd = -1
+        pendingHistoryBatch = None
+        replayRequestedValue = true
         generationValue++
     }
 
@@ -368,41 +377,159 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         generationValue
     }
 
-    public func itemAppendOnlyText(
-        index: Int64,
-        width: Int64,
-        themeKey: String
-    ): ?VirtualTranscriptAppendOnlyText {
-        let _ = themeKey
-        if (index < 0 || index >= snapshot.cards.size) { return None }
-        let item = snapshot.cards[index]
-        let streamingText = item.state == "streaming" &&
-            (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning)
-        if (!streamingText || (item.kind == UiCardKind.Reasoning && item.collapsed)) {
-            return None
+    private func visibleStart(): Int64 {
+        if (pendingHistoryEnd >= 0) {
+            return min(snapshot.cards.size, pendingHistoryEnd)
         }
-        Some(VirtualTranscriptAppendOnlyText(
-            item.body,
-            style: Style(fg: theme.text),
-            wrapWidth: max(1, width - 2),
-            appendEpoch: item.bodyRewriteEpoch
-        ))
+        min(snapshot.cards.size, retiredCountValue)
     }
 
-    public func itemCardTheme(index: Int64): ?TranscriptCardTheme {
-        if (index >= 0 && index < snapshot.cards.size) {
-            Some(productTranscriptCardTheme(theme, snapshot.cards[index]))
-        } else {
-            None
+    private func physicalIndex(index: Int64): Int64 {
+        visibleStart() + index
+    }
+
+    private func cardUsesChrome(kind: UiCardKind): Bool {
+        kind != UiCardKind.Assistant && kind != UiCardKind.User && kind != UiCardKind.Reasoning
+    }
+
+    private func cardIsStable(item: UiCard): Bool {
+        if (item.state == "streaming" || item.state == "running" || item.state == "queued") {
+            return false
         }
+        match (item.kind) {
+            case UiCardKind.Approval | UiCardKind.Permission | UiCardKind.Ask | UiCardKind.Plan =>
+                false
+            case _ => true
+        }
+    }
+
+    private func candidateEnd(): Int64 {
+        let keep = 6
+        let limit = max(0, snapshot.cards.size - keep)
+        var end = min(snapshot.cards.size, retiredCountValue)
+        while (end < limit && cardIsStable(snapshot.cards[end])) {
+            end++
+        }
+        end
+    }
+
+    private func documentLineText(line: DocumentLine): String {
+        let text = StringBuilder()
+        for (span in line.spans) {
+            text.append(span.text)
+        }
+        text.toString()
+    }
+
+    private func historyCardLines(index: Int64, width: Int64): Array<String> {
+        let item = snapshot.cards[index]
+        let lines = ArrayList<String>()
+        let document = renderCard(item, max(1, width - 4), "history")
+        let title = itemTitleForPhysicalIndex(index, max(1, width - 4))
+        let chrome = cardUsesChrome(item.kind)
+        if (chrome) {
+            lines.add(if (unicode) { "╭─ " + title } else { "+- " + title })
+        }
+        for (line in document.lines) {
+            let body = documentLineText(line)
+            if (chrome) {
+                lines.add(if (unicode) { "│ " + body } else { "| " + body })
+            } else {
+                lines.add(body)
+            }
+        }
+        if (document.lines.isEmpty()) {
+            if (chrome) {
+                lines.add(if (unicode) { "│ " } else { "| " })
+            } else {
+                lines.add(title)
+            }
+        }
+        let footer = itemFooterForPhysicalIndex(index)
+        if (chrome && (footer != "" || !item.collapsed)) {
+            lines.add(if (unicode) { "╰─ " + footer } else { "+- " + footer })
+        }
+        lines.toArray()
+    }
+
+    private func historyLines(start: Int64, end: Int64, width: Int64, maxLines: Int64): Array<String> {
+        let lines = ArrayList<String>()
+        var index = start
+        while (index < end) {
+            let cardLines = historyCardLines(index, width)
+            if (!lines.isEmpty() && lines.size + cardLines.size > maxLines) {
+                break
+            }
+            for (line in cardLines) {
+                lines.add(line)
+            }
+            index++
+        }
+        lines.toArray()
+    }
+
+    func prepareHistoryBatch(id: Int64, width: Int64, replay!: Bool = false): ?HistoryBatch {
+        match (pendingHistoryBatch) {
+            case Some(batch) => return Some(batch)
+            case None => ()
+        }
+        let replaying = replay || replayRequestedValue
+        let start = if (replaying) { 0 } else { retiredCountValue }
+        let end = candidateEnd()
+        if (end <= start) {
+            if (replaying) { replayRequestedValue = false }
+            return None
+        }
+        let lines = historyLines(start, end, max(1, width), 256)
+        if (lines.isEmpty()) {
+            if (replaying) { replayRequestedValue = false }
+            return None
+        }
+        let batch = HistoryBatch(
+            id,
+            if (replaying) { HistoryBatchKind.Replay } else { HistoryBatchKind.Append },
+            lines,
+            startRow: 0
+        )
+        pendingHistoryId = id
+        pendingHistoryEnd = end
+        pendingHistoryBatch = Some(batch)
+        replayRequestedValue = false
+        generationValue++
+        Some(batch)
+    }
+
+    func acknowledgeHistory(id: Int64): Unit {
+        if (pendingHistoryId != id) { return }
+        retiredCountValue = max(retiredCountValue, pendingHistoryEnd)
+        pendingHistoryId = -1
+        pendingHistoryEnd = -1
+        pendingHistoryBatch = None
+    }
+
+    func requestHistoryReplay(): Unit {
+        replayRequestedValue = true
+        pendingHistoryId = -1
+        pendingHistoryEnd = -1
+        pendingHistoryBatch = None
+        retiredCountValue = 0
+        generationValue++
+    }
+
+    func historyReplayRequested(): Bool {
+        replayRequestedValue
+    }
+
+    func retiredCount(): Int64 {
+        retiredCountValue
     }
 
     public func size(): Int64 {
-        snapshot.cards.size
+        max(0, snapshot.cards.size - visibleStart())
     }
 
     public func itemId(index: Int64): String {
-        snapshot.cards[index].id
+        snapshot.cards[physicalIndex(index)].id
     }
 
     public func itemTitle(index: Int64): String {
@@ -410,12 +537,11 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
     }
 
     public func itemUsesCardChrome(index: Int64): Bool {
-        let kind = snapshot.cards[index].kind
-        kind != UiCardKind.Assistant && kind != UiCardKind.User && kind != UiCardKind.Reasoning
+        cardUsesChrome(snapshot.cards[physicalIndex(index)].kind)
     }
 
     public func itemUsesCompactCardChrome(index: Int64): Bool {
-        let item = snapshot.cards[index]
+        let item = snapshot.cards[physicalIndex(index)]
         if (item.kind == UiCardKind.Tool && isShellToolCard(item)) {
             return false
         }
@@ -423,7 +549,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         collapsed && itemFooter(index) == ""
     }
 
-    public func itemTitleForWidth(index: Int64, width: Int64): String {
+    private func itemTitleForPhysicalIndex(index: Int64, width: Int64): String {
         let item = snapshot.cards[index]
         let status = productTranscriptStatus(item)
         let collapsed = item.collapsed || (item.kind == UiCardKind.Approval && !approvalCardIsWaiting(item.state))
@@ -439,24 +565,16 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
         let state = readableCardState(item.state)
         let duration = productCardDuration(item)
-        // The timer is allowed to change the running marker only.  Keeping
-        // the title width stable avoids rewrapping the whole transcript on
-        // every spinner tick; the final duration is written at tool_end.
-        let liveDuration = duration
-        let suffix = " · " + state + (if (liveDuration == "") {
+        let suffix = " · " + state + (if (duration == "") {
             ""
         } else {
-            " · " + liveDuration
+            " · " + duration
         }) + (if (collapsed) {
             " ▸"
         } else {
             ""
         })
         let prefix = focusMark + mark + " "
-        // Older persisted cards may still carry the former generic
-        // `Tool · name` title.  Drop only that redundant presentation prefix
-        // at render time; keep the stored card and all specialized titles
-        // unchanged.
         let genericToolPrefix = "Tool · "
         let displayTitle = if (item.kind == UiCardKind.Tool && item.title.startsWith(genericToolPrefix)) {
             item.title[genericToolPrefix.size..]
@@ -470,7 +588,11 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         ) + suffix
     }
 
-    public func itemFooter(index: Int64): String {
+    public func itemTitleForWidth(index: Int64, width: Int64): String {
+        itemTitleForPhysicalIndex(physicalIndex(index), width)
+    }
+
+    private func itemFooterForPhysicalIndex(index: Int64): String {
         let item = snapshot.cards[index]
         let summary = if (item.kind == UiCardKind.Tool && isShellToolCard(item)) {
             shellToolMetadata(item, unicode)
@@ -495,10 +617,12 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
     }
 
+    public func itemFooter(index: Int64): String {
+        itemFooterForPhysicalIndex(physicalIndex(index))
+    }
+
     public func revision(index: Int64): Int64 {
-        let item = snapshot.cards[index]
-        // The reducer owns content invalidation.  Keep approval selection in
-        // the key because it changes only the active card's option rows.
+        let item = snapshot.cards[physicalIndex(index)]
         let approvalRevision = if (item.kind == UiCardKind.Approval) {
             max(0, approvalSelected + 1)
         } else {
@@ -507,13 +631,41 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         item.renderRevision * 4096 + approvalRevision
     }
 
+    public func itemAppendOnlyText(
+        index: Int64,
+        width: Int64,
+        themeKey: String
+    ): ?VirtualTranscriptAppendOnlyText {
+        let _ = themeKey
+        let item = snapshot.cards[physicalIndex(index)]
+        let streamingText = item.state == "streaming" &&
+            (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning)
+        if (!streamingText || (item.kind == UiCardKind.Reasoning && item.collapsed)) {
+            return None
+        }
+        Some(VirtualTranscriptAppendOnlyText(
+            item.body,
+            style: Style(fg: theme.text),
+            wrapWidth: max(1, width - 2),
+            appendEpoch: item.bodyRewriteEpoch
+        ))
+    }
+
+    public func itemCardTheme(index: Int64): ?TranscriptCardTheme {
+        if (index >= 0 && index < size()) {
+            Some(productTranscriptCardTheme(theme, snapshot.cards[physicalIndex(index)]))
+        } else {
+            None
+        }
+    }
+
     public func document(
         index: Int64,
         width: Int64,
         themeKey: String
     ): Document {
         documentCalls++
-        renderCard(snapshot.cards[index], width, themeKey)
+        renderCard(snapshot.cards[physicalIndex(index)], width, themeKey)
     }
 }
 
@@ -554,7 +706,7 @@ func prependTranscriptPage(current: UiSnapshot, page: TuiTranscriptPage): UiSnap
     next
 }
 
-class AgentScreen {
+class AgentScreen <: TerminalFrameProvider {
     private let backend: AgentTuiBackend
     private let performanceTrace: ?TuiPerformanceTrace
     private let title: String
@@ -583,6 +735,9 @@ class AgentScreen {
     private var viewportHeight: Int64 = 0
     private var viewportArea = Rect(0, 0, 0, 0)
     private var transcriptArea = Rect(0, 0, 0, 0)
+    private var frameProviderActive = false
+    private var primaryScrollbackActive = false
+    private var activePresentationMode = PresentationMode.Primary
     private var scrollOffset: Int64 = 0
     private var transcriptTotalLines: Int64 = 0
     private var transcriptVisibleLines: Int64 = 0
@@ -592,6 +747,7 @@ class AgentScreen {
     private var configuredCardViewportCount: Int64 = 0
     private var terminalUnicode = true
     private var virtualTranscriptSource: ?AgentTranscriptSource = None
+    private var presentationAdapter: ?AgentPresentationAdapter = None
     private var virtualTranscriptView: ?VirtualTranscriptView = None
     private let transcriptRanges = ArrayList<CardScreenRange>()
     private let queuedPrompts = ArrayList<QueuedPrompt>()
@@ -626,6 +782,7 @@ class AgentScreen {
     private var mainTranscriptHasMore = false
     private let runningSubagentIds = ArrayList<String>()
     private var extensionItems: Array<TuiExtensionInfo> = []
+    private let surfaces = SurfaceHost()
     private let planReview = PlanReviewController()
     private let ask = AskController()
     private let todos = TodoController()
@@ -712,6 +869,7 @@ class AgentScreen {
         })
         source.unicode = terminalUnicode
         virtualTranscriptSource = Some(source)
+        presentationAdapter = Some(AgentPresentationAdapter(source))
         // Long sessions should only materialize the visible/overscan window.
         // The core's background batch is useful for eager height convergence,
         // but doing that work on every wheel/key frame makes scrolling render
@@ -1092,6 +1250,28 @@ class AgentScreen {
         }
     }
 
+    private func handleAgentHubMouse(mouse: MouseEvent): UpdateResult {
+        let area = surfaces.area(SurfaceOwner.AgentHub)
+        if (mouse.x < area.x || mouse.x >= area.right || mouse.y < area.y || mouse.y >= area.bottom) {
+            return UpdateResult.next()
+        }
+        match ((mouse.kind, mouse.button)) {
+            case (MouseKind.Scroll, MouseButton.WheelUp) =>
+                updateAgentHub(KeyEvent(KeyCode.Up))
+            case (MouseKind.Scroll, MouseButton.WheelDown) =>
+                updateAgentHub(KeyEvent(KeyCode.Down))
+            case (MouseKind.Down, MouseButton.Left) =>
+                let row = (mouse.y - area.y - 1) / 2
+                let entries = agentHubEntries()
+                if (row < 0 || row >= entries.size) {
+                    return UpdateResult.next()
+                }
+                modalSelected = row
+                refreshViewport()
+            case _ => UpdateResult.next()
+        }
+    }
+
     private func handleMouse(mouse: MouseEvent): UpdateResult {
         if (mouse.x < transcriptArea.x || mouse.x >= transcriptArea.right || mouse.y < transcriptArea.y || mouse.y >= transcriptArea
             .bottom) {
@@ -1252,6 +1432,8 @@ class AgentScreen {
                     ask.updateMouse(mouse)
                 } else if (modal.isSome()) {
                     handleModalMouse(mouse)
+                } else if (agentHubActive) {
+                    handleAgentHubMouse(mouse)
                 } else {
                     handleMouse(mouse)
                 }
@@ -1500,15 +1682,7 @@ class AgentScreen {
         }
         match (event) {
             case Event.KeyDown(key) => handleKeyDown(key)
-            case Event.Mouse(mouse) => if (planReview.isActive()) {
-                planReview.updateMouse(mouse)
-            } else if (todos.isEditing()) {
-                applyTodoTransition(todos.updateMouse(mouse))
-            } else if (ask.editorActive()) {
-                ask.updateMouse(mouse)
-            } else {
-                handleMouse(mouse)
-            }
+            case Event.Mouse(mouse) => handleInteractive(Event.Mouse(mouse))
             case Event.Paste(text) => handlePaste(text)
             case Event.Capabilities(caps) =>
                 applyTerminalCapabilities(caps)
@@ -1857,7 +2031,7 @@ class AgentScreen {
             1
         } else {
             composer.visualHeight(
-                max(1, composerArea.width - 4),
+                max(1, composerArea.width - 3),
                 composerMaximumHeight(
                     viewportHeight,
                     queuedRows: queuedPromptRows(),
@@ -1940,6 +2114,9 @@ class AgentScreen {
     }
 
     private func scrollTranscriptBy(delta: Int64): UpdateResult {
+        if (primaryScrollbackActive) {
+            return UpdateResult.unchanged()
+        }
         let previousOffset = scrollOffset
         scrollOffset = min(
             maximumTranscriptScroll(),
@@ -2008,6 +2185,9 @@ class AgentScreen {
     }
 
     private func scrollTranscriptToTop(): UpdateResult {
+        if (primaryScrollbackActive) {
+            return UpdateResult.unchanged()
+        }
         scrollOffset = maximumTranscriptScroll()
         match (virtualTranscriptView) {
             case Some(view) => view.state.home()
@@ -2332,6 +2512,9 @@ class AgentScreen {
     }
 
     private func transcriptScrollLabel(): String {
+        if (primaryScrollbackActive) {
+            return ""
+        }
         if (scrollOffset <= 0 || transcriptTotalLines <= transcriptVisibleLines) {
             return ""
         }
@@ -5068,6 +5251,19 @@ class AgentScreen {
         Document(lines.toArray())
     }
 
+    private func transcriptSurfaceLines(items: Array<UiCard>, width: Int64): Array<String> {
+        let document = renderTranscriptDocument(
+            items,
+            width,
+            activeProductTheme(overrideName: themeName, customThemes: customThemeDefinitions)
+        )
+        let lines = ArrayList<String>()
+        for (line in document.lines) {
+            lines.add(documentLineText(line))
+        }
+        lines.toArray()
+    }
+
     private func renderTranscriptCardDocument(
         item: UiCard,
         width: Int64,
@@ -5385,12 +5581,88 @@ class AgentScreen {
         )
     }
 
+    private func presentationMode(): PresentationMode {
+        let modalFullscreen = match (modal) {
+            case Some(kind) => match (kind) {
+                case TuiModalKind.Document => false
+                case _ => true
+            }
+            case None => false
+        }
+        let editorFullscreen = todos.isEditing() || (ask.editorActive() && !ask.inlineEditorActive())
+        surfaces.presentationMode(
+            fullscreen: agentHubActive || planReview.isActive() || modalFullscreen || editorFullscreen
+        )
+    }
+
+    public func prepareFrame(size: Rect): PresentationFrame {
+        let mode = presentationMode()
+        frameProviderActive = true
+        activePresentationMode = mode
+        primaryScrollbackActive = match (mode) {
+            case PresentationMode.Primary => true
+            case PresentationMode.Fullscreen => false
+        }
+        let history: ?HistoryBatch = match ((mode, presentationAdapter)) {
+            case (PresentationMode.Primary, Some(adapter)) => adapter.prepare(size)
+            case _ => None
+        }
+        PresentationFrame(
+            mode,
+            size,
+            viewport: size,
+            history: history,
+            generation: match (presentationAdapter) {
+                case Some(adapter) => adapter.generation()
+                case None => 0
+            }
+        )
+    }
+
+    public func renderViewport(frame: Frame): Unit {
+        render(frame)
+        match (performanceTrace) {
+            case Some(trace) =>
+                if (trace.memorySampleDue()) {
+                    emitMemoryState(trace)
+                }
+                trace.renderCompleted()
+            case None => ()
+        }
+    }
+
+    public func renderHistory(batchId: Int64, startRow: Int64, frame: Frame): Unit {
+        match (presentationAdapter) {
+            case Some(adapter) => adapter.renderHistory(batchId, startRow, frame)
+            case None => ()
+        }
+    }
+
+    public func acknowledgeHistory(id: Int64): Unit {
+        match (presentationAdapter) {
+            case Some(adapter) => adapter.acknowledge(id)
+            case None => ()
+        }
+    }
+
+    public func requestReplay(): Unit {
+        match (presentationAdapter) {
+            case Some(adapter) => adapter.requestReplay()
+            case None => ()
+        }
+    }
+
     func render(frame: Frame): Unit {
         let canvas = frame.canvas()
         let theme = activeProductTheme(
             overrideName: themeName,
             customThemes: customThemeDefinitions
         )
+        composer.area.setCompletionStyles(
+            Style(fg: theme.text, bg: theme.raised),
+            Style(fg: theme.background, bg: theme.accent, modifier: Modifier.strong())
+        )
+        surfaces.begin(frame.area)
         viewportArea = frame.area
         viewportHeight = frame.area.height
         // A partial redraw must not clear the whole backing buffer. Composer
@@ -5404,6 +5676,11 @@ class AgentScreen {
             )
         }
         if (planReview.isActive()) {
+            let surface = surfaces.fullscreenArea(margin: 1)
+            surfaces.activate(SurfaceOwner.PlanReview, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.PlanReview)
+            activeModalArea = surface
+            canvas.fillRect(surface, Style(bg: theme.background))
             match (performanceTrace) {
                 case Some(trace) =>
                     trace.layoutCompleted()
@@ -5411,7 +5688,7 @@ class AgentScreen {
                     trace.overlayStarted()
                 case None => ()
             }
-            planReview.render(frame, theme, terminalUnicode)
+            planReview.render(frame, theme, terminalUnicode, area: Some(surface))
             match (performanceTrace) {
                 case Some(trace) =>
                     trace.overlayCompleted()
@@ -5421,6 +5698,33 @@ class AgentScreen {
                     }
                 case None => ()
             }
+            return
+        }
+        if (agentHubActive) {
+            let surface = surfaces.fullscreenArea(margin: 1)
+            surfaces.activate(SurfaceOwner.AgentHub, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.AgentHub)
+            activeModalArea = surface
+            canvas.fillRect(surface, Style(bg: theme.background))
+            renderAgentHub(canvas, surface, theme)
+            return
+        }
+        if (todos.isEditing()) {
+            let surface = surfaces.fullscreenArea(margin: 1)
+            surfaces.activate(SurfaceOwner.Todo, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.Todo)
+            activeModalArea = surface
+            canvas.fillRect(surface, Style(bg: theme.background))
+            todos.renderEditor(frame, theme, surfaceArea: Some(surface))
+            return
+        }
+        if (ask.editorActive() && !ask.inlineEditorActive()) {
+            let surface = surfaces.fullscreenArea(margin: 1)
+            surfaces.activate(SurfaceOwner.Ask, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.Ask)
+            activeModalArea = surface
+            canvas.fillRect(surface, Style(bg: theme.background))
+            ask.renderEditor(frame, theme, surfaceArea: Some(surface), unicode: terminalUnicode)
             return
         }
         let queueHeight = if (agentHubActive) {
@@ -5446,7 +5750,7 @@ class AgentScreen {
             1
         } else {
             composer.visualHeight(
-                max(1, frame.area.width - 4),
+                max(1, frame.area.width - 3),
                 composerMaximumHeight(
                     frame.area.height,
                     queuedRows: queueHeight,
@@ -5457,7 +5761,7 @@ class AgentScreen {
         let editorHeight = if (agentHubActive) {
             composerHeight
         } else {
-            composerHeight + 2
+            composerHeight + 1
         }
         let rows = Layout.vertical(
             [
@@ -5485,12 +5789,24 @@ class AgentScreen {
         }
         transcriptArea = rows[0]
         let inputArea = Rect(
-            rows[4].x + 2,
+            rows[4].x + 3,
             rows[4].y + 1,
-            max(1, rows[4].width - 4),
-            max(1, rows[4].height - 2)
+            max(1, rows[4].width - 3),
+            max(1, rows[4].height - 1)
         )
         composerInputArea = inputArea
+        surfaces.activate(SurfaceOwner.Transcript, SurfacePlacement.Primary, transcriptArea)
+        surfaces.register(SurfaceOwner.Composer, SurfacePlacement.Primary, inputArea)
+        surfaces.register(SurfaceOwner.Ask, SurfacePlacement.Anchored, transcriptArea)
+        surfaces.register(SurfaceOwner.Approval, SurfacePlacement.Anchored, transcriptArea)
+        surfaces.register(SurfaceOwner.Todo, SurfacePlacement.Fullscreen, frame.area)
+        if (ask.editorActive()) {
+            surfaces.focus(SurfaceOwner.Ask)
+        } else if (ui.approvalId.isSome()) {
+            surfaces.focus(SurfaceOwner.Approval)
+        } else {
+            surfaces.focus(SurfaceOwner.Composer)
+        }
         let renderModalOnly = modalRefreshOnly && modal.isSome()
         modalRefreshOnly = false
         match (performanceTrace) {
@@ -5574,11 +5890,11 @@ class AgentScreen {
                         if (!ui.cards.isEmpty()) {
                             view.setCardTheme(productTranscriptCardTheme(theme, ui.cards[0]))
                         }
-                        if (ask.inlineEditorActive()) {
+                        if (primaryScrollbackActive || ask.inlineEditorActive()) {
                             scrollOffset = 0
                             clearScrollAnchor()
                         }
-                        if (scrollOffset <= 0) {
+                        if (primaryScrollbackActive || scrollOffset <= 0) {
                             view.state.followBottom = true
                         } else {
                             view.state.followBottom = false
@@ -5881,15 +6197,21 @@ class AgentScreen {
                     modalBody(modalItems, modalSelected, theme)
                 }
                 let overlayHost = frame.area
-                activeModalArea = agentOverlayArea(
-                    overlayHost,
-                    document: isDocument,
-                    itemCount: if (isSession) {
-                        visibleSessionNodes.size
-                    } else {
-                        modalItems.size
-                    }
-                )
+                let modalCount = if (isSession) {
+                    visibleSessionNodes.size
+                } else {
+                    modalItems.size
+                }
+                let modalWidth = if (isDocument) { 84 } else { 64 }
+                let modalHeight = if (isDocument) {
+                    max(10, overlayHost.height - 2)
+                } else {
+                    min(16, max(5, modalCount + 2))
+                }
+                let modalArea = surfaces.centeredPanel(modalWidth, modalHeight)
+                surfaces.activate(SurfaceOwner.Modal, SurfacePlacement.Anchored, modalArea)
+                surfaces.focus(SurfaceOwner.Modal)
+                activeModalArea = modalArea
                 renderAgentOverlay(
                     frame,
                     overlayHost,
@@ -5933,7 +6255,8 @@ class AgentScreen {
                     } else {
                         None
                     },
-                    documentKey: documentModalCacheKey
+                    documentKey: documentModalCacheKey,
+                    surfaceArea: Some(modalArea)
                 )
                 match (performanceTrace) {
                     case Some(trace) => trace.overlayCompleted()
@@ -7658,11 +7981,11 @@ class AgentScreen {
 
     func approvalRejectionRenderedOnce(): Bool {
         var sawApproval = false
-        for (line in transcriptLines(ui.cards.toArray(), 100)) {
-            if (line.text.contains("Tool result · task")) {
+        for (line in transcriptSurfaceLines(ui.cards.toArray(), 100)) {
+            if (line.contains("Tool result · task")) {
                 return false
             }
-            if (line.text.contains("Approval · Task") && line.text.contains("denied")) {
+            if (line.contains("Approval · Task") && line.contains("denied")) {
                 sawApproval = true
             }
         }
@@ -7883,21 +8206,18 @@ class AgentScreen {
         var sawTool = false
         var sawRejected = false
         var sawAwaiting = false
-        for (line in transcriptLines(ui.cards.toArray(), 100)) {
-            if (line.text.startsWith("✓ Read ") || line.text.startsWith("✓ Tool result · read · completed") ||
-                line.text.startsWith("[+] Read ") || line.text.startsWith("[+] Tool result · read · completed")) {
+        for (line in transcriptSurfaceLines(ui.cards.toArray(), 100)) {
+            if (line.startsWith("✓ Read ") || line.startsWith("✓ Tool result · read · completed") ||
+                line.startsWith("[+] Read ") || line.startsWith("[+] Tool result · read · completed")) {
                 sawTool = true
             }
-            if (line.text.startsWith("⊘ Approval · Task · denied") || line
-                .text
-                .startsWith("× Approval · Task · denied") || line.text.startsWith("✗ Approval · Task · denied") ||
-                line.text.startsWith("[!] Approval · Task · denied")) {
+            if (line.startsWith("⊘ Approval · Task · denied") || line
+                .startsWith("× Approval · Task · denied") || line.startsWith("✗ Approval · Task · denied") ||
+                line.startsWith("[!] Approval · Task · denied")) {
                 sawRejected = true
             }
-            if (line.text.startsWith("? Approval · Edit file · Awaiting your decision") || line
-                .text
+            if (line.startsWith("? Approval · Edit file · Awaiting your decision") || line
                 .startsWith("! Approval · Edit file · Awaiting your decision") || line
-                .text
                 .startsWith("[?] Approval · Edit file · Awaiting your decision")) {
                 sawAwaiting = true
             }
@@ -8765,24 +9085,11 @@ class AgentScreen {
             true,
             frameTheme
         )
-        var sawScrollbar = false
-        for (row in 0..frameContent.height where frameBuffer.getCell(frameArea.right - 1, frameContent.y + row).symbol ==
-            "█") {
-            sawScrollbar = true
-        }
-        let frameObserved = frameBuffer.getCell(0, 1).symbol == "│" && frameBuffer.getCell(0, 4).symbol == "╰" &&
-            frameBuffer.getCell(31, 4).symbol == "╯" && sawScrollbar
+        let frameObserved = frameBuffer.getCell(0, 1).symbol == "╰" && frameBuffer.getCell(0, 2).symbol == "│" &&
+            frameBuffer.getCell(31, 4).symbol == " "
         let frameStyleObserved = frameBuffer.getCell(0, 1).style ==
-            Style(fg: frameTheme.warning, bg: frameTheme.background) && frameBuffer.getCell(0, 4).style ==
-            Style(fg: frameTheme.warning, bg: frameTheme.background) && Style(
-                fg: headerSegmentColor(frameTheme, "border", "ready"),
-                bg: frameTheme.background
-            ) == Style(fg: frameTheme.accent, bg: frameTheme.background)
-        let footerPriority = composerFooterHint(80, true, true).contains("Alt+↑ edit") && !composerFooterHint(
-            26,
-            true,
-            true
-        ).contains("Alt+↑ edit") && composerFooterHint(26, true, true).startsWith("Enter steer")
+            Style(fg: frameTheme.warning, bg: frameTheme.background) && frameBuffer.getCell(0, 2).style ==
+            Style(fg: frameTheme.warning, bg: frameTheme.background)
 
         working = previousWorking
         status = previousStatus
@@ -8795,7 +9102,7 @@ class AgentScreen {
         composer.area.setValue(previousValue, cursor: previousCursor)
         completionOpened && completionAcceptedWithoutQueue && followUpDoesNotAcceptCompletion && ctrlEnterFollowUp &&
             plainEnterSteers && ctrlQFollowUp && newlineInserted && groupedNarrow && newestWithdrawn && mergedAtBoundary &&
-            frameObserved && frameStyleObserved && footerPriority
+            frameObserved && frameStyleObserved
     }
 
     func todoStripContractObserved(): Bool {
@@ -8835,8 +9142,8 @@ class AgentScreen {
             overrideName: themeName,
             customThemes: customThemeDefinitions
         )
-        let promptPlaceholderStyled = wideBuffer.getCell(composerArea.x + 2, composerArea.y + 1).symbol == "m" &&
-            wideBuffer.getCell(composerArea.x + 2, composerArea.y + 1).style ==
+        let promptPlaceholderStyled = wideBuffer.getCell(composerInputArea.x, composerInputArea.y).symbol == "m" &&
+            wideBuffer.getCell(composerInputArea.x, composerInputArea.y).style ==
             Style(fg: wideTheme.secondary, bg: wideTheme.background)
         let semanticArea = Rect(0, 0, 100, 4)
         let semanticBuffer = Buffer(semanticArea)
