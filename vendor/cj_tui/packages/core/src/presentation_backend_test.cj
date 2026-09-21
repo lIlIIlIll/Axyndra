@@ -74,6 +74,46 @@ class PresentationBackendContractTest {
     }
 
     @TestCase
+    func historyStartsAtBottomBeforeViewportRepaint(): Unit {
+        let output = TestOutput()
+        let backend = AnsiBackend(
+            output: output,
+            fallbackArea: Rect(0, 0, 12, 2)
+        )
+        let terminal = Terminal(backend)
+        let batch = HistoryBatch(
+            8,
+            HistoryBatchKind.Append,
+            ["old one", "old two"]
+        )
+
+        terminal.draw { frame =>
+            renderHistoryBatch(batch, 0, frame)
+            frame.canvas().drawText(0, 0, "live", Style.default())
+        }
+
+        @Expect(output.text().contains("\u{1B}[2;1Hold one\r\nold two\r\n"), true)
+    }
+
+    @TestCase
+    func invalidationPreservesCursorVisibilityForNextHide(): Unit {
+        let output = TestOutput()
+        let backend = AnsiBackend(
+            output: output,
+            fallbackArea: Rect(0, 0, 12, 2)
+        )
+        let terminal = Terminal(backend)
+
+        terminal.draw { frame =>
+            frame.setCursor(Position(1, 0))
+        }
+        terminal.invalidate()
+        terminal.draw { _ => () }
+
+        @Expect(countPresentationToken(output.text(), "\u{1B}[?25l"), 1)
+    }
+
+    @TestCase
     func fullscreenModeTransitionsAreIdempotentAndRestored(): Unit {
         let output = TestOutput()
         let backend = AnsiBackend(

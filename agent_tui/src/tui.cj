@@ -329,6 +329,16 @@ class CompletedQueueWithdrawal {
     }
 }
 
+class HistoryWindow {
+    let lines: Array<String>
+    let end: Int64
+
+    init(lines: Array<String>, end: Int64) {
+        this.lines = lines
+        this.end = end
+    }
+}
+
 class AgentTranscriptSource <: VirtualTranscriptSource {
     private var snapshot: UiSnapshot
     private let renderCard: (UiCard, Int64, String) -> Document
@@ -392,15 +402,27 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         kind != UiCardKind.Assistant && kind != UiCardKind.User && kind != UiCardKind.Reasoning
     }
 
-    private func cardIsStable(item: UiCard): Bool {
+    private func interactionIsActiveOrWaiting(item: UiCard): Bool {
+        match (item.state.toAsciiLower()) {
+            case "awaiting" | "awaiting_user" | "waiting" | "pending" | "blocked" |
+                "active" | "reviewing" => true
+            case _ => false
+        }
+    }
+
+    private func cardIsRetirementBlocker(item: UiCard): Bool {
         if (item.state == "streaming" || item.state == "running" || item.state == "queued") {
-            return false
+            return true
         }
         match (item.kind) {
             case UiCardKind.Approval | UiCardKind.Permission | UiCardKind.Ask | UiCardKind.Plan =>
-                false
-            case _ => true
+                interactionIsActiveOrWaiting(item)
+            case _ => false
         }
+    }
+
+    private func cardIsStable(item: UiCard): Bool {
+        !cardIsRetirementBlocker(item)
     }
 
     private func candidateEnd(): Int64 {
@@ -431,7 +453,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
             lines.add(if (unicode) { "╭─ " + title } else { "+- " + title })
         }
         for (line in document.lines) {
-            let body = documentLineText(line)
+            let body = stripAnsi(documentLineText(line)).replace("\r", "")
             if (chrome) {
                 lines.add(if (unicode) { "│ " + body } else { "| " + body })
             } else {
@@ -452,7 +474,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         lines.toArray()
     }
 
-    private func historyLines(start: Int64, end: Int64, width: Int64, maxLines: Int64): Array<String> {
+    private func historyLines(start: Int64, end: Int64, width: Int64, maxLines: Int64): HistoryWindow {
         let lines = ArrayList<String>()
         var index = start
         while (index < end) {
@@ -465,7 +487,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
             }
             index++
         }
-        lines.toArray()
+        HistoryWindow(lines.toArray(), index)
     }
 
     func prepareHistoryBatch(id: Int64, width: Int64, replay!: Bool = false): ?HistoryBatch {
@@ -480,19 +502,19 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
             if (replaying) { replayRequestedValue = false }
             return None
         }
-        let lines = historyLines(start, end, max(1, width), 256)
-        if (lines.isEmpty()) {
+        let window = historyLines(start, end, max(1, width), 256)
+        if (window.lines.isEmpty()) {
             if (replaying) { replayRequestedValue = false }
             return None
         }
         let batch = HistoryBatch(
             id,
             if (replaying) { HistoryBatchKind.Replay } else { HistoryBatchKind.Append },
-            lines,
+            window.lines,
             startRow: 0
         )
         pendingHistoryId = id
-        pendingHistoryEnd = end
+        pendingHistoryEnd = window.end
         pendingHistoryBatch = Some(batch)
         replayRequestedValue = false
         generationValue++
@@ -2115,6 +2137,9 @@ class AgentScreen <: TerminalFrameProvider {
 
     private func scrollTranscriptBy(delta: Int64): UpdateResult {
         if (primaryScrollbackActive) {
+            if (delta > 0 && loadOlderMainTranscriptPage()) {
+                return dirtyTranscriptAndActivity()
+            }
             return UpdateResult.unchanged()
         }
         let previousOffset = scrollOffset

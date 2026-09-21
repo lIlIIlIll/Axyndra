@@ -371,6 +371,9 @@ public class Terminal {
             // Native scrollback changes the physical cursor and invalidates
             // the previous screen image. Keep history and the full viewport in
             // one transport write so the terminal never observes a torn frame.
+            // Start at the bottom-left so each CRLF advances through the
+            // scroll region and every history line enters native scrollback.
+            backend.moveTo(area.x, area.y + max(0, area.height - 1))
             backend.drawFrame(
                 rawPrefix,
                 buffer,
@@ -486,7 +489,8 @@ public class Terminal {
         front = None
         back = None
         previousMedia = []
-        cursorVisible = false
+        // Buffer invalidation does not change the physical cursor. Preserve
+        // this bit so the next draw can emit a required hide/show sequence.
     }
 
     private func frontMatches(area: Rect): Bool {

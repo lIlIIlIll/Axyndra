@@ -19,6 +19,29 @@ func addStablePresentationCard(snapshot: UiSnapshot, index: Int64): Unit {
     )
 }
 
+func addLongPresentationCard(snapshot: UiSnapshot, index: Int64): Unit {
+    let body = StringBuilder()
+    for (line in 0..180) {
+        body.append("long history ")
+        body.append(index.toString())
+        body.append("-")
+        body.append(line.toString())
+        body.append("\n")
+    }
+    UiReducer.reduce(
+        snapshot,
+        UiEvent.UpsertCard(
+            "long-history-${index}",
+            UiCardKind.Assistant,
+            "Long history ${index}",
+            body.toString(),
+            "completed",
+            false,
+            ""
+        )
+    )
+}
+
 func presentationBatchKind(batch: HistoryBatch): String {
     match (batch.kind) {
         case HistoryBatchKind.Append => "append"
@@ -84,6 +107,85 @@ class TuiPresentationTests {
         }
         @Expect(sameReplay.id, replay.id)
         adapter.acknowledge(replay.id)
+    }
+
+    @TestCase
+    func boundedHistoryAcknowledgesOnlyEmittedCards(): Unit {
+        let snapshot = UiSnapshot()
+        addLongPresentationCard(snapshot, 0)
+        addLongPresentationCard(snapshot, 1)
+        for (index in 2..7) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+
+        let batch = match (source.prepareHistoryBatch(21, 80)) {
+            case Some(value) => value
+            case None => @Fail("bounded history should emit the first large card")
+        }
+        source.acknowledgeHistory(batch.id)
+        @Expect(source.retiredCount(), 1)
+    }
+
+    @TestCase
+    func settledInteractionCardsCanRetire(): Unit {
+        let snapshot = UiSnapshot()
+        UiReducer.reduce(
+            snapshot,
+            UiEvent.UpsertCard(
+                "resolved-ask",
+                UiCardKind.Ask,
+                "Resolved question",
+                "answered",
+                "completed",
+                false,
+                ""
+            )
+        )
+        for (index in 1..8) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+
+        let batch = match (source.prepareHistoryBatch(22, 80)) {
+            case Some(value) => value
+            case None => @Fail("settled interaction cards should be retireable")
+        }
+        source.acknowledgeHistory(batch.id)
+        @Expect(source.retiredCount(), 2)
+    }
+
+    @TestCase
+    func rawHistoryLinesStripTerminalControls(): Unit {
+        let snapshot = UiSnapshot()
+        UiReducer.reduce(
+            snapshot,
+            UiEvent.UpsertCard(
+                "unsafe-transcript",
+                UiCardKind.Assistant,
+                "Unsafe transcript",
+                "safe \u{1B}[31mred\u{1B}[0m \u{1B}]8;;https://example.test\u{07}done",
+                "completed",
+                false,
+                ""
+            )
+        )
+        for (index in 1..7) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        let batch = match (source.prepareHistoryBatch(23, 80)) {
+            case Some(value) => value
+            case None => @Fail("unsafe transcript should produce a history batch")
+        }
+        var safe = true
+        for (line in batch.lines()) {
+            safe = safe && !line.contains("\u{1B}")
+        }
+        @Expect(safe, true)
+        @Expect(batch.lines()[0].contains("safe"), true)
+        @Expect(batch.lines()[0].contains("red"), true)
+        @Expect(batch.lines()[0].contains("done"), true)
     }
 
     @TestCase
