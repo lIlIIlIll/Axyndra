@@ -9,20 +9,12 @@ class AgentPresentationAdapter {
     private let source: AgentTranscriptSource
     private var nextBatchIdValue: Int64 = 1
     private var pending: ?HistoryBatch = None
-    private var lastSize = Rect(0, 0, 0, 0)
 
     init(source: AgentTranscriptSource) {
         this.source = source
     }
 
     func prepare(size: Rect): ?HistoryBatch {
-        let hadSize = lastSize.width > 0 && lastSize.height > 0
-        let resized = lastSize.width != size.width || lastSize.height != size.height
-        lastSize = size
-        if (resized && hadSize) {
-            pending = None
-            source.requestHistoryReplay()
-        }
         match (pending) {
             case Some(batch) => return Some(batch)
             case None => ()

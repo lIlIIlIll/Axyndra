@@ -80,7 +80,7 @@ class TuiPresentationTests {
     }
 
     @TestCase
-    func resizeRequestsReplayWithoutDuplicatingBatchIds(): Unit {
+    func resizePreservesNativeScrollbackWithoutRequestingReplay(): Unit {
         let snapshot = UiSnapshot()
         for (index in 0..8) {
             addStablePresentationCard(snapshot, index)
@@ -95,18 +95,12 @@ class TuiPresentationTests {
         @Expect(presentationBatchKind(first), "append")
         adapter.acknowledge(first.id)
 
-        let replay = match (adapter.prepare(Rect(0, 0, 100, 24))) {
-            case Some(value) => value
-            case None => @Fail("resize must prepare a replay batch")
+        let afterResize = adapter.prepare(Rect(0, 0, 100, 24))
+        match (afterResize) {
+            case Some(_) => @Fail("resize must not request a scrollback replay")
+            case None => ()
         }
-        @Expect(presentationBatchKind(replay), "replay")
-        @Expect(replay.id > first.id, true)
-        let sameReplay = match (adapter.prepare(Rect(0, 0, 100, 24))) {
-            case Some(value) => value
-            case None => @Fail("replay must remain pending until acknowledged")
-        }
-        @Expect(sameReplay.id, replay.id)
-        adapter.acknowledge(replay.id)
+        @Expect(source.historyReplayRequested(), false)
     }
 
     @TestCase
@@ -234,6 +228,51 @@ class TuiPresentationTests {
         @Expect(second.id > first.id, true)
         @Expect(adapter.hasHistoryFollowUp(), false)
         adapter.acknowledge(second.id)
+    }
+
+    @TestCase
+    func shortReplayEmitsResetBatch(): Unit {
+        let snapshot = UiSnapshot()
+        for (index in 0..5) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        source.requestHistoryReplay()
+
+        let replay = match (source.prepareHistoryBatch(24, 80)) {
+            case Some(value) => value
+            case None => @Fail("short replay must emit an empty reset batch")
+        }
+        @Expect(presentationBatchKind(replay), "replay")
+        @Expect(replay.lineCount(), 0)
+        source.acknowledgeHistory(replay.id)
+        @Expect(source.historyReplayRequested(), false)
+    }
+
+    @TestCase
+    func blockedToolJobsStayVisible(): Unit {
+        let snapshot = UiSnapshot()
+        UiReducer.reduce(
+            snapshot,
+            UiEvent.UpsertCard(
+                "blocked-job",
+                UiCardKind.Tool,
+                "Blocked job",
+                "waiting for approval",
+                "blocked",
+                false,
+                ""
+            )
+        )
+        for (index in 1..8) {
+            addStablePresentationCard(snapshot, index)
+        }
+        let source = AgentTranscriptSource(snapshot, { item, _, _ => Document.plain(item.body) })
+        let batch = source.prepareHistoryBatch(25, 80)
+        match (batch) {
+            case Some(_) => @Fail("blocked tool jobs must remain in the live viewport")
+            case None => ()
+        }
     }
 
     @TestCase

@@ -431,6 +431,7 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         match (item.kind) {
             case UiCardKind.Approval | UiCardKind.Permission | UiCardKind.Ask | UiCardKind.Plan =>
                 interactionIsActiveOrWaiting(item)
+            case UiCardKind.Tool => interactionIsActiveOrWaiting(item)
             case _ => false
         }
     }
@@ -520,14 +521,18 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
         let replaying = replay || replayRequestedValue
         let start = if (replaying) { 0 } else { retiredCountValue }
-        let end = candidateEnd(retiredCountValue)
+        let end = candidateEnd(start)
         if (end <= start) {
-            if (replaying) { replayRequestedValue = false }
+            if (replaying) {
+                return Some(queueReplayReset(id, start))
+            }
             return None
         }
         let window = historyLines(start, end, max(1, width), 256)
         if (window.lines.isEmpty()) {
-            if (replaying) { replayRequestedValue = false }
+            if (replaying) {
+                return Some(queueReplayReset(id, start))
+            }
             return None
         }
         let batch = HistoryBatch(
@@ -542,6 +547,21 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         replayRequestedValue = false
         generationValue++
         Some(batch)
+    }
+
+    private func queueReplayReset(id: Int64, start: Int64): HistoryBatch {
+        let batch = HistoryBatch(
+            id,
+            HistoryBatchKind.Replay,
+            ArrayList<String>().toArray(),
+            startRow: 0
+        )
+        pendingHistoryId = id
+        pendingHistoryEnd = start
+        pendingHistoryBatch = Some(batch)
+        replayRequestedValue = false
+        generationValue++
+        batch
     }
 
     func acknowledgeHistory(id: Int64): Unit {
