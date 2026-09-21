@@ -51,6 +51,7 @@ jobs:
           cjpm_output=$(cjpm --version 2>&1)
           expected_cjpm_version=${cjpm_output##* }
           echo "AXYNDRA_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "AXYNDRA_CI_CANGJIE_VERSION=${{ steps.cangjie-nightly.outputs.version }}" >> "$GITHUB_ENV"
           echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-nightly.outputs.version }}" >> "$GITHUB_ENV"
           echo "AXYNDRA_CI_EXPECTED_CJPM_VERSION=$expected_cjpm_version" >> "$GITHUB_ENV"
           AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-nightly.outputs.version }}" \
