@@ -451,6 +451,23 @@ class AgentEventCardTests {
     }
 
     @TestCase
+    func historyRenderingIgnoresCardViewport(): Unit {
+        let theme = monoTheme()
+        let read = UiCard("archival-read", UiCardKind.Tool, "Read src/a.cj", "", state: "completed")
+        read.toolName = "read"
+        read.toolArguments = "{\"path\":\"src/a.cj\"}"
+        read.toolOutput = "line zero\nline one\nline two\nline three"
+        read.bodyScroll = 1
+        read.bodyViewport = 1
+        let live = documentText(agentCardBodyDocument(read, 80, theme))
+        let archived = documentText(agentCardBodyDocument(read, 80, theme, archive: true))
+        @Expect(live.contains("line one"), true)
+        @Expect(live.contains("line zero"), false)
+        @Expect(archived.contains("line zero"), true)
+        @Expect(archived.contains("line three"), true)
+    }
+
+    @TestCase
     func runningShellDoesNotRenderInvocationPreviewAsOutput(): Unit {
         let theme = monoTheme()
         let shell = UiCard(

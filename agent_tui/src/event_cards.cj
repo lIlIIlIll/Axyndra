@@ -716,10 +716,10 @@ func structuredOutput(item: UiCard): String {
     }
 }
 
-func cardVisibleText(item: UiCard, value: String): String {
+func cardVisibleText(item: UiCard, value: String, archive!: Bool = false): String {
     let clean = stripAnsi(value).replace("\r", "")
     let lines = clean.split("\n")
-    if (item.bodyScroll <= 0 || lines.size <= 1) {
+    if (archive || item.bodyScroll <= 0 || lines.size <= 1) {
         return limitToolDetail(clean, 0)
     }
     let viewport = max(1, item.bodyViewport)
@@ -1044,9 +1044,14 @@ func shellCommandLines(command: String, width: Int64, theme: ProductTheme): Arra
     result.toArray()
 }
 
-func limitedStyledOutput(item: UiCard, output: StyledToolOutput, theme: ProductTheme): Array<DocumentLine> {
+func limitedStyledOutput(
+    item: UiCard,
+    output: StyledToolOutput,
+    theme: ProductTheme,
+    archive!: Bool = false
+): Array<DocumentLine> {
     let lines = output.lines
-    if (item.bodyScroll > 0 && lines.size > 1) {
+    if (!archive && item.bodyScroll > 0 && lines.size > 1) {
         let viewport = max(1, item.bodyViewport)
         let start = min(max(0, item.bodyScroll), max(0, lines.size - viewport))
         return lines[start..min(lines.size, start + viewport)]
@@ -1065,7 +1070,7 @@ func limitedStyledOutput(item: UiCard, output: StyledToolOutput, theme: ProductT
     result.toArray()
 }
 
-func shellCardDocument(item: UiCard, width: Int64, theme: ProductTheme): Document {
+func shellCardDocument(item: UiCard, width: Int64, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let command = redactSensitiveText(fieldOr(parseStringField(item.toolArguments, "command"), item.title))
     for (line in shellCommandLines(command, width, theme)) {
@@ -1084,7 +1089,7 @@ func shellCardDocument(item: UiCard, width: Int64, theme: ProductTheme): Documen
             DocumentLineKind.HorizontalRule,
             [RichSpan("Output", style: Style(fg: theme.toolPrompt, bg: theme.background))]
         ))
-        for (line in limitedStyledOutput(item, output, theme)) {
+        for (line in limitedStyledOutput(item, output, theme, archive: archive)) {
             lines.add(line)
         }
         lines.add(DocumentLine(DocumentLineKind.Blank, "", style: Style(bg: theme.background)))
@@ -1115,7 +1120,7 @@ func numberedReadText(content: String, start: Int64, theme: ProductTheme): Array
     lines.toArray()
 }
 
-func readCardDocument(item: UiCard, theme: ProductTheme): Document {
+func readCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let path = safeCardField(fieldOr(parseStringField(item.toolArguments, "path"), item.title))
     addCardSection(lines, "file", path, theme)
@@ -1130,7 +1135,7 @@ func readCardDocument(item: UiCard, theme: ProductTheme): Document {
     } else {
         addCardBlank(lines)
         let numbered = numberedReadText(
-            cardVisibleText(item, content),
+            cardVisibleText(item, content, archive: archive),
             numericField(item.toolArguments, "start_line", numericField(item.toolArguments, "line_start", 1)),
             theme
         )
@@ -1141,7 +1146,7 @@ func readCardDocument(item: UiCard, theme: ProductTheme): Document {
     Document(lines.toArray())
 }
 
-func searchCardDocument(item: UiCard, theme: ProductTheme): Document {
+func searchCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let pattern = safeCardField(parseStringField(item.toolArguments, "pattern"))
     let directory = safeCardField(fieldOr(parseStringField(item.toolArguments, "path"),
@@ -1159,7 +1164,7 @@ func searchCardDocument(item: UiCard, theme: ProductTheme): Document {
     } else {
         addCardBlank(lines)
         var previousFile = ""
-        for (entry in cardVisibleText(item, matches).split("\n")) {
+        for (entry in cardVisibleText(item, matches, archive: archive).split("\n")) {
             let (file, line, content) = searchMatchParts(entry)
             let group = if (file == "") {
                 ""
@@ -1220,7 +1225,7 @@ func ensureDirectorySlash(value: String): String {
     }
 }
 
-func listCardDocument(item: UiCard, theme: ProductTheme): Document {
+func listCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let directory = safeCardField(fieldOr(parseStringField(item.toolArguments, "path"), item.title))
     addCardSection(lines, "directory", directory, theme)
@@ -1230,7 +1235,7 @@ func listCardDocument(item: UiCard, theme: ProductTheme): Document {
         addCardText(lines, "Empty directory", theme, style: Style(fg: theme.muted))
     } else {
         addCardBlank(lines)
-        for (entry in cardVisibleText(item, entries).split("\n")) {
+        for (entry in cardVisibleText(item, entries, archive: archive).split("\n")) {
             let normalized = normalizeDirectoryEntry(entry)
             if (normalized != "") {
                 lines.add(DocumentLine(DocumentLineKind.Paragraph, normalized, style: Style(fg: theme.text)))
@@ -1294,7 +1299,7 @@ public func toolTitleWithStats(name: String, arguments: String, output: String):
     base + " · +" + added.toString() + " −" + removed.toString()
 }
 
-func editCardDocument(item: UiCard, theme: ProductTheme): Document {
+func editCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let output = structuredOutput(item)
     let diff = fieldOr(
@@ -1310,7 +1315,7 @@ func editCardDocument(item: UiCard, theme: ProductTheme): Document {
     } else {
         addCardBlank(lines)
         var currentFile = ""
-        for (line in cardVisibleText(item, diff).split("\n")) {
+        for (line in cardVisibleText(item, diff, archive: archive).split("\n")) {
             let file = diffFileMarker(line)
             if (file != "" && file != currentFile) {
                 if (!lines.isEmpty()) {
@@ -1373,7 +1378,7 @@ func createCardDocument(item: UiCard, theme: ProductTheme): Document {
     Document(lines.toArray())
 }
 
-func httpCardDocument(item: UiCard, theme: ProductTheme): Document {
+func httpCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let method = fieldOr(parseStringField(item.toolArguments, "method"), "GET").toAsciiUpper()
     let url = fieldOr(
@@ -1420,12 +1425,12 @@ func httpCardDocument(item: UiCard, theme: ProductTheme): Document {
             "error"
         } else {
             "response"
-        }, cardVisibleText(item, redactSensitiveText(response)), theme)
+        }, cardVisibleText(item, redactSensitiveText(response), archive: archive), theme)
     }
     Document(lines.toArray())
 }
 
-func gitCardDocument(item: UiCard, theme: ProductTheme): Document {
+func gitCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let operation = safeCardField(fieldOr(parseStringField(item.toolArguments, "action"), parseStringField(item.toolArguments, "op")))
     let repository = safeCardField(fieldOr(parseStringField(item.toolArguments, "repo"),
@@ -1450,7 +1455,7 @@ func gitCardDocument(item: UiCard, theme: ProductTheme): Document {
             "error"
         } else {
             "result"
-        }, cardVisibleText(item, output), theme)
+        }, cardVisibleText(item, output, archive: archive), theme)
     }
     Document(lines.toArray())
 }
@@ -1492,7 +1497,7 @@ func advisorCardDocument(item: UiCard, theme: ProductTheme): Document {
     Document(lines.toArray())
 }
 
-func jobCardDocument(item: UiCard, theme: ProductTheme): Document {
+func jobCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     addCardSection(lines, "status", readableCardState(item.state), theme)
     let detail = toolCardDetail(item.body, item.state)
@@ -1501,23 +1506,23 @@ func jobCardDocument(item: UiCard, theme: ProductTheme): Document {
             "error"
         } else {
             "current"
-        }, cardVisibleText(item, detail), theme)
+        }, cardVisibleText(item, detail, archive: archive), theme)
     }
     Document(lines.toArray())
 }
 
-func askCardDocument(item: UiCard, theme: ProductTheme): Document {
-    styledEventDocument(item, theme, UiCardKind.Ask)
+func askCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
+    styledEventDocument(item, theme, UiCardKind.Ask, archive: archive)
 }
 
-func permissionCardDocument(item: UiCard, theme: ProductTheme): Document {
-    styledEventDocument(item, theme, UiCardKind.Permission)
+func permissionCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
+    styledEventDocument(item, theme, UiCardKind.Permission, archive: archive)
 }
 
-func subagentCardDocument(item: UiCard, theme: ProductTheme): Document {
+func subagentCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let detail = toolCardDetail(item.body, item.state)
-    let values = cardVisibleText(item, detail).split("\n")
+    let values = cardVisibleText(item, detail, archive: archive).split("\n")
     if (!values.isEmpty() && !(values.size == 1 && values[0].trimAscii() == "")) {
         addCardLabel(lines, if (item.state == "completed") {
             "result"
@@ -1531,11 +1536,11 @@ func subagentCardDocument(item: UiCard, theme: ProductTheme): Document {
     Document(lines.toArray())
 }
 
-func systemCardDocument(item: UiCard, theme: ProductTheme): Document {
-    styledEventDocument(item, theme, item.kind)
+func systemCardDocument(item: UiCard, theme: ProductTheme, archive!: Bool = false): Document {
+    styledEventDocument(item, theme, item.kind, archive: archive)
 }
 
-func styledEventDocument(item: UiCard, theme: ProductTheme, mode: UiCardKind): Document {
+func styledEventDocument(item: UiCard, theme: ProductTheme, mode: UiCardKind, archive!: Bool = false): Document {
     let lines = ArrayList<DocumentLine>()
     let detail = redactSensitiveText(toolCardDetail(item.body, item.state))
     // Ask choices are interactive controls, not log output. Windowing their
@@ -1543,7 +1548,7 @@ func styledEventDocument(item: UiCard, theme: ProductTheme, mode: UiCardKind): D
     let visibleDetail = if (mode == UiCardKind.Ask) {
         detail
     } else {
-        cardVisibleText(item, detail)
+        cardVisibleText(item, detail, archive: archive)
     }
     let values = visibleDetail.split("\n")
     for (value in values) {
@@ -1787,25 +1792,25 @@ func truncateCardField(value: String, maximum: Int64): String {
     output + "…"
 }
 
-func agentCardBodyDocument(item: UiCard, width: Int64, theme: ProductTheme): Document {
+func agentCardBodyDocument(item: UiCard, width: Int64, theme: ProductTheme, archive!: Bool = false): Document {
     match (agentCardRendererKind(item)) {
-        case AgentCardRendererKind.Shell => shellCardDocument(item, width, theme)
-        case AgentCardRendererKind.Http => httpCardDocument(item, theme)
-        case AgentCardRendererKind.Git => gitCardDocument(item, theme)
+        case AgentCardRendererKind.Shell => shellCardDocument(item, width, theme, archive: archive)
+        case AgentCardRendererKind.Http => httpCardDocument(item, theme, archive: archive)
+        case AgentCardRendererKind.Git => gitCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Mcp => mcpCardDocument(item, theme)
-        case AgentCardRendererKind.Read => readCardDocument(item, theme)
-        case AgentCardRendererKind.Search => searchCardDocument(item, theme)
-        case AgentCardRendererKind.List => listCardDocument(item, theme)
+        case AgentCardRendererKind.Read => readCardDocument(item, theme, archive: archive)
+        case AgentCardRendererKind.Search => searchCardDocument(item, theme, archive: archive)
+        case AgentCardRendererKind.List => listCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Create => createCardDocument(item, theme)
-        case AgentCardRendererKind.Edit => editCardDocument(item, theme)
+        case AgentCardRendererKind.Edit => editCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Plan => planCardDocument(item, theme)
-        case AgentCardRendererKind.Ask => askCardDocument(item, theme)
-        case AgentCardRendererKind.Permission => permissionCardDocument(item, theme)
-        case AgentCardRendererKind.Subagent => subagentCardDocument(item, theme)
+        case AgentCardRendererKind.Ask => askCardDocument(item, theme, archive: archive)
+        case AgentCardRendererKind.Permission => permissionCardDocument(item, theme, archive: archive)
+        case AgentCardRendererKind.Subagent => subagentCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Advisor => advisorCardDocument(item, theme)
-        case AgentCardRendererKind.Job => jobCardDocument(item, theme)
+        case AgentCardRendererKind.Job => jobCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Error | AgentCardRendererKind.Warning | AgentCardRendererKind.Compaction
-            | AgentCardRendererKind.Summary => systemCardDocument(item, theme)
+            | AgentCardRendererKind.Summary => systemCardDocument(item, theme, archive: archive)
         case AgentCardRendererKind.Generic => genericCardDocument(item, theme)
     }
 }

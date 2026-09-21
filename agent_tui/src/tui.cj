@@ -5522,7 +5522,7 @@ class AgentScreen <: TerminalFrameProvider {
             }
             return Document([])
         }
-        var body = agentCardBodyDocument(item, width, theme)
+        var body = agentCardBodyDocument(item, width, theme, archive: history)
         if (item.kind == UiCardKind.Approval && approvalCardIsWaiting(item.state)) {
             let lines = ArrayList<DocumentLine>()
             for (line in body.lines) {
