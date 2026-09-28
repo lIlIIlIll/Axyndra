@@ -7,11 +7,13 @@ import yjson.*
 import process4cj.*
 
 import agent_domain.*
+import agent_domain as domain
 import agent_ports.*
 import sandbox4cj.*
 import std.collection.*
 import std.convert.*
 import std.env.*
+import std.deriving.*
 import std.fs.*
 import std.io.*
 import std.overflow.*
@@ -22,6 +24,7 @@ import std.time.*
 public class LocalWorkspace <: WorkspacePort {
     private let root: String
     private let maxReadBytes: Int64
+    private let writeLock = Mutex()
 
     public init(root: String, maxReadBytes!: Int64 = 1048576) {
         if (maxReadBytes < 1) {
@@ -174,13 +177,62 @@ public class LocalWorkspace <: WorkspacePort {
             case Result.Err(_) => true
         }
     }
-
     public func writeFile(path: String, content: String): Result<AgentValue> {
+        writeLock.lock()
+        try {
+            writeFileUnlocked(path, content)
+        } finally {
+            writeLock.unlock()
+        }
+    }
+
+    public func writeFileIfCurrent(
+        path: String,
+        expectedContent: ?String,
+        content: String
+    ): Result<AgentValue> {
+        writeLock.lock()
+        try {
+            let target = match (inspectWriteTarget(path)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            if (target.exists != expectedContent.isSome()) {
+                return workspaceError<AgentValue>(
+                    AgentErrorKind.Conflict,
+                    "workspace.precondition_conflict",
+                    "write target existence changed before publication"
+                )
+            }
+            writeFileUnlocked(
+                path,
+                content,
+                expectedContent: expectedContent,
+                bindWorkspaceParent: true
+            )
+        } finally {
+            writeLock.unlock()
+        }
+    }
+
+    private func writeFileUnlocked(
+        path: String,
+        content: String,
+        expectedContent!: ?String = None,
+        bindWorkspaceParent!: Bool = false
+    ): Result<AgentValue> {
         let target = match (inspectWriteTarget(path)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
 
+        if (bindWorkspaceParent && target.permissionClass != "workspace.write") {
+            return workspaceError(
+                AgentErrorKind.PermissionDenied,
+                "workspace.parent_binding_outside_workspace",
+                "directory-handle-bound writes require a workspace target"
+            )
+        }
         if (target.sensitive) {
             return workspaceError(
                 AgentErrorKind.PermissionDenied,
@@ -211,59 +263,128 @@ public class LocalWorkspace <: WorkspacePort {
             )
         }
 
-        var temporary = ""
-        var phase = "staging"
-        try {
-            temporary = workspaceTemporary(target.normalizedPath, content)
-            phase = "publish"
-            workspacePublish(temporary, target.normalizedPath, target.exists)
-            phase = "confirm"
-            let info = FileInfo(Path(target.normalizedPath))
-            let contentBytes = unsafe { content.rawData() }
-            let bytes = contentBytes.size
-            if (!info.isRegular() || info.size != bytes) {
-                throw Exception("published target did not match the requested file shape")
-            }
-            Result.Ok(
-                objectValue(
-                    [
-                        ValueField("path", textValue(target.normalizedPath)),
-                        ValueField("action", textValue(if (target.exists) {
-                            "overwrite"
-                        } else {
-                            "create"
-                        })),
-                        ValueField("bytes", integerValue(bytes)),
-                        ValueField("before_bytes", integerValue(target.beforeBytes)),
-                        ValueField("lines", integerValue(if (content == "") {
-                            0
-                        } else {
-                            content.split("\n").size
-                        }))
-                    ]
-                )
+        let anchoredParent = if (bindWorkspaceParent) {
+            workspaceOpenAnchoredParent(root, target.normalizedPath)
+        } else {
+            Int32(-1)
+        }
+        if (bindWorkspaceParent && anchoredParent < 0) {
+            return workspaceError(
+                AgentErrorKind.Conflict,
+                "workspace.parent_changed",
+                "write parent could not be bound beneath the workspace root"
             )
-        } catch (error: Exception) {
-            if (temporary != "") { let _ = removeIfExists(temporary) }
-            let outcomeKind = if (phase == "staging") {
-                AgentErrorKind.Internal
-            } else {
-                AgentErrorKind.RecoveryRequired
+        }
+        let publicationPath = if (anchoredParent < 0) {
+            target.normalizedPath
+        } else {
+            "/proc/self/fd/" + anchoredParent.toString() + "/" +
+                Path(target.normalizedPath).fileName
+        }
+        try {
+            var temporary = ""
+            var expectedTemporary = ""
+            var phase = "staging"
+            var preserveTemporary = false
+            try {
+                temporary = workspaceTemporary(publicationPath, content)
+                phase = "publish"
+                match (expectedContent) {
+                    case Some(expected) =>
+                        expectedTemporary = workspacePlainTemporary(
+                            publicationPath, expected
+                        )
+                        match (workspacePublishIfMatches(
+                            temporary, publicationPath, expectedTemporary
+                        )) {
+                            case WorkspaceConditionalPublishOutcome.Applied => ()
+                            case WorkspaceConditionalPublishOutcome.Conflict =>
+                                let _ = removeIfExists(temporary)
+                                let _ = removeIfExists(expectedTemporary)
+                                temporary = ""
+                                expectedTemporary = ""
+                                return workspaceError<AgentValue>(
+                                    AgentErrorKind.Conflict,
+                                    "workspace.precondition_conflict",
+                                    "write target changed before publication"
+                                )
+                            case WorkspaceConditionalPublishOutcome.Unknown =>
+                                preserveTemporary = true
+                                let _ = removeIfExists(expectedTemporary)
+                                expectedTemporary = ""
+                                let recoveryPath = canonicalize(Path(temporary).parent)
+                                    .join(Path(temporary).fileName).toString()
+                                return Result.Err(AgentError(
+                                    AgentErrorKind.RecoveryRequired,
+                                    "workspace.write",
+                                    "workspace publish outcome is unknown; displaced file retained at " +
+                                        recoveryPath,
+                                    fields: [
+                                        ErrorField("phase", "publish"),
+                                        ErrorField("path", target.normalizedPath),
+                                        ErrorField("recovery_path", recoveryPath)
+                                    ]
+                                ))
+                        }
+                        let _ = removeIfExists(temporary)
+                        let _ = removeIfExists(expectedTemporary)
+                        temporary = ""
+                        expectedTemporary = ""
+                    case None => workspacePublish(
+                        temporary, publicationPath, target.exists && !bindWorkspaceParent
+                    )
+                }
+                phase = "confirm"
+                let info = FileInfo(Path(publicationPath))
+                let contentBytes = unsafe { content.rawData() }
+                let bytes = contentBytes.size
+                if (!info.isRegular() || info.size != bytes) {
+                    throw Exception("published target did not match the requested file shape")
+                }
+                Result.Ok(
+                    objectValue(
+                        [
+                            ValueField("path", textValue(target.normalizedPath)),
+                            ValueField("action", textValue(if (target.exists) {
+                                "overwrite"
+                            } else {
+                                "create"
+                            })),
+                            ValueField("bytes", integerValue(bytes)),
+                            ValueField("before_bytes", integerValue(target.beforeBytes)),
+                            ValueField("lines", integerValue(if (content == "") {
+                                0
+                            } else {
+                                content.split("\n").size
+                            }))
+                        ]
+                    )
+                )
+            } catch (error: Exception) {
+                if (!preserveTemporary && temporary != "") { let _ = removeIfExists(temporary) }
+                if (expectedTemporary != "") { let _ = removeIfExists(expectedTemporary) }
+                let outcomeKind = if (phase == "staging") {
+                    AgentErrorKind.Internal
+                } else {
+                    AgentErrorKind.RecoveryRequired
+                }
+                let outcomeMessage = if (phase == "staging") {
+                    error.message
+                } else {
+                    "workspace publish outcome is unknown: " + error.message
+                }
+                Result.Err(AgentError(
+                    outcomeKind,
+                    "workspace.write",
+                    outcomeMessage,
+                    fields: [
+                        ErrorField("phase", phase),
+                        ErrorField("path", target.normalizedPath)
+                    ]
+                ))
             }
-            let outcomeMessage = if (phase == "staging") {
-                error.message
-            } else {
-                "workspace publish outcome is unknown: " + error.message
-            }
-            Result.Err(AgentError(
-                outcomeKind,
-                "workspace.write",
-                outcomeMessage,
-                fields: [
-                    ErrorField("phase", phase),
-                    ErrorField("path", target.normalizedPath)
-                ]
-            ))
+        } finally {
+            if (anchoredParent >= 0) { workspaceCloseAnchoredParent(anchoredParent) }
         }
     }
 
@@ -842,24 +963,109 @@ class TransactionFile {
     }
 }
 
+foreign func axyndra_workspace_open_parent(
+    workspaceRoot: CString,
+    target: CString
+): Int32
+
+foreign func axyndra_workspace_close_parent(parentFd: Int32): Int32
+
+func workspaceOpenAnchoredParent(workspaceRoot: String, target: String): Int32 {
+    unsafe {
+        let rootPath = LibC.mallocCString(workspaceRoot)
+        try {
+            let targetPath = LibC.mallocCString(target)
+            try { axyndra_workspace_open_parent(rootPath, targetPath) }
+            finally { LibC.free(targetPath) }
+        } finally { LibC.free(rootPath) }
+    }
+}
+
+func workspaceCloseAnchoredParent(parentFd: Int32): Unit {
+    let _ = unsafe { axyndra_workspace_close_parent(parentFd) }
+}
+
 foreign func axyndra_workspace_copy_mode(source: CString, destinationFd: Int32): Int32
 
+foreign func axyndra_workspace_create(source: CString, destination: CString): Int32
 foreign func axyndra_workspace_replace(source: CString, destination: CString): Int32
 
-func workspacePublish(temporary: String, path: String, overwrite: Bool): Unit {
-    if (!overwrite) {
-        rename(temporary, to: path, overwrite: false)
-        return
+foreign func axyndra_workspace_replace_if_matches(
+    source: CString,
+    destination: CString,
+    expected: CString
+): Int32
+
+foreign func axyndra_plugin_snapshot_copy(
+    source: CString,
+    destination: CString
+): Int32
+
+func pluginCopySnapshotTreeSecure(source: String, destination: String): Unit {
+    unsafe {
+        let sourcePath = LibC.mallocCString(source)
+        try {
+            let destinationPath = LibC.mallocCString(destination)
+            try {
+                let code = axyndra_plugin_snapshot_copy(sourcePath, destinationPath)
+                if (code != 0) {
+                    throw Exception(
+                        "cannot copy plugin snapshot through verified handles, errno=" +
+                            (-code).toString()
+                    )
+                }
+            } finally { LibC.free(destinationPath) }
+        } finally { LibC.free(sourcePath) }
     }
+}
+
+func workspacePublish(temporary: String, path: String, overwrite: Bool): Unit {
     unsafe {
         let source = LibC.mallocCString(temporary)
         try {
             let destination = LibC.mallocCString(path)
             try {
-                let code = axyndra_workspace_replace(source, destination)
+                let code = if (overwrite) {
+                    axyndra_workspace_replace(source, destination)
+                } else {
+                    axyndra_workspace_create(source, destination)
+                }
                 if (code != 0) {
                     throw Exception("cannot atomically replace file, errno=" + (-code).toString())
                 }
+            } finally { LibC.free(destination) }
+        } finally { LibC.free(source) }
+    }
+}
+
+@Derive[Equatable]
+enum WorkspaceConditionalPublishOutcome {
+    Applied | Conflict | Unknown
+}
+
+func workspacePublishIfMatches(
+    temporary: String,
+    path: String,
+    expectedTemporary: String
+): WorkspaceConditionalPublishOutcome {
+    unsafe {
+        let source = LibC.mallocCString(temporary)
+        try {
+            let destination = LibC.mallocCString(path)
+            try {
+                let expected = LibC.mallocCString(expectedTemporary)
+                try {
+                    let code = axyndra_workspace_replace_if_matches(
+                        source, destination, expected
+                    )
+                    if (code == 0) { return WorkspaceConditionalPublishOutcome.Applied }
+                    if (code == 1) { return WorkspaceConditionalPublishOutcome.Conflict }
+                    if (code == 2) { return WorkspaceConditionalPublishOutcome.Unknown }
+                    throw Exception(
+                        "cannot atomically compare and replace file, errno=" +
+                            (-code).toString()
+                    )
+                } finally { LibC.free(expected) }
             } finally { LibC.free(destination) }
         } finally { LibC.free(source) }
     }
@@ -869,7 +1075,7 @@ func workspacePublish(temporary: String, path: String, overwrite: Bool): Unit {
 // including executable and private files, before publishing the replacement.
 func workspaceTemporary(path: String, content: String): String {
     let file = File.createTemp(Path(path).parent)
-    let temporary = file.info.path.toString()
+    let temporary = Path(path).parent.join(file.info.path.fileName).toString()
     try {
         try {
             file.write(content.toArray())
@@ -889,6 +1095,18 @@ func workspaceTemporary(path: String, content: String): String {
         } finally {
             file.close()
         }
+        temporary
+    } catch (error: Exception) {
+        let _ = removeIfExists(temporary)
+        throw error
+    }
+}
+
+func workspacePlainTemporary(path: String, content: String): String {
+    let file = File.createTemp(Path(path).parent)
+    let temporary = Path(path).parent.join(file.info.path.fileName).toString()
+    try {
+        try { file.write(content.toArray()) } finally { file.close() }
         temporary
     } catch (error: Exception) {
         let _ = removeIfExists(temporary)
@@ -1227,6 +1445,58 @@ func resolveProductSandboxCaBundle(authored: String): Result<String> {
         Result.Ok("")
     }
 }
+func createProductProcessPort(
+    workspace: LocalWorkspace,
+    sandboxCaBundle: String,
+    settingsRoot: String,
+    additionalReadOnlyRoots!: Array<String> = []
+): Result<LocalProcessPort> {
+    let sandboxToolchain = configuredProductSandboxToolchain()
+    let sandboxMounts = ArrayList<SandboxReadOnlyMount>()
+    sandboxMounts.add(all: sandboxToolchain.mounts)
+    for (root in additionalReadOnlyRoots) {
+        try {
+            sandboxMounts.add(SandboxReadOnlyMount(root))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.read_only_mount_unavailable",
+                error.message
+            ))
+        }
+    }
+    if (sandboxCaBundle != "") {
+        try {
+            sandboxMounts.add(SandboxReadOnlyMount(sandboxCaBundle))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.ca_unavailable",
+                error.message
+            ))
+        }
+    }
+    let hookPackageRoots = ArrayList<String>()
+    if (settingsRoot.trimAscii() != "") {
+        hookPackageRoots.add(Path(settingsRoot).join("plugins").join("packages").toString())
+    }
+    hookPackageRoots.add(
+        Path(workspace.rootPath()).join(".axyndra").join("plugins").join("packages").toString()
+    )
+    let processes = LocalProcessPort(
+        workspace,
+        // Model-triggered process requests stay fail-closed; fixtures use the
+        // same sandbox boundary rather than falling back to host execution.
+        sandboxEnabled: true,
+        sandboxReadOnlyMounts: sandboxMounts.toArray(),
+        sandboxCaBundle: sandboxCaBundle,
+        sandboxPathEntries: sandboxToolchain.pathEntries,
+        codexHookPackageRoots: hookPackageRoots.toArray(),
+        networkGateway: Some(LocalNetworkGatewayPort())
+    )
+    Result.Ok(processes)
+}
+
 
 private func addProductToolchainRoot(
     authored: String,
@@ -1259,6 +1529,21 @@ private func addProductToolchainRoot(
     }
 }
 
+class LocalProcessCancellationMonitorState {
+    private let lock = Mutex()
+    private var active = true
+
+    func shouldStop(): Bool {
+        lock.lock()
+        try { !active } finally { lock.unlock() }
+    }
+
+    func stop(): Unit {
+        lock.lock()
+        try { active = false } finally { lock.unlock() }
+    }
+}
+
 public class LocalProcessPort <: ProcessPort {
     private let workspace: LocalWorkspace
     private let sandboxEnabledValue: Bool
@@ -1268,6 +1553,7 @@ public class LocalProcessPort <: ProcessPort {
     private let sandboxCaBundleValue: String
     private let sandboxCaBundleMountValue: ?SandboxReadOnlyMount
     private let networkGatewayValue: ?NetworkGatewayPort
+    private let codexHookPackageRootsValue: Array<String>
     private let activeLock = Mutex()
     private let active = ArrayList<ActiveLocalProcess>()
     private let reserved = HashMap<String, Bool>()
@@ -1282,6 +1568,7 @@ public class LocalProcessPort <: ProcessPort {
         sandboxReadOnlyMounts!: Array<SandboxReadOnlyMount> = [],
         sandboxPathEntries!: Array<String> = [],
         sandboxCaBundle!: String = "",
+        codexHookPackageRoots!: Array<String> = [],
         networkGateway!: ?NetworkGatewayPort = None
     ) {
         this.workspace = workspace
@@ -1291,6 +1578,7 @@ public class LocalProcessPort <: ProcessPort {
         for (mount in sandboxReadOnlyMounts) { mounts.add(SandboxReadOnlyMount(mount.path)) }
         this.sandboxReadOnlyMountsValue = mounts.toArray()
         this.sandboxPathEntriesValue = sandboxPathEntries.clone()
+        this.codexHookPackageRootsValue = codexHookPackageRoots.clone()
         this.sandboxCaBundleValue = sandboxCaBundle.trimAscii()
         this.sandboxCaBundleMountValue = if (this.sandboxCaBundleValue == "") {
             None
@@ -1303,6 +1591,7 @@ public class LocalProcessPort <: ProcessPort {
         }
         this.networkGatewayValue = networkGateway
     }
+
 
     public func sandboxEnabled(): Bool { sandboxEnabledValue }
 
@@ -1325,7 +1614,7 @@ public class LocalProcessPort <: ProcessPort {
         try {
             for (entry in active) {
                 try {
-                    entry.process.terminate(force: true)
+                    entry.forceTerminateOwned()
                 } catch (error: Exception) {
                     if (firstError == "") { firstError = error.message }
                 }
@@ -1389,15 +1678,26 @@ public class LocalProcessPort <: ProcessPort {
         if (reservedOperationCancelled(request.operationId)) {
             return Result.Err(AgentError(AgentErrorKind.Cancelled, "process.cancelled", "process operation was cancelled before launch"))
         }
-        let workingDirectory = if (request.workingDirectory == "") {
+        let workingDirectory = if (request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
+            if (request.workingDirectory == "") {
+                request.filesystemRoot
+            } else {
+                request.workingDirectory
+            }
+        } else if (request.workingDirectory == "") {
             workspace.rootPath()
         } else {
-            match (workspace.resolve(
-                request.workingDirectory,
-                allowDirectory: true
+            match (readOnlyMountedWorkingDirectory(
+                request.workingDirectory, request.readOnlyMounts
             )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
+                case Some(value) => value
+                case None => match (workspace.resolve(
+                    request.workingDirectory,
+                    allowDirectory: true
+                )) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => return Result.Err(error)
+                }
             }
         }
         if (requiresSandbox) {
@@ -1448,7 +1748,11 @@ public class LocalProcessPort <: ProcessPort {
                 }
             )
             register(request.operationId, process)
-            let outputBudget = BoundedOutputBudget(sandboxResourcesValue.maxOutputBytes)
+            let outputBudget = BoundedOutputBudget(
+                effectiveProcessResources(
+                    sandboxResourcesValue, request.processLimits
+                ).maxOutputBytes
+            )
             let (output, error) = if (request.displayServerAccess) {
                 (
                     Array<Byte>(0, repeat: 0),
@@ -1484,6 +1788,146 @@ public class LocalProcessPort <: ProcessPort {
                 )
             )
         } finally { finish(request.operationId) }
+    }
+
+    // Program's worker protocol is full duplex over process stdio. This is a
+    // concrete LocalProcessPort facility, not a new general ProcessPort
+    // authority surface: it only launches WorkspaceReadOnly + Denied jobs.
+    public func executeInteractive(
+        request: ProcessRequest,
+        cancellation: domain.CancellationToken,
+        onFrame: (String) -> Result<?String>
+    ): Result<ProcessResult> {
+        if (request.sandboxMode != ProcessSandboxMode.WorkspaceReadOnly ||
+            !networkPolicyModeIsDenied(request.networkPolicy.mode)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "process.interactive_policy_denied",
+                "interactive child processes require read-only workspace isolation and denied network"
+            ))
+        }
+        if (!sandboxEnabledValue) { return sandboxRequired<ProcessResult>(request) }
+        if (request.timeoutMillis < 1 || reservedOperationCancelled(request.operationId)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Cancelled,
+                "process.cancelled",
+                "interactive process was cancelled before launch"
+            ))
+        }
+        let workingDirectory = if (request.workingDirectory == "") {
+            workspace.rootPath()
+        } else {
+            match (workspace.resolve(request.workingDirectory, allowDirectory: true)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
+        let sandbox = processSandbox(request, FilesystemIsolationMode.WorkspaceReadOnly)
+        let plan = match (sandbox.plan(WorkspaceSandboxCommand(
+            request.executable,
+            arguments: request.arguments,
+            workingDirectory: workingDirectory,
+            environment: sandboxEnvironment(request),
+            timeoutMillis: request.timeoutMillis
+        ))) {
+            case SandboxResult.Ok(value) => value
+            case SandboxResult.Err(error) => return Result.Err(sandboxAgentError(error))
+        }
+        match (sandbox.availability()) {
+            case SandboxResult.Ok(_) => ()
+            case SandboxResult.Err(error) => return Result.Err(sandboxAgentError(error))
+        }
+        try {
+            let launchArguments = ArrayList<String>()
+            launchArguments.add("--wait")
+            launchArguments.add(plan.sandboxExecutable)
+            launchArguments.add(all: plan.sandboxArguments)
+            let process = launch(
+                "setsid",
+                launchArguments.toArray(),
+                workingDirectory: Path(workingDirectory),
+                environment: HashMap<String, String>(),
+                stdIn: ProcessRedirect.Pipe,
+                stdOut: ProcessRedirect.Pipe,
+                stdErr: ProcessRedirect.Pipe
+            )
+            register(request.operationId, process)
+            let outputBudget = BoundedOutputBudget(
+                effectiveProcessResources(
+                    sandboxResourcesValue, request.processLimits
+                ).maxOutputBytes
+            )
+            let termination = InteractiveProcessTerminationState()
+            let deadline = MonoTime.now() + Duration.millisecond * request.timeoutMillis
+            let outputFuture = spawn {
+                readInteractiveProgramFrames(
+                    process.stdOutPipe,
+                    process.stdInPipe,
+                    outputBudget,
+                    onFrame,
+                    { => let _ = cancel(request.operationId) }
+                )
+            }
+            let errorFuture = spawn { readBounded(process.stdErrPipe, outputBudget) }
+            let monitor = spawn {
+                while (process.isAlive()) {
+                    if (cancellation.isCancelled()) {
+                        termination.stop(cancelled: true)
+                        let _ = cancel(request.operationId)
+                        break
+                    }
+                    if (MonoTime.now() >= deadline) {
+                        termination.stop(timedOut: true)
+                        let _ = cancel(request.operationId)
+                        break
+                    }
+                    sleep(Duration.millisecond * 10)
+                }
+            }
+            let code = process.wait()
+            let stdout = outputFuture.get()
+            let stderr = errorFuture.get()
+            monitor.get()
+            finish(request.operationId)
+            if (termination.cancelled()) {
+                Result.Err(AgentError(
+                    AgentErrorKind.Cancelled,
+                    "process.cancelled",
+                    "interactive process was cancelled"
+                ))
+            } else if (termination.timedOut()) {
+                Result.Ok(ProcessResult(
+                    code,
+                    stdout: match (stdout) {
+                        case Result.Ok(value) => value
+                        case Result.Err(_) => ""
+                    },
+                    stderr: decodeProcessOutput(stderr),
+                    timedOut: true,
+                    workingDirectory: workingDirectory,
+                    truncated: outputBudget.wasTruncated()
+                ))
+            } else {
+                match (stdout) {
+                    case Result.Err(error) => Result.Err(error)
+                    case Result.Ok(value) => Result.Ok(ProcessResult(
+                        code,
+                        stdout: value,
+                        stderr: decodeProcessOutput(stderr),
+                        workingDirectory: workingDirectory,
+                        truncated: outputBudget.wasTruncated()
+                    ))
+                }
+            }
+        } catch (error: Exception) {
+            let _ = cancel(request.operationId)
+            finish(request.operationId)
+            Result.Err(AgentError(
+                AgentErrorKind.Transport,
+                "process.interactive_execute",
+                error.message
+            ))
+        }
     }
 
     public func executeShell(
@@ -1527,7 +1971,10 @@ public class LocalProcessPort <: ProcessPort {
         let result = shell.execute(
             command,
             request.operationId,
-            request.timeoutMillis
+            request.timeoutMillis,
+            effectiveProcessResources(
+                sandboxResourcesValue, request.processLimits
+            ).maxOutputBytes
         )
         finish(request.operationId)
         match (result) {
@@ -1593,7 +2040,8 @@ public class LocalProcessPort <: ProcessPort {
     ): Result<ProcessResult> {
         let filesystem = if (request.sandboxMode == ProcessSandboxMode.Host) {
             FilesystemIsolationMode.Host
-        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
+        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly ||
+            request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
             FilesystemIsolationMode.WorkspaceReadOnly
         } else {
             FilesystemIsolationMode.WorkspaceReadWrite
@@ -1642,12 +2090,11 @@ public class LocalProcessPort <: ProcessPort {
         ])
         allowed.add(all: request.environmentAllowlist)
         if (includeDisplayServer) {
-            // Clipboard clients need the selected display server and, for
-            // authenticated X11 sessions, the explicit authority path.
-            // PATH is non-sensitive but must retain user-installed clients.
+            // Clipboard clients receive only display routing and X11 authority.
+            // PATH stays excluded; sandbox4cj pins every host-filesystem command
+            // to fixed system directories after filtering.
             allowed.add(all: [
-                "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
-                "PATH"
+                "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY"
             ])
         }
         if (sandboxCaBundleValue != "") {
@@ -1663,20 +2110,18 @@ public class LocalProcessPort <: ProcessPort {
     private func sandboxEnvironment(
         request: ProcessRequest
     ): Array<SandboxEnvironmentEntry> {
-        let _ = request
-        if (sandboxCaBundleValue == "") {
-            return []
+        let entries = ArrayList<SandboxEnvironmentEntry>()
+        if (sandboxCaBundleValue != "") {
+            entries.add(SandboxEnvironmentEntry("SSL_CERT_FILE", sandboxCaBundleValue))
+            entries.add(SandboxEnvironmentEntry("CURL_CA_BUNDLE", sandboxCaBundleValue))
         }
-        [
-            SandboxEnvironmentEntry(
-                "SSL_CERT_FILE",
-                sandboxCaBundleValue
-            ),
-            SandboxEnvironmentEntry(
-                "CURL_CA_BUNDLE",
-                sandboxCaBundleValue
-            )
-        ]
+        if (request.displayServerAccess) {
+            match (displayServerAuthorityPath()) {
+                case Some(value) => entries.add(SandboxEnvironmentEntry("XAUTHORITY", value))
+                case None => ()
+            }
+        }
+        entries.toArray()
     }
 
     private func scopedDisplayServerEnvironment(
@@ -1704,26 +2149,47 @@ public class LocalProcessPort <: ProcessPort {
         environment["TMPDIR"] = "/tmp"
         environment["LANG"] = "C.UTF-8"
         // HOME stays workspace-scoped; expose only the X11 authority path.
-        var hasXAuthority = false
+        match (displayServerAuthorityPath()) {
+            case Some(value) => environment["XAUTHORITY"] = value
+            case None => ()
+        }
+        environment
+    }
+    private func displayServerAuthorityPath(): ?String {
         match (getVariable("XAUTHORITY")) {
             case Some(value) =>
                 if (value.trimAscii() != "" && !value.contains("\u{0000}")) {
-                    environment["XAUTHORITY"] = value
-                    hasXAuthority = true
+                    return Some(value)
                 }
             case None => ()
         }
-        if (!hasXAuthority) {
-            match (getVariable("HOME")) {
-                case Some(value) =>
-                    let home = value.trimAscii()
-                    if (home != "" && !home.contains("\u{0000}") && Path(home).isAbsolute()) {
-                        environment["XAUTHORITY"] = Path(home).join(".Xauthority").normalize().toString()
-                    }
-                case None => ()
-            }
+        match (getVariable("HOME")) {
+            case Some(value) =>
+                let home = value.trimAscii()
+                if (home != "" && !home.contains("\u{0000}") && Path(home).isAbsolute()) {
+                    Some(Path(home).join(".Xauthority").normalize().toString())
+                } else {
+                    None
+                }
+            case None => None
         }
-        environment
+    }
+    private func readOnlyMountedWorkingDirectory(
+        authored: String,
+        mounts: Array<String>
+    ): ?String {
+        if (!Path(authored).isAbsolute()) { return None }
+        try {
+            let resolved = canonicalize(Path(authored)).toString()
+            for (authoredMount in mounts) {
+                let mount = SandboxReadOnlyMount(authoredMount)
+                if (resolved == mount.resolvedPath ||
+                    resolved.startsWith(mount.resolvedPath + "/")) {
+                    return Some(resolved)
+                }
+            }
+        } catch (_: Exception) {}
+        None
     }
 
     private func processSandbox(
@@ -1731,6 +2197,11 @@ public class LocalProcessPort <: ProcessPort {
         filesystem: FilesystemIsolationMode,
         networkLease!: ?NetworkGatewayLease = None
     ): WorkspaceSandbox {
+        let filesystemRoot = if (request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
+            canonicalize(Path(request.filesystemRoot)).toString()
+        } else {
+            workspace.rootPath()
+        }
         let allowed = processEnvironmentAllowlist(
             request,
             includeDisplayServer: request.displayServerAccess
@@ -1738,6 +2209,14 @@ public class LocalProcessPort <: ProcessPort {
         let mounts = ArrayList<SandboxReadOnlyMount>()
         for (mount in sandboxReadOnlyMountsValue) {
             mounts.add(mount)
+        }
+        for (authored in request.readOnlyMounts) {
+            let mount = SandboxReadOnlyMount(authored)
+            if (!processRootsOverlap(filesystemRoot, mount.resolvedPath)) {
+                var duplicate = false
+                for (existing in mounts where existing.path == mount.path) { duplicate = true }
+                if (!duplicate) { mounts.add(mount) }
+            }
         }
         match (sandboxCaBundleMountValue) {
             case Some(caMount) =>
@@ -1755,9 +2234,8 @@ public class LocalProcessPort <: ProcessPort {
             case None => ()
         }
         if (request.displayServerAccess) {
-            // Mount only the explicitly selected runtime directory. The
-            // directory is read-only; clients can connect to its socket but
-            // cannot create or modify files in the host runtime tree.
+            // Mount only the selected display socket tree and authority file read-only.
+            // Do not expose the rest of host HOME or display state.
             match (getVariable("XDG_RUNTIME_DIR")) {
                 case Some(value) =>
                     let runtimePath = value.trimAscii()
@@ -1775,9 +2253,23 @@ public class LocalProcessPort <: ProcessPort {
                     }
                 case None => ()
             }
+            match (displayServerAuthorityPath()) {
+                case Some(authorityPath) =>
+                    if (Path(authorityPath).isAbsolute() && exists(Path(authorityPath))) {
+                        try {
+                            let authorityMount = SandboxReadOnlyMount(authorityPath)
+                            var duplicate = false
+                            for (existing in mounts where existing.path == authorityMount.path) {
+                                duplicate = true
+                            }
+                            if (!duplicate) { mounts.add(authorityMount) }
+                        } catch (_: Exception) {}
+                    }
+                case None => ()
+            }
         }
         WorkspaceSandbox(WorkspaceSandboxPolicy(
-            workspace.rootPath(),
+            filesystemRoot,
             filesystem: filesystem,
             process: ProcessIsolationMode.Isolated,
             network: match (request.networkPolicy.mode) {
@@ -1790,13 +2282,152 @@ public class LocalProcessPort <: ProcessPort {
                 allowedSecrets: request.secretEnvironmentAllowlist,
                 secretValues: request.redactedValues
             ),
-            resources: sandboxResourcesValue,
+            resources: effectiveProcessResources(
+                sandboxResourcesValue, request.processLimits
+            ),
             readOnlyMounts: mounts.toArray(),
             pathEntries: sandboxPathEntriesValue
         ))
     }
+    private func processRootsOverlap(first: String, second: String): Bool {
+        first == second || first.startsWith(second + "/") || second.startsWith(first + "/")
+    }
 
-    public func executeEval(
+    private func resolveCodexHookPackageRoot(packageRoot: String): Result<String> {
+        let info = try {
+            FileInfo(Path(packageRoot))
+        } catch (_: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.hook_package_root_invalid",
+                "Codex hook package root is unavailable"
+            ))
+        }
+        if (!info.isDirectory() || info.isSymbolicLink()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.hook_package_root_invalid",
+                "Codex hook package root must be a non-symlink directory"
+            ))
+        }
+        let root = try {
+            canonicalize(Path(packageRoot)).toString()
+        } catch (_: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.hook_package_root_invalid",
+                "Codex hook package root cannot be resolved"
+            ))
+        }
+        for (allowedRoot in codexHookPackageRootsValue) {
+            let canonicalAllowed = try {
+                canonicalize(Path(allowedRoot)).toString()
+            } catch (_: Exception) {
+                continue
+            }
+            if (root.startsWith(canonicalAllowed + "/")) {
+                return Result.Ok(root)
+            }
+        }
+        Result.Err(AgentError(
+            AgentErrorKind.PermissionDenied,
+            "plugin.hook_package_root_denied",
+            "Codex hook package root is outside managed plugin snapshot storage"
+        ))
+    }
+
+    public func executeCodexHook(
+        operationId: OperationId,
+        packageRoot: String,
+        command: String,
+        standardInput: String,
+        timeoutMillis: Int64,
+        cancellation: domain.CancellationToken
+    ): Result<ProcessResult> {
+        if (!sandboxEnabledValue) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "sandbox.hook_required",
+                "Codex hooks require the isolated process sandbox"
+            ))
+        }
+        if (timeoutMillis < 1 || standardInput.toArray().size > 262144) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "plugin.hook_frame_invalid",
+                "Codex hook timeout or event frame is outside its limit"
+            ))
+        }
+        let root = match (resolveCodexHookPackageRoot(packageRoot)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+         }
+        match (cancellation.check()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        let resources = sandboxResourcesValue
+        let sandbox = WorkspaceSandbox(WorkspaceSandboxPolicy(
+            root,
+            filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
+            process: ProcessIsolationMode.Isolated,
+            network: NetworkIsolationMode.Denied,
+            environment: EnvironmentFilter(
+                allowlist: ["PATH"],
+                allowedSecrets: [],
+                secretValues: []
+            ),
+            resources: SandboxResourceLimits(
+                maxOutputBytes: min(resources.maxOutputBytes, 262144),
+                addressSpaceBytes: resources.addressSpaceBytes,
+                fileSizeBytes: resources.fileSizeBytes,
+                openFiles: resources.openFiles,
+                processes: resources.processes,
+                cpuSeconds: resources.cpuSeconds
+            ),
+            pathEntries: ["/usr/bin", "/bin"]
+        ))
+        let sandboxCommand = WorkspaceSandboxCommand(
+            "/bin/bash",
+            arguments: ["--noprofile", "--norc", "-c", command],
+            workingDirectory: root,
+            environment: [SandboxEnvironmentEntry("PATH", "/usr/bin:/bin")],
+            timeoutMillis: timeoutMillis,
+            standardInput: Some(standardInput)
+        )
+        reserveOperation(operationId)
+        let monitorState = LocalProcessCancellationMonitorState()
+        let monitor = spawn {
+            while (!monitorState.shouldStop()) {
+                if (cancellation.isCancelled()) {
+                    let _ = cancel(operationId)
+                    break
+                }
+                sleep(Duration.millisecond * 10)
+            }
+        }
+        let execution = sandbox.execute(
+            sandboxCommand,
+            onStarted: Some({ process => register(operationId, process) })
+        )
+        monitorState.stop()
+        monitor.get()
+        finish(operationId)
+        releaseOperation(operationId)
+        match (execution) {
+            case SandboxResult.Err(error) => Result.Err(sandboxAgentError(error))
+            case SandboxResult.Ok(value) => Result.Ok(ProcessResult(
+                value.exitCode,
+                stdout: value.stdout,
+                stderr: value.stderr,
+                timedOut: value.timedOut,
+                workingDirectory: root,
+                truncated: value.outputTruncated
+            ))
+        }
+    }
+
+     public func executeEval(
         sessionId: SessionId,
         language: String,
         code: String,
@@ -1830,7 +2461,10 @@ public class LocalProcessPort <: ProcessPort {
         let result = kernel.execute(
             code,
             reset,
-            request.timeoutMillis
+            request.timeoutMillis,
+            effectiveProcessResources(
+                sandboxResourcesValue, request.processLimits
+            ).maxOutputBytes
         )
         finish(request.operationId)
         match (result) {
@@ -1845,12 +2479,12 @@ public class LocalProcessPort <: ProcessPort {
         }
     }
 
-    func reserveOperation(operationId: OperationId): Unit {
+    public func reserveOperation(operationId: OperationId): Unit {
         activeLock.lock()
         try { reserved[operationId.value] = false } finally { activeLock.unlock() }
     }
 
-    func releaseOperation(operationId: OperationId): Unit {
+    public func releaseOperation(operationId: OperationId): Unit {
         activeLock.lock()
         try { reserved.remove(operationId.value) } finally { activeLock.unlock() }
     }
@@ -1922,12 +2556,22 @@ public class LocalProcessPort <: ProcessPort {
         operationId: OperationId,
         process: SubProcess
     ): Unit {
-        let entry = ActiveLocalProcess(operationId, process)
+        registerActive(ActiveLocalProcess(operationId, process))
+    }
+
+    private func register(
+        operationId: OperationId,
+        process: ManagedProcess
+    ): Unit {
+        registerActive(ActiveLocalProcess(operationId, process))
+    }
+
+    private func registerActive(entry: ActiveLocalProcess): Unit {
         var terminate = false
         activeLock.lock()
         try {
             active.add(entry)
-            terminate = reserved.get(operationId.value) ?? false
+            terminate = reserved.get(entry.operationId.value) ?? false
         } finally {
             activeLock.unlock()
         }
@@ -2005,7 +2649,8 @@ public class LocalProcessPort <: ProcessPort {
         }
         let filesystem = if (request.sandboxMode == ProcessSandboxMode.Host) {
             FilesystemIsolationMode.Host
-        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly) {
+        } else if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadOnly ||
+            request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
             FilesystemIsolationMode.WorkspaceReadOnly
         } else {
             FilesystemIsolationMode.WorkspaceReadWrite
@@ -2125,15 +2770,14 @@ public class LocalProcessPort <: ProcessPort {
         language: String,
         request: ProcessRequest
     ): Result<EvalSandboxLaunch> {
-        let command = match (evalRuntimeCommand(language)) {
+        let command = match (evalRuntimeCommand(language, request.executable)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        if (request.executable != command.executable) {
-            return Result.Err(AgentError(
-                AgentErrorKind.Configuration,
-                "sandbox.eval_executable_mismatch",
-                "eval request executable does not match the selected language runtime"
+        if (!command.profile.supportsPersistentSession) {
+            return Result.Err(evalConfigurationError(
+                "eval.runtime_capability_unavailable",
+                command.profile.runtimeName + " does not support persistent eval sessions"
             ))
         }
         let sandbox = processSandbox(
@@ -2149,11 +2793,10 @@ public class LocalProcessPort <: ProcessPort {
             case SandboxResult.Ok(value) => value
             case SandboxResult.Err(error) => return Result.Err(sandboxAgentError(error))
         }
-        Result.Ok(EvalSandboxLaunch(
-            sandbox,
-            plan,
-            sandboxPlanProfile(plan)
-        ))
+        let profile = writeContentHash(
+            command.profile.profileId + "\u{0000}" + sandboxPlanProfile(plan)
+        )
+        Result.Ok(EvalSandboxLaunch(sandbox, plan, profile))
     }
 
     private func discardEvalKernel(
@@ -2179,6 +2822,36 @@ public class LocalProcessPort <: ProcessPort {
     }
 }
 
+func intersectProcessLimit(host: Int64, requested: Int64): Int64 {
+    if (host == 0) {
+        requested
+    } else if (requested == 0) {
+        host
+    } else {
+        min(host, requested)
+    }
+}
+
+func effectiveProcessResources(
+    host: SandboxResourceLimits,
+    requested: ExecutionResourceLimits
+): SandboxResourceLimits {
+    SandboxResourceLimits(
+        maxOutputBytes: intersectProcessLimit(
+            host.maxOutputBytes, requested.maxOutputBytes
+        ),
+        addressSpaceBytes: intersectProcessLimit(
+            host.addressSpaceBytes, requested.addressSpaceBytes
+        ),
+        fileSizeBytes: intersectProcessLimit(
+            host.fileSizeBytes, requested.fileSizeBytes
+        ),
+        openFiles: intersectProcessLimit(host.openFiles, requested.openFiles),
+        processes: intersectProcessLimit(host.processes, requested.processes),
+        cpuSeconds: intersectProcessLimit(host.cpuSeconds, requested.cpuSeconds)
+    )
+}
+
 func sandboxRequired<T>(request: ProcessRequest): Result<T> {
     Result.Err(AgentError(
         AgentErrorKind.Configuration,
@@ -2193,44 +2866,60 @@ func sandboxRequired<T>(request: ProcessRequest): Result<T> {
 
 class ActiveLocalProcess {
     let operationId: OperationId
-    let process: SubProcess
+    let process: ?SubProcess
+    let managedProcess: ?ManagedProcess
+    let pid: Int64
     let startTime: Int64
 
     init(operationId: OperationId, process: SubProcess) {
         this.operationId = operationId
-        this.process = process
+        this.process = Some(process)
+        this.managedProcess = None
+        this.pid = process.pid
+        this.startTime = processStartTime(process.pid)
+    }
+
+    init(operationId: OperationId, process: ManagedProcess) {
+        this.operationId = operationId
+        this.process = None
+        this.managedProcess = Some(process)
+        this.pid = process.pid
         this.startTime = processStartTime(process.pid)
     }
 
     func leaderMatches(): Bool {
-        startTime > 0 && processStartTime(process.pid) == startTime
+        startTime > 0 && processStartTime(pid) == startTime
     }
 
     func terminateOwned(): Unit {
-        // The process may have exited between registration and cancellation.
-        // Keep the launch-time identity as the ownership guard: a reused PID
-        // must never become an eligible cancellation target.
+        // Cancellation is terminal. A graceful group signal can terminate the
+        // current child while allowing its shell to continue with later commands.
+        forceTerminateOwned()
+        let deadline = MonoTime.now() + Duration.millisecond * 1000
+        while (leaderMatches() && ownedIsAlive() && MonoTime.now() < deadline) {
+            sleep(Duration.millisecond * 10)
+        }
+    }
+
+    func forceTerminateOwned(): Unit {
         if (!leaderMatches()) { return }
-        // LocalProcessPort launches every owned process through setsid. Capture
-        // the process tree before graceful termination so descendants that
-        // leave the session remain available for forced escalation.
-        let terminated = terminateProcessTree(
-            process.pid,
-            expectedStartTime: startTime,
-            gracefulMillis: 250
-        )
-        if (!terminated) {
-            // Retry through the identity-checked native path only. The standard
-            // SubProcess fallback is PID-only and can race with PID reuse.
-            let _ = terminateProcessTree(
-                process.pid,
+        match (managedProcess) {
+            case Some(value) => let _ = value.terminate(force: true)
+            case None => let _ = terminateProcessTree(
+                pid,
                 expectedStartTime: startTime,
                 gracefulMillis: 0
             )
         }
-        let forceDeadline = MonoTime.now() + Duration.millisecond * 1000
-        while (leaderMatches() && process.isAlive() && MonoTime.now() < forceDeadline) {
-            sleep(Duration.millisecond * 10)
+    }
+
+    private func ownedIsAlive(): Bool {
+        match (managedProcess) {
+            case Some(value) => value.isAlive()
+            case None => match (process) {
+                case Some(value) => value.isAlive()
+                case None => false
+            }
         }
     }
 }
@@ -2282,7 +2971,8 @@ class PersistentShell {
     func execute(
         command: String,
         operationId: OperationId,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        outputLimitBytes: Int64
     ): Result<ProcessResult> {
         commandLock.lock()
         try {
@@ -2299,7 +2989,7 @@ class PersistentShell {
             let script = "{\n" + command + "\n} </dev/null\n" + "__axyndra_status=$?\nprintf '\\n" + outputMarker +
                 "%s|%s" + markerEnd + "\\n' \"$__axyndra_status\" \"$PWD\"" + "\nprintf '\\n" + errorMarker +
                 markerEnd + "\\n' >&2\n"
-            let outputBudget = BoundedOutputBudget(maxOutputBytes)
+            let outputBudget = BoundedOutputBudget(min(maxOutputBytes, outputLimitBytes))
             let outputReader = MarkedProcessReader(outputMarker.toArray(), outputBudget)
             let errorReader = MarkedProcessReader(errorMarker.toArray(), outputBudget)
             let outputFuture = spawn {
@@ -2589,5 +3279,129 @@ func workspaceError<T>(
             fields: fields
         )
     )
+}
+
+class InteractiveProcessTerminationState {
+    private let lock = Mutex()
+    private var timedOutValue = false
+    private var cancelledValue = false
+
+    func stop(timedOut!: Bool = false, cancelled!: Bool = false): Unit {
+        lock.lock()
+        try {
+            timedOutValue = timedOutValue || timedOut
+            cancelledValue = cancelledValue || cancelled
+        } finally { lock.unlock() }
+    }
+
+    func timedOut(): Bool {
+        lock.lock(); try { timedOutValue } finally { lock.unlock() }
+    }
+
+    func cancelled(): Bool {
+        lock.lock(); try { cancelledValue } finally { lock.unlock() }
+    }
+}
+
+func readInteractiveProgramFrames(
+    stdout: InputStream,
+    stdin: OutputStream,
+    budget: BoundedOutputBudget,
+    onFrame: (String) -> Result<?String>,
+    abort: () -> Unit
+): Result<String> {
+    let maximumFrameBytes: Int64 = 1048576
+    let buffer = Array<Byte>(4096, repeat: 0)
+    let line = ArrayList<Byte>()
+    var finalOutput: ?String = None
+    try {
+        while (true) {
+            let count = stdout.read(buffer)
+            if (count <= 0) { break }
+            for (index in 0..count) {
+                if (budget.claim(1) != 1) {
+                    abort()
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Protocol,
+                        "process.interactive_output_limit",
+                        "interactive process exceeded its aggregate output limit"
+                    ))
+                }
+                let byte = buffer[index]
+                if (byte != b'\n') {
+                    if (line.size >= maximumFrameBytes) {
+                        abort()
+                        return Result.Err(AgentError(
+                            AgentErrorKind.Protocol,
+                            "process.interactive_frame_limit",
+                            "interactive process frame exceeded its byte limit"
+                        ))
+                    }
+                    line.add(byte)
+                    continue
+                }
+                if (!line.isEmpty() && line[line.size - 1] == b'\r') {
+                    line.remove(at: line.size - 1)
+                }
+                let frame = try { String.fromUtf8(line.toArray()) } catch (_: Exception) {
+                    abort()
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Protocol,
+                        "process.interactive_utf8_invalid",
+                        "interactive process emitted an invalid UTF-8 frame"
+                    ))
+                }
+                line.clear()
+                if (finalOutput.isSome()) {
+                    abort()
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Protocol,
+                        "process.interactive_after_final",
+                        "interactive process emitted a frame after its terminal response"
+                    ))
+                }
+                match (onFrame(frame)) {
+                    case Result.Err(error) =>
+                        abort()
+                        return Result.Err(error)
+                    case Result.Ok(Some(response)) =>
+                        if (response.size > maximumFrameBytes) {
+                            abort()
+                            return Result.Err(AgentError(
+                                AgentErrorKind.Protocol,
+                                "process.interactive_response_limit",
+                                "interactive response exceeded its byte limit"
+                            ))
+                        }
+                        stdin.write(response.toArray())
+                        stdin.write([b'\n'])
+                        stdin.flush()
+                    case Result.Ok(None) => finalOutput = Some(frame)
+                }
+            }
+        }
+        if (!line.isEmpty()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Protocol,
+                "process.interactive_incomplete_frame",
+                "interactive process ended inside a frame"
+            ))
+        }
+        match (finalOutput) {
+            case Some(value) => Result.Ok(value)
+            case None => Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "process.interactive_final_missing",
+                "interactive process exited without a terminal response"
+            ))
+        }
+    } catch (error: Exception) {
+        abort()
+        Result.Err(AgentError(
+            AgentErrorKind.Transport,
+            "process.interactive_io",
+            error.message
+        ))
+    }
 }
 

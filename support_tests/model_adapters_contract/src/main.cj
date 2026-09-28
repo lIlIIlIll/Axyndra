@@ -24,6 +24,8 @@ main(): Int64 {
             ]))
         ]))
     ])
+    let echoTool = domain.ModelToolDefinition("echo", "Echo text.", schema)
+    let readTool = domain.ModelToolDefinition("read", "Read a file.", schema)
     let request = domain.ModelRequest(
         "fixture-model",
         [domain.ModelMessage(
@@ -33,7 +35,7 @@ main(): Int64 {
                 text: "hello adapter"
             )]
         )],
-        tools: [domain.ModelToolDefinition("echo", "Echo text.", schema)],
+        tools: [echoTool],
         thinking: domain.ThinkingLevel.High,
         maxOutputTokens: 32768,
         streaming: true
@@ -247,6 +249,7 @@ main(): Int64 {
                 text: "ok"
             )]
         )],
+        tools: [echoTool],
         thinking: domain.ThinkingLevel.Off
     )
     expect(
@@ -296,7 +299,8 @@ main(): Int64 {
                     )
                 ])
             )]
-        )]
+        )],
+        tools: [readTool]
     )
     expect(
         encodeMessagesRequest(toolResultRequest).contains("model-visible file content") &&
@@ -323,7 +327,9 @@ main(): Int64 {
                 text: "permission denied",
                 isError: true
             )]
-        )]
+        )],
+        tools: [readTool],
+        parallelToolCalls: false
     )
     expect(
         encodeDeepSeekMessagesRequest(failedToolResultRequest).contains("[tool_error]") &&
@@ -1366,6 +1372,21 @@ func unifiedRuntimeContract(request: domain.ModelRequest): Unit {
     ]
     let runtime: ports.ModelPort = UnifiedModelRuntime(
         profiles, models, defaultLlmApiRegistry(transport: transport)
+    )
+    let snapshotRequest = domain.ModelRequest(
+        "gateway-a/deepseek", request.messages,
+        thinking: domain.ThinkingLevel.High, maxOutputTokens: 4096
+    )
+    let snapshot = runtime.transcriptSnapshot(snapshotRequest)
+    expect(
+        snapshot.isSome() && runtime.validateTranscriptSnapshot(snapshot.getOrThrow()),
+        "unified runtime snapshots and validates the selected provider transcript"
+    )
+    expect(
+        runtime.transcriptSnapshot(domain.ModelRequest(
+            "missing/model", request.messages
+        )).isNone(),
+        "unified runtime refuses snapshots for unregistered models"
     )
     for (model in [
         "gateway-a/deepseek", "gateway-a/responses",

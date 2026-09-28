@@ -1,0 +1,238 @@
+{
+  "schema": "axyndra-fault-matrix/v1",
+  "rows": [
+    {
+      "id": "F01",
+      "fault": "admission or plan persistence failure",
+      "expected": "external execution has not started and no bypass admission or retry occurs",
+      "evidence": [
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "root admission persistence failure starts no Program or child executor and creates no bypass admission"
+        },
+        {
+          "suite": "agent_store_contract",
+          "source": "support_tests/agent_store_contract/src/main.cj",
+          "anchor": "failed admission rolls back Operation and effect records"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "fault": "crash after effect completion and before result persistence",
+      "expected": "the effect remains Unknown and is never blindly replayed",
+      "evidence": [
+        {
+          "suite": "agent_store_contract",
+          "source": "support_tests/agent_store_contract/src/main.cj",
+          "anchor": "C4 handed-off mutation without Receipt is Unknown and never blindly retried"
+        },
+        {
+          "suite": "agent_store_contract",
+          "source": "support_tests/agent_store_contract/src/main.cj",
+          "anchor": "Unknown external Receipt remains durable without becoming semantic Thread truth"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "fault": "Program or plugin host termination",
+      "expected": "completed child evidence remains durable and unfinished child and root work settle explicitly",
+      "evidence": [
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "cancellation preserves completed child evidence without replaying the child call"
+        },
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "a host process crash is surfaced as a launch diagnostic"
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "fault": "parent cancellation, budget exhaustion, or authority revocation",
+      "expected": "new child admission stops, active execution cancels or quarantines, and old authority cannot continue",
+      "evidence": [
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "budget rejection occurs before durable child admission"
+        },
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "parent cancellation reaches the active Program and settles the Run"
+        },
+        {
+          "suite": "tool_runtime_contract",
+          "source": "support_tests/tool_runtime_contract/src/main.cj",
+          "anchor": "revoked prepared work fails before invoking or committing a result"
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "fault": "plugin, schema, or Skill changes during an active Run",
+      "expected": "the admitted immutable snapshot remains pinned and missing historical content is diagnosed",
+      "evidence": [
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "invocation lease freezes the admitted generation"
+        },
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "isolated plugin reload fences the old generation before subsequent admission"
+        }
+      ]
+    },
+    {
+      "id": "F06",
+      "fault": "oversized frame, duplicate or late response, forged identity, or disconnect",
+      "expected": "failure is bounded, cannot cross an invocation domain, and cannot wait forever",
+      "evidence": [
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "duplicate terminal response cannot contaminate the next invocation"
+        },
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "oversized protocol frames fail before registration"
+        },
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "expectInvocationProtocolFailure(root, \"disconnect\", \"extension.process_failed\")"
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "fault": "nested calls with one global tool slot",
+      "expected": "the parent yields the slot, children remain globally budgeted, and no wait cycle forms",
+      "evidence": [
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "sequential PTC children yield the parent slot, acquire one shared slot, and consume Run tool budget"
+        }
+      ]
+    },
+    {
+      "id": "F08",
+      "fault": "approval wait or refusal",
+      "expected": "no blocking coordinator lock or orphan Prepared work remains",
+      "evidence": [
+        {
+          "suite": "product_contract",
+          "source": "support_tests/product_contract/src/main.cj",
+          "anchor": "cancelling a pending approval clears application state and repairs its tool result"
+        },
+        {
+          "suite": "extensions_contract",
+          "source": "support_tests/extensions_contract/src/main.cj",
+          "anchor": "denied side effect cannot invoke host or forge a terminal outcome"
+        }
+      ]
+    },
+    {
+      "id": "F09",
+      "fault": "Program directly reads secrets or workspace, spawns a process, or uses the network",
+      "expected": "the Program cannot bypass the broker or host permissions",
+      "evidence": [
+        {
+          "suite": "direct_runtime_sandbox_contract",
+          "source": "support_tests/direct_runtime_sandbox_contract/src/main.cj",
+          "anchor": "fixture direct-process runtimes use the same enforced sandbox as production"
+        },
+        {
+          "suite": "direct_runtime_sandbox_contract",
+          "source": "support_tests/direct_runtime_sandbox_contract/src/main.cj",
+          "anchor": "LSP runs read-only with no ambient secret inheritance and finite process resource limits"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "fault": "parallel plugins, Threads, or permission domains",
+      "expected": "state, environment, handles, and authority cannot cross domains",
+      "evidence": [
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "\"wrong_invocation_id\", \"wrong_tool\", \"wrong_thread_id\", \"wrong_run_id\", \"wrong_epoch\""
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "fault": "a timer requests a side effect after its tool completed",
+      "expected": "invocation authority is expired and the late request is rejected before reaching a service broker",
+      "evidence": [
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "a post-completion timer cannot reuse expired invocation authority for a side effect"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "fault": "interrupted install or update while an old generation remains referenced",
+      "expected": "the update rolls back atomically and preserves the active historical snapshot",
+      "evidence": [
+        {
+          "suite": "product_thread_runtime_contract",
+          "source": "support_tests/product_thread_runtime_contract/src/main.cj",
+          "anchor": "missing npm version cleans staging and preserves the enabled prior snapshot"
+        },
+        {
+          "suite": "extension_runtime_contract",
+          "source": "support_tests/extension_runtime_contract/src/main.cj",
+          "anchor": "failed generation switch disposes the new generation and retains the old active generation"
+        }
+      ]
+    },
+    {
+      "id": "F13",
+      "fault": "artifact persistence failure",
+      "expected": "the result never claims a complete readable artifact",
+      "evidence": [
+        {
+          "suite": "artifact_contract",
+          "source": "support_tests/artifact_contract/src/main.cj",
+          "anchor": "artifact persistence failure remains a ToolResult"
+        }
+      ]
+    },
+    {
+      "id": "F14",
+      "fault": "schema migration, restart, and backup restore",
+      "expected": "existing Runs and Operations remain readable and failure cannot expose partial migration state",
+      "evidence": [
+        {
+          "suite": "agent_store_contract",
+          "source": "support_tests/agent_store_contract/src/main.cj",
+          "anchor": "transactional backup restore preserves schema, Run, Operation, approval, Receipt, artifact, and Thread data"
+        },
+        {
+          "suite": "agent_store_contract",
+          "source": "support_tests/agent_store_contract/src/main.cj",
+          "anchor": "killed recovery preserves record cardinality"
+        },
+        {
+          "suite": "sqlite_run_repository_contract",
+          "source": "support_tests/sqlite_run_repository_contract/src/main.cj",
+          "anchor": "migration fixture stores its waiting Run snapshot"
+        }
+      ]
+    }
+  ]
+}

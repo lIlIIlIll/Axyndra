@@ -17,7 +17,9 @@ main(): Int64 {
     if (!unsupportedFailsClosed(root)) { return 1 }
     if (!realBubblewrapSmokeWhenSupported(root)) { return 1 }
     if (!processPortRequiresSandbox(root)) { return 1 }
+    if (!gatewayProxyAuthenticationSmoke(root)) { return 1 }
     if (!realProcessPortSmokeWhenSupported(root)) { return 1 }
+    if (!packageOnlyProcessPortSmokeWhenSupported(root)) { return 1 }
     if (!mediatedNetworkGatewaySmoke(root)) { return 1 }
     println("sandbox_contract: all contracts passed")
     0
@@ -44,6 +46,14 @@ func mediatedNetworkGatewaySmoke(root: String): Bool {
         sandboxCaBundle: "/etc/ssl/certs/ca-certificates.crt",
         networkGateway: Some(LocalNetworkGatewayPort())
     )
+    let deniedNetwork = processes.execute(ProcessRequest(
+        "/usr/bin/curl",
+        operationId: OperationId("denied-direct-network"),
+        arguments: ["-q", "-fsS", "http://127.0.0.1:18772/"],
+        timeoutMillis: 10000,
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+    ))
     let result = processes.execute(ProcessRequest(
         "/usr/bin/curl",
         operationId: OperationId("mediated-gateway-smoke"),
@@ -62,6 +72,14 @@ func mediatedNetworkGatewaySmoke(root: String): Bool {
     try { server.terminate(force: true) } catch (_: Exception) {}
     try { server.wait() } catch (_: Exception) {}
     removeIfExists(Path(serverRoot), recursive: true)
+    let deniedValue = match (deniedNetwork) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "direct network denial failed to launch: " + error.message)
+    }
+    if (!expect(
+        deniedValue.exitCode != 0 && !deniedValue.stdout.contains("mediated-gateway-ok"),
+        "direct host-loopback access is denied while the mediated route remains available"
+    )) { return false }
     match (result) {
         case Result.Ok(value) => expect(
             value.exitCode == 0 && value.stdout.contains("mediated-gateway-ok"),
@@ -70,6 +88,121 @@ func mediatedNetworkGatewaySmoke(root: String): Bool {
         case Result.Err(error) => expect(false, "mediated ProcessPort gateway request failed: " + error.message)
     }
 }
+
+func gatewayProxyAuthenticationSmoke(root: String): Bool {
+    let serverRoot = root + "/authenticated-gateway-server"
+    Directory.create(serverRoot, recursive: true)
+    let fixture =
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n" +
+        "class Handler(BaseHTTPRequestHandler):\n" +
+        "    def do_GET(self):\n" +
+        "        leaked = self.headers.get('Proxy-Authorization') is not None\n" +
+        "        body = b'credential-leaked' if leaked else b'authenticated-gateway-ok'\n" +
+        "        self.send_response(400 if leaked else 200)\n" +
+        "        self.send_header('Content-Length', str(len(body)))\n" +
+        "        self.end_headers()\n" +
+        "        self.wfile.write(body)\n" +
+        "    def log_message(self, format, *args):\n" +
+        "        pass\n" +
+        "HTTPServer(('127.0.0.1', 18774), Handler).serve_forever()\n"
+    let server = try {
+        launch(
+            "/usr/bin/python3",
+            ["-c", fixture],
+            stdOut: ProcessRedirect.Discard,
+            stdErr: ProcessRedirect.Discard
+        )
+    } catch (error: Exception) {
+        return expect(false, "could not start authenticated gateway fixture: " + error.message)
+    }
+    sleep(Duration.millisecond * 100)
+    let gateway = LocalNetworkGatewayPort()
+    let lease = match (gateway.acquire(
+        OperationId("authenticated-gateway-smoke"),
+        NetworkPolicy(
+            NetworkPolicyMode.Mediated,
+            egress: [NetworkEgressRule(
+                "127.0.0.1", 18774u16, privateAddresses: ["127.0.0.1"]
+            )]
+        )
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) =>
+            try { server.terminate(force: true) } catch (_: Exception) {}
+            try { server.wait() } catch (_: Exception) {}
+            removeIfExists(Path(serverRoot), recursive: true)
+            return expect(false, "could not acquire authenticated gateway: " + error.message)
+    }
+    let endpoint = lease.proxyHost + ":" + lease.proxyPort.toString()
+    let target = "http://127.0.0.1:18774/"
+    let (unauthenticatedCode, _, _) = launch(
+        "/usr/bin/curl",
+        ["-q", "--noproxy", "", "-fsS", "--proxy", "http://" + endpoint, target],
+        stdOut: ProcessRedirect.Pipe,
+        stdErr: ProcessRedirect.Pipe
+    ).waitOutput()
+    let (authenticatedCode, authenticatedOutput, _) = launch(
+        "/usr/bin/curl",
+        [
+            "-q", "--noproxy", "", "-fsS", "--proxy",
+            "http://axyndra:" + lease.proxyCredential + "@" + endpoint,
+            target
+        ],
+        stdOut: ProcessRedirect.Pipe,
+        stdErr: ProcessRedirect.Pipe
+    ).waitOutput()
+    let _ = gateway.release(lease)
+    try { server.terminate(force: true) } catch (_: Exception) {}
+    try { server.wait() } catch (_: Exception) {}
+    removeIfExists(Path(serverRoot), recursive: true)
+    expect(
+        unauthenticatedCode != 0 &&
+        authenticatedCode == 0 &&
+        String.fromUtf8(authenticatedOutput).contains("authenticated-gateway-ok"),
+        "host proxy requires its lease credential and strips it before the origin"
+    )
+}
+
+func packageOnlyProcessPortSmokeWhenSupported(root: String): Bool {
+    let packageRoot = root + "-package-only"
+    removeIfExists(Path(packageRoot), recursive: true)
+    Directory.create(Path(packageRoot), recursive: true)
+    File.writeTo(packageRoot + "/entrypoint", "package-visible".toArray())
+    File.writeTo(root + "/workspace-secret", "must-stay-hidden".toArray())
+    let result = LocalProcessPort(
+        LocalWorkspace(root),
+        sandboxEnabled: true
+    ).execute(ProcessRequest(
+        "/bin/sh",
+        operationId: OperationId("package-only-process"),
+        arguments: [
+            "-c",
+            "test -r \"$1\" && test ! -e \"$2\" && ! touch \"$3\"",
+            "package-check",
+            packageRoot + "/entrypoint",
+            root + "/workspace-secret",
+            packageRoot + "/write-proof"
+        ],
+        workingDirectory: packageRoot,
+        sandboxMode: ProcessSandboxMode.IsolatedReadOnly,
+        filesystemRoot: packageRoot,
+        networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+    ))
+    removeIfExists(Path(root + "/workspace-secret"))
+    let wrotePackage = exists(Path(packageRoot + "/write-proof"))
+    removeIfExists(Path(packageRoot), recursive: true)
+    match (result) {
+        case Result.Ok(value) => expect(
+            value.exitCode == 0 && !wrotePackage,
+            "package-only ProcessPort reads its package but neither workspace nor package writes"
+        )
+        case Result.Err(error) => expect(
+            sandboxUnavailable(error),
+            "unavailable package-only ProcessPort isolation is reported explicitly"
+        )
+    }
+}
+
 func processPortRequiresSandbox(root: String): Bool {
     let processes = LocalProcessPort(
         LocalWorkspace(root),
@@ -135,11 +268,37 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
             cpuSeconds: 30
         )
     )
+    let effectiveLimitProbe = limitedProcesses.execute(ProcessRequest(
+        "/bin/bash",
+        operationId: OperationId("resource-request-ceiling"),
+        arguments: ["--noprofile", "--norc", "-lc", "ulimit -v; ulimit -f; ulimit -n; ulimit -u; ulimit -t"],
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        processLimits: ExecutionResourceLimits(
+            maxOutputBytes: 64,
+            addressSpaceBytes: 536870912,
+            fileSizeBytes: 33554432,
+            openFiles: 16,
+            processes: 16,
+            cpuSeconds: 10
+        )
+    ))
     let oneShotLimit = limitedProcesses.execute(ProcessRequest(
         "/bin/bash",
         operationId: OperationId("resource-one-shot"),
         arguments: ["--noprofile", "--norc", "-lc", "ulimit -n; head -c 4096 /dev/zero | tr '\\000' x"],
-        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        processLimits: ExecutionResourceLimits(
+            maxOutputBytes: 32, openFiles: 16
+        )
+    ))
+    let expandedLimit = limitedProcesses.execute(ProcessRequest(
+        "/bin/bash",
+        operationId: OperationId("resource-expanded-request"),
+        arguments: ["--noprofile", "--norc", "-lc", "ulimit -n; head -c 4096 /dev/zero | tr '\\000' z"],
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        processLimits: ExecutionResourceLimits(
+            maxOutputBytes: 4096, openFiles: 128
+        )
     ))
     let persistentLimit = limitedProcesses.executeShell(
         SessionId("resource-persistent-shell"),
@@ -148,25 +307,84 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
             operationId: OperationId("resource-persistent"),
             arguments: [
                 "--noprofile", "--norc", "-lc",
-                "head -c 4096 /dev/zero | tr '\\000' y; printf marker-after-truncation"
+                "ulimit -n; head -c 4096 /dev/zero | tr '\\000' y; printf marker-after-truncation"
             ],
-            sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
+            sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+            processLimits: ExecutionResourceLimits(
+                maxOutputBytes: 32, openFiles: 16
+            )
         )
     )
+    let memoryLimited = limitedProcesses.execute(ProcessRequest(
+        "/usr/bin/python3",
+        operationId: OperationId("resource-address-space"),
+        arguments: ["-c", "bytearray(268435456); print('unexpected-success')"],
+        timeoutMillis: 5000,
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        processLimits: ExecutionResourceLimits(
+            maxOutputBytes: 4096, addressSpaceBytes: 134217728
+        )
+    ))
+    let cpuLimited = limitedProcesses.execute(ProcessRequest(
+        "/bin/bash",
+        operationId: OperationId("resource-cpu-loop"),
+        arguments: ["--noprofile", "--norc", "-lc", "while :; do :; done"],
+        timeoutMillis: 5000,
+        sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
+        processLimits: ExecutionResourceLimits(maxOutputBytes: 4096, cpuSeconds: 1)
+    ))
+    let effectiveLimitValue = match (effectiveLimitProbe) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "request resource limits failed: " + error.message)
+    }
     let oneShotValue = match (oneShotLimit) {
         case Result.Ok(value) => value
         case Result.Err(error) => return expect(false, "one-shot resource limit failed: " + error.message)
+    }
+    let expandedValue = match (expandedLimit) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "expanded request resource limit failed: " + error.message)
     }
     let persistentValue = match (persistentLimit) {
         case Result.Ok(value) => value
         case Result.Err(error) => return expect(false, "persistent resource limit failed: " + error.message)
     }
+    let memoryLimitedValue = match (memoryLimited) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "address-space exhaustion probe failed: " + error.message)
+    }
+    let cpuLimitedValue = match (cpuLimited) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "CPU exhaustion probe failed: " + error.message)
+    }
     if (!expect(
-        oneShotValue.exitCode == 0 && oneShotValue.stdout.startsWith("64\n") &&
-            oneShotValue.truncated && oneShotValue.stdout.toArray().size <= 96 &&
-            persistentValue.exitCode == 0 && persistentValue.truncated &&
-            persistentValue.stdout.toArray().size <= 96,
-        "real one-shot and persistent bwrap processes enforce prlimit and bounded output while finding a later marker"
+        memoryLimitedValue.exitCode != 0 && !memoryLimitedValue.timedOut &&
+            !memoryLimitedValue.stdout.contains("unexpected-success"),
+        "address-space exhaustion terminates inside the configured process limit"
+    )) { return false }
+    if (!expect(
+        cpuLimitedValue.exitCode != 0,
+        "a CPU-bound loop is terminated by the configured CPU or wall limit"
+    )) { return false }
+    if (!expect(
+        effectiveLimitValue.exitCode == 0 &&
+            effectiveLimitValue.stdout.startsWith("524288\n32768\n16\n16\n10\n"),
+        "ProcessRequest applies each requested RLIMIT: " + effectiveLimitValue.stdout.replace("\n", "/")
+    )) { return false }
+    if (!expect(
+        oneShotValue.exitCode == 0 && oneShotValue.stdout.startsWith("16\n") &&
+            oneShotValue.truncated && oneShotValue.stdout.toArray().size <= 32,
+        "one-shot output/open-file limits apply: " + oneShotValue.stdout.replace("\n", "/")
+    )) { return false }
+    if (!expect(
+        expandedValue.exitCode == 0 && expandedValue.stdout.startsWith("64\n") &&
+            expandedValue.truncated && expandedValue.stdout.toArray().size <= 96,
+        "larger request limits cannot exceed host ceilings: " + expandedValue.stdout.replace("\n", "/")
+    )) { return false }
+    if (!expect(
+        persistentValue.exitCode == 0 && persistentValue.stdout.startsWith("16\n") &&
+            persistentValue.truncated && persistentValue.stdout.toArray().size <= 32,
+        "persistent shell applies request output/open-file limits: " + persistentValue.stdout.replace("\n", "/")
     )) { return false }
 
     let readOnlyProof = root + "/process-read-only-proof"
@@ -282,6 +500,49 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
         case Result.Ok(value) => value
         case Result.Err(error) => return expect(false, "sandbox eval resume failed: " + error.message)
     }
+    let outputLimited = processes.executeEval(
+        session,
+        "py",
+        "print('x' * 4096)",
+        false,
+        ProcessRequest(
+            "/usr/bin/python3",
+            operationId: OperationId("eval-output-limit"),
+            workingDirectory: root,
+            timeoutMillis: 3000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            processLimits: ExecutionResourceLimits(maxOutputBytes: 32)
+        )
+    )
+    let outputLimitedValue = match (outputLimited) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "eval output limit failed: " + error.message)
+    }
+    let recoveredAfterOutputLimit = processes.executeEval(
+        session,
+        "py",
+        "40 + 2",
+        false,
+        ProcessRequest(
+            "/usr/bin/python3",
+            operationId: OperationId("eval-after-output-limit"),
+            workingDirectory: root,
+            timeoutMillis: 3000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
+        )
+    )
+    let recoveredAfterOutputLimitValue = match (recoveredAfterOutputLimit) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return expect(false, "eval kernel did not recover after output limit: " + error.message)
+    }
+    if (!expect(
+        outputLimitedValue.exitCode == -1 && outputLimitedValue.truncated &&
+            outputLimitedValue.transportClosed && outputLimitedValue.stdout == "" &&
+            outputLimitedValue.stderr.contains("output exceeded") &&
+            recoveredAfterOutputLimitValue.exitCode == 0 &&
+            recoveredAfterOutputLimitValue.stdout.trimAscii() == "42",
+        "eval output is bounded, reported truncated, and a later cell still executes"
+    )) { return false }
     expect(
         initializedValue.exitCode == 0 &&
             initializedValue.stdout.trimAscii() == "41" &&
@@ -374,6 +635,8 @@ func policyArgumentsAreExplicit(root: String): Bool {
         network: NetworkIsolationMode.Denied,
         resources: SandboxResourceLimits(
             maxOutputBytes: 4096,
+            addressSpaceBytes: 1073741824,
+            fileSizeBytes: 67108864,
             openFiles: 64,
             processes: 8,
             cpuSeconds: 2
@@ -400,6 +663,8 @@ func policyArgumentsAreExplicit(root: String): Bool {
             contains(deniedPlan.sandboxArguments, "--nofile=64") &&
             contains(deniedPlan.sandboxArguments, "--nproc=8") &&
             contains(deniedPlan.sandboxArguments, "--cpu=2") &&
+            contains(deniedPlan.sandboxArguments, "--as=1073741824") &&
+            contains(deniedPlan.sandboxArguments, "--fsize=67108864") &&
             !contains(writablePlan.sandboxArguments, "--unshare-net") &&
             !contains(writablePlan.sandboxArguments, "--unshare-pid") &&
             containsPair(writablePlan.sandboxArguments, "--bind", root),
@@ -476,6 +741,8 @@ func realBubblewrapSmokeWhenSupported(root: String): Bool {
             )
         case SandboxResult.Ok(_) => ()
     }
+    setVariable("OMP_SANDBOX_HOST_ONLY", "host-only-value")
+    let runtimeIsolation = runtimeIsolationSmoke(root)
     let environmentResult = readOnly.execute(WorkspaceSandboxCommand("/usr/bin/env"))
     let writeDenied = readOnly.execute(WorkspaceSandboxCommand(
         "/usr/bin/touch",
@@ -493,6 +760,7 @@ func realBubblewrapSmokeWhenSupported(root: String): Bool {
     ))
     removeVariable("OMP_SANDBOX_VISIBLE")
     removeVariable("OMP_SANDBOX_CONTRACT_SECRET")
+    removeVariable("OMP_SANDBOX_HOST_ONLY")
     let envValue = match (environmentResult) {
         case SandboxResult.Ok(value) => value
         case SandboxResult.Err(error) => return expect(false, "environment smoke failed: " + error.message)
@@ -505,6 +773,15 @@ func realBubblewrapSmokeWhenSupported(root: String): Bool {
         case SandboxResult.Ok(value) => value
         case SandboxResult.Err(error) => return expect(false, "writable smoke failed to launch: " + error.message)
     }
+    if (!expect(
+        envValue.stdout.contains("HOME=" + root) &&
+            envValue.stdout.contains("TMPDIR=/tmp") &&
+            envValue.stdout.contains("LANG=C.UTF-8") &&
+            envValue.stdout.contains("PATH=/usr/local/bin:/usr/bin:/bin") &&
+            !envValue.stdout.contains("OMP_SANDBOX_HOST_ONLY="),
+        "sandbox environment keeps only explicit values and runtime-owned defaults"
+    )) { return false }
+    if (!runtimeIsolation) { return false }
     expect(
         envValue.exitCode == 0 && envValue.stdout.contains("OMP_SANDBOX_VISIBLE=visible-value") &&
             !envValue.stdout.contains("contract-secret-value") &&
@@ -514,7 +791,104 @@ func realBubblewrapSmokeWhenSupported(root: String): Bool {
         "real bubblewrap redacts explicitly scoped secrets and enforces workspace mount mode"
     )
 }
+func runtimeIsolationSmoke(root: String): Bool {
+    let sandbox = WorkspaceSandbox(WorkspaceSandboxPolicy(
+        root,
+        filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
+        network: NetworkIsolationMode.Allowed
+    ))
+    let outsidePath = root + "-host-only"
+    File.writeTo(outsidePath, "host-only-proof".toArray())
+    let outside = sandbox.execute(WorkspaceSandboxCommand(
+        "/usr/bin/cat",
+        arguments: [outsidePath]
+    ))
+    removeIfExists(outsidePath)
+    let outsideValue = match (outside) {
+        case SandboxResult.Ok(value) => value
+        case SandboxResult.Err(error) => return expect(false, "unmounted host file probe failed: " + error.message)
+    }
 
+    let privateTempMarker = "/tmp/" + root.replace("/", "_") + "-private-marker"
+    let tempWrite = sandbox.execute(WorkspaceSandboxCommand(
+        "/usr/bin/touch",
+        arguments: [privateTempMarker]
+    ))
+    let tempRead = sandbox.execute(WorkspaceSandboxCommand(
+        "/usr/bin/test",
+        arguments: ["-e", privateTempMarker]
+    ))
+    let tempWriteValue = match (tempWrite) {
+        case SandboxResult.Ok(value) => value
+        case SandboxResult.Err(error) => return expect(false, "private temporary write failed to launch: " + error.message)
+    }
+    let tempReadValue = match (tempRead) {
+        case SandboxResult.Ok(value) => value
+        case SandboxResult.Err(error) => return expect(false, "private temporary isolation probe failed: " + error.message)
+    }
+
+    let readOnlyResource = root + "-toolchain"
+    let resourceProof = readOnlyResource + "/runtime-write-proof"
+    removeIfExists(resourceProof)
+    let resourceWrite = WorkspaceSandbox(WorkspaceSandboxPolicy(
+        root,
+        filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
+        network: NetworkIsolationMode.Allowed,
+        readOnlyMounts: [SandboxReadOnlyMount(readOnlyResource)]
+    )).execute(WorkspaceSandboxCommand(
+        "/usr/bin/touch",
+        arguments: [resourceProof]
+    ))
+    let resourceValue = match (resourceWrite) {
+        case SandboxResult.Ok(value) => value
+        case SandboxResult.Err(error) => return expect(false, "read-only runtime mount probe failed: " + error.message)
+    }
+
+    let heldProcess = try {
+        launch(
+            "/usr/bin/sleep",
+            ["30"],
+            stdOut: ProcessRedirect.Pipe,
+            stdErr: ProcessRedirect.Pipe
+        )
+    } catch (error: Exception) {
+        return expect(false, "could not hold descriptor fixture process: " + error.message)
+    }
+    let descriptorProbe = try {
+        WorkspaceSandbox(WorkspaceSandboxPolicy(
+            root,
+            filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
+            network: NetworkIsolationMode.Allowed,
+            resources: SandboxResourceLimits(openFiles: 64)
+        )).execute(WorkspaceSandboxCommand(
+            "/usr/bin/python3",
+            arguments: ["-c", "import os, resource; fds=[int(fd) for fd in os.listdir('/proc/self/fd')]; limit=resource.getrlimit(resource.RLIMIT_NOFILE)[0]; print('fds='+repr(fds)+' limit='+str(limit)); raise SystemExit(7 if max(fds) > 3 else 8 if limit != 64 else 0)"]
+        ))
+    } finally {
+        try { let _ = heldProcess.terminate(force: true) } catch (_: Exception) {}
+        try { let _ = heldProcess.wait() } catch (_: Exception) {}
+    }
+    let descriptorValue = match (descriptorProbe) {
+        case SandboxResult.Ok(value) => value
+        case SandboxResult.Err(error) => return expect(false, "minimal descriptor probe failed to launch: " + error.message)
+    }
+    if (!expect(
+        outsideValue.exitCode != 0 && outsideValue.stdout == "",
+        "sandbox cannot read an unmounted host file beside the workspace"
+    )) { return false }
+    if (!expect(
+        tempWriteValue.exitCode == 0 && tempReadValue.exitCode != 0,
+        "sandbox tmpfs is writable but private to one invocation"
+    )) { return false }
+    if (!expect(
+        resourceValue.exitCode != 0 && !exists(Path(resourceProof)),
+        "read-only runtime resources reject writes"
+    )) { return false }
+    expect(
+        descriptorValue.exitCode == 0,
+        "sandbox closes inherited descriptors and applies the configured open-file limit; exit=" + descriptorValue.exitCode.toString() + " output=" + descriptorValue.stdout.trimAscii() + " stderr=" + descriptorValue.stderr.trimAscii()
+    )
+}
 func prepareWorkspace(): String {
     if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
     let root = canonicalize("target").toString() + "/sandbox-contract-workspace"

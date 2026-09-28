@@ -1,0 +1,1 @@
+{"name":"fallback-plugin","version":"0.9.0","extensions":{"com.openai":{"hooks":"./hooks/hooks.json"}},"skills":"./fallback-skills","mcpServers":"./fallback-mcp.json"}

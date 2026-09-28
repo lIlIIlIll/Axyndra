@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-work_root=$(mktemp -d /tmp/mcp4cj-manifest-test.XXXXXX)
+work_root=$(mktemp -d "${TMPDIR:-/tmp}/mcp4cj-manifest-test.XXXXXX")
 trap 'rm -rf -- "$work_root"' EXIT
 
 mkdir -p -- "$work_root/server-server-stateless-2026-09-01"

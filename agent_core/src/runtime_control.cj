@@ -7,6 +7,17 @@ import std.collection.*
 import std.sync.*
 
 import tool_runtime.*
+enum CoreToolSlotStage { Parent | Yielded | Child }
+
+class CoreToolSlotReservation {
+    let toolName: String
+    var stage: CoreToolSlotStage = CoreToolSlotStage.Parent
+
+    init(toolName: String) {
+        this.toolName = toolName
+    }
+}
+
 class CoreRunControl {
     let runId: RunId
     let traceId: TraceId
@@ -14,6 +25,7 @@ class CoreRunControl {
     let runtime: AgentThreadRuntime
     let ledger: ExecutionBudget
     private let lock = Mutex()
+    private let eventLock = Mutex()
     private var currentState: RunState
     private var budgetModeValue: BudgetMode = BudgetMode.Normal
     private var drainAttemptsValue: Int64 = 0
@@ -23,6 +35,7 @@ class CoreRunControl {
     private var activeRequestId = ""
     private var activeTurnId: ?TurnId = None
     private var activeBatchId: ?ToolBatchId = None
+    private let scheduledToolSlots = HashMap<String, CoreToolSlotReservation>()
     private var cancellationRegistration: ?CancellationRegistration = None
 
     init(
@@ -42,6 +55,14 @@ class CoreRunControl {
         this.ledger = execution
         this.turnCounter = turns
         this.requestCounter = modelRequests
+    }
+
+    // Sequence allocation, durable append, and live delivery form one ordered
+    // event publication step. Parallel tool workers must not persist a later
+    // sequence before an earlier worker reaches the repository.
+    func serializeEvent(action: () -> Result<Unit>): Result<Unit> {
+        eventLock.lock()
+        try { action() } finally { eventLock.unlock() }
     }
 
     func state(): RunState {
@@ -235,6 +256,157 @@ class CoreRunControl {
         }
     }
 
+    func registerScheduledToolSlot(
+        operationId: OperationId,
+        toolName: String
+    ): Result<Unit> {
+        lock.lock()
+        try {
+            if (scheduledToolSlots.contains(operationId.value)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "run.tool_slot_duplicate",
+                    "an Operation already owns a Run scheduler slot"
+                ))
+            }
+            scheduledToolSlots[operationId.value] = CoreToolSlotReservation(toolName)
+            Result.Ok(())
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    // Returns whether this Operation still owns an active ledger slot.
+    // A yielded parent has already transferred its slot to the child.
+    func unregisterScheduledToolSlot(operationId: OperationId): Bool {
+        lock.lock()
+        try {
+            let reservation = scheduledToolSlots.get(operationId.value)
+            scheduledToolSlots.remove(operationId.value)
+            match (reservation) {
+                case Some(value) => match (value.stage) {
+                    case CoreToolSlotStage.Yielded => false
+                    case _ => true
+                }
+                case None => true
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func beginNestedToolSlot(operationId: OperationId): Result<Unit> {
+        lock.lock()
+        try {
+            let reservation = match (scheduledToolSlots.get(operationId.value)) {
+                case Some(value) => value
+                case None => return Result.Err(AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "run.tool_slot_not_active",
+                    "nested work requires an active parent Run tool slot"
+                ))
+            }
+            if (reservation.toolName != "run_program" &&
+                !reservation.toolName.startsWith("plugin.")) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.PermissionDenied,
+                    "run.tool_slot_parent_denied",
+                    "only a committed Program or registered plugin Operation may schedule a child"
+                ))
+            }
+            match (reservation.stage) {
+                case CoreToolSlotStage.Parent =>
+                    reservation.stage = CoreToolSlotStage.Yielded
+                    Result.Ok(())
+                case _ => Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "run.tool_slot_transition_invalid",
+                    "parent Run tool slot is already yielded"
+                ))
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func activateNestedToolSlot(operationId: OperationId): Result<Unit> {
+        lock.lock()
+        try {
+            let reservation = match (scheduledToolSlots.get(operationId.value)) {
+                case Some(value) => value
+                case None => return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "run.tool_slot_missing",
+                    "parent scheduler slot disappeared during child handoff"
+                ))
+            }
+            match (reservation.stage) {
+                case CoreToolSlotStage.Yielded =>
+                    reservation.stage = CoreToolSlotStage.Child
+                    Result.Ok(())
+                case _ => Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "run.tool_slot_transition_invalid",
+                    "child cannot acquire a slot that was not yielded"
+                ))
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func restoreYieldedToolSlot(operationId: OperationId): Result<Unit> {
+        lock.lock()
+        try {
+            let reservation = match (scheduledToolSlots.get(operationId.value)) {
+                case Some(value) => value
+                case None => return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "run.tool_slot_missing",
+                    "parent scheduler slot disappeared during child handoff"
+                ))
+            }
+            match (reservation.stage) {
+                case CoreToolSlotStage.Yielded =>
+                    reservation.stage = CoreToolSlotStage.Parent
+                    Result.Ok(())
+                case _ => Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "run.tool_slot_transition_invalid",
+                    "only a yielded parent slot can be restored"
+                ))
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func returnNestedToolSlot(operationId: OperationId): Result<Unit> {
+        lock.lock()
+        try {
+            let reservation = match (scheduledToolSlots.get(operationId.value)) {
+                case Some(value) => value
+                case None => return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "run.tool_slot_missing",
+                    "parent scheduler slot disappeared during child handoff"
+                ))
+            }
+            match (reservation.stage) {
+                case CoreToolSlotStage.Child =>
+                    reservation.stage = CoreToolSlotStage.Parent
+                    Result.Ok(())
+                case _ => Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "run.tool_slot_transition_invalid",
+                    "only the active child slot can return to its parent"
+                ))
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
     // Admission only: the ledger reports facts and the callers decide the
     // action. A rejected reserve no longer cancels the run — the work-turn
     // loop converts an exhausted work budget into a bounded graceful drain,
@@ -268,9 +440,43 @@ class CoreRunControl {
         try { budgetModeValue } finally { lock.unlock() }
     }
 
-    func setBudgetMode(mode: BudgetMode): Unit {
+    func enterPressure(): Bool {
+        advanceBudgetMode(BudgetMode.Pressure)
+    }
+
+    func beginDraining(): Bool {
+        advanceBudgetMode(BudgetMode.Draining)
+    }
+
+    func markExhausted(): Bool {
+        advanceBudgetMode(BudgetMode.Exhausted)
+    }
+
+    func restoreDraining(): Unit {
         lock.lock()
-        try { budgetModeValue = mode } finally { lock.unlock() }
+        try { budgetModeValue = BudgetMode.Draining } finally { lock.unlock() }
+    }
+
+    private func advanceBudgetMode(mode: BudgetMode): Bool {
+        lock.lock()
+        try {
+            if (budgetModeRank(mode) <= budgetModeRank(budgetModeValue)) {
+                return false
+            }
+            budgetModeValue = mode
+            true
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private func budgetModeRank(mode: BudgetMode): Int64 {
+        match (mode) {
+            case BudgetMode.Normal => 0
+            case BudgetMode.Pressure => 1
+            case BudgetMode.Draining => 2
+            case BudgetMode.Exhausted => 3
+        }
     }
 
     func drainAttempts(): Int64 {

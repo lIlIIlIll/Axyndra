@@ -16,6 +16,42 @@ import std.time.*
 import std.sync.*
 import tool_runtime.*
 
+class CoreToolOutputSink <: ToolOutputSink {
+    private let lock = Mutex()
+    private var emitter: ?(ToolOutputChunk) -> Result<Unit> = None
+
+    init() {}
+
+    func bind(handler: (ToolOutputChunk) -> Result<Unit>): Unit {
+        lock.lock()
+        try {
+            if (emitter.isSome()) {
+                throw IllegalStateException("Core ToolOutput sink is already bound")
+            }
+            emitter = Some(handler)
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    public func emit(chunk: ToolOutputChunk): Result<Unit> {
+        // Serialize sequence allocation and durable append for parallel tool waves.
+        lock.lock()
+        try {
+            match (emitter) {
+                case Some(handler) => handler(chunk)
+                case None => Result.Err(AgentError(
+                    AgentErrorKind.Internal,
+                    "tool.output_sink_unbound",
+                    "Core ToolOutput sink was used before event binding"
+                ))
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+}
+
 private let MODEL_RETRY_MAX_DELAY_MILLIS: Int64 = 8000
 private let MODEL_RETRY_POLL_MILLIS: Int64 = 10
 
@@ -412,6 +448,16 @@ class ModelAttemptExecution {
     }
 }
 
+class ModelAttemptDispatch {
+    let execution: ModelAttemptExecution
+    let startedAt: MonoTime
+
+    init(execution: ModelAttemptExecution, startedAt: MonoTime) {
+        this.execution = execution
+        this.startedAt = startedAt
+    }
+}
+
 // The provider request is not allowed to cross the effect boundary until its
 // exact, provider-neutral inputs have been durably described. Production
 // supplies a SQLite-backed implementation; the in-memory default preserves
@@ -467,6 +513,75 @@ enum CoreTurnExecution {
     | Finished(AgentRunOutcome)
 }
 
+public enum CoreToolHookDecision {
+    Continue | Deny(String) | Modify(AgentValue)
+}
+
+public class CoreToolHookPostEvent {
+    public let toolName: String
+    public let arguments: AgentValue
+    public let operationId: String
+    public let receiptId: String
+    public let outcome: String
+    public let requiredCapabilities: Array<Capability>
+    public let result: ?AgentValue
+
+    public init(
+        toolName: String,
+        arguments: AgentValue,
+        operationId: String,
+        receiptId: String,
+        outcome: String,
+        requiredCapabilities: Array<Capability>,
+        result!: ?AgentValue = None
+    ) {
+        this.toolName = toolName
+        this.arguments = arguments
+        this.operationId = operationId
+        this.receiptId = receiptId
+        this.outcome = outcome
+        this.requiredCapabilities = requiredCapabilities
+        this.result = result
+    }
+}
+
+public interface CoreToolHookRuntime {
+    func beforeTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        arguments: AgentValue
+    ): CoreToolHookDecision
+
+    func afterTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        event: CoreToolHookPostEvent
+    ): Unit
+}
+
+class NoopCoreToolHookRuntime <: CoreToolHookRuntime {
+    public func beforeTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        arguments: AgentValue
+    ): CoreToolHookDecision {
+        let _ = context
+        let _ = committed
+        let _ = arguments
+        CoreToolHookDecision.Continue
+    }
+
+    public func afterTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        event: CoreToolHookPostEvent
+    ): Unit {
+        let _ = context
+        let _ = committed
+        let _ = event
+    }
+}
+
 public class AgentCore <: AgentRunner {
     private let model: ControlledModelPort
     private let runs: RunRepository
@@ -478,6 +593,7 @@ public class AgentCore <: AgentRunner {
     private let contextManifestRuntime: ModelContextManifestRuntimePort
     private let modelAttemptRecovery: ModelAttemptRecoveryPolicy
     private let attemptClock: AttemptMonotonicClock
+    private let toolHooks: CoreToolHookRuntime
     private let controls = CoreRunControlRegistry()
 
     public init(
@@ -490,7 +606,8 @@ public class AgentCore <: AgentRunner {
         modelDecisionRuntime!: ?ModelDecisionRuntimePort = None,
         contextManifestRuntime!: ?ModelContextManifestRuntimePort = None,
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
-        attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock()
+        attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock(),
+        toolHooks!: CoreToolHookRuntime = NoopCoreToolHookRuntime()
     ) {
         this.model = ControlledModelPort(model)
         this.runs = runs
@@ -498,6 +615,7 @@ public class AgentCore <: AgentRunner {
         this.catalog = catalog
         this.modelAttemptRecovery = modelAttemptRecovery
         this.attemptClock = attemptClock
+        this.toolHooks = toolHooks
         this.threadRuntimes = match (threadRuntimes) {
             case Some(value) => value
             case None => InMemoryThreadRuntimeRegistry(
@@ -517,6 +635,7 @@ public class AgentCore <: AgentRunner {
             case Some(value) => value
             case None => InMemoryModelContextManifestRuntimePort()
         }
+        this.model.bindBudgetController(AgentCoreInternalModelBudgetController(this))
     }
 
     public init(
@@ -529,7 +648,8 @@ public class AgentCore <: AgentRunner {
         modelDecisionRuntime!: ?ModelDecisionRuntimePort = None,
         contextManifestRuntime!: ?ModelContextManifestRuntimePort = None,
         modelAttemptRecovery!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy(),
-        attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock()
+        attemptClock!: AttemptMonotonicClock = SystemAttemptMonotonicClock(),
+        toolHooks!: CoreToolHookRuntime = NoopCoreToolHookRuntime()
     ) {
         this.model = model
         this.runs = runs
@@ -537,6 +657,7 @@ public class AgentCore <: AgentRunner {
         this.catalog = catalog
         this.modelAttemptRecovery = modelAttemptRecovery
         this.attemptClock = attemptClock
+        this.toolHooks = toolHooks
         this.threadRuntimes = match (threadRuntimes) {
             case Some(value) => value
             case None => InMemoryThreadRuntimeRegistry(
@@ -556,6 +677,7 @@ public class AgentCore <: AgentRunner {
             case Some(value) => value
             case None => InMemoryModelContextManifestRuntimePort()
         }
+        this.model.bindBudgetController(AgentCoreInternalModelBudgetController(this))
     }
 
     public func start(
@@ -626,17 +748,23 @@ public class AgentCore <: AgentRunner {
                 finishControl(request.runId)
                 return Result.Err(error)
         }
+        let toolOutputSink = CoreToolOutputSink()
         let context = ToolInvocationContext(
             request.runId,
             request.sessionId,
             request.capabilities,
+            epoch: active.epoch,
             toolContext: request.toolContext,
             cancellation: control.source.token,
             approvalModeOverride: request.approvalModeOverride,
-            budget: executionBudgetFrom(request.budget),
+            outputSink: toolOutputSink,
+            budget: control.ledger,
             budgetModeFn: Some({ => control.budgetMode() }),
-            skills: request.skillStack
+            skills: request.skillStack,
+            toolSetSnapshot: Some(active.lane.toolSet)
         )
+        bindToolOutputSink(context, control, sink, toolOutputSink)
+        bindBudgetChargeHandler(context, control, sink)
         match (emitTyped(context, control, AgentEventPayload.RunStarted, sink)) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return fail(request, context, control, error, sink)
@@ -733,18 +861,28 @@ public class AgentCore <: AgentRunner {
         // A checkpoint can be taken on the last ordinary work turn, so turns
         // alone cannot infer whether the next request is work or drain.
         if (checkpoint.requestBudgetClass == BudgetChargeClass.Drain) {
-            control.setBudgetMode(BudgetMode.Draining)
+            control.restoreDraining()
         }
+        let runToolSet = match (coreActiveRunToolSet(control.runtime)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let toolOutputSink = CoreToolOutputSink()
         let context = ToolInvocationContext(
             durableRequest.runId, durableRequest.sessionId,
             durableRequest.capabilities, sequence: resumeSequence,
+            epoch: control.runtime.threadSnapshot().activeEpoch,
             toolContext: durableRequest.toolContext,
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
-            budget: executionBudgetFrom(durableRequest.budget),
+            outputSink: toolOutputSink,
+            budget: control.ledger,
             budgetModeFn: Some({ => control.budgetMode() }),
-            skills: durableRequest.skillStack
+            skills: durableRequest.skillStack,
+            toolSetSnapshot: Some(runToolSet)
         )
+        bindToolOutputSink(context, control, sink, toolOutputSink)
+        bindBudgetChargeHandler(context, control, sink)
         let counter = BudgetCounter(
             modelRequests: checkpoint.modelRequests,
             workModelRequests: checkpoint.workModelRequests,
@@ -770,6 +908,17 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
+            )
+        }
+        if (storedAttempt.transcriptSnapshot == "" ||
+            !model.validateTranscriptSnapshot(storedAttempt.transcriptSnapshot)) {
+            return fail(
+                durableRequest, context, control,
+                AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "model.attempt_replay_binding_invalid",
+                    "durable model Attempt transcript snapshot is missing or cannot be restored"
+                ), sink, counter: Some(counter)
             )
         }
         if (storedAttempt.semanticRequestDigest != checkpoint.semanticRequestDigest ||
@@ -870,6 +1019,22 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
+        if (storedAttempt.transcriptSnapshot != "") {
+            let regeneratedSnapshot = match (model.transcriptSnapshot(modelRequest)) {
+                case Some(value) => value
+                case None => ""
+            }
+            if (regeneratedSnapshot != storedAttempt.transcriptSnapshot) {
+                return fail(
+                    durableRequest, context, control,
+                    AgentError(
+                        AgentErrorKind.RecoveryRequired,
+                        "model.attempt_replay_binding_invalid",
+                        "current model adapter does not reproduce the frozen transcript snapshot"
+                    ), sink, counter: Some(counter)
+                )
+            }
+        }
         if (storedAttempt.dispatchState == ModelAttemptDispatchState.DispatchClaimed) {
             if (!durableRequest.autoRetry || !modelAttemptRecovery.enabled() ||
                 modelAttemptRecovery.maxRecoveryRetries == 0 || storedAttempt.attemptNo != 1 ||
@@ -946,39 +1111,19 @@ public class AgentCore <: AgentRunner {
                 )
             }
         }
-        let _ = emitAttemptLifecycle(
-            context, control, checkpoint.semanticRequestId, attemptId,
-            "model.attempt_started", sink,
-            fields: [
-                ValueField("attempt_no", integerValue(attemptNo)),
-                ValueField("policy_reason", textValue(executionPolicyReason))
-            ]
-        )
-        let started = MonoTime.now()
-        let execution = executeModelWithinBudget(
-            durableRequest, counter, modelRequest, checkpoint.semanticRequestId,
-            attemptId, context, control, sink
-        )
-        let result = execution.result
-        match (recordModelAttempt(
-            durableRequest, modelRequest, attemptNo, counter, result,
+        let dispatched = match (dispatchClaimedModelAttempt(
+            durableRequest, counter, modelRequest, attemptNo,
+            checkpoint.semanticRequestId, attemptId, executionPolicyReason,
             context, control, sink
         )) {
-            case Result.Ok(_) => ()
+            case Result.Ok(value) => value
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
-        match (persistDeferredModelAttemptBarrier(
-            execution, attemptId, checkpoint.semanticRequestId,
-            context, control, sink
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return fail(
-                durableRequest, context, control, error, sink,
-                counter: Some(counter)
-            )
-        }
+        let execution = dispatched.execution
+        let started = dispatched.startedAt
+        let result = execution.result
         match (settleProvisionalModelEvents(
             execution.provisionalEvents, true, context, control,
             checkpoint.semanticRequestId, attemptId, sink
@@ -1038,41 +1183,41 @@ public class AgentCore <: AgentRunner {
         } else {
             max(0, agentUtcMillis() - checkpoint.requestStartedAtMillis)
         }
+        let observedUsage = accountedModelAttemptUsage(reply, request.pricing)
         match (counter.accountReply(reply, request.budget, request.pricing, duration)) {
             case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
+            case Result.Err(error) =>
+                let _ = control.ledger.recordObservedUsage(observedUsage)
+                return Result.Err(error)
         }
-        let cost = match (request.pricing) {
-            case Some(pricing) => match (priceModelUsage(reply.usage, pricing)) {
-                case Some(value) => value
-                case None => 0
-            }
+        let cost = match (observedUsage.costMicros) {
+            case Some(value) => value
             case None => 0
         }
+        let stableRequestId = RequestId(if (usageRequestId == "") {
+            checkpoint.stableRequestId
+        } else { usageRequestId })
         match (reserveBudget(
-            control, context,
+            control,
+            context,
             BudgetCharge(
                 inputTokens: reply.inputTokens,
                 outputTokens: reply.outputTokens,
                 costMicros: cost
             ),
             sink,
-            requestId: Some(RequestId(if (usageRequestId == "") {
-                checkpoint.stableRequestId
-            } else { usageRequestId }))
+            requestId: Some(stableRequestId),
+            observedUsage: Some(observedUsage)
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
         emitTyped(
-            context, control,
-            AgentEventPayload.ModelUsageUpdated(
-                accountedModelAttemptUsage(reply, request.pricing)
-            ),
+            context,
+            control,
+            AgentEventPayload.ModelUsageUpdated(observedUsage),
             sink,
-            requestId: Some(RequestId(if (usageRequestId == "") {
-                checkpoint.stableRequestId
-            } else { usageRequestId }))
+            requestId: Some(stableRequestId)
         )
     }
 
@@ -1137,6 +1282,46 @@ public class AgentCore <: AgentRunner {
             interactions: request.interactions,
             toolContext: request.toolContext
         )
+        // Validate current targets and approval scope before consuming the decision.
+        if (isAwaitingApproval(previous.status)) {
+            let preflightControl = match (controlForResume(durableRequest, previous)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            let preflightToolSet = match (coreActiveRunToolSet(preflightControl.runtime)) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+            var preflightSequence = previous.sequence
+            match (runs.events(durableRequest.runId, 0)) {
+                case Result.Ok(page) =>
+                    preflightSequence = max(preflightSequence, page.nextSequence - 1)
+                    for (event in page.events) {
+                        preflightSequence = max(preflightSequence, event.sequence)
+                    }
+                case Result.Err(_) => ()
+            }
+            let preflightContext = ToolInvocationContext(
+                durableRequest.runId,
+                durableRequest.sessionId,
+                durableRequest.capabilities,
+                sequence: preflightSequence,
+                epoch: preflightControl.runtime.threadSnapshot().activeEpoch,
+                toolContext: durableRequest.toolContext,
+                cancellation: preflightControl.source.token,
+                approvalModeOverride: durableRequest.approvalModeOverride,
+                budget: preflightControl.ledger,
+                budgetModeFn: Some({ => preflightControl.budgetMode() }),
+                skills: durableRequest.skillStack,
+                toolSetSnapshot: Some(preflightToolSet)
+            )
+            match (tools.validateApprovalDecision(
+                preflightContext, durableApproval.operationId, decision
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+        }
         let decisionReceipt = ApprovalDecisionReceipt(
             durableApproval.operationId,
             durableRequest.runId,
@@ -1172,18 +1357,28 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        let runToolSet = match (coreActiveRunToolSet(control.runtime)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let toolOutputSink = CoreToolOutputSink()
         let context = ToolInvocationContext(
             durableRequest.runId,
             durableRequest.sessionId,
             durableRequest.capabilities,
             sequence: sequence,
+            epoch: control.runtime.threadSnapshot().activeEpoch,
             toolContext: durableRequest.toolContext,
             cancellation: control.source.token,
             approvalModeOverride: durableRequest.approvalModeOverride,
-            budget: executionBudgetFrom(durableRequest.budget),
+            outputSink: toolOutputSink,
+            budget: control.ledger,
             budgetModeFn: Some({ => control.budgetMode() }),
-            skills: durableRequest.skillStack
+            skills: durableRequest.skillStack,
+            toolSetSnapshot: Some(runToolSet)
         )
+        bindToolOutputSink(context, control, sink, toolOutputSink)
+        bindBudgetChargeHandler(context, control, sink)
         let resumed = match (control.resumeAfterApproval()) {
             case Result.Ok(value) => value
             case Result.Err(error) => return fail(
@@ -1249,9 +1444,7 @@ public class AgentCore <: AgentRunner {
                     }
                 )
                 match (commitCanonicalToolAttempt(control, failed)) {
-                    case Result.Ok(_) => return fail(
-                        durableRequest, context, control, error, sink
-                    )
+                    case Result.Ok(_) => notifyPostToolHook(context, failed)
                     case Result.Err(commitError) =>
                         let diagnostic = AgentError(
                             commitError.kind,
@@ -1267,6 +1460,7 @@ public class AgentCore <: AgentRunner {
                             durableRequest, context, control, diagnostic, sink
                         )
                 }
+                return fail(durableRequest, context, control, error, sink)
             }
         }
         let canonicalOutcome = CoreToolOutcome(
@@ -1282,7 +1476,7 @@ public class AgentCore <: AgentRunner {
             }
         )
         match (commitCanonicalToolAttempt(control, canonicalOutcome)) {
-            case Result.Ok(_) => ()
+            case Result.Ok(_) => notifyPostToolHook(context, canonicalOutcome)
             case Result.Err(error) => return fail(
                 durableRequest, context, control, error, sink
             )
@@ -1303,7 +1497,7 @@ public class AgentCore <: AgentRunner {
             context,
             durableApproval.toolName,
             outcome,
-            objectValue([]),
+            approvedPlan.canonicalArguments,
             sink
         )) {
             case Result.Ok(_) => ()
@@ -1632,7 +1826,17 @@ public class AgentCore <: AgentRunner {
         let requestTools = if (drainFinalization) {
             Array<ModelToolDefinition>()
         } else {
-            catalog.definitionsFor(request.capabilities)
+            match (control.runtime.activeRun()) {
+                case Some(active) => match (validateCoreToolSetSnapshot(active.lane.toolSet)) {
+                    case Result.Ok(_) => coreModelToolDefinitions(active.lane.toolSet)
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                case None => return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "run.model_lane_snapshot_missing",
+                    "active Run has no immutable ModelLane tool snapshot"
+                ))
+            }
         }
         let baseSystem = systemWithSkillStack(
             request.system,
@@ -1707,6 +1911,7 @@ public class AgentCore <: AgentRunner {
             0,
             (MonoTime.now() - startedAt).toMilliseconds()
         )
+        let observedUsage = accountedModelAttemptUsage(reply, request.pricing)
         match (counter.accountReply(
             reply,
             request.budget,
@@ -1714,19 +1919,18 @@ public class AgentCore <: AgentRunner {
             requestDurationMillis
         )) {
             case Result.Ok(_) => ()
-            case Result.Err(error) => return optionalOutcome(fail(
-                request,
-                context,
-                error,
-                sink,
-                counter: Some(counter)
-            ))
+            case Result.Err(error) =>
+                let _ = control.ledger.recordObservedUsage(observedUsage)
+                return optionalOutcome(fail(
+                    request,
+                    context,
+                    error,
+                    sink,
+                    counter: Some(counter)
+                ))
         }
-        let replyCost = match (request.pricing) {
-            case Some(pricing) => match (priceModelUsage(reply.usage, pricing)) {
-                case Some(value) => value
-                case None => 0
-            }
+        let replyCost = match (observedUsage.costMicros) {
+            case Some(value) => value
             case None => 0
         }
         match (reserveBudget(
@@ -1739,7 +1943,8 @@ public class AgentCore <: AgentRunner {
             ),
             sink,
             turnId: Some(turnId),
-            requestId: Some(requestId)
+            requestId: Some(requestId),
+            observedUsage: Some(observedUsage)
         )) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return optionalOutcome(fail(
@@ -1754,9 +1959,7 @@ public class AgentCore <: AgentRunner {
         let _ = emitTyped(
             context,
             control,
-            AgentEventPayload.ModelUsageUpdated(
-                accountedModelAttemptUsage(reply, request.pricing)
-            ),
+            AgentEventPayload.ModelUsageUpdated(observedUsage),
             sink,
             turnId: Some(turnId),
             requestId: Some(requestId)
@@ -2046,8 +2249,7 @@ public class AgentCore <: AgentRunner {
                 )
             }
             counter.turns += 1
-            if (counter.turns == pressureAtTurns) {
-                control.setBudgetMode(BudgetMode.Pressure)
+            if (counter.turns == pressureAtTurns && control.enterPressure()) {
                 let _ = emitTyped(
                     context,
                     control,
@@ -2291,19 +2493,20 @@ public class AgentCore <: AgentRunner {
         counter: BudgetCounter,
         sink: AgentEventSink
     ): Result<AgentRunOutcome> {
-        control.setBudgetMode(BudgetMode.Draining)
-        let _ = emitTyped(
-            context,
-            control,
-            AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
-                BudgetMode.Draining,
-                BudgetDimension.Turns,
-                request.budget.maxTurns,
-                counter.turns,
-                0
-            )),
-            sink
-        )
+        if (control.beginDraining()) {
+            let _ = emitTyped(
+                context,
+                control,
+                AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                    BudgetMode.Draining,
+                    BudgetDimension.Turns,
+                    request.budget.maxTurns,
+                    counter.turns,
+                    0
+                )),
+                sink
+            )
+        }
         match (saveDrainCheckpoint(request, context, counter)) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return fail(
@@ -2375,7 +2578,7 @@ public class AgentCore <: AgentRunner {
             )
             let blocked = control.ledger.projectedAdmissionBlocked(worstCaseUsage)
             if (blocked.isSome()) {
-                control.setBudgetMode(BudgetMode.Exhausted)
+                let enteredExhausted = control.markExhausted()
                 let usageNow = control.ledger.snapshot()
                 let dimension = blocked.getOrThrow()
                 let (limitValue, usedValue): (Int64, Int64) = match (dimension) {
@@ -2388,18 +2591,20 @@ public class AgentCore <: AgentRunner {
                     case _ =>
                         (request.budget.maxCostMicros, usageNow.costMicros)
                 }
-                let _ = emitTyped(
-                    context,
-                    control,
-                    AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
-                        BudgetMode.Exhausted,
-                        dimension,
-                        limitValue,
-                        usedValue,
-                        0
-                    )),
-                    sink
-                )
+                if (enteredExhausted) {
+                    let _ = emitTyped(
+                        context,
+                        control,
+                        AgentEventPayload.BudgetSignal(BudgetSignalSnapshot(
+                            BudgetMode.Exhausted,
+                            dimension,
+                            limitValue,
+                            usedValue,
+                            0
+                        )),
+                        sink
+                    )
+                }
                 return completeDrainedRun(
                     request, context, control, counter, sink,
                     "run drained at hard budget limit without finalization request"
@@ -2561,7 +2766,7 @@ public class AgentCore <: AgentRunner {
             return Result.Ok(None)
         }
         let batchId = control.nextBatchId()
-        let coordinator = CoreToolBatchCoordinator(tools)
+        let coordinator = CoreToolBatchCoordinator(tools, toolHooks)
         let preparation = match (coordinator.prepare(
             context,
             calls,
@@ -2616,7 +2821,29 @@ public class AgentCore <: AgentRunner {
             context,
             preparation,
             control.source.token,
-            { _ => Result.Ok(()) },
+            { work => control.registerScheduledToolSlot(
+                work.prepared.operationId,
+                work.block.name
+            ) },
+            { work =>
+                let slotActive = control.unregisterScheduledToolSlot(
+                    work.prepared.operationId
+                )
+                if (!slotActive) {
+                    Result.Ok(())
+                } else {
+                    match (control.ledger.releaseTools()) {
+                        case Result.Err(error) => Result.Err(error)
+                        case Result.Ok(usage) => emitTyped(
+                            context,
+                            control,
+                            AgentEventPayload.BudgetUpdated(usage),
+                            sink,
+                            toolBatchId: Some(batchId)
+                        )
+                    }
+                }
+            },
             { count =>
                 match (reserveBudget(
                     control,
@@ -2656,6 +2883,9 @@ public class AgentCore <: AgentRunner {
                     fatal = Some(error)
                 }
             }
+            if (canonicalCommitted) {
+                notifyPostToolHook(context, item)
+            }
             match (item.result) {
                 case Result.Err(error) => if (fatal.isNone()) {
                     fatal = Some(error)
@@ -2666,7 +2896,7 @@ public class AgentCore <: AgentRunner {
                             context,
                             item.block.name,
                             outcome,
-                            item.block.arguments,
+                            item.operationPlan.getOrThrow().canonicalArguments,
                             sink,
                             toolBatchId: Some(batchId),
                             toolCallId: Some(ToolCallId(item.block.callId))
@@ -2886,7 +3116,63 @@ public class AgentCore <: AgentRunner {
     }
 
 
-    private func commitCanonicalToolAttempt(
+    private func notifyPostToolHook(
+        context: ToolInvocationContext,
+        outcome: CoreToolOutcome
+    ): Unit {
+        let operationId = match (outcome.operationId) {
+            case Some(value) => value
+            case None => return
+        }
+        let plan = match (outcome.operationPlan) {
+            case Some(value) => value
+            case None => return
+        }
+        let fallbackReceiptId = "receipt-" + operationId.value
+        var receiptId = fallbackReceiptId
+        var terminalOutcome = "failed"
+        var resultValue: ?AgentValue = None
+        match (outcome.result) {
+            case Result.Ok(ToolInvocationResult.Completed(result)) =>
+                receiptId = if (result.receiptId == "") {
+                    fallbackReceiptId
+                } else { result.receiptId }
+                terminalOutcome = if (result.isError) { "failed" } else { "completed" }
+                resultValue = Some(result.output)
+            case Result.Ok(ToolInvocationResult.Denied(denial)) =>
+                terminalOutcome = "denied"
+                resultValue = Some(objectValue([
+                    ValueField("code", textValue(denial.reason.code)),
+                    ValueField("message", textValue(denial.reason.message))
+                ]))
+            case Result.Ok(ToolInvocationResult.NeedsApproval(_)) =>
+                terminalOutcome = "denied"
+            case Result.Err(error) =>
+                terminalOutcome = if (error.kind == AgentErrorKind.Cancelled) {
+                    "cancelled"
+                } else { "failed" }
+                resultValue = Some(objectValue([
+                    ValueField("code", textValue(error.code)),
+                    ValueField("message", textValue(error.message))
+                ]))
+        }
+        let event = CoreToolHookPostEvent(
+            outcome.block.name,
+            plan.canonicalArguments,
+            operationId.value,
+            receiptId,
+            terminalOutcome,
+            plan.requiredCapabilities,
+            result: resultValue
+        )
+        try {
+            toolHooks.afterTool(context, outcome.committed, event)
+        } catch (_: Exception) {
+            // Observer failure cannot alter a committed result or its receipt.
+        }
+    }
+
+     private func commitCanonicalToolAttempt(
         control: CoreRunControl,
         outcome: CoreToolOutcome
     ): Result<Unit> {
@@ -2973,18 +3259,16 @@ public class AgentCore <: AgentRunner {
                 (counter.modelRequests + 1).toString()
         )
         if (!request.autoRetry) {
-            let rawAttemptRequest = modelRequestForAttempt(modelRequest, 1)
-            let attemptRequest = match (resolvedModelRequestForAttempt(
-                request, rawAttemptRequest
+            let attemptPlan = match (prepareModelAttemptRequest(
+                request, modelRequest, semanticRequestId, 1,
+                AttemptPolicyReason.Initial, modelAttemptRecovery
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
-            let policy = attemptPolicyFor(
-                attemptRequest, AttemptPolicyReason.Initial, modelAttemptRecovery
-            )
-            let effectiveAttemptRequest = requestFromAttemptPolicy(attemptRequest, policy)
-            let attemptId = modelAttemptIdFor(semanticRequestId, 1)
+            let effectiveAttemptRequest = attemptPlan.request
+            let policy = attemptPlan.policy
+            let attemptId = attemptPlan.attemptId
             match (persistModelAttemptBeforeRequest(
                 request, semanticRequestId, attemptId, 1, None, policy, effectiveAttemptRequest,
                 counter, context, control, sink, toolLoopState
@@ -3019,45 +3303,16 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            let _ = emitAttemptLifecycle(
-                context, control, semanticRequestId, attemptId,
-                "model.attempt_started", sink,
-                fields: [
-                    ValueField("attempt_no", integerValue(1)),
-                    ValueField("policy_reason", textValue(attemptPolicyReasonName(policy.reason)))
-                ]
-            )
-            let execution = executeModelWithinBudget(
-                request,
-                counter,
-                effectiveAttemptRequest,
-                semanticRequestId,
-                attemptId,
-                context,
-                control,
-                sink
-            )
-            let result = execution.result
-            match (recordModelAttempt(
-                request,
-                effectiveAttemptRequest,
-                1,
-                counter,
-                result,
-                context,
-                control,
-                sink
-            )) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
-            }
-            match (persistDeferredModelAttemptBarrier(
-                execution, attemptId, semanticRequestId,
+            let dispatched = match (dispatchClaimedModelAttempt(
+                request, counter, effectiveAttemptRequest, 1,
+                semanticRequestId, attemptId, attemptPolicyReasonName(policy.reason),
                 context, control, sink
             )) {
-                case Result.Ok(_) => ()
+                case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
+            let execution = dispatched.execution
+            let result = execution.result
             match (settleProvisionalModelEvents(
                 execution.provisionalEvents, true, context, control,
                 semanticRequestId, attemptId, sink
@@ -3078,34 +3333,32 @@ public class AgentCore <: AgentRunner {
         var retryOrigin: ?AgentError = None
         var recoveryCeiling: ?ThinkingLevel = None
         while (attempt <= maxAttempts) {
-            let rawAttemptRequest = modelRequestForAttempt(modelRequest, attempt)
-            let attemptRequest = match (resolvedModelRequestForAttempt(
-                request, rawAttemptRequest, recoveryCeiling: recoveryCeiling
+            let attemptReason = if (attempt == 1) {
+                AttemptPolicyReason.Initial
+            } else if (recoveryCeiling.isSome()) {
+                AttemptPolicyReason.OutputLimitRecovery
+            } else {
+                AttemptPolicyReason.Retry
+            }
+            let attemptPlan = match (prepareModelAttemptRequest(
+                request, modelRequest, semanticRequestId, attempt, attemptReason,
+                modelAttemptRecovery, recoveryCeiling: recoveryCeiling,
+                parentAttemptId: if (attempt == 1) { None } else {
+                    Some(modelAttemptIdFor(semanticRequestId, attempt - 1))
+                }
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
-            let policy = attemptPolicyFor(
-                attemptRequest,
-                if (attempt == 1) {
-                    AttemptPolicyReason.Initial
-                } else if (recoveryCeiling.isSome()) {
-                    AttemptPolicyReason.OutputLimitRecovery
-                } else {
-                    AttemptPolicyReason.Retry
-                },
-                modelAttemptRecovery
-            )
-            let effectiveAttemptRequest = requestFromAttemptPolicy(attemptRequest, policy)
-            let attemptId = modelAttemptIdFor(semanticRequestId, attempt)
+            let policy = attemptPlan.policy
+            let effectiveAttemptRequest = attemptPlan.request
+            let attemptId = attemptPlan.attemptId
             match (persistModelAttemptBeforeRequest(
                 request,
                 semanticRequestId,
                 attemptId,
                 attempt,
-                if (attempt == 1) { None } else {
-                    Some(modelAttemptIdFor(semanticRequestId, attempt - 1))
-                },
+                attemptPlan.parentAttemptId,
                 policy,
                 effectiveAttemptRequest,
                 counter,
@@ -3146,53 +3399,17 @@ public class AgentCore <: AgentRunner {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            let _ = emitAttemptLifecycle(
-                context, control, semanticRequestId, attemptId,
-                "model.attempt_started", sink,
-                fields: [
-                    ValueField("attempt_no", integerValue(attempt)),
-                    ValueField("policy_reason", textValue(attemptPolicyReasonName(policy.reason)))
-                ]
-            )
-            let execution = executeModelWithinBudget(
-                request,
-                counter,
-                effectiveAttemptRequest,
-                semanticRequestId,
-                attemptId,
-                context,
-                control,
-                sink
-            )
-            let result = execution.result
-            let provisionalEvents = execution.provisionalEvents
-            match (recordModelAttempt(
-                request,
-                effectiveAttemptRequest,
-                attempt,
-                counter,
-                result,
-                context,
-                control,
-                sink
+            let dispatched = match (dispatchClaimedModelAttempt(
+                request, counter, effectiveAttemptRequest, attempt,
+                semanticRequestId, attemptId, attemptPolicyReasonName(policy.reason),
+                context, control, sink, settleOnRecordFailure: true
             )) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    match (settleProvisionalModelEvents(
-                        provisionalEvents, true, context, control,
-                        semanticRequestId, attemptId, sink
-                    )) {
-                        case Result.Ok(_) => return Result.Err(error)
-                        case Result.Err(settleError) => return Result.Err(settleError)
-                    }
-            }
-            match (persistDeferredModelAttemptBarrier(
-                execution, attemptId, semanticRequestId,
-                context, control, sink
-            )) {
-                case Result.Ok(_) => ()
+                case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
             }
+            let execution = dispatched.execution
+            let result = execution.result
+            let provisionalEvents = execution.provisionalEvents
             let durableResult = durableResultForAttempt(
                 request, semanticRequestId, attemptId, result,
                 terminalizeFailure: false
@@ -3290,7 +3507,11 @@ public class AgentCore <: AgentRunner {
                     let durableMayWin = durable.isSome() &&
                         persistedAttempt.replayBarrier != ModelAttemptReplayBarrier.Cancelled &&
                         persistedAttempt.replayBarrier != ModelAttemptReplayBarrier.RunDeadline
-                    let disposition = retryDispositionForAttempt(error, durableMayWin)
+                    let failurePlan = planModelAttemptFailure(
+                        error, durableMayWin, persistedAttempt.replayBarrier,
+                        attempt, maxAttempts, modelAttemptRecovery.maxRecoveryRetries
+                    )
+                    let disposition = failurePlan.disposition
                     match (disposition) {
                         case AttemptRetryDisposition.ResumeDurableDecision =>
                             let decision = durable.getOrThrow()
@@ -3321,48 +3542,8 @@ public class AgentCore <: AgentRunner {
                             ))
                         case _ => ()
                     }
-                    let retryableDisposition =
-                        disposition == AttemptRetryDisposition.RetryEscalated ||
-                        disposition == AttemptRetryDisposition.RetrySamePolicy
-                    let outputLimitedRecovery = match (error.attemptFailure) {
-                        case Some(failure) =>
-                            failure.kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
-                                failure.kind == AttemptFailureKind.OutputLimited
-                        case None => false
-                    }
-                    // A terminal malformed tool-input response is not a
-                    // durable tool decision. The adapter has rejected it
-                    // before projection, so replaying from the last
-                    // canonical context is safe even though provisional tool
-                    // evidence reached the replay barrier. Other failures
-                    // with ToolEvidence remain fail-closed.
-                    let malformedToolArgumentsRecovery = match (error.attemptFailure) {
-                        case Some(failure) =>
-                            failure.kind == AttemptFailureKind.MalformedToolArguments
-                        case None => false
-                    }
-                    // llm4cj has already established that transport EOF
-                    // occurred before any protocol terminal. Its bounded
-                    // diagnostic makes provisional stream evidence safe to
-                    // discard and replay from canonical context.
-                    let providerTerminalMissingRecovery = match (error.attemptFailure) {
-                        case Some(failure) =>
-                            failure.kind == AttemptFailureKind.ProviderTerminalMissing
-                        case None => false
-                    }
-                    let replaySafeForRecovery =
-                        persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.NoBarrier ||
-                        (malformedToolArgumentsRecovery &&
-                            persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence) ||
-                        (providerTerminalMissingRecovery &&
-                            (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
-                                persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal)) ||
-                        (outputLimitedRecovery &&
-                            (persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
-                                persistedAttempt.replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal))
-                    let willRetry = retryableDisposition && attempt < maxAttempts &&
-                        modelAttemptRecovery.maxRecoveryRetries > 0 &&
-                        replaySafeForRecovery
+                    let outputLimitedRecovery = failurePlan.outputLimited
+                    let willRetry = failurePlan.willRetry
                     match (settleProvisionalModelEvents(
                         provisionalEvents, !willRetry, context, control,
                         semanticRequestId, attemptId, sink
@@ -3538,25 +3719,27 @@ public class AgentCore <: AgentRunner {
                     case Some(usage) =>
                         match (counter.accountAttemptUsage(usage, request.budget)) {
                             case Result.Err(requestBudgetError) =>
-                                // Keep the observed usage in the ledger for
-                                // the terminal snapshot, but fail closed:
-                                // an over-limit billed attempt must not retry.
+                                // Provider-reported usage is irreversible even
+                                // when it violates the per-request ceiling.
                                 let _ = control.ledger.recordObservedUsage(usage)
                                 budgetFailure = Some(requestBudgetError)
-                            case Result.Ok(_) => match (control.ledger.reserve(BudgetCharge(
-                                inputTokens: usage.inputTokens,
-                                outputTokens: usage.outputTokens,
-                                costMicros: match (usage.costMicros) {
-                                    case Some(value) => value
-                                    case None => 0
-                                }
-                            ))) {
+                            case Result.Ok(_) => match (reserveBudget(
+                                control,
+                                context,
+                                BudgetCharge(
+                                    inputTokens: usage.inputTokens,
+                                    outputTokens: usage.outputTokens,
+                                    costMicros: match (usage.costMicros) {
+                                        case Some(value) => value
+                                        case None => 0
+                                    }
+                                ),
+                                sink,
+                                requestId: Some(RequestId(modelRequest.requestId)),
+                                observedUsage: Some(usage)
+                            )) {
                                 case Result.Ok(_) => ()
                                 case Result.Err(budgetError) =>
-                                    // Keep the observed usage in the ledger
-                                    // for the terminal snapshot, but fail
-                                    // closed when the cumulative limit is hit.
-                                    let _ = control.ledger.recordObservedUsage(usage)
                                     budgetFailure = Some(budgetError)
                             }
                         }
@@ -3650,6 +3833,58 @@ public class AgentCore <: AgentRunner {
             ))
         }
         Result.Ok(())
+    }
+
+    private func dispatchClaimedModelAttempt(
+        request: AgentRunRequest,
+        counter: BudgetCounter,
+        modelRequest: ModelRequest,
+        attemptNo: Int64,
+        semanticRequestId: SemanticModelRequestId,
+        attemptId: ModelAttemptId,
+        policyReasonName: String,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink,
+        settleOnRecordFailure!: Bool = false
+    ): Result<ModelAttemptDispatch> {
+        let _ = emitAttemptLifecycle(
+            context, control, semanticRequestId, attemptId,
+            "model.attempt_started", sink,
+            fields: [
+                ValueField("attempt_no", integerValue(attemptNo)),
+                ValueField("policy_reason", textValue(policyReasonName))
+            ]
+        )
+        let startedAt = MonoTime.now()
+        let execution = executeModelWithinBudget(
+            request, counter, modelRequest, semanticRequestId,
+            attemptId, context, control, sink
+        )
+        match (recordModelAttempt(
+            request, modelRequest, attemptNo, counter, execution.result,
+            context, control, sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                if (settleOnRecordFailure) {
+                    match (settleProvisionalModelEvents(
+                        execution.provisionalEvents, true, context, control,
+                        semanticRequestId, attemptId, sink
+                    )) {
+                        case Result.Ok(_) => return Result.Err(error)
+                        case Result.Err(settleError) => return Result.Err(settleError)
+                    }
+                }
+                return Result.Err(error)
+        }
+        match (persistDeferredModelAttemptBarrier(
+            execution, attemptId, semanticRequestId, context, control, sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
+        }
+        Result.Ok(ModelAttemptDispatch(execution, startedAt))
     }
 
     private func executeModelWithinBudget(
@@ -4370,44 +4605,46 @@ public class AgentCore <: AgentRunner {
         toolCallId!: ?ToolCallId = None,
         operationId!: ?OperationId = None
     ): Result<Unit> {
-        let event = AgentEvent(
-            EventMeta(
-                context.nextSequence(),
-                control.traceId,
-                context.runId,
-                occurredAtMillis: agentUtcMillis(),
-                turnId: match (turnId) {
-                    case Some(value) => Some(value)
-                    case None => control.currentTurnId()
-                },
-                requestId: match (requestId) {
-                    case Some(value) => Some(value)
-                    case None => match (control.currentRequestId()) {
-                        case "" => None
-                        case value => Some(RequestId(value))
-                    }
-                },
-                semanticRequestId: semanticRequestId,
-                attemptId: attemptId,
-                toolBatchId: match (toolBatchId) {
-                    case Some(value) => Some(value)
-                    case None => control.currentBatchId()
-                },
-                toolCallId: toolCallId,
-                operationId: operationId
-            ),
-            payload
-        )
-        match (runs.append(event)) {
-            case Result.Ok(_) =>
-                sink(event)
-                Result.Ok(())
-            case Result.Err(error) =>
-                if (isProvisionalStreamTelemetry(event)) {
+        control.serializeEvent({ =>
+            let event = AgentEvent(
+                EventMeta(
+                    context.nextSequence(),
+                    control.traceId,
+                    context.runId,
+                    occurredAtMillis: agentUtcMillis(),
+                    turnId: match (turnId) {
+                        case Some(value) => Some(value)
+                        case None => control.currentTurnId()
+                    },
+                    requestId: match (requestId) {
+                        case Some(value) => Some(value)
+                        case None => match (control.currentRequestId()) {
+                            case "" => None
+                            case value => Some(RequestId(value))
+                        }
+                    },
+                    semanticRequestId: semanticRequestId,
+                    attemptId: attemptId,
+                    toolBatchId: match (toolBatchId) {
+                        case Some(value) => Some(value)
+                        case None => control.currentBatchId()
+                    },
+                    toolCallId: toolCallId,
+                    operationId: operationId
+                ),
+                payload
+            )
+            match (runs.append(event)) {
+                case Result.Ok(_) =>
                     sink(event)
                     Result.Ok(())
-                } else { Result.Err(error) }
-        }
+                case Result.Err(error) =>
+                    if (isProvisionalStreamTelemetry(event)) {
+                        sink(event)
+                        Result.Ok(())
+                    } else { Result.Err(error) }
+            }
+        })
     }
 
     private func emitAttemptLifecycle(
@@ -4541,6 +4778,161 @@ public class AgentCore <: AgentRunner {
         )
     }
 
+    private func bindToolOutputSink(
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink,
+        outputSink: CoreToolOutputSink
+    ): Unit {
+        outputSink.bind({ chunk =>
+            let callId = ToolCallId(chunk.callId)
+            emitTyped(
+                context,
+                control,
+                AgentEventPayload.ToolOutput(callId, chunk.channel, chunk.content),
+                sink,
+                toolCallId: Some(callId)
+            )
+        })
+    }
+
+    private func bindBudgetChargeHandler(
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink
+    ): Unit {
+        context.setBudgetChargeHandler({ charge =>
+            reserveBudget(control, context, charge, sink)
+        })
+        context.setNestedToolScheduler({ parentOperationId, action =>
+            executeNestedToolSlot(
+                control, context, parentOperationId, sink, action
+            )
+        })
+    }
+
+    private func executeNestedToolSlot(
+        control: CoreRunControl,
+        context: ToolInvocationContext,
+        parentOperationId: OperationId,
+        sink: AgentEventSink,
+        action: () -> Result<Unit>
+    ): Result<Unit> {
+        match (context.cancellation.check()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        match (control.beginNestedToolSlot(parentOperationId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        let parentUsage = match (control.ledger.releaseTools()) {
+            case Result.Ok(value) => value
+            case Result.Err(error) =>
+                let _ = control.restoreYieldedToolSlot(parentOperationId)
+                return Result.Err(error)
+        }
+        match (emitTyped(
+            context,
+            control,
+            AgentEventPayload.BudgetUpdated(parentUsage),
+            sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                match (resumeYieldedToolSlot(
+                    control, context, parentOperationId, sink
+                )) {
+                    case Result.Ok(_) => return Result.Err(error)
+                    case Result.Err(resumeError) => return Result.Err(resumeError)
+                }
+        }
+        match (context.cancellation.check()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                match (resumeYieldedToolSlot(
+                    control, context, parentOperationId, sink
+                )) {
+                    case Result.Ok(_) => return Result.Err(error)
+                    case Result.Err(resumeError) => return Result.Err(resumeError)
+                }
+        }
+        let childUsage = match (control.reserve(BudgetCharge(
+            toolCalls: 1,
+            toolsStarted: 1
+        ))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) =>
+                match (resumeYieldedToolSlot(
+                    control, context, parentOperationId, sink
+                )) {
+                    case Result.Ok(_) => return Result.Err(error)
+                    case Result.Err(resumeError) => return Result.Err(resumeError)
+                }
+        }
+        match (control.activateNestedToolSlot(parentOperationId)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                let _ = control.restoreYieldedToolSlot(parentOperationId)
+                return Result.Err(error)
+        }
+        match (emitTyped(
+            context,
+            control,
+            AgentEventPayload.BudgetUpdated(childUsage),
+            sink
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                let _ = control.returnNestedToolSlot(parentOperationId)
+                return Result.Err(error)
+        }
+        match (context.cancellation.check()) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) =>
+                match (control.returnNestedToolSlot(parentOperationId)) {
+                    case Result.Ok(_) => return Result.Err(error)
+                    case Result.Err(slotError) => return Result.Err(slotError)
+                }
+        }
+        let childResult: Result<Unit> = try {
+            action()
+        } catch (error: Exception) {
+            Result.Err(AgentError(
+                AgentErrorKind.Internal,
+                "tool.scheduler_child_panicked",
+                "nested tool execution escaped its Result boundary",
+                fields: [ErrorField("parent_operation_id", parentOperationId.value)]
+            ))
+        }
+        match (control.returnNestedToolSlot(parentOperationId)) {
+            case Result.Ok(_) => childResult
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    private func resumeYieldedToolSlot(
+        control: CoreRunControl,
+        context: ToolInvocationContext,
+        parentOperationId: OperationId,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        let usage = match (control.reserve(BudgetCharge(toolsStarted: 1))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (control.restoreYieldedToolSlot(parentOperationId)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        emitTyped(
+            context,
+            control,
+            AgentEventPayload.BudgetUpdated(usage),
+            sink
+        )
+    }
+
     private func reserveBudget(
         control: CoreRunControl,
         context: ToolInvocationContext,
@@ -4549,7 +4941,8 @@ public class AgentCore <: AgentRunner {
         turnId!: ?TurnId = None,
         requestId!: ?RequestId = None,
         toolBatchId!: ?ToolBatchId = None,
-        toolCallId!: ?ToolCallId = None
+        toolCallId!: ?ToolCallId = None,
+        observedUsage!: ?ModelUsage = None
     ): Result<ExecutionUsage> {
         match (control.reserve(charge)) {
             case Result.Ok(usage) =>
@@ -4566,7 +4959,68 @@ public class AgentCore <: AgentRunner {
                     case Result.Ok(_) => Result.Ok(usage)
                     case Result.Err(error) => Result.Err(error)
                 }
+            case Result.Err(error) =>
+                match (observedUsage) {
+                    case Some(value) => let _ = control.ledger.recordObservedUsage(value)
+                    case None => ()
+                }
+                Result.Err(error)
+        }
+    }
+
+    func reserveInternalModelRequest(parent: AgentRunRequest): Result<Unit> {
+        let control = match (internalModelControl(parent)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (control.reserve(BudgetCharge(modelRequests: 1))) {
+            case Result.Ok(_) => Result.Ok(())
             case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    func accountInternalModelUsage(
+        parent: AgentRunRequest,
+        usage: ModelUsage
+    ): Result<Unit> {
+        let control = match (internalModelControl(parent)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let cost = match (usage.costMicros) {
+            case Some(value) => value
+            case None => 0
+        }
+        match (control.reserve(BudgetCharge(
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            costMicros: cost
+        ))) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) =>
+                let _ = control.ledger.recordObservedUsage(usage)
+                Result.Err(error)
+        }
+    }
+
+    private func internalModelControl(
+        parent: AgentRunRequest
+    ): Result<CoreRunControl> {
+        match (controls.find(parent.runId)) {
+            case Some(control) => Result.Ok(control)
+            case None =>
+                let snapshot = match (runs.find(parent.runId)) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                if (snapshot.status != RunState.WaitingApproval) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.RecoveryRequired,
+                        "model.internal_run_control_missing",
+                        "internal model call has no active approval Run control"
+                    ))
+                }
+                controlForResume(parent, snapshot, internalNoToolsRecovery: true)
         }
     }
 
@@ -4574,6 +5028,7 @@ public class AgentCore <: AgentRunner {
         request: AgentRunRequest,
         snapshot: RunSnapshot,
         modelRecovery!: Bool = false,
+        internalNoToolsRecovery!: Bool = false,
         initialUsage!: ?ExecutionUsage = None
     ): Result<CoreRunControl> {
         match (controls.find(request.runId)) {
@@ -4598,31 +5053,17 @@ public class AgentCore <: AgentRunner {
                                 "canonical Thread owner does not match the durable continuation"
                             ))
                         }
-                    case None =>
-                        let started = match (runtime.startTurn(
-                            SemanticTurnId("turn-" + request.runId.value),
-                            request.runId,
-                            ItemId("user-" + request.runId.value),
-                            coreUserContent(ModelMessage(
-                                ModelRole.User,
-                                [ModelBlock(ModelBlockKind.Text, text: request.prompt)]
-                            )),
-                            coreModelLane(request, catalog),
-                            request.skillStack,
-                            executionLaneId: request.executionLaneId,
-                            createdAtMillis: agentUtcMillis(),
-                            deadlineMillis: request.budget.deadlineMillis,
-                            runBudgetSnapshot: coreBudgetSnapshot(request.budget)
-                        )) {
-                            case Result.Ok(value) => value
+                        match (validateCoreToolSetSnapshot(active.lane.toolSet)) {
+                            case Result.Ok(_) => ()
                             case Result.Err(error) => return Result.Err(error)
                         }
-                        let _ = started
-                        if (!modelRecovery) {
-                            match (runtime.pauseForApproval()) {
-                                case Result.Ok(_) => ()
-                                case Result.Err(error) => return Result.Err(error)
-                            }
+                    case None =>
+                        if (!internalNoToolsRecovery) {
+                            return Result.Err(AgentError(
+                                AgentErrorKind.RecoveryRequired,
+                                "run.model_lane_snapshot_missing",
+                                "canonical Thread has no active Run snapshot to restore"
+                            ))
                         }
                 }
                 let restoredModelRequests = match (initialUsage) {
@@ -4817,39 +5258,41 @@ public class AgentCore <: AgentRunner {
                 modelEventValue(event)
             )
         }
-        let durableEvent = AgentEvent(
-            EventMeta(
-                context.nextSequence(), control.traceId, context.runId,
-                occurredAtMillis: agentUtcMillis(),
-                turnId: control.currentTurnId(),
-                requestId: match (control.currentRequestId()) {
-                    case "" => None
-                    case value => Some(RequestId(value))
-                },
-                semanticRequestId: Some(semanticRequestId),
-                attemptId: Some(attemptId),
-                toolBatchId: control.currentBatchId()
-            ),
-            payload
-        )
-        match (runs.append(durableEvent)) {
-            case Result.Ok(_) =>
-                sink(durableEvent)
-                Result.Ok(())
-            case Result.Err(_) =>
-                let dropped = AgentEvent(
-                    durableEvent.meta,
-                    AgentEventPayload.Extension(AgentEventKind.Diagnostic, objectValue([
-                        ValueField("code", textValue("model.stream_telemetry_dropped"))
-                    ]))
-                )
-                match (runs.append(dropped)) {
-                    case Result.Ok(_) =>
-                        sink(dropped)
-                        Result.Ok(())
-                    case Result.Err(error) => Result.Err(error)
-                }
-        }
+        control.serializeEvent({ =>
+            let durableEvent = AgentEvent(
+                EventMeta(
+                    context.nextSequence(), control.traceId, context.runId,
+                    occurredAtMillis: agentUtcMillis(),
+                    turnId: control.currentTurnId(),
+                    requestId: match (control.currentRequestId()) {
+                        case "" => None
+                        case value => Some(RequestId(value))
+                    },
+                    semanticRequestId: Some(semanticRequestId),
+                    attemptId: Some(attemptId),
+                    toolBatchId: control.currentBatchId()
+                ),
+                payload
+            )
+            match (runs.append(durableEvent)) {
+                case Result.Ok(_) =>
+                    sink(durableEvent)
+                    Result.Ok(())
+                case Result.Err(_) =>
+                    let dropped = AgentEvent(
+                        durableEvent.meta,
+                        AgentEventPayload.Extension(AgentEventKind.Diagnostic, objectValue([
+                            ValueField("code", textValue("model.stream_telemetry_dropped"))
+                        ]))
+                    )
+                    match (runs.append(dropped)) {
+                        case Result.Ok(_) =>
+                            sink(dropped)
+                            Result.Ok(())
+                        case Result.Err(error) => Result.Err(error)
+                    }
+            }
+        })
     }
 
     private func persistFirstModelAttemptBarrier(
@@ -5242,6 +5685,10 @@ public class AgentCore <: AgentRunner {
             providerRequestId: effectiveRequest.requestId,
             semanticRequestDigest: semanticRequestDigest,
             wirePolicyDigest: wirePolicyDigest,
+            transcriptSnapshot: match (model.transcriptSnapshot(effectiveRequest)) {
+                case Some(value) => value
+                case None => ""
+            },
             dispatchState: ModelAttemptDispatchState.Prepared,
             replayBarrier: ModelAttemptReplayBarrier.NoBarrier
         )
@@ -5978,105 +6425,6 @@ func errorHasField(error: AgentError, name: String): Bool {
     false
 }
 
-func resolvedModelRequestForAttempt(
-    runRequest: AgentRunRequest,
-    request: ModelRequest,
-    recoveryCeiling!: ?ThinkingLevel = None
-): Result<ModelRequest> {
-    let resolved = match (resolveModelAttemptPolicy(AttemptPolicyInput(
-        runRequest.requestedPolicy,
-        runRequest.modelCapabilitiesSnapshot,
-        recoveryCeiling: recoveryCeiling,
-        resolverVersion: runRequest.resolverVersion
-    ))) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    Result.Ok(ModelRequest(
-        request.model,
-        request.messages,
-        system: request.system,
-        tools: request.tools,
-        thinking: resolved.thinking.effective,
-        maxOutputTokens: resolved.output.effectiveWireLimit,
-        wireMaxOutputTokens: Some(resolved.output.effectiveWireLimit),
-        resolvedPolicy: Some(resolved),
-        streaming: request.streaming,
-        parallelToolCalls: request.parallelToolCalls,
-        requestId: request.requestId,
-        serviceTier: request.serviceTier,
-        cachePolicy: request.cachePolicy,
-        toolChoice: request.toolChoice,
-        structuredOutput: request.structuredOutput,
-        cacheKey: request.cacheKey,
-        transportHardTimeoutMillis: request.transportHardTimeoutMillis
-    ))
-}
-
-// Request and attempt identifiers are transport bookkeeping, not model input.
-// A retry receives a fresh cancellable wire id while every semantic request
-// field is copied byte-for-byte from the original attempt.
-func modelRequestForAttempt(value: ModelRequest, attempt: Int64): ModelRequest {
-    ModelRequest(
-        value.model,
-        value.messages,
-        system: value.system,
-        tools: value.tools,
-        thinking: value.thinking,
-        maxOutputTokens: value.maxOutputTokens,
-        wireMaxOutputTokens: Some(value.wireMaxOutputTokens),
-        resolvedPolicy: value.resolvedPolicy,
-        streaming: value.streaming,
-        parallelToolCalls: value.parallelToolCalls,
-        requestId: if (attempt <= 1) {
-            value.requestId
-        } else {
-            value.requestId + "-retry-" + (attempt - 1).toString()
-        },
-        serviceTier: value.serviceTier,
-        cachePolicy: value.cachePolicy,
-        toolChoice: value.toolChoice,
-        structuredOutput: value.structuredOutput,
-        cacheKey: value.cacheKey,
-        transportHardTimeoutMillis: value.transportHardTimeoutMillis
-    )
-}
-
-func attemptPolicyFor(
-    request: ModelRequest,
-    reason: AttemptPolicyReason,
-    deadlines: ModelAttemptRecoveryPolicy
-): AttemptPolicy {
-    AttemptPolicy(
-        request.model, request.thinking, request.toolChoice,
-        request.maxOutputTokens, reason: reason,
-        softDeadlineMillis: 0,
-        hardDeadlineMillis: 0,
-        streamIdleMillis: deadlines.streamIdleMillis,
-        resolvedPolicy: request.resolvedPolicy
-    )
-}
-
-func requestFromAttemptPolicy(request: ModelRequest, policy: AttemptPolicy): ModelRequest {
-    ModelRequest(
-        policy.model, request.messages, system: request.system, tools: request.tools,
-        thinking: policy.thinking, maxOutputTokens: policy.maxOutputTokens,
-        wireMaxOutputTokens: Some(policy.maxOutputTokens),
-        resolvedPolicy: request.resolvedPolicy,
-        streaming: request.streaming, parallelToolCalls: request.parallelToolCalls,
-        requestId: request.requestId, serviceTier: request.serviceTier,
-        cachePolicy: request.cachePolicy, toolChoice: policy.toolChoice,
-        structuredOutput: request.structuredOutput, cacheKey: request.cacheKey,
-        transportHardTimeoutMillis: 0
-    )
-}
-
-func modelAttemptIdFor(
-    semanticRequestId: SemanticModelRequestId,
-    attempt: Int64
-): ModelAttemptId {
-    ModelAttemptId(semanticRequestId.value + "-attempt-" + attempt.toString())
-}
 
 func attemptPolicyValue(policy: AttemptPolicy): AgentValue {
     let fields = ArrayList<ValueField>()
@@ -6861,33 +7209,6 @@ func decisionReplayFrame(blocks: Array<DurableDecisionBlock>): String {
 
 func decisionFrame(value: String): String { value.size.toString() + ":" + value }
 
-func canonicalAgentValue(value: AgentValue): String {
-    match (value.unifiedKind) {
-        case ValueKind.Null => "null"
-        case ValueKind.Boolean => if (value.asBool()) { "true" } else { "false" }
-        case ValueKind.Number => "n" + decisionFrame(value.asNumberText())
-        case ValueKind.Text => "s" + decisionFrame(value.text)
-        case ValueKind.List =>
-            var output = "["
-            for (item in value.items) { output += decisionFrame(canonicalAgentValue(item)) }
-            output + "]"
-        case ValueKind.Object =>
-            var output = "{"
-            let used = Array<Bool>(value.fields.size, repeat: false)
-            for (_ in 0..value.fields.size) {
-                var selected: Int64 = -1
-                for (index in 0..value.fields.size where !used[index]) {
-                    if (selected < 0 || value.fields[index].name < value.fields[selected].name) {
-                        selected = index
-                    }
-                }
-                used[selected] = true
-                output += decisionFrame(value.fields[selected].name) +
-                    decisionFrame(canonicalAgentValue(value.fields[selected].value))
-            }
-            output + "}"
-    }
-}
 
 func stableDecisionFingerprint(value: String): String {
     var hash: UInt64 = 1469598103934665603
@@ -7342,17 +7663,10 @@ func skillPromptQuote(value: String): String {
 }
 
 func coreModelLane(request: AgentRunRequest, catalog: ToolCatalog): ModelLane {
-    let definitions = catalog.definitionsFor(request.capabilities)
-    let tools = ArrayList<ToolSnapshotEntry>()
-    for (definition in definitions) {
-        tools.add(ToolSnapshotEntry(
-            definition.name,
-            definition.description,
-            definition.inputSchema,
-            "agent-core-v1",
-            []
-        ))
-    }
+    let toolSet = catalog.toolSetSnapshot(
+        "catalog-" + request.runId.value,
+        request.capabilities
+    )
     ModelLane(
         ModelLaneRole.Main,
         "configured",
@@ -7360,7 +7674,7 @@ func coreModelLane(request: AgentRunRequest, catalog: ToolCatalog): ModelLane {
         "agent-core",
         ModelLaneCapabilitiesSnapshot(
             streaming: true,
-            tools: !tools.isEmpty(),
+            tools: coreModelToolSetHasAvailableTool(toolSet),
             reasoning: request.thinking != ThinkingLevel.Off,
             structuredOutput: request.structuredOutput.isSome(),
             imageInput: !request.imageInputs.isEmpty(),
@@ -7377,9 +7691,54 @@ func coreModelLane(request: AgentRunRequest, catalog: ToolCatalog): ModelLane {
         } else {
             "default"
         },
-        ToolSetSnapshot("catalog-" + request.runId.value, tools.toArray()),
+        toolSet,
         "system-v1"
     )
+}
+
+func coreModelToolSetHasAvailableTool(snapshot: ToolSetSnapshot): Bool {
+    for (entry in snapshot.entries where entry.availableAtSnapshot) {
+        return true
+    }
+    false
+}
+
+func coreModelToolDefinitions(snapshot: ToolSetSnapshot): Array<ModelToolDefinition> {
+    let definitions = ArrayList<ModelToolDefinition>()
+    for (entry in snapshot.entries where entry.availableAtSnapshot) {
+        definitions.add(ModelToolDefinition(
+            entry.name,
+            entry.description,
+            entry.inputSchema
+        ))
+    }
+    definitions.toArray()
+}
+
+func validateCoreToolSetSnapshot(snapshot: ToolSetSnapshot): Result<Unit> {
+    for (entry in snapshot.entries where !entry.hasCompleteIdentity()) {
+        return Result.Err(AgentError(
+            AgentErrorKind.RecoveryRequired,
+            "run.tool_snapshot_identity_missing",
+            "durable Run tool snapshot does not contain a complete implementation identity",
+            fields: [ErrorField("tool", entry.name)]
+        ))
+    }
+    Result.Ok(())
+}
+
+func coreActiveRunToolSet(runtime: AgentThreadRuntime): Result<ToolSetSnapshot> {
+    match (runtime.activeRun()) {
+        case Some(active) => match (validateCoreToolSetSnapshot(active.lane.toolSet)) {
+            case Result.Ok(_) => Result.Ok(active.lane.toolSet)
+            case Result.Err(error) => Result.Err(error)
+        }
+        case None => Result.Err(AgentError(
+            AgentErrorKind.RecoveryRequired,
+            "run.model_lane_snapshot_missing",
+            "active Run has no immutable ModelLane tool snapshot"
+        ))
+    }
 }
 
 func coreBudgetSnapshot(budget: ResourceBudget): AgentValue {
@@ -7420,6 +7779,7 @@ func approvalRequestEventValue(request: ApprovalRequest): AgentValue {
             ValueField("risk_reasons", approvalEventStrings(request.metadata.assessment.reasons)),
             ValueField("permission_class", textValue(request.metadata.capabilityLabel)),
             ValueField("decision_source", textValue(approvalDecisionSourceName(request.decisionSource))),
+            ValueField("session_approval_allowed", boolValue(request.sessionApprovalAllowed)),
             ValueField("requested_capabilities", listValue([textValue(request.metadata.capabilityLabel)]))
         ]
     )
@@ -7571,5 +7931,24 @@ func providerStreamEventValue(event: ProviderStreamEvent): Array<ValueField> {
         case ProviderStreamEvent.StreamTransportClosed => [
             ValueField("code", textValue("model.stream_transport_closed"))
         ]
+    }
+}
+
+class AgentCoreInternalModelBudgetController <: InternalModelBudgetController {
+    private let core: AgentCore
+
+    init(core: AgentCore) { this.core = core }
+
+    public func reserveInternalModelRequest(
+        parent: AgentRunRequest
+    ): Result<Unit> {
+        core.reserveInternalModelRequest(parent)
+    }
+
+    public func accountInternalModelUsage(
+        parent: AgentRunRequest,
+        usage: ModelUsage
+    ): Result<Unit> {
+        core.accountInternalModelUsage(parent, usage)
     }
 }

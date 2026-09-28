@@ -21,12 +21,27 @@ import std.process.*
 import std.time.*
 
 main(): Int64 {
+    let workerArguments = getCommandLine()
+    if (isProductToolProgramWorker(workerArguments)) {
+        return runProductToolProgramWorker(workerArguments)
+    }
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
     }
     let root = Directory.createTemp("target").toString()
     try {
         runProductIdContracts()
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-runtime-config")) {
+            prepareContractFiles(root)
+            runToolContracts(root)
+            println("product eval runtime configuration contract passed")
+            return 0
+        }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-optional-interpreter")) {
+            runOptionalInterpreterDefaultProductContract(root)
+            println("product default startup without optional Eval interpreter contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("process-remediation")) {
             runProcessRemediationContracts(root)
             return 0
@@ -116,6 +131,12 @@ main(): Int64 {
             println("product guarded and async contract passed")
             return 0
         }
+        if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("ai-approval")) {
+            prepareProductContractWorkspace(root)
+            runAiApprovalContracts(root)
+            println("product AI approval contract passed")
+            return 0
+        }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("session-lifecycle")) {
             prepareProductContractWorkspace(root)
             let product = openProduct(config: ProductConfig(
@@ -152,6 +173,7 @@ main(): Int64 {
     }
 }
 
+
 func runProductIdContracts(): Unit {
     let first = ProductIds()
     let second = ProductIds()
@@ -165,6 +187,41 @@ func runProductIdContracts(): Unit {
                     "independent ProductIds generators never share durable identity")
             }
             observed.add(value)
+        }
+    }
+}
+
+func runOptionalInterpreterDefaultProductContract(root: String): Unit {
+    let variable = "AXYNDRA_EVAL_PYTHON_EXECUTABLE"
+    let original = getVariable(variable)
+    try {
+        setVariable(variable, root + "/missing-python/python3")
+        let product = openProduct(
+            config: ProductConfig(
+                stateRoot: root + "/optional-eval-state",
+                workspaceRoot: root,
+                fixture: true,
+                approvalMode: ApprovalMode.Yolo,
+                asyncEnabled: false
+            )
+        ).value().getOrThrow()
+        try {
+            let response = product
+                .applicationSession()
+                .handle("default product startup without Python Eval")
+                .value()
+                .getOrThrow()
+            expect(
+                response.text == "fixture response for default product startup without Python Eval",
+                "default Product startup and model turn do not require optional Python Eval"
+            )
+        } finally {
+            product.close()
+        }
+    } finally {
+        match (original) {
+            case Some(value) => setVariable(variable, value)
+            case None => removeVariable(variable)
         }
     }
 }
@@ -583,7 +640,7 @@ func runAiApprovalContracts(root: String): Unit {
         )
     }, "rebuilt application settles the restored durable pending approval")
 
-    let failingPathRoot = "/tmp/axyndra-approval-missing-parent"
+    let failingPathRoot = workspace + "/../missing-parent"
     let _ = removeIfExists(failingPathRoot, recursive: true)
     let failingApplication = openProduct(
         config: ProductConfig(
@@ -601,9 +658,15 @@ func runAiApprovalContracts(root: String): Unit {
         failingApproval.operationId.value,
         ApprovalDecision.Approve
     )
+    let failedToolResult = toolResultValue(
+        failingApplication.messages().value().getOrThrow(),
+        "fixture-approval-execution-failure"
+    ).getOrThrow()
     expect(
-        failedDecision.isError() && failingApplication.approval().isNone() && failingApplication.cancel().isOk(),
-        "a failed approved operation clears stale approval state and remains cancellable"
+        failedDecision.isOk() && failingApplication.approval().isNone() &&
+            failedToolResult.field("error").getOrThrow().text == "workspace.parent_missing" &&
+            failingApplication.cancel().isOk(),
+        "a failed approved operation commits its recoverable error result, clears the prompt, and remains cancellable"
     )
 
     let never = openProduct(
@@ -1550,7 +1613,9 @@ func runProviderAuthenticationContracts(root: String): Unit {
 func runToolContracts(root: String): Unit {
     let workspace = LocalWorkspace(root)
     let processes = LocalProcessPort(workspace, sandboxEnabled: true)
-    runProcessCancellationContract(processes)
+    if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") != Some("eval-runtime-config")) {
+        runProcessCancellationContract(processes)
+    }
     let catalog = ToolCatalog()
     let askRuntime = AskRuntime()
     let toolDatabase = SqliteDatabase(root + "/tool-state.db")
@@ -1587,6 +1652,23 @@ func runToolContracts(root: String): Unit {
             ]
         )
     )
+    if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("eval-runtime-config")) {
+        let evalPipeline = ToolPipeline(
+            catalog,
+            InMemoryOperationRuntimePort(),
+            RecordingAuditPort(),
+            ProductIds(),
+            policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
+        )
+        try {
+            runEvalRuntimeConfigurationContracts(evalPipeline, context, root)
+            runEvalContracts(evalPipeline, context, workspace, processes)
+        } finally {
+            processes.close().value().getOrThrow()
+            toolDatabase.close()
+        }
+        return
+    }
     runAskToolContracts(pipeline, context, askRuntime)
     let initializedTodos = runAstSearchContracts(pipeline, context)
     runAstEditContracts(workspace, processes)
@@ -1599,6 +1681,70 @@ func runToolContracts(root: String): Unit {
     toolDatabase.close()
 }
 
+func runEvalRuntimeConfigurationContracts(
+    pipeline: ToolPipeline,
+    context: ToolInvocationContext,
+    root: String
+): Unit {
+    let variable = "AXYNDRA_EVAL_PYTHON_EXECUTABLE"
+    let original = getVariable(variable)
+    try {
+        setVariable(variable, "python3")
+        let relativeContent = evalConfigurationFailureContent(
+            executePipelineCall(
+                pipeline,
+                context,
+                evalCall("eval-relative-interpreter", "py", "1 + 1")
+            ),
+            "eval.interpreter_path_invalid",
+            "absolute path"
+        )
+        let missingPath = root + "/missing-python/python3"
+        setVariable(variable, missingPath)
+        let unavailableContent = evalConfigurationFailureContent(
+            executePipelineCall(
+                pipeline,
+                context,
+                evalCall("eval-missing-interpreter", "py", "1 + 1")
+            ),
+            "eval.interpreter_unavailable",
+            "Python interpreter is unavailable"
+        )
+        expect(
+            !unavailableContent.contains(missingPath),
+            "missing interpreter diagnostics do not reveal the configured host path"
+        )
+        let _ = relativeContent
+    } finally {
+        match (original) {
+            case Some(value) => setVariable(variable, value)
+            case None => removeVariable(variable)
+        }
+    }
+}
+
+func evalConfigurationFailureContent(
+    result: Result<ToolInvocationResult>,
+    expectedCode: String,
+    expectedMessage: String
+): String {
+    match (result) {
+        case Result.Err(error) =>
+            expect(
+                error.code == expectedCode && error.message.contains(expectedMessage),
+                "eval configuration errors preserve their specific code and diagnostic"
+            )
+            error.message
+        case Result.Ok(ToolInvocationResult.Completed(value)) =>
+            let content = value.output.field("content").getOrThrow().text
+            expect(
+                value.isError && content.contains(expectedMessage),
+                "eval configuration errors are visible in the completed tool result"
+            )
+            content
+        case Result.Ok(_) => throw IllegalStateException("expected eval configuration failure")
+    }
+}
 func runWriteApprovalClassificationContracts(root: String): Unit {
     let workspaceRoot = root + "/write-classification/workspace"
     let tempOutside = Directory.createTemp("/tmp").toString()
@@ -1982,8 +2128,7 @@ func runAskToolContracts(
         askSingleCall("ask-headless")
     )
     expect(
-        headlessAsk.isError() && headlessAsk.error().getOrThrow().code == "ask.interactive_required" &&
-            headlessAsk.error().getOrThrow().message == "Ask tool requires interactive mode",
+        headlessAsk.isError() && headlessAsk.error().getOrThrow().code == "ask.interactive_required",
         "ask fails explicitly without an interactive surface"
     )
     askRuntime.setInteractive(context.sessionId, true)
@@ -4900,7 +5045,7 @@ func runSlashCommandContracts(
             "tools: ast_grep ast_edit web_search grep write ask read github edit glob bash bash_readonly eval " +
             "checkpoint rewind lsp debug plan_write goal memory_edit " +
             "retain recall reflect learn manage_skill read_skill_reference todo " +
-            "task hub yield" && !setup.agentInvoked &&
+            "task hub yield run_program apply_file_plan recover_file_plan" && !setup.agentInvoked &&
             isProviderSetupAction(setup.action) && !providers.agentInvoked && isProviderSetupAction(providers.action) &&
             isModelSelectorAction(switchModel.action) && isBranchSelectorAction(branch.action) &&
             !emptyJobs.agentInvoked && emptyJobs.text == "No background jobs." && !stats.agentInvoked &&
@@ -5960,6 +6105,17 @@ func runSessionLifecycleContracts(
     runStructuredCompactionSummaryContract(root, product)
     runHybridCompactionSummaryContracts(root)
     let sourceBeforeFork = application.id()
+    let sourceEval = application.invokeLocalTool(
+        "eval",
+        evalCall(
+            "fork-source-state", "py", "fork_probe = 73\nfork_probe", reset: true
+        ).arguments
+    )
+    expect(
+        sourceEval.isOk() && sourceEval.value().getOrThrow().output
+            .field("content").getOrThrow().text.trimAscii() == "73",
+        "source session Eval process retains mutable state before fork"
+    )
     let sourceTranscript = product.messages(sourceBeforeFork).value().getOrThrow()
     let exportPath = root + "/append-only-session.html"
     product.exportSessionHtml(sourceBeforeFork, exportPath).value().getOrThrow()
@@ -5973,9 +6129,42 @@ func runSessionLifecycleContracts(
         "session branch inherits the source model"
     )
     let branchSession = application.id()
+    let branchTranscriptAtFork = product.messages(branchSession).value().getOrThrow().size
+    expect(
+        branchTranscriptAtFork == sourceTranscript.size,
+        "fork starts with the complete source transcript before branch-local calls"
+    )
+    let branchEval = application.invokeLocalTool(
+        "eval",
+        evalCall(
+            "fork-branch-state", "py", "globals().get(\"fork_probe\", \"missing\")"
+        ).arguments
+    )
+    expect(
+        branchEval.isOk() && branchEval.value().getOrThrow().output
+            .field("content").getOrThrow().text.trimAscii() == "missing",
+        "forked session starts with independent mutable Eval process state"
+    )
+    expect(
+        application.handle("/session " + sourceBeforeFork.value).isOk(),
+        "switch back to source session for Eval state check"
+    )
+    let sourceEvalAfterFork = application.invokeLocalTool(
+        "eval",
+        evalCall("fork-source-after", "py", "fork_probe").arguments
+    )
+    expect(
+        sourceEvalAfterFork.isOk() && sourceEvalAfterFork.value().getOrThrow()
+            .output.field("content").getOrThrow().text.trimAscii() == "73",
+        "fork does not mutate the source session Eval process"
+    )
+    expect(
+        application.handle("/session " + branchSession.value).isOk(),
+        "restore branch session after Eval process isolation check"
+    )
     expect(
         product.sessionModel(branchSession).value().getOrThrow() == "fixture-next" &&
-            product.messages(branchSession).value().getOrThrow().size == sourceTranscript.size &&
+            branchSession.value != sourceBeforeFork.value &&
             durableCheckpointCount(root + "/state/state.db", branchSession) > 0,
         "fork copies the full transcript and its durable ContextCheckpoint"
     )

@@ -134,6 +134,24 @@ func runAliasAndConfigContracts(): Unit {
     expect(rejects({ =>
         McpStreamableHttpClientConfig("http://remote.example/mcp")
     }), "remote MCP clients require HTTPS")
+    let proxyCredential = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    let authenticatedProxy = McpStreamableHttpClientConfig(
+        "http://127.0.0.1:9/mcp",
+        proxyUrl: "http://axyndra:" + proxyCredential + "@127.0.0.1:9"
+    )
+    match (openStreamableHttpMcpTransport(authenticatedProxy)) {
+        case Result.Ok(transport) => expect(
+            transport.close().isOk(),
+            "authenticated loopback proxy configuration reaches the transport"
+        )
+        case Result.Err(error) => throw IllegalStateException(
+            "authenticated loopback proxy configuration was rejected: " + error.message
+        )
+    }
+    expect(rejects({ => McpStreamableHttpClientConfig(
+        "http://127.0.0.1:9/mcp",
+        proxyUrl: "http://axyndra:short@127.0.0.1:9"
+    ) }), "loopback proxy credentials require the generated per-lease format")
     let _ = McpStreamableHttpClientConfig(
         "https://mcp.example/mcp",
         bearerTokenEnvironment: "MCP_BEARER"

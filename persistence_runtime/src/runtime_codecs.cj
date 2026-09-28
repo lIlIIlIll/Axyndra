@@ -11,8 +11,10 @@ import std.convert.*
 import std.fs.*
 import std.overflow.*
 
-const RUN_SNAPSHOT_FORMAT_VERSION: Int64 = 2
+const RUN_SNAPSHOT_FORMAT_VERSION: Int64 = 3
 const RUN_EVENT_FORMAT_VERSION: Int64 = 1
+const RUN_CONTINUATION_FORMAT_VERSION: Int64 = 5
+const LEGACY_RUN_CONTINUATION_FORMAT_VERSION: Int64 = 4
 
 func ensureDirectory(path: String): Unit {
     if (!exists(Path(path))) { Directory.create(path, recursive: true) }
@@ -555,7 +557,7 @@ func continuationValue(
         imageInputs.add(modelImageValue(image))
     }
     objectValue([
-        ValueField("version", integerValue(4)),
+        ValueField("version", integerValue(RUN_CONTINUATION_FORMAT_VERSION)),
         ValueField("kind", textValue(match (value.kind) {
             case RunContinuationKind.WaitingApproval => "waiting_approval"
             case RunContinuationKind.RunningModel => "running_model"
@@ -954,9 +956,11 @@ func decodeContinuation(source: String): Result<RunContinuation> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
-    if (version != 4) {
+    if (version != RUN_CONTINUATION_FORMAT_VERSION &&
+        version != LEGACY_RUN_CONTINUATION_FORMAT_VERSION) {
         return codecError("unsupported run continuation version")
     }
+    let legacyFormat = version == LEGACY_RUN_CONTINUATION_FORMAT_VERSION
     let kind = match (requiredText(value, "kind")) {
         case Result.Ok("waiting_approval") => RunContinuationKind.WaitingApproval
         case Result.Ok("running_model") => RunContinuationKind.RunningModel
@@ -1076,14 +1080,14 @@ func decodeContinuation(source: String): Result<RunContinuation> {
             }
         }
         let budget = match (value.field("budget")) {
-            case Some(raw) => match (strictBudgetFromValue(raw)) {
+            case Some(raw) => match (strictBudgetFromValue(raw, legacyFormat)) {
                 case Result.Ok(item) => item
                 case Result.Err(error) => return Result.Err(error)
             }
             case None => return codecError("missing field: budget")
         }
         let approval = match (value.field("approval")) {
-            case Some(raw) => match (strictApprovalRequestFromValue(raw)) {
+            case Some(raw) => match (strictApprovalRequestFromValue(raw, legacyFormat)) {
                 case Result.Ok(item) => item
                 case Result.Err(error) => return Result.Err(error)
             }
@@ -1305,7 +1309,19 @@ func budgetValue(value: ResourceBudget): AgentValue {
         ValueField("max_total_input_tokens", integerValue(value.maxTotalInputTokens)),
         ValueField("max_total_output_tokens", integerValue(value.maxTotalOutputTokens)),
         ValueField("max_cost_micros", integerValue(value.maxCostMicros)),
-        ValueField("deadline_millis", integerValue(value.deadlineMillis))
+        ValueField("deadline_millis", integerValue(value.deadlineMillis)),
+        ValueField("process_limits", executionResourceLimitsValue(value.processLimits))
+    ])
+}
+
+func executionResourceLimitsValue(value: ExecutionResourceLimits): AgentValue {
+    objectValue([
+        ValueField("max_output_bytes", integerValue(value.maxOutputBytes)),
+        ValueField("address_space_bytes", integerValue(value.addressSpaceBytes)),
+        ValueField("file_size_bytes", integerValue(value.fileSizeBytes)),
+        ValueField("open_files", integerValue(value.openFiles)),
+        ValueField("processes", integerValue(value.processes)),
+        ValueField("cpu_seconds", integerValue(value.cpuSeconds))
     ])
 }
 
@@ -1375,7 +1391,10 @@ func strictOptionalInteger(
     }
 }
 
-func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
+func strictBudgetFromValue(
+    value: AgentValue,
+    legacyFormat: Bool
+): Result<ResourceBudget> {
     if (value.unifiedKind != ValueKind.Object) {
         return codecError("field is not an object: budget")
     }
@@ -1433,6 +1452,17 @@ func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
         let totalOutput = lenientBudgetInteger(value, "max_total_output_tokens", 0)
         let costMicros = lenientBudgetInteger(value, "max_cost_micros", 0)
         let deadline = lenientBudgetInteger(value, "deadline_millis", 0)
+        let processLimits = match (value.field("process_limits")) {
+            case Some(raw) => match (strictExecutionResourceLimitsFromValue(raw)) {
+                case Result.Ok(item) => item
+                case Result.Err(error) => return Result.Err(error)
+            }
+            case None => if (legacyFormat) {
+                ExecutionResourceLimits()
+            } else {
+                return codecError("missing field: process_limits")
+            }
+        }
         Result.Ok(ResourceBudget(
             maxInputTokens: input,
             maxOutputTokens: output,
@@ -1450,10 +1480,55 @@ func strictBudgetFromValue(value: AgentValue): Result<ResourceBudget> {
             maxTotalInputTokens: totalInput,
             maxTotalOutputTokens: totalOutput,
             maxCostMicros: costMicros,
-            deadlineMillis: deadline
+            deadlineMillis: deadline,
+            processLimits: processLimits
         ))
     } catch (error: Exception) {
         codecError("invalid run continuation budget: " + error.message)
+    }
+}
+
+func strictExecutionResourceLimitsFromValue(
+    value: AgentValue
+): Result<ExecutionResourceLimits> {
+    if (value.unifiedKind != ValueKind.Object) {
+        return codecError("field is not an object: process_limits")
+    }
+    let maxOutput = match (requiredInteger(value, "max_output_bytes")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let addressSpace = match (requiredInteger(value, "address_space_bytes")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let fileSize = match (requiredInteger(value, "file_size_bytes")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let openFiles = match (requiredInteger(value, "open_files")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let processes = match (requiredInteger(value, "processes")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let cpuSeconds = match (requiredInteger(value, "cpu_seconds")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    try {
+        Result.Ok(ExecutionResourceLimits(
+            maxOutputBytes: maxOutput,
+            addressSpaceBytes: addressSpace,
+            fileSizeBytes: fileSize,
+            openFiles: openFiles,
+            processes: processes,
+            cpuSeconds: cpuSeconds
+        ))
+    } catch (error: Exception) {
+        codecError("invalid run continuation process limits: " + error.message)
     }
 }
 
@@ -1492,7 +1567,8 @@ func approvalRequestValue(value: ApprovalRequest): AgentValue {
             case None => nullValue()
         }),
         ValueField("metadata", approvalMetadataValue(value.metadata)),
-        ValueField("decision_source", textValue(decisionSourceName(value.decisionSource)))
+        ValueField("decision_source", textValue(decisionSourceName(value.decisionSource))),
+        ValueField("session_approval_allowed", boolValue(value.sessionApprovalAllowed))
     ])
 }
 
@@ -1506,7 +1582,8 @@ func approvalRequestBindingValue(value: ApprovalRequest): AgentValue {
         ValueField("session_id", textValue(value.sessionId)),
         ValueField("argument_hash", textValue(value.argumentHash)),
         ValueField("risk_flags", stringListValue(value.riskFlags)),
-        ValueField("metadata", approvalMetadataValue(value.metadata))
+        ValueField("metadata", approvalMetadataValue(value.metadata)),
+        ValueField("session_approval_allowed", boolValue(value.sessionApprovalAllowed))
     ])
 }
 
@@ -1514,7 +1591,8 @@ func approvalRequestBindingValue(value: ApprovalRequest): AgentValue {
 // record decoders compatible, but reject any missing, mistyped, or unknown
 // approval semantics here.
 func strictApprovalRequestFromValue(
-    value: AgentValue
+    value: AgentValue,
+    legacyFormat: Bool
 ): Result<ApprovalRequest> {
     if (value.unifiedKind != ValueKind.Object) {
         return codecError("approval request must be an object")
@@ -1580,6 +1658,17 @@ func strictApprovalRequestFromValue(
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    let sessionApprovalAllowed = match (value.field("session_approval_allowed")) {
+        case Some(_) => match (requiredBoolean(value, "session_approval_allowed")) {
+            case Result.Ok(item) => item
+            case Result.Err(error) => return Result.Err(error)
+        }
+        case None => if (legacyFormat) {
+            true
+        } else {
+            return codecError("missing field: session_approval_allowed")
+        }
+    }
     Result.Ok(ApprovalRequest(
         OperationId(operationId),
         callId,
@@ -1591,7 +1680,8 @@ func strictApprovalRequestFromValue(
         riskFlags: riskFlags,
         review: review,
         metadata: metadata,
-        decisionSource: decisionSource
+        decisionSource: decisionSource,
+        sessionApprovalAllowed: sessionApprovalAllowed
     ))
 }
 
@@ -1764,7 +1854,8 @@ func approvalMetadataValue(value: ToolApprovalMetadata): AgentValue {
         ValueField("write_summary", match (value.writeSummary) {
             case Some(summary) => writeSummaryValue(summary)
             case None => nullValue()
-        })
+        }),
+        ValueField("session_approval_allowed", boolValue(value.sessionApprovalAllowed))
     ])
 }
 
@@ -1804,7 +1895,8 @@ func approvalMetadataFromValue(value: AgentValue, capability: Capability): ToolA
         },
         assessment,
         scope,
-        writeSummary: summary
+        writeSummary: summary,
+        sessionApprovalAllowed: boolOrDefault(value, "session_approval_allowed", true)
     )
 }
 
@@ -2330,6 +2422,7 @@ func requiredToolOutputChannel(
     match (raw) {
         case "stdout" => Result.Ok(ToolOutputChannel.Stdout)
         case "stderr" => Result.Ok(ToolOutputChannel.Stderr)
+        case "progress" => Result.Ok(ToolOutputChannel.Progress)
         case "artifact" => Result.Ok(ToolOutputChannel.Artifact)
         case "summary" => Result.Ok(ToolOutputChannel.Summary)
         case _ => codecError("unknown tool output channel")

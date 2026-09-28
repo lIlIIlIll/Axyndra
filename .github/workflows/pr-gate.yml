@@ -57,13 +57,14 @@ jobs:
           echo "AXYNDRA_CI_EXPECTED_CJC_VERSION=${{ steps.cangjie-toolchain.outputs.version }}" >> "$GITHUB_ENV"
           AXYNDRA_CI_EXPECTED_CJC_VERSION="${{ steps.cangjie-toolchain.outputs.version }}" \
             AXYNDRA_SDK_ROOT="$sdk_root" scripts/check_sdk.sh
-      - name: Repository policy gates
+      - name: Fast static and architecture layer
         run: |
           python3 scripts/tracked_artifact_gate.py
           python3 scripts/docs_gate.py
           scripts/architecture_gate_lib_test.sh
           python3 scripts/tracked_artifact_gate_test.py
           python3 scripts/docs_gate_test.py
+          python3 scripts/ci_evidence_test.py
           python3 scripts/check_sdk_test.py
           python3 scripts/prepare_native_deps_test.py
           python3 scripts/pinned_cangjie_test.py
@@ -72,20 +73,22 @@ jobs:
         run: |
           scripts/pinned_cangjie cjpm clean
           scripts/pinned_cangjie cjpm check
-      - name: Workspace unit tests
+      # Run the narrow execution/permission/recovery contracts before the full
+      # workspace suite. This changes failure latency, not covered commands.
+      - name: Focused execution, permission, and recovery contracts
+        env:
+          AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
+        run: |
+          python3 scripts/vnext_contract_gate.py \
+            --sdk-root "$AXYNDRA_SDK_ROOT"
+      - name: Full workspace unit integration
         env:
           AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
         run: python3 scripts/product_unit_gate.py
       - name: Build product executable
         run: |
           scripts/pinned_cangjie cjpm build -m agent_app -o agent_app
-      - name: vNext focused contracts
-        env:
-          AXYNDRA_EVIDENCE_DIR: ${{ runner.temp }}/axyndra-evidence
-        run: |
-          python3 scripts/vnext_contract_gate.py \
-            --sdk-root "$AXYNDRA_SDK_ROOT"
-      - name: Product regression fixtures
+      - name: Full product regression fixtures
         run: scripts/pinned_cangjie bash scripts/product_regression_gate.sh
       - name: Write CI evidence
         if: always()

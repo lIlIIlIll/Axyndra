@@ -2,6 +2,12 @@
 
 > 尚未切换。当前源码与候选 API 的形状匹配，不是运行验收通过。
 
+## 当前实施状态
+
+- `process4cj.fillSecureRandom` 已在 `libs/process4cj` 实现为 Linux getrandom C ABI；包内 20 个测试全部通过，并以独立 entropy smoke contract 验证了 ProductIds 32 字符十六进制、retry jitter 边界和 broker token 64 字符十六进制合同。
+- ProductIds、retry jitter、broker token 和产品 Base64 已迁移到产品自有实现；provider/MCP HTTP transport 仍保持当前 stdx 实现，尚未切换。
+- Wirestack 的 redirect raw-response、x-api-key never-indexed 和独立 write/read I/O budget 补丁只在 detached 本地 checkout 中验证；审计到的远程 SHA 尚未包含固定提交。因此按本规格停止在依赖准入之前，不修改 provider/MCP manifest，也不宣称 stdx-free closure 或运行验收通过。
+
 本规格定义把 Axyndra 当前 stdx HTTP、SSE 和 JSON 使用迁移到 Wirestack、sse4cj 和 yjson 时的适配归属、迁移顺序和准入合同。依赖、pin、workspace 闭包、宿主 executable 和 SDK/native 前置见 [依赖与 stdx 审计](dependencies.md)。
 
 ## 前置条件
@@ -9,7 +15,7 @@
 迁移开始前必须同时满足以下条件：
 
 - 选定并记录一组 Cangjie SDK、stdx 和 native 物料。`scripts/check_sdk.sh` 的最低版本检查、`scripts/sdk_paths.sh` 对 `libstdx.net.http.so` 的检查、`scripts/prepare_native_deps.sh` 对 C11/Linux compiler capability 的检查都保持不变；只有 release gate 启用精确版本复现。
-- yjson 使用 release tag 0.1.0，锁文件解析为 commit c91859feb77aeba392a1fad0f99d731df66be831；llm4cj 使用 release tag v0.1.0，锁文件解析为 commit c80ab51ed1f8786ba4e5e06557dd43da92bdd94d；所有受影响 lockfile 同步更新并经过 pin gate。相邻 ../yjson、../llm4cj、../Wirestack 和 ../sse4cj 工作树只能作为源码对照，不能直接写进 Axyndra manifest。
+- yjson 使用 release tag 0.1.0，锁文件解析为 commit c91859feb77aeba392a1fad0f99d731df66be831；llm4cj 使用 release tag v0.2.0，锁文件解析为 commit fd83641c4f39fc5c299298187028e581e7a8616c；所有受影响 lockfile 同步更新并经过 pin gate。相邻 ../yjson、../llm4cj、../Wirestack 和 ../sse4cj 工作树只能作为源码对照，不能直接写进 Axyndra manifest。
 - yjson 0.1.0 tag 的 schema、JSON Pointer、JSON Path 和 JSON Patch 算法源码已嵌入 libs/yjson_support；不再依赖开发机 sibling path，也不新增独立 yjson_algorithms Git 依赖。
 - HTTP、SSE、JSON 的行为合同先有可执行 fixture 或现有合同入口，再提交适配。候选库的 API 可见不等于 TLS、取消、EOF、预算、错误分类或 native 物料已经验收。
 - 迁移只沿依赖方向向下调用。Wirestack、sse4cj 和 yjson 不依赖 Axyndra 的 Agent DTO、provider 名称、MCP 产品错误码或产品 schema。
@@ -97,7 +103,7 @@ JSON 线有三个硬门槛：
 
 1. `items` 的 live alias 是现有行为。没有上层合同决定前，不改为 snapshot，也不要求 yjson 打开私有 storage。
 2. yjson 0.1.0 tag 的算法源码已随 yjson_support 一起编译和发布。不能删除 schema validation 以换取可编译，也不能把开发机 sibling path 写入 product manifest。
-3. 新 yjson 必须与兼容的 llm4cj v0.1.0 release 一起核对。其 JsonNode.parse/JsonReadOptions 映射可直接复用；manifest 与 lockfile 使用 release tag，不使用 branch = "main"；macros 的 path/test-dependency 闭包另行审计。
+3. 新 yjson 必须与兼容的 llm4cj v0.2.0 release 一起核对。其 JsonNode.parse/JsonReadOptions 映射可直接复用；manifest 与 lockfile 使用 release tag，不使用 branch = "main"；macros 的 path/test-dependency 闭包另行审计。
 
 JSON-RPC 数字 ID 还必须保留现有合同：`1e3` 和 `1000` 的编码文本不同但关联判等；`9007199254740992` 与 `9007199254740993` 不因 Float64 舍入而相等。复用 `libs/jsonrpc4cj/src/jsonrpc_test.cj`，不要用浮点中间值。
 
@@ -108,7 +114,7 @@ JSON-RPC 数字 ID 还必须保留现有合同：`1e3` 和 `1000` 的编码文�
 3. **MCP HTTP**：在 `libs/mcp4cj` 适配 client/server body 与 graceful shutdown；`agent_mcp` 只更新产品配置和错误映射。provider HTTP 和 MCP HTTP 的实现互不依赖，可以分别准入。
 4. **SSE 复用**：先解决 sse4cj package-level stdx dependency 和非法 UTF-8/EOF 行为差异，再让 llm4cj 吸收 framing；不在 Axyndra 增加重复编解码。
 5. **JSON 独立迁移线**：先确认 schema 来源、live alias、number/duplicate/depth/size 语义，再选择相容 yjson/llm4cj pins，统一受影响 package lock。JSON 不因 HTTP/SSE 替换而同步升级。
-6. **最终 stdx 闭包复核**：重算源码 import、8 个 workspace 传递包、support-test target、SDK path、native/link 和 candidate package 动态库。`SecureRandom` 仍由 stdx crypto 提供，不能作为网络库迁移的减项。
+6. **最终 stdx 闭包复核**：重算源码 import、8 个 workspace 传递包、support-test target、SDK path、native/link 和 candidate package 动态库。安全随机数由 `process4cj.fillSecureRandom` 提供，仍需把 C shim 和 native 物料纳入最终发布闭包。
 
 ## 行为验收合同
 

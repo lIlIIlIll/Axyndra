@@ -53,23 +53,35 @@ public class ProductAskQuestion {
 
 public class ProductAskRequest {
     public let requestId: String
-    public let runId: RunId
+    public let runId: String
     public let sessionId: SessionId
     public let callId: String
     public let questions: Array<ProductAskQuestion>
+    public let interactionKind: String
+    public let operationId: String
+    public let commandId: String
+    public let epoch: Int64
 
     public init(
         requestId: String,
-        runId: RunId,
+        runId: String,
         sessionId: SessionId,
         callId: String,
-        questions: Array<ProductAskQuestion>
+        questions: Array<ProductAskQuestion>,
+        interactionKind!: String = "ask",
+        operationId!: String = "",
+        commandId!: String = "",
+        epoch!: Int64 = 0
     ) {
         this.requestId = requestId
         this.runId = runId
         this.sessionId = sessionId
         this.callId = callId
         this.questions = questions
+        this.interactionKind = interactionKind
+        this.operationId = operationId
+        this.commandId = commandId
+        this.epoch = epoch
     }
 }
 
@@ -126,20 +138,31 @@ public class AskRuntime {
     ): Unit {
         lock.lock()
         try {
-            let index = stringIndex(
-                interactiveSessions,
-                sessionId.value
-            )
+            let index = stringIndex(interactiveSessions, sessionId.value)
             if (enabled && index < 0) {
                 interactiveSessions.add(sessionId.value)
-            } else if (!enabled && index >= 0) {
-                interactiveSessions.remove(at: index)
+            } else if (!enabled) {
+                if (index >= 0) { interactiveSessions.remove(at: index) }
+                for (state in pending
+                     where state.request.sessionId.value == sessionId.value) {
+                    if (state.resolution.isNone()) {
+                        state.resolution = Some(ProductAskResolution.Cancelled)
+                    }
+                }
             }
         } finally {
             lock.unlock()
         }
     }
 
+    public func hasInteractive(sessionId: SessionId): Bool {
+        lock.lock()
+        try {
+            stringIndex(interactiveSessions, sessionId.value) >= 0
+        } finally {
+            lock.unlock()
+        }
+    }
     public func subscribe(sink: ProductAskEventSink): Unit {
         lock.lock()
         try {
@@ -204,7 +227,7 @@ public class AskRuntime {
         lock.lock()
         try {
             for (state in pending
-                 where state.request.runId.value == runId.value) {
+                 where state.request.runId == runId.value) {
                 if (state.resolution.isNone()) {
                     state.resolution = Some(
                         ProductAskResolution.Cancelled
@@ -220,31 +243,84 @@ public class AskRuntime {
     func ask(
         context: ToolInvocationContext,
         callId: String,
-        questions: Array<ProductAskQuestion>
+        questions: Array<ProductAskQuestion>,
+        interactionKind!: String = "ask",
+        operationId!: String = "",
+        timeoutMillis!: Int64 = 0
     ): Result<ProductAskResolution> {
         let request = ProductAskRequest(
-            context.runId.value + ":" + callId,
-            context.runId,
+            context.runId.value + ":" + operationId + ":" + callId,
+            context.runId.value,
             context.sessionId,
             callId,
-            questions
+            questions,
+            interactionKind: interactionKind,
+            operationId: operationId,
+            epoch: context.epoch
         )
+        waitForRequest(request, context.cancellation, timeoutMillis)
+    }
+
+    func askPluginCommand(
+        sessionId: SessionId,
+        commandId: String,
+        serviceRequestId: String,
+        cancellation: CancellationToken,
+        questions: Array<ProductAskQuestion>,
+        interactionKind: String,
+        timeoutMillis: Int64
+    ): Result<ProductAskResolution> {
+        if (commandId.trimAscii() == "" || serviceRequestId.trimAscii() == "" ||
+            (interactionKind != "select" && interactionKind != "confirm")) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "ask.command_identity_invalid",
+                "Plugin command interaction identity is invalid"
+            ))
+        }
+        let request = ProductAskRequest(
+            sessionId.value + ":plugin-command:" + commandId + ":" + serviceRequestId,
+            "",
+            sessionId,
+            "",
+            questions,
+            interactionKind: interactionKind,
+            commandId: commandId
+        )
+        waitForRequest(request, cancellation, timeoutMillis)
+    }
+
+    private func waitForRequest(
+        request: ProductAskRequest,
+        cancellation: CancellationToken,
+        timeoutMillis: Int64
+    ): Result<ProductAskResolution> {
+        if (timeoutMillis < 0 || timeoutMillis > 600000) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "ask.timeout_invalid",
+                "Ask timeout must be between 1 and 600000 milliseconds"
+            ))
+        }
+        if (cancellation.isCancelled()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Cancelled,
+                "ask.cancelled",
+                "Ask request was cancelled before frontend delivery"
+            ))
+        }
         let sinks = ArrayList<ProductAskEventSink>()
         lock.lock()
         try {
-            if (stringIndex(
-                interactiveSessions,
-                context.sessionId.value
-            ) < 0) {
+            if (stringIndex(interactiveSessions, request.sessionId.value) < 0) {
                 return Result.Err(AgentError(
                     AgentErrorKind.Cancelled,
                     "ask.interactive_required",
-                    "Ask tool requires interactive mode"
+                    "Ask request requires an interactive frontend"
                 ))
             }
             for (state in pending
-                 where state.request.sessionId.value ==
-                     context.sessionId.value) {
+                 where state.request.sessionId.value == request.sessionId.value) {
                 return Result.Err(AgentError(
                     AgentErrorKind.Conflict,
                     "ask.already_pending",
@@ -258,26 +334,41 @@ public class AskRuntime {
         }
         for (sink in sinks) { sink(request) }
 
+        var waitedMillis: Int64 = 0
         while (true) {
+            let cancelled = cancellation.isCancelled()
+            let timedOut = timeoutMillis > 0 && waitedMillis >= timeoutMillis
             lock.lock()
             try {
                 for (index in 0..pending.size) {
                     let state = pending[index]
-                    if (state.request.requestId != request.requestId) {
-                        continue
+                    if (state.request.requestId != request.requestId) { continue }
+                    if (cancelled || timedOut) {
+                        pending.remove(at: index)
+                        if (cancelled) {
+                            return Result.Err(AgentError(
+                                AgentErrorKind.Cancelled,
+                                "ask.cancelled",
+                                "Ask request was cancelled while waiting for frontend input"
+                            ))
+                        }
+                        return Result.Err(AgentError(
+                            AgentErrorKind.Timeout,
+                            "ask.timeout",
+                            "Ask request timed out while waiting for frontend input"
+                        ))
                     }
                     match (state.resolution) {
+                        case Some(ProductAskResolution.Cancelled) =>
+                            pending.remove(at: index)
+                            return Result.Err(AgentError(
+                                AgentErrorKind.Cancelled,
+                                "ask.cancelled",
+                                "Ask request was cancelled by the user"
+                            ))
                         case Some(value) =>
                             pending.remove(at: index)
-                            return match (value) {
-                                case ProductAskResolution.Cancelled =>
-                                    Result.Err(AgentError(
-                                        AgentErrorKind.Cancelled,
-                                        "ask.cancelled",
-                                        "Ask tool was cancelled by the user"
-                                    ))
-                                case _ => Result.Ok(value)
-                            }
+                            return Result.Ok(value)
                         case None => ()
                     }
                     break
@@ -286,6 +377,7 @@ public class AskRuntime {
                 lock.unlock()
             }
             sleep(Duration.millisecond * 10)
+            waitedMillis += 10
         }
         Result.Err(AgentError(
             AgentErrorKind.Internal,
@@ -315,7 +407,10 @@ public class AskTool <: ToolExecutor {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match (runtime.ask(context, call.callId, questions)) {
+        match (runtime.ask(
+            context, call.callId, questions,
+            operationId: prepared.operationId.value
+        )) {
             case Result.Ok(ProductAskResolution.Chat) =>
                 let questionTexts = ArrayList<AgentValue>()
                 var joined = ""

@@ -14,7 +14,6 @@ import std.io.*
 import std.process.*
 import std.sync.*
 import std.time.*
-import stdx.crypto.crypto.*
 
 public enum ProviderProtocol {
     Messages | Responses | Completions
@@ -957,6 +956,25 @@ public class ProviderModelPort <: ports.ModelPort {
         this.transport = transport
     }
 
+    public func transcriptSnapshot(request: domain.ModelRequest): ?String {
+        try {
+            let wire = toLlmWireRequest(request, provider.dialect, provider.id)
+            match (wire.transcript.snapshot()) {
+                case LlmWireResult.Ok(value) => Some(value)
+                case LlmWireResult.Err(_) => None
+            }
+        } catch (_: Exception) {
+            None
+        }
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        match (LlmWireTranscript.restore(snapshot)) {
+            case LlmWireResult.Ok(_) => true
+            case LlmWireResult.Err(_) => false
+        }
+    }
+
     public func execute(
         request: domain.ModelRequest,
         events: domain.ModelEventSink
@@ -1181,11 +1199,52 @@ public class FixtureModelPort <: ports.ModelPort {
     // Fixture-only observation point for end-to-end Product request contracts.
     // Production transports never read or populate this field.
     public var lastRequest: ?domain.ModelRequest = None
+    private let scriptedLock = Mutex()
+    private let scriptedReplies = ArrayList<domain.ModelReply>()
+    private var scriptedReplySequence: Int64 = 0
 
     public init(failFirst!: Bool = false) {
         this.failFirst = failFirst
     }
 
+    public func enqueueToolCallReply(
+        callId: String,
+        name: String,
+        arguments: domain.AgentValue
+    ): Unit {
+        scriptedLock.lock()
+        try {
+            scriptedReplySequence += 1
+            scriptedReplies.add(fixtureTerminalReply(
+                [domain.ModelBlock(
+                    domain.ModelBlockKind.ToolCall,
+                    callId: callId,
+                    name: name,
+                    arguments: arguments
+                )],
+                stopReason: "tool_use",
+                inputTokens: 1,
+                outputTokens: 1,
+                providerId: "fixture",
+                responseId: "fixture-scripted-" + scriptedReplySequence.toString()
+            ))
+        } finally {
+            scriptedLock.unlock()
+        }
+    }
+
+    private func takeScriptedReply(): ?domain.ModelReply {
+        scriptedLock.lock()
+        try {
+            if (scriptedReplies.isEmpty()) {
+                None
+            } else {
+                Some(scriptedReplies.remove(at: 0))
+            }
+        } finally {
+            scriptedLock.unlock()
+        }
+    }
     public func execute(
         request: domain.ModelRequest,
         events: domain.ModelEventSink
@@ -1203,6 +1262,10 @@ public class FixtureModelPort <: ports.ModelPort {
                     fallbackAllowed: true
                 )
             )
+        }
+        match (takeScriptedReply()) {
+            case Some(reply) => return domain.Result.Ok(reply)
+            case None => ()
         }
         let lastText = if (request.messages.isEmpty()) {
             ""
@@ -1292,7 +1355,7 @@ public class FixtureModelPort <: ports.ModelPort {
                             domain.ValueField("path", domain.textValue(if (lastText == "fixture approval safe") {
                                 "tmp/result.txt"
                             } else {
-                                "/tmp/axyndra-approval-missing-parent/child.txt"
+                                "../missing-parent/child.txt"
                             })),
                             domain.ValueField("content", domain.textValue("hello\n"))
                         ]
@@ -2811,7 +2874,7 @@ public interface RetryJitterSource {
 
 public class SecureRetryJitterSource <: RetryJitterSource {
     private let lock = Mutex()
-    private let random = SecureRandom()
+    private let randomBytes = Array<Byte>(8, repeat: 0)
 
     public init() {}
 
@@ -2821,7 +2884,12 @@ public class SecureRetryJitterSource <: RetryJitterSource {
         let span = quarter * 2 + 1
         lock.lock()
         try {
-            Int64(random.nextUInt64() % UInt64(span)) - quarter
+            fillSecureRandom(randomBytes)
+            var value: UInt64 = 0
+            for (byte in randomBytes) {
+                value = (value << 8) | UInt64(UInt8(byte))
+            }
+            Int64(value % UInt64(span)) - quarter
         } finally { lock.unlock() }
     }
 }
@@ -3246,17 +3314,74 @@ func toLlmWireServiceTier(value: String, dialect: ProviderDialect): LlmWireServi
     }
 }
 
+func consumePendingToolCall(
+    pending: ArrayList<String>,
+    active: ArrayList<Bool>,
+    callId: String
+): ?Bool {
+    if (callId == "") { return None }
+    for (index in 0..pending.size) {
+        if (pending[index] == callId) {
+            let wasActive = active[index]
+            pending.remove(at: index)
+            active.remove(at: index)
+            return Some(wasActive)
+        }
+    }
+    None
+}
+
+func retiredToolCallHistoryBlock(block: domain.ModelBlock): LlmWireBlock {
+    LlmWireBlock.Text(LlmWireTextBlock(
+        "[Historical call to unavailable tool " + block.name +
+            "; call_id=" + block.callId + " ]\nArguments: " +
+            encodeAgentValue(block.arguments)
+    ))
+}
+
+func retiredToolResultHistoryBlock(block: domain.ModelBlock): LlmWireBlock {
+    let content = if (block.text == "") { encodeAgentValue(block.arguments) } else { block.text }
+    LlmWireBlock.Text(LlmWireTextBlock(
+        "[Historical result from unavailable tool; call_id=" + block.callId +
+            "; error=" + block.isError.toString() + " ]\n" + content
+    ))
+}
+
 func toLlmWireRequest(
     request: domain.ModelRequest,
     dialect: ProviderDialect,
     providerId: String
 ): LlmWireRequest {
     let messages = ArrayList<LlmWireMessage>()
-    let pendingToolCalls = HashSet<String>()
+    let activeToolNames = ArrayList<String>()
+    for (tool in request.tools) { activeToolNames.add(tool.name) }
+    let pendingToolCalls = ArrayList<String>()
+    let pendingToolCallActivity = ArrayList<Bool>()
     for (message in request.messages) {
         let blocks = ArrayList<LlmWireBlock>()
-        for (index in 0..message.blocks.size) {
-            let block = message.blocks[index]
+        for (block in message.blocks) {
+            if (let domain.ModelBlockKind.ToolResult <- block.kind) {
+                match (consumePendingToolCall(
+                    pendingToolCalls, pendingToolCallActivity, block.callId
+                )) {
+                    case Some(true) => ()
+                    case Some(false) =>
+                        blocks.add(retiredToolResultHistoryBlock(block))
+                        continue
+                    case None => continue
+                }
+            }
+            if (let domain.ModelBlockKind.ToolCall <- block.kind) {
+                let active = activeToolNames.contains(block.name)
+                if (block.callId != "") {
+                    pendingToolCalls.add(block.callId)
+                    pendingToolCallActivity.add(active)
+                }
+                if (!active) {
+                    blocks.add(retiredToolCallHistoryBlock(block))
+                    continue
+                }
+            }
             if (let domain.ModelBlockKind.Reasoning <- block.kind) {
                 let replayable = match (block.opaqueState) {
                     case Some(state) => nativeReplayMatches(
@@ -3264,13 +3389,12 @@ func toLlmWireRequest(
                     )
                     case None => false
                 }
-                // llm4cj rejects display-only reasoning on request input.
-                // Only compatible provider-native replay state is encodable.
+                // Display-only reasoning is not a sendable transcript block.
+                // Preserve only provider-native state that passes llm4cj replay admission.
                 if (!replayable) { continue }
             }
             match (block.kind) {
                 case domain.ModelBlockKind.ToolCall =>
-                    pendingToolCalls.add(block.callId)
                     match (block.opaqueState) {
                         case Some(state) => if (nativeReplayMatches(
                             state, dialect, providerId, model: request.model
@@ -3280,11 +3404,6 @@ func toLlmWireRequest(
                         case None => ()
                     }
                     blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
-                case domain.ModelBlockKind.ToolResult =>
-                    if (pendingToolCalls.contains(block.callId)) {
-                        pendingToolCalls.remove(block.callId)
-                        blocks.add(toLlmWireBlock(block, dialect, providerId, model: request.model))
-                    }
                 case domain.ModelBlockKind.Unknown => match (block.opaqueState) {
                     case Some(state) => if (nativeReplayMatches(
                         state, dialect, providerId, model: request.model
@@ -3306,9 +3425,11 @@ func toLlmWireRequest(
             ))
         }
     }
-    let tools = ArrayList<LlmWireTool>()
+    let declarations = ArrayList<LlmWireToolDeclaration>()
     for (tool in request.tools) {
-        tools.add(LlmWireTool(tool.name, tool.description, agentValueLlmJson(tool.inputSchema)))
+        declarations.add(LlmWireToolDeclaration(
+            LlmWireTool(tool.name, "1", tool.description, agentValueLlmJson(tool.inputSchema))
+        ))
     }
     let structured = match (request.structuredOutput) {
         case Some(value) => match (dialect) {
@@ -3329,11 +3450,20 @@ func toLlmWireRequest(
     } else {
         [LlmWireInstruction(LlmWireInstructionRole.System, request.system)]
     }
+    let items = ArrayList<LlmWireInputItem>()
+    for (message in messages) {
+        items.add(LlmWireInputItem.Message(message))
+    }
+    let transcript = LlmWireTranscript(
+        LlmWireInitialContext(
+            instructions: instructions,
+            tools: declarations.toArray()
+        ),
+        items: items.toArray()
+    )
     LlmWireRequest(
         request.model,
-        messages.toArray(),
-        instructions: instructions,
-        tools: tools.toArray(),
+        transcript,
         thinkingMode: thinking.mode,
         reasoningEffort: thinking.effort,
         maxOutputTokens: request.wireMaxOutputTokens,
@@ -3479,25 +3609,62 @@ func llmWireCapabilities(
     )
 }
 
+func transcriptCapabilitiesForDialect(dialect: ProviderDialect): LlmWireTranscriptCapabilities {
+    let endpointProfileId = match (dialect) {
+        case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages => "anthropic.messages.v1"
+        case ProviderDialect.DeepSeekMessages => "deepseek.messages.v1"
+        case ProviderDialect.DeepSeekResponses => "deepseek.responses.v1"
+        case ProviderDialect.OpenAiResponses => "openai.responses.v1"
+        case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat => "openai.chat.v1"
+        case ProviderDialect.DeepSeekChat => "deepseek.chat.v1"
+    }
+    LlmWireTranscriptCapabilities(endpointProfileId, "1")
+}
+
 func codecForDialect(
     dialect: ProviderDialect,
     model: String,
     provider: String,
     capabilities: LlmWireCapabilities
 ): LlmWireCodec {
+    let transcriptCapabilities = transcriptCapabilitiesForDialect(dialect)
     match (dialect) {
         case ProviderDialect.AnthropicMessages | ProviderDialect.GenericMessages =>
-            anthropicMessagesCodec(anthropicMessagesModelProfile(model, capabilities: capabilities), provider: provider)
+            anthropicMessagesCodec(anthropicMessagesModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
         case ProviderDialect.DeepSeekMessages =>
-            deepSeekMessagesCodec(deepSeekMessagesModelProfile(model, capabilities: capabilities), provider: provider)
+            deepSeekMessagesCodec(deepSeekMessagesModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
         case ProviderDialect.DeepSeekResponses =>
-            deepSeekResponsesCodec(deepSeekResponsesModelProfile(model, capabilities: capabilities), provider: provider)
+            deepSeekResponsesCodec(deepSeekResponsesModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
         case ProviderDialect.OpenAiResponses =>
-            openAiResponsesCodec(openAiResponsesModelProfile(model, capabilities: capabilities), provider: provider)
+            openAiResponsesCodec(openAiResponsesModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
         case ProviderDialect.OpenAiChat | ProviderDialect.GenericChat =>
-            openAiChatCodec(openAiChatModelProfile(model, capabilities: capabilities), provider: provider)
+            openAiChatCodec(openAiChatModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
         case ProviderDialect.DeepSeekChat =>
-            deepSeekChatCodec(deepSeekChatModelProfile(model, capabilities: capabilities), provider: provider)
+            deepSeekChatCodec(deepSeekChatModelProfile(
+                model,
+                transcriptCapabilities: transcriptCapabilities,
+                capabilities: capabilities
+            ), provider: provider)
     }
 }
 
@@ -3613,7 +3780,7 @@ func encodeStandaloneRequest(request: domain.ModelRequest, dialect: ProviderDial
     }
     let capabilities = domain.ModelCapabilities(
         toolCalling: usesTools,
-        parallelToolCalling: !request.tools.isEmpty() && request.parallelToolCalls,
+        parallelToolCalling: !request.tools.isEmpty(),
         // Standalone encoder helpers must be able to represent an explicit
         // disabled-thinking request as well as enabled levels.
         reasoning: true,

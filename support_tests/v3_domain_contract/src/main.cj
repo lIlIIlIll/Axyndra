@@ -230,17 +230,24 @@ func executionBudgetContract(): Unit {
         case Result.Ok(_) => false
     }, "absolute deadline is enforced")
 
+    let processLimits = ExecutionResourceLimits(
+        maxOutputBytes: 4096,
+        addressSpaceBytes: 1048576
+    )
     let resource = ResourceBudget(
         maxTurns: 4,
         maxToolCalls: 8,
         maxConcurrentTools: 3,
         maxCostMicros: 99,
-        deadlineMillis: 1234
+        deadlineMillis: 1234,
+        processLimits: processLimits
     )
     let converted = executionBudgetFrom(resource)
     expect(converted.maxConcurrentTools == 3 && converted.maxCostMicros == 99 &&
-           converted.deadlineMillis == 1234,
-           "resource configuration converts to an execution budget")
+           converted.deadlineMillis == 1234 &&
+           converted.processLimits.maxOutputBytes == 4096 &&
+           converted.processLimits.addressSpaceBytes == 1048576,
+           "resource configuration converts into the canonical process budget")
 }
 
 class Counter {

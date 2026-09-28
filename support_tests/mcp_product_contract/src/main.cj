@@ -21,6 +21,9 @@ main(): Int64 {
         runStdioCompositionContract(root)
         runHttpCompositionContract(root)
         runFailClosedContracts(root)
+        runPluginMcpOwnershipContract(root)
+        runPluginScopeFallbackContract(root)
+        runPluginRollbackRestorationContract(root)
         println("mcp product contract passed")
         0
     } finally {
@@ -374,6 +377,189 @@ func runHttpCompositionContract(root: String): Unit {
             case Result.Ok(_) => ()
             case Result.Err(error) => throw IllegalStateException("HTTP fixture failed: " + error.describe())
         }
+    }
+}
+
+func runPluginMcpOwnershipContract(root: String): Unit {
+    let settings = root + "/plugin-owner-config"
+    let state = root + "/plugin-owner-state"
+    let workspace = root + "/plugin-owner-workspace"
+    let pluginRoot = workspace + "/plugin"
+    writeBaseConfiguration(settings)
+    Directory.create(pluginRoot, recursive: true)
+    File.writeTo(pluginRoot + "/plugin.json",
+        "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"owned-mcp-conflict\",\"version\":\"1.0.0\"}".toArray())
+    File.writeTo(pluginRoot + "/mcp.json",
+        "{\"mcpServers\":{\"fixture\":{\"type\":\"stdio\",\"command\":\"/unused\"}}}".toArray())
+    let serverId = "plugin-" + modelPolicySha256Text("codex:owned-mcp-conflict") + "-fixture"
+    File.writeTo(settings + "/mcp.yml", (
+        "version: 1\nservers:\n" +
+        "  - id: " + serverId + "\n" +
+        "    enabled: false\n" +
+        "    transport: stdio\n" +
+        "    command: /unused\n"
+    ).toArray())
+
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: settings,
+        stateRoot: state,
+        workspaceRoot: workspace,
+        approvalMode: ApprovalMode.Yolo,
+        asyncEnabled: false
+    )).value().getOrThrow()
+    try {
+        let imported = match (product.importLocalPlugin(pluginRoot, PluginInstallScope.Workspace)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        let enabled = product.setPluginEnabled(
+            imported.descriptor.id, true, PluginInstallScope.Workspace
+        )
+        expect(match (enabled) {
+            case PluginImportResult.Err(error) => error.code == "mcp.duplicate_server_id"
+            case PluginImportResult.Ok(_) => false
+        }, "a plugin cannot replace an operator-owned MCP server with the same id")
+        let operatorSnapshot = product.mcpStatus(serverId).getOrThrow()
+        expect(operatorSnapshot.status == ProductMcpServerStatus.Disabled &&
+            product.mcpSnapshots().size == 1,
+            "failed plugin activation preserves the operator-owned MCP record")
+    } finally {
+        let _ = product.closeMcp()
+    }
+}
+func runPluginScopeFallbackContract(root: String): Unit {
+    let settings = root + "/plugin-scope-fallback-config"
+    let state = root + "/plugin-scope-fallback-state"
+    let workspace = root + "/plugin-scope-fallback-workspace"
+    let workspacePlugin = workspace + "/workspace-plugin"
+    let userPlugin = workspace + "/user-plugin"
+    let pluginName = "scope-fallback"
+    let serverScript = workspacePlugin + "/fixture_server.py"
+    writeBaseConfiguration(settings)
+    Directory.create(workspacePlugin, recursive: true)
+    Directory.create(userPlugin, recursive: true)
+    File.writeTo(serverScript, File.readFrom("fixture_server.py"))
+    File.writeTo(workspacePlugin + "/plugin.json",
+        ("{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"" + pluginName + "\",\"version\":\"1.0.0\"}").toArray())
+    File.writeTo(userPlugin + "/plugin.json",
+        ("{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"" + pluginName + "\",\"version\":\"1.0.0\"}").toArray())
+    File.writeTo(workspacePlugin + "/mcp.json", (
+        "{\"mcpServers\":{\"fixture\":{\"type\":\"stdio\",\"command\":\"/usr/bin/python3\",\"args\":[\"-B\",\"-u\"," +
+        yamlQuote("fixture_server.py") + "]}}}"
+    ).toArray())
+
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: settings,
+        stateRoot: state,
+        workspaceRoot: workspace,
+        approvalMode: ApprovalMode.Yolo,
+        asyncEnabled: false
+    )).value().getOrThrow()
+    try {
+        let workspaceRecord = match (product.importLocalPlugin(
+            workspacePlugin, PluginInstallScope.Workspace
+        )) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        match (product.setPluginEnabled(
+            workspaceRecord.descriptor.id, true, PluginInstallScope.Workspace
+        )) {
+            case PluginImportResult.Ok(_) => ()
+            case PluginImportResult.Err(error) => throw IllegalStateException(
+                "workspace plugin activation failed: " + error.code + ": " + error.message
+            )
+        }
+        let initialSnapshots = product.mcpSnapshots()
+        expect(initialSnapshots.size == 1, "workspace plugin exposes one MCP server")
+        let initial = initialSnapshots[0]
+        let serverId = initial.id
+        expect(initial.status == ProductMcpServerStatus.Ready && !initial.tools.isEmpty(),
+            "workspace plugin MCP server is initially active")
+
+        let userRecord = match (product.importLocalPlugin(userPlugin, PluginInstallScope.User)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        expect(match (product.setPluginEnabled(
+            userRecord.descriptor.id, false, PluginInstallScope.User
+        )) {
+            case PluginImportResult.Ok(value) => !value.enabled
+            case PluginImportResult.Err(_) => false
+        }, "explicitly disabled user plugin suppresses the workspace plugin")
+        expect(product.mcpSnapshots().isEmpty(),
+            "disabled user override deactivates the workspace plugin")
+
+        match (product.uninstallPlugin(
+            userRecord.descriptor.id, PluginInstallScope.User
+        )) {
+            case PluginImportResult.Ok(_) => ()
+            case PluginImportResult.Err(error) => throw IllegalStateException(
+                "disabled user override uninstall failed: " + error.code + ": " + error.message
+            )
+        }
+        let restored = product.mcpStatus(serverId).getOrThrow()
+        expect(restored.status == ProductMcpServerStatus.Ready && !restored.tools.isEmpty(),
+            "removing the disabled user override activates the exposed workspace plugin")
+    } finally {
+        let _ = product.closeMcp()
+    }
+}
+
+func runPluginRollbackRestorationContract(root: String): Unit {
+    let settings = root + "/plugin-rollback-restore-config"
+    let state = root + "/plugin-rollback-restore-state"
+    let workspace = root + "/plugin-rollback-restore-workspace"
+    let priorPlugin = workspace + "/prior-plugin"
+    let currentPlugin = workspace + "/current-plugin"
+    let serverScript = priorPlugin + "/fixture_server.py"
+    let pluginName = "rollback-restore"
+    writeBaseConfiguration(settings)
+    Directory.create(priorPlugin, recursive: true)
+    Directory.create(currentPlugin, recursive: true)
+    File.writeTo(serverScript, File.readFrom("fixture_server.py"))
+    File.writeTo(priorPlugin + "/plugin.json",
+        ("{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"" + pluginName + "\",\"version\":\"1.0.0\"}").toArray())
+    File.writeTo(priorPlugin + "/mcp.json", (
+        "{\"mcpServers\":{\"fixture\":{\"type\":\"stdio\",\"command\":\"/usr/bin/python3\",\"args\":[\"-B\",\"-u\"," +
+        yamlQuote("fixture_server.py") + "]}}}"
+    ).toArray())
+    File.writeTo(currentPlugin + "/plugin.json",
+        ("{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"" + pluginName + "\",\"version\":\"2.0.0\"}").toArray())
+
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: settings,
+        stateRoot: state,
+        workspaceRoot: workspace,
+        approvalMode: ApprovalMode.Yolo,
+        asyncEnabled: false
+    )).value().getOrThrow()
+    try {
+        let prior = match (product.importLocalPlugin(priorPlugin)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        expect(match (product.setPluginEnabled(prior.descriptor.id, true)) {
+            case PluginImportResult.Ok(_) => true
+            case PluginImportResult.Err(_) => false
+        }, "prior plugin generation activates before update")
+        expect(match (product.updateLocalPlugin(prior.descriptor.id, currentPlugin)) {
+            case PluginImportResult.Ok(value) => value.descriptor.version == "2.0.0" && value.enabled
+            case PluginImportResult.Err(_) => false
+        }, "working current generation replaces the enabled prior generation")
+        let _ = removeIfExists(prior.descriptor.root + "/fixture_server.py")
+
+        expect(match (product.rollbackPlugin(prior.descriptor.id)) {
+            case PluginImportResult.Err(_) => true
+            case PluginImportResult.Ok(_) => false
+        }, "rollback reports the prior generation activation failure")
+        let records = product.pluginSnapshots()
+        expect(records.size == 1 && records[0].descriptor.version == "2.0.0" && records[0].enabled,
+            "failed rollback restores the previously working enabled generation")
+        expect(product.mcpSnapshots().isEmpty(),
+            "failed rollback leaves no MCP record from the broken generation")
+    } finally {
+        let _ = product.closeMcp()
     }
 }
 

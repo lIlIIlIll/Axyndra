@@ -62,6 +62,7 @@ public func openStreamableHttpMcpTransport(
             headers: headers.toArray(),
             origin: config.origin,
             preferSse: config.preferSse,
+            proxyUrl: config.proxyUrl,
             framing: config.framing
         )
     } catch (error: Exception) {

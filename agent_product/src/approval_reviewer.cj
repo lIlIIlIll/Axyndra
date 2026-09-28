@@ -44,6 +44,7 @@ public class ApprovalReviewer {
     private let settings: ProductApprovalSettings
     private let defaultModel: String
     private let workspaceRoot: String
+    private let standaloneAccounting: Bool
     private let lock = Mutex()
     private let activeRequests = ArrayList<ActiveApprovalReview>()
 
@@ -57,6 +58,7 @@ public class ApprovalReviewer {
         this.settings = settings
         this.defaultModel = defaultModel
         this.workspaceRoot = workspaceRoot
+        this.standaloneAccounting = true
     }
 
     public init(
@@ -69,6 +71,7 @@ public class ApprovalReviewer {
         this.settings = settings
         this.defaultModel = defaultModel
         this.workspaceRoot = workspaceRoot
+        this.standaloneAccounting = false
     }
 
     public func mode(): ApprovalRoutingMode {
@@ -151,7 +154,8 @@ public class ApprovalReviewer {
                 InternalModelCallOptions(
                     timeoutMillis: settings.timeoutMillis,
                     maxAttempts: if (runRequest.autoRetry) { 2 } else { 1 },
-                    parent: Some(runRequest)
+                    parent: Some(runRequest),
+                    standaloneAccounting: standaloneAccounting
                 )
             )) {
                 case Result.Err(error) =>

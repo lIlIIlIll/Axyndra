@@ -6,7 +6,6 @@ import std.collection.*
 import std.deriving.*
 import std.env.*
 import std.fs.*
-import std.process.*
 
 public enum SandboxErrorKind {
     Configuration | InvalidInput | PermissionDenied | Transport | Cancelled | Deadline
@@ -307,6 +306,8 @@ public class WorkspaceSandboxCommand {
     public let workingDirectory: String
     public let environment: Array<SandboxEnvironmentEntry>
     public let timeoutMillis: Int64
+    // Optional bounded input for one-shot commands. None sends immediate EOF.
+    public let standardInput: ?String
     public let networkBridgeExecutable: String
     public let networkBridgeSocket: String
 
@@ -316,6 +317,7 @@ public class WorkspaceSandboxCommand {
         workingDirectory!: String = "",
         environment!: Array<SandboxEnvironmentEntry> = [],
         timeoutMillis!: Int64 = 60000,
+        standardInput!: ?String = None,
         networkBridgeExecutable!: String = "",
         networkBridgeSocket!: String = ""
     ) {
@@ -324,6 +326,12 @@ public class WorkspaceSandboxCommand {
         }
         if (timeoutMillis < 1) {
             throw IllegalArgumentException("sandbox timeout must be positive")
+        }
+        match (standardInput) {
+            case Some(value) => if (value.size > 1048576) {
+                throw IllegalArgumentException("sandbox standard input exceeds 1 MiB")
+            }
+            case None => ()
         }
         if ((networkBridgeExecutable.trimAscii() == "") != (networkBridgeSocket.trimAscii() == "")) {
             throw IllegalArgumentException("sandbox network bridge values must be provided together")
@@ -337,6 +345,7 @@ public class WorkspaceSandboxCommand {
         this.workingDirectory = workingDirectory
         this.environment = environment
         this.timeoutMillis = timeoutMillis
+        this.standardInput = standardInput
         this.networkBridgeExecutable = networkBridgeExecutable.trimAscii()
         this.networkBridgeSocket = networkBridgeSocket.trimAscii()
     }
@@ -391,7 +400,7 @@ public class SandboxExecutionResult {
     }
 }
 
-public type SandboxProcessStarted = (SubProcess) -> Unit
+public type SandboxProcessStarted = (ManagedProcess) -> Unit
 
 public class WorkspaceSandbox {
     public let policy: WorkspaceSandboxPolicy
@@ -410,6 +419,7 @@ public class WorkspaceSandbox {
         let cwd = match (resolveWorkingDirectory(
             policy.workspaceRoot,
             command.workingDirectory,
+            readOnlyMounts: policy.readOnlyMounts,
             allowOutside: policy.filesystem == FilesystemIsolationMode.Host
         )) {
             case SandboxResult.Ok(value) => value
@@ -474,32 +484,34 @@ public class WorkspaceSandbox {
         launchArguments.add(policy.bubblewrapExecutable)
         launchArguments.add(all: arguments)
         try {
-            let process = launch(
+            let process = startSandboxProcess(
                 policy.timeoutExecutable,
                 launchArguments.toArray(),
-                environment: HashMap<String, String>(),
-                stdOut: ProcessRedirect.Pipe,
-                stdErr: ProcessRedirect.Pipe
+                65536
             )
-            let probeBudget = BoundedOutputBudget(65536)
-            let stdout = spawn { readBounded(process.stdOutPipe, probeBudget) }
-            let stderr = spawn { readBounded(process.stdErrPipe, probeBudget) }
-            let code = process.wait()
-            let _ = stdout.get()
-            let detail = decodeProcessOutput(stderr.get()).trimAscii()
-            if (code == 0) {
-                SandboxResult.Ok(())
-            } else {
-                sandboxError<Unit>(
-                    SandboxErrorKind.Configuration,
-                    "sandbox.isolation_unsupported",
-                    if (detail == "") {
-                        "bubblewrap could not establish the configured isolation boundary"
-                    } else {
-                        "bubblewrap could not establish the configured isolation boundary: " + detail
-                    },
-                    fields: [SandboxErrorField("exit_code", code.toString())]
-                )
+            try {
+                let probeBudget = BoundedOutputBudget(65536)
+                let stdout = spawn { readBounded(process.stdout, probeBudget) }
+                let stderr = spawn { readBounded(process.stderr, probeBudget) }
+                let code = process.wait().code
+                let _ = stdout.get()
+                let detail = decodeProcessOutput(stderr.get()).trimAscii()
+                if (code == 0) {
+                    SandboxResult.Ok(())
+                } else {
+                    sandboxError<Unit>(
+                        SandboxErrorKind.Configuration,
+                        "sandbox.isolation_unsupported",
+                        if (detail == "") {
+                            "bubblewrap could not establish the configured isolation boundary"
+                        } else {
+                            "bubblewrap could not establish the configured isolation boundary: " + detail
+                        },
+                        fields: [SandboxErrorField("exit_code", code.toString())]
+                    )
+                }
+            } finally {
+                let _ = process.close()
             }
         } catch (error: Exception) {
             sandboxError<Unit>(
@@ -528,32 +540,43 @@ public class WorkspaceSandbox {
         let requestedRedactor = requested.redactor()
         let budget = BoundedOutputBudget(policy.resources.maxOutputBytes)
         try {
-            let process = launch(
+            let process = startSandboxProcess(
                 planValue.launcherExecutable,
                 planValue.launcherArguments,
-                environment: HashMap<String, String>(),
-                stdOut: ProcessRedirect.Pipe,
-                stdErr: ProcessRedirect.Pipe
+                policy.resources.maxOutputBytes
             )
-            match (onStarted) {
-                case Some(callback) => callback(process)
-                case None => ()
+            try {
+                match (onStarted) {
+                    case Some(callback) => callback(process)
+                    case None => ()
+                }
+                let stdout = spawn { readBounded(process.stdout, budget) }
+                let stderr = spawn { readBounded(process.stderr, budget) }
+                match (command.standardInput) {
+                    case Some(value) =>
+                        let writer = spawn {
+                            process.writeStdin(value.toArray())
+                            process.flushInput()
+                            let _ = process.closeInput()
+                        }
+                        writer.get()
+                    case None => let _ = process.closeInput()
+                }
+                let output = stdout.get()
+                let errors = stderr.get()
+                let code = process.wait().code
+                let outputText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(output)))
+                let errorText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(errors)))
+                SandboxResult.Ok(SandboxExecutionResult(
+                    code,
+                    outputText,
+                    errorText,
+                    code == 124 || code == 137,
+                    budget.wasTruncated()
+                ))
+            } finally {
+                let _ = process.close()
             }
-            let stdout = spawn { readBounded(process.stdOutPipe, budget) }
-            let stderr = spawn { readBounded(process.stdErrPipe, budget) }
-            // Collect buffered bytes before SDK wait can discard the unread tail.
-            let output = stdout.get()
-            let errors = stderr.get()
-            let code = process.wait()
-            let outputText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(output)))
-            let errorText = requestedRedactor.redact(ambientRedactor.redact(decodeProcessOutput(errors)))
-            SandboxResult.Ok(SandboxExecutionResult(
-                code,
-                outputText,
-                errorText,
-                code == 124 || code == 137,
-                budget.wasTruncated()
-            ))
         } catch (error: Exception) {
             sandboxError<SandboxExecutionResult>(
                 SandboxErrorKind.Transport,
@@ -562,6 +585,20 @@ public class WorkspaceSandbox {
             )
         }
     }
+}
+
+func startSandboxProcess(
+    executable: String,
+    arguments: Array<String>,
+    maxOutputBytes: Int64
+): ManagedProcess {
+    startProcess(ProcessCommand(
+        executable,
+        arguments: arguments,
+        environment: HashMap<String, String>(),
+        maxOutputBytes: maxOutputBytes,
+        terminateProcessTree: true
+    ))
 }
 
 func buildSandboxArguments(
@@ -700,6 +737,7 @@ func addDestinationParents(arguments: ArrayList<String>, path: String): Unit {
 func resolveWorkingDirectory(
     root: String,
     authored: String,
+    readOnlyMounts!: Array<SandboxReadOnlyMount> = [],
     allowOutside!: Bool = false
 ): SandboxResult<String> {
     let candidate = if (authored.trimAscii() == "") {
@@ -725,11 +763,12 @@ func resolveWorkingDirectory(
                 "sandbox working directory must be a directory"
             )
         }
-        if (!allowOutside && !withinPath(resolved, root)) {
+        if (!allowOutside && !withinPath(resolved, root) &&
+            !withinReadOnlyMount(resolved, readOnlyMounts)) {
             return sandboxError<String>(
                 SandboxErrorKind.PermissionDenied,
                 "sandbox.path_escape",
-                "sandbox working directory resolves outside the workspace"
+                "sandbox working directory resolves outside the mounted roots"
             )
         }
         SandboxResult.Ok(resolved)
@@ -793,8 +832,23 @@ func mergeEnvironment(
     let values = ArrayList<SandboxEnvironmentEntry>()
     for (entry in ambient) { upsertEnvironment(values, entry) }
     for (entry in requested) { upsertEnvironment(values, entry) }
-    // Runtime-owned values cannot be influenced by the inherited host state.
-    upsertEnvironment(values, SandboxEnvironmentEntry("PATH", controlledPath(policy.pathEntries)))
+    // Host-filesystem commands must never search caller- or workspace-controlled
+    // directories. Sandboxed commands may retain an explicitly allowed PATH;
+    // otherwise they receive the controlled toolchain path.
+    if (policy.filesystem == FilesystemIsolationMode.Host) {
+        upsertEnvironment(values, SandboxEnvironmentEntry(
+            "PATH", "/usr/local/bin:/usr/bin:/bin"
+        ))
+    } else {
+        var hasAllowedPath = false
+        for (entry in values where entry.name == "PATH") { hasAllowedPath = true }
+        if (!hasAllowedPath) {
+            upsertEnvironment(values, SandboxEnvironmentEntry(
+                "PATH", controlledPath(policy.pathEntries)
+            ))
+        }
+    }
+    // Runtime-owned HOME, TMPDIR, and LANG cannot inherit host values.
     upsertEnvironment(values, SandboxEnvironmentEntry("HOME", policy.workspaceRoot))
     upsertEnvironment(values, SandboxEnvironmentEntry("TMPDIR", "/tmp"))
     upsertEnvironment(values, SandboxEnvironmentEntry("LANG", "C.UTF-8"))

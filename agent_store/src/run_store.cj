@@ -68,7 +68,21 @@ public class SqliteRunStore {
     public init(database: SqliteDatabase) { this.database = database }
 
     public func load(runId: RunId): DurableRunSnapshot {
-        let rows = database.query(
+        loadUsing({ sql => database.query(sql) }, runId)
+    }
+
+    public func load(
+        transaction: SqliteTransaction,
+        runId: RunId
+    ): DurableRunSnapshot {
+        loadUsing({ sql => transaction.query(sql) }, runId)
+    }
+
+    private func loadUsing(
+        query: (String) -> Array<SqliteRow>,
+        runId: RunId
+    ): DurableRunSnapshot {
+        let rows = query(
             "SELECT runs.thread_id,runs.turn_id,runs.epoch,runs.state,runs.lane_snapshot," +
                 "runs.skill_snapshot,runs.budget,runs.usage,runs.started_at_millis," +
                 "runs.finished_at_millis,runs.cancellation_reason,binding.lane_id FROM runs " +
@@ -89,7 +103,7 @@ public class SqliteRunStore {
         } else {
             Some(skillStackFromSnapshotValue(skillValue))
         }
-        let journalRows = database.query(
+        let journalRows = query(
             "SELECT COALESCE(MAX(sequence),0) FROM run_journal WHERE run_id=" +
                 sqliteText(runId.value)
         )

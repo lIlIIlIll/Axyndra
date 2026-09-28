@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import agent_runtime.*
 import std.collection.*
 import std.deriving.*
 import std.sync.*
@@ -27,13 +28,18 @@ public class PreparedToolInvocation {
     public let approval: ?ApprovalRequest
     public let operationPlan: NormalizedOperationPlan
 
+    // Present only when AgentCore prepared this invocation from a canonical
+    // committed model Decision. Derived-call admission must use this exact
+    // attestation; callers cannot construct PreparedToolInvocation directly.
+    public let committedToolCall: ?CommittedToolCallRef
     init(
         operationId: OperationId,
         call: ToolCall,
         concurrency: ToolConcurrencyProfile,
         authorization: PreparedAuthorization,
         operationPlan: NormalizedOperationPlan,
-        approval!: ?ApprovalRequest = None
+        approval!: ?ApprovalRequest = None,
+        committedToolCall!: ?CommittedToolCallRef = None
     ) {
         this.operationId = operationId
         this.call = call
@@ -41,6 +47,7 @@ public class PreparedToolInvocation {
         this.authorization = authorization
         this.approval = approval
         this.operationPlan = operationPlan
+        this.committedToolCall = committedToolCall
     }
 }
 

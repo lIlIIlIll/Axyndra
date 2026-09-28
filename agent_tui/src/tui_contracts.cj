@@ -90,6 +90,7 @@ public enum TuiAgentEvent {
         String,
         String,
         String,
+        Bool,
         String
     )
     | ApprovalReview(
@@ -108,6 +109,7 @@ public enum TuiAgentEvent {
     | Usage(Int64, Int64)
     | Setup(String)
     | Plan(String, String)
+    | PluginNotice(String, String)
     | Warning(String, String)
     | Compaction(Int64, Int64, String)
     | Summary(String)
@@ -300,15 +302,33 @@ public class TuiAskRequest {
     public let requestId: String
     public let questions: Array<TuiAskQuestion>
     public let callId: String
+    public let runId: String
+    public let sessionId: String
+    public let operationId: String
+    public let commandId: String
+    public let epoch: Int64
+    public let interactionKind: String
 
     public init(
         requestId: String,
         questions: Array<TuiAskQuestion>,
-        callId!: String = ""
+        callId!: String = "",
+        runId!: String = "",
+        sessionId!: String = "",
+        operationId!: String = "",
+        commandId!: String = "",
+        epoch!: Int64 = 0,
+        interactionKind!: String = "ask"
     ) {
         this.requestId = requestId
         this.questions = questions
         this.callId = callId
+        this.runId = runId
+        this.sessionId = sessionId
+        this.operationId = operationId
+        this.commandId = commandId
+        this.epoch = epoch
+        this.interactionKind = interactionKind
     }
 }
 
@@ -593,6 +613,12 @@ public interface AgentTuiBackend {
         requestId: String,
         resolution: TuiAskResolution
     ): Bool
+    func pluginCommands(): Array<String>
+    func runPluginCommand(
+        routeName: String,
+        arguments: String,
+        events: TuiAgentEventSink
+    ): TuiTurnResult
     func cancel(): Unit
 
     func currentModel(): String

@@ -6,6 +6,16 @@ import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
+func firstWireMessage(request: LlmWireRequest): LlmWireMessage {
+    match (request.transcript.items[0]) {
+        case LlmWireInputItem.Message(value) => value
+        case _ => throw IllegalStateException("expected a wire message")
+    }
+}
+func readToolDefinition(name!: String = "read"): domain.ModelToolDefinition {
+    domain.ModelToolDefinition(name, "Read a file", domain.objectValue([]))
+}
+
 @Test
 class UsageProjectionTests {
     @TestCase
@@ -86,9 +96,9 @@ class NativeReplayRegressionTests {
                 domain.ModelBlock(domain.ModelBlockKind.Text, text: "portable answer")
             ])]
         ), ProviderDialect.OpenAiResponses, "openai")
-        @Expect(request.messages.size, 1)
-        @Expect(request.messages[0].blocks.size, 1)
-        match (request.messages[0].blocks[0]) {
+        @Expect(request.transcript.items.size, 1)
+        @Expect(firstWireMessage(request).blocks.size, 1)
+        match (firstWireMessage(request).blocks[0]) {
             case LlmWireBlock.Text(value) => @Expect(value.text, "portable answer")
             case _ => @Fail("display-only reasoning was projected into request history")
         }
@@ -115,9 +125,9 @@ class NativeReplayRegressionTests {
         let request = toLlmWireRequest(domain.ModelRequest(
             "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, blocks)]
         ), ProviderDialect.DeepSeekMessages, "volengine")
-        @Expect(request.messages.size, 1)
-        @Expect(request.messages[0].blocks.size, 1)
-        match (request.messages[0].blocks[0]) {
+        @Expect(request.transcript.items.size, 1)
+        @Expect(firstWireMessage(request).blocks.size, 1)
+        match (firstWireMessage(request).blocks[0]) {
             case LlmWireBlock.Text(value) => @Expect(value.text, "visible answer")
             case _ => @Fail("foreign provider replay was projected into request history")
         }
@@ -135,14 +145,15 @@ class NativeReplayRegressionTests {
             ))
         )
         let request = toLlmWireRequest(domain.ModelRequest(
-            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, [block])]
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, [block])],
+            tools: [readToolDefinition()]
         ), ProviderDialect.DeepSeekMessages, "primary")
-        @Expect(request.messages[0].blocks.size, 2)
-        match (request.messages[0].blocks[0]) {
+        @Expect(firstWireMessage(request).blocks.size, 2)
+        match (firstWireMessage(request).blocks[0]) {
             case LlmWireBlock.NativeReplay(value) => @Expect(value.dialectId, "deepseek.messages.v1")
             case _ => @Fail("opaque tool call replay was not restored")
         }
-        match (request.messages[0].blocks[1]) {
+        match (firstWireMessage(request).blocks[1]) {
             case LlmWireBlock.ToolCall(value) => @Expect(value.callId, "call-1")
             case _ => @Fail("opaque replay replaced the canonical tool call")
         }
@@ -241,17 +252,74 @@ class NativeReplayRegressionTests {
             )
         ]
         let projected = toLlmWireRequest(domain.ModelRequest(
-            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, reconstructed)]
+            "fixture", [domain.ModelMessage(domain.ModelRole.Assistant, reconstructed)],
+            tools: [readToolDefinition()]
         ), ProviderDialect.AnthropicMessages, "primary")
-        @Expect(projected.messages[0].blocks.size, 2)
-        match (projected.messages[0].blocks[0]) {
+        @Expect(firstWireMessage(projected).blocks.size, 2)
+        match (firstWireMessage(projected).blocks[0]) {
             case LlmWireBlock.NativeReplay(_) => @Expect(true, true)
             case _ => @Fail("native replay was not retained before the canonical tool call")
         }
-        match (projected.messages[0].blocks[1]) {
+        match (firstWireMessage(projected).blocks[1]) {
             case LlmWireBlock.ToolCall(value) => @Expect(value.callId, "call-1")
             case _ => @Fail("canonical tool call was replaced by native replay")
         }
+    }
+
+    @TestCase
+    func retiredToolHistoryIsNotAdvertisedAsCallable(): Unit {
+        let projected = toLlmWireRequest(domain.ModelRequest(
+            "fixture",
+            [
+                domain.ModelMessage(domain.ModelRole.Assistant, [domain.ModelBlock(
+                    domain.ModelBlockKind.ToolCall, callId: "retired-call",
+                    name: "retired", arguments: domain.objectValue([])
+                )]),
+                domain.ModelMessage(domain.ModelRole.User, [domain.ModelBlock(
+                    domain.ModelBlockKind.ToolResult, callId: "retired-call",
+                    name: "retired", text: "retired output"
+                )])
+            ],
+            tools: [readToolDefinition(name: "current")]
+        ), ProviderDialect.OpenAiChat, "openai")
+        @Expect(projected.transcript.initialContext.tools.size, 1)
+        @Expect(projected.transcript.initialContext.tools[0].tool.name, "current")
+        @Expect(projected.transcript.items.size, 2)
+        match (projected.transcript.items[0]) {
+            case LlmWireInputItem.Message(message) => match (message.blocks[0]) {
+                case LlmWireBlock.Text(value) => @Expect(
+                    value.text.contains("Historical call to unavailable tool retired"), true
+                )
+                case _ => @Fail("retired tool call remained executable")
+            }
+            case _ => @Fail("retired tool call history is missing")
+        }
+        match (projected.transcript.items[1]) {
+            case LlmWireInputItem.Message(message) => match (message.blocks[0]) {
+                case LlmWireBlock.Text(value) => @Expect(value.text.contains("retired output"), true)
+                case _ => @Fail("retired tool result remained executable")
+            }
+            case _ => @Fail("retired tool result history is missing")
+        }
+    }
+
+    @TestCase
+    func transcriptSnapshotContainsProjectionFailures(): Unit {
+        let model = ProviderModelPort(
+            ProviderSpec(
+                "fixture", ProviderProtocol.Responses, "fixture-model",
+                "https://provider.example", "FIXTURE_API_KEY",
+                provider: "openai", dialect: Some(ProviderDialect.OpenAiResponses)
+            ),
+            NativeProviderTransport()
+        )
+        let snapshot = model.transcriptSnapshot(domain.ModelRequest(
+            "fixture-model",
+            [domain.ModelMessage(domain.ModelRole.Assistant, [
+                domain.ModelBlock(domain.ModelBlockKind.Error, text: "unsupported")
+            ])]
+        ))
+        @Expect(snapshot.isNone(), true)
     }
 
     @TestCase
@@ -274,7 +342,7 @@ class StreamProjectionSafetyTests {
     @TestCase
     func streamSinkExceptionsDoNotEscapeProjection(): Unit {
         let projection = ProviderStreamProjection(
-            openAiChatCodec(openAiChatModelProfile("fixture"), provider: "fixture"),
+            openAiChatCodec(openAiChatModelProfile("fixture", transcriptCapabilities: LlmWireTranscriptCapabilities("openai.chat.v1", "1")), provider: "fixture"),
             ProviderProtocol.Completions,
             {_ => throw IllegalStateException("sink failed")}
         )
@@ -505,7 +573,8 @@ class OrphanToolResultEncodingTests {
     private func request(messages: Array<domain.ModelMessage>): domain.ModelRequest {
         domain.ModelRequest(
             "fixture-model",
-            messages
+            messages,
+            tools: [readToolDefinition()]
         )
     }
 
@@ -587,9 +656,13 @@ class OrphanToolResultEncodingTests {
             domain.ModelMessage(domain.ModelRole.User, [resultBlock("call_reused", "second output")])
         ]), ProviderDialect.AnthropicMessages, "standalone")
         var resultCount = 0
-        for (message in wire.messages) {
-            for (block in message.blocks) {
-                if (let LlmWireBlock.ToolResult(_) <- block) { resultCount++ }
+        for (item in wire.transcript.items) {
+            match (item) {
+                case LlmWireInputItem.Message(message) =>
+                    for (block in message.blocks) {
+                        if (let LlmWireBlock.ToolResult(_) <- block) { resultCount++ }
+                    }
+                case _ => ()
             }
         }
         @Expect(resultCount, 2)
@@ -656,7 +729,9 @@ class DeepSeekMessagesToolErrorCompatibilityTests {
                 domain.ModelMessage(domain.ModelRole.Assistant, [call("call-read")]),
                 domain.ModelMessage(domain.ModelRole.User, [resultBlock])
             ],
-            system: system
+            system: system,
+            tools: [readToolDefinition()],
+            parallelToolCalls: false
         )
     }
 

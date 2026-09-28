@@ -363,6 +363,10 @@ func staleModelResultContract(): Unit {
     let runB = coordinator.startTurn(
         SemanticTurnId("turn-b"), RunId("run-b"), ItemId("user-b"), userContent("b")
     ).value().getOrThrow()
+    let afterRunB = coordinator.snapshot()
+    expect(afterRunB.thread.revision == 3 && afterRunB.items.size == 2 &&
+        afterRunB.nextResultSequence == 1,
+        "new run starts at revision 3 with two canonical user items and result sequence 1")
     let stale = coordinator.commit(envelope(
         runA,
         "thread-stale-model",
@@ -380,6 +384,11 @@ func staleModelResultContract(): Unit {
                 reason.kind == StaleResultKind.WrongEpoch
         case _ => false
     }, "cancelled run model output is stale")
+    let afterStale = coordinator.snapshot()
+    expect(afterStale.thread.revision == afterRunB.thread.revision &&
+        afterStale.items.size == afterRunB.items.size &&
+        afterStale.nextResultSequence == afterRunB.nextResultSequence,
+        "late model output leaves revision, items, and result sequence unchanged")
     let committed = coordinator.commit(envelope(
         runB,
         "thread-stale-model",
@@ -397,6 +406,9 @@ func staleModelResultContract(): Unit {
     let snapshot = coordinator.snapshot()
     expect(snapshot.items.size == 3, "late output does not change item cardinality")
     expect(itemText(snapshot.items[2]) == "current-b", "new run never sees late model output")
+    expect(snapshot.thread.revision == 4 && snapshot.nextResultSequence == 2 &&
+        snapshot.items[2].ordinal == 3,
+        "current model result advances exactly one semantic revision and sequence")
 }
 
 

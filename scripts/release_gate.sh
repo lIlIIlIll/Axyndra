@@ -116,7 +116,9 @@ fi
 python3 scripts/cold_start_gate.py \
   --candidate "$candidate" \
   --diagnostics "$package_root/diagnostics"
-
+AXYNDRA_BINARY="$candidate" \
+  python3 support_tests/plugin_performance_baseline/check.py \
+  | tee "$package_root/diagnostics/plugin-performance.jsonl"
 python3 scripts/tui_golden_gate.py \
   --candidate "$candidate --fixture" \
   --scenario cards \

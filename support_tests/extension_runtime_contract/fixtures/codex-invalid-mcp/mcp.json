@@ -1,0 +1,1 @@
+{"$schema":"https://schemas.example.test/mcp/v99.json","mcpServers":{"docs":{"type":"streamable-http","url":"https://example.test/mcp"}}}

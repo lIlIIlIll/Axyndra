@@ -104,9 +104,11 @@ class CoreToolLoopState {
 
 class CoreToolBatchCoordinator {
     private let tools: ToolPipeline
+    private let toolHooks: CoreToolHookRuntime
 
-    init(tools: ToolPipeline) {
+    init(tools: ToolPipeline, toolHooks: CoreToolHookRuntime) {
         this.tools = tools
+        this.toolHooks = toolHooks
     }
 
     // Preparation stops at the first approval request. Calls after that
@@ -151,8 +153,41 @@ class CoreToolBatchCoordinator {
                         [], coreSortToolOutcomes(immediate.toArray()), None, None, None, []
                     ))
             }
-            let call = ToolCall(block.callId, block.name, block.arguments)
-            match (tools.prepareCommitted(context, committed)) {
+            var effectiveArguments = block.arguments
+            let hookDecision = try {
+                toolHooks.beforeTool(context, committed, block.arguments)
+            } catch (_: Exception) {
+                CoreToolHookDecision.Deny("PreToolUse handler failed; tool call denied")
+            }
+            match (hookDecision) {
+                case CoreToolHookDecision.Continue => ()
+                case CoreToolHookDecision.Modify(arguments) => effectiveArguments = arguments
+                case CoreToolHookDecision.Deny(reason) =>
+                    let safeReason = if (reason.trimAscii() == "" || reason.size > 512) {
+                        "PreToolUse denied the tool call"
+                    } else {
+                        reason
+                    }
+                    immediate.add(CoreToolOutcome(
+                        index,
+                        committed,
+                        Result.Ok(ToolInvocationResult.Denied(ToolDenial(
+                            block.callId,
+                            block.name,
+                            AgentError(
+                                AgentErrorKind.PermissionDenied,
+                                "tool.hook_denied",
+                                safeReason
+                            )
+                        )))
+                    ))
+                    continue
+            }
+            match (tools.prepareCommitted(
+                context,
+                committed,
+                effectiveArguments: Some(effectiveArguments)
+            )) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(ToolPreparation.Ready(value)) =>
                     ready.add(CorePreparedTool(index, committed, value))
@@ -190,6 +225,7 @@ class CoreToolBatchCoordinator {
         preparation: CoreToolBatchPreparation,
         token: CancellationToken,
         beforeExecute: (CorePreparedTool) -> Result<Unit>,
+        afterExecute: (CorePreparedTool) -> Result<Unit>,
         beforeWave: (Int64) -> Result<Unit>,
         afterWave: (Int64) -> Result<Unit>
     ): Result<CoreToolBatchExecution> {
@@ -219,7 +255,7 @@ class CoreToolBatchCoordinator {
                         break
                 }
                 futures.add(spawn {
-                    try {
+                    let result: Result<ToolInvocationResult> = try {
                         match (token.check()) {
                             case Result.Ok(_) => tools.executePrepared(context, work.prepared)
                             case Result.Err(error) => Result.Err(error)
@@ -235,6 +271,11 @@ class CoreToolBatchCoordinator {
                             ]
                         ))
                     }
+                    let settled: Result<ToolInvocationResult> = match (afterExecute(work)) {
+                        case Result.Ok(_) => result
+                        case Result.Err(error) => Result.Err(error)
+                    }
+                    settled
                 })
             }
             for (index in 0..futures.size) {
@@ -251,25 +292,23 @@ class CoreToolBatchCoordinator {
             }
             match (launchFailure) {
                 case Some(error) =>
-                    match (afterWave(wave.calls.size)) {
-                        case Result.Ok(_) => ()
-                        case Result.Err(releaseError) => return Result.Ok(CoreToolBatchExecution(
-                            coreSortToolOutcomes(outcomes.toArray()),
-                            fatal: Some(releaseError)
-                        ))
+                    let unlaunched = wave.calls.size - futures.size
+                    if (unlaunched > 0) {
+                        match (afterWave(unlaunched)) {
+                            case Result.Ok(_) => ()
+                            case Result.Err(releaseError) => return Result.Ok(
+                                CoreToolBatchExecution(
+                                    coreSortToolOutcomes(outcomes.toArray()),
+                                    fatal: Some(releaseError)
+                                )
+                            )
+                        }
                     }
                     return Result.Ok(CoreToolBatchExecution(
                         coreSortToolOutcomes(outcomes.toArray()),
                         fatal: Some(error)
                     ))
                 case None => ()
-            }
-            match (afterWave(wave.calls.size)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Ok(CoreToolBatchExecution(
-                    coreSortToolOutcomes(outcomes.toArray()),
-                    fatal: Some(error)
-                ))
             }
         }
         Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray())))

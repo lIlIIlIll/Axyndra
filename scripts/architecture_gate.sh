@@ -187,6 +187,26 @@ if unexpected_tui_dependencies:
         + ", ".join(sorted(unexpected_tui_dependencies))
     )
 
+# agent_app and agent_rpc retain existing Core edges for internal reviewer
+# dry-run and RPC run-mode enums. Do not add Core edges to CLI or TUI.
+frontend_packages = {"agent_app", "agent_cli", "agent_rpc", "agent_tui"}
+for package in sorted(frontend_packages):
+    forbidden_store = graph.get(package, set()).intersection({"agent_store"})
+    if forbidden_store:
+        raise SystemExit(
+            "architecture gate failed: frontend depends directly on Store: "
+            + package
+            + " -> "
+            + ", ".join(sorted(forbidden_store))
+        )
+core_free_frontends = {"agent_cli", "agent_tui"}
+for package in sorted(core_free_frontends):
+    if "agent_core" in graph.get(package, set()):
+        raise SystemExit(
+            "architecture gate failed: CLI/TUI depends directly on Core: "
+            + package
+        )
+
 edge_count = sum(len(values) for values in graph.values())
 print(
     f"workspace dependency graph passed ({len(graph)} packages, "
@@ -211,6 +231,17 @@ if rg_matches -n 'import (agent_core|model_adapters)' \
   fail "CLI parser crosses the client/domain boundary"
 fi
 
+if rg_matches -n 'import agent_store' \
+  "$ROOT/agent_app/src" "$ROOT/agent_rpc/src" \
+  "$ROOT/agent_cli/src" "$ROOT/agent_tui/src" >/dev/null; then
+  fail "frontend imports Store instead of using a client/product boundary"
+fi
+
+if rg_matches -n 'import agent_core' \
+  "$ROOT/agent_cli/src" "$ROOT/agent_tui/src" >/dev/null; then
+  fail "CLI/TUI imports Core instead of using a client/product boundary"
+fi
+
 if rg_matches -n 'import (model_adapters|llm4cj)' \
   "$ROOT/agent_core/src" "$ROOT/agent_runtime/src" >/dev/null; then
   fail "Agent runtime crosses ModelPort into provider API or transport code"
@@ -220,9 +251,9 @@ if [[ -d "$ROOT/libs/llm4cj" || -d "$ROOT/libs/json4cj" ]]; then
   fail "extracted llm4cj/json4cj source remains in the Axyndra workspace"
 fi
 
-if ! rg_matches -n 'llm4cj.*git = "https://github.com/lIlIIlIll/llm4cj.git".*tag = "v0.1.0"' \
+if ! rg_matches -n 'llm4cj.*git = "https://github.com/lIlIIlIll/llm4cj.git".*tag = "v0.2.0"' \
   "$ROOT/model_adapters/cjpm.toml" >/dev/null; then
-  fail "model_adapters does not depend on llm4cj v0.1.0 from the standalone repository"
+  fail "model_adapters does not depend on llm4cj v0.2.0 from the standalone repository"
 fi
 python3 "$ROOT/scripts/dependency_pin_gate.py"
 

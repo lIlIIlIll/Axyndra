@@ -280,7 +280,13 @@ public class SqliteDatabase {
 
     private func migrate(): Unit {
         let version = scalarIntLocked("PRAGMA user_version")
-        if (version == 22) { return }
+        if (version == 26) { return }
+        if (version > 26) {
+            throw IllegalStateException(
+                "Unsupported SQLite schema version " + version.toString() +
+                "; this binary supports up to version 26"
+            )
+        }
         if (version == 0) {
             executeLocked("BEGIN IMMEDIATE")
             try {
@@ -289,7 +295,11 @@ public class SqliteDatabase {
                 for (statement in v20Migration()) { executeLocked(statement) }
                 for (statement in v21Migration()) { executeLocked(statement) }
                 for (statement in v22Migration()) { executeLocked(statement) }
-                executeLocked("PRAGMA user_version=22")
+                for (statement in v23Migration()) { executeLocked(statement) }
+                for (statement in v24Migration()) { executeLocked(statement) }
+                for (statement in v25Migration()) { executeLocked(statement) }
+                for (statement in v26Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=26")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}
@@ -527,7 +537,8 @@ public class SqliteDatabase {
                 throw error
             }
         } else if (version != 15 && version != 16 && version != 17 &&
-            version != 18 && version != 19 && version != 20 && version != 21) {
+            version != 18 && version != 19 && version != 20 && version != 21 &&
+            version != 22 && version != 23 && version != 24 && version != 25) {
             throw IllegalStateException(
                 "unsupported SQLite schema version " + version.toString()
             )
@@ -618,6 +629,56 @@ public class SqliteDatabase {
             try {
                 for (statement in v22Migration()) { executeLocked(statement) }
                 executeLocked("PRAGMA user_version=22")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v23 stores the exact llm4cj transcript snapshot used by an attempt.
+        if (version >= 1 && version <= 22) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v23Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=23")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v24 records durable parentage and idempotency for derived Operations.
+        if (version >= 1 && version <= 23) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v24Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=24")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v25 upgrades every persisted Run snapshot before the version-3
+        // decoder becomes authoritative. No legacy decoder remains at runtime.
+        if (version >= 1 && version <= 24) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v25Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=25")
+                executeLocked("COMMIT")
+            } catch (error: Exception) {
+                try { executeLocked("ROLLBACK") } catch (_: Exception) {}
+                throw error
+            }
+        }
+        // v26 quarantines active pre-transcript model Attempts before any
+        // recovery path can dispatch them through a changed adapter.
+        if (version >= 1 && version <= 25) {
+            executeLocked("BEGIN IMMEDIATE")
+            try {
+                for (statement in v26Migration()) { executeLocked(statement) }
+                executeLocked("PRAGMA user_version=26")
                 executeLocked("COMMIT")
             } catch (error: Exception) {
                 try { executeLocked("ROLLBACK") } catch (_: Exception) {}

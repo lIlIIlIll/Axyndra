@@ -141,6 +141,18 @@ class Process4CjTests {
     }
 
     @TestCase
+    func fillsSecureRandomBytes(): Unit {
+        let bytes = Array<Byte>(32, repeat: 0)
+        fillSecureRandom(bytes)
+        var changed = false
+        for (byte in bytes) {
+            if (byte != 0) { changed = true; break }
+        }
+        @Expect(changed)
+        fillSecureRandom(Array<Byte>(0, repeat: 0))
+    }
+
+    @TestCase
     func framesFragmentedLinesAndContentLengthBodies() {
         let lines = LineFramer(maxFrameBytes: 16)
         @Expect(lines.push("one\r").size, 0)

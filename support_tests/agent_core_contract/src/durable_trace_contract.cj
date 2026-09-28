@@ -26,6 +26,15 @@ class DurableCrashDispatchModel <: ModelPort {
         this.marker = marker
     }
 
+    public func transcriptSnapshot(request: ModelRequest): ?String {
+        let _ = request.requestId
+        Some("durable-model-transcript-v1")
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        snapshot == "durable-model-transcript-v1"
+    }
+
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
         let _ = request
         let _ = events
@@ -45,6 +54,15 @@ class DurableCrashDispatchModel <: ModelPort {
 class DurableResumeAnswerModel <: ModelPort {
     var calls: Int64 = 0
     var lastModel: String = ""
+
+    public func transcriptSnapshot(request: ModelRequest): ?String {
+        let _ = request.requestId
+        Some("durable-model-transcript-v1")
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        snapshot == "durable-model-transcript-v1"
+    }
 
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
         calls += 1

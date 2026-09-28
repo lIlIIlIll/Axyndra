@@ -26,11 +26,14 @@ main(): Int64 {
     threadCodecContract()
     runRequestSnapshotProjectionContract()
     v19ToV20ContinuationColumnContract()
+    v23ToV24AdmissionMigrationContract()
+    v25ToV26TranscriptMigrationContract()
+    futureSchemaVersionContract()
     let root = Directory.createTemp("/tmp").toString()
     let path = root + "/state.db"
     let database = SqliteDatabase(path)
     try {
-        expect(database.scalarInt("PRAGMA user_version") == 22, "schema is migrated")
+        expect(database.scalarInt("PRAGMA user_version") == 26, "schema is migrated")
         expect(database.query("PRAGMA journal_mode")[0].required(0).toAsciiLower() == "wal",
             "WAL mode is durable configuration")
         expect(database.scalarInt("PRAGMA foreign_keys") == 1, "foreign keys are enabled")
@@ -45,7 +48,13 @@ main(): Int64 {
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
                 "'model_decision_usage','canonical_decision_items','decision_operations')"
-        ) == 6, "all vNext durable record families exist")
+        ) == 6 && database.scalarInt(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' " +
+                "AND name='derived_operation_admissions'"
+        ) == 1 && database.scalarInt(
+            "SELECT COUNT(*) FROM pragma_index_list('derived_operation_admissions') " +
+                "WHERE [unique]=1"
+        ) == 3, "all durable record families and admission constraints exist")
 
         database.execute(
             "INSERT INTO threads VALUES ('thread',0,'workspace','open',1,NULL)"
@@ -82,6 +91,8 @@ main(): Int64 {
         threadSeedContract(database)
         semanticStoreContract(database)
         inboxStepContract(database)
+        databaseBackupRestoreContract(database, root)
+
     } finally {
         database.close()
     }
@@ -108,12 +119,42 @@ main(): Int64 {
     }
     repeatedCrashRecoveryContract(root)
     modelDecisionDurabilityContract()
+    derivedOperationAdmissionContract()
     totalContinuationCrashContract()
     v6ToV16MigrationContract()
     v7ToV16MigrationContract()
     sqliteAppendRestoreBenchmark()
     println("agent store contract passed")
     0
+}
+
+func databaseBackupRestoreContract(database: SqliteDatabase, root: String): Unit {
+    database.execute(
+        "INSERT INTO artifacts(hash,mime,size,metadata,relative_path) VALUES(" +
+            "'backup-artifact','application/octet-stream',3,'{}','blobs/backup-artifact')"
+    )
+    let backupPath = root + "/backup/state.db"
+    database.backupTo(backupPath)
+    let restored = SqliteDatabase(backupPath)
+    try {
+        let thread = SqliteThreadCommitSink(restored).loadThread(ThreadId("durable-thread"))
+        expect(restored.scalarInt("PRAGMA user_version") == 26 &&
+            restored.query("PRAGMA integrity_check")[0].required(0) == "ok" &&
+            thread.thread.revision == 5 && thread.items.size == 4 &&
+            restored.scalarInt("SELECT COUNT(*) FROM runs WHERE id='durable-run'") == 1 &&
+            restored.scalarInt(
+                "SELECT COUNT(*) FROM operations WHERE id IN ('durable-operation','unknown-operation')"
+            ) == 2 && restored.scalarInt(
+                "SELECT COUNT(*) FROM operation_receipts WHERE id IN ('durable-receipt','unknown-receipt')"
+            ) == 2 && restored.scalarInt(
+                "SELECT COUNT(*) FROM approvals WHERE operation_id='recovery-operation'"
+            ) == 1 && restored.scalarInt(
+                "SELECT COUNT(*) FROM artifacts WHERE hash='backup-artifact'"
+            ) == 1,
+            "transactional backup restore preserves schema, Run, Operation, approval, Receipt, artifact, and Thread data")
+    } finally {
+        restored.close()
+    }
 }
 
 func runRequestSnapshotProjectionContract(): Unit {
@@ -257,6 +298,7 @@ func v19ToV20ContinuationColumnContract(): Unit {
         seed.execute(
             "INSERT INTO threads VALUES ('v19-thread',0,'workspace','open',1,'v19-turn')"
         )
+        seed.execute("ALTER TABLE model_attempts DROP COLUMN transcript_snapshot")
         seed.execute(
             "INSERT INTO turns VALUES ('v19-turn','v19-thread',1,'active','v19-user','v19-run')"
         )
@@ -266,13 +308,14 @@ func v19ToV20ContinuationColumnContract(): Unit {
                 "'v19-run','v19-thread','v19-turn',1,'waiting_approval','{}','{}','{}','{}'," +
                 "1,'legacy-v19-payload')"
         )
+        seed.execute("DROP TABLE derived_operation_admissions")
         seed.execute("PRAGMA user_version=19")
     } finally { seed.close() }
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 22,
-            "v19 database migrates through schema v22")
+        expect(migrated.scalarInt("PRAGMA user_version") == 26,
+            "v19 database migrates through schema v26")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"
         ) == 0, "v20 removes the legacy continuation column from canonical Runs")
@@ -283,6 +326,347 @@ func v19ToV20ContinuationColumnContract(): Unit {
         expect(migrated.query("PRAGMA foreign_key_check").isEmpty(),
             "v19 to v20 migration preserves foreign-key integrity")
     } finally { migrated.close() }
+}
+
+func v25ToV26TranscriptMigrationContract(): Unit {
+    let root = Directory.createTemp("/tmp").toString()
+    let path = root + "/v25-transcript.db"
+    let seed = SqliteDatabase(path)
+    try {
+        seed.execute(
+            "INSERT INTO threads VALUES ('legacy-transcript-thread',0,'workspace','open',1," +
+                "'legacy-transcript-turn')"
+        )
+        seed.execute(
+            "INSERT INTO turns VALUES ('legacy-transcript-turn','legacy-transcript-thread',1," +
+                "'active','legacy-transcript-user','legacy-transcript-run')"
+        )
+        seed.execute(
+            "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot," +
+                "budget,usage,started_at_millis,app_snapshot) VALUES(" +
+                "'legacy-transcript-run','legacy-transcript-thread','legacy-transcript-turn'," +
+                "1,'running','{}','{}','{}','{}',1," +
+                "json_object('format_version',3,'status','running'))"
+        )
+        seed.execute(
+            "INSERT INTO model_attempts(id,semantic_request_id,run_id,parent_attempt_id," +
+                "attempt_no,lifecycle,policy,policy_reason,started_at_millis," +
+                "last_activity_at_millis,completed_at_millis,provider_request_id," +
+                "provider_response_id,failure_kind,semantic_request_digest,wire_policy_digest," +
+                "dispatch_state,replay_barrier,transcript_snapshot) VALUES(" +
+                "'legacy-transcript-attempt','legacy-transcript-request'," +
+                "'legacy-transcript-run',NULL,1,'created','{}','initial',1,1,NULL," +
+                "'legacy-provider-request','','','legacy-semantic-digest','legacy-wire-digest'," +
+                "'prepared','none','')"
+        )
+        seed.execute(
+            "INSERT INTO run_continuations(run_id,schema_version,revision,phase,payload,digest," +
+                "updated_commit_sequence,active_attempt_id) VALUES(" +
+                "'legacy-transcript-run',1,1,'model_effect_pending','legacy','digest',1," +
+                "'legacy-transcript-attempt')"
+        )
+        seed.execute("PRAGMA user_version=25")
+    } finally { seed.close() }
+
+    let migrated = SqliteDatabase(path)
+    try {
+        let row = migrated.query(
+            "SELECT state,json_extract(app_snapshot,'$.status')," +
+                "json_extract(app_snapshot,'$.error.code') FROM runs " +
+                "WHERE id='legacy-transcript-run'"
+        )[0]
+        expect(migrated.scalarInt("PRAGMA user_version") == 26 &&
+            row.required(0) == "recovery_required" &&
+            row.required(1) == "recovery_required" &&
+            row.required(2) == "model.attempt_replay_binding_missing",
+            "v26 quarantines an active legacy Attempt without a transcript snapshot")
+    } finally { migrated.close() }
+}
+
+func futureSchemaVersionContract(): Unit {
+    let root = Directory.createTemp("/tmp").toString()
+    let path = root + "/future-schema.db"
+    let seed = SqliteDatabase(path)
+    try {
+        seed.execute("PRAGMA user_version=27")
+    } finally { seed.close() }
+
+    var rejected = false
+    try {
+        let unsupported = SqliteDatabase(path)
+        unsupported.close()
+    } catch (error: IllegalStateException) {
+        rejected = error.message.contains("Unsupported SQLite schema version 27")
+    }
+    expect(rejected, "a newer database schema is rejected before use")
+}
+
+func v23ToV24AdmissionMigrationContract(): Unit {
+    let root = Directory.createTemp("/tmp").toString()
+    let path = root + "/v23-admission.db"
+    let seed = SqliteDatabase(path)
+    try {
+        let sink = SqliteThreadCommitSink(seed)
+        let threadId = ThreadId("legacy-v23-thread")
+        let turnId = SemanticTurnId("legacy-v23-turn")
+        let runId = RunId("legacy-v23-run")
+        let coordinator = ThreadCoordinator(sink.createThread(threadId, "workspace"), sink)
+        let active = coordinator.startTurn(
+            turnId, runId, ItemId("legacy-v23-user"),
+            ThreadItemContent.UserMessage(textMessageParts("migration")),
+            createdAtMillis: 1
+        ).value().getOrThrow()
+        let arguments = objectValue([ValueField("path", textValue("legacy.txt"))])
+        let rootCall = commitDurableToolCall(
+            seed, coordinator, threadId, turnId, runId, active.activeEpoch, 1,
+            ItemId("legacy-v23-call"), "legacy-v23-provider-call", "read", arguments, 2
+        )
+        let legacyPlan = NormalizedOperationPlan(
+            "read", arguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never,
+            "legacy-v23-plan"
+        )
+        let legacyOperation = OperationId("legacy-v23-program-operation")
+        expect(DurableOperationStore(seed).prepareTrustedControlOperation(
+            legacyOperation, runId, rootCall.canonicalItemId, legacyPlan
+        ).isOk(), "legacy Program Operation exists before admission migration")
+        seed.execute("DROP TABLE derived_operation_admissions")
+        seed.execute("PRAGMA user_version=23")
+    } finally { seed.close() }
+
+    let migrated = SqliteDatabase(path)
+    try {
+        expect(migrated.scalarInt("PRAGMA user_version") == 26 &&
+            migrated.scalarInt(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' " +
+                    "AND name='derived_operation_admissions'"
+            ) == 1, "v23 migration creates the derived admission relation")
+        expect(migrated.scalarInt(
+            "SELECT COUNT(*) FROM operations WHERE id='legacy-v23-program-operation' " +
+                "AND state='prepared'"
+        ) == 1 && migrated.scalarInt(
+            "SELECT COUNT(*) FROM derived_operation_admissions"
+        ) == 0, "legacy Program Operation is retained without inferred admission")
+        expect(migrated.query("PRAGMA foreign_key_check").isEmpty(),
+            "v23 to v24 migration preserves foreign-key integrity")
+    } finally { migrated.close() }
+}
+
+func derivedOperationAdmissionContract(): Unit {
+    let root = Directory.createTemp("/tmp").toString()
+    let database = SqliteDatabase(root + "/derived-admission.db")
+    try {
+        let sink = SqliteThreadCommitSink(database)
+        let threadId = ThreadId("derived-thread")
+        let turnId = SemanticTurnId("derived-turn")
+        let runId = RunId("derived-run")
+        let coordinator = ThreadCoordinator(sink.createThread(threadId, "workspace"), sink)
+        let active = coordinator.startTurn(
+            turnId, runId, ItemId("derived-user"),
+            ThreadItemContent.UserMessage(textMessageParts("run a read-only program")),
+            createdAtMillis: 1
+        ).value().getOrThrow()
+        let rootArguments = objectValue([ValueField("program", textValue("read file"))])
+        let rootToolCall = commitDurableToolCall(
+            database, coordinator, threadId, turnId, runId, active.activeEpoch, 1,
+            ItemId("derived-root-call"), "derived-root-provider-call", "run_program",
+            rootArguments, 2
+        )
+        let effectiveRootArguments = objectValue([
+            ValueField("program", textValue("read hook-modified file"))
+        ])
+        let rootPlan = NormalizedOperationPlan(
+            "run_program", effectiveRootArguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never,
+            "derived-root-plan"
+        )
+        let store = DurableOperationStore(database)
+        let parentOperation = OperationId("derived-root-operation")
+        expect(store.prepare(parentOperation, runId, rootToolCall, rootPlan).isOk(),
+            "derived Program root is prepared from the committed ToolCall")
+
+        let childArguments = objectValue([ValueField("path", textValue("README.md"))])
+        let childPlan = NormalizedOperationPlan(
+            "read", childArguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe,
+            "derived-read-plan-v1"
+        )
+        let beforeItems = database.scalarInt(
+            "SELECT COUNT(*) FROM items WHERE thread_id='derived-thread'"
+        )
+        let beforeRevision = database.scalarInt(
+            "SELECT revision FROM threads WHERE id='derived-thread'"
+        )
+        let early = store.prepareDerivedOperation(
+            OperationId("derived-too-early"), parentOperation, runId, rootToolCall,
+            "request-early", childPlan
+        )
+        expect(!early.isOk() && database.scalarInt(
+            "SELECT COUNT(*) FROM derived_operation_admissions"
+        ) == 0 && database.scalarInt(
+            "SELECT COUNT(*) FROM operations"
+        ) == 1, "no child Operation is persisted before root handoff")
+
+        expect(store.markExecuting(
+            parentOperation, runId, rootPlan, 3, false
+        ).isOk() && store.markExecutionHandoff(
+            parentOperation, runId, threadId, 4
+        ).isOk(), "canonical root reaches its durable executor handoff")
+
+        let firstOperation = OperationId("derived-child-1")
+        let first = store.prepareDerivedOperation(
+            firstOperation, parentOperation, runId, rootToolCall, "request-1", childPlan
+        )
+        expect(first.isOk() && first.value().getOrThrow().value == firstOperation.value,
+            "host admission persists the first child Operation")
+        let firstAdmission = database.query(
+            "SELECT operation_id,parent_operation_id,call_sequence,request_key,request_digest " +
+                "FROM derived_operation_admissions WHERE operation_id='derived-child-1'"
+        )[0]
+        expect(firstAdmission.required(0) == firstOperation.value &&
+            firstAdmission.required(1) == parentOperation.value &&
+            firstAdmission.required(2) == "1" && firstAdmission.required(3) == "request-1" &&
+            firstAdmission.required(4) == childPlan.bindingDigest && database.scalarInt(
+                "SELECT COUNT(*) FROM operations WHERE id='derived-child-1' AND " +
+                    "tool_call_item_id='derived-root-call'"
+            ) == 1 && database.scalarInt(
+                "SELECT COUNT(*) FROM operation_effect_records WHERE " +
+                    "operation_id='derived-child-1' AND tool_call_item_id='derived-root-call'"
+            ) == 1, "child identity and immutable effect bind to the actual root Item")
+        let restoredCall = store.loadCall(firstOperation, runId).value().getOrThrow()
+        expect(restoredCall.callId == "request-1" && restoredCall.name == "read" &&
+            encodeStoredValue(restoredCall.arguments) == encodeStoredValue(childArguments),
+            "admitted child call restores from its persisted key and normalized plan")
+        expect(database.scalarInt(
+            "SELECT COUNT(*) FROM decision_operations WHERE operation_id='derived-child-1'"
+        ) == 0 && database.scalarInt(
+            "SELECT COUNT(*) FROM items WHERE thread_id='derived-thread'"
+        ) == beforeItems && database.scalarInt(
+            "SELECT revision FROM threads WHERE id='derived-thread'"
+        ) == beforeRevision, "derived admission creates no synthetic Thread item or root Decision link")
+
+        let duplicate = store.prepareDerivedOperation(
+            OperationId("derived-ignored-duplicate-id"), parentOperation, runId,
+            rootToolCall, "request-1", childPlan
+        )
+        expect(duplicate.isOk() && duplicate.value().getOrThrow().value == firstOperation.value &&
+            database.scalarInt("SELECT COUNT(*) FROM operations") == 2 &&
+            database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions") == 1,
+            "same request key and plan reuses the existing Operation identity")
+
+        let changedArguments = objectValue([ValueField("path", textValue("other.txt"))])
+        let changedPlan = NormalizedOperationPlan(
+            "read", changedArguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe,
+            "derived-read-plan-v2"
+        )
+        let conflict = store.prepareDerivedOperation(
+            OperationId("derived-conflicting-id"), parentOperation, runId,
+            rootToolCall, "request-1", changedPlan
+        )
+        expect(!conflict.isOk() && database.scalarInt("SELECT COUNT(*) FROM operations") == 2 &&
+            database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions") == 1,
+            "reusing a request key with a different normalized plan is a conflict")
+
+        let digestCollisionPlan = NormalizedOperationPlan(
+            "read", changedArguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe,
+            "derived-read-plan-v1"
+        )
+        let digestCollision = store.prepareDerivedOperation(
+            OperationId("derived-digest-collision"), parentOperation, runId,
+            rootToolCall, "request-1", digestCollisionPlan
+        )
+        expect(!digestCollision.isOk() && database.scalarInt("SELECT COUNT(*) FROM operations") == 2,
+            "matching digest cannot hide a different persisted normalized plan")
+
+        let secondOperation = OperationId("derived-child-2")
+        let second = store.prepareDerivedOperation(
+            secondOperation, parentOperation, runId, rootToolCall, "request-2", childPlan
+        )
+        expect(second.isOk() && database.scalarInt(
+            "SELECT call_sequence FROM derived_operation_admissions " +
+                "WHERE operation_id='derived-child-2'"
+        ) == 2, "host assigns monotonically increasing per-parent call sequence")
+
+        let nested = store.prepareDerivedOperation(
+            OperationId("derived-nested-child"), firstOperation, runId, rootToolCall,
+            "nested-request", childPlan
+        )
+        let missingParent = store.prepareDerivedOperation(
+            OperationId("derived-missing-parent-child"), OperationId("missing-parent"),
+            runId, rootToolCall, "missing-parent-request", childPlan
+        )
+        let nestedProgramPlan = NormalizedOperationPlan(
+            "run_program", childArguments, [Capability(CapabilityKind.WorkspaceRead)],
+            OperationEffectClass.ReadOnly, OperationRetryDisposition.Never,
+            "nested-program-plan"
+        )
+        let nestedProgram = store.prepareDerivedOperation(
+            OperationId("derived-nested-program"), parentOperation, runId, rootToolCall,
+            "nested-program-request", nestedProgramPlan
+        )
+        let writePlan = NormalizedOperationPlan(
+            "write", objectValue([ValueField("path", textValue("out.txt"))]),
+            [Capability(CapabilityKind.WorkspaceWrite)],
+            OperationEffectClass.WorkspaceMutation, OperationRetryDisposition.Never,
+            "derived-write-plan"
+        )
+        let writable = store.prepareDerivedOperation(
+            OperationId("derived-write-child"), parentOperation, runId, rootToolCall,
+            "write-request", writePlan
+        )
+        expect(!nested.isOk() && !missingParent.isOk() && !nestedProgram.isOk() &&
+            !writable.isOk() && database.scalarInt("SELECT COUNT(*) FROM operations") == 3 &&
+            database.scalarInt("SELECT COUNT(*) FROM derived_operation_admissions") == 2,
+            "invalid parents, nested Programs and writable child plans fail closed")
+
+        let beforeFailureOperations = database.scalarInt("SELECT COUNT(*) FROM operations")
+        let beforeFailureEffects = database.scalarInt(
+            "SELECT COUNT(*) FROM operation_effect_records"
+        )
+        let beforeFailureAdmissions = database.scalarInt(
+            "SELECT COUNT(*) FROM derived_operation_admissions"
+        )
+        database.execute(
+            "CREATE TRIGGER reject_derived_admission BEFORE INSERT ON " +
+                "derived_operation_admissions BEGIN SELECT RAISE(ABORT,'injected'); END"
+        )
+        let failedInsert = store.prepareDerivedOperation(
+            OperationId("derived-atomic-child"), parentOperation, runId, rootToolCall,
+            "atomic-request", childPlan
+        )
+        expect(!failedInsert.isOk() && database.scalarInt("SELECT COUNT(*) FROM operations") ==
+            beforeFailureOperations && database.scalarInt(
+                "SELECT COUNT(*) FROM operation_effect_records"
+            ) == beforeFailureEffects && database.scalarInt(
+                "SELECT COUNT(*) FROM derived_operation_admissions"
+            ) == beforeFailureAdmissions, "failed admission rolls back Operation and effect records")
+        database.execute("DROP TRIGGER reject_derived_admission")
+        let retriedInsert = store.prepareDerivedOperation(
+            OperationId("derived-atomic-child"), parentOperation, runId, rootToolCall,
+            "atomic-request", childPlan
+        )
+        expect(retriedInsert.isOk() && database.scalarInt(
+            "SELECT call_sequence FROM derived_operation_admissions " +
+                "WHERE operation_id='derived-atomic-child'"
+        ) == 3, "rolled-back admission leaves its identity and sequence available for retry")
+        expect(store.markExecuting(
+            firstOperation, runId, childPlan, 5, false
+        ).isOk() && store.settleDerivedOperation(
+            runId, parentOperation, VNextOperationReceipt(
+                "receipt-derived-child-1", firstOperation, OperationOutcome.Completed,
+                objectValue([ValueField("content", textValue("ok"))]), objectValue([]), 6
+            )
+        ).isOk(),
+            "hook-modified root plan remains authoritative through derived settlement")
+        expect(database.scalarInt(
+            "SELECT COUNT(*) FROM items WHERE thread_id='derived-thread'"
+        ) == beforeItems && database.scalarInt(
+            "SELECT revision FROM threads WHERE id='derived-thread'"
+        ) == beforeRevision && database.query("PRAGMA foreign_key_check").isEmpty(),
+            "derived admission preserves conversation history and database integrity")
+    } finally { database.close() }
 }
 
 func v6ToV16MigrationContract(): Unit {
@@ -313,8 +697,8 @@ func v6ToV16MigrationContract(): Unit {
 
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 22,
-            "v6 database migrates through schema v7 to v22")
+        expect(migrated.scalarInt("PRAGMA user_version") == 26,
+            "v6 database migrates through schema v7 to v26")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (" +
                 "'model_attempts','model_decisions','model_decision_blocks'," +
@@ -345,12 +729,13 @@ func v7ToV16MigrationContract(): Unit {
         seed.execute("ALTER TABLE model_attempts DROP COLUMN dispatch_state")
         seed.execute("ALTER TABLE model_attempts DROP COLUMN wire_policy_digest")
         seed.execute("ALTER TABLE model_attempts DROP COLUMN semantic_request_digest")
+        seed.execute("ALTER TABLE model_attempts DROP COLUMN transcript_snapshot")
         seed.execute("PRAGMA user_version=7")
     } finally { seed.close() }
     let migrated = SqliteDatabase(path)
     try {
-        expect(migrated.scalarInt("PRAGMA user_version") == 22,
-            "v7 database migrates through schema v8 to v22")
+        expect(migrated.scalarInt("PRAGMA user_version") == 26,
+            "v7 database migrates through schema v8 to v26")
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('app_run_events') WHERE name IN (" +
                 "'sequence_start','sequence_end','event_class','stream_key','delta_count','char_count')"
@@ -358,8 +743,8 @@ func v7ToV16MigrationContract(): Unit {
         expect(migrated.scalarInt(
             "SELECT COUNT(*) FROM pragma_table_info('model_attempts') WHERE name IN (" +
                 "'semantic_request_digest','wire_policy_digest','dispatch_state','replay_barrier'," +
-                "'dispatch_started_at_millis','provider_terminal_at_millis')"
-        ) == 6, "v7 to v9 adds model attempt dispatch and replay metadata")
+                "'dispatch_started_at_millis','provider_terminal_at_millis','transcript_snapshot')"
+        ) == 7, "v7 to v26 adds model attempt dispatch, replay and transcript metadata")
         expect(migrated.query("PRAGMA foreign_key_check").isEmpty(),
             "v7 to v8 migration passes foreign-key validation")
     } finally { migrated.close() }
@@ -391,9 +776,12 @@ func modelDecisionDurabilityContract(): Unit {
             "initial",
             10,
             11,
-            providerRequestId: "provider-request-1"
+            providerRequestId: "provider-request-1",
+            transcriptSnapshot: "{\"format\":\"llm4cj.transcript\",\"version\":1}"
         )
         expect(store.createAttempt(attempt).isOk(), "Model Attempt persists")
+        expect(database.query("SELECT transcript_snapshot FROM model_attempts WHERE id='attempt-1'")[0].required(0) ==
+            attempt.transcriptSnapshot, "Model Attempt persists the exact transcript snapshot")
         expect(store.createAttempt(attempt).isOk(), "Model Attempt persistence is idempotent")
         let decision = ModelDecision(
             ModelDecisionId("decision-1"),
@@ -2172,6 +2560,7 @@ func contextManifestContract(database: SqliteDatabase): Unit {
 }
 
 func removeV10Schema(database: SqliteDatabase): Unit {
+    database.execute("DROP TABLE derived_operation_admissions")
     database.execute("ALTER TABLE run_continuations DROP COLUMN active_attempt_id")
     database.execute("DROP TABLE legacy_run_continuation_imports")
     database.execute("ALTER TABLE runs ADD COLUMN continuation TEXT")

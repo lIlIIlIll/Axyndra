@@ -77,8 +77,22 @@ public class SqliteCompositionSnapshotStore {
     }
 
     public func loadRun(runId: RunId): Result<ResolvedAgentCompositionSnapshot> {
+        loadRunUsing({ sql, parameters => database.query(sql, parameters) }, runId)
+    }
+
+    public func loadRun(
+        transaction: SqliteTransaction,
+        runId: RunId
+    ): Result<ResolvedAgentCompositionSnapshot> {
+        loadRunUsing({ sql, parameters => transaction.query(sql, parameters) }, runId)
+    }
+
+    private func loadRunUsing(
+        query: (String, Array<SqlParameter>) -> Array<SqliteRow>,
+        runId: RunId
+    ): Result<ResolvedAgentCompositionSnapshot> {
         try {
-            let rows = database.query(
+            let rows = query(
                 "SELECT snapshot.digest,snapshot.payload FROM run_composition_bindings binding " +
                     "JOIN composition_snapshots snapshot ON snapshot.id=binding.snapshot_id " +
                     "WHERE binding.run_id=?",

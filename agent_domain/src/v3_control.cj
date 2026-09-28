@@ -174,7 +174,7 @@ public class EventMeta {
 
 @Derive[Equatable]
 public enum ToolOutputChannel {
-    Stdout | Stderr | Artifact | Summary
+    Stdout | Stderr | Progress | Artifact | Summary
 }
 
 @Derive[Equatable]
@@ -559,6 +559,7 @@ func toolOutputChannelName(channel: ToolOutputChannel): String {
     match (channel) {
         case ToolOutputChannel.Stdout => "stdout"
         case ToolOutputChannel.Stderr => "stderr"
+        case ToolOutputChannel.Progress => "progress"
         case ToolOutputChannel.Artifact => "artifact"
         case ToolOutputChannel.Summary => "summary"
     }
@@ -763,8 +764,19 @@ public enum BudgetChargeClass {
     Work | Drain
 }
 
+class ExecutionBudgetChildReservation {
+    let id: String
+    let usage: ExecutionUsage
+
+    init(id: String, usage: ExecutionUsage) {
+        this.id = id
+        this.usage = usage
+    }
+}
+
 public class ExecutionBudget {
     private let usageLock = Mutex()
+    private let childReservations = ArrayList<ExecutionBudgetChildReservation>()
     private var usedTurns: Int64 = 0
     private var usedModelRequests: Int64 = 0
     private var usedDrainModelRequests: Int64 = 0
@@ -773,6 +785,9 @@ public class ExecutionBudget {
     private var usedInputTokens: Int64 = 0
     private var usedOutputTokens: Int64 = 0
     private var usedCostMicros: Int64 = 0
+    private var reservedChildInputTokens: Int64 = 0
+    private var reservedChildOutputTokens: Int64 = 0
+    private var reservedChildCostMicros: Int64 = 0
     public let maxTurns: Int64
     public let maxModelRequests: Int64
     public let maxDrainModelRequests: Int64
@@ -789,6 +804,8 @@ public class ExecutionBudget {
     public let maxConcurrentChildren: Int64
     // Absolute UTC epoch milliseconds. Zero disables the deadline.
     public let deadlineMillis: Int64
+    // Immutable ceilings copied from the parent Run budget.
+    public let processLimits: ExecutionResourceLimits
 
     public init(
         maxTurns!: Int64 = 32,
@@ -804,7 +821,8 @@ public class ExecutionBudget {
         deadlineMillis!: Int64 = 0,
         maxChildren!: Int64 = 8,
         maxDepth!: Int64 = 4,
-        maxConcurrentChildren!: Int64 = 4
+        maxConcurrentChildren!: Int64 = 4,
+        processLimits!: ExecutionResourceLimits = ExecutionResourceLimits()
     ) {
         if (maxTurns < 1 || maxModelRequests < 1 || maxDrainModelRequests < 1 || maxToolCalls < 1 || maxConcurrentTools < 1 ||
             maxInputTokens < 1 || maxOutputTokens < 1 || maxCostMicros < 0 ||
@@ -827,11 +845,166 @@ public class ExecutionBudget {
         this.maxChildren = maxChildren
         this.maxDepth = maxDepth
         this.maxConcurrentChildren = maxConcurrentChildren
+        this.processLimits = processLimits
     }
 
     public func snapshot(): ExecutionUsage {
         usageLock.lock()
         try { usage() } finally { usageLock.unlock() }
+    }
+
+    // Child reservations and parent model usage share these cumulative
+    // dimensions. Zero remains the public sentinel for an unbounded limit.
+    public func remainingCumulativeBudget(): ExecutionUsage {
+        usageLock.lock()
+        try {
+            ExecutionUsage(
+                inputTokens: remainingExecutionBudgetAmount(
+                    maxTotalInputTokens, usedInputTokens, reservedChildInputTokens
+                ),
+                outputTokens: remainingExecutionBudgetAmount(
+                    maxTotalOutputTokens, usedOutputTokens, reservedChildOutputTokens
+                ),
+                costMicros: remainingExecutionBudgetAmount(
+                    maxCostMicros, usedCostMicros, reservedChildCostMicros
+                )
+            )
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
+    public func reserveChildBudget(
+        id: String,
+        reserved: ExecutionUsage,
+        nowMillis!: Int64 = agentUtcMillis()
+    ): Result<ExecutionUsage> {
+        let normalizedId = id.trimAscii()
+        if (normalizedId == "") {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "child.budget_id_empty",
+                "child budget id must not be empty"
+            ))
+        }
+        usageLock.lock()
+        try {
+            if (deadlineMillis > 0 && nowMillis >= deadlineMillis) {
+                return executionBudgetFailure(BudgetViolation(
+                    BudgetDimension.Deadline,
+                    deadlineMillis,
+                    nowMillis,
+                    "budget.deadline_exceeded"
+                ))
+            }
+            for (item in childReservations where item.id == normalizedId) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "child.duplicate_budget_id",
+                    "child budget id is already reserved"
+                ))
+            }
+            let nextInput = saturatedExecutionBudgetAdd(
+                saturatedExecutionBudgetAdd(usedInputTokens, reservedChildInputTokens),
+                reserved.inputTokens
+            )
+            let nextOutput = saturatedExecutionBudgetAdd(
+                saturatedExecutionBudgetAdd(usedOutputTokens, reservedChildOutputTokens),
+                reserved.outputTokens
+            )
+            let nextCost = saturatedExecutionBudgetAdd(
+                saturatedExecutionBudgetAdd(usedCostMicros, reservedChildCostMicros),
+                reserved.costMicros
+            )
+            if (maxTotalInputTokens > 0 && nextInput > maxTotalInputTokens) {
+                return childParentBudgetFailure(
+                    BudgetDimension.InputTokens, maxTotalInputTokens, nextInput
+                )
+            }
+            if (maxTotalOutputTokens > 0 && nextOutput > maxTotalOutputTokens) {
+                return childParentBudgetFailure(
+                    BudgetDimension.OutputTokens, maxTotalOutputTokens, nextOutput
+                )
+            }
+            if (maxCostMicros > 0 && nextCost > maxCostMicros) {
+                return childParentBudgetFailure(
+                    BudgetDimension.Cost, maxCostMicros, nextCost
+                )
+            }
+            childReservations.add(ExecutionBudgetChildReservation(normalizedId, reserved))
+            reservedChildInputTokens = saturatedExecutionBudgetAdd(
+                reservedChildInputTokens, reserved.inputTokens
+            )
+            reservedChildOutputTokens = saturatedExecutionBudgetAdd(
+                reservedChildOutputTokens, reserved.outputTokens
+            )
+            reservedChildCostMicros = saturatedExecutionBudgetAdd(
+                reservedChildCostMicros, reserved.costMicros
+            )
+            Result.Ok(usage())
+        } finally {
+            usageLock.unlock()
+        }
+    }
+
+    public func settleChildBudget(
+        id: String,
+        actual: ExecutionUsage
+    ): Result<ExecutionUsage> {
+        let normalizedId = id.trimAscii()
+        usageLock.lock()
+        try {
+            var index: Int64 = -1
+            for (candidate in 0..childReservations.size where
+                childReservations[candidate].id == normalizedId) {
+                index = candidate
+                break
+            }
+            if (index < 0) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "child.budget_reservation_missing",
+                    "child budget reservation is missing"
+                ))
+            }
+            let reservation = childReservations[index].usage
+            childReservations.remove(at: index)
+            reservedChildInputTokens -= reservation.inputTokens
+            reservedChildOutputTokens -= reservation.outputTokens
+            reservedChildCostMicros -= reservation.costMicros
+            usedInputTokens = saturatedExecutionBudgetAdd(usedInputTokens, actual.inputTokens)
+            usedOutputTokens = saturatedExecutionBudgetAdd(usedOutputTokens, actual.outputTokens)
+            usedCostMicros = saturatedExecutionBudgetAdd(usedCostMicros, actual.costMicros)
+            // Zero preserves the unbounded sentinel; only a positive child
+            // reservation imposes an explicit cumulative cap.
+            let exceedsReservation =
+                (reservation.inputTokens > 0 &&
+                    actual.inputTokens > reservation.inputTokens) ||
+                (reservation.outputTokens > 0 &&
+                    actual.outputTokens > reservation.outputTokens) ||
+                (reservation.costMicros > 0 &&
+                    actual.costMicros > reservation.costMicros)
+            let exceedsParent = (maxTotalInputTokens > 0 && usedInputTokens > maxTotalInputTokens) ||
+                (maxTotalOutputTokens > 0 && usedOutputTokens > maxTotalOutputTokens) ||
+                (maxCostMicros > 0 && usedCostMicros > maxCostMicros)
+            if (exceedsReservation) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.BudgetExceeded,
+                    "child.actual_usage_exceeds_reservation",
+                    "child actual usage exceeds its reserved cumulative budget"
+                ))
+            }
+            if (exceedsParent) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.BudgetExceeded,
+                    "child.parent_actual_usage_exceeded",
+                    "settling child usage exceeds the parent cumulative budget"
+                ))
+            }
+            Result.Ok(usage())
+        } finally {
+            usageLock.unlock()
+        }
     }
 
     public func reserve(
@@ -877,6 +1050,15 @@ public class ExecutionBudget {
             let nextCostMicros = saturatedExecutionBudgetAdd(
                 usedCostMicros, charge.costMicros
             )
+            let admissionInputTokens = saturatedExecutionBudgetAdd(
+                nextInputTokens, reservedChildInputTokens
+            )
+            let admissionOutputTokens = saturatedExecutionBudgetAdd(
+                nextOutputTokens, reservedChildOutputTokens
+            )
+            let admissionCostMicros = saturatedExecutionBudgetAdd(
+                nextCostMicros, reservedChildCostMicros
+            )
             match (executionBudgetViolation(
                 this,
                 nextTurns,
@@ -884,9 +1066,9 @@ public class ExecutionBudget {
                 nextDrainModelRequests,
                 nextToolCalls,
                 nextActiveTools,
-                nextInputTokens,
-                nextOutputTokens,
-                nextCostMicros
+                admissionInputTokens,
+                admissionOutputTokens,
+                admissionCostMicros
             )) {
                 case Some(violation) => return executionBudgetFailure(violation)
                 case None => ()
@@ -1008,17 +1190,26 @@ public class ExecutionBudget {
                 return Some(BudgetDimension.Deadline)
             }
             if (maxTotalInputTokens > 0 &&
-                saturatedExecutionBudgetAdd(usedInputTokens, projection.inputTokens) >
+                saturatedExecutionBudgetAdd(
+                    saturatedExecutionBudgetAdd(usedInputTokens, reservedChildInputTokens),
+                    projection.inputTokens
+                ) >
                     maxTotalInputTokens) {
                 return Some(BudgetDimension.InputTokens)
             }
             if (maxTotalOutputTokens > 0 &&
-                saturatedExecutionBudgetAdd(usedOutputTokens, projection.outputTokens) >
+                saturatedExecutionBudgetAdd(
+                    saturatedExecutionBudgetAdd(usedOutputTokens, reservedChildOutputTokens),
+                    projection.outputTokens
+                ) >
                     maxTotalOutputTokens) {
                 return Some(BudgetDimension.OutputTokens)
             }
             if (maxCostMicros > 0 &&
-                saturatedExecutionBudgetAdd(usedCostMicros, projection.costMicros) >
+                saturatedExecutionBudgetAdd(
+                    saturatedExecutionBudgetAdd(usedCostMicros, reservedChildCostMicros),
+                    projection.costMicros
+                ) >
                     maxCostMicros) {
                 return Some(BudgetDimension.Cost)
             }
@@ -1042,6 +1233,29 @@ public class ExecutionBudget {
     }
 }
 
+func remainingExecutionBudgetAmount(limit: Int64, used: Int64, reserved: Int64): Int64 {
+    if (limit == 0) { return 0 }
+    let consumed = saturatedExecutionBudgetAdd(used, reserved)
+    if (consumed >= limit) { 0 } else { limit - consumed }
+}
+
+func childParentBudgetFailure(
+    dimension: BudgetDimension,
+    limit: Int64,
+    observed: Int64
+): Result<ExecutionUsage> {
+    Result.Err(AgentError(
+        AgentErrorKind.BudgetExceeded,
+        "child.parent_budget_exceeded",
+        "child budget reservation exceeds remaining parent cumulative budget",
+        fields: [
+            ErrorField("dimension", budgetDimensionName(dimension)),
+            ErrorField("limit", limit.toString()),
+            ErrorField("observed", observed.toString())
+        ]
+    ))
+}
+
 public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
     ExecutionBudget(
         maxTurns: resource.maxTurns,
@@ -1057,7 +1271,8 @@ public func executionBudgetFrom(resource: ResourceBudget): ExecutionBudget {
         deadlineMillis: resource.deadlineMillis,
         maxChildren: resource.maxChildren,
         maxDepth: resource.maxDepth,
-        maxConcurrentChildren: resource.maxConcurrentChildren
+        maxConcurrentChildren: resource.maxConcurrentChildren,
+        processLimits: resource.processLimits
     )
 }
 

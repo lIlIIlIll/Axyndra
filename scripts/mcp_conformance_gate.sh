@@ -5,7 +5,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fixture="$root/support_tests/mcp_conformance_server"
 conformance_package=${MCP_CONFORMANCE_PACKAGE:-@modelcontextprotocol/conformance@0.2.0-alpha.11}
 port=${MCP_CONFORMANCE_PORT:-31341}
-work_root=$(mktemp -d /tmp/mcp4cj-conformance.XXXXXX)
+work_root=$(mktemp -d "${TMPDIR:-/tmp}/mcp4cj-conformance.XXXXXX")
 server_log="$work_root/server.log"
 server_pid=
 

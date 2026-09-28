@@ -179,7 +179,7 @@ if not runtime_root.is_dir():
 else:
     runtime_manifest = tomllib.loads((runtime_root / "cjpm.toml").read_text(encoding="utf-8"))
     runtime_dependencies = set(runtime_manifest.get("dependencies", {}))
-    if runtime_dependencies != {"agent_sdk", "yjson", "yjson_support"}:
+    if runtime_dependencies != {"agent_domain", "agent_sdk", "process4cj", "yjson", "yjson_support"}:
         errors.append(
             "agent_extension_runtime dependency surface drifted; got "
             + ", ".join(sorted(runtime_dependencies))

@@ -86,6 +86,39 @@ class CiEvidenceTest(unittest.TestCase):
                     env=environment, capture_output=True)
                 self.assertNotEqual(failed.returncode, 0)
 
+    def test_execution_sensitive_layers_are_unfiltered_and_ordered(self) -> None:
+        workflows = {
+            name: (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            for name in ("pr-gate.yml", "nightly-gate.yml", "release-gate.yml")
+        }
+        for name, source in workflows.items():
+            with self.subTest(workflow=name):
+                self.assertNotRegex(source, r"(?m)^\s+paths(?:-ignore)?:")
+
+        pr = workflows["pr-gate.yml"]
+        ordered_layers = (
+            "Fast static and architecture layer",
+            "Clean Cangjie check",
+            "Focused execution, permission, and recovery contracts",
+            "Full workspace unit integration",
+            "Build product executable",
+            "Full product regression fixtures",
+        )
+        positions = [pr.index(layer) for layer in ordered_layers]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("python3 scripts/vnext_contract_gate.py", pr)
+        self.assertIn("python3 scripts/product_unit_gate.py", pr)
+
+        nightly = workflows["nightly-gate.yml"]
+        self.assertIn("channel: nightly", nightly)
+        self.assertIn("AXYNDRA_GATE_KIND: implementation", nightly)
+        release = workflows["release-gate.yml"]
+        self.assertIn("runs-on: ubuntu-24.04", release)
+        self.assertIn('AXYNDRA_REAL_SMOKE: "1"', release)
+        self.assertIn("DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", release)
+        release_script = (ROOT / "scripts" / "release_gate.sh").read_text(encoding="utf-8")
+        self.assertIn("support_tests/plugin_performance_baseline/check.py", release_script)
+
     def test_early_failure_writes_unknown_toolchain(self):
         with tempfile.TemporaryDirectory() as temporary:
             environment = {key: value for key, value in os.environ.items()

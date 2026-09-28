@@ -10,6 +10,7 @@ import persistence_runtime.*
 import std.fs.*
 
 main(): Int64 {
+    v24SnapshotMigrationContract()
     if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
     let root = Directory.createTemp("target").toString()
     let database = SqliteDatabase(root + "/state.db")
@@ -161,10 +162,18 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         ),
         8192
     )
+    let processLimits = ExecutionResourceLimits(
+        maxOutputBytes: 101,
+        addressSpaceBytes: 102,
+        fileSizeBytes: 103,
+        openFiles: 104,
+        processes: 105,
+        cpuSeconds: 106
+    )
     let initial = RunContinuation(
         runId, sessionId, "fixture", "resume current continuation", approval,
         thinking: ThinkingLevel.High,
-        budget: ResourceBudget(maxOutputTokens: 8192),
+        budget: ResourceBudget(maxOutputTokens: 8192, processLimits: processLimits),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
         cacheKey: "initial",
@@ -172,10 +181,18 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
     )
     expect(repository.saveContinuation(initial).isOk(),
         "current continuation is installed as the CAS source")
+    let restoredLimits = repository.continuation(runId)
+        .value().getOrThrow().budget.processLimits
+    expect(restoredLimits.maxOutputBytes == 101 &&
+        restoredLimits.addressSpaceBytes == 102 &&
+        restoredLimits.fileSizeBytes == 103 &&
+        restoredLimits.openFiles == 104 && restoredLimits.processes == 105 &&
+        restoredLimits.cpuSeconds == 106,
+        "continuation recovery preserves every per-execution process limit")
     let updated = RunContinuation(
         runId, sessionId, "fixture", "resume current continuation", approval,
         thinking: ThinkingLevel.High,
-        budget: ResourceBudget(maxOutputTokens: 8192),
+        budget: ResourceBudget(maxOutputTokens: 8192, processLimits: processLimits),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
         cacheKey: "updated",
@@ -190,7 +207,7 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
     let drifted = RunContinuation(
         runId, sessionId, "fixture", "resume current continuation", approval,
         thinking: ThinkingLevel.High,
-        budget: ResourceBudget(maxOutputTokens: 8192),
+        budget: ResourceBudget(maxOutputTokens: 8192, processLimits: processLimits),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
         cacheKey: "drifted",
@@ -214,7 +231,7 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
             sessionId: sessionId.value, argumentHash: "migration-next-arguments"
         ),
         thinking: ThinkingLevel.High,
-        budget: ResourceBudget(maxOutputTokens: 8192),
+        budget: ResourceBudget(maxOutputTokens: 8192, processLimits: processLimits),
         requestedPolicy: requested,
         modelCapabilitiesSnapshot: capabilities,
         cacheKey: "updated",
@@ -234,7 +251,7 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         runId, sessionId, "fixture", "resume current continuation",
         checkpoint, requested, capabilities,
         thinking: ThinkingLevel.High,
-        budget: ResourceBudget(maxOutputTokens: 8192),
+        budget: ResourceBudget(maxOutputTokens: 8192, processLimits: processLimits),
         cacheKey: "updated",
         executionLaneId: LaneId("review")
     )
@@ -652,6 +669,41 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
     expect(repository.setWorkMode(source, "unsafe").isError() &&
         repository.setWorkspaceBinding(source, root, "/").isError(),
         "SQLite Thread metadata preserves mode and workspace validation")
+}
+
+func v24SnapshotMigrationContract(): Unit {
+    if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
+    let root = Directory.createTemp("target").toString()
+    let path = root + "/v24-snapshot.db"
+    let seed = SqliteDatabase(path)
+    try {
+        seedCanonicalRun(seed)
+        let repository = SqliteRunRepository(seed)
+        expect(repository.save(RunSnapshot(
+            RunId("run-1"), SessionId("thread-1"), RunState.Running,
+            summary: "version-two snapshot"
+        )).isOk(), "migration fixture stores its Run snapshot")
+        seed.execute(
+            "UPDATE runs SET app_snapshot=json_set(app_snapshot,'$.format_version',2) " +
+                "WHERE id='run-1'"
+        )
+        seed.execute("PRAGMA user_version=24")
+    } finally { seed.close() }
+
+    let migrated = SqliteDatabase(path)
+    try {
+        let restored = SqliteRunRepository(migrated)
+            .find(RunId("run-1")).value().getOrThrow()
+        expect(migrated.scalarInt("PRAGMA user_version") == 26 &&
+            migrated.scalarInt(
+                "SELECT json_extract(app_snapshot,'$.format_version') " +
+                    "FROM runs WHERE id='run-1'"
+            ) == 3 && restored.summary == "version-two snapshot",
+            "v24 migration rewrites version-two snapshots before repository decode at v26")
+    } finally {
+        migrated.close()
+        let _ = removeIfExists(root, recursive: true)
+    }
 }
 
 func seedCanonicalRun(database: SqliteDatabase): Unit {

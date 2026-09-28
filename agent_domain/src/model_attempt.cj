@@ -292,6 +292,9 @@ public class DurableModelAttempt {
     public let replayBarrier: ModelAttemptReplayBarrier
     public let dispatchStartedAtMillis: ?Int64
     public let providerTerminalAtMillis: ?Int64
+    // Canonical llm4cj transcript snapshot used for provider replay. Empty is
+    // reserved for non-wire test ports that cannot materialize provider input.
+    public let transcriptSnapshot: String
 
     public init(
         id: ModelAttemptId,
@@ -313,7 +316,8 @@ public class DurableModelAttempt {
         dispatchState!: ModelAttemptDispatchState = ModelAttemptDispatchState.Prepared,
         replayBarrier!: ModelAttemptReplayBarrier = ModelAttemptReplayBarrier.NoBarrier,
         dispatchStartedAtMillis!: ?Int64 = None,
-        providerTerminalAtMillis!: ?Int64 = None
+        providerTerminalAtMillis!: ?Int64 = None,
+        transcriptSnapshot!: String = ""
     ) {
         if (attemptNo < 1 || startedAtMillis < 0 ||
             lastActivityAtMillis < startedAtMillis || match (completedAtMillis) {
@@ -342,6 +346,7 @@ public class DurableModelAttempt {
         this.replayBarrier = replayBarrier
         this.dispatchStartedAtMillis = dispatchStartedAtMillis
         this.providerTerminalAtMillis = providerTerminalAtMillis
+        this.transcriptSnapshot = transcriptSnapshot
     }
 }
 

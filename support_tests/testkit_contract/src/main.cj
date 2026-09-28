@@ -191,15 +191,15 @@ func memoryPortsContract(): Unit {
         "digest"
     )
     let item = ItemId("memory-tool-call")
-    expect(operations.prepareProgramSubOperation(
+    expect(operations.prepareTrustedControlOperation(
         operation, run, item, plan
     ).isOk(), "memory operation runtime prepares canonical work")
     expect(operations.loadPlan(operation, run).isOk(),
         "memory operation runtime retains normalized plans")
-    expect(operations.prepareProgramSubOperation(
+    expect(operations.prepareTrustedControlOperation(
         operation, run, item, plan
     ).isOk(), "identical canonical preparation is idempotent")
-    expect(operations.prepareProgramSubOperation(
+    expect(operations.prepareTrustedControlOperation(
         operation, run, ItemId("other-tool-call"), plan
     ).isError(), "canonical ToolCall Item binding cannot drift")
 

@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 sdk_root=${AXYNDRA_SDK_ROOT:-${HOME:?HOME must be set}/cangjie_sdk/main/linux_x64/vanilla/20260817/cangjie}
 export AXYNDRA_SDK_ROOT="$sdk_root"
-work_root=$(mktemp -d /tmp/axyndra-package-readiness.XXXXXX)
+work_root=$(mktemp -d "${TMPDIR:-/tmp}/axyndra-package-readiness.XXXXXX")
 mkdir -p "$work_root/logs"
 log_sequence=0
 GREP=${GREP:-rp-grep}

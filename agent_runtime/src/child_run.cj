@@ -204,23 +204,10 @@ public class ChildBudgetLease {
     }
 }
 
-// Per-parent-run child budget authority. Two ledgers exist by contract and
-// MUST NOT be merged:
-//
-//   1. The parent Run's own ExecutionBudget charges the parent's own turns,
-//      tool calls, model requests, cumulative tokens, and cost.
-//   2. This pool charges the AGGREGATE of children only: each child reserves
-//      its cumulative-token/cost limits up front, settles actual usage on
-//      completion, and the pool checks reserved+consumed against the parent's
-//      cumulative limits.
-//
-// `maxCostMicros` / `maxTotalInputTokens` / `maxTotalOutputTokens` are
-// therefore Run-local hard limits (see ResourceBudget: "the cumulative Run
-// budget"): the parent's own spend does NOT subtract from what children may
-// reserve, and children together are capped by the same limits without
-// counting the parent's own spend. The theoretical subtree total is up to
-// 2x one limit; that is the documented contract, not a leak. Turns, tool
-// calls, and model requests are per-Run budgets and never aggregate here.
+// Per-parent child lifecycle, count, and concurrency authority. Cumulative
+// token/cost holds and actual usage are recorded in the parent's
+// ExecutionBudget, which also charges the parent Run's own model usage.
+// Turns, model requests, and tool calls remain per-Run dimensions.
 //
 public class ChildBudgetPool {
     private let lock = Mutex()
@@ -292,13 +279,9 @@ public class ChildBudgetPool {
                     "unbounded child tokens cannot be reserved from a bounded parent"
                 )
             }
-            let reserved = reservedUsageLocked()
-            let requested = budgetUsage(budget)
-            if (!aggregateUsageFits(parent, addUsage(addUsage(consumed, reserved), requested))) {
-                return childBudgetError(
-                    "child.parent_budget_exceeded",
-                    "child budget reservation exceeds remaining parent budget"
-                )
+            match (parent.reserveChildBudget(normalizedId, budgetUsage(budget))) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
             }
             reservations.add(ChildBudgetReservationRecord(normalizedId, budget))
             totalChildrenStarted += 1
@@ -341,21 +324,29 @@ public class ChildBudgetPool {
             let reservation = reservations[index]
             let exceedsReservation = !usageFits(reservation.budget, actual)
             let nextConsumed = addConsumedUsage(consumed, actual)
-            let exceedsParent = !aggregateUsageFits(parent, nextConsumed)
-            // Actual usage has already happened. Release the reservation and
-            // account it before returning a terminal budget violation.
+            let parentSettlement = parent.settleChildBudget(id, actual)
+            let terminalParentError: ?AgentError = match (parentSettlement) {
+                case Result.Ok(_) => None
+                case Result.Err(error) =>
+                    if (error.code == "child.actual_usage_exceeds_reservation" ||
+                        error.code == "child.parent_actual_usage_exceeded") {
+                        Some(error)
+                    } else {
+                        return Result.Err(error)
+                    }
+            }
+            // Actual usage is irreversible. Release both local evidence and
+            // the parent hold even when settlement reports a terminal overrun.
             reservations.remove(at: index)
             consumed = nextConsumed
+            match (terminalParentError) {
+                case Some(error) => return Result.Err(error)
+                case None => ()
+            }
             if (exceedsReservation) {
                 return childBudgetError(
                     "child.actual_usage_exceeds_reservation",
                     "child actual usage exceeds its reserved budget"
-                )
-            }
-            if (exceedsParent) {
-                return childBudgetError(
-                    "child.parent_actual_usage_exceeded",
-                    "settling child usage would exceed the parent budget"
                 )
             }
             Result.Ok(ChildBudgetPoolSnapshot(
@@ -365,7 +356,6 @@ public class ChildBudgetPool {
             lock.unlock()
         }
     }
-
     private func reservedUsageLocked(): ExecutionUsage {
         var usage = ExecutionUsage()
         for (item in reservations) { usage = addUsage(usage, budgetUsage(item.budget)) }
@@ -422,14 +412,7 @@ func usageFits(budget: ExecutionBudget, usage: ExecutionUsage): Bool {
         (budget.maxCostMicros == 0 || usage.costMicros <= budget.maxCostMicros)
 }
 
-// A Run's turns, tool-call count, request token ceiling and live tool slots
-// belong to that Run. They are not silently reinterpreted as an aggregate
-// budget for descendants. Only explicitly cumulative totals roll up.
-func aggregateUsageFits(budget: ExecutionBudget, usage: ExecutionUsage): Bool {
-    (budget.maxTotalInputTokens == 0 || usage.inputTokens <= budget.maxTotalInputTokens) &&
-        (budget.maxTotalOutputTokens == 0 || usage.outputTokens <= budget.maxTotalOutputTokens) &&
-        (budget.maxCostMicros == 0 || usage.costMicros <= budget.maxCostMicros)
-}
+// The parent ExecutionBudget owns cumulative child accounting.
 
 func childBudgetError<T>(code: String, message: String): Result<T> {
     Result.Err(AgentError(AgentErrorKind.InvalidInput, code, message))

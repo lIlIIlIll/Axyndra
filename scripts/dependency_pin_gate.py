@@ -9,8 +9,8 @@ from pathlib import Path
 
 LLM4CJ = "llm4cj"
 LLM4CJ_GIT = "https://github.com/lIlIIlIll/llm4cj.git"
-LLM4CJ_TAG = "v0.1.0"
-LLM4CJ_COMMIT = "c80ab51ed1f8786ba4e5e06557dd43da92bdd94d"
+LLM4CJ_TAG = "v0.2.0"
+LLM4CJ_COMMIT = "fd83641c4f39fc5c299298187028e581e7a8616c"
 YJSON = "yjson"
 YJSON_GIT = "https://github.com/lIlIIlIll/yjson.git"
 YJSON_TAG = "0.1.0"

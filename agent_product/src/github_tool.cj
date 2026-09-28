@@ -394,7 +394,6 @@ public class ProductGithubRuntime {
         arguments: Array<String>,
         timeoutMillis: Int64
     ): Result<ProcessResult> {
-        let _ = context
         let operation = optionalString(call, "op", "")
         processes.execute(ProcessRequest(
             executable,
@@ -407,6 +406,7 @@ public class ProductGithubRuntime {
                 ProcessSandboxMode.WorkspaceReadOnly
             },
             networkPolicy: Some(prepared.operationPlan.networkPolicy),
+            processLimits: context.budget.processLimits,
             environmentAllowlist: ["GH_HOST"],
             secretEnvironmentAllowlist: githubSecretEnvironment()
         ))

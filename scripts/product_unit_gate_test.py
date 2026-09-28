@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import unittest
-from product_unit_gate import summary, inventory, run_logged
+from product_unit_gate import dry_run_cases, summary, inventory, run_logged
 from pathlib import Path
 import tempfile
 import subprocess
@@ -21,6 +21,22 @@ class UnitGateTest(unittest.TestCase):
             with self.assertRaises(ValueError): inventory(root)
             manifest.write_text('[workspace]\nmembers=[]\ntest-members=[]\n')
             with self.assertRaises(ValueError): inventory(root)
+
+    def test_dry_run_cases_preserve_suite_qualified_identity(self):
+        report = '''
+            TCS: FirstSuite, RESULT:
+            [ NORUN  ] CASE: first
+            [ NORUN  ] CASE: second
+            TCS: SecondSuite, RESULT:
+            [ NORUN  ] CASE: first
+        '''
+        self.assertEqual(dry_run_cases(report), [
+            'FirstSuite.first', 'FirstSuite.second', 'SecondSuite.first'
+        ])
+        with self.assertRaises(ValueError):
+            dry_run_cases('[ NORUN  ] CASE: orphan')
+        with self.assertRaises(ValueError):
+            dry_run_cases('TCS: EmptySuite, RESULT:')
 
     def test_timeout_terminates_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:

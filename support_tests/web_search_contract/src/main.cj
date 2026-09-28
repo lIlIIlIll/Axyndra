@@ -71,8 +71,14 @@ func verifyProviders(root: String): Unit {
             ["--header", "Authorization: Bearer curl-secret"],
             OperationId("search-curl-profile"),
             webSearchContractNetworkPolicy(""),
-            ["curl-secret"]
+            ["curl-secret"],
+            processLimits: ExecutionResourceLimits(
+                maxOutputBytes: 4096,
+                openFiles: 16
+            )
         ).isOk() && processTransport.requests.size == 1 &&
+            processTransport.requests[0].processLimits.maxOutputBytes == 4096 &&
+            processTransport.requests[0].processLimits.openFiles == 16 &&
             processTransport.requests[0].sandboxMode ==
                 ProcessSandboxMode.WorkspaceReadOnly &&
             networkPolicyModeIsMediated(
@@ -353,8 +359,10 @@ class FakeSearchTransport <: WebSearchTransport {
         arguments: Array<String>,
         operationId: OperationId,
         networkPolicy: NetworkPolicy,
-        secretValues: Array<String>
+        secretValues: Array<String>,
+        processLimits!: ExecutionResourceLimits
     ): Result<ProcessResult> {
+        let _ = processLimits
         let _ = networkPolicy
         let _ = operationId
         this.arguments = arguments

@@ -2,6 +2,7 @@ package agent_product
 
 import agent_domain.*
 import agent_extensions.*
+import agent_extension_runtime.*
 import agent_mcp.*
 import agent_ports.*
 import sandbox4cj.*
@@ -11,6 +12,8 @@ import std.convert.*
 import std.deriving.*
 import std.env.*
 import std.fs.*
+import yjson.*
+import yjson_support.*
 import std.sync.*
 
 @Derive[Equatable]
@@ -82,6 +85,10 @@ class ProductMcpServerConfig {
     let enabled: Bool
     let transport: ProductMcpTransportKind
     let networkPolicy: NetworkPolicy
+    // Non-empty only for imported plugin servers; their package snapshot is
+    // the sole plugin-content authority exposed to the stdio transport.
+    let packageRoot: String
+    let pluginOwner: String
     let secretEnvironmentTargets: Array<String>
     let trustedReadOnlyTools: Array<String>
     let stdio: ?McpStdioTransportConfig
@@ -92,6 +99,8 @@ class ProductMcpServerConfig {
         enabled: Bool,
         transport: ProductMcpTransportKind,
         networkPolicy!: ?NetworkPolicy = None,
+        packageRoot!: String = "",
+        pluginOwner!: String = "",
         secretEnvironmentTargets!: Array<String> = [],
         trustedReadOnlyTools!: Array<String> = [],
         stdio!: ?McpStdioTransportConfig = None,
@@ -104,6 +113,8 @@ class ProductMcpServerConfig {
             case Some(value) => value
             case None => NetworkPolicy(NetworkPolicyMode.Denied)
         }
+        this.packageRoot = packageRoot
+        this.pluginOwner = pluginOwner
         this.secretEnvironmentTargets = secretEnvironmentTargets
         this.trustedReadOnlyTools = trustedReadOnlyTools
         this.stdio = stdio
@@ -132,6 +143,7 @@ class ProductMcpRecord {
 class ProductMcpRuntime {
     private let records: ArrayList<ProductMcpRecord>
     private let lock = Mutex()
+    private let aliases = McpToolAliasRegistry()
     private var closed = false
     private var closeError: ?AgentError = None
 
@@ -141,6 +153,164 @@ class ProductMcpRuntime {
             records.add(ProductMcpRecord(config))
         }
     }
+
+    func activatePlugin(
+        plugin: ProductPluginRecord,
+        workspaceRoot: String,
+        catalog: ToolCatalog,
+        extensions: ExtensionInstaller,
+        sandboxCaBundle!: String = "",
+        restoreExisting!: Bool = false
+    ): Result<Unit> {
+        lock.lock()
+        let unavailable = closed
+        lock.unlock()
+        if (unavailable) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Internal,
+                "mcp.runtime_closed",
+                "MCP runtime is already closed"
+            ))
+        }
+        let configs = match (loadProductPluginMcpConfig(plugin)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        for (config in configs where config.enabled) {
+            lock.lock()
+            var existingOwned = false
+            var conflicting = false
+            for (record in records where record.config.id == config.id) {
+                if (record.config.pluginOwner == plugin.descriptor.namespace) {
+                    existingOwned = true
+                } else {
+                    conflicting = true
+                }
+            }
+            lock.unlock()
+            if (restoreExisting && existingOwned && !conflicting) { continue }
+            if (existingOwned || conflicting) {
+                let _ = deactivatePlugin(plugin, catalog, extensions)
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "mcp.duplicate_server_id",
+                    "MCP server id is already active",
+                    fields: [ErrorField("server", config.id)]
+                ))
+            }
+            let record = ProductMcpRecord(config)
+            lock.lock()
+            records.add(record)
+            lock.unlock()
+            let opened = match (openProductMcpTransport(
+                config,
+                workspaceRoot,
+                sandboxCaBundle: sandboxCaBundle
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) =>
+                    removeDynamicRecord(record)
+                    let _ = deactivatePlugin(plugin, catalog, extensions)
+                    return Result.Err(productMcpServerError(config.id, error))
+            }
+            let client = McpClient(
+                opened.transport,
+                McpRequestMeta(clientInfo: McpImplementationInfo("axyndra", "1.0.0", title: "axyndra"))
+            )
+            attach(record, client, releaseAction: { => opened.release() })
+            let extension = match (discoverMcpExtension(
+                config.id,
+                client,
+                agentUtcMillis(),
+                aliases: aliases,
+                redact: { value => opened.redactor.redact(value) },
+                trustedReadOnlyTools: config.trustedReadOnlyTools
+            )) {
+                case Result.Ok(value) => value
+                case Result.Err(error) =>
+                    discardDynamicRecord(record, client)
+                    let _ = deactivatePlugin(plugin, catalog, extensions)
+                    return Result.Err(productMcpServerError(config.id, error))
+            }
+            match (extensions.installTrusted(extension, catalog, source: "plugin:" + plugin.descriptor.namespace)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) =>
+                    discardDynamicRecord(record, client)
+                    let _ = deactivatePlugin(plugin, catalog, extensions)
+                    return Result.Err(productMcpServerError(config.id, error))
+            }
+            let tools = ArrayList<String>()
+            for (contribution in extension.tools()) {
+                tools.add(contribution.descriptor.definition.name)
+            }
+            markReady(record, tools.toArray())
+        }
+        Result.Ok(())
+    }
+
+    func deactivatePlugin(
+        plugin: ProductPluginRecord,
+        catalog: ToolCatalog,
+        extensions: ExtensionInstaller
+    ): Result<Unit> {
+        let configs = match (loadProductPluginMcpConfig(plugin)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        for (config in configs where config.enabled) {
+            var target: ?ProductMcpRecord = None
+            lock.lock()
+            for (index in 0..records.size) {
+                if (records[index].config.id == config.id &&
+                    records[index].config.pluginOwner == plugin.descriptor.namespace) {
+                    target = Some(records.remove(at: index))
+                    break
+                }
+            }
+            lock.unlock()
+            match (target) {
+                case None => ()
+                case Some(record) =>
+                    match (record.client) {
+                        case Some(client) =>
+                            let _ = client.close()
+                            record.releaseTransport()
+                            record.releaseTransport = { => () }
+                        case None => ()
+                    }
+                    match (extensions.uninstall("mcp:" + config.id, catalog)) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(error) =>
+                            if (error.code != "extension.not_found") {
+                                return Result.Err(error)
+                            }
+                    }
+            }
+        }
+        Result.Ok(())
+    }
+
+    private func removeDynamicRecord(record: ProductMcpRecord): Unit {
+        lock.lock()
+        try {
+            for (index in 0..records.size) {
+                if (records[index].config.id == record.config.id &&
+                    records[index].config.pluginOwner == record.config.pluginOwner) {
+                    records.remove(at: index)
+                    break
+                }
+            }
+        } finally { lock.unlock() }
+    }
+
+    private func discardDynamicRecord(record: ProductMcpRecord, client: McpClient): Unit {
+        let _ = client.close()
+        record.releaseTransport()
+        record.releaseTransport = { => () }
+        removeDynamicRecord(record)
+    }
+
+    func aliasRegistry(): McpToolAliasRegistry { aliases }
 
     func recordsForStartup(): Array<ProductMcpRecord> {
         lock.lock()
@@ -191,7 +361,8 @@ class ProductMcpRuntime {
                     record.config.enabled,
                     record.status,
                     sandboxed: record.config.transport == ProductMcpTransportKind.Stdio,
-                    workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio,
+                    workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio &&
+                        record.config.packageRoot == "",
                     networkPolicy: Some(record.config.networkPolicy),
                     tools: record.tools,
                     errorCode: record.errorCode
@@ -213,7 +384,8 @@ class ProductMcpRuntime {
                     record.config.enabled,
                     record.status,
                     sandboxed: record.config.transport == ProductMcpTransportKind.Stdio,
-                    workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio,
+                    workspaceReadOnly: record.config.transport == ProductMcpTransportKind.Stdio &&
+                        record.config.packageRoot == "",
                     networkPolicy: Some(record.config.networkPolicy),
                     tools: record.tools,
                     errorCode: record.errorCode
@@ -385,28 +557,385 @@ func emptyProductMcpRuntime(): ProductMcpRuntime {
     ProductMcpRuntime([])
 }
 
-func loadProductMcpConfig(root: String): Result<Array<ProductMcpServerConfig>> {
+func loadProductMcpConfig(
+    root: String,
+    pluginRuntime!: ?ProductPluginRuntime = None
+): Result<Array<ProductMcpServerConfig>> {
     let path = root + "/mcp.yml"
-    if (!exists(Path(path))) { return Result.Ok([]) }
-    try {
-        let bytes = File.readFrom(path)
-        if (bytes.size > 1048576) {
-            throw IllegalArgumentException("mcp.yml exceeds the 1 MiB configuration limit")
+    let configs = ArrayList<ProductMcpServerConfig>()
+    if (exists(Path(path))) {
+        try {
+            let bytes = File.readFrom(path)
+            if (bytes.size > 1048576) {
+                throw IllegalArgumentException("mcp.yml exceeds the 1 MiB configuration limit")
+            }
+            let source = String.fromUtf8(bytes)
+            if (source.indexOf("\u{0}").isSome()) {
+                throw IllegalArgumentException("mcp.yml contains NUL")
+            }
+            configs.add(all: parseProductMcpConfig(source))
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "mcp.product_config_invalid",
+                "cannot load mcp.yml: " + error.message,
+                fields: [ErrorField("path", path)]
+            ))
         }
-        let source = String.fromUtf8(bytes)
-        if (source.indexOf("\u{0}").isSome()) {
-            throw IllegalArgumentException("mcp.yml contains NUL")
+    }
+    match (pluginRuntime) {
+        case Some(runtime) =>
+            for (record in runtime.enabledMcpPlugins()) {
+                match (loadProductPluginMcpConfig(record)) {
+                    case Result.Ok(values) => configs.add(all: values)
+                    case Result.Err(error) => return Result.Err(error)
+                }
+            }
+        case None => ()
+    }
+    let ids = ArrayList<String>()
+    for (config in configs) {
+        if (containsString(ids, config.id)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "mcp.duplicate_server_id",
+                "MCP server id is declared more than once",
+                fields: [ErrorField("server", config.id)]
+            ))
         }
-        Result.Ok(parseProductMcpConfig(source))
+        ids.add(config.id)
+    }
+    Result.Ok(configs.toArray())
+}
+
+func loadProductPluginMcpConfig(
+    record: ProductPluginRecord
+): Result<Array<ProductMcpServerConfig>> {
+    let components = ArrayList<PluginComponent>()
+    for (component in record.descriptor.components where
+         component.kind == PluginComponentKind.Mcp &&
+         component.status == PluginComponentStatus.Supported) {
+        components.add(component)
+    }
+    if (components.isEmpty()) { return Result.Ok([]) }
+    let root = record.descriptor.root
+    let canonicalRoot = try {
+        canonicalize(Path(root)).toString()
     } catch (error: Exception) {
-        Result.Err(AgentError(
+        return Result.Err(AgentError(
             AgentErrorKind.Configuration,
-            "mcp.product_config_invalid",
-            "cannot load mcp.yml: " + error.message,
-            fields: [ErrorField("path", path)]
+            "mcp.plugin_root_invalid",
+            "cannot resolve plugin package root: " + error.message,
+            fields: [ErrorField("plugin", record.descriptor.id)]
         ))
     }
+    let rootPrefix = canonicalRoot + "/"
+    let values = ArrayList<ProductMcpServerConfig>()
+    for (component in components) {
+        let relativePath = component.relativePath
+        if (!productPluginMcpSafeRelativePath(relativePath)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "mcp.plugin_component_path_invalid",
+                "plugin MCP component path must be a normalized package-relative path",
+                fields: [
+                    ErrorField("plugin", record.descriptor.id),
+                    ErrorField("path", relativePath)
+                ]
+            ))
+        }
+        let path = Path(canonicalRoot).join(relativePath).normalize().toString()
+        if (!path.startsWith(rootPrefix)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "mcp.plugin_component_path_escape",
+                "plugin MCP component path escapes its package root",
+                fields: [
+                    ErrorField("plugin", record.descriptor.id),
+                    ErrorField("path", relativePath)
+                ]
+            ))
+        }
+        try {
+            let info = FileInfo(Path(path))
+            if (!info.isRegular() || info.isSymbolicLink()) {
+                throw IllegalArgumentException("plugin MCP component must be a regular non-symlink file")
+            }
+            let canonicalPath = canonicalize(Path(path)).toString()
+            if (canonicalPath != path || !canonicalPath.startsWith(rootPrefix)) {
+                throw IllegalArgumentException("plugin MCP component resolves through a symlink or outside its package")
+            }
+            let bytes = File.readFrom(canonicalPath)
+            if (bytes.size > 1048576) {
+                throw IllegalArgumentException("plugin MCP manifest exceeds the 1 MiB limit")
+            }
+            let document = parseUnifiedJson(String.fromUtf8(bytes), maxBytes: 1048576, maxDepth: 32)
+            let servers = pluginMcpServerNode(document)
+            if (servers.unifiedKind != UnifiedJsonKind.Object) {
+                throw IllegalArgumentException("plugin MCP servers must be an object")
+            }
+            for (field in servers.fields) {
+                values.add(pluginMcpServerConfig(
+                    record.descriptor.namespace, field.name, canonicalRoot, field.value
+                ))
+            }
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "mcp.plugin_config_invalid",
+                "cannot adapt plugin MCP configuration: " + error.message,
+                fields: [
+                    ErrorField("plugin", record.descriptor.id),
+                    ErrorField("path", relativePath)
+                ]
+            ))
+        }
+    }
+    Result.Ok(values.toArray())
 }
+
+func productPluginMcpSafeRelativePath(value: String): Bool {
+    if (value == "" || value.startsWith("/") || value.contains("\\") || value.contains("\u{0}")) {
+        return false
+    }
+    for (part in value.split("/")) {
+        if (part == "" || part == "." || part == "..") { return false }
+    }
+    true
+}
+
+func pluginMcpServerNode(document: JsonNode): JsonNode {
+    match (document.field("mcpServers")) {
+        case Some(value) => return value
+        case None => ()
+    }
+    match (document.field("servers")) {
+        case Some(value) => return value
+        case None => ()
+    }
+    match (document.field("mcp")) {
+        case Some(value) =>
+            match (value.field("servers")) {
+                case Some(servers) => return servers
+                case None => return value
+            }
+        case None => ()
+    }
+    throw IllegalArgumentException("portable plugin manifest has no mcpServers, servers, or mcp object")
+}
+
+func pluginMcpText(value: JsonNode, name: String, fallback: String): String {
+    match (value.field(name)) {
+        case Some(item) =>
+            if (item.unifiedKind != UnifiedJsonKind.Text) {
+                throw IllegalArgumentException("plugin MCP field must be a string: " + name)
+            }
+            item.text.trimAscii()
+        case None => fallback
+    }
+}
+
+func pluginMcpBool(value: JsonNode, name: String, fallback: Bool): Bool {
+    match (value.field(name)) {
+        case Some(item) =>
+            if (item.unifiedKind != UnifiedJsonKind.Boolean) {
+                throw IllegalArgumentException("plugin MCP field must be a boolean: " + name)
+            }
+            item.asBool()
+        case None => fallback
+    }
+}
+
+func pluginMcpStringArray(value: JsonNode, name: String): Array<String> {
+    match (value.field(name)) {
+        case None => []
+        case Some(item) =>
+            if (item.unifiedKind != UnifiedJsonKind.List) {
+                throw IllegalArgumentException("plugin MCP field must be an array: " + name)
+            }
+            let values = ArrayList<String>()
+            for (entry in item.items) {
+                if (entry.unifiedKind != UnifiedJsonKind.Text) {
+                    throw IllegalArgumentException("plugin MCP array must contain strings: " + name)
+                }
+                values.add(entry.text)
+            }
+            values.toArray()
+    }
+}
+
+func pluginMcpEnvironment(value: JsonNode): Array<McpEnvironmentBinding> {
+    match (value.field("env")) {
+        case None => []
+        case Some(item) =>
+            if (item.unifiedKind != UnifiedJsonKind.Object) {
+                throw IllegalArgumentException("plugin MCP env must be an object")
+            }
+            let bindings = ArrayList<McpEnvironmentBinding>()
+            for (field in item.fields) {
+                if (field.value.unifiedKind != UnifiedJsonKind.Text) {
+                    throw IllegalArgumentException("plugin MCP env values must name host environment variables")
+                }
+                bindings.add(McpEnvironmentBinding(field.name, field.value.text))
+            }
+            bindings.toArray()
+    }
+}
+
+func pluginMcpHeaders(value: JsonNode): Array<McpHttpHeaderBinding> {
+    match (value.field("headers")) {
+        case None => []
+        case Some(item) =>
+            if (item.unifiedKind != UnifiedJsonKind.Object) {
+                throw IllegalArgumentException("plugin MCP headers must be an object")
+            }
+            let bindings = ArrayList<McpHttpHeaderBinding>()
+            for (field in item.fields) {
+                if (field.value.unifiedKind != UnifiedJsonKind.Text) {
+                    throw IllegalArgumentException("plugin MCP header values must name host environment variables")
+                }
+                bindings.add(McpHttpHeaderBinding(field.name, field.value.text))
+            }
+            bindings.toArray()
+    }
+}
+
+func pluginMcpHttpEgress(url: String): NetworkEgressRule {
+    if (!url.startsWith("https://")) {
+        throw IllegalArgumentException(
+            "plugin MCP HTTP endpoints must use HTTPS; private or loopback endpoints require operator-owned mcp.yml configuration"
+        )
+    }
+    let remainder = url[8..]
+    var end = remainder.size
+    for (separator in ["/", "?", "#"]) {
+        match (remainder.indexOf(separator)) {
+            case Some(index) => end = min(end, index)
+            case None => ()
+        }
+    }
+    let authority = remainder[..end]
+    if (authority == "" || authority.contains("@") || authority.contains(" ") ||
+        authority.startsWith("[") || authority.contains("]")) {
+        throw IllegalArgumentException("plugin MCP HTTP endpoint authority is invalid")
+    }
+    let parts = authority.split(":")
+    if (parts.size > 2 || parts[0] == "") {
+        throw IllegalArgumentException("plugin MCP HTTP endpoint host or port is invalid")
+    }
+    let host = parts[0].toAsciiLower()
+    if (host == "localhost" || host.endsWith(".localhost")) {
+        throw IllegalArgumentException(
+            "plugin MCP private endpoints require operator-owned mcp.yml configuration"
+        )
+    }
+    var port: UInt16 = 443u16
+    if (parts.size == 2) {
+        try {
+            port = UInt16.parse(parts[1])
+            if (port == 0u16 || port.toString() != parts[1]) {
+                throw IllegalArgumentException("plugin MCP HTTP endpoint port is invalid")
+            }
+        } catch (_: Exception) {
+            throw IllegalArgumentException("plugin MCP HTTP endpoint port is invalid")
+        }
+    }
+    try {
+        NetworkEgressRule(host, port)
+    } catch (_: Exception) {
+        throw IllegalArgumentException(
+            "plugin MCP private endpoints require operator-owned mcp.yml configuration"
+        )
+    }
+}
+
+func pluginMcpServerConfig(
+    pluginNamespace: String,
+    serverName: String,
+    packageRoot: String,
+    value: JsonNode
+): ProductMcpServerConfig {
+    if (value.unifiedKind != UnifiedJsonKind.Object) {
+        throw IllegalArgumentException("plugin MCP server entry must be an object")
+    }
+    let id = "plugin-" + modelPolicySha256Text(pluginNamespace) + "-" + serverName
+    if (!isSafeProfileId(id)) {
+        throw IllegalArgumentException("plugin MCP server id contains unsupported characters")
+    }
+    let transportName = pluginMcpText(
+        value,
+        "transport",
+        pluginMcpText(value, "type", if (value.field("url").isSome()) { "streamable-http" } else { "stdio" })
+    )
+    let enabled = pluginMcpBool(value, "enabled", true)
+    let arguments = if (value.field("args").isSome()) {
+        pluginMcpStringArray(value, "args")
+    } else {
+        pluginMcpStringArray(value, "arguments")
+    }
+    if (transportName == "stdio") {
+        let command = pluginMcpText(value, "command", "")
+        if (command == "") {
+            throw IllegalArgumentException("plugin MCP stdio server requires command")
+        }
+        let environment = pluginMcpEnvironment(value)
+        if (!environment.isEmpty()) {
+            throw IllegalArgumentException(
+                "plugin MCP environment bindings require operator-owned mcp.yml configuration"
+            )
+        }
+        let authoredCwd = pluginMcpText(value, "cwd", "")
+        let cwd = if (authoredCwd == "") { packageRoot } else { authoredCwd }
+        ProductMcpServerConfig(
+            id,
+            enabled,
+            ProductMcpTransportKind.Stdio,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied)),
+            packageRoot: packageRoot,
+            pluginOwner: pluginNamespace,
+            stdio: Some(McpStdioTransportConfig(
+                command,
+                arguments: arguments,
+                cwd: cwd,
+                environment: environment
+            ))
+        )
+    } else if (transportName == "streamable-http" || transportName == "sse") {
+        let url = pluginMcpText(value, "url", "")
+        if (url == "") {
+            throw IllegalArgumentException("plugin MCP HTTP server requires url")
+        }
+        let bearerTokenEnvironment = pluginMcpText(value, "bearer_token_env", "")
+        let headers = pluginMcpHeaders(value)
+        if (bearerTokenEnvironment != "" || !headers.isEmpty()) {
+            throw IllegalArgumentException(
+                "plugin MCP credentials require operator-owned mcp.yml configuration"
+            )
+        }
+        let egress = pluginMcpHttpEgress(url)
+        ProductMcpServerConfig(
+            id,
+            enabled,
+            ProductMcpTransportKind.StreamableHttp,
+            networkPolicy: Some(NetworkPolicy(
+                NetworkPolicyMode.Mediated,
+                egress: [egress]
+            )),
+            pluginOwner: pluginNamespace,
+            http: Some(McpStreamableHttpClientConfig(
+                url,
+                bearerTokenEnvironment: bearerTokenEnvironment,
+                headers: headers,
+                origin: pluginMcpText(value, "origin", ""),
+                preferSse: transportName == "sse"
+            ))
+        )
+    } else {
+        throw IllegalArgumentException("plugin MCP transport is unsupported: " + transportName)
+    }
+}
+
+
 
 func parseProductMcpConfig(source: String): Array<ProductMcpServerConfig> {
     var versionSeen = false
@@ -804,7 +1333,7 @@ func acquireProductMcpNetworkLease(
     }
     let gateway: NetworkGatewayPort = LocalNetworkGatewayPort()
     match (gateway.acquire(
-        OperationId("mcp-stdio-" + serverId),
+        OperationId("mcp-transport-" + serverId),
         policy
     )) {
         case Result.Ok(lease) => Result.Ok(Some(ProductMcpNetworkLease(gateway, lease)))
@@ -829,7 +1358,7 @@ func openProductMcpTransport(
             case Some(stdio) => match (openSandboxedProductMcpStdio(
                 config.id,
                 stdio,
-                workspaceRoot,
+                if (config.packageRoot == "") { workspaceRoot } else { config.packageRoot },
                 config.networkPolicy,
                 config.secretEnvironmentTargets,
                 sandboxCaBundle: sandboxCaBundle
@@ -841,19 +1370,47 @@ func openProductMcpTransport(
         }
         case ProductMcpTransportKind.StreamableHttp => match (config.http) {
             case Some(http) =>
-                // The HTTP transport resolves bearer and custom-header values
-                // from the process environment. Bind those same values to the
-                // product redaction boundary before discovery can project any
-                // remote-authored text into the catalog, pipeline, persistence,
-                // or model context. Only the redactor escapes this function;
-                // resolved credentials never enter config/status snapshots.
-                let redactor = productMcpHttpSecretRedactor(http)
-                match (openStreamableHttpMcpTransport(http)) {
+                // Bind environment-backed HTTP secrets and the per-lease
+                // gateway credential to the same redaction boundary before
+                // discovery can project remote-authored text into the catalog,
+                // pipeline, persistence, or model context. Only the redactor
+                // escapes this function; resolved credentials never enter
+                // config or status snapshots.
+                let networkLease = match (acquireProductMcpNetworkLease(
+                    config.id, config.networkPolicy
+                )) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                let proxyCredential = match (networkLease) {
+                    case Some(value) => value.lease.proxyCredential
+                    case None => ""
+                }
+                let redactor = productMcpHttpSecretRedactor(
+                    http, proxyCredential: proxyCredential
+                )
+                let effectiveHttp = match (networkLease) {
+                    case Some(value) => McpStreamableHttpClientConfig(
+                        http.url,
+                        bearerTokenEnvironment: http.bearerTokenEnvironment,
+                        headers: http.headers,
+                        origin: http.origin,
+                        preferSse: http.preferSse,
+                        proxyUrl: "http://axyndra:" + value.lease.proxyCredential + "@" +
+                            value.lease.proxyHost + ":" + value.lease.proxyPort.toString(),
+                        framing: http.framing
+                    )
+                    case None => http
+                }
+                match (openStreamableHttpMcpTransport(effectiveHttp)) {
                     case Result.Ok(value) => Result.Ok(ProductMcpTransportHandle(
                         value,
-                        redactor
+                        redactor,
+                        releaseAction: { => releaseProductMcpNetworkLease(networkLease) }
                     ))
-                    case Result.Err(error) => Result.Err(productMcpRedactError(error, redactor))
+                    case Result.Err(error) =>
+                        releaseProductMcpNetworkLease(networkLease)
+                        Result.Err(productMcpRedactError(error, redactor))
                 }
             case None => productMcpInternalTransportError()
         }
@@ -861,13 +1418,15 @@ func openProductMcpTransport(
 }
 
 func productMcpHttpSecretRedactor(
-    config: McpStreamableHttpClientConfig
+    config: McpStreamableHttpClientConfig,
+    proxyCredential!: String = ""
 ): SecretRedactor {
     let values = ArrayList<String>()
     productMcpAddEnvironmentSecret(values, config.bearerTokenEnvironment)
     for (binding in config.headers) {
         productMcpAddEnvironmentSecret(values, binding.environment)
     }
+    if (proxyCredential != "") { values.add(proxyCredential) }
     SecretRedactor(values.toArray())
 }
 
@@ -885,7 +1444,7 @@ func productMcpAddEnvironmentSecret(
 func openSandboxedProductMcpStdio(
     serverId: String,
     config: McpStdioTransportConfig,
-    workspaceRoot: String,
+    filesystemRoot: String,
     networkPolicy: NetworkPolicy,
     secretTargets: Array<String>,
     sandboxCaBundle!: String = ""
@@ -965,7 +1524,7 @@ func openSandboxedProductMcpStdio(
     }
     let sandbox = try {
         WorkspaceSandbox(WorkspaceSandboxPolicy(
-            workspaceRoot,
+            filesystemRoot,
             filesystem: FilesystemIsolationMode.WorkspaceReadOnly,
             process: ProcessIsolationMode.Isolated,
             network: match (networkPolicy.mode) {
@@ -987,7 +1546,7 @@ func openSandboxedProductMcpStdio(
         return Result.Err(AgentError(
             AgentErrorKind.Configuration,
             "mcp.product_sandbox_invalid",
-            "cannot construct the MCP workspace sandbox: " + error.message
+            "cannot construct the MCP filesystem sandbox: " + error.message
         ))
     }
     match (sandbox.availability()) {
@@ -1135,7 +1694,6 @@ func startProductMcp(
         case Result.Err(error) => return Result.Err(error)
     }
     let runtime = ProductMcpRuntime(configs)
-    let aliases = McpToolAliasRegistry()
     for (record in runtime.recordsForStartup() where record.config.enabled) {
         let opened = match (openProductMcpTransport(
             record.config,
@@ -1155,7 +1713,7 @@ func startProductMcp(
             record.config.id,
             client,
             agentUtcMillis(),
-            aliases: aliases,
+            aliases: runtime.aliasRegistry(),
             redact: { value => opened.redactor.redact(value) },
             trustedReadOnlyTools: record.config.trustedReadOnlyTools
         )) {

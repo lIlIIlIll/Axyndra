@@ -772,6 +772,38 @@ public func modelPolicySha256(bytes: Array<Byte>): String {
     result
 }
 
+public func canonicalAgentValue(value: AgentValue): String {
+    match (value.unifiedKind) {
+        case ValueKind.Null => "null"
+        case ValueKind.Boolean => if (value.asBool()) { "true" } else { "false" }
+        case ValueKind.Number => "n" + agentValueFrame(value.asNumberText())
+        case ValueKind.Text => "s" + agentValueFrame(value.text)
+        case ValueKind.List =>
+            var output = "["
+            for (item in value.items) { output += agentValueFrame(canonicalAgentValue(item)) }
+            output + "]"
+        case ValueKind.Object =>
+            var output = "{"
+            let used = Array<Bool>(value.fields.size, repeat: false)
+            for (_ in 0..value.fields.size) {
+                var selected: Int64 = -1
+                for (index in 0..value.fields.size where !used[index]) {
+                    if (selected < 0 || value.fields[index].name < value.fields[selected].name) {
+                        selected = index
+                    }
+                }
+                used[selected] = true
+                output += agentValueFrame(value.fields[selected].name) +
+                    agentValueFrame(canonicalAgentValue(value.fields[selected].value))
+            }
+            output + "}"
+    }
+}
+
+func agentValueFrame(value: String): String {
+    value.size.toString() + ":" + value
+}
+
 public func modelPolicySha256Text(value: String): String {
     modelPolicySha256(value.toArray())
 }

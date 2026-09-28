@@ -733,7 +733,8 @@ func copyMemoryAttemptDispatch(
         dispatchState: ModelAttemptDispatchState.DispatchClaimed,
         replayBarrier: value.replayBarrier,
         dispatchStartedAtMillis: Some(dispatchStartedAtMillis),
-        providerTerminalAtMillis: value.providerTerminalAtMillis
+        providerTerminalAtMillis: value.providerTerminalAtMillis,
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -757,7 +758,8 @@ func copyMemoryAttemptBarrier(
         dispatchStartedAtMillis: value.dispatchStartedAtMillis,
         providerTerminalAtMillis: if (barrier == ModelAttemptReplayBarrier.ProviderTerminal) {
             Some(agentUtcMillis())
-        } else { value.providerTerminalAtMillis }
+        } else { value.providerTerminalAtMillis },
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -779,7 +781,8 @@ func copyMemoryAttemptAbandoned(
         dispatchState: value.dispatchState,
         replayBarrier: value.replayBarrier,
         dispatchStartedAtMillis: value.dispatchStartedAtMillis,
-        providerTerminalAtMillis: value.providerTerminalAtMillis
+        providerTerminalAtMillis: value.providerTerminalAtMillis,
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -853,7 +856,8 @@ func approvalRequestsEqual(left: ApprovalRequest, right: ApprovalRequest): Bool 
         left.capability.resource == right.capability.resource &&
         agentValuesEqual(left.preview, right.preview) && left.sessionId == right.sessionId &&
         left.argumentHash == right.argumentHash && stringArraysEqual(left.riskFlags, right.riskFlags) &&
-        left.decisionSource == right.decisionSource
+        left.decisionSource == right.decisionSource &&
+        left.sessionApprovalAllowed == right.sessionApprovalAllowed
 }
 
 func approvalRequestBindingsEqual(left: ApprovalRequest, right: ApprovalRequest): Bool {

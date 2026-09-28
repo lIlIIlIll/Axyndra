@@ -94,6 +94,7 @@ public class McpStreamableHttpClientConfig {
     public let headers: Array<McpHttpHeaderBinding>
     public let origin: String
     public let preferSse: Bool
+    public let proxyUrl: String
     public let framing: McpFramingConfig
 
     public init(
@@ -102,10 +103,14 @@ public class McpStreamableHttpClientConfig {
         headers!: Array<McpHttpHeaderBinding> = [],
         origin!: String = "",
         preferSse!: Bool = false,
+        proxyUrl!: String = "",
         framing!: McpFramingConfig = McpFramingConfig()
     ) {
         if (!secureMcpUrl(url)) {
             throw IllegalArgumentException("MCP HTTP URL must use HTTPS or loopback HTTP")
+        }
+        if (proxyUrl != "" && !loopbackMcpProxy(proxyUrl)) {
+            throw IllegalArgumentException("MCP HTTP proxy must use loopback HTTP")
         }
         if (bearerTokenEnvironment != "" && !validEnvironmentName(bearerTokenEnvironment)) {
             throw IllegalArgumentException("invalid MCP bearer token environment variable")
@@ -120,6 +125,7 @@ public class McpStreamableHttpClientConfig {
         this.bearerTokenEnvironment = bearerTokenEnvironment
         this.headers = headers
         this.origin = origin
+        this.proxyUrl = proxyUrl
         this.preferSse = preferSse
         this.framing = framing
     }
@@ -339,6 +345,29 @@ func loopbackAuthority(authority: String): Bool {
         if (authority.startsWith(prefix) && asciiDecimal(authority[prefix.size..])) { return true }
     }
     false
+}
+
+func loopbackMcpProxy(value: String): Bool {
+    if (!value.startsWith("http://")) { return false }
+    let remainder = value[7..]
+    if (mcpUrlAuthority(value, "http://").size != remainder.size) { return false }
+    let parts = remainder.split("@")
+    if (parts.size == 1) { return loopbackAuthority(parts[0]) }
+    parts.size == 2 && validLoopbackProxyCredential(parts[0]) &&
+        loopbackAuthority(parts[1])
+}
+
+func validLoopbackProxyCredential(value: String): Bool {
+    let fields = value.split(":")
+    if (fields.size != 2 || fields[0] != "axyndra" || fields[1].size != 64) {
+        return false
+    }
+    for (byte in fields[1].toArray()) {
+        if (!((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) {
+            return false
+        }
+    }
+    true
 }
 
 func asciiDecimal(value: String): Bool {

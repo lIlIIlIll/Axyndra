@@ -262,7 +262,8 @@ public class ExtensionInstaller {
             case SdkResult.Err(error) => return Result.Err(sdkError(error))
             case SdkResult.Ok(_) => ()
         }
-        let extensionId = extension.metadata().id
+        let metadata = extension.metadata()
+        let extensionId = metadata.id
         match (ensureNew(extensionId)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
@@ -274,7 +275,10 @@ public class ExtensionInstaller {
                 case Result.Err(error) =>
                     return rollbackRegistration(catalog, registered, error)
             }
-            match (catalog.register(sdkDescriptor(tool, host), SdkToolExecutor(tool, host))) {
+            match (catalog.register(
+                sdkDescriptor(tool, host, metadata.id, metadata.version),
+                SdkToolExecutor(tool, host)
+            )) {
                 case Result.Ok(_) => registered.add(tool.definition().name)
                 case Result.Err(error) =>
                     return rollbackRegistration(catalog, registered, error)
@@ -351,6 +355,19 @@ public class ExtensionInstaller {
         Result.Ok(())
     }
 
+    public func uninstall(extensionId: String, catalog: ToolCatalog): Result<Unit> {
+        for (index in 0..installed.size) {
+            let record = installed[index]
+            if (record.id() != extensionId) { continue }
+            for (name in record.toolNames()) { let _ = catalog.unregister(name) }
+            installed.remove(at: index)
+            return Result.Ok(())
+        }
+        extensionConfigurationError(
+            "extension.not_found", "extension is not installed"
+        )
+    }
+
     private func ensureNew(id: String): Result<Unit> {
         for (value in installed where value.id() == id) {
             return extensionConfigurationError(
@@ -385,7 +402,12 @@ func sdkNetworkRequirement(definition: ExtensionToolDefinition): ?CapabilityRequ
     }
     None
 }
-func sdkDescriptor(tool: ExtensionTool, host: ExtensionOperationHost): ToolDescriptor {
+func sdkDescriptor(
+    tool: ExtensionTool,
+    host: ExtensionOperationHost,
+    extensionId: String,
+    version: String
+): ToolDescriptor {
     let definition = tool.definition()
     let first = definition.capabilities[0]
     let additional: Array<CapabilityRequirement> = if (definition.capabilities.size > 1) {
@@ -396,6 +418,8 @@ func sdkDescriptor(tool: ExtensionTool, host: ExtensionOperationHost): ToolDescr
         ModelToolDefinition(definition.name, definition.description, definition.inputSchema),
         host.resolveCapability(first, objectValue([])),
         sideEffecting: definition.effect == ExtensionEffect.SideEffect,
+        implementationVersion: version,
+        implementationFingerprint: extensionId + ":" + version + ":" + definition.name,
         concurrency: if (definition.effect == ExtensionEffect.SideEffect) {
             exclusiveToolConcurrency()
         } else {

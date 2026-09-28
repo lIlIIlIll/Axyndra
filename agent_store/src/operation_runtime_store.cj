@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import std.collection.*
+import std.convert.*
 import agent_domain.*
 import agent_runtime.*
 
@@ -16,10 +17,9 @@ public class DurableOperationStore <: OperationRuntimePort {
 
     public init(database: SqliteDatabase) { this.database = database }
 
-    // Programmatic Runs produce their own canonical ToolCall Items rather
-    // than Model Decision blocks. They still use the same immutable effect
-    // record, state register, handoff and Receipt tables.
-    public func prepareProgramSubOperation(
+    // Trusted direct-control Runs commit their own canonical ToolCall Item.
+    // The host prepares its normalized plan through the canonical operation store.
+    public func prepareTrustedControlOperation(
         operationId: OperationId,
         runId: RunId,
         toolCallItemId: ItemId,
@@ -38,7 +38,7 @@ public class DurableOperationStore <: OperationRuntimePort {
                         " AND items.kind='tool_call' AND runs.state='running' " +
                         "AND threads.active_turn_id=runs.turn_id",
                     [runId.value],
-                    "Program Operation does not own a canonical ToolCall"
+                    "Trusted control Operation does not own a canonical ToolCall"
                 )
                 let existing = transaction.query(
                     "SELECT run_id,tool_call_item_id,normalized_plan FROM operations WHERE id=" +
@@ -50,7 +50,7 @@ public class DurableOperationStore <: OperationRuntimePort {
                         existing[0].required(1) != toolCallItemId.value ||
                         existing[0].required(2) != encodedPlan) {
                         throw IllegalStateException(
-                            "Program Operation already has a different canonical binding"
+                            "Control Operation already has a different canonical binding"
                         )
                     }
                 } else {
@@ -80,8 +80,255 @@ public class DurableOperationStore <: OperationRuntimePort {
                 }
             Result.Ok(())
         } catch (error: Exception) {
-            operationStoreError("operation.program_prepare_failed", operationId, error)
+            operationStoreError("operation.control_prepare_failed", operationId, error)
         }
+    }
+
+    public func prepareDerivedOperation(
+        operationId: OperationId,
+        parentOperationId: OperationId,
+        runId: RunId,
+        rootToolCall: CommittedToolCallRef,
+        requestKey: String,
+        plan: NormalizedOperationPlan
+    ): Result<OperationId> {
+        if (requestKey.trimAscii() == "") {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "operation.derived_request_key_invalid",
+                "derived request key must not be empty"
+            ))
+        }
+        let isProgramRootCall = rootToolCall.block.name == "run_program"
+        let isPluginServiceChild = isJavaScriptPluginName(rootToolCall.block.name) &&
+            requestKey.startsWith(
+                "javascript-service:" + rootToolCall.block.callId + ":"
+            ) && isPluginServiceChildPlan(plan)
+        if (operationId.value == parentOperationId.value ||
+            (!isProgramRootCall && !isPluginServiceChild) ||
+            (isProgramRootCall && plan.toolName == "run_program") ||
+            plan.effectClass != OperationEffectClass.ReadOnly) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "operation.derived_effect_denied",
+                "derived admission requires a supported canonical root and read-only child plan"
+            ))
+        }
+        let encodedPlan = encodeOperationPlan(plan)
+        try {
+            database.transaction { transaction =>
+                let existing = transaction.query(
+                    "SELECT a.operation_id,a.request_digest,o.run_id,o.tool_call_item_id," +
+                        "o.normalized_plan,e.normalized_plan,o.state FROM derived_operation_admissions a " +
+                        "JOIN operations o ON o.id=a.operation_id " +
+                        "LEFT JOIN operation_effect_records e ON e.operation_id=o.id " +
+                        "WHERE a.parent_operation_id=" + sqliteText(parentOperationId.value) +
+                        " AND a.request_key=" + sqliteText(requestKey)
+                )
+                if (!existing.isEmpty()) {
+                    if (existing.size != 1 ||
+                        existing[0].required(1) != plan.bindingDigest ||
+                        existing[0].required(2) != runId.value ||
+                        existing[0].required(3) != rootToolCall.canonicalItemId.value ||
+                        existing[0].required(4) != encodedPlan ||
+                        existing[0].required(5) != encodedPlan) {
+                        Result<OperationId>.Err(AgentError(
+                            AgentErrorKind.Conflict,
+                            "operation.derived_request_conflict",
+                            "derived request key is already bound to another plan or root"
+                        ))
+                    } else {
+                        let state = existing[0].required(6)
+                        let active = if (state == "prepared" || state == "waiting_approval" ||
+                            state == "executing") {
+                            isActiveDerivedRoot(
+                                transaction, parentOperationId, runId, rootToolCall,
+                                requestKey, plan
+                            )
+                        } else {
+                            state == "committed" || state == "rejected" ||
+                                state == "cancelled" || state == "timed_out" ||
+                                state == "failed" || state == "unknown" ||
+                                state == "recovery_required"
+                        }
+                        if (!active) {
+                            Result<OperationId>.Err(AgentError(
+                                AgentErrorKind.Conflict,
+                                "operation.derived_parent_inactive",
+                                "derived request belongs to an inactive execution parent"
+                            ))
+                        } else {
+                            Result.Ok(OperationId(existing[0].required(0)))
+                        }
+                    }
+                } else if (!isActiveDerivedRoot(
+                    transaction, parentOperationId, runId, rootToolCall,
+                    requestKey, plan
+                )) {
+                    Result<OperationId>.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "operation.derived_parent_invalid",
+                        "derived Operation parent is not an active supported committed root"
+                    ))
+                } else if (!transaction.query(
+                    "SELECT id FROM operations WHERE id=" + sqliteText(operationId.value)
+                ).isEmpty()) {
+                    Result<OperationId>.Err(AgentError(
+                        AgentErrorKind.Conflict,
+                        "operation.derived_identity_conflict",
+                        "derived Operation ID is already in use"
+                    ))
+                } else {
+                    let sequenceRows = transaction.query(
+                        "SELECT COALESCE(MAX(call_sequence),0)+1 FROM derived_operation_admissions " +
+                            "WHERE parent_operation_id=" + sqliteText(parentOperationId.value)
+                    )
+                    let callSequence = Int64.parse(sequenceRows[0].required(0))
+                    if (callSequence <= 0) {
+                        throw IllegalStateException("derived call sequence overflowed")
+                    }
+                    transaction.execute(
+                        "INSERT INTO operations " +
+                            "(id,run_id,tool_call_item_id,normalized_plan,capability_requirement," +
+                            "resource_scope,effect_class,retry_disposition,idempotency_key,state,revision) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,'prepared',1)",
+                        [
+                            SqlParameter.Text(operationId.value),
+                            SqlParameter.Text(runId.value),
+                            SqlParameter.Text(rootToolCall.canonicalItemId.value),
+                            SqlParameter.Text(encodedPlan),
+                            SqlParameter.Text(encodeCapabilities(plan.requiredCapabilities)),
+                            SqlParameter.Text(encodeResourceScope(plan)),
+                            SqlParameter.Text(storeEffectName(plan.effectClass)),
+                            SqlParameter.Text(storeRetryName(plan.retryDisposition)),
+                            if (plan.idempotencyKey == "") {
+                                SqlParameter.Null
+                            } else {
+                                SqlParameter.Text(plan.idempotencyKey)
+                            }
+                        ]
+                    )
+                    insertOperationEffectRecord(
+                        transaction, operationId, runId, rootToolCall.canonicalItemId,
+                        plan, encodedPlan
+                    )
+                    transaction.execute(
+                        "INSERT INTO derived_operation_admissions " +
+                            "(operation_id,parent_operation_id,call_sequence,request_key,request_digest) " +
+                            "VALUES (?,?,?,?,?)",
+                        [
+                            SqlParameter.Text(operationId.value),
+                            SqlParameter.Text(parentOperationId.value),
+                            SqlParameter.Int64Value(callSequence),
+                            SqlParameter.Text(requestKey),
+                            SqlParameter.Text(plan.bindingDigest)
+                        ]
+                    )
+                    Result.Ok(operationId)
+                }
+            }
+        } catch (error: Exception) {
+            operationStoreError("operation.derived_prepare_failed", operationId, error)
+        }
+    }
+
+    private func isActiveDerivedRoot(
+        transaction: SqliteTransaction,
+        parentOperationId: OperationId,
+        runId: RunId,
+        rootToolCall: CommittedToolCallRef,
+        requestKey: String,
+        childPlan: NormalizedOperationPlan
+    ): Bool {
+        let rows = transaction.query(
+            "SELECT parent.normalized_plan FROM decision_operations source " +
+                "JOIN model_decisions d ON d.id=source.decision_id " +
+                "JOIN model_decision_blocks b ON b.decision_id=source.decision_id " +
+                " AND b.scoped_tool_call_id=source.scoped_tool_call_id " +
+                "JOIN canonical_decision_items c ON c.decision_id=source.decision_id " +
+                " AND c.decision_block_id=b.id " +
+                "JOIN items ON items.id=c.item_id " +
+                "JOIN operations parent ON parent.id=source.operation_id " +
+                "JOIN runs ON runs.id=parent.run_id " +
+                "JOIN threads ON threads.id=runs.thread_id " +
+                "JOIN operation_effect_records effect ON effect.operation_id=parent.id " +
+                "JOIN operation_state_registers state ON state.operation_id=parent.id " +
+                "WHERE source.operation_id=" + sqliteText(parentOperationId.value) +
+                " AND source.decision_id=" + sqliteText(rootToolCall.decisionId.value) +
+                " AND source.scoped_tool_call_id=" +
+                    sqliteText(rootToolCall.scopedToolCallId.value) +
+                " AND runs.id=" + sqliteText(runId.value) +
+                " AND runs.state='running' AND threads.active_turn_id=runs.turn_id " +
+                " AND items.id=" + sqliteText(rootToolCall.canonicalItemId.value) +
+                " AND items.thread_id=runs.thread_id AND items.turn_id=runs.turn_id " +
+                " AND items.kind='tool_call' AND d.validation_status='validated' " +
+                " AND d.canonical_committed_at_millis IS NOT NULL " +
+                " AND parent.run_id=runs.id AND parent.tool_call_item_id=items.id " +
+                " AND parent.state='executing' AND state.state='executing' " +
+                " AND EXISTS (SELECT 1 FROM audit_events handoff WHERE " +
+                "handoff.operation_id=parent.id AND handoff.run_id=runs.id " +
+                "AND handoff.kind='operation_execution_handoff') " +
+                " AND NOT EXISTS (SELECT 1 FROM derived_operation_admissions nested " +
+                "WHERE nested.operation_id=parent.id)"
+        )
+        if (rows.size != 1) { return false }
+        let rootPlan = decodeOperationPlan(rows[0].required(0))
+        isSupportedDerivedParentPlan(rootPlan, rootToolCall.block.name) &&
+            isSupportedDerivedChildPlan(
+                rootToolCall.block.name, rootToolCall.block.callId, requestKey, childPlan
+            )
+    }
+
+    private func isSupportedDerivedParentPlan(
+        plan: NormalizedOperationPlan,
+        toolName: String
+    ): Bool {
+        if (toolName == "run_program") { return plan.toolName == "run_program" }
+        plan.toolName == toolName && isJavaScriptPluginName(toolName) &&
+            operationPlanRequiresCapability(plan, CapabilityKind.ExtensionInvoke) &&
+            operationPlanRequiresCapability(plan, CapabilityKind.WorkspaceRead)
+    }
+
+    private func isSupportedDerivedChildPlan(
+        parentToolName: String,
+        parentCallId: String,
+        requestKey: String,
+        plan: NormalizedOperationPlan
+    ): Bool {
+        if (parentToolName == "run_program") {
+            return plan.toolName != "run_program" &&
+                plan.effectClass == OperationEffectClass.ReadOnly
+        }
+        if (!isJavaScriptPluginName(parentToolName)) { return false }
+        let requestPrefix = "javascript-service:" + parentCallId + ":"
+        requestKey.startsWith(requestPrefix) && requestKey.size > requestPrefix.size &&
+            isPluginServiceChildPlan(plan)
+    }
+
+    private func isPluginServiceChildPlan(plan: NormalizedOperationPlan): Bool {
+        if (plan.toolName != "bash_readonly" ||
+            plan.effectClass != OperationEffectClass.ReadOnly ||
+            plan.networkPolicy.mode != NetworkPolicyMode.Denied) {
+            return false
+        }
+        for (required in plan.requiredCapabilities) {
+            if (required.kind != CapabilityKind.WorkspaceRead) { return false }
+        }
+        true
+    }
+
+    private func isJavaScriptPluginName(toolName: String): Bool {
+        toolName.startsWith("plugin.") && toolName.size > 7
+    }
+
+    private func operationPlanRequiresCapability(
+        plan: NormalizedOperationPlan,
+        kind: CapabilityKind
+    ): Bool {
+        for (required in plan.requiredCapabilities) {
+            if (required.kind == kind) { return true }
+        }
+        false
     }
 
     public func prepare(
@@ -387,13 +634,29 @@ public class DurableOperationStore <: OperationRuntimePort {
         operationId: OperationId,
         runId: RunId
     ): Result<NormalizedOperationPlan> {
+        loadPlanUsing({ sql => database.query(sql) }, operationId, runId)
+    }
+
+    public func loadPlan(
+        transaction: SqliteTransaction,
+        operationId: OperationId,
+        runId: RunId
+    ): Result<NormalizedOperationPlan> {
+        loadPlanUsing({ sql => transaction.query(sql) }, operationId, runId)
+    }
+
+    private func loadPlanUsing(
+        query: (String) -> Array<SqliteRow>,
+        operationId: OperationId,
+        runId: RunId
+    ): Result<NormalizedOperationPlan> {
         try {
-            let rows = database.query(
+            let rows = query(
                 "SELECT normalized_plan FROM operations WHERE id=" +
                     sqliteText(operationId.value) + " AND run_id=" + sqliteText(runId.value)
             )
             if (rows.size != 1) {
-                let owner = database.query(
+                let owner = query(
                     "SELECT id FROM operations WHERE id=" + sqliteText(operationId.value)
                 )
                 if (owner.size == 1) {
@@ -480,13 +743,235 @@ public class DurableOperationStore <: OperationRuntimePort {
         }
     }
 
+    public func settleDerivedOperation(
+        runId: RunId,
+        parentOperationId: OperationId,
+        receipt: VNextOperationReceipt
+    ): Result<Unit> {
+        try {
+            database.transaction { transaction =>
+                let rows = transaction.query(
+                    "SELECT o.state,o.run_id,o.tool_call_item_id,a.parent_operation_id," +
+                        "e.reserved_receipt_id,e.reserved_result_item_id,a.request_key," +
+                        "o.normalized_plan " +
+                        "FROM operations o JOIN derived_operation_admissions a " +
+                        "ON a.operation_id=o.id JOIN operation_effect_records e " +
+                        "ON e.operation_id=o.id WHERE o.id=?",
+                    [SqlParameter.Text(receipt.operationId.value)]
+                )
+                if (rows.size != 1 || rows[0].required(1) != runId.value ||
+                    rows[0].required(3) != parentOperationId.value ||
+                    rows[0].required(4) != receipt.receiptId) {
+                    throw IllegalStateException(
+                        "derived receipt is not bound to the expected child Operation"
+                    )
+                }
+                let state = rows[0].required(0)
+                if (state != "executing" &&
+                    !(receipt.outcome == OperationOutcome.Rejected &&
+                        (state == "prepared" || state == "waiting_approval"))) {
+                    throw IllegalStateException(
+                        "derived Operation did not reach a settleable state"
+                    )
+                }
+                let parent = transaction.query(
+                    "SELECT state,run_id,tool_call_item_id,normalized_plan " +
+                        "FROM operations WHERE id=?",
+                    [SqlParameter.Text(parentOperationId.value)]
+                )
+                let parentIsValid = if (parent.size != 1) {
+                    false
+                } else {
+                    let parentPlan = decodeOperationPlan(parent[0].required(3))
+                    let rootItems = transaction.query(
+                        "SELECT payload FROM items WHERE id=?",
+                        [SqlParameter.Text(rows[0].required(2))]
+                    )
+                    if (rootItems.size != 1) {
+                        false
+                    } else {
+                        match (decodeStoredThreadContent(rootItems[0].required(0))) {
+                            case ThreadItemContent.ToolCall(callId, name, _) =>
+                                isSupportedDerivedParentPlan(parentPlan, name) &&
+                                    isSupportedDerivedChildPlan(
+                                        name, callId.value, rows[0].required(6),
+                                        decodeOperationPlan(rows[0].required(7))
+                                    )
+                            case _ => false
+                        }
+                    }
+                }
+                if (parent.size != 1 || parent[0].required(0) != "executing" ||
+                    parent[0].required(1) != runId.value ||
+                    parent[0].required(2) != rows[0].required(2) || !parentIsValid) {
+                    throw IllegalStateException(
+                        "derived receipt parent is not the active supported canonical root"
+                    )
+                }
+                if (!transaction.query(
+                    "SELECT id FROM items WHERE id=?",
+                    [SqlParameter.Text(rows[0].required(5))]
+                ).isEmpty()) {
+                    throw IllegalStateException(
+                        "reserved derived result identity must not become a Thread Item"
+                    )
+                }
+                if (!transaction.query(
+                    "SELECT id FROM operation_receipts WHERE operation_id=?",
+                    [SqlParameter.Text(receipt.operationId.value)]
+                ).isEmpty()) {
+                    throw IllegalStateException(
+                        "derived Operation already has a canonical Receipt"
+                    )
+                }
+                transaction.execute(
+                    "INSERT INTO operation_receipts " +
+                        "(id,operation_id,outcome,detail,verification,created_at_millis) " +
+                        "VALUES (?,?,?,?,?,?)",
+                    [
+                        SqlParameter.Text(receipt.receiptId),
+                        SqlParameter.Text(receipt.operationId.value),
+                        SqlParameter.Text(operationOutcomeName(receipt.outcome)),
+                        SqlParameter.Text(encodeStoredValue(receipt.detail)),
+                        SqlParameter.Text(encodeStoredValue(receipt.verification)),
+                        SqlParameter.Int64Value(receipt.observedAtMillis)
+                    ]
+                )
+                let nextState = match (receipt.outcome) {
+                    case OperationOutcome.Completed => "committed"
+                    case OperationOutcome.Rejected => "rejected"
+                    case OperationOutcome.Cancelled => "cancelled"
+                    case OperationOutcome.TimedOut => "timed_out"
+                    case OperationOutcome.Failed => "failed"
+                    case OperationOutcome.Unknown => "recovery_required"
+                }
+                transaction.execute(
+                    "UPDATE operations SET state=" + sqliteText(nextState) +
+                        ",revision=revision+1 WHERE id=" +
+                        sqliteText(receipt.operationId.value) + " AND run_id=" +
+                        sqliteText(runId.value) + " AND state=" + sqliteText(state)
+                )
+                requireStoreChanged(
+                    transaction, "derived Operation settlement lost its owner"
+                )
+                mirrorOperationState(transaction, receipt.operationId, nextState)
+            }
+            Result.Ok(())
+        } catch (error: Exception) {
+            operationStoreError("operation.derived_settle_failed", receipt.operationId, error)
+        }
+    }
+
+    public func loadDerivedOperationReceipt(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<?VNextOperationReceipt> {
+        try {
+            let rows = database.query(
+                "SELECT r.id,r.outcome,r.detail,r.verification,r.created_at_millis " +
+                    "FROM operation_receipts r JOIN operations o ON o.id=r.operation_id " +
+                    "JOIN derived_operation_admissions a ON a.operation_id=o.id " +
+                    "WHERE o.id=? AND o.run_id=?",
+                [SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value)]
+            )
+            if (rows.isEmpty()) { return Result.Ok(None) }
+            if (rows.size != 1) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "operation.derived_receipt_ambiguous",
+                    "derived Operation has multiple canonical Receipts"
+                ))
+            }
+            let outcome = match (rows[0].required(1)) {
+                case "completed" => OperationOutcome.Completed
+                case "rejected" => OperationOutcome.Rejected
+                case "cancelled" => OperationOutcome.Cancelled
+                case "timed_out" => OperationOutcome.TimedOut
+                case "failed" => OperationOutcome.Failed
+                case "unknown" => OperationOutcome.Unknown
+                case _ => return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "operation.derived_receipt_invalid",
+                    "derived Operation Receipt has an unsupported outcome"
+                ))
+            }
+            Result.Ok(Some(VNextOperationReceipt(
+                rows[0].required(0),
+                operationId,
+                outcome,
+                decodeStoredValue(rows[0].required(2)),
+                decodeStoredValue(rows[0].required(3)),
+                parseStoreInt(rows[0].required(4), "derived Receipt timestamp")
+            )))
+        } catch (error: Exception) {
+            operationStoreError("operation.derived_receipt_load_failed", operationId, error)
+        }
+    }
+
+    public func loadDerivedOperationState(
+        operationId: OperationId,
+        runId: RunId
+    ): Result<String> {
+        try {
+            let rows = database.query(
+                "SELECT o.state FROM operations o JOIN derived_operation_admissions a " +
+                    "ON a.operation_id=o.id WHERE o.id=? AND o.run_id=?",
+                [SqlParameter.Text(operationId.value), SqlParameter.Text(runId.value)]
+            )
+            if (rows.size == 1) { return Result.Ok(rows[0].required(0)) }
+            if (rows.size > 1) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired,
+                    "operation.derived_state_ambiguous",
+                    "derived Operation has multiple admission records"
+                ))
+            }
+            let owner = database.query(
+                "SELECT run_id FROM operations WHERE id=?",
+                [SqlParameter.Text(operationId.value)]
+            )
+            if (owner.size == 1) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "tool.approval_run_mismatch",
+                    "derived Operation belongs to another Run"
+                ))
+            }
+            Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "operation.not_found",
+                "derived Operation was not found"
+            ))
+        } catch (error: Exception) {
+            operationStoreError("operation.derived_state_load_failed", operationId, error)
+        }
+    }
+
     public func loadCall(
         operationId: OperationId,
         runId: RunId
     ): Result<ToolCall> {
         try {
+            let derivedRows = database.query(
+                "SELECT a.request_key,o.normalized_plan FROM derived_operation_admissions a " +
+                    "JOIN operations o ON o.id=a.operation_id WHERE a.operation_id=" +
+                    sqliteText(operationId.value) + " AND o.run_id=" + sqliteText(runId.value)
+            )
+            if (!derivedRows.isEmpty()) {
+                if (derivedRows.size != 1) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.RecoveryRequired,
+                        "operation.derived_call_ambiguous",
+                        "derived Operation has multiple admission records"
+                    ))
+                }
+                let plan = decodeOperationPlan(derivedRows[0].required(1))
+                return Result.Ok(ToolCall(
+                    derivedRows[0].required(0), plan.toolName, plan.canonicalArguments
+                ))
+            }
             let rows = database.query(
-                "SELECT items.payload FROM operations " +
+                "SELECT items.payload,operations.normalized_plan FROM operations " +
                     "JOIN runs ON runs.id=operations.run_id " +
                     "JOIN items ON items.id=operations.tool_call_item_id " +
                     "WHERE operations.id=" + sqliteText(operationId.value) +
@@ -513,8 +998,11 @@ public class DurableOperationStore <: OperationRuntimePort {
                 ))
             }
             match (decodeStoredThreadContent(rows[0].required(0))) {
-                case ThreadItemContent.ToolCall(callId, name, arguments) =>
-                    Result.Ok(ToolCall(callId.value, name, arguments))
+                case ThreadItemContent.ToolCall(callId, _, _) =>
+                    let plan = decodeOperationPlan(rows[0].required(1))
+                    Result.Ok(ToolCall(
+                        callId.value, plan.toolName, plan.canonicalArguments
+                    ))
                 case _ => Result.Err(AgentError(
                     AgentErrorKind.RecoveryRequired,
                     "operation.call_not_canonical",
@@ -920,6 +1408,7 @@ func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
 func storedApprovalMetadata(value: ToolApprovalMetadata): AgentValue {
     objectValue([
         ValueField("capability_label", textValue(value.capabilityLabel)),
+        ValueField("session_approval_allowed", boolValue(value.sessionApprovalAllowed)),
         ValueField("risk", textValue(approvalRiskLevelName(value.assessment.level))),
         ValueField("flags", stringValues(value.assessment.flags)),
         ValueField("reasons", stringValues(value.assessment.reasons)),
@@ -948,7 +1437,11 @@ func parseStoredApprovalMetadata(value: AgentValue): ToolApprovalMetadata {
             toolName: grant.field("tool_name").getOrThrow().text,
             host: grant.field("host").getOrThrow().text,
             sessionOnly: grant.field("session_only").getOrThrow().asBool()
-        )
+        ),
+        sessionApprovalAllowed: match (value.field("session_approval_allowed")) {
+            case Some(item) => item.asBool()
+            case None => true
+        }
     )
 }
 
