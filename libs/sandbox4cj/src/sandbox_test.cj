@@ -81,6 +81,23 @@ class Sandbox4CjTests {
     }
 
     @TestCase
+    func permitsWorkingDirectoryInsideExplicitReadOnlyMount() {
+        let mount = Path("target/sandbox4cj-tests-mount")
+        if (!exists(mount)) { Directory.create(mount, recursive: true) }
+        let mountedRoot = canonicalize(mount).toString()
+        let plan = WorkspaceSandbox(WorkspaceSandboxPolicy(
+            sandboxTestRoot(),
+            readOnlyMounts: [SandboxReadOnlyMount(mountedRoot)],
+            bubblewrapExecutable: "/usr/bin/true",
+            timeoutExecutable: "/usr/bin/true"
+        )).plan(WorkspaceSandboxCommand(
+            "/usr/bin/true",
+            workingDirectory: mountedRoot
+        ))
+        @Expect(plan.isOk(), true)
+    }
+
+    @TestCase
     func rejectsPathEscapeAndFailsClosedWithoutEnforcer() {
         let root = sandboxTestRoot()
         let pathEscape = WorkspaceSandbox(WorkspaceSandboxPolicy(
@@ -95,6 +112,39 @@ class Sandbox4CjTests {
             bubblewrapExecutable: "/definitely/missing/bwrap"
         )).execute(WorkspaceSandboxCommand("/usr/bin/true"))
         @Expect(sandboxResultCode(unavailable), "sandbox.bubblewrap_unavailable")
+    }
+
+    @TestCase
+    func forwardsStandardInputToSandboxedCommandAndClosesIt() {
+        let result = WorkspaceSandbox(WorkspaceSandboxPolicy(sandboxTestRoot())).execute(
+            WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "cat; printf done"],
+                standardInput: Some("hook-event\n"))
+        )
+        match (result) {
+            case SandboxResult.Ok(value) => @Expect(value.stdout, "hook-event\ndone")
+            case SandboxResult.Err(error) =>
+                if (error.code != "sandbox.platform_unsupported" &&
+                    error.code != "sandbox.bubblewrap_unavailable" &&
+                    error.code != "sandbox.isolation_unsupported") {
+                    @Fail(error.code + ": " + error.message)
+                }
+        }
+    }
+
+    @TestCase
+    func closesStandardInputWhenCommandHasNoInput() {
+        let result = WorkspaceSandbox(WorkspaceSandboxPolicy(sandboxTestRoot())).execute(
+            WorkspaceSandboxCommand("/bin/sh", arguments: ["-c", "cat; printf eof"])
+        )
+        match (result) {
+            case SandboxResult.Ok(value) => @Expect(value.stdout, "eof")
+            case SandboxResult.Err(error) =>
+                if (error.code != "sandbox.platform_unsupported" &&
+                    error.code != "sandbox.bubblewrap_unavailable" &&
+                    error.code != "sandbox.isolation_unsupported") {
+                    @Fail(error.code + ": " + error.message)
+                }
+        }
     }
 }
 

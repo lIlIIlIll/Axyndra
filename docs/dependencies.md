@@ -1,6 +1,6 @@
 # 依赖与 stdx 审计
 
-这份文档记录 Axyndra 为切换 Wirestack、sse4cj 和 yjson 所做的依赖审计。它描述当前工作树的源码、manifest、lockfile、构建脚本和可执行契约，不表示候选库已经接入，也不表示候选行为已经通过运行验收。
+这份文档记录 Axyndra 为切换 Wirestack、sse4cj 和 yjson 所做的依赖审计。它描述当前工作树的源码、manifest、lockfile、构建脚本和可执行契约；llm4cj v0.2.0 已按独立仓库的 v0.2.0 release tag 和精确 commit pin 接入 model_adapters，但 Axyndra 的 SDK/产品门禁仍以当前工作树的可执行证据为准，不把未运行的 gate 写成已通过。
 
 ## 审计口径
 
@@ -13,27 +13,31 @@
 3. 根及包级 `cjpm.lock` 定义可复现的远程 pin。源码 API 对照分别来自已锁定的 yjson/llm4cj 源码和相邻候选库工作树；候选工作树不是 Axyndra 当前依赖。
 4. `.cj` 的 import、process 调用、构建脚本和 support test manifest 用来区分源码依赖、传递依赖、宿主工具和运行时前置条件。源码匹配不等于编译、链接或运行验收通过。
 
-当前树中可读到 72 个非 .git 的 cjpm.lock：根锁文件、13 个 workspace 包锁文件和 58 个 support-test 锁文件。它们的 lockfile version 均为 0；其中 38 个只包含 yjson，34 个包含 yjson 和 llm4cj，3 个没有远程 requires。所有含 yjson 的锁文件都使用同一个 tag 与 commit，含 llm4cj 的锁文件也使用同一个 tag 与 commit。scripts/dependency_pin_gate.py 同时验证 yjson manifest、yjson lock 和 llm4cj lock 的 git/tag/commitId 一致性。
+当前 pin gate 读取 72 个 yjson lock、34 个 llm4cj lock 和 72 个 yjson manifest；各 lockfile version 均为 0。workspace 与 support-test 的锁文件仍可能只包含 yjson，只有实际声明 llm4cj 的依赖闭包才包含 llm4cj 行。所有含 yjson 的锁文件都使用同一个 tag 与 commit，含 llm4cj 的锁文件也使用同一个 tag 与 commit。scripts/dependency_pin_gate.py 同时验证 yjson manifest、yjson lock 和 llm4cj lock 的 git/tag/commitId 一致性。
 
 ## 外部来源与完整 pin
 
 | 依赖 | Axyndra 当前声明 | 锁定来源 | 需要单独核对的候选来源 |
 | --- | --- | --- | --- |
 | yjson | Git，静态输出，tag = "0.1.0" | https://github.com/lIlIIlIll/yjson.git，commit c91859feb77aeba392a1fad0f99d731df66be831，tag = "0.1.0" | 该 release 的生产 dependencies 为空，仅在 test-dependencies 以 commit fec0adce41f73d037d876cbac7a28aee8108bb5c 引入 yjson_macros。 |
-| llm4cj | Git，静态输出，tag = "v0.1.0" | https://github.com/lIlIIlIll/llm4cj.git，commit c80ab51ed1f8786ba4e5e06557dd43da92bdd94d，tag = "v0.1.0" | release manifest 同样声明 yjson tag = "0.1.0"；其 src/json_support.cj 使用 JsonNode.parse、JsonReadOptions 和公开容器访问。 |
+| llm4cj | Git，静态输出，tag = "v0.2.0" | https://github.com/lIlIIlIll/llm4cj.git，commit fd83641c4f39fc5c299298187028e581e7a8616c，tag = "v0.2.0" | release manifest 同样声明 yjson tag = "0.1.0"；其 src/json_support.cj 使用 JsonNode.parse、JsonReadOptions 和公开容器访问。 |
 | `Wirestack` | 当前未声明 | 相邻工作树 `../Wirestack`，未加入根 workspace | HTTP/TLS/native API 只能在迁移规格中作为候选接口。它的 native resolver/TLS-provider 物料、SDK 组合和动态库闭包仍需运行验证。 |
 | `sse4cj` | 当前未声明 | 相邻工作树 `../sse4cj`，未加入根 workspace | decoder 与 stdx HTTP/server 在同一个包中，且 manifest 带 stdx bin-dependency；不能只因 decoder API 相似就宣称去除 stdx。 |
 | yjson_algorithms | 不再作为独立依赖 | yjson 0.1.0 tag 中的算法源码已嵌入 libs/yjson_support，并随该 package 发布 | GitHub 未提供可单独 pin 的仓库；当前 schema、JSON Pointer、JSON Path 和 JSON Patch 行为来自已验证的 yjson tag 源码。 |
 
-根 `cjpm.lock` 的远程 pin 为：
+`model_adapters/cjpm.toml` 的声明：
 
 ```toml
-yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "c91859feb77aeba392a1fad0f99d731df66be831", tag = "0.1.0", output-type = "static"}
-yjson_macros = {git = "https://github.com/lIlIIlIll/yjson_macros.git", commitId = "fec0adce41f73d037d876cbac7a28aee8108bb5c"}
-llm4cj = {git = "https://github.com/lIlIIlIll/llm4cj.git", commitId = "c80ab51ed1f8786ba4e5e06557dd43da92bdd94d", tag = "v0.1.0", output-type = "static"}
+llm4cj = {git = "https://github.com/lIlIIlIll/llm4cj.git", tag = "v0.2.0", output-type = "static"}
 ```
 
-yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba392a1fad0f99d731df66be831；llm4cj 使用 release tag v0.1.0，解析为 commit c80ab51ed1f8786ba4e5e06557dd43da92bdd94d。这样既保留可复现的 commit，又让 manifest 与已验证的 release 依赖声明一致；JSON schema 算法源码随 yjson tag 嵌入 libs/yjson_support。
+对应 lock 的解析：
+
+```toml
+llm4cj = {git = "https://github.com/lIlIIlIll/llm4cj.git", commitId = "fd83641c4f39fc5c299298187028e581e7a8616c", tag = "v0.2.0", output-type = "static"}
+```
+
+yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba392a1fad0f99d731df66be831；llm4cj 使用 release tag v0.2.0，解析为 commit fd83641c4f39fc5c299298187028e581e7a8616c。这样既保留可复现的 commit，又让 manifest 与已验证的 release 依赖声明一致；JSON schema 算法源码随 yjson tag 嵌入 libs/yjson_support。
 
 ## Workspace 包清单
 
@@ -120,22 +124,21 @@ yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba
 
 ### 源码 import
 
-当前直接 import stdx 的生产源码只有 4 个文件，分布在 3 个直接源码消费者中：
+当前直接 import stdx 的生产源码只有 2 个文件，分布在 2 个直接源码消费者中：
 
 | 源文件 | stdx API | 当前职责 |
 | --- | --- | --- |
 | `model_adapters/src/native_transport.cj` | `stdx.log.NoopLogger`、`stdx.net.http.*`、`stdx.net.tls.*` | `NativeProviderTransport` 的 provider HTTP、TLS、body 读取、取消、凭据阶段和错误映射 |
-| `model_adapters/src/adapters.cj` | `stdx.crypto.crypto.*` | `SecureRetryJitterSource` 的安全随机 jitter |
 | `libs/mcp4cj/src/http.cj` | `stdx.log.NoopLogger`、`stdx.net.http.*`、`stdx.net.tls.*` | `StreamableHttpMcpTransport` 的 request-scoped HTTP、SSE response、取消和 MCP header 处理 |
-| `agent_product/src/product.cj` | `stdx.crypto.crypto.*` | `ProductIds` 的安全随机 ID 生成 |
+
+安全随机数消费者 `model_adapters/src/adapters.cj`、`agent_product/src/product.cj` 和 `agent_product/src/process_broker.cj` 已统一使用 `process4cj.fillSecureRandom`；它们不再依赖 `stdx.crypto`。
 
 直接 stdx import 的测试文件是 `libs/mcp4cj/src/mcp_test.cj` 和 `support_tests/mcp_contract/src/main.cj`。`agent_mcp/src/transport.cj` 中关于 stdio/transport 的说明字符串不是 import，不计入源码使用数。
 
 对应 manifest 中明确设置 `${CANGJIE_STDX_PATH}` 的四个 workspace 包是 `libs/mcp4cj`、`agent_mcp`、`model_adapters` 和 `agent_product`。`libs/process4cj` 的 target path 是 `native`，它是 C shim 的本地物料，不应误计为 stdx path。
 
 ### 传递闭包
-
-从三个直接 stdx 源码消费者沿 workspace manifest 的反向依赖闭包计算，受 stdx 影响的 8 个 workspace 包是：
+从两个直接 stdx 源码消费者沿 workspace manifest 的反向依赖闭包计算，受 stdx 影响的 8 个 workspace 包是：
 
 ```text
 agent_app
@@ -158,7 +161,7 @@ persistence_runtime
 - `scripts/package_candidate.sh` 先验证 SDK、完整 stdx、构建出的产品 executable 和 `patchelf`，再以 `ldd` 递归收集 process-native、SDK、tools 和 stdx 动态库，并检查最终诊断中没有 `not found`。
 - `.github/workflows/pr-gate.yml` 以 LLVM 15 和 STS 1.1.3 作为 reference baseline；nightly gate 以匹配的 nightly SDK/stdx 和 LLVM 18 覆盖前向兼容，并把 SDK/stdx 检查放在构建测试之前。
 
-`SecureRandom` 是 ID 和 retry jitter 的现有安全随机实现，与 stdx 到 Wirestack/sse4cj/yjson 的网络和 framing 迁移无关。迁移不能以删除安全随机为代价，也不在本轮提出随机数替代方案。
+`process4cj.fillSecureRandom` 是 ProductIds、retry jitter 和 broker token 的现有安全随机实现，底层使用 Linux getrandom C ABI；它已从 stdx.crypto 解耦，但仍属于最终 native 物料闭包。
 
 ## 非 stdx 的系统要求
 
@@ -209,7 +212,7 @@ python3 -B scripts/docs_gate.py
 
 基线结果为：
 
-- dependency pin gate passed (34 llm4cj locks, 72 yjson locks, 72 yjson manifests, llm4cj tag=v0.1.0, yjson tag=0.1.0)；
+- dependency pin gate passed (35 llm4cj locks, 72 yjson locks, 72 yjson manifests, llm4cj tag=v0.2.0, yjson tag=0.1.0)；
 - `reusable library boundaries passed (8 libraries)`；
 - 新增文档后再次运行 docs gate，以当前 Markdown 文件数和 38 个 workspace 包为准，不把旧的 `10 markdown files` 计数写成永久断言。
 

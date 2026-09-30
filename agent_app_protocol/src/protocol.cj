@@ -49,6 +49,7 @@ public enum AppCommandPayload {
     | ResumeRecovery(ThreadId, RunId)
     | SwitchThread(ThreadId)
     | LoadItemsPage(ThreadId, Int64, Int64)
+    | InspectRun(ThreadId, RunId, Int64, Int64)
 }
 
 public class AppCommand {
@@ -61,6 +62,12 @@ public class AppCommand {
                 if (beforeOrdinal < 0 || limit < 1 || limit > 1000) {
                     throw IllegalArgumentException(
                         "items page requires beforeOrdinal >= 0 and 1 <= limit <= 1000"
+                    )
+                }
+            case AppCommandPayload.InspectRun(_, _, beforeCursor, limit) =>
+                if (beforeCursor < 0 || limit < 1 || limit > 100) {
+                    throw IllegalArgumentException(
+                        "run inspection requires beforeCursor >= 0 and 1 <= limit <= 100"
                     )
                 }
             case _ => ()
@@ -163,6 +170,7 @@ public enum AppEventPayload {
     | OperationUpdated(OperationId, AppOperationPhase, String)
     | RunFinished(AppRunPhase, String)
     | ItemsPage(ThreadItemsPage)
+    | RunInspection(AppRunInspectionPage)
 }
 
 public class AppEvent {
@@ -196,6 +204,11 @@ public class AppEvent {
                 if (page.threadId.value != meta.threadId.value ||
                     page.threadRevision != meta.threadRevision) {
                     throw IllegalArgumentException("items page metadata does not match its Thread")
+                }
+            case AppEventPayload.RunInspection(page) =>
+                if (page.threadId.value != meta.threadId.value ||
+                    page.threadRevision != meta.threadRevision) {
+                    throw IllegalArgumentException("run inspection metadata does not match its Thread")
                 }
             case _ => ()
         }
@@ -341,6 +354,7 @@ func appPayloadIsRunScoped(payload: AppEventPayload): Bool {
              AppEventPayload.OperationUpdated(_, _, _) |
              AppEventPayload.RunFinished(_, _) => true
         case AppEventPayload.ThreadSnapshot(_) |
-             AppEventPayload.ItemsPage(_) => false
+             AppEventPayload.ItemsPage(_) |
+             AppEventPayload.RunInspection(_) => false
     }
 }

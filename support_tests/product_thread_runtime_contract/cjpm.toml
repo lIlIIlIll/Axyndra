@@ -11,6 +11,7 @@
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_app_protocol" = { path = "../../agent_app_protocol", output-type = "static" }
+  "agent_core" = { path = "../../agent_core", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_product" = { path = "../../agent_product", output-type = "static" }
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
@@ -18,5 +19,7 @@
   "agent_skills" = { path = "../../agent_skills", output-type = "static" }
   "agent_store" = { path = "../../agent_store", output-type = "static" }
   "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
-  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
   "model_adapters" = { path = "../../model_adapters", output-type = "static" }
+  "process4cj" = { path = "../../libs/process4cj", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }

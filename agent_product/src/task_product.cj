@@ -2240,6 +2240,7 @@ public class ProductTaskRuntime {
             base,
             spec.agent,
             childCapabilities,
+            context.budget,
             sharedContext: sharedContext
         )
         let state = match (createSubagentState(
@@ -2663,7 +2664,8 @@ public class ProductTaskRuntime {
         let request = productSubagentRequest(
             base,
             state.agent,
-            childCapabilities
+            childCapabilities,
+            authority.budget
         )
         while (true) {
             let claimed = claimRevivedChild(runtime, id, message, request, authority)
@@ -3141,7 +3143,13 @@ public class ProductTaskRuntime {
                 case None => ExecutionUsage()
             }
             match (lease.settle(usage)) {
-                case Result.Err(error) => Result.Err(error)
+                case Result.Err(error) =>
+                    if (error.code == "child.actual_usage_exceeds_reservation" ||
+                        error.code == "child.parent_actual_usage_exceeded") {
+                        childBudgetLeases.remove(childId)
+                        childUsage.remove(childId)
+                    }
+                    Result.Err(error)
                 case Result.Ok(_) =>
                     childBudgetLeases.remove(childId)
                     childUsage.remove(childId)
@@ -4600,8 +4608,10 @@ func productSubagentRequest(
     base: AgentRunRequest,
     agent: String,
     capabilities: CapabilitySet,
+    parentBudget: ExecutionBudget,
     sharedContext!: String = ""
 ): AgentRunRequest {
+    let remaining = parentBudget.remainingCumulativeBudget()
     let promptBuild = productSubagentPrompt(agent, sharedContext)
     AgentRunRequest(
         base.runId,
@@ -4616,8 +4626,16 @@ func productSubagentRequest(
         budget: ResourceBudget(
             maxInputTokens: base.budget.maxInputTokens,
             maxOutputTokens: min(8000, base.budget.maxOutputTokens),
-            maxTotalInputTokens: base.budget.maxTotalInputTokens,
-            maxTotalOutputTokens: base.budget.maxTotalOutputTokens,
+            maxTotalInputTokens: productChildCumulativeLimit(
+                base.budget.maxTotalInputTokens,
+                parentBudget.maxTotalInputTokens,
+                remaining.inputTokens
+            ),
+            maxTotalOutputTokens: productChildCumulativeLimit(
+                base.budget.maxTotalOutputTokens,
+                parentBudget.maxTotalOutputTokens,
+                remaining.outputTokens
+            ),
             maxModelRequests: min(12, base.budget.maxModelRequests),
             maxTurns: min(12, base.budget.maxTurns),
             maxToolCalls: min(24, base.budget.maxToolCalls),
@@ -4632,8 +4650,15 @@ func productSubagentRequest(
             maxConcurrentChildren: min(4, base.budget.maxConcurrentChildren),
             maxContextMessages: base.budget.maxContextMessages,
             maxConcurrentTools: base.budget.maxConcurrentTools,
-            maxCostMicros: base.budget.maxCostMicros,
-            deadlineMillis: base.budget.deadlineMillis
+            processLimits: base.budget.processLimits,
+            maxCostMicros: productChildCumulativeLimit(
+                base.budget.maxCostMicros,
+                parentBudget.maxCostMicros,
+                remaining.costMicros
+            ),
+            deadlineMillis: productChildDeadline(
+                base.budget.deadlineMillis, parentBudget.deadlineMillis
+            )
         ),
         approvalModeOverride: None,
         autoRetry: base.autoRetry,
@@ -4651,9 +4676,26 @@ func productSubagentRequest(
     )
 }
 
-// A child can only lose authority. Role ceilings are product policy; the
-// effective set is still intersected with both the parent's grant and the
-// execution/sandbox ceiling by agent_runtime.
+// Cap cumulative child usage by the headroom in its parent ledger.
+// Zero remains the unbounded sentinel. Exhausted bounded parents receive
+// a nonzero cap that admission rejects before child launch.
+func productChildCumulativeLimit(
+    requested: Int64,
+    parentLimit: Int64,
+    remaining: Int64
+): Int64 {
+    if (parentLimit == 0) { return requested }
+    let capped = if (requested == 0) { remaining } else { min(requested, remaining) }
+    if (capped == 0) { 1 } else { capped }
+}
+func productChildDeadline(requested: Int64, parent: Int64): Int64 {
+    if (requested == 0) { return parent }
+    if (parent == 0) { return requested }
+    min(requested, parent)
+}
+
+// Role ceilings are product policy; effective capabilities remain
+// intersected with the parent's grant and runtime sandbox ceiling.
 func productAgentCapabilityCeiling(agent: String): CapabilitySet {
     let values = ArrayList<Capability>()
     values.add(Capability(CapabilityKind.WorkspaceRead))

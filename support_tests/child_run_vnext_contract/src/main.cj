@@ -153,6 +153,29 @@ func budgetReservationContract(): Unit {
     second.settle(ExecutionUsage()).value().getOrThrow()
     expect(pool.reserve("after-settle", child).isError(),
         "maxChildren is a lifetime Run limit, not only active child concurrency")
+    let sharedBudget = ExecutionBudget(maxTotalInputTokens: 100)
+    let _ = sharedBudget.reserve(BudgetCharge(inputTokens: 80)).value().getOrThrow()
+    let sharedPool = ChildBudgetPool(sharedBudget, 2)
+    let parentLimited = sharedPool.reserve(
+        "uses-remaining-parent", ExecutionBudget(maxTotalInputTokens: 30)
+    )
+    expect(parentLimited.isError() &&
+        parentLimited.error().getOrThrow().code == "child.parent_budget_exceeded",
+        "child reservation includes cumulative usage already charged to its parent")
+
+    let settleBudget = ExecutionBudget(maxTotalInputTokens: 100)
+    let _ = settleBudget.reserve(BudgetCharge(inputTokens: 20)).value().getOrThrow()
+    let settlePool = ChildBudgetPool(settleBudget, 1)
+    let childLease = settlePool.reserve(
+        "settles-to-parent", ExecutionBudget(maxTotalInputTokens: 60)
+    ).value().getOrThrow()
+    let _ = childLease.settle(ExecutionUsage(inputTokens: 25)).value().getOrThrow()
+    let parentAfterChild = settleBudget.snapshot()
+    let parentOverspend = settleBudget.reserve(BudgetCharge(inputTokens: 56))
+    expect(parentAfterChild.inputTokens == 45 && parentOverspend.isError() &&
+        settleBudget.snapshot().inputTokens == 45,
+        "settled child usage is charged once to the shared parent budget")
+
 
     let concurrencyPool = ChildBudgetPool(ExecutionBudget(
         maxTurns: 20, maxToolCalls: 30, maxConcurrentTools: 4,
@@ -178,9 +201,8 @@ func budgetReservationContract(): Unit {
         "child reservation identity is normalized before duplicate detection")
     normalizedLease.settle(ExecutionUsage()).value().getOrThrow()
 
-    let overspendPool = ChildBudgetPool(
-        ExecutionBudget(maxTotalInputTokens: 100), 1
-    )
+    let overspendParent = ExecutionBudget(maxTotalInputTokens: 100)
+    let overspendPool = ChildBudgetPool(overspendParent, 1)
     let overspendLease = overspendPool.reserve(
         "overspend", ExecutionBudget(maxTotalInputTokens: 100)
     ).value().getOrThrow()
@@ -189,12 +211,33 @@ func budgetReservationContract(): Unit {
     expect(overspend.isError() && overspend.error().getOrThrow().code ==
         "child.actual_usage_exceeds_reservation" &&
         overspendSnapshot.activeReservations == 0 &&
-        overspendSnapshot.consumed.inputTokens == 101,
-        "actual overspend remains accounted and releases its reservation")
+        overspendSnapshot.consumed.inputTokens == 101 &&
+        overspendParent.snapshot().inputTokens == 101,
+        "actual overspend remains accounted in both child evidence and parent ledger")
     let repeatedOverspend = overspendLease.settle(ExecutionUsage(inputTokens: 101))
     expect(repeatedOverspend.isError() && repeatedOverspend.error().getOrThrow().code ==
         "child.budget_lease_settled",
         "an overspent child lease is terminal and cannot be settled repeatedly")
+    let deadlineParent = ExecutionBudget(deadlineMillis: 1)
+    let deadlinePool = ChildBudgetPool(deadlineParent, 1)
+    let expiredChild = deadlinePool.reserve("expired-parent", ExecutionBudget())
+    expect(expiredChild.isError() &&
+        expiredChild.error().getOrThrow().code == "budget.deadline_exceeded" &&
+        deadlinePool.snapshot().activeReservations == 0,
+        "expired parent deadlines reject child work before reservation")
+
+    let unboundedParent = ExecutionBudget()
+    let unboundedPool = ChildBudgetPool(unboundedParent, 1)
+    let unboundedLease = unboundedPool.reserve(
+        "unbounded-parent", ExecutionBudget()
+    ).value().getOrThrow()
+    let unboundedSettlement = unboundedLease.settle(ExecutionUsage(
+        inputTokens: 12, outputTokens: 4, costMicros: 5
+    ))
+    let unboundedUsage = unboundedParent.snapshot()
+    expect(unboundedSettlement.isOk() && unboundedUsage.inputTokens == 12 &&
+        unboundedUsage.outputTokens == 4 && unboundedUsage.costMicros == 5,
+        "zero child reservation remains unbounded while actual usage is charged")
 }
 
 func isolatedResultContract(): Unit {

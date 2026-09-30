@@ -260,7 +260,21 @@ public class SqliteModelDecisionStore <: ModelDecisionRuntimePort {
     }
 
     public func loadDecision(decisionId: ModelDecisionId): DurableModelDecisionSnapshot {
-        let rows = database.query(
+        loadDecisionUsing({ sql => database.query(sql) }, decisionId)
+    }
+
+    public func loadDecision(
+        transaction: SqliteTransaction,
+        decisionId: ModelDecisionId
+    ): DurableModelDecisionSnapshot {
+        loadDecisionUsing({ sql => transaction.query(sql) }, decisionId)
+    }
+
+    private func loadDecisionUsing(
+        query: (String) -> Array<SqliteRow>,
+        decisionId: ModelDecisionId
+    ): DurableModelDecisionSnapshot {
+        let rows = query(
             "SELECT attempt_id,semantic_request_id,validation_status," +
                 "completion_disposition,decision_outcome,content_hash,replay_hash," +
                 "provider_id,provider_response_id,terminal_evidence,validator_version," +
@@ -271,7 +285,7 @@ public class SqliteModelDecisionStore <: ModelDecisionRuntimePort {
             throw IllegalStateException("durable Model Decision does not exist")
         }
         let row = rows[0]
-        let blockRows = database.query(
+        let blockRows = query(
             "SELECT id,ordinal,payload,scoped_tool_call_id FROM model_decision_blocks " +
                 "WHERE decision_id=" + sqliteText(decisionId.value) + " ORDER BY ordinal"
         )
@@ -288,7 +302,7 @@ public class SqliteModelDecisionStore <: ModelDecisionRuntimePort {
                 }
             ))
         }
-        let usageRows = database.query(
+        let usageRows = query(
             "SELECT payload FROM model_decision_usage WHERE decision_id=" +
                 sqliteText(decisionId.value)
         )
@@ -437,7 +451,8 @@ public func persistModelAttemptInTransaction(
             "last_activity_at_millis,COALESCE(completed_at_millis,-1)," +
             "provider_request_id,provider_response_id,failure_kind," +
             "semantic_request_digest,wire_policy_digest,dispatch_state,replay_barrier," +
-            "COALESCE(dispatch_started_at_millis,-1),COALESCE(provider_terminal_at_millis,-1) " +
+            "COALESCE(dispatch_started_at_millis,-1),COALESCE(provider_terminal_at_millis,-1)," +
+                "transcript_snapshot " +
             "FROM model_attempts WHERE id=" + sqliteText(attempt.id.value)
     )
     if (existing.isEmpty()) {
@@ -448,7 +463,7 @@ public func persistModelAttemptInTransaction(
                 "last_activity_at_millis,completed_at_millis,provider_request_id," +
                 "provider_response_id,failure_kind,semantic_request_digest,wire_policy_digest," +
                 "dispatch_state,replay_barrier,dispatch_started_at_millis," +
-                "provider_terminal_at_millis) VALUES (" +
+                "provider_terminal_at_millis,transcript_snapshot) VALUES (" +
                 sqliteText(attempt.id.value) + "," +
                 attemptInsertValues(attempt) + ")"
         )
@@ -477,7 +492,8 @@ func attemptRow(value: DurableModelAttempt): Array<String> {
         modelAttemptDispatchStateName(value.dispatchState),
         modelAttemptReplayBarrierName(value.replayBarrier),
         match (value.dispatchStartedAtMillis) { case Some(time) => time.toString(); case None => "-1" },
-        match (value.providerTerminalAtMillis) { case Some(time) => time.toString(); case None => "-1" }
+        match (value.providerTerminalAtMillis) { case Some(time) => time.toString(); case None => "-1" },
+        value.transcriptSnapshot
     ]
 }
 
@@ -494,7 +510,8 @@ func attemptInsertValues(value: DurableModelAttempt): String {
         sqliteText(modelAttemptDispatchStateName(value.dispatchState)) + "," +
         sqliteText(modelAttemptReplayBarrierName(value.replayBarrier)) + "," +
         match (value.dispatchStartedAtMillis) { case Some(time) => time.toString(); case None => "NULL" } + "," +
-        match (value.providerTerminalAtMillis) { case Some(time) => time.toString(); case None => "NULL" }
+        match (value.providerTerminalAtMillis) { case Some(time) => time.toString(); case None => "NULL" } + "," +
+        sqliteText(value.transcriptSnapshot)
 }
 
 public func modelAttemptDispatchStateName(value: ModelAttemptDispatchState): String {

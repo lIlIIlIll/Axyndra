@@ -18,6 +18,7 @@ foreign func process4cj_spawn(
     stderrFd: CPointer<Int32>,
     statusFd: CPointer<Int32>
 ): Int32
+foreign func process4cj_random_bytes(buffer: CPointer<UInt8>, length: Int64): Int32
 foreign func process4cj_read(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int64
 foreign func process4cj_wait_readable(fd: Int32, timeoutMillis: Int32): Int32
 foreign func process4cj_write_all(fd: Int32, buffer: CPointer<UInt8>, length: Int64): Int32
@@ -97,6 +98,21 @@ public func readFdChunk(fd: Int32, maxBytes!: Int64 = 8192): ?Array<Byte> {
     Some(buffer[..count])
 }
 
+/** Fill a byte array from the operating system's cryptographically secure entropy source. */
+public func fillSecureRandom(buffer: Array<Byte>): Unit {
+    if (buffer.isEmpty()) { return }
+    let result = unsafe {
+        let raw = acquireArrayRawData(buffer)
+        try { process4cj_random_bytes(raw.pointer, buffer.size) }
+        finally { releaseArrayRawData(raw) }
+    }
+    if (result != 0) {
+        throw ProcessError(
+            ProcessErrorKind.Io,
+            "secure random fill failed errno=" + (-result).toString()
+        )
+    }
+}
 public enum ProcessErrorKind {
     Spawn | Io | BrokenPipe | Frame | OutputLimit | DeadlineExceeded | Cancelled | Exit
 }

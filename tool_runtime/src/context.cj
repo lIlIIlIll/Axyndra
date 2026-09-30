@@ -1,6 +1,7 @@
 package tool_runtime
 
 import agent_domain.*
+import agent_runtime.*
 import agent_skills.*
 import std.collection.*
 import std.deriving.*
@@ -188,6 +189,7 @@ public class ToolContextDescriptor {
 public class ToolInvocationContext {
     public let runId: RunId
     public let sessionId: SessionId
+    public let epoch: Int64
     public let capabilities: CapabilitySet
     public let workspaceRoot: String
     public let cwd: String
@@ -202,26 +204,35 @@ public class ToolInvocationContext {
     // observes the run's current mode, not the mode at context creation.
     public let budgetModeFn: ?() -> BudgetMode
     public let skills: SkillStackSnapshot
+    public let toolSetSnapshot: ?ToolSetSnapshot
+    public let trustedControl: Bool
     private let sequenceLock = Mutex()
+    private let executionControlLock = Mutex()
     private var sequence: Int64
     private var auditSequence: Int64 = 0
-
+    private var budgetChargeHandler: ?(BudgetCharge) -> Result<ExecutionUsage> = None
+    private var nestedToolScheduler: ?(OperationId, () -> Result<Unit>) -> Result<Unit> = None
     public init(
         runId: RunId,
         sessionId: SessionId,
         capabilities: CapabilitySet,
         sequence!: Int64 = 0,
+        epoch!: Int64 = 0,
         toolContext!: ToolContextDescriptor = ToolContextDescriptor(),
         cancellation!: CancellationToken = CancellationSource().token,
         approvalModeOverride!: ?ApprovalMode = None,
         outputSink!: ToolOutputSink = NoopToolOutputSink(),
         budget!: ExecutionBudget = ExecutionBudget(),
         budgetModeFn!: ?() -> BudgetMode = None,
-        skills!: SkillStackSnapshot = SkillStackSnapshot([], [])
+        skills!: SkillStackSnapshot = SkillStackSnapshot([], []),
+        toolSetSnapshot!: ?ToolSetSnapshot = None,
+        trustedControl!: Bool = false
     ) {
         this.runId = runId
         this.sessionId = sessionId
+        if (epoch < 0) { throw IllegalArgumentException("tool invocation epoch must not be negative") }
         this.capabilities = capabilities
+        this.epoch = epoch
         this.workspaceRoot = toolContext.workspaceRoot
         this.cwd = toolContext.cwd
         this.environment = ToolEnvironmentView(entries: toolContext.environment.entries())
@@ -233,6 +244,87 @@ public class ToolInvocationContext {
         this.budget = budget
         this.budgetModeFn = budgetModeFn
         this.skills = skills
+        this.toolSetSnapshot = toolSetSnapshot
+        this.trustedControl = trustedControl
+    }
+
+    // AgentCore installs this once before publishing the context to tools so
+    // nested calls charge and durably report against the owning Run ledger.
+    public func setBudgetChargeHandler(
+        handler: (BudgetCharge) -> Result<ExecutionUsage>
+    ): Unit {
+        executionControlLock.lock()
+        try {
+            if (budgetChargeHandler.isSome()) {
+                throw IllegalStateException(
+                    "tool invocation budget charge handler is already installed"
+                )
+            }
+            budgetChargeHandler = Some(handler)
+        } finally {
+            executionControlLock.unlock()
+        }
+    }
+
+    // Core installs the scheduler once. A parent Operation identity is
+    // required so only a committed Program or plugin root can yield its slot.
+    public func setNestedToolScheduler(
+        handler: (OperationId, () -> Result<Unit>) -> Result<Unit>
+    ): Unit {
+        executionControlLock.lock()
+        try {
+            if (nestedToolScheduler.isSome()) {
+                throw IllegalStateException(
+                    "tool invocation nested scheduler is already installed"
+                )
+            }
+            nestedToolScheduler = Some(handler)
+        } finally {
+            executionControlLock.unlock()
+        }
+    }
+
+    public func chargeBudget(charge: BudgetCharge): Result<ExecutionUsage> {
+        executionControlLock.lock()
+        let handler = try {
+            budgetChargeHandler
+        } finally {
+            executionControlLock.unlock()
+        }
+        match (handler) {
+            case Some(value) => value(charge)
+            case None => budget.reserve(charge)
+        }
+    }
+
+    // The scheduler runs the callback without holding its coordination lock
+    // or a store transaction; it returns the same exclusive Run slot after
+    // the child settles.
+    public func withNestedToolSlot(
+        parentOperationId: OperationId,
+        action: () -> Result<Unit>
+    ): Result<Unit> {
+        if (currentBudgetMode() == BudgetMode.Draining) {
+            return Result.Err(AgentError(
+                AgentErrorKind.BudgetExceeded,
+                "budget.drain_exhausted",
+                "nested tool work is not permitted while the run is draining"
+            ))
+        }
+        executionControlLock.lock()
+        let scheduler = try {
+            nestedToolScheduler
+        } finally {
+            executionControlLock.unlock()
+        }
+        match (scheduler) {
+            case Some(value) => value(parentOperationId, action)
+            case None => Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "tool.scheduler_unavailable",
+                "nested tool execution requires the parent Run scheduler"
+            ))
+        }
     }
 
     public func nextSequence(): Int64 {

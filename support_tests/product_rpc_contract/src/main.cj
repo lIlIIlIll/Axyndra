@@ -49,9 +49,11 @@ main(): Int64 {
             return 0
         }
         expect(
-            server.ready().contains("\"type\":\"ready\"") && server.ready().contains("\"maxFrameBytes\":1048576") &&
-                server.ready().contains("\"supportedProtocolVersions\":[1,2]"),
-            "RPC advertises its frame contract"
+            server.ready().contains("\"type\":\"ready\"") &&
+                server.ready().contains("\"maxFrameBytes\":1048576") &&
+                server.ready().contains("\"supportedProtocolVersions\":[1,2]") &&
+                server.ready().contains("\"supportedInteractionProfiles\":[\"basic-v1\"]"),
+            "RPC advertises its frame and interaction contract"
         )
         let approvalWire = productApprovalFrame(
             ApprovalRequest(
@@ -72,11 +74,16 @@ main(): Int64 {
                 approvalWire.field("capability").getOrThrow().text == "workspace.write" &&
                 approvalWire.field("resource").getOrThrow().text == "workspace/note.txt" &&
                 approvalWire.field("risk").getOrThrow().text == "medium" &&
+                approvalWire.field("sessionApprovalAllowed").getOrThrow().asBool() &&
                 approvalWire.field("preview").getOrThrow().field("path").getOrThrow().text == "note.txt",
             "RPC approval frame exposes the shared structured preview"
         )
         let expectedCommands = [
             "negotiate_protocol",
+            "negotiate_interactions",
+            "get_plugin_commands",
+            "plugin_command",
+            "interaction_response",
             "prompt",
             "steer",
             "follow_up",
@@ -121,8 +128,23 @@ main(): Int64 {
         ]
         expect(
             availableRpcCommands().size == expectedCommands.size && allCommandsPresent(expectedCommands),
-            "RPC exports the pinned 42-command inventory"
+            "RPC exports the pinned 46-command inventory"
         )
+        expect(server.handle(
+            "{\"id\":\"interaction-invalid-profile\",\"type\":\"negotiate_interactions\",\"profile\":\"unbounded\"}"
+        ).contains("\"success\":false"), "RPC rejects unsupported interaction profiles")
+        expect(server.handle(
+            "{\"id\":\"interaction-unnegotiated\",\"type\":\"interaction_response\",\"interactionId\":\"missing\"}"
+        ).contains("\"success\":false"), "RPC does not accept interaction responses before negotiation")
+        expect(server.handle(
+            "{\"id\":\"interaction-negotiate\",\"type\":\"negotiate_interactions\",\"profile\":\"basic-v1\"}"
+        ).contains("\"interactionProfile\":\"basic-v1\""), "RPC enables the finite basic interaction profile")
+        expect(server.handle(
+            "{\"id\":\"interaction-stale\",\"type\":\"interaction_response\",\"interactionId\":\"missing\"}"
+        ).contains("\"there is no pending interaction\""), "RPC rejects responses without a pending interaction")
+        expect(server.handle(
+            "{\"id\":\"interaction-disable\",\"type\":\"negotiate_interactions\",\"profile\":\"none\"}"
+        ).contains("\"interactionProfile\":\"none\""), "RPC can disable the interaction responder")
         let discovery = decodeAgentValue(
             server.handle(
                 "{\"id\":\"commands\",\"type\":\"get_available_commands\"}"
@@ -376,6 +398,15 @@ main(): Int64 {
                 ", progress=" + progressVisible.toString() + ", childEvent=" +
                 childEventVisible.toString() + ", result=" + taskResultVisible.toString() +
                 ", frames=" + output.snapshot()
+        )
+        let inspectionAccepted = server.handle(
+            "{\"id\":\"inspect-1\",\"type\":\"prompt\",\"message\":\"/inspect\"}"
+        ).contains("\"success\":true")
+        expect(
+            inspectionAccepted && output.awaitContains(
+                "\"type\":\"prompt_result\",\"id\":\"inspect-1\",\"agentInvoked\":false"
+            ) && output.contains("tool_visibility_digest:"),
+            "RPC exposes the same typed Run inspection diagnostics without invoking the agent"
         )
         expect(
             server.handle("{\"id\":\"sub-finished\",\"type\":\"get_subagents\"}").contains("\"subagents\":[]") &&

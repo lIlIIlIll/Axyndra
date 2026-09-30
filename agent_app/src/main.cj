@@ -26,6 +26,9 @@ import tool_runtime.*
 
 main(): Int64 {
     let rawArguments = getCommandLine()
+    if (isProductToolProgramWorker(rawArguments)) {
+        return runProductToolProgramWorker(rawArguments)
+    }
     if (isProductProcessBrokerWorker(rawArguments)) {
         return runProductProcessBrokerWorker(rawArguments)
     }
@@ -229,13 +232,14 @@ func localMaintenanceCommand(
     } else {
         ""
     }
-    for (value in [
-        "read", "config", "grep", "agents", "worktree", "search",
-        "gc", "usage", "stats", "grievances", "ssh"
-    ] where value == candidate) {
-        return candidate
+    if (candidate == "read" || candidate == "config" || candidate == "grep" ||
+        candidate == "agents" || candidate == "worktree" || candidate == "search" ||
+        candidate == "gc" || candidate == "usage" || candidate == "stats" ||
+        candidate == "grievances" || candidate == "ssh") {
+        candidate
+    } else {
+        ""
     }
-    ""
 }
 
 func runLocalMaintenanceCommand(
@@ -3079,6 +3083,33 @@ class ProductTuiBackend <: AgentTuiBackend {
         session.answerAsk(requestId, productResolution).isOk()
     }
 
+    public func pluginCommands(): Array<String> {
+        let routes = ArrayList<String>()
+        for (command in session.javascriptPluginCommands()) {
+            routes.add(command.routeName)
+        }
+        routes.toArray()
+    }
+
+    public func runPluginCommand(
+        routeName: String,
+        arguments: String,
+        events: TuiAgentEventSink
+    ): TuiTurnResult {
+        match (session.invokeJavaScriptPluginCommand(
+            routeName, arguments, {kind, message =>
+                events(TuiAgentEvent.PluginNotice(kind, message))
+            }
+        )) {
+            case Result.Ok(_) => TuiTurnResult("", "plugin command completed")
+            case Result.Err(error) =>
+                events(TuiAgentEvent.Warning(
+                    "Plugin command failed (" + error.code + ")", error.message
+                ))
+                TuiTurnResult("", "plugin command failed")
+        }
+    }
+
     public func cancel(): Unit {
         let focused = focusedSubagent()
         if (focused == "") {
@@ -3607,7 +3638,7 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     private func forwardAsk(request: ProductAskRequest): Unit {
-        let target = currentSink()
+        let target = observerTarget()
         match (target) {
             case Some(events) =>
                 let questions = ArrayList<TuiAskQuestion>()
@@ -3638,7 +3669,13 @@ class ProductTuiBackend <: AgentTuiBackend {
                         TuiAskRequest(
                             request.requestId,
                             questions.toArray(),
-                            callId: request.callId
+                            callId: request.callId,
+                            runId: request.runId,
+                            sessionId: request.sessionId.value,
+                            operationId: request.operationId,
+                            commandId: request.commandId,
+                            epoch: request.epoch,
+                            interactionKind: request.interactionKind
                         )
                     )
                 )
@@ -3880,6 +3917,7 @@ func tuiApprovalEvent(
         tuiApprovalGrantLabel(details.metadata.grantScope),
         "Approval details · " + details.toolName,
         inspect,
+        approval.sessionApprovalAllowed,
         ownerId
     )
 }

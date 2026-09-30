@@ -278,6 +278,9 @@ func toolCatalogValue(value: ToolSetSnapshot): AgentValue {
             ValueField("description", textValue(entry.description)),
             ValueField("input_schema", entry.inputSchema),
             ValueField("executor_version", textValue(entry.executorVersion)),
+            ValueField("implementation_fingerprint", textValue(entry.implementationFingerprint)),
+            ValueField("schema_digest", textValue(entry.schemaDigest)),
+            ValueField("available_at_snapshot", boolValue(entry.availableAtSnapshot)),
             ValueField("required_capabilities", listValue(capabilities.toArray()))
         ]))
     }

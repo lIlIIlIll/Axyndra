@@ -1,0 +1,11 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "plugin_performance_baseline"
+  organization = ""
+  description = "Reproducible extension performance baseline probe"
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "agent_extension_runtime" = { path = "../../agent_extension_runtime", output-type = "static" }
+  "process4cj" = { path = "../../libs/process4cj", output-type = "static" }

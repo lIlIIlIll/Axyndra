@@ -35,6 +35,24 @@ func runProcessRemediationContracts(root: String): Unit {
         concurrent.exitCode == 0 && concurrent.stdout == "done" && concurrent.stderr.size == 131072,
         "host execution drains stdout and stderr concurrently"
     )
+    let descriptorsBefore = Directory.readFrom("/proc/self/fd").size
+    for (index in 0..12) {
+        let result = processes.execute(ProcessRequest(
+            "/bin/true",
+            operationId: OperationId("process-fd-" + index.toString()),
+            timeoutMillis: 3000,
+            sandboxMode: ProcessSandboxMode.Host,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.HostNetwork))
+        )).value().getOrThrow()
+        expect(result.exitCode == 0 && !result.timedOut,
+            "short one-shot process exits normally during handle soak")
+    }
+    let descriptorsAfter = Directory.readFrom("/proc/self/fd").size
+    expect(
+        descriptorsAfter <= descriptorsBefore + 1,
+        "completed process launches do not accumulate pipe handles: before=" +
+            descriptorsBefore.toString() + " after=" + descriptorsAfter.toString()
+    )
     let stubbornOperation = OperationId("stubborn-output-cancel")
     let stubborn = spawn {
         processes.execute(ProcessRequest(
@@ -49,6 +67,38 @@ func runProcessRemediationContracts(root: String): Unit {
         sleep(Duration.millisecond * 10)
     }
     expect(processes.hasActiveOperation(stubbornOperation), "stubborn process enters the owned registry")
+    let startupReadyFile = directory + "/startup-cancel.ready"
+    let startupOperation = OperationId("startup-cancel")
+    let startup = spawn {
+        processes.execute(ProcessRequest(
+            "/bin/sh",
+            operationId: startupOperation,
+            arguments: ["-c", "sleep 5; printf ready > \"$1\"; sleep 5", "startup-cancel", startupReadyFile],
+            timeoutMillis: 10000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        ))
+    }
+    try {
+        let startupDeadline = MonoTime.now() + Duration.second * 3
+        while (!processes.hasActiveOperation(startupOperation) && MonoTime.now() < startupDeadline) {
+            sleep(Duration.millisecond * 10)
+        }
+        expect(processes.hasActiveOperation(startupOperation),
+            "startup process becomes cancellable before command readiness")
+        expect(!exists(Path(startupReadyFile)), "startup delay has not completed before cancellation")
+        expect(processes.cancel(startupOperation).isOk(), "startup cancellation is accepted")
+        let startupResult = startup.get().value().getOrThrow()
+        expect(
+            startupResult.exitCode != 0 && !startupResult.timedOut &&
+                !exists(Path(startupReadyFile)) && !processes.hasActiveOperation(startupOperation),
+            "startup cancellation is distinct from timeout and releases ownership"
+        )
+    } finally {
+        let _ = processes.cancel(startupOperation)
+        let _ = startup.get()
+        try { let _ = removeIfExists(startupReadyFile) } catch (_: Exception) {}
+    }
     let cancelStarted = MonoTime.now()
     expect(processes.cancel(stubbornOperation).isOk(), "stubborn process cancellation is accepted")
     let stubbornResult = stubborn.get().value().getOrThrow()
@@ -58,9 +108,53 @@ func runProcessRemediationContracts(root: String): Unit {
             !processes.hasActiveOperation(stubbornOperation),
         "ignored SIGTERM escalates and releases the owned process"
     )
+    let cooperativeReadyFile = directory + "/cooperative-cancel.ready"
+    let cooperativeStoppedFile = directory + "/cooperative-cancel.stopped"
+    let cooperativeOperation = OperationId("cooperative-cancel")
+    let cooperative = spawn {
+        processes.execute(ProcessRequest(
+            "/bin/sh",
+            operationId: cooperativeOperation,
+            arguments: [
+                "-c",
+                "trap 'printf stopped > \"$2\"; exit 0' TERM; printf ready > \"$1\"; while :; do :; done",
+                "cooperative",
+                cooperativeReadyFile,
+                cooperativeStoppedFile
+            ],
+            timeoutMillis: 10000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        ))
+    }
+    try {
+        let cooperativeDeadline = MonoTime.now() + Duration.second * 3
+        while ((!exists(Path(cooperativeReadyFile)) ||
+                !processes.hasActiveOperation(cooperativeOperation)) &&
+               MonoTime.now() < cooperativeDeadline) {
+            sleep(Duration.millisecond * 10)
+        }
+        expect(exists(Path(cooperativeReadyFile)) &&
+                processes.hasActiveOperation(cooperativeOperation),
+            "cooperative process is ready before cancellation")
+        expect(processes.cancel(cooperativeOperation).isOk(),
+            "cooperative cancellation is accepted")
+        let cooperativeResult = cooperative.get().value().getOrThrow()
+        expect(
+            exists(Path(cooperativeStoppedFile)) && !cooperativeResult.timedOut &&
+                !processes.hasActiveOperation(cooperativeOperation),
+            "TERM handler completes before forced escalation"
+        )
+    } finally {
+        let _ = processes.cancel(cooperativeOperation)
+        let _ = cooperative.get()
+        try { let _ = removeIfExists(cooperativeReadyFile) } catch (_: Exception) {}
+        try { let _ = removeIfExists(cooperativeStoppedFile) } catch (_: Exception) {}
+    }
     runEscapedDescendantCancellationContract(directory, processes)
     runThreadedDescendantCancellationContract(directory, processes)
     runDisplayServerEnvironmentContracts(directory, processes)
+    runEvalStartupFailureContract(processes)
     let catalog = ToolCatalog()
     installLocalTools(catalog, workspace, processes).value().getOrThrow()
     let pipeline = ToolPipeline(catalog, InMemoryOperationRuntimePort(), RecordingAuditPort(), ProductIds(),
@@ -92,8 +186,10 @@ func runProcessRemediationContracts(root: String): Unit {
         let _ = source.cancel()
         let _ = pipeline.cancel(context.runId)
         expect(first.get().isError() && second.get().isError(), "cancel both concurrent grep calls in the run")
-        expect((MonoTime.now() - started).toMilliseconds() < 3000 && !otherDone.load(),
-            "grep cancellation is prompt and does not stop an unrelated run")
+        let cancellationMillis = (MonoTime.now() - started).toMilliseconds()
+        expect(cancellationMillis < 3000 && !otherDone.load(),
+            "grep cancellation remains prompt and isolated: elapsed=" + cancellationMillis.toString() +
+                "ms unrelated_completed=" + otherDone.load().toString())
     } finally {
         let _ = source.cancel()
         let _ = otherSource.cancel()
@@ -103,7 +199,61 @@ func runProcessRemediationContracts(root: String): Unit {
     }
     expect(executePipelineCall(pipeline, context, blockingGrep(directory + "/first")).isError(), "already cancelled grep cannot start a new operation")
     processes.close().value().getOrThrow()
-    println("process output and concurrent grep cancellation contracts passed")
+    println("process lifecycle, eval startup, output and cancellation contracts passed")
+}
+
+func runEvalStartupFailureContract(processes: LocalProcessPort): Unit {
+    let sessionId = SessionId("silent-eval-startup")
+    let failedOperation = OperationId("silent-eval-startup")
+    let failed = processes.executeEval(
+        sessionId,
+        "py",
+        "40 + 2",
+        false,
+        ProcessRequest(
+            "/usr/bin/true",
+            operationId: failedOperation,
+            timeoutMillis: 1000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        )
+    )
+    match (failed) {
+        case Result.Err(error) =>
+            expect(
+                error.code == "eval.runtime_write_failed",
+                "silent eval startup failure has a stable transport diagnostic"
+            )
+        case Result.Ok(value) =>
+            expect(
+                value.exitCode == -1 && value.transportClosed && !value.timedOut,
+                "silent eval runtime exit is classified as a closed transport"
+            )
+    }
+    expect(!processes.hasActiveOperation(failedOperation),
+        "failed eval startup releases its active process registration")
+    let recoveredOperation = OperationId("silent-eval-recovered")
+    let recovered = match (processes.executeEval(
+        sessionId,
+        "py",
+        "40 + 2",
+        false,
+        ProcessRequest(
+            "python3",
+            operationId: recoveredOperation,
+            timeoutMillis: 3000,
+            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
+            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
+        )
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+    }
+    expect(
+        recovered.exitCode == 0 && recovered.stdout.trimAscii() == "42" &&
+            !recovered.transportClosed && !processes.hasActiveOperation(recoveredOperation),
+        "eval starts a fresh process after a no-response runtime"
+    )
 }
 
 func runEscapedDescendantCancellationContract(
@@ -226,8 +376,8 @@ func runDisplayServerEnvironmentContracts(
             case Result.Err(error) => error.message
         }
         expect(
-            pathProbe.isOk() && pathValue == callerPath,
-            "display-server process preserves the caller PATH for installed clients"
+            pathProbe.isOk() && pathValue == "/usr/local/bin:/usr/bin:/bin",
+            "display-server host process replaces caller PATH with fixed system directories"
         )
         setVariable("XAUTHORITY", authority)
         let explicit = displayEnvironmentProbe(processes, output)
@@ -312,7 +462,7 @@ func blockingGrep(name: String): ToolCall {
 }
 
 func waitGrepProcess(path: String): Unit {
-    let deadline = MonoTime.now() + Duration.second * 10
+    let deadline = MonoTime.now() + Duration.second * 6
     while (MonoTime.now() < deadline) {
         // Observe the actual executable and exact FIFO argument directly;
         // an extra SDK subprocess would introduce its own wait lifecycle.

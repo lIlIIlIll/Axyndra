@@ -68,53 +68,32 @@ public class IsolatedPluginLaunchRequest {
     public let executionKind: ExtensionExecutionKind
     public let generation: UInt64
     public let grantedCapabilities: Array<String>
+    public let packageRoot: String
     public let ambientAuthority: Bool
 
     init(
         manifest: SignedExtensionPackageManifest,
         executionKind: ExtensionExecutionKind,
         generation: UInt64,
-        grantedCapabilities: Array<String>
+        grantedCapabilities: Array<String>,
+        packageRoot!: String = ""
     ) {
         this.manifest = manifest
         this.executionKind = executionKind
         this.generation = generation
         this.grantedCapabilities = grantedCapabilities
+        this.packageRoot = packageRoot.trimAscii()
         // Process and WASM plugins receive only explicit host capabilities.
         this.ambientAuthority = false
     }
 }
-
-public class IsolatedPluginInvocation {
-    public let id: String
-    public let method: String
-    public let payloadJson: String
-    public let timeoutMillis: Int64
-
-    public init(
-        id: String,
-        method: String,
-        payloadJson: String,
-        timeoutMillis!: Int64 = 30000
-    ) {
-        if (id.trimAscii() == "" || method.trimAscii() == "" ||
-            payloadJson.trimAscii() == "" ||
-            timeoutMillis < 1 || timeoutMillis > 60000) {
-            throw IllegalArgumentException("isolated plugin invocation is invalid")
-        }
-        this.id = id.trimAscii()
-        this.method = method.trimAscii()
-        this.payloadJson = payloadJson.trimAscii()
-        this.timeoutMillis = timeoutMillis
-    }
-}
-
 public func validateIsolatedPluginPackage(
     manifest: SignedExtensionPackageManifest,
     executionKind: ExtensionExecutionKind,
     generation: UInt64,
     capabilityCeiling: Array<String>,
-    verifier: ExtensionPackageSignatureVerifier
+    verifier: ExtensionPackageSignatureVerifier,
+    packageRoot!: String = ""
 ): SafeLifecycleResult<IsolatedPluginLaunchRequest> {
     if (executionKind != ExtensionExecutionKind.ProcessPlugin &&
         executionKind != ExtensionExecutionKind.WasmComponent) {
@@ -139,7 +118,8 @@ public func validateIsolatedPluginPackage(
         return SafeLifecycleResult.Err("extension package signature verification failed")
     }
     SafeLifecycleResult.Ok(IsolatedPluginLaunchRequest(
-        manifest, executionKind, generation, manifest.requestedCapabilities
+        manifest, executionKind, generation, manifest.requestedCapabilities,
+        packageRoot: packageRoot
     ))
 }
 

@@ -78,7 +78,7 @@ func prepareDirectOperation(
     context: ToolInvocationContext,
     prepared: PreparedToolInvocation
 ): Result<Unit> {
-    pipeline.operationRuntime().prepareProgramSubOperation(
+    pipeline.operationRuntime().prepareTrustedControlOperation(
         prepared.operationId,
         context.runId,
         ItemId("sdk-direct-tool-call-" + prepared.operationId.value),

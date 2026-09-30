@@ -27,6 +27,9 @@
   "agent_mcp": [
     "agent_mcp/src/client_test.cj"
   ],
+  "agent_extension_runtime": [
+    "agent_extension_runtime/src/plugin_package_test.cj"
+  ],
   "model_adapters": [
     "model_adapters/src/adapters_test.cj"
   ],
@@ -44,7 +47,10 @@
   ],
   "agent_product": [
     "agent_product/src/application_handoff_test.cj",
+    "agent_product/src/local_infrastructure_test.cj",
+    "agent_product/src/plugin_runtime_test.cj",
     "agent_product/src/provider_dialect_test.cj",
+    "agent_product/src/run_inspection_test.cj",
     "agent_product/src/skill_reference_discovery_test.cj",
     "agent_product/src/skill_routing_test.cj"
   ],

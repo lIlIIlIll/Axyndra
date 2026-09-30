@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -27,6 +28,8 @@
 #define MAX_HEADER 16384
 #define BUFFER_SIZE 8192
 #define POLL_TIMEOUT_MS 100
+#define PROXY_TOKEN_BYTES 32
+#define PROXY_TOKEN_HEX_LENGTH (PROXY_TOKEN_BYTES * 2)
 
 typedef struct {
     int family;
@@ -66,6 +69,29 @@ static int write_all(int fd, const void *data, size_t length) {
         bytes += written;
         length -= (size_t)written;
     }
+    return 0;
+}
+static int proxy_random_bytes(unsigned char *buffer, size_t length) {
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t count = getrandom(buffer + offset, length - offset, 0);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return -1;
+        offset += (size_t)count;
+    }
+    return 0;
+}
+
+static int make_proxy_token(char *token, size_t capacity) {
+    static const char hex[] = "0123456789abcdef";
+    unsigned char random[PROXY_TOKEN_BYTES];
+    if (capacity <= PROXY_TOKEN_HEX_LENGTH ||
+        proxy_random_bytes(random, sizeof(random)) < 0) return -1;
+    for (size_t index = 0; index < sizeof(random); ++index) {
+        token[index * 2] = hex[random[index] >> 4];
+        token[index * 2 + 1] = hex[random[index] & 0x0f];
+    }
+    token[PROXY_TOKEN_HEX_LENGTH] = '\0';
     return 0;
 }
 
@@ -348,7 +374,54 @@ static void gateway_stop_workers(pid_t *workers, size_t *count) {
     }
 }
 
-static int run_gateway(const char *socket_path, const policy_t *policy) {
+static int proxy_connection(int client, const char *socket_path, const char *proxy_token);
+
+static int open_gateway_proxy_listener(
+    const char *port_file,
+    char *proxy_token,
+    size_t proxy_token_capacity
+) {
+    if (make_proxy_token(proxy_token, proxy_token_capacity) < 0) {
+        die("cannot generate gateway proxy credential");
+    }
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0) die("cannot create gateway proxy listener");
+    int reuse = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listener, (struct sockaddr *)&address, sizeof(address)) < 0 ||
+        listen(listener, 64) < 0) die("cannot bind gateway proxy listener");
+    socklen_t address_length = sizeof(address);
+    if (getsockname(listener, (struct sockaddr *)&address, &address_length) < 0) {
+        die("cannot read gateway proxy port");
+    }
+    char credential[PROXY_TOKEN_HEX_LENGTH + 2];
+    int credential_length = snprintf(credential, sizeof(credential), "%s\n", proxy_token);
+    if (credential_length <= 0 || write_all(
+        STDOUT_FILENO, credential, (size_t)credential_length
+    ) < 0) die("cannot publish gateway proxy credential");
+    int file = open(port_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (file < 0) die("cannot publish gateway proxy port");
+    char port[16];
+    int length = snprintf(port, sizeof(port), "%u\n", (unsigned)ntohs(address.sin_port));
+    if (length <= 0 || write_all(file, port, (size_t)length) < 0 || fsync(file) < 0) {
+        close(file);
+        die("cannot publish gateway proxy port");
+    }
+    close(file);
+    return listener;
+}
+
+static int run_gateway(
+    const char *socket_path,
+    const char *proxy_port_file,
+    const policy_t *policy
+) {
+    if (prctl(PR_SET_DUMPABLE, 0) != 0) die("cannot protect gateway credentials");
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server < 0) die("cannot create gateway socket");
     struct sockaddr_un address;
@@ -361,37 +434,60 @@ static int run_gateway(const char *socket_path, const policy_t *policy) {
     }
     snprintf(address.sun_path, sizeof(address.sun_path), "%s", socket_path);
     unlink(socket_path);
+    unlink(proxy_port_file);
     umask(0077);
-    if (bind(server, (struct sockaddr *)&address, sizeof(address)) < 0 || listen(server, 64) < 0) die("cannot bind gateway socket");
+    if (bind(server, (struct sockaddr *)&address, sizeof(address)) < 0 ||
+        listen(server, 64) < 0) die("cannot bind gateway socket");
     chmod(socket_path, 0600);
+    char proxy_token[PROXY_TOKEN_HEX_LENGTH + 1];
+    int proxy_server = open_gateway_proxy_listener(
+        proxy_port_file, proxy_token, sizeof(proxy_token)
+    );
     signal(SIGPIPE, SIG_IGN);
     pid_t workers[MAX_GATEWAY_WORKERS];
     size_t worker_count = 0;
     while (true) {
         gateway_reap_workers(workers, &worker_count);
-        int client = accept(server, NULL, NULL);
-        if (client < 0) {
+        struct pollfd listeners[2] = {
+            {.fd = server, .events = POLLIN},
+            {.fd = proxy_server, .events = POLLIN},
+        };
+        int ready = poll(listeners, 2, -1);
+        if (ready < 0) {
             if (errno == EINTR) continue;
             gateway_stop_workers(workers, &worker_count);
+            close(proxy_server);
             close(server);
+            unlink(proxy_port_file);
             unlink(socket_path);
             return 1;
         }
-        if (worker_count >= MAX_GATEWAY_WORKERS) {
+        for (size_t listener_index = 0; listener_index < 2; ++listener_index) {
+            if (!(listeners[listener_index].revents & POLLIN)) continue;
+            int client = accept(listeners[listener_index].fd, NULL, NULL);
+            if (client < 0) {
+                if (errno == EINTR) continue;
+                continue;
+            }
+            if (worker_count >= MAX_GATEWAY_WORKERS) {
+                close(client);
+                continue;
+            }
+            pid_t parent_pid = getpid();
+            pid_t child = fork();
+            if (child == 0) {
+                close(proxy_server);
+                close(server);
+                if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent_pid) _exit(127);
+                int result = listener_index == 0
+                    ? gateway_connection(client, policy)
+                    : proxy_connection(client, socket_path, proxy_token);
+                close(client);
+                _exit(result == 0 ? 0 : 1);
+            }
             close(client);
-            continue;
+            if (child > 0) workers[worker_count++] = child;
         }
-        pid_t parent_pid = getpid();
-        pid_t child = fork();
-        if (child == 0) {
-            close(server);
-            if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent_pid) _exit(127);
-            int result = gateway_connection(client, policy);
-            close(client);
-            _exit(result == 0 ? 0 : 1);
-        }
-        close(client);
-        if (child > 0) workers[worker_count++] = child;
         gateway_reap_workers(workers, &worker_count);
     }
 }
@@ -449,6 +545,59 @@ static bool find_header_value(const char *headers, const char *name, char *value
         cursor = line_end + 1;
     }
     return false;
+}
+static int encode_base64(
+    const unsigned char *input,
+    size_t length,
+    char *output,
+    size_t capacity
+) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t required = 4 * ((length + 2) / 3);
+    if (capacity <= required) return -1;
+    size_t source = 0;
+    size_t target = 0;
+    while (source < length) {
+        size_t remaining = length - source;
+        uint32_t block = (uint32_t)input[source++] << 16;
+        if (remaining > 1) block |= (uint32_t)input[source++] << 8;
+        if (remaining > 2) block |= input[source++];
+        output[target++] = alphabet[(block >> 18) & 0x3f];
+        output[target++] = alphabet[(block >> 12) & 0x3f];
+        output[target++] = remaining > 1 ? alphabet[(block >> 6) & 0x3f] : '=';
+        output[target++] = remaining > 2 ? alphabet[block & 0x3f] : '=';
+    }
+    output[target] = '\0';
+    return (int)target;
+}
+
+static bool proxy_authenticated(const char *headers, const char *proxy_token) {
+    if (proxy_token == NULL) return true;
+    char supplied[160];
+    if (!find_header_value(
+        headers, "Proxy-Authorization", supplied, sizeof(supplied)
+    )) return false;
+    char credentials[PROXY_TOKEN_HEX_LENGTH + 9];
+    int credential_length = snprintf(
+        credentials, sizeof(credentials), "axyndra:%s", proxy_token
+    );
+    char encoded[128];
+    if (credential_length <= 0 || encode_base64(
+        (const unsigned char *)credentials,
+        (size_t)credential_length,
+        encoded,
+        sizeof(encoded)
+    ) < 0) return false;
+    char expected[136];
+    int expected_length = snprintf(expected, sizeof(expected), "Basic %s", encoded);
+    size_t supplied_length = strlen(supplied);
+    if (expected_length <= 0 || supplied_length != (size_t)expected_length) return false;
+    unsigned char difference = 0;
+    for (size_t index = 0; index < supplied_length; ++index) {
+        difference |= (unsigned char)(supplied[index] ^ expected[index]);
+    }
+    return difference == 0;
 }
 
 static int connect_gateway(const char *socket_path, const char *host, uint16_t port) {
@@ -529,11 +678,54 @@ static int rewrite_proxy_request(const char *headers, size_t length, char *outpu
     output[prefix_length + rewritten_path_length + suffix_length] = '\0';
     return (int)(prefix_length + rewritten_path_length + suffix_length);
 }
-static int proxy_connection(int client, const char *socket_path) {
+static int strip_proxy_authorization(
+    const char *headers,
+    size_t length,
+    char *output,
+    size_t capacity
+) {
+    const char *header_end = strstr(headers, "\r\n\r\n");
+    const char *line_end = strstr(headers, "\r\n");
+    if (header_end == NULL || line_end == NULL || length + 1 > capacity) return -1;
+    size_t first_line_length = (size_t)(line_end - headers) + 2;
+    memcpy(output, headers, first_line_length);
+    size_t written = first_line_length;
+    const char *cursor = headers + first_line_length;
+    static const char name[] = "Proxy-Authorization";
+    while (cursor < header_end) {
+        line_end = strstr(cursor, "\r\n");
+        if (line_end == NULL || line_end > header_end) return -1;
+        size_t line_length = (size_t)(line_end - cursor);
+        bool remove = line_length > sizeof(name) - 1 &&
+            strncasecmp(cursor, name, sizeof(name) - 1) == 0 &&
+            cursor[sizeof(name) - 1] == ':';
+        if (!remove) {
+            memcpy(output + written, cursor, line_length + 2);
+            written += line_length + 2;
+        }
+        cursor = line_end + 2;
+    }
+    size_t tail_offset = (size_t)(cursor - headers);
+    size_t tail_length = length - tail_offset;
+    memcpy(output + written, headers + tail_offset, tail_length);
+    written += tail_length;
+    output[written] = '\0';
+    return (int)written;
+}
+
+static int proxy_connection(int client, const char *socket_path, const char *proxy_token) {
     char headers[MAX_HEADER + 1];
     ssize_t length = read_until_headers(client, headers, MAX_HEADER);
     if (length <= 0 || length == -2) return -1;
     headers[length] = '\0';
+    if (!proxy_authenticated(headers, proxy_token)) {
+        static const char required[] =
+            "HTTP/1.1 407 Proxy Authentication Required\r\n"
+            "Proxy-Authenticate: Basic realm=\"Axyndra\"\r\n"
+            "Content-Length: 0\r\nConnection: close\r\n\r\n";
+        write_all(client, required, strlen(required));
+        return -1;
+    }
     char method[32];
     char authority[512];
     if (sscanf(headers, "%31s %511s", method, authority) != 2) return -1;
@@ -558,9 +750,16 @@ static int proxy_connection(int client, const char *socket_path) {
             return -1;
         }
     } else {
+        char rewritten[MAX_HEADER + 1];
+        int rewritten_length = rewrite_proxy_request(
+            headers, (size_t)length, rewritten, sizeof(rewritten)
+        );
         char forwarded[MAX_HEADER + 1];
-        int forwarded_length = rewrite_proxy_request(headers, (size_t)length, forwarded, sizeof(forwarded));
-        if (forwarded_length < 0 || write_all(gateway, forwarded, (size_t)forwarded_length) < 0) {
+        int forwarded_length = rewritten_length < 0 ? -1 : strip_proxy_authorization(
+            rewritten, (size_t)rewritten_length, forwarded, sizeof(forwarded)
+        );
+        if (forwarded_length < 0 ||
+            write_all(gateway, forwarded, (size_t)forwarded_length) < 0) {
             close(gateway);
             return -1;
         }
@@ -641,7 +840,7 @@ static int run_bridge(const char *socket_path, char **target) {
                     pid_t worker = fork();
                     if (worker == 0) {
                         close(listener);
-                        int result = proxy_connection(client, socket_path);
+                        int result = proxy_connection(client, socket_path, NULL);
                         close(client);
                         _exit(result == 0 ? 0 : 1);
                     }
@@ -700,15 +899,16 @@ static bool parse_policy(int argc, char **argv, int start, policy_t *policy) {
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s --gateway --socket PATH [--rule HOST PORT PRIVATE,...]\n", argv[0]);
+        fprintf(stderr, "usage: %s --gateway --socket PATH --proxy-port-file PATH [--rule HOST PORT PRIVATE,...]\n", argv[0]);
         fprintf(stderr, "       %s --bridge --socket PATH -- COMMAND [ARGS...]\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "--gateway") == 0) {
-        if (strcmp(argv[2], "--socket") != 0) return 2;
+        if (argc < 6 || strcmp(argv[2], "--socket") != 0 ||
+            strcmp(argv[4], "--proxy-port-file") != 0) return 2;
         policy_t policy;
-        if (!parse_policy(argc, argv, 4, &policy)) return 2;
-        return run_gateway(argv[3], &policy);
+        if (!parse_policy(argc, argv, 6, &policy)) return 2;
+        return run_gateway(argv[3], argv[5], &policy);
     }
     if (strcmp(argv[1], "--bridge") == 0) {
         if (strcmp(argv[2], "--socket") != 0 || argc < 6 || strcmp(argv[4], "--") != 0) return 2;

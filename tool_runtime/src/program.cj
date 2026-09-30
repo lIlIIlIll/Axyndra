@@ -117,7 +117,7 @@ public func compileRestrictedToolProgram(programId: String, source: String): Res
     }
     let statements = ArrayList<ToolProgramStatement>()
     var sawReturn = false
-    for (raw in source.replace("\n", ";").split(";")) {
+    for (raw in splitRestrictedToolProgramStatements(source)) {
         let line = raw.trimAscii()
         if (line.isEmpty()) { continue }
         if (sawReturn) {
@@ -125,20 +125,36 @@ public func compileRestrictedToolProgram(programId: String, source: String): Res
         }
         if (line.startsWith("const ")) {
             let remainder = line[6..]
-            let marker = " = await "
-            let separator = match (remainder.indexOf(marker)) {
+            let separator = match (remainder.indexOf(" = ")) {
                 case Some(value) => value
-                case None => return programAgentError<ToolProgramIR>("tool_program.parse", "const statement must await a tool call")
+                case None => return programAgentError<ToolProgramIR>(
+                    "tool_program.parse",
+                    "const statement must assign a tool call or bounded expression"
+                )
             }
             let name = remainder[..separator].trimAscii()
             if (!validProgramIdentifier(name)) {
-                return programAgentError<ToolProgramIR>("tool_program.binding", "invalid program binding: ${name}")
+                return programAgentError<ToolProgramIR>("tool_program.binding", "invalid program binding: "+name)
             }
-            let invocation = match (parseProgramToolInvocation(remainder[separator + marker.size..])) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
+            let authoredExpression = remainder[separator + 3..].trimAscii()
+            if (authoredExpression.startsWith("await ")) {
+                let invocation = match (parseProgramToolInvocation(authoredExpression[6..])) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => return Result.Err(error)
+                }
+                statements.add(ToolProgramStatement.Let(
+                    name, ToolProgramExpression.Tool(invocation)
+                ))
+            } else {
+                let expression = match (parseProgramBindingExpression(authoredExpression)) {
+                    case Some(value) => value
+                    case None => return programAgentError<ToolProgramIR>(
+                        "tool_program.parse",
+                        "const expression must be a field, bounded map/filter, or count reduction"
+                    )
+                }
+                statements.add(ToolProgramStatement.Let(name, expression))
             }
-            statements.add(ToolProgramStatement.Let(name, ToolProgramExpression.Tool(invocation)))
         } else if (line.startsWith("return ")) {
             let returned = line[7..].trimAscii()
             if (returned.startsWith("await ")) {
@@ -147,10 +163,27 @@ public func compileRestrictedToolProgram(programId: String, source: String): Res
                     case Result.Err(error) => return Result.Err(error)
                 }
                 statements.add(ToolProgramStatement.Return(ToolProgramExpression.Tool(invocation)))
-            } else if (validProgramIdentifier(returned)) {
-                statements.add(ToolProgramStatement.Return(ToolProgramExpression.Variable(returned)))
             } else {
-                return programAgentError<ToolProgramIR>("tool_program.parse", "return must name a binding or await a tool call")
+                let literal: ?AgentValue = try {
+                    Some(parseUnifiedJson(returned, maxBytes: 262144, maxDepth: 16))
+                } catch (_: JsonException) {
+                    None
+                }
+                match (literal) {
+                    case Some(value) => statements.add(
+                        ToolProgramStatement.Return(ToolProgramExpression.Literal(value))
+                    )
+                    case None => if (validProgramIdentifier(returned)) {
+                        statements.add(ToolProgramStatement.Return(
+                            ToolProgramExpression.Variable(returned)
+                        ))
+                    } else {
+                        return programAgentError<ToolProgramIR>(
+                            "tool_program.parse",
+                            "return must be a JSON literal, binding, or awaited tool call"
+                        )
+                    }
+                }
             }
             sawReturn = true
         } else {
@@ -165,6 +198,101 @@ public func compileRestrictedToolProgram(programId: String, source: String): Res
     }
 }
 
+func splitRestrictedToolProgramStatements(source: String): Array<String> {
+    let statements = ArrayList<String>()
+    let bytes = unsafe { source.rawData() }
+    var start: Int64 = 0
+    var quoteByte: Byte = 0
+    var escaped = false
+    var expressionDepth: Int64 = 0
+    for (index in 0..bytes.size) {
+        let byte = bytes[index]
+        if (quoteByte != 0) {
+            if (escaped) {
+                escaped = false
+            } else if (byte == b'\\') {
+                escaped = true
+            } else if (byte == quoteByte) {
+                quoteByte = 0
+            }
+        } else if (byte == b'"' || byte == b'\'') {
+            quoteByte = byte
+        } else if (byte == b'{' || byte == b'[' || byte == b'(') {
+            expressionDepth++
+        } else if (byte == b'}' || byte == b']' || byte == b')') {
+            if (expressionDepth > 0) { expressionDepth-- }
+        } else if (expressionDepth == 0 &&
+            (byte == b';' || byte == b'\n' || byte == b'\r')) {
+            statements.add(source[start..index])
+            start = index + 1
+        }
+    }
+    statements.add(source[start..])
+    statements.toArray()
+}
+
+func parseProgramBindingExpression(source: String): ?ToolProgramExpression {
+    let value = source.replace(" ", "")
+    let reduceSuffix = ".reduce((total,item)=>total+1,0)"
+    if (value.endsWith(reduceSuffix)) {
+        let sourceName = value[..value.size - reduceSuffix.size]
+        if (validProgramIdentifier(sourceName)) {
+            return Some(ToolProgramExpression.ReduceCount(sourceName))
+        }
+        return None
+    }
+    let filterMarker = ".filter("
+    let filterStart = match (value.indexOf(filterMarker)) {
+        case Some(index) => index
+        case None => -1
+    }
+    if (filterStart > 0 && value.endsWith(")")) {
+        let sourceName = value[..filterStart]
+        let predicate = value[filterStart + filterMarker.size..value.size - 1]
+        let predicatePrefix = "x=>x."
+        if (validProgramIdentifier(sourceName) && predicate.startsWith(predicatePrefix)) {
+            let fieldName = predicate[predicatePrefix.size..]
+            if (validProgramIdentifier(fieldName)) {
+                return Some(ToolProgramExpression.FilterTruthyField(sourceName, fieldName))
+            }
+        }
+        return None
+    }
+    let mapMarker = ".map("
+    let mapStart = match (value.indexOf(mapMarker)) {
+        case Some(index) => index
+        case None => -1
+    }
+    if (mapStart > 0 && value.endsWith(")")) {
+        let sourceName = value[..mapStart]
+        let selector = value[mapStart + mapMarker.size..value.size - 1]
+        let selectorPrefix = "x=>x."
+        if (validProgramIdentifier(sourceName) && selector.startsWith(selectorPrefix)) {
+            let fieldName = selector[selectorPrefix.size..]
+            if (validProgramIdentifier(fieldName)) {
+                return Some(ToolProgramExpression.MapField(sourceName, fieldName))
+            }
+        }
+        return None
+    }
+    let separator = match (value.indexOf(".")) {
+        case Some(index) => index
+        case None => -1
+    }
+    if (separator > 0) {
+        let sourceName = value[..separator]
+        let fieldName = value[separator + 1..]
+        if (validProgramIdentifier(sourceName) && validProgramIdentifier(fieldName)) {
+            return Some(ToolProgramExpression.Field(sourceName, fieldName))
+        }
+        return None
+    }
+    if (validProgramIdentifier(value)) {
+        Some(ToolProgramExpression.Variable(value))
+    } else {
+        None
+    }
+}
 func parseProgramToolInvocation(source: String): Result<ProgramToolInvocation> {
     let value = source.trimAscii()
     if (!value.startsWith("tools.") || !value.endsWith(")")) {

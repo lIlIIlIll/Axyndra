@@ -95,6 +95,7 @@ public class McpAgentExtension <: TrustedAgentExtension {
         serverId: String,
         client: McpClient,
         tools: Array<McpTool>,
+        observedAtMillis: Int64,
         aliases: McpToolAliasRegistry,
         redact: McpTextRedactor,
         trustedReadOnlyTools: Array<String>
@@ -129,7 +130,10 @@ public class McpAgentExtension <: TrustedAgentExtension {
                         redactMcpValue(tool.inputSchema, redact)
                     ),
                     Capability(CapabilityKind.ExtensionInvoke, resource: serverId),
-                    sideEffecting: !readOnly
+                    sideEffecting: !readOnly,
+                    implementationVersion: "mcp-directory-v1",
+                    implementationFingerprint: "mcp:" + serverId + ":" +
+                        observedAtMillis.toString() + ":" + tool.name
                 ),
                 McpToolExecutor(client, tool.name, redact)
             ))
@@ -171,6 +175,7 @@ public func discoverMcpExtension(
             normalized,
             client,
             directory.tools,
+            observedAtMillis,
             aliases,
             redact,
             trustedReadOnlyTools

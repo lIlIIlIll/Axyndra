@@ -57,8 +57,14 @@ class AcpTypedEventProjectionTests {
                 "warning"
             )
         )).getOrThrow()
-        let completed = acpUpdateFromEvent(acpToolEvent(
+        let progress = acpUpdateFromEvent(acpToolEvent(
             3,
+            AgentEventPayload.ToolOutput(
+                ToolCallId("call-1"), ToolOutputChannel.Progress, "calling-service"
+            )
+        )).getOrThrow()
+        let completed = acpUpdateFromEvent(acpToolEvent(
+            4,
             AgentEventPayload.ToolCompleted(ToolCallId("call-1"), false, 0)
         )).getOrThrow()
 
@@ -69,6 +75,12 @@ class AcpTypedEventProjectionTests {
         @Expect(match (output.field("rawOutput")) {
             case Some(value) => acpTestText(value, "channel") == "stderr" &&
                 acpTestText(value, "delta") == "warning"
+            case None => false
+        })
+        @Expect(acpTestText(progress, "toolCallId"), "call-1")
+        @Expect(match (progress.field("rawOutput")) {
+            case Some(value) => acpTestText(value, "channel") == "progress" &&
+                acpTestText(value, "delta") == "calling-service"
             case None => false
         })
         @Expect(acpTestText(completed, "toolCallId"), "call-1")

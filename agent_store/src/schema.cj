@@ -271,3 +271,46 @@ func v22Migration(): Array<String> {
         "DROP TABLE IF EXISTS tool_operation_intent_receipts"
     ]
 }
+
+func v23Migration(): Array<String> {
+    [
+        "ALTER TABLE model_attempts ADD COLUMN transcript_snapshot TEXT NOT NULL DEFAULT ''"
+    ]
+}
+
+func v24Migration(): Array<String> {
+    [
+        "CREATE TABLE derived_operation_admissions (" +
+            "operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE," +
+            "parent_operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE," +
+            "call_sequence INTEGER NOT NULL CHECK(call_sequence > 0)," +
+            "request_key TEXT NOT NULL CHECK(length(trim(request_key)) > 0)," +
+            "request_digest TEXT NOT NULL CHECK(length(request_digest) > 0)," +
+            "CHECK(operation_id <> parent_operation_id)," +
+            "UNIQUE(parent_operation_id,request_key)," +
+            "UNIQUE(parent_operation_id,call_sequence))"
+    ]
+}
+
+func v25Migration(): Array<String> {
+    [
+        "UPDATE runs SET app_snapshot=json_set(app_snapshot,'$.format_version',3) " +
+            "WHERE app_snapshot IS NOT NULL AND json_valid(app_snapshot)=1 " +
+            "AND json_extract(app_snapshot,'$.format_version')=2"
+    ]
+}
+
+func v26Migration(): Array<String> {
+    [
+        "UPDATE runs SET state='recovery_required'," +
+            "app_snapshot=CASE WHEN app_snapshot IS NOT NULL AND json_valid(app_snapshot)=1 THEN " +
+            "json_set(app_snapshot,'$.status','recovery_required'," +
+            "'$.summary','model Attempt recovery requires a frozen transcript snapshot'," +
+            "'$.error',json_object('kind','recovery_required','code','model.attempt_replay_binding_missing','message','durable model Attempt transcript snapshot is missing','retryable',json('false'),'fallback_allowed',json('false'),'fields',json('[]'))) " +
+            "ELSE app_snapshot END " +
+            "WHERE state='running' AND id IN (" +
+            "SELECT rc.run_id FROM run_continuations rc " +
+            "JOIN model_attempts ma ON ma.id=rc.active_attempt_id " +
+            "WHERE length(trim(ma.transcript_snapshot))=0)"
+    ]
+}

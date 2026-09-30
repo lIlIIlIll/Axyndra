@@ -111,6 +111,38 @@ main(): Int64 {
         )
         database.execute(
             "UPDATE legacy_run_continuation_imports SET " +
+                "payload=json_remove(payload,'$.budget.process_limits') " +
+                "WHERE run_id='product-restart-run'"
+        )
+        expect(continuationRepository.continuation(runId).isError() &&
+            database.scalarInt(
+                "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                    "WHERE run_id='product-restart-run'"
+            ) == 1,
+            "current continuation format rejects a missing process-limit binding")
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET payload=" +
+                sqliteText(encodedContinuation) + " WHERE run_id='product-restart-run'"
+        )
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET payload=json_remove(" +
+                "json_set(payload,'$.version',4),'$.approval.session_approval_allowed'," +
+                "'$.budget.process_limits') WHERE run_id='product-restart-run'"
+        )
+        let legacyV4 = continuationRepository.continuation(runId)
+        expect(legacyV4.isOk() && legacyV4.value().getOrThrow()
+            .approval.sessionApprovalAllowed && legacyV4.value().getOrThrow()
+            .budget.processLimits.maxOutputBytes == 0 && database.scalarInt(
+                "SELECT COUNT(*) FROM legacy_run_continuation_imports " +
+                    "WHERE run_id='product-restart-run'"
+            ) == 0,
+            "legacy v4 approval continuation restores prior session and process-limit defaults")
+        database.execute(
+            "INSERT INTO legacy_run_continuation_imports(run_id,payload) VALUES(" +
+                "'product-restart-run'," + sqliteText(encodedContinuation) + ")"
+        )
+        database.execute(
+            "UPDATE legacy_run_continuation_imports SET " +
                 "payload=json_set(payload,'$.requested_policy',json('null')) " +
                 "WHERE run_id='product-restart-run'"
         )

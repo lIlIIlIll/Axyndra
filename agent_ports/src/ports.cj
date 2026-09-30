@@ -12,6 +12,20 @@ public interface ModelPort {
         events: ModelEventSink
     ): Result<ModelReply>
 
+    // Provider adapters may expose the exact immutable llm4cj transcript used for this request.
+    // Domain-only test ports return None and do not fabricate a provider snapshot.
+    func transcriptSnapshot(request: ModelRequest): ?String {
+        let _ = request
+        None
+    }
+
+    // Recovery validates the persisted provider-neutral transcript without
+    // making domain-only ports invent a wire representation.
+    func validateTranscriptSnapshot(snapshot: String): Bool {
+        let _ = snapshot
+        false
+    }
+
     func cancel(requestId: String): Result<Unit> {
         let _ = requestId
         Result.Ok(())
@@ -232,6 +246,8 @@ public interface WorkspacePort {
 }
 
 public interface ProcessPort {
+    func reserveOperation(operationId: OperationId): Unit { let _ = operationId }
+    func releaseOperation(operationId: OperationId): Unit { let _ = operationId }
     func execute(request: ProcessRequest): Result<ProcessResult>
     func cancel(operationId: OperationId): Result<Unit>
 }
@@ -240,6 +256,7 @@ public class NetworkGatewayLease {
     public let operationId: OperationId
     public let proxyHost: String
     public let proxyPort: UInt16
+    public let proxyCredential: String
     public let caBundle: String
     // The proxy endpoint is local to the sandbox bridge. The bridge socket and
     // executable are host-selected composition values, not model input.
@@ -250,6 +267,7 @@ public class NetworkGatewayLease {
         operationId: OperationId,
         proxyHost: String,
         proxyPort: UInt16,
+        proxyCredential: String,
         caBundle!: String = "",
         bridgeSocket!: String = "",
         bridgeExecutable!: String = ""
@@ -257,17 +275,31 @@ public class NetworkGatewayLease {
         if (proxyHost.trimAscii() == "" || proxyPort == 0u16) {
             throw IllegalArgumentException("network gateway endpoint is invalid")
         }
+        if (!validNetworkGatewayCredential(proxyCredential)) {
+            throw IllegalArgumentException("network gateway credential is invalid")
+        }
         if ((bridgeSocket.trimAscii() == "") != (bridgeExecutable.trimAscii() == "")) {
             throw IllegalArgumentException("network gateway bridge values must be provided together")
         }
         this.operationId = operationId
         this.proxyHost = proxyHost.trimAscii()
         this.proxyPort = proxyPort
+        this.proxyCredential = proxyCredential
         this.caBundle = caBundle.trimAscii()
         this.bridgeSocket = bridgeSocket.trimAscii()
         this.bridgeExecutable = bridgeExecutable.trimAscii()
     }
 }
+func validNetworkGatewayCredential(value: String): Bool {
+    if (value.size != 64) { return false }
+    for (byte in value.toArray()) {
+        if (!((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) {
+            return false
+        }
+    }
+    true
+}
+
 // The gateway owns all mediated egress. A process in NetworkPolicyMode.Mediated
 // is never allowed to fall back to HostNetwork when this port is unavailable.
 public interface NetworkGatewayPort {

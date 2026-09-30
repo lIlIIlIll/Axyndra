@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "axyndra-coding-corpus-v1",
+  "model": {
+    "provider": "local-scripted-fixture",
+    "id": "coding-task-fixture-v1",
+    "effective_config": {
+      "temperature": 0,
+      "thinking": "deterministic",
+      "network": "denied"
+    }
+  },
+  "budget": {
+    "model_requests": 4,
+    "tool_calls": 32,
+    "wall_time_millis": 30000
+  },
+  "allowed_tools": ["read", "grep", "write", "bash", "run_program"],
+  "tasks": [
+    {
+      "id": "local-fix-clamp",
+      "category": "local_fix",
+      "instruction": "Fix clamp so values above the upper bound return the upper bound.",
+      "initial_files": {
+        "src/math_utils.py": "def clamp(value, lower, upper):\n    return max(lower, max(value, upper))\n"
+      },
+      "operations": [
+        {
+          "op": "replace",
+          "path": "src/math_utils.py",
+          "expected": "def clamp(value, lower, upper):\n    return max(lower, max(value, upper))\n",
+          "content": "def clamp(value, lower, upper):\n    return max(lower, min(value, upper))\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "clamp-boundaries",
+          "argv": ["python3", "-c", "from src.math_utils import clamp; assert [clamp(x, 0, 10) for x in (-2, 4, 20)] == [0, 4, 10]"]
+        }
+      ]
+    },
+    {
+      "id": "cross-file-port",
+      "category": "cross_file_change",
+      "instruction": "Change the service default port to 9090 and keep CLI help consistent.",
+      "initial_files": {
+        "src/config.py": "DEFAULT_PORT = 8080\n",
+        "src/cli.py": "from .config import DEFAULT_PORT\nHELP = 'listen port (default: 8080)'\n"
+      },
+      "operations": [
+        {
+          "op": "replace",
+          "path": "src/config.py",
+          "expected": "DEFAULT_PORT = 8080\n",
+          "content": "DEFAULT_PORT = 9090\n"
+        },
+        {
+          "op": "replace",
+          "path": "src/cli.py",
+          "expected": "from .config import DEFAULT_PORT\nHELP = 'listen port (default: 8080)'\n",
+          "content": "from .config import DEFAULT_PORT\nHELP = 'listen port (default: 9090)'\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "port-and-help",
+          "argv": ["python3", "-c", "from src.config import DEFAULT_PORT; from src.cli import HELP; assert DEFAULT_PORT == 9090 and '9090' in HELP"]
+        }
+      ]
+    },
+    {
+      "id": "ci-failure-diagnosis",
+      "category": "ci_diagnosis",
+      "instruction": "Diagnose why the lint job cannot find the configured source directory.",
+      "initial_files": {
+        "ci/job.json": "{\"lint_path\": \"lib\"}\n",
+        "src/app.py": "print('ready')\n"
+      },
+      "operations": [
+        {
+          "op": "create",
+          "path": "ci/diagnosis.txt",
+          "content": "lint_path points to missing directory 'lib'; repository source is under 'src'.\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "diagnosis-identifies-root-cause",
+          "argv": ["python3", "-c", "from pathlib import Path; text=Path('ci/diagnosis.txt').read_text(); assert \"missing directory 'lib'\" in text and \"under 'src'\" in text"]
+        }
+      ]
+    },
+    {
+      "id": "api-doc-errors",
+      "category": "api_documentation",
+      "instruction": "Document parse_limit parameters, return value, and ValueError behavior.",
+      "initial_files": {
+        "src/limits.py": "def parse_limit(text):\n    value = int(text)\n    if value < 1:\n        raise ValueError('limit must be positive')\n    return value\n",
+        "docs/api.txt": "parse_limit(text)\n  Parse a limit.\n"
+      },
+      "operations": [
+        {
+          "op": "replace",
+          "path": "docs/api.txt",
+          "expected": "parse_limit(text)\n  Parse a limit.\n",
+          "content": "parse_limit(text) -> int\n  Parameters: text is a base-10 integer string.\n  Returns: a positive integer.\n  Raises: ValueError when text is not an integer or the value is below 1.\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "api-contract-complete",
+          "argv": ["python3", "-c", "from pathlib import Path; text=Path('docs/api.txt').read_text(); assert all(x in text for x in ('Parameters:', 'Returns:', 'Raises:', 'ValueError'))"]
+        }
+      ]
+    },
+    {
+      "id": "behavior-refactor-flags",
+      "category": "behavior_preserving_refactor",
+      "instruction": "Refactor enabled-word parsing without changing accepted values.",
+      "initial_files": {
+        "src/flags.py": "def enabled(text):\n    value = text.strip().lower()\n    if value == 'yes':\n        return True\n    if value == 'true':\n        return True\n    if value == '1':\n        return True\n    return False\n"
+      },
+      "operations": [
+        {
+          "op": "replace",
+          "path": "src/flags.py",
+          "expected": "def enabled(text):\n    value = text.strip().lower()\n    if value == 'yes':\n        return True\n    if value == 'true':\n        return True\n    if value == '1':\n        return True\n    return False\n",
+          "content": "def enabled(text):\n    return text.strip().lower() in {'yes', 'true', '1'}\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "truth-table-preserved",
+          "argv": ["python3", "-c", "from src.flags import enabled; cases={'yes':True,' YES ':True,'true':True,'1':True,'no':False,'0':False,'':False}; assert {k:enabled(k) for k in cases} == cases"]
+        }
+      ]
+    },
+    {
+      "id": "read-aggregate-anchors",
+      "category": "read_aggregation",
+      "instruction": "Aggregate SymbolAnchor occurrences by file in sorted path order.",
+      "initial_files": {
+        "src/alpha.cj": "class SymbolAnchor {}\nlet name = \"SymbolAnchor\"\n",
+        "src/beta.cj": "func SymbolAnchor(): Unit {}\n",
+        "src/ignored.cj": "let value = 1\n"
+      },
+      "program": {
+        "sdk": "tool-program-sdk-v1",
+        "source": "const hits = await tools.grep({\"pattern\":\"SymbolAnchor\",\"path\":\"src\",\"count\":true}); const files = hits.files; return files;"
+      },
+      "operations": [
+        {
+          "op": "create",
+          "path": "reports/anchors.txt",
+          "content": "src/alpha.cj 2\nsrc/beta.cj 1\n"
+        }
+      ],
+      "tests": [
+        {
+          "name": "aggregate-is-exact-and-sorted",
+          "argv": ["python3", "-c", "from pathlib import Path; assert Path('reports/anchors.txt').read_text() == 'src/alpha.cj 2\\nsrc/beta.cj 1\\n'"]
+        }
+      ]
+    }
+  ]
+}

@@ -42,3 +42,7 @@ libs/process4cj/native/sandbox-net-bridge
 !scripts/release_contracts.txt
 
 !scripts/product_unit_inventory.json
+!support_tests/fault_matrix/matrix.json
+!support_tests/coding_task_benchmark/corpus.json
+!support_tests/extension_runtime_contract/fixtures/**/*.json
+!support_tests/tui_path_coverage/scenarios.json

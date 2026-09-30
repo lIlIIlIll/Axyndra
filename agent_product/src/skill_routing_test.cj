@@ -147,6 +147,19 @@ class ProductSkillDiscoveryTests {
         @Expect(rejected)
         @Expect(oversized.position, 9)
     }
+    @TestCase
+    func multilineYamlDescriptionsPreserveLiteralAndFoldedBlockScalars(): Unit {
+        let literal = "---\nname: Reviewed package\ndescription: |\n  First line.\n  Second line.\n---\n"
+        @Expect(productSkillFrontmatter(literal, "description"), "First line.\nSecond line.\n")
+        let folded = "---\nname: Reviewed package\ndescription: >-\n  First line.\n  Second line.\n---\n"
+        @Expect(productSkillFrontmatter(folded, "description"), "First line. Second line.")
+    }
+
+    @TestCase
+    func unsupportedYamlBlockScalarModifiersAreNotPartiallyImported(): Unit {
+        let source = "---\nname: Invalid metadata\ndescription: |x\n  silently truncated\n---\n"
+        @Expect(productSkillFrontmatter(source, "description"), "")
+    }
 
     @TestCase
     func catalogHasCountAndRenderedMetadataBudgets(): Unit {

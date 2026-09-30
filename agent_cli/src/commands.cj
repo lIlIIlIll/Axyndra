@@ -586,6 +586,8 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         SlashCommandDefinition("jobs", "Agents & tools", "List background jobs"),
         SlashCommandDefinition("extensions", "Agents & tools", "Manage installed extensions"),
         SlashCommandDefinition("mcp", "Agents & tools", "Show configured MCP servers"),
+        SlashCommandDefinition("plugins", "Agents & tools", "Import and manage portable plugins", usage: "/plugins [list|inspect <path>|import <path>|update <id> <path>|rollback <id>|uninstall <id>|enable <id>|disable <id>|doctor|gc]"),
+        SlashCommandDefinition("prompts", "Agents & tools", "List and run declarative plugin prompts", usage: "/prompts [list|run <namespace/path> [arguments...]]"),
         SlashCommandDefinition(
             "ssh",
             "Agents & tools",
@@ -596,6 +598,10 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         SlashCommandDefinition("usage", "Inspect", "Show provider usage and session statistics"),
         SlashCommandDefinition("stats", "Inspect", "Show session execution statistics"),
         SlashCommandDefinition("context", "Inspect", "Show current context usage"),
+        SlashCommandDefinition(
+            "inspect", "Inspect", "Explain a durable Run from canonical evidence",
+            usage: "/inspect [run-id] [before-operation-cursor]"
+        ),
         SlashCommandDefinition("debug", "Inspect", "Show a diagnostic session snapshot"),
         SlashCommandDefinition(
             "changelog",

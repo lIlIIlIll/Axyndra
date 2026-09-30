@@ -13,6 +13,7 @@ import std.sync.*
 import tool_runtime.*
 
 main(): Int64 {
+    testToolCatalogBatchRegistration()
     let catalog = ToolCatalog()
     register(catalog, "read", CapabilityKind.WorkspaceRead, false)
     register(catalog, "write", CapabilityKind.WorkspaceWrite, true)
@@ -250,6 +251,10 @@ main(): Int64 {
         case Result.Ok(ToolInvocationResult.NeedsApproval(request)) => request
         case _ => throw IllegalStateException("network operation did not request approval")
     }
+    expect(
+        !networkPending.sessionApprovalAllowed,
+        "network approval does not expose a session grant"
+    )
     match (pipeline.decide(
         networkContext,
         networkPending.operationId,
@@ -286,9 +291,58 @@ main(): Int64 {
     runConcurrencyContracts()
     runPreparedPipelineContracts()
     runToolOutputSinkContract()
+    runToolSnapshotContracts()
     runToolProgramContracts()
+    runNestedSlotDrainingContract()
     println("tool_runtime contract passed")
     0
+}
+
+func runNestedSlotDrainingContract(): Unit {
+    let probe = NestedSlotSchedulerProbe()
+    let context = ToolInvocationContext(
+        RunId("draining-nested-run"),
+        SessionId("draining-nested-session"),
+        CapabilitySet(),
+        budgetModeFn: { => probe.mode }
+    )
+    context.setNestedToolScheduler({ _, action =>
+        probe.schedulerCalls += 1
+        action()
+    })
+
+    match (context.withNestedToolSlot(OperationId("draining-parent"), { =>
+        probe.actionCalls += 1
+        Result.Ok(())
+    })) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    expect(
+        probe.schedulerCalls == 1 && probe.actionCalls == 1,
+        "nested work is admitted while its live Run remains active"
+    )
+
+    probe.mode = BudgetMode.Draining
+    match (context.withNestedToolSlot(OperationId("draining-parent"), { =>
+        probe.actionCalls += 1
+        Result.Ok(())
+    })) {
+        case Result.Err(error) => expect(
+            error.code == "budget.drain_exhausted" &&
+                probe.schedulerCalls == 1 && probe.actionCalls == 1,
+            "Draining rejects nested work before scheduling or execution"
+        )
+        case Result.Ok(_) => throw IllegalStateException(
+            "nested work was admitted while its Run was draining"
+        )
+    }
+}
+
+class NestedSlotSchedulerProbe {
+    var mode: BudgetMode = BudgetMode.Normal
+    var schedulerCalls: Int64 = 0
+    var actionCalls: Int64 = 0
 }
 
 func runToolProgramContracts(): Unit {
@@ -350,6 +404,60 @@ func runToolProgramContracts(): Unit {
         compiledResult.subOperations.size == 1 &&
         compiledResult.value.field("tool").isSome(),
         "restricted TS-like source compiles to the closed IR before interpretation")
+    let literalReturn = mustProgram(compileRestrictedToolProgram(
+        "program-literal", "return {\"answer\":42,\"items\":[\"alpha\"]};"
+    ))
+    let literalResult = runtime.execute(literalReturn, context)
+    let literalAnswer = literalResult.value.field("answer").getOrThrow()
+    let literalItems = literalResult.value.field("items").getOrThrow()
+    expect(
+        literalResult.status == ToolProgramStatus.Completed &&
+            literalResult.value.unifiedKind == ValueKind.Object &&
+            literalAnswer.text == "42" && literalItems.unifiedKind == ValueKind.List &&
+            literalItems.items.size == 1 && literalItems.items[0].text == "alpha",
+        "restricted Program source returns JSON literals without invoking tools"
+    )
+    let semicolonReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
+        "program-semicolon-literal", "return {\"query\":\"alpha;beta\"};"
+    )), context)
+    expect(
+        semicolonReturn.status == ToolProgramStatus.Completed &&
+            semicolonReturn.value.field("query").getOrThrow().text == "alpha;beta",
+        "restricted Program statement splitting preserves semicolons inside JSON strings"
+    )
+    let multilineReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
+        "program-multiline-literal",
+        "return {\n  \"answer\": 42,\n  \"items\": [1, 2]\n};"
+    )), context)
+    expect(
+        multilineReturn.status == ToolProgramStatus.Completed &&
+            multilineReturn.value.field("answer").getOrThrow().text == "42" &&
+            multilineReturn.value.field("items").getOrThrow().items.size == 2,
+        "restricted Program splitting preserves nested multiline JSON literals"
+    )
+    let trueReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
+        "program-true", "return true;"
+    )), context)
+    let falseReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
+        "program-false", "return false;"
+    )), context)
+    let nullReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
+        "program-null", "return null;"
+    )), context)
+    expect(
+        trueReturn.status == ToolProgramStatus.Completed &&
+            falseReturn.status == ToolProgramStatus.Completed &&
+            nullReturn.status == ToolProgramStatus.Completed &&
+            canonicalAgentValue(trueReturn.value) == "true" &&
+            canonicalAgentValue(falseReturn.value) == "false" &&
+            canonicalAgentValue(nullReturn.value) == "null",
+        "restricted Program source recognizes JSON keyword literals before bindings"
+    )
+    expect(compileRestrictedToolProgram(
+        "program-benchmark-aggregation",
+        "const hits = await tools.grep({\"pattern\":\"SymbolAnchor\",\"path\":\"src\",\"count\":true}); " +
+            "const files = hits.files; return files;"
+    ).isOk(), "coding benchmark Program uses the compiler-supported source subset")
     expect(compileRestrictedToolProgram(
         "program-dynamic", "return await tools[name]({});"
     ).isError(), "source compiler rejects dynamic tool bindings")
@@ -385,7 +493,26 @@ func runToolProgramContracts(): Unit {
     ), context, limits: ToolProgramLimits(maxResultBytes: 40u64))
     expect(nestedResult.status == ToolProgramStatus.Completed,
         "result accounting visits nested containers once without serializing each container")
-
+    let partialAfterSubcall = runtime.execute(ToolProgramIR(
+        "program-result-size-partial",
+        "const child = await tools.read({}); return '12345678901234567890';", [
+            ToolProgramStatement.Let("child", ToolProgramExpression.Tool(
+                ProgramToolInvocation("read", literalArguments)
+            )),
+            ToolProgramStatement.Return(ToolProgramExpression.Literal(
+                textValue("12345678901234567890")
+            ))
+        ]
+    ), context, limits: ToolProgramLimits(maxResultBytes: 16u64))
+    expect(partialAfterSubcall.status == ToolProgramStatus.Partial &&
+        partialAfterSubcall.errorCode == "tool_program.result_limit" &&
+        partialAfterSubcall.value.unifiedKind == ValueKind.Null &&
+        partialAfterSubcall.subOperations.size == 1 &&
+        match (partialAfterSubcall.subOperations[0].outcome) {
+            case ToolInvocationResult.Completed(_) => true
+            case _ => false
+        },
+        "oversized final value fails the root while retaining its completed child trace")
     let forbidden = runtime.execute(ToolProgramIR(
         "program-forbidden", "import fs from 'fs'; return fs;", [
             ToolProgramStatement.Return(ToolProgramExpression.Literal(nullValue()))
@@ -428,7 +555,7 @@ class TestProgramSubOperationExecutor <: ProgramSubOperationExecutor {
                 return Result.Ok(ToolInvocationResult.Denied(value))
             case Result.Err(error) => return Result.Err(error)
         }
-        match (operations.prepareProgramSubOperation(
+        match (operations.prepareTrustedControlOperation(
             prepared.operationId,
             context.runId,
             ItemId("test-program-call-" + prepared.operationId.value),
@@ -806,7 +933,7 @@ func runMultiCapabilityContracts(): Unit {
         case Result.Ok(ToolPreparation.Ready(value)) => value
         case _ => throw IllegalStateException("dynamic fixture was not prepared")
     }
-    match (operations.prepareProgramSubOperation(
+    match (operations.prepareTrustedControlOperation(
         prepared.operationId,
         fullContext.runId,
         ItemId("test-multi-capability-" + prepared.operationId.value),
@@ -875,7 +1002,7 @@ func runMultiCapabilityContracts(): Unit {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("multi-capability approval was not requested")
     }
-    match (approvalOperations.prepareProgramSubOperation(
+    match (approvalOperations.prepareTrustedControlOperation(
         pending.operationId,
         fullContext.runId,
         ItemId("test-approval-capability-" + pending.operationId.value),
@@ -1110,7 +1237,7 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("second prepared call did not request approval")
     }
-    match (operations.prepareProgramSubOperation(
+    match (operations.prepareTrustedControlOperation(
         first.operationId,
         context.runId,
         ItemId("test-prepared-first-" + first.operationId.value),
@@ -1119,7 +1246,7 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(_) => ()
         case Result.Err(error) => throw IllegalStateException(error.describe())
     }
-    match (operations.prepareProgramSubOperation(
+    match (operations.prepareTrustedControlOperation(
         second.operationId,
         context.runId,
         ItemId("test-prepared-second-" + second.operationId.value),
@@ -1172,7 +1299,7 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolPreparation.NeedsApproval(value, _)) => value
         case _ => throw IllegalStateException("rejection fixture did not request approval")
     }
-    match (operations.prepareProgramSubOperation(
+    match (operations.prepareTrustedControlOperation(
         rejected.operationId,
         context.runId,
         ItemId("test-prepared-rejected-" + rejected.operationId.value),
@@ -1238,6 +1365,176 @@ func runPreparedPipelineContracts(): Unit {
     }
 }
 
+func runToolSnapshotContracts(): Unit {
+    let catalog = ToolCatalog()
+    let v1Executions = ExecutionCounter()
+    let v2Executions = ExecutionCounter()
+    let capabilities = CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+    let schema = objectValue([ValueField("type", textValue("object"))])
+    let toolName = "snapshot-versioned"
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(toolName, "versioned snapshot fixture", schema),
+            Capability(CapabilityKind.WorkspaceRead),
+            implementationVersion: "fixture-v1",
+            implementationFingerprint: "fixture-fingerprint-v1"
+        ),
+        VersionExecutor("v1", v1Executions)
+    ).isOk(), "register v1 snapshot fixture")
+    let v1Snapshot = catalog.toolSetSnapshot("run-v1", capabilities)
+    let lane = ModelLane(
+        ModelLaneRole.Main,
+        "fixture-provider",
+        "fixture-model",
+        "fixture-protocol",
+        ModelLaneCapabilitiesSnapshot(),
+        4096,
+        512,
+        0,
+        "fixture-estimator",
+        "never",
+        "default",
+        v1Snapshot,
+        "system-v1"
+    )
+    let restored = modelLaneFromSnapshotValue(modelLaneSnapshotValue(lane))
+    expect(
+        restored.toolSet.entries.size == 1 &&
+            restored.toolSet.entries[0].implementationFingerprint == "fixture-fingerprint-v1" &&
+            restored.toolSet.entries[0].schemaDigest == v1Snapshot.entries[0].schemaDigest &&
+            restored.toolSet.entries[0].hasCompleteIdentity(),
+        "ModelLane round-trip retains the complete tool implementation identity"
+    )
+    let operations = MemoryOperations()
+    let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds())
+    let v1Context = ToolInvocationContext(
+        RunId("snapshot-run-v1"),
+        SessionId("snapshot-session"),
+        capabilities,
+        toolSetSnapshot: Some(v1Snapshot)
+    )
+    let v1Prepared = match (preparePipelineCall(
+        pipeline, v1Context, ToolCall("snapshot-call-v1", toolName, objectValue([]))
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    expect(catalog.unregister(toolName), "retire the active tool implementation")
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(toolName, "versioned snapshot fixture", schema),
+            Capability(CapabilityKind.WorkspaceRead),
+            implementationVersion: "fixture-v2",
+            implementationFingerprint: "fixture-fingerprint-v2"
+        ),
+        VersionExecutor("v2", v2Executions)
+    ).isOk(), "register v2 without rewriting the v1 Run")
+    match (pipeline.executePrepared(v1Context, v1Prepared)) {
+        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
+            result.output.field("implementation").getOrThrow().text == "v1" &&
+                v1Executions.executions == 1 && v2Executions.executions == 0,
+            "retired Run dispatches only to the implementation frozen at admission"
+        )
+        case _ => throw IllegalStateException("frozen v1 implementation did not execute")
+    }
+    let v2Snapshot = catalog.toolSetSnapshot("run-v2", capabilities)
+    let v2Context = ToolInvocationContext(
+        RunId("snapshot-run-v2"),
+        SessionId("snapshot-session"),
+        capabilities,
+        toolSetSnapshot: Some(v2Snapshot)
+    )
+    let v2Prepared = match (preparePipelineCall(
+        pipeline, v2Context, ToolCall("snapshot-call-v2", toolName, objectValue([]))
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    match (pipeline.executePrepared(v2Context, v2Prepared)) {
+        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
+            result.output.field("implementation").getOrThrow().text == "v2" &&
+                v2Executions.executions == 1,
+            "new Runs observe the replacement implementation"
+        )
+        case _ => throw IllegalStateException("new v2 implementation did not execute")
+    }
+    let revokedPrepared = match (preparePipelineCall(
+        pipeline, v2Context, ToolCall("snapshot-call-revoked", toolName, objectValue([]))
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    expect(catalog.revoke(toolName), "revoke every installed implementation immediately")
+    match (pipeline.executePrepared(v2Context, revokedPrepared)) {
+        case Result.Err(error) => expect(
+            error.code == "tool.prepared_registration_missing" &&
+                v2Executions.executions == 1,
+            "revoked prepared work fails before invoking or committing a result"
+        )
+        case _ => throw IllegalStateException("revoked implementation executed")
+    }
+    match (operations.loadCommittedToolResult(
+        revokedPrepared.operationId, v2Context.runId
+    )) {
+        case Result.Ok(None) => ()
+        case _ => throw IllegalStateException("revoked operation committed a tool result")
+    }
+    let inFlightCatalog = ToolCatalog()
+    let inFlightOperations = MemoryOperations()
+    let inFlightCounter = RevocationCounter()
+    let inFlightName = "snapshot-inflight-revoke"
+    expect(inFlightCatalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                inFlightName, "in-flight revoke fixture", schema
+            ),
+            Capability(CapabilityKind.WorkspaceRead),
+            implementationVersion: "revoke-v1",
+            implementationFingerprint: "revoke-fingerprint-v1"
+        ),
+        RevokingExecutor(inFlightCatalog, inFlightCounter)
+    ).isOk(), "register in-flight revoke fixture")
+    let inFlightContext = ToolInvocationContext(
+        RunId("snapshot-inflight-run"),
+        SessionId("snapshot-inflight-session"),
+        capabilities,
+        toolSetSnapshot: Some(
+            inFlightCatalog.toolSetSnapshot("snapshot-inflight", capabilities)
+        )
+    )
+    let inFlightPipeline = ToolPipeline(
+        inFlightCatalog, inFlightOperations, MemoryAudit(), FixedIds()
+    )
+    let inFlightPrepared = match (preparePipelineCall(
+        inFlightPipeline,
+        inFlightContext,
+        ToolCall("snapshot-inflight-call", inFlightName, objectValue([]))
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    match (inFlightPipeline.executePrepared(inFlightContext, inFlightPrepared)) {
+        case Result.Err(error) => expect(
+            error.code == "tool.revoked_during_execution" &&
+                inFlightCounter.executions == 1 &&
+                inFlightCounter.cancellations == 1 &&
+                inFlightCounter.cancelledRunId == inFlightContext.runId.value,
+            "revocation cancels the active Run and rejects its stale executor result"
+        )
+        case _ => throw IllegalStateException(
+            "in-flight revoked executor returned a committable ToolResult"
+        )
+    }
+    match (inFlightOperations.loadCommittedToolResult(
+        inFlightPrepared.operationId, inFlightContext.runId
+    )) {
+        case Result.Ok(None) => ()
+        case _ => throw IllegalStateException(
+            "in-flight revoked execution committed a stale ToolResult"
+        )
+    }
+}
+
 func runToolOutputSinkContract(): Unit {
     let sink = MemoryToolOutputSink()
     let catalog = ToolCatalog()
@@ -1278,6 +1575,60 @@ func runToolOutputSinkContract(): Unit {
 class ExecutionCounter {
     var executions: Int64 = 0
 }
+
+class RevocationCounter {
+    var executions: Int64 = 0
+    var cancellations: Int64 = 0
+    var cancelledRunId: String = ""
+}
+
+class RevokingExecutor <: ToolExecutor {
+    private let catalog: ToolCatalog
+    private let counter: RevocationCounter
+
+    init(catalog: ToolCatalog, counter: RevocationCounter) {
+        this.catalog = catalog
+        this.counter = counter
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let _ = context
+        counter.executions += 1
+        let _ = catalog.revoke(prepared.call.name)
+        Result.Ok(ToolResult(prepared.call.callId, textValue("stale result")))
+    }
+
+    public func cancel(runId: RunId): Result<Unit> {
+        counter.cancellations += 1
+        counter.cancelledRunId = runId.value
+        Result.Ok(())
+    }
+}
+class VersionExecutor <: ToolExecutor {
+    private let version: String
+    private let counter: ExecutionCounter
+
+    init(version: String, counter: ExecutionCounter) {
+        this.version = version
+        this.counter = counter
+    }
+
+    public func execute(
+        _context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let _ = _context
+        counter.executions += 1
+        Result.Ok(ToolResult(
+            prepared.call.callId,
+            objectValue([ValueField("implementation", textValue(version))])
+        ))
+    }
+}
+
 type MemoryOperations = InMemoryOperationRuntimePort
 
 class CountingExecutor <: ToolExecutor {
@@ -1527,6 +1878,75 @@ func auditHasDecisionSource(events: ArrayList<AgentEvent>, callId: String, sourc
         }
     }
     false
+}
+
+func testToolCatalogBatchRegistration(): Unit {
+    let catalog = ToolCatalog()
+    let capabilitySet = CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke)])
+    let schema = objectValue([ValueField("type", textValue("object"))])
+    let firstName = "plugin.pi:transactional.first"
+    let secondName = "plugin.pi:transactional.second"
+    let first = ToolCatalogRegistration(
+        ToolDescriptor(
+            ModelToolDefinition(firstName, "first extension tool", schema),
+            Capability(CapabilityKind.ExtensionInvoke),
+            sideEffecting: true
+        ),
+        EchoExecutor()
+    )
+    let second = ToolCatalogRegistration(
+        ToolDescriptor(
+            ModelToolDefinition(secondName, "second extension tool", schema),
+            Capability(CapabilityKind.ExtensionInvoke),
+            sideEffecting: true
+        ),
+        EchoExecutor()
+    )
+    let frozenBeforeActivation = catalog.toolSetSnapshot("run-before-extension", capabilitySet)
+    expect(catalog.registerBatch([first, second]).isOk(),
+        "a valid extension registration batch commits")
+    let installed = catalog.definitions()
+    expect(installed.size == 2 && installed[0].name == firstName && installed[1].name == secondName,
+        "all extension tools enter the catalog together in namespaced order")
+    expect(frozenBeforeActivation.entries.isEmpty(),
+        "an active Run snapshot does not gain tools registered after it was frozen")
+    let afterActivation = catalog.toolSetSnapshot("run-after-extension", capabilitySet)
+    expect(afterActivation.entries.size == 2 &&
+        afterActivation.entries[0].name == firstName && afterActivation.entries[1].name == secondName,
+        "a later Run sees the complete committed extension tool set")
+    expect(match (catalog.resolvedDescriptor(ToolCall("catalog-call", firstName, objectValue([])))) {
+        case Some(descriptor) =>
+            let required = descriptor.requiredCapabilities()
+            required.size == 1 && required[0].kind == CapabilityKind.ExtensionInvoke
+        case None => false
+    }, "registering extension tools does not grant manifest-requested authority")
+
+    let conflictCatalog = ToolCatalog()
+    let existing = ToolCatalogRegistration(
+        ToolDescriptor(
+            ModelToolDefinition(secondName, "pre-existing tool", schema),
+            Capability(CapabilityKind.ExtensionInvoke),
+            sideEffecting: true
+        ),
+        EchoExecutor()
+    )
+    expect(conflictCatalog.registerBatch([existing]).isOk(), "pre-existing tool registers")
+    let conflict = conflictCatalog.registerBatch([first, second])
+    expect(match (conflict) {
+        case Result.Err(error) => error.code == "tool.duplicate"
+        case Result.Ok(_) => false
+    }, "a collision rejects the complete extension batch")
+    let afterConflict = conflictCatalog.definitions()
+    expect(afterConflict.size == 1 && afterConflict[0].name == secondName,
+        "a rejected batch leaves no earlier candidate tool installed")
+
+    let duplicateCatalog = ToolCatalog()
+    let duplicate = duplicateCatalog.registerBatch([first, first])
+    expect(match (duplicate) {
+        case Result.Err(error) => error.code == "tool.duplicate"
+        case Result.Ok(_) => false
+    } && duplicateCatalog.definitions().isEmpty(),
+        "duplicate names inside a staged batch are rejected without mutation")
 }
 
 func register(

@@ -14,7 +14,7 @@ import time
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--runs", type=int, default=12)
+    parser.add_argument("--runs", type=int, default=40)
     parser.add_argument("--p95-ms", type=float, default=500.0)
     parser.add_argument("--timeout-s", type=float, default=15.0)
     args = parser.parse_args()
@@ -64,7 +64,8 @@ def main() -> int:
                 )
             samples.append(elapsed)
     ordered = sorted(samples)
-    p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+    p95_index = max(0, min(len(ordered) - 1, (len(ordered) * 95 + 99) // 100 - 1))
+    p95 = ordered[p95_index]
     if p95 > args.p95_ms:
         raise SystemExit(
             f"TUI journey p95 {p95:.1f}ms exceeds {args.p95_ms:.1f}ms"

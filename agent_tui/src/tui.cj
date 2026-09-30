@@ -971,6 +971,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var focusedCardIndex: Int64 = -1
     private var focusedCardId = ""
     private var approvalSelected: Int64 = 0
+    private var approvalSessionAllowed: Bool = true
     private var approvalSessionLabel = "Allow scoped access for this session"
     private var approvalInspectTitle = "Approval details"
     private var approvalInspectBody = ""
@@ -2006,7 +2007,9 @@ class AgentScreen <: TerminalFrameProvider {
             case None => ""
         }
     }
-
+    private func approvalOptionCount(): Int64 {
+        if (approvalSessionAllowed) { 3 } else { 2 }
+    }
     private func updateApproval(key: KeyEvent): UpdateResult {
         match (key.code) {
             case KeyCode.CtrlC => cancelApprovalInteraction(true)
@@ -2036,22 +2039,27 @@ class AgentScreen <: TerminalFrameProvider {
                 approvalSelected = max(0, approvalSelected - 1)
                 UpdateResult.next()
             case KeyCode.Right | KeyCode.Down =>
-                approvalSelected = min(2, approvalSelected + 1)
+                approvalSelected = min(approvalOptionCount() - 1, approvalSelected + 1)
                 UpdateResult.next()
             case KeyCode.Enter =>
                 if (working) {
                     status = "waiting for approval request to settle"
                     return UpdateResult.next()
                 }
-                let rejecting = approvalSelected == 2
+                let rejectIndex = approvalOptionCount() - 1
+                let rejecting = approvalSelected == rejectIndex
                 let decision = match (approvalSelected) {
                     case 0 => TuiApprovalDecision.AllowOnce
-                    case 1 => TuiApprovalDecision.AllowSession
+                    case 1 => if (approvalSessionAllowed) {
+                        TuiApprovalDecision.AllowSession
+                    } else {
+                        TuiApprovalDecision.Reject(composer.area.value.trimAscii())
+                    }
                     case _ => TuiApprovalDecision.Reject(composer.area.value.trimAscii())
                 }
                 let state = match (approvalSelected) {
                     case 0 => "approved-once"
-                    case 1 => "approved-session"
+                    case 1 => if (approvalSessionAllowed) { "approved-session" } else { "rejected" }
                     case _ => "rejected"
                 }
                 match (ui.approvalId) {
@@ -2061,7 +2069,7 @@ class AgentScreen <: TerminalFrameProvider {
                             UiEvent.SetCardState(
                                 id,
                                 state,
-                                if (approvalSelected == 2 && composer.area.value.trimAscii() != "") {
+                                if (rejecting && composer.area.value.trimAscii() != "") {
                                     "rejected: " + composer.area.value.trimAscii()
                                 } else {
                                     state
@@ -2072,7 +2080,12 @@ class AgentScreen <: TerminalFrameProvider {
                         for (card in ui.cards where card.id == id) {
                             card.footer = match (approvalSelected) {
                                 case 0 => "allowed once"
-                                case 1 => approvalSessionLabel
+                                case 1 => if (approvalSessionAllowed) {
+                                    approvalSessionLabel
+                                } else {
+                                    let reason = composer.area.value.trimAscii()
+                                    if (reason == "") { "rejected" } else { "rejected: " + reason }
+                                }
                                 case _ =>
                                     let reason = composer.area.value.trimAscii()
                                     if (reason == "") {
@@ -2100,6 +2113,7 @@ class AgentScreen <: TerminalFrameProvider {
                 approvalInspectBody = ""
                 approvalToolCardId = ""
                 approvalSelected = 0
+                approvalSessionAllowed = true
                 if (rejecting) {
                     composer.area.setValue("")
                 }
@@ -2166,6 +2180,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         UiReducer.reduce(ui, UiEvent.ClearApproval)
         approvalSelected = 0
+        approvalSessionAllowed = true
         approvalInspectBody = ""
         approvalToolCardId = ""
         mainWorking = false
@@ -2968,6 +2983,43 @@ class AgentScreen <: TerminalFrameProvider {
                         Event.Message("agent-turn")
                 }
             )
+        }
+        if (prompt.startsWith("/plugin.")) {
+            if (working) {
+                status = "wait for the active turn before running a plugin command"
+                return UpdateResult.next()
+            }
+            let commandText = prompt[1..]
+            let splitAt = commandText.indexOf(" ")
+            let routeName = match (splitAt) {
+                case Some(index) => commandText[..index]
+                case None => commandText
+            }
+            let arguments = match (splitAt) {
+                case Some(index) => commandText[index + 1..].trimAscii()
+                case None => ""
+            }
+            for (registeredRoute in backend.pluginCommands()) {
+                if (routeName != registeredRoute) { continue }
+                taskLabel = prompt
+                addCard(UiCardKind.User, "You", prompt)
+                scrollOffset = 0
+                working = true
+                workingElapsedMillis = 0
+                UiReducer.reduce(ui, UiEvent.SetWorking(true))
+                status = "running plugin command " + routeName
+                return startAgentTurn({
+                    =>
+                        let result = backend.runPluginCommand(
+                            routeName, arguments, {value => mailbox.push(value)}
+                        )
+                        mailbox.complete(result)
+                        Event.Message("plugin-command")
+                })
+            }
+            status = "unknown plugin command " + routeName
+            addCard(UiCardKind.Warning, "Plugin command unavailable", routeName)
+            return UpdateResult.next()
         }
         taskLabel = prompt
         addCard(UiCardKind.User, "You", prompt)
@@ -4625,7 +4677,7 @@ class AgentScreen <: TerminalFrameProvider {
                     info.task,
                     agent: info.agent
                 )
-            case TuiAgentEvent.Approval(tool, operationId, callId, capability, resource, risk, reason, preview, sessionLabel, inspectTitle, inspectBody, ownerId) =>
+            case TuiAgentEvent.Approval(tool, operationId, callId, capability, resource, risk, reason, preview, sessionLabel, inspectTitle, inspectBody, sessionAllowed, ownerId) =>
                 let approvalId = "approval-" + operationId
                 if (ownerId != focusedSubagentId) {
                     let _ = if (ownerId == "") {
@@ -4638,6 +4690,8 @@ class AgentScreen <: TerminalFrameProvider {
                 working = false
                 UiReducer.reduce(ui, UiEvent.SetWorking(false))
                 status = "approval required"
+                approvalSessionAllowed = sessionAllowed
+                approvalSelected = if (sessionAllowed) { min(2, approvalSelected) } else { 0 }
                 approvalSessionLabel = sessionLabel
                 approvalInspectTitle = inspectTitle
                 approvalInspectBody = inspectBody
@@ -4757,6 +4811,18 @@ class AgentScreen <: TerminalFrameProvider {
                     "running",
                     false,
                     ""
+                )
+            )
+            case TuiAgentEvent.PluginNotice(kind, message) => UiReducer.reduce(
+                ui,
+                UiEvent.UpsertCard(
+                    nextCardId("plugin-notice"),
+                    UiCardKind.Warning,
+                    "Plugin notification (" + kind + ")",
+                    message,
+                    "completed",
+                    false,
+                    "plugin command"
                 )
             )
             case TuiAgentEvent.Warning(title, body) => UiReducer.reduce(
@@ -5537,7 +5603,11 @@ class AgentScreen <: TerminalFrameProvider {
             if (!lines.isEmpty()) {
                 lines.add(DocumentLine(DocumentLineKind.Blank, ""))
             }
-            let options = ["Allow once", approvalSessionLabel, "Deny"]
+            let options = if (approvalSessionAllowed) {
+                ["Allow once", approvalSessionLabel, "Deny"]
+            } else {
+                ["Allow once", "Deny"]
+            }
             for (index in 0..options.size) {
                 let selected = index == approvalSelected
                 lines.add(
@@ -7355,6 +7425,7 @@ class AgentScreen <: TerminalFrameProvider {
                 "Allow this delegation for this session",
                 "Approval details",
                 "{\"context\":\"count cj files\"}",
+                true,
                 ""
             )
         )
@@ -7381,6 +7452,7 @@ class AgentScreen <: TerminalFrameProvider {
                 "Allow writes inside the workspace for this session",
                 "Approval details",
                 "{\"input\":\"[README.md#ABCD]\"}",
+                true,
                 ""
             )
         )
@@ -8209,6 +8281,7 @@ class AgentScreen <: TerminalFrameProvider {
                 "Allow this delegation for this session",
                 "Approval details",
                 "{\"name\":\"second-child\"}",
+                true,
                 ""
             )
         )
@@ -8259,6 +8332,7 @@ class AgentScreen <: TerminalFrameProvider {
                 "Allow writes inside the workspace for this session",
                 "Approval details",
                 "{\"path\":\"child-approved.txt\"}",
+                true,
                 ""
             )
         )
@@ -8289,6 +8363,7 @@ class AgentScreen <: TerminalFrameProvider {
         let previousApprovalCancellationPending = approvalCancellationPending
         let previousApprovalToolCardId = approvalToolCardId
         let previousApprovalSelected = approvalSelected
+        let previousApprovalSessionAllowed = approvalSessionAllowed
         let previousApprovalSessionLabel = approvalSessionLabel
         let previousApprovalInspectTitle = approvalInspectTitle
         let previousApprovalInspectBody = approvalInspectBody
@@ -8322,6 +8397,7 @@ class AgentScreen <: TerminalFrameProvider {
                 "Allow writes under /tmp/cube_lib for this session",
                 "Approval details",
                 "fixture",
+                true,
                 ""
             )
         )
@@ -8387,6 +8463,7 @@ class AgentScreen <: TerminalFrameProvider {
         approvalToolCardId = previousApprovalToolCardId
         approvalCancellationPending = previousApprovalCancellationPending
         approvalSelected = previousApprovalSelected
+        approvalSessionAllowed = previousApprovalSessionAllowed
         approvalSessionLabel = previousApprovalSessionLabel
         approvalInspectTitle = previousApprovalInspectTitle
         approvalInspectBody = previousApprovalInspectBody

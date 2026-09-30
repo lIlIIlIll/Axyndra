@@ -711,6 +711,62 @@ func registerBashTool(
     )
 }
 
+func pluginAcquisitionAdditionalCapabilities(call: ToolCall): Array<Capability> {
+    match (call.arguments.field("workspace_read_root")) {
+        case Some(value) => if (value.unifiedKind == ValueKind.Text && value.text != "") {
+            [Capability(CapabilityKind.WorkspaceRead, resource: value.text)]
+        } else {
+            []
+        }
+        case None => []
+    }
+}
+
+func registerPluginAcquisitionTool(
+    catalog: ToolCatalog,
+    settingsRoot: String,
+    workspaceRoot: String,
+    sandboxCaBundle: String,
+    shellNetworkMode: ShellNetworkMode
+): Result<Unit> {
+    catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "plugin_acquisition",
+                "Internal approved plugin source acquisition.",
+                objectSchema(
+                    [
+                        schemaProperty("command", "string"),
+                        schemaProperty("timeout", "number"),
+                        schemaProperty("pty", "boolean"),
+                        schemaProperty("async", "boolean"),
+                        schemaProperty("workspace_read_root", "string"),
+                        schemaNetworkPolicyProperty()
+                    ],
+                    ["command"]
+                )
+            ),
+            Capability(CapabilityKind.ProcessSpawn),
+            sideEffecting: true,
+            controlOnly: true,
+            implementationVersion: "plugin-acquisition-v2",
+            implementationFingerprint: "host-owned-plugin-acquisition-v2",
+            additionalCapabilityResolver: Some({ call =>
+                pluginAcquisitionAdditionalCapabilities(call)
+            }),
+            networkPolicyResolver: Some({ call =>
+                bashToolNetworkPolicy(shellNetworkMode, call)
+            })
+        ),
+        PluginAcquisitionTool(
+            settingsRoot,
+            workspaceRoot,
+            sandboxCaBundle,
+            shellNetworkMode
+        )
+    )
+}
+
 func registerBashReadonlyTool(
     catalog: ToolCatalog,
     workspace: LocalWorkspace,
@@ -1473,24 +1529,31 @@ class EvalTool <: ToolExecutor {
         } else {
             timeoutSeconds * 1000
         }
+        let reset = optionalBoolean(call, "reset", false)
+        let runtimeCommand = match (selectEvalRuntimeCommand(language)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        if (reset && !runtimeCommand.profile.supportsReset) {
+            return Result.Err(evalConfigurationError(
+                "eval.runtime_capability_unavailable",
+                runtimeCommand.profile.runtimeName + " does not support eval reset"
+            ))
+        }
         registerEvalOperation(context.runId, prepared.operationId)
         let execution = try {
             processes.executeEval(
                 context.sessionId,
                 language,
                 code,
-                optionalBoolean(call, "reset", false),
+                reset,
                 ProcessRequest(
-                    match (language) {
-                        case "py" => "/usr/bin/python3"
-                        case "js" => "/usr/bin/bun"
-                        case "rb" => "/usr/bin/ruby"
-                        case _ => "/usr/bin/julia"
-                    },
+                    runtimeCommand.executable,
                     operationId: prepared.operationId,
                     timeoutMillis: timeoutMillis,
                     sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-                    networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                    networkPolicy: Some(prepared.operationPlan.networkPolicy),
+                    processLimits: context.budget.processLimits
                 )
             )
         } finally {
@@ -1564,7 +1627,7 @@ class EvalTool <: ToolExecutor {
                         ValueField("timed_out", boolValue(result.timedOut)),
                         ValueField(
                             "truncated",
-                            boolValue(captured.stdout.truncated || captured.stderr.truncated)
+                            boolValue(result.truncated || captured.stdout.truncated || captured.stderr.truncated)
                         ),
                         ValueField(
                             "reset",
@@ -2486,7 +2549,8 @@ class GrepTool <: ToolExecutor {
                 arguments: arguments.toArray(),
                 timeoutMillis: 15000,
                 sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
-                networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                networkPolicy: Some(prepared.operationPlan.networkPolicy),
+                processLimits: context.budget.processLimits
             )
         ) })) {
             case Result.Ok(value) => value
@@ -2605,7 +2669,7 @@ class GlobTool <: ToolExecutor {
     }
 
     public func execute(
-        _: ToolInvocationContext,
+        context: ToolInvocationContext,
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let call = ToolCall(
@@ -2651,7 +2715,8 @@ class GlobTool <: ToolExecutor {
                 arguments: arguments.toArray(),
                 timeoutMillis: 15000,
                 sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
-                networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                networkPolicy: Some(prepared.operationPlan.networkPolicy),
+                processLimits: context.budget.processLimits
             )
         )) {
             case Result.Ok(value) => value
@@ -2820,6 +2885,90 @@ func bashSandboxMode(
     }
 }
 
+class PluginAcquisitionTool <: ToolExecutor {
+    private let settingsRoot: String
+    private let workspaceRoot: String
+    private let sandboxCaBundle: String
+    private let shellNetworkMode: ShellNetworkMode
+
+    init(
+        settingsRoot: String,
+        workspaceRoot: String,
+        sandboxCaBundle: String,
+        shellNetworkMode: ShellNetworkMode
+    ) {
+        this.settingsRoot = settingsRoot
+        this.workspaceRoot = workspaceRoot
+        this.sandboxCaBundle = sandboxCaBundle
+        this.shellNetworkMode = shellNetworkMode
+    }
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let root = match (productPluginAcquisitionRoot(settingsRoot, workspaceRoot)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                error.code,
+                error.message
+            ))
+        }
+        let plannedRoot = try {
+            canonicalize(Path(prepared.operationPlan.cwd)).toString()
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.acquisition_plan_root_invalid",
+                error.message
+            ))
+        }
+        let contextRoot = try {
+            canonicalize(Path(context.workspaceRoot)).toString()
+        } catch (error: Exception) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.acquisition_context_root_invalid",
+                error.message
+            ))
+        }
+        if (plannedRoot != root || contextRoot != root) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "plugin.acquisition_root_mismatch",
+                "plugin acquisition execution is not bound to host-owned staging"
+            ))
+        }
+        let additionalReadOnlyRoots = ArrayList<String>()
+        for (required in prepared.operationPlan.requiredCapabilities) {
+            if (required.kind == CapabilityKind.WorkspaceRead &&
+                required.resource == workspaceRoot) {
+                additionalReadOnlyRoots.add(workspaceRoot)
+            }
+        }
+        let acquisitionWorkspace = LocalWorkspace(root)
+        let acquisitionProcesses = match (createProductProcessPort(
+            acquisitionWorkspace,
+            sandboxCaBundle,
+            settingsRoot,
+            additionalReadOnlyRoots: additionalReadOnlyRoots.toArray()
+        )) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        try {
+            BashTool(
+                acquisitionWorkspace,
+                acquisitionProcesses,
+                shellNetworkMode: shellNetworkMode
+            ).execute(context, prepared)
+        } finally {
+            let _ = acquisitionProcesses.close()
+        }
+    }
+}
+
 class BashTool <: ToolExecutor {
     private let workspace: LocalWorkspace
     private let processes: LocalProcessPort
@@ -2950,7 +3099,8 @@ class BashTool <: ToolExecutor {
                 workingDirectory: if (persistent) { "" } else { resolvedCwd },
                 timeoutMillis: timeoutMillis,
                 sandboxMode: bashSandboxMode(processes, readOnly),
-                networkPolicy: Some(networkPolicy)
+                networkPolicy: Some(networkPolicy),
+                processLimits: context.budget.processLimits
             )
         } else {
             ProcessRequest(
@@ -2960,7 +3110,8 @@ class BashTool <: ToolExecutor {
                 workingDirectory: if (persistent) { "" } else { resolvedCwd },
                 timeoutMillis: timeoutMillis,
                 sandboxMode: bashSandboxMode(processes, readOnly),
-                networkPolicy: Some(networkPolicy)
+                networkPolicy: Some(networkPolicy),
+                processLimits: context.budget.processLimits
             )
         }
         let result = match (bashOperations.executeWithOperation(
@@ -3916,7 +4067,7 @@ class ProductProcessOperations {
 
 func processOperations(processes: ProcessPort, prefix: String): ProductProcessOperations {
     ProductProcessOperations(prefix,
-        { id => match (processes as LocalProcessPort) { case Some(local) => local.reserveOperation(id); case None => () } },
-        { id => match (processes as LocalProcessPort) { case Some(local) => local.releaseOperation(id); case None => () } },
+        { id => processes.reserveOperation(id) },
+        { id => processes.releaseOperation(id) },
         { id => processes.cancel(id) })
 }

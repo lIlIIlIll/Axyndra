@@ -829,6 +829,37 @@ public class CapabilitySet {
     }
 }
 
+// Per-execution process ceilings. Zero inherits the product host ceiling;
+// these values can only tighten the limits enforced by a host.
+public class ExecutionResourceLimits {
+    public let maxOutputBytes: Int64
+    public let addressSpaceBytes: Int64
+    public let fileSizeBytes: Int64
+    public let openFiles: Int64
+    public let processes: Int64
+    public let cpuSeconds: Int64
+
+    public init(
+        maxOutputBytes!: Int64 = 0,
+        addressSpaceBytes!: Int64 = 0,
+        fileSizeBytes!: Int64 = 0,
+        openFiles!: Int64 = 0,
+        processes!: Int64 = 0,
+        cpuSeconds!: Int64 = 0
+    ) {
+        if (maxOutputBytes < 0 || addressSpaceBytes < 0 || fileSizeBytes < 0 ||
+            openFiles < 0 || processes < 0 || cpuSeconds < 0) {
+            throw IllegalArgumentException("execution resource limits must be non-negative")
+        }
+        this.maxOutputBytes = maxOutputBytes
+        this.addressSpaceBytes = addressSpaceBytes
+        this.fileSizeBytes = fileSizeBytes
+        this.openFiles = openFiles
+        this.processes = processes
+        this.cpuSeconds = cpuSeconds
+    }
+}
+
 public class ResourceBudget {
     public let maxInputTokens: Int64
     public let maxOutputTokens: Int64
@@ -858,6 +889,7 @@ public class ResourceBudget {
     public let maxConcurrentTools: Int64
     public let maxCostMicros: Int64
     public let deadlineMillis: Int64
+    public let processLimits: ExecutionResourceLimits
 
     public init(
         maxInputTokens!: Int64 = 100000,
@@ -879,7 +911,8 @@ public class ResourceBudget {
         maxContextMessages!: Int64 = 0,
         maxConcurrentTools!: Int64 = 4,
         maxCostMicros!: Int64 = 0,
-        deadlineMillis!: Int64 = 0
+        deadlineMillis!: Int64 = 0,
+        processLimits!: ExecutionResourceLimits = ExecutionResourceLimits()
     ) {
         let effectiveOutputBudget = match (requestOutputBudget) {
             case Some(value) => value
@@ -917,6 +950,7 @@ public class ResourceBudget {
         this.maxConcurrentTools = maxConcurrentTools
         this.maxCostMicros = maxCostMicros
         this.deadlineMillis = deadlineMillis
+        this.processLimits = processLimits
     }
 }
 
@@ -1096,17 +1130,20 @@ public class ToolApprovalMetadata {
     public let assessment: RiskAssessment
     public let grantScope: ApprovalGrantScope
     public let writeSummary: ?WriteApprovalSummary
+    public let sessionApprovalAllowed: Bool
 
     public init(
         capabilityLabel: String,
         assessment: RiskAssessment,
         grantScope: ApprovalGrantScope,
-        writeSummary!: ?WriteApprovalSummary = None
+        writeSummary!: ?WriteApprovalSummary = None,
+        sessionApprovalAllowed!: Bool = true
     ) {
         this.capabilityLabel = capabilityLabel
         this.assessment = assessment
         this.grantScope = grantScope
         this.writeSummary = writeSummary
+        this.sessionApprovalAllowed = sessionApprovalAllowed
     }
 }
 
@@ -1128,6 +1165,7 @@ public class ApprovalRequest {
     public let review: ?ApprovalReview
     public let metadata: ToolApprovalMetadata
     public let decisionSource: ApprovalDecisionSource
+    public let sessionApprovalAllowed: Bool
 
     public init(
         operationId: OperationId,
@@ -1140,7 +1178,8 @@ public class ApprovalRequest {
         riskFlags!: Array<String> = [],
         review!: ?ApprovalReview = None,
         metadata!: ToolApprovalMetadata = defaultToolApprovalMetadata(capability),
-        decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.User
+        decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.User,
+        sessionApprovalAllowed!: Bool = true
     ) {
         this.operationId = operationId
         this.callId = callId
@@ -1153,6 +1192,7 @@ public class ApprovalRequest {
         this.review = review
         this.metadata = metadata
         this.decisionSource = decisionSource
+        this.sessionApprovalAllowed = sessionApprovalAllowed
     }
 }
 
@@ -1473,7 +1513,8 @@ public func reviewedApprovalRequest(
         riskFlags: request.riskFlags,
         review: Some(review),
         metadata: request.metadata,
-        decisionSource: ApprovalDecisionSource.AiReviewer
+        decisionSource: ApprovalDecisionSource.AiReviewer,
+        sessionApprovalAllowed: request.sessionApprovalAllowed
     )
 }
 
@@ -1492,7 +1533,8 @@ public func sourcedApprovalRequest(
         riskFlags: request.riskFlags,
         review: request.review,
         metadata: request.metadata,
-        decisionSource: source
+        decisionSource: source,
+        sessionApprovalAllowed: request.sessionApprovalAllowed
     )
 }
 
@@ -1840,7 +1882,7 @@ public class WorkspaceMutation {
 
 @Derive[Equatable]
 public enum ProcessSandboxMode {
-    Host | WorkspaceReadOnly | WorkspaceReadWrite
+    Host | IsolatedReadOnly | WorkspaceReadOnly | WorkspaceReadWrite
 }
 
 public class ProcessRequest {
@@ -1850,6 +1892,10 @@ public class ProcessRequest {
     public let workingDirectory: String
     public let timeoutMillis: Int64
     public let sandboxMode: ProcessSandboxMode
+    // IsolatedReadOnly replaces the product workspace with this filesystem root.
+    // Additional content roots require explicit read-only grants.
+    public let filesystemRoot: String
+    public let readOnlyMounts: Array<String>
     // Every process request carries an explicit, frozen network policy.
     // The policy is the only authorization source for process network access.
     public let networkPolicy: NetworkPolicy
@@ -1865,6 +1911,8 @@ public class ProcessRequest {
     // A product-authored clipboard action may explicitly expose the selected
     // display-server socket without granting the general host environment.
     public let displayServerAccess: Bool
+    // Zero-valued dimensions inherit the product host ceiling.
+    public let processLimits: ExecutionResourceLimits
 
     public init(
         executable: String,
@@ -1873,11 +1921,14 @@ public class ProcessRequest {
         workingDirectory!: String = "",
         timeoutMillis!: Int64 = 60000,
         sandboxMode!: ProcessSandboxMode = ProcessSandboxMode.WorkspaceReadOnly,
+        filesystemRoot!: String = "",
+        readOnlyMounts!: Array<String> = [],
         networkPolicy!: ?NetworkPolicy = None,
         environmentAllowlist!: Array<String> = [],
         secretEnvironmentAllowlist!: Array<String> = [],
         redactedValues!: Array<String> = [],
-        displayServerAccess!: Bool = false
+        displayServerAccess!: Bool = false,
+        processLimits!: ExecutionResourceLimits = ExecutionResourceLimits()
     ) {
         if (executable.trimAscii() == "") {
             throw IllegalArgumentException("process executable must not be empty")
@@ -1885,12 +1936,25 @@ public class ProcessRequest {
         if (timeoutMillis < 1) {
             throw IllegalArgumentException("process timeout must be positive")
         }
+        if (sandboxMode == ProcessSandboxMode.IsolatedReadOnly &&
+            filesystemRoot.trimAscii() == "") {
+            throw IllegalArgumentException("isolated read-only process requires a filesystem root")
+        }
+        if (sandboxMode != ProcessSandboxMode.IsolatedReadOnly &&
+            filesystemRoot.trimAscii() != "") {
+            throw IllegalArgumentException("filesystem root requires isolated read-only mode")
+        }
+        if (sandboxMode == ProcessSandboxMode.Host && !readOnlyMounts.isEmpty()) {
+            throw IllegalArgumentException("host process cannot declare sandbox mounts")
+        }
         this.operationId = operationId
         this.executable = executable
         this.arguments = arguments
         this.workingDirectory = workingDirectory
         this.timeoutMillis = timeoutMillis
         this.sandboxMode = sandboxMode
+        this.filesystemRoot = filesystemRoot
+        this.readOnlyMounts = readOnlyMounts
         this.networkPolicy = match (networkPolicy) {
             case Some(value) => value
             case None => NetworkPolicy(NetworkPolicyMode.Denied)
@@ -1899,6 +1963,7 @@ public class ProcessRequest {
         this.secretEnvironmentAllowlist = secretEnvironmentAllowlist
         this.redactedValues = redactedValues
         this.displayServerAccess = displayServerAccess
+        this.processLimits = processLimits
     }
 }
 

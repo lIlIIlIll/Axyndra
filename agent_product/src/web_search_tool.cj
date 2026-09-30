@@ -15,7 +15,8 @@ public interface WebSearchTransport {
         arguments: Array<String>,
         operationId: OperationId,
         networkPolicy: NetworkPolicy,
-        secretValues: Array<String>
+        secretValues: Array<String>,
+        processLimits!: ExecutionResourceLimits
     ): Result<ProcessResult>
 
 }
@@ -45,10 +46,10 @@ public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationCo
     }
 
     public func reserve(id: OperationId): Unit {
-        match (processes as LocalProcessPort) { case Some(local) => local.reserveOperation(id); case None => () }
+        processes.reserveOperation(id)
     }
     public func release(id: OperationId): Unit {
-        match (processes as LocalProcessPort) { case Some(local) => local.releaseOperation(id); case None => () }
+        processes.releaseOperation(id)
     }
     public func cancel(id: OperationId): Result<Unit> { processes.cancel(id) }
 
@@ -56,7 +57,8 @@ public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationCo
         arguments: Array<String>,
         operationId: OperationId,
         networkPolicy: NetworkPolicy,
-        secretValues: Array<String>
+        secretValues: Array<String>,
+        processLimits!: ExecutionResourceLimits
     ): Result<ProcessResult> {
         processes.execute(ProcessRequest(
             executable,
@@ -65,7 +67,8 @@ public class CurlWebSearchTransport <: WebSearchTransport & WebSearchOperationCo
             timeoutMillis: 120000,
             sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
             networkPolicy: Some(networkPolicy),
-            redactedValues: secretValues
+            redactedValues: secretValues,
+            processLimits: processLimits
         ))
     }
 }
@@ -246,7 +249,8 @@ public class ProductWebSearchRuntime {
                 request,
                 operationId,
                 prepared.operationPlan.networkPolicy,
-                webSearchSecretValues(provider)
+                webSearchSecretValues(provider),
+                processLimits: context.budget.processLimits
             ) }
         )) {
             case Result.Ok(value) => value

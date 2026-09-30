@@ -8,6 +8,7 @@ import agent_client.*
 import agent_app_protocol.*
 import agent_core.*
 import agent_domain.*
+import agent_domain as domain
 import agent_extensions.*
 import agent_mcp.*
 import agent_ports.*
@@ -26,7 +27,7 @@ import std.fs.*
 import std.sync.*
 import agent_extension_runtime.*
 import std.time.*
-import stdx.crypto.crypto.*
+import process4cj.*
 
 
 public class ProductConfig {
@@ -101,7 +102,7 @@ public enum ProductStartupMode {
 
 public class ProductIds <: IdGenerator {
     private let lock = Mutex()
-    private let random = SecureRandom()
+    private let randomBytes = Array<Byte>(16, repeat: 0)
 
     public init() {}
 
@@ -118,27 +119,56 @@ public class ProductIds <: IdGenerator {
     private func next(prefix: String): String {
         lock.lock()
         try {
+            fillSecureRandom(randomBytes)
             prefix + "-" +
                 DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString() + "-" +
-                productIdHex(random.nextUInt64(), random.nextUInt64())
+                productIdHex(randomBytes)
         } finally {
             lock.unlock()
         }
     }
 }
 
-private func productIdHex(high: UInt64, low: UInt64): String {
+private func productIdHex(bytes: Array<Byte>): String {
     let digits = "0123456789abcdef".toArray()
     let encoded = ArrayList<Byte>()
-    for (value in [high, low]) {
-        var shift: UInt64 = 60
-        while (true) {
-            encoded.add(digits[Int64((value >> shift) & 0x0f)])
-            if (shift == 0) { break }
-            shift -= 4
-        }
+    for (byte in bytes) {
+        let value = UInt64(UInt8(byte))
+        encoded.add(digits[Int64((value >> 4) & 0x0f)])
+        encoded.add(digits[Int64(value & 0x0f)])
     }
     String.fromUtf8(encoded.toArray())
+}
+
+/** Encode bytes as unwrapped RFC 4648 Base64 for product-owned clipboard/RPC payloads. */
+public func productBase64Bytes(bytes: Array<UInt8>): String {
+    let alphabet = unsafe { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".rawData() }
+    let output = Array<UInt8>(((bytes.size + 2) / 3) * 4, repeat: 0)
+    var inputIndex: Int64 = 0
+    var outputIndex: Int64 = 0
+    while (inputIndex < bytes.size) {
+        let first = UInt32(bytes[inputIndex])
+        let hasSecond = inputIndex + 1 < bytes.size
+        let hasThird = inputIndex + 2 < bytes.size
+        let second = if (hasSecond) { UInt32(bytes[inputIndex + 1]) } else { UInt32(0) }
+        let third = if (hasThird) { UInt32(bytes[inputIndex + 2]) } else { UInt32(0) }
+        let packed = (first << 16) | (second << 8) | third
+        output[outputIndex] = alphabet[Int64((packed >> 18) & 63)]
+        output[outputIndex + 1] = alphabet[Int64((packed >> 12) & 63)]
+        output[outputIndex + 2] = if (hasSecond) {
+            alphabet[Int64((packed >> 6) & 63)]
+        } else {
+            b'='
+        }
+        output[outputIndex + 3] = if (hasThird) {
+            alphabet[Int64(packed & 63)]
+        } else {
+            b'='
+        }
+        inputIndex += 3
+        outputIndex += 4
+    }
+    String.fromUtf8(output)
 }
 
 public class ProductClipboardCopy {
@@ -232,6 +262,7 @@ public class ProductRuntime {
     private let providerProfiles: Array<ProviderProfile>
     private let modelCatalog: Array<ModelCatalogEntry>
     private let processes: LocalProcessPort
+    private let codexHookRuntime: ProductCodexHookRuntime
     private let retryControl: RetryControl
     private let uriRouter: InternalUriRouter
     private let taskRuntime: ProductTaskRuntime
@@ -239,6 +270,7 @@ public class ProductRuntime {
     private let goalRuntime: ProductGoalRuntime
     private let memoryRuntime: ProductMemoryRuntime
     private let skillRuntime: ProductSkillRuntime
+    private let pluginRuntime: ProductPluginRuntime
     private let webSearchRuntime: ProductWebSearchRuntime
     private let compactionSummarizer: CompactionSummarizer
     private let approvalReviewer: ApprovalReviewer
@@ -275,6 +307,7 @@ public class ProductRuntime {
         providerProfiles: Array<ProviderProfile>,
         modelCatalog: Array<ModelCatalogEntry>,
         processes: LocalProcessPort,
+        codexHookRuntime: ProductCodexHookRuntime,
         retryControl: RetryControl,
         uriRouter: InternalUriRouter,
         taskRuntime: ProductTaskRuntime,
@@ -282,6 +315,7 @@ public class ProductRuntime {
         goalRuntime: ProductGoalRuntime,
         memoryRuntime: ProductMemoryRuntime,
         skillRuntime: ProductSkillRuntime,
+        pluginRuntime: ProductPluginRuntime,
         webSearchRuntime: ProductWebSearchRuntime,
         compactionSummarizer: CompactionSummarizer,
         approvalReviewer: ApprovalReviewer,
@@ -315,6 +349,7 @@ public class ProductRuntime {
         this.providerProfiles = providerProfiles
         this.modelCatalog = modelCatalog
         this.processes = processes
+        this.codexHookRuntime = codexHookRuntime
         this.retryControl = retryControl
         this.uriRouter = uriRouter
         this.taskRuntime = taskRuntime
@@ -322,6 +357,7 @@ public class ProductRuntime {
         this.goalRuntime = goalRuntime
         this.memoryRuntime = memoryRuntime
         this.skillRuntime = skillRuntime
+        this.pluginRuntime = pluginRuntime
         this.webSearchRuntime = webSearchRuntime
         this.compactionSummarizer = compactionSummarizer
         this.approvalReviewer = approvalReviewer
@@ -332,6 +368,34 @@ public class ProductRuntime {
         this.threadRuntimes = threadRuntimes
         this.vnext = vnext
         this.fixtureProbe = fixtureProbe
+    }
+
+    func activateStartupPlugins(): Result<Unit> {
+        for (record in pluginRuntime.enabledEffectiveRecords()) {
+            match (activateProductPlugin(record)) {
+                case Result.Ok(_) => ()
+                case Result.Err(activationError) =>
+                    match (pluginRuntime.setEnabled(
+                        record.descriptor.namespace, false, record.scope
+                    )) {
+                        case PluginImportResult.Ok(_) => ()
+                        case PluginImportResult.Err(persistenceError) =>
+                            return Result.Err(AgentError(
+                                AgentErrorKind.Configuration,
+                                "plugin.startup_disable_failed",
+                                "failed to persist startup quarantine for " +
+                                    record.descriptor.namespace + ": " +
+                                    persistenceError.code,
+                                fields: [
+                                    ErrorField("plugin", record.descriptor.namespace),
+                                    ErrorField("activation_error", activationError.code),
+                                    ErrorField("persistence_error", persistenceError.code)
+                                ]
+                            ))
+                    }
+            }
+        }
+        Result.Ok(())
     }
 
     public func request(
@@ -608,9 +672,608 @@ public class ProductRuntime {
         extensions.snapshots()
     }
 
+    public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
+        vnext.javascriptPluginCommands()
+    }
+
+    public func invokeJavaScriptPluginCommand(
+        routeName: String,
+        arguments: String,
+        sessionId: SessionId,
+        commandId: String,
+        cancellation: domain.CancellationToken,
+        noticeSink: ProductJavaScriptPluginNoticeSink
+    ): Result<Unit> {
+        vnext.invokeJavaScriptPluginCommand(
+            routeName, arguments, sessionId, commandId, cancellation, noticeSink
+        )
+    }
+
+    public func pluginSnapshots(): Array<ProductPluginRecord> {
+        pluginRuntime.list()
+    }
+
+    public func inspectPlugin(root: String): PluginPackageResult<PluginPackageDescriptor> {
+        pluginRuntime.inspect(root)
+    }
+
+    public func importLocalPlugin(root: String): PluginImportResult<ProductPluginRecord> {
+        importLocalPlugin(root, PluginInstallScope.User)
+    }
+
+    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+        let descriptor = match (pluginRuntime.inspect(root)) {
+            case PluginPackageResult.Ok(value) => value
+            case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+        }
+        importProductPlugin(
+            descriptor.namespace,
+            { => pluginRuntime.importLocal(root, scope) }
+        )
+    }
+
+
+    public func importPluginSource(
+        sessionId: SessionId,
+        source: ProductPluginSourceRequest,
+        approvalDecision!: ApprovalDecision
+    ): PluginImportResult<ProductPluginRecord> {
+        importPluginSource(
+            sessionId,
+            source,
+            PluginInstallScope.User,
+            approvalDecision: approvalDecision
+        )
+    }
+
+    public func importPluginSource(
+        sessionId: SessionId,
+        source: ProductPluginSourceRequest,
+        scope: PluginInstallScope,
+        approvalDecision!: ApprovalDecision
+    ): PluginImportResult<ProductPluginRecord> {
+        let spec = match (productPluginSourceSpec(source, shellNetworkMode)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+        }
+        if (pluginScopeEquals(scope, PluginInstallScope.Workspace) && workspace.rootPath().trimAscii() == "") {
+            return pluginImportError("plugin.workspace_scope_missing", "workspace scope requires an identified workspace root")
+        }
+        match (pluginRuntime.cachedSource(spec, scope)) {
+            case Some(record) => return PluginImportResult.Ok(record)
+            case None => ()
+        }
+        let acquirer = ProductPluginSourceAcquirer(
+            vnext, ids, workspace.rootPath(), settingsRoot
+        )
+        match (acquirer.acquire(sessionId, spec, approvalDecision)) {
+            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
+            case PluginImportResult.Ok(acquired) =>
+                try {
+                    let descriptor = match (pluginRuntime.inspect(acquired.packageRoot)) {
+                        case PluginPackageResult.Ok(value) => value
+                        case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+                    }
+                    importProductPlugin(
+                        descriptor.namespace,
+                        { => pluginRuntime.importAcquiredSource(acquired, scope) }
+                    )
+                } finally {
+                    acquirer.cleanup(acquired)
+                }
+        }
+    }
+
+    public func pluginDoctor(): Array<PluginImportError> {
+        pluginRuntime.doctor()
+    }
+    public func pluginPromptTemplates(): Array<String> {
+        pluginRuntime.promptTemplateNames()
+    }
+
+    public func renderPluginPromptTemplate(
+        identity: String,
+        arguments: Array<String>
+    ): PluginImportResult<String> {
+        pluginRuntime.renderPromptTemplate(identity, arguments)
+    }
+
+    private func pluginHasMcp(record: ProductPluginRecord): Bool {
+        for (component in record.descriptor.components where component.kind == PluginComponentKind.Mcp) {
+            return true
+        }
+        false
+    }
+
+    private func pluginDeactivationRestoreError(
+        record: ProductPluginRecord,
+        deactivationError: AgentError,
+        restoreError: AgentError
+    ): AgentError {
+        AgentError(
+            AgentErrorKind.Configuration,
+            "plugin.deactivation_restore_failed",
+            "plugin deactivation failed and its active components could not be restored",
+            fields: [
+                ErrorField("plugin", record.descriptor.namespace),
+                ErrorField("deactivation_error", deactivationError.code),
+                ErrorField("restore_error", restoreError.code)
+            ]
+        )
+    }
+
+    private func restoreProductPlugin(
+        record: ProductPluginRecord,
+        restoreVnext!: Bool
+    ): Result<Unit> {
+        var restoreError: ?AgentError = None
+        if (restoreVnext) {
+            match (vnext.restoreImportedPlugin(record)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => restoreError = Some(error)
+            }
+        }
+        if (pluginHasMcp(record)) {
+            match (mcpRuntime.activatePlugin(
+                record,
+                workspace.rootPath(),
+                catalog,
+                extensions,
+                sandboxCaBundle: sandboxCaBundle,
+                restoreExisting: true
+            )) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => if (restoreError.isNone()) {
+                    restoreError = Some(error)
+                }
+            }
+        }
+        codexHookRuntime.activatePlugin(record)
+        match (restoreError) {
+            case Some(error) => Result.Err(error)
+            case None => Result.Ok(())
+        }
+    }
+
+    private func deactivateProductPlugin(record: ProductPluginRecord): Result<Unit> {
+        codexHookRuntime.revokePlugin(record)
+        if (pluginHasMcp(record)) {
+            match (mcpRuntime.deactivatePlugin(record, catalog, extensions)) {
+                case Result.Err(error) =>
+                    match (restoreProductPlugin(record, restoreVnext: false)) {
+                        case Result.Ok(_) => return Result.Err(error)
+                        case Result.Err(restoreError) => return Result.Err(
+                            pluginDeactivationRestoreError(record, error, restoreError)
+                        )
+                    }
+                case Result.Ok(_) => ()
+            }
+        }
+        match (vnext.deactivateImportedPlugin(record)) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) =>
+                match (restoreProductPlugin(record, restoreVnext: true)) {
+                    case Result.Ok(_) => Result.Err(error)
+                    case Result.Err(restoreError) => Result.Err(
+                        pluginDeactivationRestoreError(record, error, restoreError)
+                    )
+                }
+        }
+    }
+
+    private func activateProductPlugin(record: ProductPluginRecord): Result<Unit> {
+        match (vnext.activateImportedPlugin(record)) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) =>
+                if (!pluginHasMcp(record)) {
+                    codexHookRuntime.activatePlugin(record)
+                    return Result.Ok(())
+                }
+                match (mcpRuntime.activatePlugin(
+                    record,
+                    workspace.rootPath(),
+                    catalog,
+                    extensions,
+                    sandboxCaBundle: sandboxCaBundle
+                )) {
+                    case Result.Ok(_) =>
+                        codexHookRuntime.activatePlugin(record)
+                        Result.Ok(())
+                    case Result.Err(error) =>
+                        let _ = vnext.deactivateImportedPlugin(record)
+                        Result.Err(error)
+                }
+        }
+    }
+
+    private func importProductPlugin(
+        namespace: String,
+        operation: () -> PluginImportResult<ProductPluginRecord>
+    ): PluginImportResult<ProductPluginRecord> {
+        let effectiveBefore = pluginRuntime.get(namespace)
+        match (operation()) {
+            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
+            case PluginImportResult.Ok(record) =>
+                let effectiveAfter = pluginRuntime.get(namespace)
+                let effectiveChanged = match ((effectiveBefore, effectiveAfter)) {
+                    case (Some(previous), Some(current)) =>
+                        !pluginScopeEquals(previous.scope, current.scope) ||
+                            previous.contentLock != current.contentLock
+                    case (None, Some(_)) => true
+                    case (Some(_), None) => true
+                    case (None, None) => false
+                }
+                if (!effectiveChanged) { return PluginImportResult.Ok(record) }
+                match (effectiveBefore) {
+                    case Some(previous) =>
+                        if (previous.enabled) {
+                            match (deactivateProductPlugin(previous)) {
+                                case Result.Ok(_) => ()
+                                case Result.Err(error) =>
+                                    match (pluginRuntime.uninstall(record.descriptor.id, record.scope)) {
+                                        case PluginImportResult.Ok(_) => let _ = activateProductPlugin(previous)
+                                        case PluginImportResult.Err(rollbackError) =>
+                                            return pluginImportError(rollbackError.code, rollbackError.message)
+                                    }
+                                    return pluginImportError(error.code, error.message)
+                            }
+                        }
+                    case None => ()
+                }
+                match (effectiveAfter) {
+                    case Some(current) =>
+                        if (current.enabled) {
+                            match (activateProductPlugin(current)) {
+                                case Result.Ok(_) => ()
+                                case Result.Err(error) =>
+                                    match (pluginRuntime.uninstall(record.descriptor.id, record.scope)) {
+                                        case PluginImportResult.Ok(_) =>
+                                            match (effectiveBefore) {
+                                                case Some(previous) => if (previous.enabled) {
+                                                    let _ = activateProductPlugin(previous)
+                                                }
+                                                case None => ()
+                                            }
+                                        case PluginImportResult.Err(rollbackError) =>
+                                            return pluginImportError(rollbackError.code, rollbackError.message)
+                                    }
+                                    return pluginImportError(error.code, error.message)
+                            }
+                        }
+                    case None => ()
+                }
+                PluginImportResult.Ok(record)
+        }
+    }
+    private func replaceActiveProductPlugin(
+        id: String,
+        operation: () -> PluginImportResult<ProductPluginRecord>,
+        restoreOnActivationFailure!: Bool = false
+    ): PluginImportResult<ProductPluginRecord> {
+        let current = match (pluginRuntime.get(id)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+        }
+        let wasEnabled = current.enabled
+        if (wasEnabled) {
+            match (deactivateProductPlugin(current)) {
+                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Ok(_) => ()
+            }
+        }
+        match (operation()) {
+            case PluginImportResult.Err(error) =>
+                if (wasEnabled) { let _ = activateProductPlugin(current) }
+                PluginImportResult.Err(error)
+            case PluginImportResult.Ok(record) =>
+                if (!record.enabled) { return PluginImportResult.Ok(record) }
+                match (activateProductPlugin(record)) {
+                    case Result.Ok(_) => PluginImportResult.Ok(record)
+                    case Result.Err(error) =>
+                        if (restoreOnActivationFailure) {
+                            match (pluginRuntime.rollback(id)) {
+                                case PluginImportResult.Ok(restored) =>
+                                    if (wasEnabled) { let _ = activateProductPlugin(restored) }
+                                case PluginImportResult.Err(_) =>
+                                    let _ = pluginRuntime.setEnabled(id, false)
+                            }
+                        } else {
+                            let _ = pluginRuntime.setEnabled(id, false)
+                        }
+                        pluginImportError(error.code, error.message)
+                }
+        }
+    }
+
+    public func updateLocalPlugin(id: String, root: String): PluginImportResult<ProductPluginRecord> {
+        replaceActiveProductPlugin(id, { => pluginRuntime.updateLocal(id, root) }, restoreOnActivationFailure: true)
+    }
+
+    private func replaceActiveProductPluginInScope(
+        id: String,
+        scope: PluginInstallScope,
+        operation: () -> PluginImportResult<ProductPluginRecord>,
+        restoreOnActivationFailure!: Bool = false
+    ): PluginImportResult<ProductPluginRecord> {
+        let current = match (pluginRuntime.get(id, scope)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        }
+        let effectiveBefore = pluginRuntime.get(id)
+        let wasActive = match (effectiveBefore) {
+            case Some(previous) => previous.enabled && previous.descriptor.namespace == current.descriptor.namespace &&
+                pluginScopeEquals(previous.scope, current.scope)
+            case None => false
+        }
+        if (wasActive) {
+            match (deactivateProductPlugin(current)) {
+                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Ok(_) => ()
+            }
+        }
+        match (operation()) {
+            case PluginImportResult.Err(error) =>
+                if (wasActive) { let _ = activateProductPlugin(current) }
+                PluginImportResult.Err(error)
+            case PluginImportResult.Ok(record) =>
+                let effectiveAfter = pluginRuntime.get(id)
+                let shouldActivate = match (effectiveAfter) {
+                    case Some(active) => active.enabled && active.descriptor.namespace == record.descriptor.namespace &&
+                        pluginScopeEquals(active.scope, record.scope)
+                    case None => false
+                }
+                if (!shouldActivate) { return PluginImportResult.Ok(record) }
+                let active = match (effectiveAfter) {
+                    case Some(value) => value
+                    case None => return PluginImportResult.Ok(record)
+                }
+                match (activateProductPlugin(active)) {
+                    case Result.Ok(_) => PluginImportResult.Ok(record)
+                    case Result.Err(error) =>
+                        if (restoreOnActivationFailure) {
+                            match (pluginRuntime.rollback(id, scope)) {
+                                case PluginImportResult.Ok(_) =>
+                                    match (effectiveBefore) {
+                                        case Some(previous) => if (wasActive) { let _ = activateProductPlugin(previous) }
+                                        case None => ()
+                                    }
+                                case PluginImportResult.Err(_) =>
+                                    let _ = pluginRuntime.setEnabled(id, false, scope)
+                            }
+                        } else {
+                            let _ = pluginRuntime.setEnabled(id, false, scope)
+                        }
+                        pluginImportError(error.code, error.message)
+                }
+        }
+    }
+
+    public func updateLocalPlugin(
+        id: String,
+        root: String,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        replaceActiveProductPluginInScope(
+            id,
+            scope,
+            { => pluginRuntime.updateLocal(id, root, scope) },
+            restoreOnActivationFailure: true
+        )
+    }
+
+    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+        replaceActiveProductPluginInScope(
+            id,
+            scope,
+            { => pluginRuntime.rollback(id, scope) },
+            restoreOnActivationFailure: true
+        )
+    }
+
+    public func updatePluginSource(
+        id: String,
+        sessionId: SessionId,
+        source: ProductPluginSourceRequest,
+        approvalDecision!: ApprovalDecision
+    ): PluginImportResult<ProductPluginRecord> {
+        let current = match (pluginRuntime.get(id)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+        }
+        updatePluginSourceInScope(id, current.scope, sessionId, source, approvalDecision)
+    }
+
+    public func updatePluginSource(
+        id: String,
+        scope: PluginInstallScope,
+        sessionId: SessionId,
+        source: ProductPluginSourceRequest,
+        approvalDecision!: ApprovalDecision
+    ): PluginImportResult<ProductPluginRecord> {
+        updatePluginSourceInScope(id, scope, sessionId, source, approvalDecision)
+    }
+
+    private func updatePluginSourceInScope(
+        id: String,
+        scope: PluginInstallScope,
+        sessionId: SessionId,
+        source: ProductPluginSourceRequest,
+        approvalDecision: ApprovalDecision
+    ): PluginImportResult<ProductPluginRecord> {
+        let current = match (pluginRuntime.get(id, scope)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        }
+        let spec = match (productPluginSourceSpec(source, shellNetworkMode)) {
+            case PluginImportResult.Ok(value) => value
+            case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+        }
+        match (pluginRuntime.cachedSource(spec, scope, id: id)) {
+            case Some(record) => return PluginImportResult.Ok(record)
+            case None => ()
+        }
+        let acquirer = ProductPluginSourceAcquirer(
+            vnext, ids, workspace.rootPath(), settingsRoot
+        )
+        match (acquirer.acquire(sessionId, spec, approvalDecision)) {
+            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
+            case PluginImportResult.Ok(acquired) =>
+                try {
+                    let descriptor = match (pluginRuntime.inspect(acquired.packageRoot)) {
+                        case PluginPackageResult.Ok(value) => value
+                        case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+                    }
+                    if (descriptor.namespace != current.descriptor.namespace) {
+                        return pluginImportError(
+                            "plugin.update_id_mismatch",
+                            "updated source package namespace does not match the imported plugin"
+                        )
+                    }
+                    replaceActiveProductPluginInScope(
+                        id,
+                        scope,
+                        { => pluginRuntime.updateAcquiredSource(id, acquired, scope) },
+                        restoreOnActivationFailure: true
+                    )
+                } finally {
+                    acquirer.cleanup(acquired)
+                }
+        }
+    }
+
+    public func rollbackPlugin(id: String): PluginImportResult<ProductPluginRecord> {
+        replaceActiveProductPlugin(
+            id,
+            { => pluginRuntime.rollback(id) },
+            restoreOnActivationFailure: true
+        )
+    }
+    public func uninstallPlugin(id: String): PluginImportResult<Unit> {
+        let current = match (pluginRuntime.get(id)) {
+            case Some(record) => record
+            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+        }
+        uninstallPlugin(id, current.scope)
+    }
+
+
+    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginImportResult<Unit> {
+        let current = match (pluginRuntime.get(id, scope)) {
+            case Some(record) => record
+            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        }
+        let effectiveBefore = pluginRuntime.get(id)
+        let wasEffective = match (effectiveBefore) {
+            case Some(previous) => previous.descriptor.namespace == current.descriptor.namespace &&
+                pluginScopeEquals(previous.scope, current.scope)
+            case None => false
+        }
+        let wasActive = wasEffective && current.enabled
+        if (wasActive) {
+            match (deactivateProductPlugin(current)) {
+                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Ok(_) => ()
+            }
+        }
+        match (pluginRuntime.uninstall(id, scope)) {
+            case PluginImportResult.Err(error) =>
+                if (wasActive) { let _ = activateProductPlugin(current) }
+                PluginImportResult.Err(error)
+            case PluginImportResult.Ok(_) =>
+                let effectiveAfter = pluginRuntime.get(id)
+                match (effectiveAfter) {
+                    case Some(active) =>
+                        if (!wasEffective || !active.enabled) { return PluginImportResult.Ok(()) }
+                        match (activateProductPlugin(active)) {
+                            case Result.Ok(_) => PluginImportResult.Ok(())
+                            case Result.Err(error) =>
+                                match (pluginRuntime.restoreRecord(current)) {
+                                    case PluginImportResult.Err(restoreError) =>
+                                        return pluginImportError(restoreError.code, restoreError.message)
+                                    case PluginImportResult.Ok(_) => ()
+                                }
+                                if (wasActive) { let _ = activateProductPlugin(current) }
+                                pluginImportError(error.code, error.message)
+                        }
+                    case None => PluginImportResult.Ok(())
+                }
+        }
+    }
+
+    public func garbageCollectPlugins(): PluginImportResult<Array<String>> {
+        pluginRuntime.garbageCollect()
+    }
+
+    public func setPluginEnabled(id: String, enabled: Bool): PluginImportResult<ProductPluginRecord> {
+        let current = match (pluginRuntime.get(id)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+        }
+        setPluginEnabled(id, enabled, current.scope)
+    }
+
+    public func setPluginEnabled(
+        id: String,
+        enabled: Bool,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        let target = match (pluginRuntime.get(id, scope)) {
+            case Some(value) => value
+            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        }
+        let explicitDisableChange = pluginScopeEquals(scope, PluginInstallScope.User) &&
+            !enabled && !target.explicitlyDisabled
+        if (target.enabled == enabled && !explicitDisableChange) { return PluginImportResult.Ok(target) }
+        let effectiveBefore = pluginRuntime.get(id)
+        match (effectiveBefore) {
+            case Some(previous) =>
+                if (previous.enabled) {
+                    match (deactivateProductPlugin(previous)) {
+                        case Result.Err(error) => return pluginImportError(error.code, error.message)
+                        case Result.Ok(_) => ()
+                    }
+                }
+            case None => ()
+        }
+        match (pluginRuntime.setEnabled(id, enabled, scope)) {
+            case PluginImportResult.Err(error) =>
+                match (effectiveBefore) {
+                    case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
+                    case None => ()
+                }
+                PluginImportResult.Err(error)
+            case PluginImportResult.Ok(record) =>
+                let effectiveAfter = pluginRuntime.get(id)
+                match (effectiveAfter) {
+                    case Some(active) =>
+                        if (!active.enabled) { return PluginImportResult.Ok(record) }
+                        match (activateProductPlugin(active)) {
+                            case Result.Ok(_) => PluginImportResult.Ok(record)
+                            case Result.Err(error) =>
+                                match (pluginRuntime.restoreRecord(target)) {
+                                    case PluginImportResult.Err(restoreError) =>
+                                        return pluginImportError(restoreError.code, restoreError.message)
+                                    case PluginImportResult.Ok(_) => ()
+                                }
+                                match (effectiveBefore) {
+                                    case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
+                                    case None => ()
+                                }
+                                pluginImportError(error.code, error.message)
+                        }
+                    case None => PluginImportResult.Ok(record)
+                }
+        }
+    }
+
     public func extensionDiagnostics(): Array<ExtensionDiagnostic> {
         extensionRuntime.diagnostics()
     }
+
+    public func codexHookDiagnostics(): Array<String> {
+        codexHookRuntime.diagnostics()
+    }
+
 
     public func mcpSnapshots(): Array<ProductMcpServerSnapshot> {
         mcpRuntime.snapshots()
@@ -629,6 +1292,7 @@ public class ProductRuntime {
     }
 
     public func close(): Result<Unit> {
+        let vnextResult = vnext.close()
         let extensionResult = extensionRuntime.shutdown()
         let taskResult = taskRuntime.close()
         let processResult = processes.close()
@@ -641,6 +1305,10 @@ public class ProductRuntime {
                 "product.state_database_close_failed",
                 error.message
             ))
+        }
+        match (vnextResult) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
         }
         match (extensionResult) {
             case ExtensionRuntimeResult.Err(error) => return Result.Err(extensionRuntimeAgentError(error))
@@ -1243,6 +1911,21 @@ public class ProductRuntime {
         }
     }
 
+    public func latestRunId(threadId: ThreadId): Result<RunId> {
+        ProductRunInspectionProjection(vnextDatabase).latestRunId(threadId)
+    }
+
+    public func runInspection(
+        threadId: ThreadId,
+        runId: RunId,
+        beforeCursor!: Int64 = 0,
+        limit!: Int64 = 25
+    ): Result<AppRunInspectionPage> {
+        ProductRunInspectionProjection(vnextDatabase).inspect(
+            threadId, runId, beforeCursor, limit
+        )
+    }
+
     // Stable process-local App Protocol read boundary. Frontends do not reach
     // into SQLite or ThreadStore directly; the same command/event pair can be
     // transported out of process later without changing canonical ownership.
@@ -1284,6 +1967,20 @@ public class ProductRuntime {
                     ),
                     AppEventPayload.ItemsPage(page)
                 ))
+            case AppCommandPayload.InspectRun(threadId, runId, beforeCursor, limit) =>
+                match (runInspection(
+                    threadId, runId, beforeCursor: beforeCursor, limit: limit
+                )) {
+                    case Result.Ok(page) => Result.Ok(AppEvent(
+                        AppEventMeta(
+                            command.meta.clientSequence,
+                            threadId,
+                            page.threadRevision
+                        ),
+                        AppEventPayload.RunInspection(page)
+                    ))
+                    case Result.Err(error) => Result.Err(error)
+                }
             case _ => Result.Err(AgentError(
                 AgentErrorKind.InvalidInput,
                 "product.app_command_not_supported",
@@ -1690,48 +2387,7 @@ public class ProductRuntime {
                 )
             )
         }
-        // Trusted UI boundary: clipboard staging is an explicit application
-        // action over a product-owned file, never a model ToolCall. Native
-        // display-server access cannot be represented by the workspace bwrap.
-        let encoded = match (processes.execute(
-            ProcessRequest(
-                "/bin/sh",
-                operationId: ids.nextOperationId(),
-                arguments: [
-                    "-c",
-                    "base64 < \"$1\" | tr -d '\\n'",
-                    "axyndra-clipboard",
-                    path
-                ],
-                timeoutMillis: 5000,
-                sandboxMode: ProcessSandboxMode.Host,
-                networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
-        ))) {
-            case Result.Ok(result) =>
-                if (result.exitCode == 0 && result.stdout.trimAscii() != "") {
-                    result.stdout.trimAscii()
-                } else {
-                    try {
-                        removeIfExists(path)
-                    } catch (_: Exception) {}
-                    return Result.Err(
-                        AgentError(
-                            AgentErrorKind.Internal,
-                            "clipboard.base64_failed",
-                            if (result.stderr.trimAscii() == "") {
-                                "base64 produced no output"
-                            } else {
-                                result.stderr.trimAscii()
-                            }
-                        )
-                    )
-                }
-            case Result.Err(error) =>
-                try {
-                    removeIfExists(path)
-                } catch (_: Exception) {}
-                return Result.Err(error)
-        }
+        let encoded = productBase64Bytes(unsafe { text.rawData() })
         let native = if (!nativeEnabled) {
             false
         } else {
@@ -3634,35 +4290,14 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
     )
     let ids = ProductIds()
     let workspace = LocalWorkspace(config.workspaceRoot)
-    let sandboxToolchain = configuredProductSandboxToolchain()
     let sandboxCaBundle = match (resolveProductSandboxCaBundle(settings.sandboxCaBundle)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    let sandboxMounts = ArrayList<SandboxReadOnlyMount>()
-    sandboxMounts.add(all: sandboxToolchain.mounts)
-    if (sandboxCaBundle != "") {
-        try {
-            sandboxMounts.add(SandboxReadOnlyMount(sandboxCaBundle))
-        } catch (error: Exception) {
-            return Result.Err(AgentError(
-                AgentErrorKind.Configuration,
-                "sandbox.ca_unavailable",
-                error.message
-            ))
-        }
+    let processes = match (createProductProcessPort(workspace, sandboxCaBundle, config.settingsRoot)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
     }
-    let processes = LocalProcessPort(
-        workspace,
-        // Model-triggered process requests are fail-closed unless the
-        // workspace sandbox is enabled. Fixture transports exercise the same
-        // execution boundary instead of silently switching to host execution.
-        sandboxEnabled: true,
-        sandboxReadOnlyMounts: sandboxMounts.toArray(),
-        sandboxCaBundle: sandboxCaBundle,
-        sandboxPathEntries: sandboxToolchain.pathEntries,
-        networkGateway: Some(LocalNetworkGatewayPort())
-    )
     let artifactStore = ProductArtifactStore(
         config.stateRoot,
         database: Some(vnextDatabase)
@@ -3681,7 +4316,12 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         config.settingsRoot,
         workspace.rootPath()
     )
-    let skillRuntime = ProductSkillRuntime(config.settingsRoot, workspace.rootPath())
+    let pluginRuntime = ProductPluginRuntime(config.settingsRoot, workspace.rootPath())
+    let skillRuntime = ProductSkillRuntime(
+        config.settingsRoot,
+        workspace.rootPath(),
+        pluginRuntime: Some(pluginRuntime)
+    )
     let webSearchRuntime = ProductWebSearchRuntime(
         CurlWebSearchTransport(processes),
         config.settingsRoot
@@ -3724,6 +4364,17 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
+    match (registerPluginAcquisitionTool(
+        catalog,
+        config.settingsRoot,
+        workspace.rootPath(),
+        sandboxCaBundle,
+        settings.shellNetworkMode
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
+
     let pipeline = ToolPipeline(
         catalog,
         operations,
@@ -3736,6 +4387,108 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         ),
         permissions: permissions
     )
+    let workerExecutable = match (productProgramWorkerExecutable()) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let programProcessRuntime = ProductToolProgramProcessRuntime(
+        config.stateRoot, artifactStore, workerExecutable
+    )
+    match (catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "run_program",
+                "Execute a restricted read-only Program using workspace read tools. A completed Program may return value.application_plan with schema axyndra.file-change-proposal/v1 and ordered create(path, content) or replace(path, expected_content, content) operations. For replace, use tools.read with a :raw path suffix and set expected_content to the complete exact UTF-8 file text. The host validates and stores an immutable plan and patch artifact, returns their references and a bounded diff, and never applies the plan.",
+                objectSchema([schemaProperty("source", "string")], ["source"])
+            ),
+            Capability(CapabilityKind.WorkspaceRead),
+            implementationVersion: "product-tool-program-v2",
+            implementationFingerprint: "product-tool-program-application-plan-v1",
+            networkPolicyResolver: Some({_ =>
+                Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            })
+        ),
+        ProductPlanGeneratingRunProgramExecutor(
+            ProductRunProgramExecutor(
+                programProcessRuntime, catalog, pipeline, operations, ids
+            ),
+            workspace,
+            artifactStore
+        )
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
+    match (catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "apply_file_plan",
+                "Apply a previously generated immutable file plan through canonical approval. Revalidate every target immediately before its ordered write and report applied, conflict, not_started, failed_no_effect, or unknown items with a separate complete, no_effect, partial, or unknown effect summary; never describe the multi-file result as atomic.",
+                objectSchema([
+                    schemaProperty("plan_ref", "string"),
+                    schemaProperty("plan_digest", "string")
+                ], ["plan_ref", "plan_digest"])
+            ),
+            Capability(CapabilityKind.WorkspaceWrite),
+            sideEffecting: true,
+            implementationVersion: "product-file-plan-application-v1",
+            implementationFingerprint: "product-file-plan-application-v1",
+            capabilityResolver: Some({ call =>
+                productFileApplicationPrimaryCapability(call, workspace)
+            }),
+            additionalCapabilityResolver: Some({ call =>
+                productFileApplicationAdditionalCapabilities(call, workspace)
+            }),
+            approvalMetadataResolver: Some({ call =>
+                productFilePlanApprovalMetadata(call.arguments, workspace.rootPath())
+            }),
+            networkPolicyResolver: Some({ _ =>
+                Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }),
+            canonicalArgumentsResolver: Some({ context, call =>
+                canonicalizeProductFileApplicationPlan(
+                    context, call, workspace, artifactStore
+                )
+            })
+        ),
+        ProductFilePlanApplicationExecutor(workspace, artifactStore)
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
+    match (catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(
+                "recover_file_plan",
+                "Inspect an immutable file plan against actual workspace state after cancellation, failure, or unknown execution. Classify every item as applied, not_started, conflict, or unknown and, only when safe, create a fresh continuation plan that still requires a separate authorized apply_file_plan operation. Never roll back automatically.",
+                objectSchema([
+                    schemaProperty("plan_ref", "string"),
+                    schemaProperty("plan_digest", "string")
+                ], ["plan_ref", "plan_digest"])
+            ),
+            Capability(CapabilityKind.WorkspaceRead),
+            implementationVersion: "product-file-plan-recovery-v1",
+            implementationFingerprint: "product-file-plan-recovery-v1",
+            capabilityResolver: Some({ call =>
+                productFileRecoveryPrimaryCapability(call, workspace)
+            }),
+            additionalCapabilityResolver: Some({ call =>
+                productFileRecoveryAdditionalCapabilities(call, workspace)
+            }),
+            networkPolicyResolver: Some({ _ =>
+                Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
+            }),
+            canonicalArgumentsResolver: Some({ context, call =>
+                canonicalizeProductFileRecoveryPlan(
+                    context, call, workspace, artifactStore
+                )
+            })
+        ),
+        ProductFilePlanRecoveryExecutor(workspace, artifactStore)
+    )) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
     let retryControl = RetryControl()
     var fixtureProbe: ?FixtureModelPort = None
     let configuredPort: ModelPort = if (config.fixture) {
@@ -3756,6 +4509,8 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         case None => configuredPort
     }
     let modelControl = ControlledModelPort(effectiveModelPort, runs: Some(runs))
+    let javascriptPlugins = ProductJavaScriptPluginHost()
+    let codexHookRuntime = ProductCodexHookRuntime(processes, javascriptPlugins)
     let core = AgentCore(
         modelControl,
         runs,
@@ -3765,6 +4520,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         operationRuntime: Some(operations),
         modelDecisionRuntime: Some(SqliteModelDecisionStore(vnextDatabase)),
         contextManifestRuntime: Some(ProductContextManifestRuntime(vnextDatabase)),
+        toolHooks: codexHookRuntime,
         modelAttemptRecovery: config.modelAttemptRecovery
     )
     let service = CoreRunService(core, runs)
@@ -3812,6 +4568,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         loadedProfiles,
         loadedCatalog,
         processes,
+        codexHookRuntime,
         retryControl,
         uriRouter,
         taskRuntime,
@@ -3819,6 +4576,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         goalRuntime,
         memoryRuntime,
         skillRuntime,
+        pluginRuntime,
         webSearchRuntime,
         compactionSummarizer,
         approvalReviewer,
@@ -3830,11 +4588,18 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         ProductVnextControl(
             vnextDatabase, catalog, pipeline, ids, threadRuntimes,
             operations,
-            workspace.rootPath(), processes,
+            askRuntime,
+            workspace.rootPath(), config.settingsRoot, processes, javascriptPlugins,
             extensionSignatureVerifier: config.extensionSignatureVerifier
         ),
         fixtureProbe: fixtureProbe
     )
+    match (product.activateStartupPlugins()) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) =>
+            let _ = product.close()
+            return Result.Err(error)
+    }
     taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase))
     Result.Ok(product)
 }
@@ -4660,4 +5425,42 @@ func productToolEnvironment(): ToolEnvironmentView {
         }
     }
     ToolEnvironmentView(entries: values.toArray())
+}
+
+func productProgramWorkerExecutable(): Result<String> {
+    let arguments = getCommandLine()
+    if (arguments.isEmpty()) {
+        return programProcessError<String>(
+            AgentErrorKind.Configuration,
+            "tool_program.worker_unavailable",
+            "the running Product executable could not be resolved"
+        )
+    }
+    let invoked = arguments[0]
+    let candidates = ArrayList<String>()
+    if (invoked.contains("/")) {
+        candidates.add(invoked)
+    } else {
+        let path = getVariable("PATH")
+        if (path.isSome()) {
+            for (directory in path.getOrThrow().split(":")) {
+                candidates.add(Path(directory).join(invoked).toString())
+            }
+        }
+    }
+    for (candidate in candidates) {
+        if (!exists(Path(candidate))) { continue }
+        let resolved = try { canonicalize(Path(candidate)).toString() } catch (_: Exception) {
+            continue
+        }
+        match (canonicalProgramWorkerExecutable(resolved)) {
+            case Result.Ok(value) => return Result.Ok(value)
+            case Result.Err(_) => ()
+        }
+    }
+    programProcessError<String>(
+        AgentErrorKind.Configuration,
+        "tool_program.worker_unavailable",
+        "the running Product executable is not a usable Program worker"
+    )
 }

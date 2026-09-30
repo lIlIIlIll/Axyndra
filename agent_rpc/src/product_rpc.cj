@@ -23,6 +23,9 @@ public class ProductJsonlRpcServer {
     private var running = false
     private let bashWorkers = ArrayList<RpcBashWorker>()
     private var closing = false
+    private var interactionProfile = "none"
+    private var activePluginCommandRequestId = ""
+    private var pluginCommandWorker: ?Future<Unit> = None
     private var protocolVersion: Int64 = 1
     private var chunkCounter: Int64 = 0
     private var thinkingLevel = "medium"
@@ -66,6 +69,7 @@ public class ProductJsonlRpcServer {
         session.subscribeSubagents({
             event => emitSubagentFrame(event)
         })
+        session.subscribeAsks({request => publishInteractionRequest(request)})
         session.subscribeAsyncJobs({
             event => emitFrame(
                 encodeAgentValue(
@@ -94,6 +98,7 @@ public class ProductJsonlRpcServer {
                         "supportedProtocolVersions",
                         listValue([integerValue(1), integerValue(2)])
                     ),
+                    ValueField("supportedInteractionProfiles", stringListValue(["basic-v1"])),
                     ValueField("maxFrameBytes", integerValue(1048576)),
                     ValueField(
                         "maxReassembledFrameBytes",
@@ -229,6 +234,12 @@ public class ProductJsonlRpcServer {
                         command,
                         "operationId does not match the pending approval"
                     )
+                } else if (command == "approve_session" && !pending.getOrThrow().sessionApprovalAllowed) {
+                    failure(
+                        id,
+                        command,
+                        "session approval is unavailable for network-enabled operations"
+                    )
                 } else if (!startDecision(
                     RpcDecision(
                         id,
@@ -265,6 +276,11 @@ public class ProductJsonlRpcServer {
             }
             case "get_state" => success(id, command, data: stateValue())
             case "get_available_commands" => success(id, command, data: commandsValue())
+            case "get_plugin_commands" => success(id, command, data: pluginCommandsValue())
+            case "plugin_command" => startPluginCommand(
+                id, command, productTextField(value, "routeName"),
+                productTextField(value, "arguments")
+            )
             case "set_fast_mode" =>
                 let enabled = productBoolField(value, "enabled")
                 match (session.setFastMode(enabled)) {
@@ -526,6 +542,8 @@ public class ProductJsonlRpcServer {
                         case Result.Err(error) => failure(id, command, error.message)
                     }
                 }
+            case "negotiate_interactions" => negotiateInteractions(id, command, value)
+            case "interaction_response" => interactionResponse(id, command, value)
             case "negotiate_protocol" =>
                 if (productIntegerField(value, "protocolVersion") == 2) {
                     frameLock.lock()
@@ -560,12 +578,113 @@ public class ProductJsonlRpcServer {
         true
     }
 
+    private func pluginCommandsValue(): AgentValue {
+        let commands = ArrayList<AgentValue>()
+        for (command in session.javascriptPluginCommands()) {
+            commands.add(objectValue([
+                ValueField("routeName", textValue(command.routeName)),
+                ValueField("name", textValue(command.name)),
+                ValueField("description", textValue(command.description))
+            ]))
+        }
+        objectValue([ValueField("commands", listValue(commands.toArray()))])
+    }
+
+    private func startPluginCommand(
+        id: String,
+        command: String,
+        routeName: String,
+        arguments: String
+    ): String {
+        if (id.trimAscii() == "" || routeName.trimAscii() == "" ||
+            routeName.size > 256 || arguments.size > 1048576) {
+            return failure(id, command, "plugin command identity or arguments are invalid")
+        }
+        var registered = false
+        for (candidate in session.javascriptPluginCommands()) {
+            if (candidate.routeName == routeName) { registered = true; break }
+        }
+        if (!registered) { return failure(id, command, "plugin command is not registered") }
+        lock.lock()
+        let accepted = try {
+            if (closing || running || activePluginCommandRequestId != "" ||
+                session.approval().isSome()) {
+                false
+            } else {
+                activePluginCommandRequestId = id
+                running = true
+                pluginCommandWorker = Some(spawn {
+                    runPluginCommand(id, routeName, arguments)
+                })
+                true
+            }
+        } finally {
+            lock.unlock()
+        }
+        if (!accepted) {
+            return failure(id, command, "RPC server is busy or another command is active")
+        }
+        success(id, command, data: objectValue([
+            ValueField("accepted", boolValue(true))
+        ]))
+    }
+
+    private func runPluginCommand(
+        id: String,
+        routeName: String,
+        arguments: String
+    ): Unit {
+        let result = session.invokeJavaScriptPluginCommand(
+            routeName, arguments, {noticeType, message =>
+                emitFrame(encodeAgentValue(objectValue([
+                    ValueField("type", textValue("plugin_notice")),
+                    ValueField("requestId", textValue(id)),
+                    ValueField("routeName", textValue(routeName)),
+                    ValueField("noticeType", textValue(noticeType)),
+                    ValueField("message", textValue(message))
+                ])))
+            }
+        )
+        lock.lock()
+        try {
+            if (activePluginCommandRequestId == id) {
+                activePluginCommandRequestId = ""
+                running = false
+            }
+        } finally {
+            lock.unlock()
+        }
+        match (result) {
+            case Result.Ok(_) => emitFrame(encodeAgentValue(objectValue([
+                ValueField("type", textValue("plugin_command_completed")),
+                ValueField("requestId", textValue(id)),
+                ValueField("routeName", textValue(routeName)),
+                ValueField("ok", boolValue(true))
+            ])))
+            case Result.Err(error) => emitFrame(encodeAgentValue(objectValue([
+                ValueField("type", textValue("plugin_command_completed")),
+                ValueField("requestId", textValue(id)),
+                ValueField("routeName", textValue(routeName)),
+                ValueField("ok", boolValue(false)),
+                ValueField("error", textValue(error.message)),
+                ValueField("code", textValue(error.code))
+            ])))
+        }
+    }
+
     private func queueInteraction(
         kind: String,
         message: String
     ): Result<Unit> {
         lock.lock()
         try {
+            if (activePluginCommandRequestId != "") {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Conflict,
+                    "plugin.command_active",
+                    "steering cannot be queued while a plugin command is active"
+                ))
+            }
             if (running || session.approval().isSome()) {
                 return session.enqueue("", kind, message)
             }
@@ -842,17 +961,226 @@ public class ProductJsonlRpcServer {
         hostUris.getOrThrow()
     }
 
+    private func interactionProfileEnabled(): Bool {
+        lock.lock()
+        try {
+            interactionProfile == "basic-v1" && !closing
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private func negotiateInteractions(
+        id: String,
+        command: String,
+        value: AgentValue
+    ): String {
+        let profile = match (rpcInteractionText(value, "profile")) {
+            case Some(item) => item
+            case None => return failure(id, command, "profile must be 'basic-v1' or 'none'")
+        }
+        if (profile != "basic-v1" && profile != "none") {
+            return failure(id, command, "profile must be 'basic-v1' or 'none'")
+        }
+        lock.lock()
+        try {
+            if (closing) { return failure(id, command, "RPC server is closing") }
+            interactionProfile = profile
+        } finally {
+            lock.unlock()
+        }
+        session.setAskInteractive(profile == "basic-v1")
+        success(id, command, data: objectValue([
+            ValueField("interactionProfile", textValue(profile))
+        ]))
+    }
+
+    private func publishInteractionRequest(request: ProductAskRequest): Unit {
+        if (!interactionProfileEnabled()) { return }
+        let questions = ArrayList<AgentValue>()
+        for (question in request.questions) {
+            questions.add(rpcInteractionQuestionValue(question))
+        }
+        emitFrame(encodeAgentValue(objectValue([
+            ValueField("type", textValue("interaction_request")),
+            ValueField("interactionId", textValue(request.requestId)),
+            ValueField("interactionKind", textValue(request.interactionKind)),
+            ValueField("runId", textValue(request.runId)),
+            ValueField("sessionId", textValue(request.sessionId.value)),
+            ValueField("operationId", textValue(request.operationId)),
+            ValueField("commandId", textValue(request.commandId)),
+            ValueField("callId", textValue(request.callId)),
+            ValueField("epoch", integerValue(request.epoch)),
+            ValueField("questions", listValue(questions.toArray()))
+        ])))
+    }
+
+    private func interactionResponse(
+        id: String,
+        command: String,
+        value: AgentValue
+    ): String {
+        if (!interactionProfileEnabled()) {
+            return failure(id, command, "basic-v1 interactions have not been negotiated")
+        }
+        let request = match (session.pendingAsk()) {
+            case Some(item) => item
+            case None => return failure(id, command, "there is no pending interaction")
+        }
+        let interactionId = match (rpcInteractionText(value, "interactionId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "interactionId must be a string")
+        }
+        let runId = match (rpcInteractionText(value, "runId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "runId must be a string")
+        }
+        let sessionId = match (rpcInteractionText(value, "sessionId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "sessionId must be a string")
+        }
+        let operationId = match (rpcInteractionText(value, "operationId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "operationId must be a string")
+        }
+        let commandId = match (rpcInteractionText(value, "commandId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "commandId must be a string")
+        }
+        let callId = match (rpcInteractionText(value, "callId")) {
+            case Some(item) => item
+            case None => return failure(id, command, "callId must be a string")
+        }
+        let interactionKind = match (rpcInteractionText(value, "interactionKind")) {
+            case Some(item) => item
+            case None => return failure(id, command, "interactionKind must be a string")
+        }
+        let epoch = match (rpcInteractionInteger(value, "epoch")) {
+            case Some(item) => item
+            case None => return failure(id, command, "epoch must be an integer")
+        }
+        if (interactionId != request.requestId || runId != request.runId ||
+            sessionId != request.sessionId.value || operationId != request.operationId ||
+            commandId != request.commandId || callId != request.callId ||
+            interactionKind != request.interactionKind || epoch != request.epoch) {
+            return failure(id, command, "interaction identity does not match the pending request")
+        }
+        let cancelled = match (rpcInteractionBoolean(value, "cancelled")) {
+            case Some(item) => item
+            case None => return failure(id, command, "cancelled must be a boolean")
+        }
+        if (cancelled) {
+            return answerInteraction(id, command, request.requestId, ProductAskResolution.Cancelled)
+        }
+        if (request.interactionKind == "select" && request.questions.size == 1) {
+            let choice = match (rpcInteractionText(value, "choice")) {
+                case Some(item) => item
+                case None => return failure(id, command, "choice must be a string")
+            }
+            let question = request.questions[0]
+            let answer = ProductAskAnswer(question.id, selectedOptions: [choice])
+            return answerInteraction(
+                id, command, request.requestId, ProductAskResolution.Answers([answer])
+            )
+        }
+        if (request.interactionKind == "confirm" && request.questions.size == 1) {
+            let confirmed = match (rpcInteractionBoolean(value, "confirmed")) {
+                case Some(item) => item
+                case None => return failure(id, command, "confirmed must be a boolean")
+            }
+            let question = request.questions[0]
+            let answer = ProductAskAnswer(
+                question.id, selectedOptions: [if (confirmed) { "Yes" } else { "No" }]
+            )
+            return answerInteraction(
+                id, command, request.requestId, ProductAskResolution.Answers([answer])
+            )
+        }
+        if (request.interactionKind == "ask") {
+            let rawAnswers = match (value.field("answers")) {
+                case Some(item) => item
+                case None => return failure(id, command, "answers must be an array")
+            }
+            if (rawAnswers.unifiedKind != ValueKind.List ||
+                rawAnswers.items.size != request.questions.size) {
+                return failure(id, command, "answers must match the pending question count")
+            }
+            let answers = ArrayList<ProductAskAnswer>()
+            for (index in 0..request.questions.size) {
+                let rawAnswer = rawAnswers.items[index]
+                if (rawAnswer.unifiedKind != ValueKind.Object) {
+                    return failure(id, command, "each answer must be an object")
+                }
+                let answerId = match (rpcInteractionText(rawAnswer, "id")) {
+                    case Some(item) => item
+                    case None => return failure(id, command, "answer id must be a string")
+                }
+                let selected = match (rpcInteractionStringList(rawAnswer, "selectedOptions")) {
+                    case Some(item) => item
+                    case None => return failure(id, command, "selectedOptions must be an array of strings")
+                }
+                let customInput = match (rpcOptionalInteractionText(rawAnswer, "customInput")) {
+                    case Result.Ok(item) => item
+                    case Result.Err(error) => return failure(id, command, error.message)
+                }
+                let note = match (rpcOptionalInteractionText(rawAnswer, "note")) {
+                    case Result.Ok(item) => item
+                    case Result.Err(error) => return failure(id, command, error.message)
+                }
+                let timedOut = match (rpcOptionalInteractionBoolean(rawAnswer, "timedOut")) {
+                    case Result.Ok(item) => item
+                    case Result.Err(error) => return failure(id, command, error.message)
+                }
+                answers.add(ProductAskAnswer(
+                    answerId,
+                    selectedOptions: selected,
+                    customInput: customInput,
+                    note: note,
+                    timedOut: timedOut
+                ))
+            }
+            return answerInteraction(
+                id, command, request.requestId,
+                ProductAskResolution.Answers(answers.toArray())
+            )
+        }
+        failure(id, command, "pending interaction kind is unsupported by basic-v1")
+    }
+
+    private func answerInteraction(
+        id: String,
+        command: String,
+        requestId: String,
+        resolution: ProductAskResolution
+    ): String {
+        match (session.answerAsk(requestId, resolution)) {
+            case Result.Ok(_) => success(id, command)
+            case Result.Err(error) => failure(id, command, error.message)
+        }
+    }
+
     public func close(cancelBash!: Bool = true): Unit {
         lock.lock()
         closing = true
+        interactionProfile = "none"
+        let commandActive = activePluginCommandRequestId != ""
         let workers = bashWorkers.toArray()
+        let commandWorker = pluginCommandWorker
         lock.unlock()
+        session.setAskInteractive(false)
+        if (commandActive) { session.cancelJavaScriptPluginCommand() }
         if (cancelBash) { let _ = session.abortBash() }
         var failureMessage: ?String = None
         for (worker in workers) {
             try { worker.future.getOrThrow().get() } catch (error: Exception) {
                 if (failureMessage.isNone()) { failureMessage = Some(error.message) }
             }
+        }
+        match (commandWorker) {
+            case Some(worker) => try { worker.get() } catch (error: Exception) {
+                if (failureMessage.isNone()) { failureMessage = Some(error.message) }
+            }
+            case None => ()
         }
         match (failureMessage) {
             case Some(message) => throw IllegalStateException(message)
@@ -1467,7 +1795,7 @@ public class ProductJsonlRpcServer {
                         ValueField("byteLength", integerValue(bytes.size)),
                         ValueField(
                             "data",
-                            textValue(base64Bytes(bytes[start..end]))
+                            textValue(productBase64Bytes(bytes[start..end]))
                         )
                     ]
                 )
@@ -1596,9 +1924,110 @@ func slashCommandValue(command: SlashCommandDefinition): AgentValue {
     objectValue(fields.toArray())
 }
 
+func rpcInteractionText(value: AgentValue, name: String): ?String {
+    match (value.field(name)) {
+        case Some(field) => if (field.unifiedKind == ValueKind.Text) { Some(field.text) } else { None }
+        case None => None
+    }
+}
+
+func rpcInteractionInteger(value: AgentValue, name: String): ?Int64 {
+    match (value.field(name)) {
+        case Some(field) =>
+            if (field.unifiedKind != ValueKind.Number) { return None }
+            let source = field.asNumberText()
+            try {
+                let parsed = Int64.parse(source)
+                if (parsed.toString() == source) { Some(parsed) } else { None }
+            } catch (_: Exception) {
+                None
+            }
+        case None => None
+    }
+}
+
+func rpcInteractionBoolean(value: AgentValue, name: String): ?Bool {
+    match (value.field(name)) {
+        case Some(field) => if (field.unifiedKind == ValueKind.Boolean) { Some(field.asBool()) } else { None }
+        case None => None
+    }
+}
+
+func rpcInteractionStringList(value: AgentValue, name: String): ?Array<String> {
+    let field = match (value.field(name)) {
+        case Some(item) => item
+        case None => return None
+    }
+    if (field.unifiedKind != ValueKind.List) { return None }
+    let values = ArrayList<String>()
+    for (item in field.items) {
+        if (item.unifiedKind != ValueKind.Text) { return None }
+        values.add(item.text)
+    }
+    Some(values.toArray())
+}
+
+func rpcOptionalInteractionText(value: AgentValue, name: String): Result<?String> {
+    match (value.field(name)) {
+        case Some(field) =>
+            if (field.unifiedKind == ValueKind.Text) {
+                Result.Ok(Some(field.text))
+            } else {
+                Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "rpc.interaction_field_invalid",
+                    name + " must be a string"
+                ))
+            }
+        case None => Result.Ok(None)
+    }
+}
+
+func rpcOptionalInteractionBoolean(value: AgentValue, name: String): Result<Bool> {
+    match (value.field(name)) {
+        case Some(field) =>
+            if (field.unifiedKind == ValueKind.Boolean) {
+                Result.Ok(field.asBool())
+            } else {
+                Result.Err(AgentError(
+                    AgentErrorKind.InvalidInput,
+                    "rpc.interaction_field_invalid",
+                    name + " must be a boolean"
+                ))
+            }
+        case None => Result.Ok(false)
+    }
+}
+
+func rpcInteractionQuestionValue(question: ProductAskQuestion): AgentValue {
+    let options = ArrayList<AgentValue>()
+    for (option in question.options) {
+        options.add(objectValue([
+            ValueField("label", textValue(option.label)),
+            ValueField("description", textValue(option.description)),
+            ValueField("preview", textValue(option.preview))
+        ]))
+    }
+    let fields = ArrayList<ValueField>()
+    fields.add(ValueField("id", textValue(question.id)))
+    fields.add(ValueField("question", textValue(question.question)))
+    fields.add(ValueField("header", textValue(question.header)))
+    fields.add(ValueField("options", listValue(options.toArray())))
+    fields.add(ValueField("multi", boolValue(question.multi)))
+    match (question.recommended) {
+        case Some(index) => fields.add(ValueField("recommended", integerValue(index)))
+        case None => ()
+    }
+    objectValue(fields.toArray())
+}
+
 public func availableRpcCommands(): Array<String> {
     [
         "negotiate_protocol",
+        "negotiate_interactions",
+        "get_plugin_commands",
+        "plugin_command",
+        "interaction_response",
         "prompt",
         "steer",
         "follow_up",
@@ -1724,6 +2153,7 @@ public func productApprovalFrame(approval: ApprovalRequest): AgentValue {
     fields.add(ValueField("riskFlags", approvalRpcStrings(details.riskFlags)))
     fields.add(ValueField("riskReasons", approvalRpcStrings(details.metadata.assessment.reasons)))
     fields.add(ValueField("decisionSource", textValue(approvalDecisionSourceName(details.decisionSource))))
+    fields.add(ValueField("sessionApprovalAllowed", boolValue(approval.sessionApprovalAllowed)))
     fields.add(ValueField("preview", approvalReviewerArguments(approval)))
     match (details.review) {
         case Some(review) => fields.add(
@@ -2166,48 +2596,6 @@ func minInt(first: Int64, second: Int64): Int64 {
     } else {
         second
     }
-}
-
-func base64Bytes(bytes: Array<UInt8>): String {
-    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    let chars = ArrayList<UInt8>()
-    var index: Int64 = 0
-    while (index < bytes.size) {
-        let first = UInt32(bytes[index])
-        let second = if (index + 1 < bytes.size) {
-            UInt32(bytes[index + 1])
-        } else {
-            UInt32(0)
-        }
-        let third = if (index + 2 < bytes.size) {
-            UInt32(bytes[index + 2])
-        } else {
-            UInt32(0)
-        }
-        let packed = (first << 16) | (second << 8) | third
-        appendBase64(chars, alphabet, Int64((packed >> 18) & 63))
-        appendBase64(chars, alphabet, Int64((packed >> 12) & 63))
-        if (index + 1 < bytes.size) {
-            appendBase64(chars, alphabet, Int64((packed >> 6) & 63))
-        } else {
-            chars.add(b'=')
-        }
-        if (index + 2 < bytes.size) {
-            appendBase64(chars, alphabet, Int64(packed & 63))
-        } else {
-            chars.add(b'=')
-        }
-        index += 3
-    }
-    String.fromUtf8(chars.toArray())
-}
-
-func appendBase64(
-    output: ArrayList<UInt8>,
-    alphabet: String,
-    index: Int64
-): Unit {
-    output.add(unsafe { alphabet.rawData() }[index])
 }
 
 // The completion flag is protected by the server lock. Inspecting a Future

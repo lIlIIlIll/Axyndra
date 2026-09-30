@@ -6,8 +6,8 @@ from pathlib import Path
 from dependency_pin_gate import check_root
 
 
-LLM4CJ_COMMIT = "c80ab51ed1f8786ba4e5e06557dd43da92bdd94d"
-LLM4CJ_TAG = "v0.1.0"
+LLM4CJ_COMMIT = "fd83641c4f39fc5c299298187028e581e7a8616c"
+LLM4CJ_TAG = "v0.2.0"
 LLM4CJ_REMOTE = "https://github.com/lIlIIlIll/llm4cj.git"
 YJSON_COMMIT = "c91859feb77aeba392a1fad0f99d731df66be831"
 YJSON_TAG = "0.1.0"

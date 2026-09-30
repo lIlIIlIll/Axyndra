@@ -321,6 +321,11 @@ public func retryDispositionForAttempt(
 // turn-aware budget/event policy around execute(), while auxiliary calls use
 // executeInternal() so they cannot bypass retry, timeout, cancellation, or a
 // parent run's durable request/usage/cost counters.
+interface InternalModelBudgetController {
+    func reserveInternalModelRequest(parent: AgentRunRequest): Result<Unit>
+    func accountInternalModelUsage(parent: AgentRunRequest, usage: ModelUsage): Result<Unit>
+}
+
 public class InternalModelCallOptions {
     public let timeoutMillis: Int64
     public let maxAttempts: Int64
@@ -350,10 +355,21 @@ public class ControlledModelPort <: ModelPort {
     private let provider: ModelPort
     private let runs: ?RunRepository
     private let budgetLock = Mutex()
+    private var budgetController: ?InternalModelBudgetController = None
 
     public init(provider: ModelPort, runs!: ?RunRepository = None) {
         this.provider = provider
         this.runs = runs
+    }
+
+    func bindBudgetController(controller: InternalModelBudgetController): Unit {
+        budgetLock.lock()
+        try { budgetController = Some(controller) } finally { budgetLock.unlock() }
+    }
+
+    private func boundBudgetController(): ?InternalModelBudgetController {
+        budgetLock.lock()
+        try { budgetController } finally { budgetLock.unlock() }
     }
 
     // AgentCore is the caller for ordinary turns and layers its run-state,
@@ -363,6 +379,14 @@ public class ControlledModelPort <: ModelPort {
         events: ModelEventSink
     ): Result<ModelReply> {
         provider.execute(request, events)
+    }
+
+    public func transcriptSnapshot(request: ModelRequest): ?String {
+        provider.transcriptSnapshot(request)
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        provider.validateTranscriptSnapshot(snapshot)
     }
 
     public func cancel(requestId: String): Result<Unit> {
@@ -393,6 +417,22 @@ public class ControlledModelPort <: ModelPort {
                 "durable internal model calls require a request id"
             ))
         }
+        if (options.parent.isNone() && !options.standaloneAccounting) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "model.internal_budget_context_required",
+                "internal model calls require a live Run budget or explicit standalone accounting"
+            ))
+        }
+        let runBudgetController = boundBudgetController()
+        if (options.parent.isSome() && !options.standaloneAccounting &&
+            runBudgetController.isNone()) {
+            return Result.Err(AgentError(
+                AgentErrorKind.InvalidInput,
+                "model.internal_run_control_required",
+                "internal Run model calls must use the canonical Run budget controller"
+            ))
+        }
         // Standalone maintenance has no canonical Run. Its explicit ledger is
         // call-local; missing durable parents never fall back to this mode.
         let standalone: ?StandaloneInternalLedger = if (options.standaloneAccounting) {
@@ -406,17 +446,31 @@ public class ControlledModelPort <: ModelPort {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            match (match (standalone) {
+            let attemptCharge = match (standalone) {
                 case Some(ledger) => ledger.chargeAttempt()
-                case None => chargeAttempt(accountingParent)
-            }) {
+                case None => match ((options.parent, runBudgetController)) {
+                    case (Some(parent), Some(controller)) =>
+                        match (controller.reserveInternalModelRequest(parent)) {
+                            case Result.Err(error) => Result<Unit>.Err(error)
+                            case Result.Ok(_) => chargeAttempt(
+                                accountingParent, canonicalBudget: true
+                            )
+                        }
+                    case _ => Result<Unit>.Err(AgentError(
+                        AgentErrorKind.InvalidInput,
+                        "model.internal_run_control_required",
+                        "internal Run model calls must use the canonical Run budget controller"
+                    ))
+                }
+            }
+            match (attemptCharge) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
             let activity = InternalModelActivity()
             let future = spawn {
                 provider.execute(request, { event =>
-                    if (activity.record()) { events(event) }
+                    if (activity.record(event)) { events(event) }
                 })
             }
             while (future.tryGet().isNone()) {
@@ -434,14 +488,36 @@ public class ControlledModelPort <: ModelPort {
                             sleep(Duration.millisecond * 10)
                             cleanupWaited += 10
                         }
-                        match (recordInternalAttempt(
-                            accountingParent,
-                            request,
-                            attempt,
-                            error: Some(error)
-                        )) {
+                        let completed = future.tryGet()
+                        let completedUsage = usageFromCompletedCall(
+                            completed, options.parent
+                        )
+                        let observedUsage = match (completedUsage) {
+                            case Some(value) => Some(value)
+                            case None => activity.observedUsage()
+                        }
+                        let usageCharge = chargeObservedAttemptUsage(
+                            accountingParent, request, observedUsage, started,
+                            standalone, runBudgetController
+                        )
+                        let attemptRecord = recordInternalAttempt(
+                            accountingParent, request, attempt,
+                            error: Some(error), usage: observedUsage
+                        )
+                        if (completed.isNone()) {
+                            settleLateInternalUsage(
+                                future, activity, options.parent, accountingParent,
+                                request, observedUsage, started, standalone,
+                                runBudgetController
+                            )
+                        }
+                        match (attemptRecord) {
                             case Result.Ok(_) => ()
                             case Result.Err(recordError) => return Result.Err(recordError)
+                        }
+                        match (usageCharge) {
+                            case Result.Ok(_) => ()
+                            case Result.Err(usageError) => return Result.Err(usageError)
                         }
                         return Result.Err(error)
                 }
@@ -463,14 +539,36 @@ public class ControlledModelPort <: ModelPort {
                             ErrorField("timeout_ms", options.timeoutMillis.toString())
                         ]
                     )
-                    match (recordInternalAttempt(
-                        accountingParent,
-                        request,
-                        attempt,
-                        error: Some(timeout)
-                    )) {
-                        case Result.Ok(_) => return Result.Err(timeout)
+                    let completed = future.tryGet()
+                    let completedUsage = usageFromCompletedCall(
+                        completed, options.parent
+                    )
+                    let observedUsage = match (completedUsage) {
+                        case Some(value) => Some(value)
+                        case None => activity.observedUsage()
+                    }
+                    let usageCharge = chargeObservedAttemptUsage(
+                        accountingParent, request, observedUsage, started,
+                        standalone, runBudgetController
+                    )
+                    let attemptRecord = recordInternalAttempt(
+                        accountingParent, request, attempt,
+                        error: Some(timeout), usage: observedUsage
+                    )
+                    if (completed.isNone()) {
+                        settleLateInternalUsage(
+                            future, activity, options.parent, accountingParent,
+                            request, observedUsage, started, standalone,
+                            runBudgetController
+                        )
+                    }
+                    match (attemptRecord) {
+                        case Result.Ok(_) => ()
                         case Result.Err(recordError) => return Result.Err(recordError)
+                    }
+                    match (usageCharge) {
+                        case Result.Ok(_) => return Result.Err(timeout)
+                        case Result.Err(usageError) => return Result.Err(usageError)
                     }
                 }
                 sleep(Duration.millisecond * 10)
@@ -480,7 +578,10 @@ public class ControlledModelPort <: ModelPort {
                 case Result.Ok(reply) =>
                     let charged = match (standalone) {
                         case Some(ledger) => ledger.chargeReply(reply)
-                        case None => chargeReply(accountingParent, request, reply, started)
+                        case None => chargeReply(
+                            accountingParent, request, reply, started,
+                            runBudgetController.getOrThrow()
+                        )
                     }
                     match (recordInternalAttempt(
                         accountingParent,
@@ -512,14 +613,34 @@ public class ControlledModelPort <: ModelPort {
                     } else {
                         error
                     }
+                    let providerUsage = attemptUsageFromError(
+                        normalized,
+                        match (options.parent) {
+                            case Some(parent) => parent.pricing
+                            case None => None
+                        }
+                    )
+                    let observedUsage = match (providerUsage) {
+                        case Some(value) => Some(value)
+                        case None => activity.observedUsage()
+                    }
+                    let usageCharge = chargeObservedAttemptUsage(
+                        accountingParent, request, observedUsage, started,
+                        standalone, runBudgetController
+                    )
                     match (recordInternalAttempt(
                         accountingParent,
                         request,
                         attempt,
-                        error: Some(normalized)
+                        error: Some(normalized),
+                        usage: observedUsage
                     )) {
                         case Result.Ok(_) => ()
                         case Result.Err(recordError) => return Result.Err(recordError)
+                    }
+                    match (usageCharge) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(usageError) => return Result.Err(usageError)
                     }
                     if (!normalized.retryable || attempt == options.maxAttempts) {
                         return Result.Err(normalized)
@@ -550,14 +671,89 @@ public class ControlledModelPort <: ModelPort {
         ))
     }
 
-    private func chargeAttempt(parent: ?AgentRunRequest): Result<Unit> {
+    private func usageFromCompletedCall(
+        outcome: ?Result<ModelReply>,
+        parent: ?AgentRunRequest
+    ): ?ModelUsage {
+        let pricing: ?ModelPricing = match (parent) {
+            case Some(request) => request.pricing
+            case None => None
+        }
+        match (outcome) {
+            case Some(Result.Ok(reply)) =>
+                Some(accountedModelAttemptUsage(reply, pricing))
+            case Some(Result.Err(error)) => attemptUsageFromError(error, pricing)
+            case None => None
+        }
+    }
+
+    private func chargeObservedAttemptUsage(
+        parent: ?AgentRunRequest,
+        modelRequest: ModelRequest,
+        usage: ?ModelUsage,
+        started: MonoTime,
+        standalone: ?StandaloneInternalLedger,
+        budgetController: ?InternalModelBudgetController
+    ): Result<Unit> {
+        match (usage) {
+            case Some(value) => match (standalone) {
+                case Some(ledger) => ledger.chargeUsage(value)
+                case None => chargeObservedUsage(
+                    parent.getOrThrow(),
+                    modelRequest,
+                    value,
+                    started,
+                    budgetController.getOrThrow()
+                )
+            }
+            case None => Result.Ok(())
+        }
+    }
+
+    private func settleLateInternalUsage(
+        future: Future<Result<ModelReply>>,
+        activity: InternalModelActivity,
+        parent: ?AgentRunRequest,
+        accountingParent: ?AgentRunRequest,
+        modelRequest: ModelRequest,
+        chargedUsage: ?ModelUsage,
+        started: MonoTime,
+        standalone: ?StandaloneInternalLedger,
+        budgetController: ?InternalModelBudgetController
+    ): Unit {
+        let _ = spawn {
+            let completedUsage = usageFromCompletedCall(Some(future.get()), parent)
+            let terminalUsage = match (completedUsage) {
+                case Some(value) => Some(value)
+                case None => activity.observedUsage()
+            }
+            match (internalModelUsageDelta(terminalUsage, chargedUsage)) {
+                case Some(delta) =>
+                    let _ = chargeObservedAttemptUsage(
+                        accountingParent,
+                        modelRequest,
+                        Some(delta),
+                        started,
+                        standalone,
+                        budgetController
+                    )
+                case None => ()
+            }
+        }
+    }
+
+    private func chargeAttempt(
+        parent: ?AgentRunRequest,
+        canonicalBudget!: Bool = false
+    ): Result<Unit> {
         match ((parent, runs)) {
             case (Some(request), Some(repository)) => withBudgetLock({=>
                 let snapshot = match (repository.find(request.runId)) {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result<Unit>.Err(error)
                 }
-                if (snapshot.modelRequests >= request.budget.maxModelRequests) {
+                if (!canonicalBudget &&
+                    snapshot.modelRequests >= request.budget.maxModelRequests) {
                     return internalBudgetError<Unit>("model_requests")
                 }
                 repository.save(copyInternalSnapshot(
@@ -573,41 +769,49 @@ public class ControlledModelPort <: ModelPort {
         parent: ?AgentRunRequest,
         modelRequest: ModelRequest,
         reply: ModelReply,
-        started: MonoTime
+        started: MonoTime,
+        budgetController: InternalModelBudgetController
     ): Result<Unit> {
-        match ((parent, runs)) {
-            case (Some(request), Some(repository)) => withBudgetLock({=>
+        let request = parent.getOrThrow()
+        chargeObservedUsage(
+            request,
+            modelRequest,
+            accountedModelAttemptUsage(reply, request.pricing),
+            started,
+            budgetController
+        )
+    }
+
+    private func chargeObservedUsage(
+        request: AgentRunRequest,
+        modelRequest: ModelRequest,
+        usage: ModelUsage,
+        started: MonoTime,
+        budgetController: InternalModelBudgetController
+    ): Result<Unit> {
+        let inputExceeded = usage.inputTokens > request.budget.maxInputTokens
+        let outputExceeded = usage.outputTokens > request.budget.maxOutputTokens
+        let durable = match (runs) {
+            case Some(repository) => withBudgetLock({=>
                 let snapshot = match (repository.find(request.runId)) {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result<Unit>.Err(error)
                 }
-                let inputExceeded = reply.inputTokens > request.budget.maxInputTokens
-                let outputExceeded = reply.outputTokens > request.budget.maxOutputTokens
-                let totalInput = saturatedModelUsageAdd(snapshot.inputTokens, reply.inputTokens)
-                let totalOutput = saturatedModelUsageAdd(snapshot.outputTokens, reply.outputTokens)
-                let requestCost: ?Int64 = match (request.pricing) {
-                    case Some(value) => priceModelUsage(reply.usage, value)
-                    case None => reply.usage.costMicros
-                }
-                // A previous attempt may have consumed no billable usage. A
-                // later priced reply must still become the first known cost;
-                // an unknown contribution does not erase a known one.
-                let totalCost: ?Int64 = match ((snapshot.costMicros, requestCost)) {
+                let totalInput = saturatedModelUsageAdd(
+                    snapshot.inputTokens, usage.inputTokens
+                )
+                let totalOutput = saturatedModelUsageAdd(
+                    snapshot.outputTokens, usage.outputTokens
+                )
+                let totalCost: ?Int64 = match ((snapshot.costMicros, usage.costMicros)) {
                     case (Some(total), Some(value)) =>
                         Some(saturatedModelUsageAdd(total, value))
                     case (Some(total), None) => Some(total)
                     case (None, Some(value)) => Some(value)
                     case (None, None) => None
                 }
-                let costExceeded = match (totalCost) {
-                    case Some(value) => request.budget.maxCostMicros > 0 &&
-                        value > request.budget.maxCostMicros
-                    case None => false
-                }
                 let eventSequence = match (nextInternalEventSequence(
-                    repository,
-                    request.runId,
-                    snapshot.sequence
+                    repository, request.runId, snapshot.sequence
                 )) {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result<Unit>.Err(error)
@@ -617,35 +821,27 @@ public class ControlledModelPort <: ModelPort {
                     sequence: eventSequence,
                     inputTokens: totalInput,
                     outputTokens: totalOutput,
-                    reasoningTokens: snapshot.reasoningTokens + reply.reasoningTokens,
-                    cacheReadTokens: snapshot.cacheReadTokens + reply.cacheReadTokens,
-                    cacheWriteTokens: snapshot.cacheWriteTokens + reply.cacheWriteTokens,
+                    reasoningTokens: saturatedModelUsageAdd(
+                        snapshot.reasoningTokens, usage.reasoningTokens
+                    ),
+                    cacheReadTokens: saturatedModelUsageAdd(
+                        snapshot.cacheReadTokens, usage.cacheReadTokens
+                    ),
+                    cacheWriteTokens: saturatedModelUsageAdd(
+                        snapshot.cacheWriteTokens, usage.cacheWriteTokens
+                    ),
                     costMicros: totalCost,
                     replaceCost: true,
-                    lastInputTokens: reply.inputTokens,
-                    lastOutputTokens: reply.outputTokens,
+                    lastInputTokens: usage.inputTokens,
+                    lastOutputTokens: usage.outputTokens,
                     lastRequestDurationMillis: max(
-                        0,
-                        (MonoTime.now() - started).toMilliseconds()
+                        0, (MonoTime.now() - started).toMilliseconds()
                     )
                 ))) {
                     case Result.Err(error) => return Result<Unit>.Err(error)
                     case Result.Ok(_) => ()
                 }
-                let eventUsage = ModelUsage(
-                    inputTokens: reply.inputTokens,
-                    outputTokens: reply.outputTokens,
-                    reasoningTokens: reply.reasoningTokens,
-                    cacheReadTokens: reply.cacheReadTokens,
-                    cacheWriteTokens: reply.cacheWriteTokens,
-                    costMicros: match (requestCost) {
-                        case Some(value) => Some(value)
-                        case None => reply.usage.costMicros
-                    },
-                    source: reply.usage.source,
-                    evidence: reply.usage.evidence
-                )
-                match (repository.append(AgentEvent(
+                repository.append(AgentEvent(
                     EventMeta(
                         eventSequence,
                         TraceId("internal-model-" + request.runId.value),
@@ -653,28 +849,23 @@ public class ControlledModelPort <: ModelPort {
                         occurredAtMillis: agentUtcMillis(),
                         requestId: if (modelRequest.requestId == "") {
                             None
-                        } else {
-                            Some(RequestId(modelRequest.requestId))
-                        }
+                        } else { Some(RequestId(modelRequest.requestId)) }
                     ),
-                    AgentEventPayload.ModelUsageUpdated(eventUsage)
-                ))) {
-                    case Result.Err(error) => return Result<Unit>.Err(error)
-                    case Result.Ok(_) => ()
-                }
-                if (inputExceeded) { return internalBudgetError<Unit>("input_tokens") }
-                if (outputExceeded) { return internalBudgetError<Unit>("output_tokens") }
-                if (request.budget.maxTotalInputTokens > 0 && totalInput > request.budget.maxTotalInputTokens) {
-                    return internalBudgetError<Unit>("total_input_tokens")
-                }
-                if (request.budget.maxTotalOutputTokens > 0 && totalOutput > request.budget.maxTotalOutputTokens) {
-                    return internalBudgetError<Unit>("total_output_tokens")
-                }
-                if (costExceeded) { return internalBudgetError<Unit>("cost") }
-                Result.Ok(())
+                    AgentEventPayload.ModelUsageUpdated(usage)
+                ))
             })
-            case _ => Result.Ok(())
+            case None => Result.Ok(())
         }
+        match (durable) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        let budgetResult = budgetController.accountInternalModelUsage(
+            request, usage
+        )
+        if (inputExceeded) { return internalBudgetError<Unit>("input_tokens") }
+        if (outputExceeded) { return internalBudgetError<Unit>("output_tokens") }
+        budgetResult
     }
 
     private func recordInternalAttempt(
@@ -682,7 +873,8 @@ public class ControlledModelPort <: ModelPort {
         modelRequest: ModelRequest,
         attempt: Int64,
         reply!: ?ModelReply = None,
-        error!: ?AgentError = None
+        error!: ?AgentError = None,
+        usage!: ?ModelUsage = None
     ): Result<Unit> {
         match ((parent, runs)) {
             case (Some(request), Some(repository)) => withBudgetLock({=>
@@ -718,7 +910,8 @@ public class ControlledModelPort <: ModelPort {
                         } else {
                             ModelRequestOutcome.Failed
                         },
-                        errorCode: value.code
+                        errorCode: value.code,
+                        usage: usage
                     )
                     case _ => return Result<Unit>.Err(AgentError(
                         AgentErrorKind.Internal,
@@ -845,15 +1038,41 @@ public class ControlledModelPort <: ModelPort {
 
 class InternalModelActivity {
     private let lock = Mutex()
-    private var accepting = true
+    private var forwarding = true
     private var eventCount: Int64 = 0
+    private var usageSeen = false
+    private var inputTokens: Int64 = 0
+    private var outputTokens: Int64 = 0
 
-    func record(): Bool {
+    func record(event: ModelEvent): Bool {
         lock.lock()
         try {
-            if (!accepting) { return false }
+            let shouldForward = forwarding
             eventCount += 1
-            true
+            match (event) {
+                case ModelEvent.UsageUpdated(input, output) =>
+                    inputTokens = input
+                    outputTokens = output
+                    usageSeen = true
+                case ModelEvent.ProviderProgress(ProviderStreamEvent.UsageDelta(input, output)) =>
+                    inputTokens = saturatedModelUsageAdd(inputTokens, input)
+                    outputTokens = saturatedModelUsageAdd(outputTokens, output)
+                    usageSeen = true
+                case ModelEvent.ProviderProgress(ProviderStreamEvent.UsageCompleted(input, output)) =>
+                    inputTokens = input
+                    outputTokens = output
+                    usageSeen = true
+                case _ => ()
+            }
+            shouldForward
+        } finally { lock.unlock() }
+    }
+
+    func observedUsage(): ?ModelUsage {
+        lock.lock()
+        try {
+            if (!usageSeen) { return None }
+            Some(ModelUsage(inputTokens: inputTokens, outputTokens: outputTokens))
         } finally { lock.unlock() }
     }
 
@@ -864,7 +1083,58 @@ class InternalModelActivity {
 
     func close(): Unit {
         lock.lock()
-        try { accepting = false } finally { lock.unlock() }
+        try { forwarding = false } finally { lock.unlock() }
+    }
+}
+
+func internalModelUsageDelta(
+    terminal: ?ModelUsage,
+    charged: ?ModelUsage
+): ?ModelUsage {
+    let finalUsage = match (terminal) {
+        case Some(value) => value
+        case None => return None
+    }
+    let previous = match (charged) {
+        case Some(value) => value
+        case None => ModelUsage()
+    }
+    let cost: ?Int64 = match ((finalUsage.costMicros, previous.costMicros)) {
+        case (Some(value), Some(already)) => Some(max(0, value - already))
+        case (Some(value), None) => Some(value)
+        case _ => None
+    }
+    let inputDelta = max(0, finalUsage.inputTokens - previous.inputTokens)
+    let outputDelta = max(0, finalUsage.outputTokens - previous.outputTokens)
+    let cacheReadDelta = min(
+        max(0, finalUsage.cacheReadTokens - previous.cacheReadTokens),
+        inputDelta
+    )
+    let cacheWriteDelta = min(
+        max(0, finalUsage.cacheWriteTokens - previous.cacheWriteTokens),
+        inputDelta - cacheReadDelta
+    )
+    let delta = ModelUsage(
+        inputTokens: inputDelta,
+        outputTokens: outputDelta,
+        reasoningTokens: min(
+            max(0, finalUsage.reasoningTokens - previous.reasoningTokens),
+            outputDelta
+        ),
+        cacheReadTokens: cacheReadDelta,
+        cacheWriteTokens: cacheWriteDelta,
+        costMicros: cost
+    )
+    let noCost = match (cost) {
+        case Some(value) => value == 0
+        case None => true
+    }
+    if (delta.inputTokens == 0 && delta.outputTokens == 0 &&
+        delta.reasoningTokens == 0 && delta.cacheReadTokens == 0 &&
+        delta.cacheWriteTokens == 0 && noCost) {
+        None
+    } else {
+        Some(delta)
     }
 }
 
@@ -1041,16 +1311,20 @@ class StandaloneInternalLedger {
     }
 
     func chargeReply(reply: ModelReply): Result<Unit> {
-        input = saturatedModelUsageAdd(input, reply.inputTokens)
-        output = saturatedModelUsageAdd(output, reply.outputTokens)
-        let priced = match (parent.pricing) {
-            case Some(value) => priceModelUsage(reply.usage, value)
-            case None => reply.usage.costMicros
+        chargeUsage(accountedModelAttemptUsage(reply, parent.pricing))
+    }
+
+    func chargeUsage(usage: ModelUsage): Result<Unit> {
+        input = saturatedModelUsageAdd(input, usage.inputTokens)
+        output = saturatedModelUsageAdd(output, usage.outputTokens)
+        let valueCost = match (usage.costMicros) {
+            case Some(value) => value
+            case None => 0
         }
-        cost = saturatedModelUsageAdd(cost, match (priced) { case Some(value) => value; case None => 0 })
+        cost = saturatedModelUsageAdd(cost, valueCost)
         let budget = parent.budget
-        if (reply.inputTokens > budget.maxInputTokens) { return internalBudgetError<Unit>("input_tokens") }
-        if (reply.outputTokens > budget.maxOutputTokens) { return internalBudgetError<Unit>("output_tokens") }
+        if (usage.inputTokens > budget.maxInputTokens) { return internalBudgetError<Unit>("input_tokens") }
+        if (usage.outputTokens > budget.maxOutputTokens) { return internalBudgetError<Unit>("output_tokens") }
         if (budget.maxTotalInputTokens > 0 && input > budget.maxTotalInputTokens) {
             return internalBudgetError<Unit>("total_input_tokens")
         }
@@ -1063,3 +1337,219 @@ class StandaloneInternalLedger {
         Result.Ok(())
     }
 }
+class ModelAttemptRequestPlan {
+    let attemptNo: Int64
+    let parentAttemptId: ?ModelAttemptId
+    let attemptId: ModelAttemptId
+    let policy: AttemptPolicy
+    let request: ModelRequest
+
+    init(
+        attemptNo: Int64,
+        parentAttemptId: ?ModelAttemptId,
+        attemptId: ModelAttemptId,
+        policy: AttemptPolicy,
+        request: ModelRequest
+    ) {
+        this.attemptNo = attemptNo
+        this.parentAttemptId = parentAttemptId
+        this.attemptId = attemptId
+        this.policy = policy
+        this.request = request
+    }
+}
+
+// Resolve policy once, then freeze the transport identity and effective request
+// before the caller persists or dispatches the attempt. The retry loop remains
+// in AgentCore; this planner has no retry or persistence authority.
+func prepareModelAttemptRequest(
+    runRequest: AgentRunRequest,
+    modelRequest: ModelRequest,
+    semanticRequestId: SemanticModelRequestId,
+    attemptNo: Int64,
+    reason: AttemptPolicyReason,
+    recovery: ModelAttemptRecoveryPolicy,
+    recoveryCeiling!: ?ThinkingLevel = None,
+    parentAttemptId!: ?ModelAttemptId = None
+): Result<ModelAttemptRequestPlan> {
+    let attemptRequest = modelRequestForAttempt(modelRequest, attemptNo)
+    let resolved = match (resolvedModelRequestForAttempt(
+        runRequest, attemptRequest, recoveryCeiling: recoveryCeiling
+    )) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let policy = attemptPolicyFor(resolved, reason, recovery)
+    let effectiveRequest = requestFromAttemptPolicy(resolved, policy)
+    Result.Ok(ModelAttemptRequestPlan(
+        attemptNo,
+        parentAttemptId,
+        modelAttemptIdFor(semanticRequestId, attemptNo),
+        policy,
+        effectiveRequest
+    ))
+}
+
+func resolvedModelRequestForAttempt(
+    runRequest: AgentRunRequest,
+    request: ModelRequest,
+    recoveryCeiling!: ?ThinkingLevel = None
+): Result<ModelRequest> {
+    let resolved = match (resolveModelAttemptPolicy(AttemptPolicyInput(
+        runRequest.requestedPolicy,
+        runRequest.modelCapabilitiesSnapshot,
+        recoveryCeiling: recoveryCeiling,
+        resolverVersion: runRequest.resolverVersion
+    ))) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    Result.Ok(ModelRequest(
+        request.model,
+        request.messages,
+        system: request.system,
+        tools: request.tools,
+        thinking: resolved.thinking.effective,
+        maxOutputTokens: resolved.output.effectiveWireLimit,
+        wireMaxOutputTokens: Some(resolved.output.effectiveWireLimit),
+        resolvedPolicy: Some(resolved),
+        streaming: request.streaming,
+        parallelToolCalls: request.parallelToolCalls,
+        requestId: request.requestId,
+        serviceTier: request.serviceTier,
+        cachePolicy: request.cachePolicy,
+        toolChoice: request.toolChoice,
+        structuredOutput: request.structuredOutput,
+        cacheKey: request.cacheKey,
+        transportHardTimeoutMillis: request.transportHardTimeoutMillis
+    ))
+}
+
+// Request and attempt identifiers are transport bookkeeping, not model input.
+// Retries get a fresh cancellable wire id and preserve every semantic field.
+func modelRequestForAttempt(value: ModelRequest, attempt: Int64): ModelRequest {
+    ModelRequest(
+        value.model,
+        value.messages,
+        system: value.system,
+        tools: value.tools,
+        thinking: value.thinking,
+        maxOutputTokens: value.maxOutputTokens,
+        wireMaxOutputTokens: Some(value.wireMaxOutputTokens),
+        resolvedPolicy: value.resolvedPolicy,
+        streaming: value.streaming,
+        parallelToolCalls: value.parallelToolCalls,
+        requestId: if (attempt <= 1) {
+            value.requestId
+        } else {
+            value.requestId + "-retry-" + (attempt - 1).toString()
+        },
+        serviceTier: value.serviceTier,
+        cachePolicy: value.cachePolicy,
+        toolChoice: value.toolChoice,
+        structuredOutput: value.structuredOutput,
+        cacheKey: value.cacheKey,
+        transportHardTimeoutMillis: value.transportHardTimeoutMillis
+    )
+}
+
+func attemptPolicyFor(
+    request: ModelRequest,
+    reason: AttemptPolicyReason,
+    deadlines: ModelAttemptRecoveryPolicy
+): AttemptPolicy {
+    AttemptPolicy(
+        request.model, request.thinking, request.toolChoice,
+        request.maxOutputTokens, reason: reason,
+        softDeadlineMillis: 0,
+        hardDeadlineMillis: 0,
+        streamIdleMillis: deadlines.streamIdleMillis,
+        resolvedPolicy: request.resolvedPolicy
+    )
+}
+
+func requestFromAttemptPolicy(request: ModelRequest, policy: AttemptPolicy): ModelRequest {
+    ModelRequest(
+        policy.model, request.messages, system: request.system, tools: request.tools,
+        thinking: policy.thinking, maxOutputTokens: policy.maxOutputTokens,
+        wireMaxOutputTokens: Some(policy.maxOutputTokens),
+        resolvedPolicy: request.resolvedPolicy,
+        streaming: request.streaming, parallelToolCalls: request.parallelToolCalls,
+        requestId: request.requestId, serviceTier: request.serviceTier,
+        cachePolicy: request.cachePolicy, toolChoice: policy.toolChoice,
+        structuredOutput: request.structuredOutput, cacheKey: request.cacheKey,
+        transportHardTimeoutMillis: 0
+    )
+}
+
+func modelAttemptIdFor(
+    semanticRequestId: SemanticModelRequestId,
+    attempt: Int64
+): ModelAttemptId {
+    ModelAttemptId(semanticRequestId.value + "-attempt-" + attempt.toString())
+}
+
+class ModelAttemptFailurePlan {
+    let disposition: AttemptRetryDisposition
+    let outputLimited: Bool
+    let willRetry: Bool
+
+    init(
+        disposition: AttemptRetryDisposition,
+        outputLimited: Bool,
+        willRetry: Bool
+    ) {
+        this.disposition = disposition
+        this.outputLimited = outputLimited
+        this.willRetry = willRetry
+    }
+}
+
+// Keep replay safety next to retry classification so an error cannot acquire
+// retry permission without satisfying the durable barrier rules.
+func planModelAttemptFailure(
+    error: AgentError,
+    durableDecisionExists: Bool,
+    replayBarrier: ModelAttemptReplayBarrier,
+    attemptNo: Int64,
+    maxAttempts: Int64,
+    maxRecoveryRetries: Int64
+): ModelAttemptFailurePlan {
+    let disposition = retryDispositionForAttempt(error, durableDecisionExists)
+    let outputLimited = match (error.attemptFailure) {
+        case Some(failure) =>
+            failure.kind == AttemptFailureKind.OutputLimitedBeforeDecision ||
+                failure.kind == AttemptFailureKind.OutputLimited
+        case None => false
+    }
+    // Malformed tool input is rejected before a durable decision exists, so it
+    // can replay from the last canonical context after ToolEvidence.
+    let malformedToolArguments = match (error.attemptFailure) {
+        case Some(failure) => failure.kind == AttemptFailureKind.MalformedToolArguments
+        case None => false
+    }
+    // A provider-terminal-missing result proves EOF preceded protocol terminal;
+    // its bounded diagnostic permits replay after provisional evidence.
+    let providerTerminalMissing = match (error.attemptFailure) {
+        case Some(failure) => failure.kind == AttemptFailureKind.ProviderTerminalMissing
+        case None => false
+    }
+    let replaySafe = replayBarrier == ModelAttemptReplayBarrier.NoBarrier ||
+        (malformedToolArguments && replayBarrier == ModelAttemptReplayBarrier.ToolEvidence) ||
+        (providerTerminalMissing &&
+            (replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
+                replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal)) ||
+        (outputLimited &&
+            (replayBarrier == ModelAttemptReplayBarrier.ToolEvidence ||
+                replayBarrier == ModelAttemptReplayBarrier.ProviderTerminal))
+    let retryableDisposition =
+        disposition == AttemptRetryDisposition.RetryEscalated ||
+        disposition == AttemptRetryDisposition.RetrySamePolicy
+    ModelAttemptFailurePlan(
+        disposition,
+        outputLimited,
+        retryableDisposition && attemptNo < maxAttempts &&
+            maxRecoveryRetries > 0 && replaySafe
+    )
+}
+

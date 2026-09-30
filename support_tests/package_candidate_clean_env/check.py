@@ -28,9 +28,14 @@ def main() -> None:
             root / "cache",
         ):
             directory.mkdir()
+        runtime_path = root / "runtime-path"
+        runtime_path.mkdir()
+        rg = shutil.which("rg")
+        assert rg is not None, "package candidate smoke requires the declared rg runtime dependency"
+        shutil.copy2(rg, runtime_path / "rg")
         environment = {
             "HOME": str(home),
-            "PATH": "/usr/bin:/bin",
+            "PATH": str(runtime_path),
             "XDG_CONFIG_HOME": str(root / "config"),
             "XDG_STATE_HOME": str(root / "state"),
             "XDG_CACHE_HOME": str(root / "cache"),
@@ -48,6 +53,9 @@ def main() -> None:
         )
         evidence = completed.stdout + completed.stderr
         assert completed.returncode == 0, evidence
+        assert shutil.which("node", path=environment["PATH"]) is None
+        assert shutil.which("bun", path=environment["PATH"]) is None
+        assert shutil.which("cjc", path=environment["PATH"]) is None
         assert "/help" in completed.stdout, evidence
         forbidden = ("learn_agent_cj", "cangjie_sdk", "CANGJIE_HOME", "LD_LIBRARY_PATH")
         assert not any(value in evidence for value in forbidden), evidence

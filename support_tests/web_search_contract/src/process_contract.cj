@@ -15,8 +15,10 @@ import std.time.*
 class LocalCurlFixturePort <: ProcessPort {
     let root: String
     let endpoint: String
+    public let requests = ArrayList<ProcessRequest>()
     init(root: String, endpoint: String) { this.root = root; this.endpoint = endpoint }
     public func execute(request: ProcessRequest): Result<ProcessResult> {
+        requests.add(request)
         expect(request.arguments[0] == "-q", "every provider disables curl config as its first argument")
         let arguments = ArrayList<String>()
         for (arg in request.arguments) {
@@ -39,9 +41,17 @@ func verifyLocalProcessContracts(root: String): Unit {
     setVariable("BRAVE_API_KEY", "FAKE-LOCAL-BRAVE")
     setVariable("TAVILY_API_KEY", "FAKE-LOCAL-TAVILY")
     setVariable("SEARXNG_URL", endpoint)
-    let local = ProductWebSearchRuntime(CurlWebSearchTransport(LocalCurlFixturePort(root, endpoint)), root)
-    let context = ToolInvocationContext(RunId("local-curl"), SessionId("local-curl"),
-        CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)]))
+    let localPort = LocalCurlFixturePort(root, endpoint)
+    let local = ProductWebSearchRuntime(CurlWebSearchTransport(localPort), root)
+    let context = ToolInvocationContext(
+        RunId("local-curl"),
+        SessionId("local-curl"),
+        CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)]),
+        budget: ExecutionBudget(processLimits: ExecutionResourceLimits(
+            maxOutputBytes: 4096,
+            openFiles: 32
+        ))
+    )
     for (provider in ["brave", "tavily", "searxng"]) {
         expect(invokeSelectedResult(
             local,
@@ -52,6 +62,15 @@ func verifyLocalProcessContracts(root: String): Unit {
         ).isOk(),
             "local provider request completed")
     }
+    var limitsPropagated = localPort.requests.size == 3
+    for (request in localPort.requests) {
+        if (request.processLimits.maxOutputBytes != 4096 ||
+            request.processLimits.openFiles != 32) {
+            limitsPropagated = false
+        }
+    }
+    expect(limitsPropagated,
+        "ProductWebSearchRuntime forwards the invocation process budget to Curl ProcessPort")
     let processes = LocalProcessPort(
         LocalWorkspace(root),
         sandboxEnabled: true,

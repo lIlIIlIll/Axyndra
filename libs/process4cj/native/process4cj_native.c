@@ -18,8 +18,10 @@
 #include <limits.h>
 #include <sys/prctl.h>
 
+#include <linux/openat2.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <sys/random.h>
 
 extern char **environ;
 
@@ -1197,13 +1199,14 @@ int32_t process4cj_terminate_tree(
         free(descendants);
         return kill_error != 0 ? kill_error : freeze_error;
     }
-    int first_error = p4_signal_captured_tree(
-        &root,
-        descendants,
-        count,
-        SIGTERM
-    );
+    int first_error = 0;
     if (graceful_millis > 0) {
+        first_error = p4_signal_captured_tree(
+            &root,
+            descendants,
+            count,
+            SIGTERM
+        );
         int result = p4_continue_captured_tree(&root, descendants, count);
         if (result != 0 && first_error == 0) first_error = result;
         p4_wait_for_graceful_tree(
@@ -1259,8 +1262,480 @@ int32_t axyndra_workspace_copy_mode(const char *source, int32_t destination_fd) 
     return 0;
 }
 
+/* Atomically create without replacing a concurrently introduced destination. */
+int32_t axyndra_workspace_create(const char *source, const char *destination) {
+#ifdef SYS_renameat2
+    if (syscall(SYS_renameat2, AT_FDCWD, source, AT_FDCWD, destination, 1U) < 0) {
+        return -errno;
+    }
+    return 0;
+#else
+    (void)source;
+    (void)destination;
+    return -ENOTSUP;
+#endif
+}
+
 /* POSIX rename preserves the destination when the operation fails. */
 int32_t axyndra_workspace_replace(const char *source, const char *destination) {
     if (rename(source, destination) < 0) return -errno;
+    return 0;
+}
+
+static int p4_workspace_same_identity(
+    const struct stat *left,
+    const struct stat *right
+) {
+    return left->st_dev == right->st_dev && left->st_ino == right->st_ino;
+}
+
+typedef struct {
+    int64_t files;
+    int64_t bytes;
+} p4_snapshot_copy_state;
+
+static int p4_same_open_file(int left_fd, int right_fd) {
+    struct stat left;
+    struct stat right;
+    if (fstat(left_fd, &left) < 0 || fstat(right_fd, &right) < 0) return -errno;
+    return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
+}
+
+static int p4_fd_is_ancestor(int ancestor_fd, int child_fd) {
+    int current = dup(child_fd);
+    if (current < 0) return -errno;
+    for (int depth = 0; depth < 1024; ++depth) {
+        int same = p4_same_open_file(ancestor_fd, current);
+        if (same != 0) {
+            p4_close_if_open(current);
+            return same;
+        }
+        int parent = openat(current, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (parent < 0) {
+            int error = errno;
+            p4_close_if_open(current);
+            return -error;
+        }
+        int at_root = p4_same_open_file(current, parent);
+        p4_close_if_open(current);
+        if (at_root < 0) {
+            p4_close_if_open(parent);
+            return at_root;
+        }
+        if (at_root == 1) {
+            p4_close_if_open(parent);
+            return 0;
+        }
+        current = parent;
+    }
+    p4_close_if_open(current);
+    return -ELOOP;
+}
+
+static int p4_snapshot_copy_bytes(
+    int source_fd,
+    int destination_fd,
+    int64_t max_bytes,
+    int64_t *copied_bytes
+) {
+    char buffer[65536];
+    *copied_bytes = 0;
+    for (;;) {
+        ssize_t count;
+        do { count = read(source_fd, buffer, sizeof(buffer)); }
+        while (count < 0 && errno == EINTR);
+        if (count < 0) return -errno;
+        if (count == 0) return 0;
+        if ((int64_t)count > max_bytes - *copied_bytes) return -EFBIG;
+        ssize_t offset = 0;
+        while (offset < count) {
+            ssize_t written;
+            do {
+                written = write(destination_fd, buffer + offset, (size_t)(count - offset));
+            } while (written < 0 && errno == EINTR);
+            if (written < 0) return -errno;
+            if (written == 0) return -EIO;
+            offset += written;
+        }
+        *copied_bytes += count;
+    }
+}
+
+static int p4_snapshot_copy_directory(
+    int source_fd,
+    int destination_fd,
+    int depth,
+    p4_snapshot_copy_state *state
+) {
+    if (depth > 64) return -ELOOP;
+    int scan_fd = dup(source_fd);
+    if (scan_fd < 0) return -errno;
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        p4_close_if_open(scan_fd);
+        return -error;
+    }
+    int result = 0;
+    errno = 0;
+    for (struct dirent *entry = readdir(directory); entry != NULL; entry = readdir(directory)) {
+        const char *name = entry->d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+        if (strcmp(name, ".git") == 0 || strcmp(name, ".hg") == 0 ||
+            strcmp(name, ".svn") == 0) continue;
+
+        int child_fd = openat(
+            source_fd,
+            name,
+            O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+        );
+        if (child_fd < 0) {
+            result = -errno;
+            break;
+        }
+        struct stat before;
+        if (fstat(child_fd, &before) < 0) {
+            result = -errno;
+            p4_close_if_open(child_fd);
+            break;
+        }
+        if (S_ISDIR(before.st_mode)) {
+            if (mkdirat(destination_fd, name, 0700) < 0) {
+                result = -errno;
+                p4_close_if_open(child_fd);
+                break;
+            }
+            int child_destination = openat(
+                destination_fd,
+                name,
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+            );
+            if (child_destination < 0) {
+                result = -errno;
+                p4_close_if_open(child_fd);
+                break;
+            }
+            result = p4_snapshot_copy_directory(
+                child_fd, child_destination, depth + 1, state
+            );
+            p4_close_if_open(child_destination);
+        } else if (S_ISREG(before.st_mode)) {
+            if (before.st_size < 0 || state->files >= 10000 ||
+                before.st_size > 268435456 - state->bytes) {
+                result = -EFBIG;
+                p4_close_if_open(child_fd);
+                break;
+            }
+            int child_destination = openat(
+                destination_fd,
+                name,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                0600 | (before.st_mode & 0111)
+            );
+            if (child_destination < 0) {
+                result = -errno;
+                p4_close_if_open(child_fd);
+                break;
+            }
+            int64_t copied_bytes = 0;
+            result = p4_snapshot_copy_bytes(
+                child_fd,
+                child_destination,
+                268435456 - state->bytes,
+                &copied_bytes
+            );
+            struct stat after;
+            if (result == 0 && fstat(child_fd, &after) < 0) result = -errno;
+            if (result == 0 && (
+                before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+                before.st_size != after.st_size || before.st_size != copied_bytes ||
+                before.st_mtim.tv_sec != after.st_mtim.tv_sec ||
+                before.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
+                before.st_ctim.tv_sec != after.st_ctim.tv_sec ||
+                before.st_ctim.tv_nsec != after.st_ctim.tv_nsec
+            )) result = -ESTALE;
+            p4_close_if_open(child_destination);
+            if (result == 0) {
+                state->files += 1;
+                state->bytes += copied_bytes;
+            }
+        } else {
+            result = -EINVAL;
+        }
+        p4_close_if_open(child_fd);
+        if (result != 0) break;
+        errno = 0;
+    }
+    if (result == 0 && errno != 0) result = -errno;
+    closedir(directory);
+    return result;
+}
+
+static int p4_open_directory_no_symlinks(const char *path) {
+    if (path == NULL || path[0] == '\0') return -EINVAL;
+#ifdef SYS_openat2
+    const char *relative = path;
+    const char *anchor_path = ".";
+    if (path[0] == '/') {
+        relative = path + 1;
+        anchor_path = "/";
+    }
+    if (relative[0] == '\0') {
+        int directory_fd = open(anchor_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        return directory_fd < 0 ? -errno : directory_fd;
+    }
+    int anchor_fd = open(anchor_path, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (anchor_fd < 0) return -errno;
+    struct open_how how = {
+        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS
+    };
+    int directory_fd = (int)syscall(
+        SYS_openat2, anchor_fd, relative, &how, sizeof(how)
+    );
+    int error = directory_fd < 0 ? errno : 0;
+    p4_close_if_open(anchor_fd);
+    if (directory_fd < 0) return -error;
+    return directory_fd;
+#else
+    return -ENOTSUP;
+#endif
+}
+int32_t axyndra_workspace_open_parent(
+    const char *workspace_root,
+    const char *target
+) {
+    if (workspace_root == NULL || target == NULL) return -EINVAL;
+#ifdef SYS_openat2
+    size_t root_length = strlen(workspace_root);
+    const char *relative = NULL;
+    if (root_length == 1 && workspace_root[0] == '/') {
+        if (target[0] != '/' || target[1] == '\0') return -EXDEV;
+        relative = target + 1;
+    } else {
+        if (root_length == 0 || strncmp(workspace_root, target, root_length) != 0 ||
+            target[root_length] != '/' || target[root_length + 1] == '\0') {
+            return -EXDEV;
+        }
+        relative = target + root_length + 1;
+    }
+    const char *separator = strrchr(relative, '/');
+    if (separator != NULL && separator[1] == '\0') return -EINVAL;
+
+    int root_fd = p4_open_directory_no_symlinks(workspace_root);
+    if (root_fd < 0) return root_fd;
+    if (separator == NULL) {
+        int parent_fd = fcntl(root_fd, F_DUPFD_CLOEXEC, 0);
+        int error = parent_fd < 0 ? errno : 0;
+        p4_close_if_open(root_fd);
+        return parent_fd < 0 ? -error : parent_fd;
+    }
+
+    size_t parent_length = (size_t)(separator - relative);
+    if (parent_length == 0) {
+        int parent_fd = fcntl(root_fd, F_DUPFD_CLOEXEC, 0);
+        int error = parent_fd < 0 ? errno : 0;
+        p4_close_if_open(root_fd);
+        return parent_fd < 0 ? -error : parent_fd;
+    }
+    char *parent = malloc(parent_length + 1);
+    if (parent == NULL) {
+        p4_close_if_open(root_fd);
+        return -ENOMEM;
+    }
+    memcpy(parent, relative, parent_length);
+    parent[parent_length] = '\0';
+    struct open_how how = {
+        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS
+    };
+    int parent_fd = (int)syscall(
+        SYS_openat2, root_fd, parent, &how, sizeof(how)
+    );
+    int error = parent_fd < 0 ? errno : 0;
+    free(parent);
+    p4_close_if_open(root_fd);
+    return parent_fd < 0 ? -error : parent_fd;
+#else
+    (void)workspace_root;
+    (void)target;
+    return -ENOTSUP;
+#endif
+}
+
+int32_t axyndra_workspace_close_parent(int32_t parent_fd) {
+    if (parent_fd < 0) return -EINVAL;
+    return close(parent_fd) < 0 ? -errno : 0;
+}
+int32_t axyndra_plugin_snapshot_copy(
+    const char *source,
+    const char *destination
+) {
+    if (source == NULL || destination == NULL) return -EINVAL;
+    int source_fd = p4_open_directory_no_symlinks(source);
+    if (source_fd < 0) return source_fd;
+    int destination_fd = p4_open_directory_no_symlinks(destination);
+    if (destination_fd < 0) {
+        p4_close_if_open(source_fd);
+        return destination_fd;
+    }
+    int source_contains_destination = p4_fd_is_ancestor(source_fd, destination_fd);
+    int destination_contains_source = p4_fd_is_ancestor(destination_fd, source_fd);
+    if (source_contains_destination < 0 || destination_contains_source < 0) {
+        int error = source_contains_destination < 0
+            ? source_contains_destination
+            : destination_contains_source;
+        p4_close_if_open(destination_fd);
+        p4_close_if_open(source_fd);
+        return error;
+    }
+    if (source_contains_destination == 1 || destination_contains_source == 1) {
+        p4_close_if_open(destination_fd);
+        p4_close_if_open(source_fd);
+        return -EXDEV;
+    }
+    p4_snapshot_copy_state state = {0, 0};
+    int result = p4_snapshot_copy_directory(source_fd, destination_fd, 0, &state);
+    p4_close_if_open(destination_fd);
+    p4_close_if_open(source_fd);
+    return result;
+}
+
+
+static int p4_workspace_same_content(int left_fd, int right_fd) {
+    char left[8192];
+    char right[8192];
+    if (lseek(left_fd, 0, SEEK_SET) < 0) return -errno;
+    if (lseek(right_fd, 0, SEEK_SET) < 0) return -errno;
+    for (;;) {
+        ssize_t left_size;
+        do { left_size = read(left_fd, left, sizeof(left)); }
+        while (left_size < 0 && errno == EINTR);
+        if (left_size < 0) return -errno;
+        ssize_t right_size;
+        do { right_size = read(right_fd, right, sizeof(right)); }
+        while (right_size < 0 && errno == EINTR);
+        if (right_size < 0) return -errno;
+        if (left_size != right_size) return 0;
+        if (left_size == 0) return 1;
+        if (memcmp(left, right, (size_t)left_size) != 0) return 0;
+    }
+}
+
+static int p4_workspace_exchange(
+    const char *left,
+    const char *right
+) {
+#ifdef SYS_renameat2
+#ifndef RENAME_EXCHANGE
+#define RENAME_EXCHANGE (1U << 1)
+#endif
+    if (syscall(
+        SYS_renameat2,
+        AT_FDCWD,
+        left,
+        AT_FDCWD,
+        right,
+        RENAME_EXCHANGE
+    ) < 0) return -errno;
+    return 0;
+#else
+    (void)left;
+    (void)right;
+    return -ENOTSUP;
+#endif
+}
+
+/*
+ * Return 0 for a verified exchange, 1 for a pre-publication conflict, and 2
+ * when an exchange occurred but its identities or bytes cannot be verified.
+ * Never roll back by pathname: another editor can replace either name between
+ * an identity check and an exchange. On 2 the caller must retain source, which
+ * may contain that editor's displaced file, and report an unknown effect.
+ */
+int32_t axyndra_workspace_replace_if_matches(
+    const char *source,
+    const char *destination,
+    const char *expected
+) {
+    if (source == NULL || destination == NULL || expected == NULL) return -EINVAL;
+    int destination_fd = open(destination, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (destination_fd < 0) {
+        int error = errno;
+        if (error == ENOENT || error == ENOTDIR || error == ELOOP ||
+            error == EACCES || error == EPERM) return 1;
+        return -error;
+    }
+    int expected_fd = open(expected, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (expected_fd < 0) {
+        int error = errno;
+        p4_close_if_open(destination_fd);
+        return -error;
+    }
+    int source_fd = open(source, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (source_fd < 0) {
+        int error = errno;
+        p4_close_if_open(expected_fd);
+        p4_close_if_open(destination_fd);
+        return -error;
+    }
+
+    struct stat destination_before;
+    struct stat source_before;
+    int result = 0;
+    if (fstat(destination_fd, &destination_before) < 0 ||
+        fstat(source_fd, &source_before) < 0) {
+        result = -errno;
+        goto done;
+    }
+    if (!S_ISREG(destination_before.st_mode) || !S_ISREG(source_before.st_mode)) {
+        result = -EINVAL;
+        goto done;
+    }
+    result = p4_workspace_same_content(destination_fd, expected_fd);
+    if (result <= 0) {
+        if (result == 0) result = 1;
+        goto done;
+    }
+    result = p4_workspace_exchange(source, destination);
+    if (result != 0) goto done;
+
+    struct stat swapped_previous;
+    struct stat published;
+    int content_matches = p4_workspace_same_content(destination_fd, expected_fd);
+    int snapshot_matches =
+        stat(source, &swapped_previous) == 0 &&
+        stat(destination, &published) == 0 &&
+        p4_workspace_same_identity(&destination_before, &swapped_previous) &&
+        p4_workspace_same_identity(&source_before, &published);
+    if (content_matches == 1 && snapshot_matches) {
+        result = 0;
+        goto done;
+    }
+
+    result = 2;
+
+done:
+    p4_close_if_open(source_fd);
+    p4_close_if_open(expected_fd);
+    p4_close_if_open(destination_fd);
+    return (int32_t)result;
+}
+
+int32_t process4cj_random_bytes(uint8_t *buffer, int64_t length) {
+    if (length < 0 || (length > 0 && buffer == NULL)) return -EINVAL;
+    if (length == 0) return 0;
+    int64_t offset = 0;
+    while (offset < length) {
+        size_t remaining = (size_t)(length - offset);
+        size_t chunk = remaining > 256 ? 256 : remaining;
+        ssize_t count;
+        do {
+            count = getrandom(buffer + offset, chunk, 0);
+        } while (count < 0 && errno == EINTR);
+        if (count < 0) return -errno;
+        if (count == 0) return -EIO;
+        offset += (int64_t)count;
+    }
     return 0;
 }

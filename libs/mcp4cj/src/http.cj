@@ -29,6 +29,7 @@ public class McpStreamableHttpClientConfig {
     public let headers: Array<McpHttpHeader>
     public let origin: String
     public let preferSse: Bool
+    public let proxyUrl: String
     public let framing: McpFramingConfig
     public init(
         url: String,
@@ -36,17 +37,20 @@ public class McpStreamableHttpClientConfig {
         headers!: Array<McpHttpHeader> = [],
         origin!: String = "",
         preferSse!: Bool = false,
+        proxyUrl!: String = "",
         framing!: McpFramingConfig = McpFramingConfig()
     ) {
         if (!secureMcpHttpUrl(url) || !validHttpValue(bearerToken) ||
-            (origin != "" && !secureMcpHttpOrigin(origin))) {
+            (origin != "" && !secureMcpHttpOrigin(origin)) ||
+            (proxyUrl != "" && !loopbackMcpProxy(proxyUrl))) {
             throw IllegalArgumentException("invalid MCP Streamable HTTP client configuration")
         }
         for (header in headers where reservedMcpHeader(header.name)) {
             throw IllegalArgumentException("custom header replaces an MCP protocol header")
         }
         this.url = url; this.bearerToken = bearerToken; this.headers = headers
-        this.origin = origin; this.preferSse = preferSse; this.framing = framing
+        this.origin = origin; this.preferSse = preferSse; this.proxyUrl = proxyUrl
+        this.framing = framing
     }
 }
 
@@ -339,6 +343,9 @@ public class StreamableHttpMcpTransport <: McpTransport {
             let timeout = Duration.millisecond * config.framing.requestTimeoutMillis
             let readTimeout = if (subscription) { Duration.Max } else { timeout }
             let clientBuilder = ClientBuilder().autoRedirect(false).readTimeout(readTimeout).writeTimeout(timeout).logger(NoopLogger())
+            if (config.proxyUrl != "") {
+                clientBuilder.httpProxy(config.proxyUrl).httpsProxy(config.proxyUrl)
+            }
             if (config.url.startsWith("https://")) {
                 clientBuilder.tlsConfig(TlsClientConfig())
             }
@@ -1388,6 +1395,28 @@ func loopbackMcpAuthority(authority: String): Bool {
         if (authority.startsWith(prefix) && asciiMcpDecimal(authority[prefix.size..])) { return true }
     }
     false
+}
+func loopbackMcpProxy(value: String): Bool {
+    if (!value.startsWith("http://")) { return false }
+    let remainder = value[7..]
+    if (mcpHttpAuthority(value, "http://").size != remainder.size) { return false }
+    let parts = remainder.split("@")
+    if (parts.size == 1) { return loopbackMcpAuthority(parts[0]) }
+    parts.size == 2 && validMcpProxyCredential(parts[0]) &&
+        loopbackMcpAuthority(parts[1])
+}
+
+func validMcpProxyCredential(value: String): Bool {
+    let fields = value.split(":")
+    if (fields.size != 2 || fields[0] != "axyndra" || fields[1].size != 64) {
+        return false
+    }
+    for (byte in fields[1].toArray()) {
+        if (!((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) {
+            return false
+        }
+    }
+    true
 }
 func asciiMcpDecimal(value: String): Bool {
     if (value == "") { return false }

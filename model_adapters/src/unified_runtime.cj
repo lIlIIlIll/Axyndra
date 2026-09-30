@@ -2,6 +2,7 @@ package model_adapters
 
 import agent_domain as domain
 import agent_ports as ports
+import llm4cj.*
 
 public enum LlmApiId {
     OpenAiChatCompletions | OpenAiResponses | AnthropicMessages
@@ -247,6 +248,39 @@ public class UnifiedModelRuntime <: ports.ModelPort {
         this.apis = apis
     }
 
+    public func transcriptSnapshot(request: domain.ModelRequest): ?String {
+        let model = match (runtimeModel(models, request.model)) {
+            case Some(value) => value
+            case None => return None
+        }
+        let profile = match (runtimeProfile(profiles, model.profileId)) {
+            case Some(value) => value
+            case None => return None
+        }
+        if (apis.resolve(model.apiBinding.apiId).isNone() ||
+            profile.authentication == "oauth") { return None }
+        try {
+            let wire = toLlmWireRequest(
+                withRuntimeWireModel(request, model.wireModelId),
+                runtimeProviderDialect(model.apiBinding.dialect),
+                profile.id
+            )
+            match (wire.transcript.snapshot()) {
+                case LlmWireResult.Ok(value) => Some(value)
+                case LlmWireResult.Err(_) => None
+            }
+        } catch (_: Exception) {
+            None
+        }
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        match (LlmWireTranscript.restore(snapshot)) {
+            case LlmWireResult.Ok(_) => true
+            case LlmWireResult.Err(_) => false
+        }
+    }
+
     public func execute(
         request: domain.ModelRequest,
         events: domain.ModelEventSink
@@ -331,6 +365,25 @@ public func llmApiIdName(value: LlmApiId): String {
 
 func sameApiId(left: LlmApiId, right: LlmApiId): Bool {
     llmApiIdName(left) == llmApiIdName(right)
+}
+
+func runtimeProviderDialect(value: TypedProviderDialect): ProviderDialect {
+    match (value) {
+        case TypedProviderDialect.OpenAiCompletions(dialect) => match (dialect) {
+            case OpenAiCompletionsDialect.OpenAi => ProviderDialect.OpenAiChat
+            case OpenAiCompletionsDialect.DeepSeek => ProviderDialect.DeepSeekChat
+            case OpenAiCompletionsDialect.Generic => ProviderDialect.GenericChat
+        }
+        case TypedProviderDialect.OpenAiResponses(dialect) => match (dialect) {
+            case OpenAiResponsesDialect.OpenAi => ProviderDialect.OpenAiResponses
+            case OpenAiResponsesDialect.DeepSeek => ProviderDialect.DeepSeekResponses
+        }
+        case TypedProviderDialect.AnthropicMessages(dialect) => match (dialect) {
+            case AnthropicMessagesDialect.Anthropic => ProviderDialect.AnthropicMessages
+            case AnthropicMessagesDialect.DeepSeek => ProviderDialect.DeepSeekMessages
+            case AnthropicMessagesDialect.Generic => ProviderDialect.GenericMessages
+        }
+    }
 }
 
 func typedDialectMatchesApi(apiId: LlmApiId, dialect: TypedProviderDialect): Bool {

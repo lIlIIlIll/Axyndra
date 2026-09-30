@@ -3,6 +3,7 @@ package agent_product
 import agent_domain.*
 import agent_ports.*
 import std.collection.*
+import std.convert.*
 import std.env.*
 import std.fs.*
 import std.process.*
@@ -55,26 +56,45 @@ public class LocalNetworkGatewayPort <: NetworkGatewayPort {
         }
         let directory = gatewayDirectory(operationId)
         let socketPath = Path(directory).join("gateway.sock").toString()
+        let proxyPortPath = Path(directory).join("proxy.port").toString()
         try {
             Directory.create(directory, recursive: true)
-            let arguments = gatewayArguments(socketPath, policy)
+            let arguments = gatewayArguments(socketPath, proxyPortPath, policy)
             let process = launch(
                 executable,
                 arguments,
                 workingDirectory: Some(Path(directory)),
-                stdOut: ProcessRedirect.Discard,
+                stdIn: ProcessRedirect.Discard,
+                stdOut: ProcessRedirect.Pipe,
                 stdErr: ProcessRedirect.Discard
             )
-            if (!waitForGateway(socketPath, process)) {
+            if (!waitForGateway(socketPath, proxyPortPath, process)) {
                 try { process.terminate(force: true) } catch (_: Exception) {}
                 try { process.wait() } catch (_: Exception) {}
                 removeIfExists(Path(directory), recursive: true)
                 return Result.Err(networkGatewayUnavailableError())
             }
+            let proxyPort = match (gatewayProxyPort(proxyPortPath)) {
+                case Some(value) => value
+                case None =>
+                    try { process.terminate(force: true) } catch (_: Exception) {}
+                    try { process.wait() } catch (_: Exception) {}
+                    removeIfExists(Path(directory), recursive: true)
+                    return Result.Err(networkGatewayUnavailableError())
+            }
+            let proxyCredential = match (gatewayProxyCredential(process)) {
+                case Some(value) => value
+                case None =>
+                    try { process.terminate(force: true) } catch (_: Exception) {}
+                    try { process.wait() } catch (_: Exception) {}
+                    removeIfExists(Path(directory), recursive: true)
+                    return Result.Err(networkGatewayUnavailableError())
+            }
             let lease = NetworkGatewayLease(
                 operationId,
                 "127.0.0.1",
-                1u16,
+                proxyPort,
+                proxyCredential,
                 bridgeSocket: socketPath,
                 bridgeExecutable: executable
             )
@@ -129,12 +149,15 @@ public class LocalNetworkGatewayPort <: NetworkGatewayPort {
 
     private func gatewayArguments(
         socketPath: String,
+        proxyPortPath: String,
         policy: NetworkPolicy
     ): Array<String> {
         let arguments = ArrayList<String>()
         arguments.add("--gateway")
         arguments.add("--socket")
         arguments.add(socketPath)
+        arguments.add("--proxy-port-file")
+        arguments.add(proxyPortPath)
         for (rule in policy.egress) {
             arguments.add("--rule")
             arguments.add(rule.host)
@@ -144,18 +167,65 @@ public class LocalNetworkGatewayPort <: NetworkGatewayPort {
         arguments.toArray()
     }
 
-    private func waitForGateway(socketPath: String, process: SubProcess): Bool {
+    private func waitForGateway(
+        socketPath: String,
+        proxyPortPath: String,
+        process: SubProcess
+    ): Bool {
         var attempts = 0
         while (attempts < 100) {
-            if (exists(Path(socketPath))) { return true }
+            if (exists(Path(socketPath)) && exists(Path(proxyPortPath))) { return true }
             if (!process.isAlive()) { return false }
             sleep(Duration.millisecond * 10)
             attempts += 1
         }
-        exists(Path(socketPath))
+        exists(Path(socketPath)) && exists(Path(proxyPortPath))
+    }
+
+    private func gatewayProxyPort(path: String): ?UInt16 {
+        try {
+            let value = String.fromUtf8(File.readFrom(Path(path))).trimAscii()
+            let port = UInt16.parse(value)
+            if (port == 0u16 || port.toString() != value) { None } else { Some(port) }
+        } catch (_: Exception) {
+            None
+        }
+    }
+
+    private func gatewayProxyCredential(process: SubProcess): ?String {
+        try {
+            let value = ArrayList<Byte>()
+            let buffer = Array<Byte>(64, repeat: 0)
+            while (value.size <= 64) {
+                let count = process.stdOutPipe.read(buffer)
+                if (count <= 0) { return None }
+                for (index in 0..count) {
+                    let byte = buffer[index]
+                    if (byte == b'\n') {
+                        let credential = String.fromUtf8(value.toArray())
+                        return if (validGatewayProxyCredential(credential)) {
+                            Some(credential)
+                        } else { None }
+                    }
+                    if (byte == b'\r' || value.size >= 64) { return None }
+                    value.add(byte)
+                }
+            }
+        } catch (_: Exception) {}
+        None
+    }
+
+    private func validGatewayProxyCredential(value: String): Bool {
+        if (value.size != 64) { return false }
+        for (byte in value.toArray()) {
+            if (!((byte >= b'0' && byte <= b'9') ||
+                (byte >= b'a' && byte <= b'f'))) {
+                return false
+            }
+        }
+        true
     }
 }
-
 class LocalGatewayProcess {
     let operationId: OperationId
     let directory: String

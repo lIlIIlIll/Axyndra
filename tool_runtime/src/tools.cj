@@ -50,6 +50,11 @@ public type ToolNetworkPolicyResolver = (ToolCall) -> Result<NetworkPolicy>
 public type ToolSideEffectResolver = (ToolCall) -> Bool
 
 public type ToolApprovalMetadataResolver = (ToolCall) -> ToolApprovalMetadata
+public type ToolCanonicalArgumentsResolver = (
+    ToolInvocationContext,
+    ToolCall
+) -> Result<AgentValue>
+
 
 public class ObjectArgumentValidator <: ToolArgumentValidator {
     public func validate(
@@ -109,12 +114,17 @@ public class ToolDescriptor {
     public let capability: Capability
     public let sideEffecting: Bool
     public let concurrency: ToolConcurrencyProfile
+    public let controlOnly: Bool
     public let additionalCapabilities: Array<Capability>
+    public let implementationVersion: String
+    public let implementationFingerprint: String
+    public let schemaDigest: String
     private let capabilityResolver: ?ToolCapabilityResolver
     private let networkPolicyResolver: ?ToolNetworkPolicyResolver
     private let additionalCapabilityResolver: ?ToolAdditionalCapabilityResolver
     private let sideEffectResolver: ?ToolSideEffectResolver
     private let approvalMetadataResolver: ?ToolApprovalMetadataResolver
+    private let canonicalArgumentsResolver: ?ToolCanonicalArgumentsResolver
     private let approvalMetadataValue: ?ToolApprovalMetadata
 
     public init(
@@ -122,23 +132,45 @@ public class ToolDescriptor {
         capability: Capability,
         sideEffecting!: Bool = false,
         concurrency!: ToolConcurrencyProfile = ToolConcurrencyProfile(),
+        controlOnly!: Bool = false,
         additionalCapabilities!: Array<Capability> = [],
+        implementationVersion!: String = "agent-core-v1",
+        implementationFingerprint!: String = "",
         capabilityResolver!: ?ToolCapabilityResolver = None,
         additionalCapabilityResolver!: ?ToolAdditionalCapabilityResolver = None,
         sideEffectResolver!: ?ToolSideEffectResolver = None,
         approvalMetadataResolver!: ?ToolApprovalMetadataResolver = None,
         networkPolicyResolver!: ?ToolNetworkPolicyResolver = None,
-        approvalMetadataValue!: ?ToolApprovalMetadata = None
+        approvalMetadataValue!: ?ToolApprovalMetadata = None,
+        canonicalArgumentsResolver!: ?ToolCanonicalArgumentsResolver = None
     ) {
+        let version = implementationVersion.trimAscii()
+        if (version == "") {
+            throw IllegalArgumentException("tool implementation version must not be empty")
+        }
         this.definition = definition
         this.capability = capability
         this.sideEffecting = sideEffecting
         this.concurrency = concurrency
+        this.controlOnly = controlOnly
         this.additionalCapabilities = additionalCapabilities
+        this.implementationVersion = version
+        this.schemaDigest = modelPolicySha256Text(
+            canonicalAgentValue(definition.inputSchema)
+        )
+        this.implementationFingerprint = if (implementationFingerprint.trimAscii() == "") {
+            modelPolicySha256Text(
+                definition.name + "\n" + version + "\n" + definition.description + "\n" +
+                    canonicalAgentValue(definition.inputSchema)
+            )
+        } else {
+            implementationFingerprint.trimAscii()
+        }
         this.capabilityResolver = capabilityResolver
         this.additionalCapabilityResolver = additionalCapabilityResolver
         this.sideEffectResolver = sideEffectResolver
         this.approvalMetadataResolver = approvalMetadataResolver
+        this.canonicalArgumentsResolver = canonicalArgumentsResolver
         this.approvalMetadataValue = approvalMetadataValue
         this.networkPolicyResolver = networkPolicyResolver
     }
@@ -157,16 +189,21 @@ public class ToolDescriptor {
                 case Some(resolve) => resolve(call)
                 case None => sideEffecting
             },
+            controlOnly: controlOnly,
             concurrency: concurrency,
             additionalCapabilities: resolvedAdditional.toArray(),
+            implementationVersion: implementationVersion,
+            implementationFingerprint: implementationFingerprint,
             networkPolicyResolver: networkPolicyResolver,
             approvalMetadataResolver: approvalMetadataResolver,
             approvalMetadataValue: Some(match (approvalMetadataResolver) {
                 case Some(resolve) => resolve(call)
                 case None => defaultToolApprovalMetadata(resolvedCapability)
-            })
+            }),
+            canonicalArgumentsResolver: canonicalArgumentsResolver
         )
     }
+
 
     // The first element is the primary capability used by the existing
     // approval UI; every element is an independently enforced requirement.
@@ -220,6 +257,28 @@ public class ToolDescriptor {
             case None => match (approvalMetadataResolver) {
                 case Some(resolve) => resolve(call)
                 case None => defaultToolApprovalMetadata(capability)
+            }
+        }
+    }
+
+    public func canonicalizedCall(
+        context: ToolInvocationContext,
+        call: ToolCall
+    ): Result<ToolCall> {
+        match (canonicalArgumentsResolver) {
+            case None => Result.Ok(call)
+            case Some(resolve) => match (resolve(context, call)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(arguments) => if (arguments.unifiedKind == ValueKind.Object) {
+                    Result.Ok(ToolCall(call.callId, call.name, arguments))
+                } else {
+                    Result.Err(AgentError(
+                        AgentErrorKind.InvalidInput,
+                        "tool.normalized_arguments_invalid",
+                        "normalized tool arguments must be an object",
+                        fields: [ErrorField("tool", call.name)]
+                    ))
+                }
             }
         }
     }
@@ -300,10 +359,41 @@ class PlanWriteTool <: ToolExecutor {
     }
 }
 
+class ActiveToolExecution {
+    let operationId: OperationId
+    let runId: RunId
+
+    init(operationId: OperationId, runId: RunId) {
+        this.operationId = operationId
+        this.runId = runId
+    }
+}
+
+class ToolRevocationTarget {
+    let executor: ToolExecutor
+    let runIds: Array<RunId>
+
+    init(executor: ToolExecutor, runIds: Array<RunId>) {
+        this.executor = executor
+        this.runIds = runIds
+    }
+}
+public class ToolCatalogRegistration {
+    public let descriptor: ToolDescriptor
+    public let executor: ToolExecutor
+
+    public init(descriptor: ToolDescriptor, executor: ToolExecutor) {
+        this.descriptor = descriptor
+        this.executor = executor
+    }
+}
+
 class ToolRegistration {
     let descriptor: ToolDescriptor
     let executor: ToolExecutor
     var active: Bool
+    var revoked: Bool = false
+    let activeExecutions = ArrayList<ActiveToolExecution>()
 
     init(descriptor: ToolDescriptor, executor: ToolExecutor) {
         this.descriptor = descriptor
@@ -312,8 +402,24 @@ class ToolRegistration {
     }
 }
 
+func toolHookAvailableAtSnapshot(
+    handler: ToolHookHandlerSnapshot,
+    capabilities: CapabilitySet
+): Bool {
+    if (!handler.command.startsWith("pi.event:")) { return true }
+    if (!capabilities.allows(
+        CapabilityKind.ExtensionInvoke, resource: handler.pluginId
+    )) { return false }
+    if (handler.event == "PreToolUse") {
+        return capabilities.allows(CapabilityKind.WorkspaceWrite)
+    }
+    capabilities.allows(CapabilityKind.WorkspaceRead) ||
+        capabilities.allows(CapabilityKind.WorkspaceWrite)
+}
+
 public class ToolCatalog {
-    private let registrations = ArrayList<ToolRegistration>()
+    private var registrations = ArrayList<ToolRegistration>()
+    private var hookHandlers = ArrayList<ToolHookHandlerSnapshot>()
     private let lock = Mutex()
 
     public init() {}
@@ -334,7 +440,7 @@ public class ToolCatalog {
         }
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == descriptor.definition.name) {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.definition.name == descriptor.definition.name) {
                 return Result.Err(
                     AgentError(
                         AgentErrorKind.Configuration,
@@ -351,10 +457,124 @@ public class ToolCatalog {
         }
     }
 
+    // Candidates are staged before mutation, then published by one locked list replacement.
+    // An empty batch is a no-op.
+    public func registerBatch(entries: Array<ToolCatalogRegistration>): Result<Unit> {
+        let staged = ArrayList<ToolRegistration>()
+        for (entry in entries) {
+            let descriptor = entry.descriptor
+            if (descriptor.sideEffecting && !sharedSideEffectHasWrite(descriptor.concurrency)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "tool.shared_side_effect_without_write",
+                    "a side-effecting shared tool must declare at least one write resource",
+                    fields: [ErrorField("tool", descriptor.definition.name)]
+                ))
+            }
+            for (existing in staged where
+                existing.descriptor.definition.name == descriptor.definition.name) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "tool.duplicate",
+                    "tool name is duplicated in the registration batch",
+                    fields: [ErrorField("tool", descriptor.definition.name)]
+                ))
+            }
+            staged.add(ToolRegistration(descriptor, entry.executor))
+        }
+        if (staged.size == 0) { return Result.Ok(()) }
+
+        lock.lock()
+        try {
+            for (candidate in staged) {
+                let name = candidate.descriptor.definition.name
+                for (item in registrations where
+                    item.active && !item.revoked && item.descriptor.definition.name == name) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Configuration,
+                        "tool.duplicate",
+                        "tool is already registered",
+                        fields: [ErrorField("tool", name)]
+                    ))
+                }
+            }
+            let committed = ArrayList<ToolRegistration>()
+            for (item in registrations) { committed.add(item) }
+            for (item in staged) { committed.add(item) }
+            registrations = committed
+            Result.Ok(())
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    public func registerHookHandlers(
+        pluginId: String,
+        handlers: Array<ToolHookHandlerSnapshot>
+    ): Result<Unit> {
+        if (pluginId.trimAscii() == "") {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "tool.hook_plugin_id_invalid",
+                "hook registration requires a plugin identity"
+            ))
+        }
+        lock.lock()
+        try {
+            let staged = ArrayList<ToolHookHandlerSnapshot>()
+            for (handler in hookHandlers where handler.pluginId != pluginId) {
+                staged.add(handler)
+            }
+            for (handler in handlers) {
+                if (handler.pluginId != pluginId) {
+                    return Result.Err(AgentError(
+                        AgentErrorKind.Configuration,
+                        "tool.hook_plugin_identity_mismatch",
+                        "hook handler identity does not match its registration owner"
+                    ))
+                }
+                staged.add(handler)
+            }
+            var preCount: Int64 = 0
+            var postCount: Int64 = 0
+            for (handler in staged) {
+                if (handler.event == "PreToolUse") { preCount += 1 }
+                if (handler.event == "PostToolUse") { postCount += 1 }
+            }
+            if (preCount > 32 || postCount > 32) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "tool.hook_handler_limit",
+                    "hook event exceeds the 32-handler product limit"
+                ))
+            }
+            hookHandlers = staged
+            Result.Ok(())
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    public func unregisterHookHandlers(pluginId: String): Bool {
+        lock.lock()
+        try {
+            let retained = ArrayList<ToolHookHandlerSnapshot>()
+            var removed = false
+            for (handler in hookHandlers) {
+                if (handler.pluginId == pluginId) { removed = true }
+                else { retained.add(handler) }
+            }
+            hookHandlers = retained
+            removed
+        } finally {
+            lock.unlock()
+        }
+    }
+
     func find(name: String): ?ToolRegistration {
         lock.lock()
         try {
-            for (item in registrations where item.active && item.descriptor.definition.name == name) {
+            for (item in registrations where item.active && !item.revoked && item.descriptor.definition.name == name) {
                 return Some(item)
             }
             None
@@ -369,8 +589,47 @@ public class ToolCatalog {
     func findRegistered(name: String): ?ToolRegistration {
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name) {
-                return Some(item)
+            var selected: ?ToolRegistration = None
+            var selectedIsActive = false
+            for (item in registrations where item.descriptor.definition.name == name && !item.revoked) {
+                if (item.active) {
+                    selected = Some(item)
+                    selectedIsActive = true
+                } else if (!selectedIsActive) {
+                    selected = Some(item)
+                }
+            }
+            selected
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func findForSnapshot(
+        snapshot: ToolSetSnapshot,
+        name: String
+    ): ?ToolRegistration {
+        var expected: ?ToolSnapshotEntry = None
+        for (entry in snapshot.entries where entry.name == name) {
+            expected = Some(entry)
+            break
+        }
+        match (expected) {
+            case None => return None
+            case Some(_) => ()
+        }
+        let identity = match (expected) {
+            case Some(value) => value
+            case None => return None
+        }
+        lock.lock()
+        try {
+            for (item in registrations where item.descriptor.definition.name == name && !item.revoked) {
+                if (item.descriptor.implementationVersion == identity.executorVersion &&
+                    item.descriptor.implementationFingerprint == identity.implementationFingerprint &&
+                    item.descriptor.schemaDigest == identity.schemaDigest) {
+                    return Some(item)
+                }
             }
             None
         } finally {
@@ -396,7 +655,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             let values = ArrayList<ModelToolDefinition>()
-            for (item in registrations where item.active) {
+            for (item in registrations where item.active && !item.descriptor.controlOnly) {
                 values.add(item.descriptor.definition)
             }
             values.toArray()
@@ -409,7 +668,7 @@ public class ToolCatalog {
         lock.lock()
         try {
             let values = ArrayList<ModelToolDefinition>()
-            for (item in registrations where item.active) {
+            for (item in registrations where item.active && !item.descriptor.controlOnly) {
                 var allowed = true
                 for (required in item.descriptor.requiredCapabilities()) {
                     if (!capabilities.allows(
@@ -430,30 +689,152 @@ public class ToolCatalog {
         }
     }
 
-    public func unregister(name: String): Bool {
+    public func toolSetSnapshot(
+        id: String,
+        capabilities: CapabilitySet
+    ): ToolSetSnapshot {
         lock.lock()
         try {
-            for (index in 0..registrations.size) {
-                if (registrations[index].descriptor.definition.name == name) {
-                    registrations.remove(at: index)
-                    return true
+            let entries = ArrayList<ToolSnapshotEntry>()
+            for (item in registrations where item.active && !item.descriptor.controlOnly) {
+                let required = item.descriptor.requiredCapabilities()
+                var allowed = true
+                for (capability in required) {
+                    if (!capabilities.allows(
+                        capability.kind,
+                        resource: capability.resource
+                    )) {
+                        allowed = false
+                        break
+                    }
                 }
+                entries.add(ToolSnapshotEntry(
+                    item.descriptor.definition.name,
+                    item.descriptor.definition.description,
+                    item.descriptor.definition.inputSchema,
+                    item.descriptor.implementationVersion,
+                    required,
+                    implementationFingerprint: item.descriptor.implementationFingerprint,
+                    schemaDigest: item.descriptor.schemaDigest,
+                    availableAtSnapshot: allowed
+                ))
             }
-            false
+            let snapshotHooks = ArrayList<ToolHookHandlerSnapshot>()
+            for (handler in hookHandlers where
+                toolHookAvailableAtSnapshot(handler, capabilities)) {
+                snapshotHooks.add(handler)
+            }
+            ToolSetSnapshot(
+                id, entries.toArray(), hookHandlers: snapshotHooks.toArray()
+            )
         } finally {
             lock.unlock()
         }
     }
 
+    public func unregister(name: String): Bool {
+        lock.lock()
+        try {
+            var changed = false
+            for (item in registrations where item.descriptor.definition.name == name && item.active) {
+                item.active = false
+                changed = true
+            }
+            changed
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    // Revocation is an immediate security boundary, unlike ordinary retirement.
+    public func revoke(name: String): Bool {
+        let targets = ArrayList<ToolRevocationTarget>()
+        var found = false
+        lock.lock()
+        try {
+            for (item in registrations where item.descriptor.definition.name == name) {
+                item.active = false
+                item.revoked = true
+                found = true
+                let runIds = ArrayList<RunId>()
+                for (execution in item.activeExecutions) {
+                    var present = false
+                    for (runId in runIds where runId.value == execution.runId.value) {
+                        present = true
+                        break
+                    }
+                    if (!present) { runIds.add(execution.runId) }
+                }
+                if (!runIds.isEmpty()) {
+                    targets.add(ToolRevocationTarget(item.executor, runIds.toArray()))
+                }
+            }
+        } finally {
+            lock.unlock()
+        }
+        for (target in targets) {
+            for (runId in target.runIds) {
+                let _ = target.executor.cancel(runId)
+            }
+        }
+        found
+    }
+    func beginExecution(
+        registration: ToolRegistration,
+        operationId: OperationId,
+        runId: RunId
+    ): Bool {
+        lock.lock()
+        try {
+            if (registration.revoked) { return false }
+            registration.activeExecutions.add(ActiveToolExecution(operationId, runId))
+            true
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func finishExecution(
+        registration: ToolRegistration,
+        operationId: OperationId
+    ): Unit {
+        lock.lock()
+        try {
+            var index: Int64 = 0
+            while (index < registration.activeExecutions.size) {
+                if (registration.activeExecutions[index].operationId.value == operationId.value) {
+                    registration.activeExecutions.remove(at: index)
+                    break
+                }
+                index += 1
+            }
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    func executionWasRevoked(registration: ToolRegistration): Bool {
+        lock.lock()
+        try { registration.revoked } finally { lock.unlock() }
+    }
 
     public func setActive(name: String, active: Bool): Bool {
         lock.lock()
         try {
-            for (item in registrations where item.descriptor.definition.name == name) {
-                item.active = active
-                return true
+            var selected: ?ToolRegistration = None
+            var found = false
+            for (item in registrations where item.descriptor.definition.name == name && !item.revoked) {
+                found = true
+                if (active) { selected = Some(item) }
+                item.active = false
             }
-            false
+            if (active) {
+                match (selected) {
+                    case Some(item) => item.active = true
+                    case None => ()
+                }
+            }
+            found
         } finally {
             lock.unlock()
         }
@@ -645,21 +1026,40 @@ public class ToolPipeline {
     }
 
 
+    private func registrationForRun(
+        context: ToolInvocationContext,
+        name: String,
+        newPreparation!: Bool = false
+    ): ?ToolRegistration {
+        match (context.toolSetSnapshot) {
+            case Some(snapshot) => catalog.findForSnapshot(snapshot, name)
+            case None =>
+                if (newPreparation) { catalog.find(name) } else {
+                    catalog.findRegistered(name)
+                }
+        }
+    }
+
     // Sole production AgentCore entry. A CommittedToolCallRef can only be
     // minted after a validated durable Decision has been atomically projected
     // into the canonical Thread.
     public func prepareCommitted(
         context: ToolInvocationContext,
-        committed: CommittedToolCallRef
+        committed: CommittedToolCallRef,
+        effectiveArguments!: ?AgentValue = None
     ): Result<ToolPreparation> {
+        let arguments = match (effectiveArguments) {
+            case Some(value) => value
+            case None => committed.block.arguments
+        }
         prepareResolved(context, ToolCall(
             committed.block.callId,
             committed.block.name,
-            committed.block.arguments
+            arguments
         ), Some(OperationId(
             "operation-" + committed.decisionId.value + "-" +
                 committed.scopedToolCallId.value
-        )))
+        )), committedToolCall: Some(committed))
     }
 
     // Direct SDK preparation surface. Production AgentCore must use
@@ -679,9 +1079,10 @@ public class ToolPipeline {
     private func prepareResolved(
         context: ToolInvocationContext,
         call: ToolCall,
-        committedOperationId: ?OperationId
+        committedOperationId: ?OperationId,
+        committedToolCall!: ?CommittedToolCallRef = None
     ): Result<ToolPreparation> {
-        let registration = match (catalog.find(call.name)) {
+        let registration = match (registrationForRun(context, call.name, newPreparation: true)) {
             case Some(value) => value
             case None =>
                 let error = AgentError(
@@ -691,6 +1092,15 @@ public class ToolPipeline {
                     fields: [ErrorField("tool", call.name)]
                 )
                 return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
+        }
+        if (registration.descriptor.controlOnly && !context.trustedControl) {
+            let error = AgentError(
+                AgentErrorKind.InvalidInput,
+                "tool.not_found",
+                "tool is not registered",
+                fields: [ErrorField("tool", call.name)]
+            )
+            return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
         }
         // Freeze and validate network authorization before schema-dependent
         // resolution or any executor can observe the call. A gateway error
@@ -707,7 +1117,13 @@ public class ToolPipeline {
             case Result.Err(error) =>
                 return Result.Ok(ToolPreparation.Completed(recoverableToolResult(call, error)))
         }
-        let effective = registration.descriptor.resolved(call)
+        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Ok(
+                ToolPreparation.Completed(recoverableToolResult(call, error))
+            )
+        }
+        let effective = registration.descriptor.resolved(canonicalCall)
         let requirements = effective.requiredCapabilities()
         match (missingRequiredCapability(context, requirements)) {
             case Some(missing) =>
@@ -743,7 +1159,7 @@ public class ToolPipeline {
                 )
             )
         }
-        let plan = normalizedToolOperationPlan(context, call, effective)
+        let plan = normalizedToolOperationPlan(context, canonicalCall, effective)
         let metadata = plan.approvalMetadata
         let riskFlags = mergedApprovalFlags(
             approvalRiskFlags(call, effective.capability),
@@ -754,12 +1170,14 @@ public class ToolPipeline {
             call.callId,
             call.name,
             effective.capability,
-            preview: call.arguments,
+            preview: plan.canonicalArguments,
             sessionId: context.sessionId.value,
             argumentHash: requiredCapabilitiesArgumentHash(call, requirements),
             riskFlags: riskFlags,
             metadata: metadata,
-            decisionSource: ApprovalDecisionSource.HardDeny
+            decisionSource: ApprovalDecisionSource.HardDeny,
+            sessionApprovalAllowed: networkPolicyModeIsDenied(plan.networkPolicy.mode) &&
+                metadata.sessionApprovalAllowed
         )
         match (approvalPermanentDenialReason(safetyRequest)) {
             case Some(reason) =>
@@ -793,6 +1211,7 @@ public class ToolPipeline {
         )
         let networkSessionEligible = networkPolicyModeIsDenied(plan.networkPolicy.mode)
         let granted = networkSessionEligible &&
+            metadata.sessionApprovalAllowed &&
             evaluated.requirement == PermissionRequirement.Confirm &&
             persistedGrantAllows(context.sessionId, metadata.grantScope)
         let policyDecision = if (granted) {
@@ -831,20 +1250,24 @@ public class ToolPipeline {
                 call,
                 effective,
                 effective.capability,
+                plan,
                 decisionSource: if (granted) {
                     ApprovalDecisionSource.SessionGrant
                 } else {
                     ApprovalDecisionSource.StaticPolicy
                 },
                 metadata: Some(metadata),
-                requestedOperationId: committedOperationId
+                requestedOperationId: committedOperationId,
+                committedToolCall: committedToolCall
             )
             case PermissionRequirement.Confirm => prepareForApproval(
                 context,
                 call,
                 effective,
                 metadata,
-                requestedOperationId: committedOperationId
+                plan,
+                requestedOperationId: committedOperationId,
+                committedToolCall: committedToolCall
             )
         }
     }
@@ -862,7 +1285,7 @@ public class ToolPipeline {
                 value
             case _ => return Result.Ok(())
         }
-        let registration = match (catalog.findRegistered(toolName)) {
+        let registration = match (registrationForRun(context, toolName)) {
             case Some(value) => value
             case None => return Result.Err(
                 AgentError(
@@ -904,7 +1327,7 @@ public class ToolPipeline {
                 "the canonical Operation plan changed while approval was pending"
             ))
         }
-        let registration = match (catalog.findRegistered(prepared.call.name)) {
+        let registration = match (registrationForRun(context, prepared.call.name)) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -913,11 +1336,12 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", prepared.call.name)]
             ))
         }
-        let currentPlan = normalizedToolOperationPlan(
-            context,
-            prepared.call,
-            registration.descriptor.resolved(prepared.call)
-        )
+        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let current = registration.descriptor.resolved(canonicalCall)
+        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current)
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -929,21 +1353,11 @@ public class ToolPipeline {
             case ApprovalDecision.Reject | ApprovalDecision.RejectWithReason(_) => false
             case ApprovalDecision.Approve | ApprovalDecision.ApproveSession => true
         }
-        if (approved && match (decision) {
-            case ApprovalDecision.ApproveSession => !networkPolicyModeIsDenied(plan.networkPolicy.mode)
-            case _ => false
-        }) {
-            return Result.Err(AgentError(
-                AgentErrorKind.PermissionDenied,
-                "approval.session_scope_forbidden",
-                "network-enabled operations require one-time approval"
-            ))
-        }
-        match (missingRequiredCapability(context, plan.requiredCapabilities)) {
-            case Some(missing) => return Result.Err(
-                missingCapabilityError(prepared.call, missing, "approval")
-            )
-            case None => ()
+        match (validateDecisionPolicy(
+            context, prepared.call, plan, decision
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return Result.Err(error)
         }
         if (approved && match (decision) {
             case ApprovalDecision.ApproveSession => match (
@@ -1045,6 +1459,51 @@ public class ToolPipeline {
         operations.loadPlan(operationId, context.runId)
     }
 
+    // Non-mutating check before AgentCore persists an approval decision.
+    // authorize repeats the checks immediately before executor handoff.
+    public func validateApprovalDecision(
+        context: ToolInvocationContext,
+        operationId: OperationId,
+        decision: ApprovalDecision
+    ): Result<Unit> {
+        let prepared = match (loadPreparedForApproval(context, operationId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        validateDecisionPolicy(
+            context, prepared.call, prepared.operationPlan, decision
+        )
+    }
+
+    private func validateDecisionPolicy(
+        context: ToolInvocationContext,
+        call: ToolCall,
+        plan: NormalizedOperationPlan,
+        decision: ApprovalDecision
+    ): Result<Unit> {
+        let approved = match (decision) {
+            case ApprovalDecision.Reject | ApprovalDecision.RejectWithReason(_) => false
+            case ApprovalDecision.Approve | ApprovalDecision.ApproveSession => true
+        }
+        if (approved && match (decision) {
+            case ApprovalDecision.ApproveSession =>
+                !networkPolicyModeIsDenied(plan.networkPolicy.mode) ||
+                    !plan.approvalMetadata.sessionApprovalAllowed
+            case _ => false
+        }) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "approval.session_scope_forbidden",
+                "this operation requires one-time approval"
+            ))
+        }
+        match (missingRequiredCapability(context, plan.requiredCapabilities)) {
+            case Some(missing) => return Result.Err(
+                missingCapabilityError(call, missing, "approval")
+            )
+            case None => Result.Ok(())
+        }
+    }
     private func preparedWithAuthorization(
         prepared: PreparedToolInvocation,
         authorization: PreparedAuthorization
@@ -1055,7 +1514,8 @@ public class ToolPipeline {
             prepared.concurrency,
             authorization,
             prepared.operationPlan,
-            approval: prepared.approval
+            approval: prepared.approval,
+            committedToolCall: prepared.committedToolCall
         )
     }
 
@@ -1071,7 +1531,7 @@ public class ToolPipeline {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        let registration = match (catalog.findRegistered(call.name)) {
+        let registration = match (registrationForRun(context, call.name)) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -1080,11 +1540,12 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", call.name)]
             ))
         }
-        let currentPlan = normalizedToolOperationPlan(
-            context,
-            call,
-            registration.descriptor.resolved(call)
-        )
+        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let current = registration.descriptor.resolved(canonicalCall)
+        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current)
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -1105,7 +1566,9 @@ public class ToolPipeline {
                 approvalRiskFlags(call, capability),
                 plan.approvalMetadata.assessment.flags
             ),
-            metadata: plan.approvalMetadata
+            metadata: plan.approvalMetadata,
+            sessionApprovalAllowed: networkPolicyModeIsDenied(plan.networkPolicy.mode) &&
+                plan.approvalMetadata.sessionApprovalAllowed
         )
         Result.Ok(PreparedToolInvocation(
             operationId,
@@ -1132,13 +1595,14 @@ public class ToolPipeline {
         call: ToolCall,
         descriptor: ToolDescriptor,
         metadata: ToolApprovalMetadata,
-        requestedOperationId!: ?OperationId = None
+        plan: NormalizedOperationPlan,
+        requestedOperationId!: ?OperationId = None,
+        committedToolCall!: ?CommittedToolCallRef = None
     ): Result<ToolPreparation> {
         let operationId = match (requestedOperationId) {
             case Some(value) => value
             case None => ids.nextOperationId()
         }
-        let plan = normalizedToolOperationPlan(context, call, descriptor)
         let capability = primaryPlanCapability(plan)
         let required = plan.requiredCapabilities
         let _ = appendAudit(
@@ -1159,7 +1623,9 @@ public class ToolPipeline {
                 approvalRiskFlags(call, capability),
                 metadata.assessment.flags
             ),
-            metadata: metadata
+            metadata: metadata,
+            sessionApprovalAllowed: networkPolicyModeIsDenied(plan.networkPolicy.mode) &&
+                metadata.sessionApprovalAllowed
         )
         let prepared = PreparedToolInvocation(
             operationId,
@@ -1167,7 +1633,8 @@ public class ToolPipeline {
             descriptor.concurrency,
             PreparedAuthorization.ApprovalRequired,
             plan,
-            approval: Some(request)
+            approval: Some(request),
+            committedToolCall: committedToolCall
         )
         Result.Ok(ToolPreparation.NeedsApproval(prepared, request))
     }
@@ -1177,15 +1644,16 @@ public class ToolPipeline {
         call: ToolCall,
         descriptor: ToolDescriptor,
         capability: Capability,
+        plan: NormalizedOperationPlan,
         decisionSource!: ApprovalDecisionSource = ApprovalDecisionSource.StaticPolicy,
         metadata!: ?ToolApprovalMetadata = None,
-        requestedOperationId!: ?OperationId = None
+        requestedOperationId!: ?OperationId = None,
+        committedToolCall!: ?CommittedToolCallRef = None
     ): Result<ToolPreparation> {
         let operationId = match (requestedOperationId) {
             case Some(value) => value
             case None => ids.nextOperationId()
         }
-        let plan = normalizedToolOperationPlan(context, call, descriptor)
         let _ = appendAudit(
             context,
             "tool.approval_bypassed",
@@ -1205,7 +1673,8 @@ public class ToolPipeline {
                     } else {
                         PreparedAuthorization.StaticPolicy
                     },
-                    plan
+                    plan,
+                    committedToolCall: committedToolCall
                 )
                 )
             )
@@ -1260,7 +1729,7 @@ public class ToolPipeline {
                 return Result.Ok(ToolInvocationResult.Completed(result))
             case Result.Ok(None) => ()
         }
-        let registration = match (catalog.findRegistered(prepared.call.name)) {
+        let registration = match (registrationForRun(context, prepared.call.name)) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -1269,8 +1738,12 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", prepared.call.name)]
             ))
         }
-        let current = registration.descriptor.resolved(prepared.call)
-        let currentPlan = normalizedToolOperationPlan(context, prepared.call, current)
+        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        let current = registration.descriptor.resolved(canonicalCall)
+        let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current)
         if (!sameNormalizedOperationPlan(currentPlan, storedPlan)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Conflict,
@@ -1298,6 +1771,17 @@ public class ToolPipeline {
             ))
             case None => ()
         }
+        if (!catalog.beginExecution(
+            registration, prepared.operationId, context.runId
+        )) {
+            return Result.Err(AgentError(
+                AgentErrorKind.RecoveryRequired,
+                "tool.prepared_registration_missing",
+                "prepared tool was revoked before execution",
+                fields: [ErrorField("tool", prepared.call.name)]
+            ))
+        }
+        try {
         match (operations.markExecuting(
             prepared.operationId,
             context.runId,
@@ -1321,7 +1805,24 @@ public class ToolPipeline {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        let execution = match (registration.executor.execute(context, prepared)) {
+        if (catalog.executionWasRevoked(registration)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "tool.revoked_during_execution",
+                "tool was revoked before executor admission",
+                fields: [ErrorField("tool", prepared.call.name)]
+            ))
+        }
+        let executionResult = registration.executor.execute(context, prepared)
+        if (catalog.executionWasRevoked(registration)) {
+            return Result.Err(AgentError(
+                AgentErrorKind.PermissionDenied,
+                "tool.revoked_during_execution",
+                "tool was revoked while execution was in flight",
+                fields: [ErrorField("tool", prepared.call.name)]
+            ))
+        }
+        let execution = match (executionResult) {
             case Result.Ok(value) =>
                 if (value.callId != prepared.call.callId) {
                     return Result.Err(AgentError(
@@ -1355,6 +1856,9 @@ public class ToolPipeline {
                 }
             )
         ))
+        } finally {
+            catalog.finishExecution(registration, prepared.operationId)
+        }
     }
 
 
@@ -1539,15 +2043,15 @@ public func normalizedToolOperationPlan(
         ValueField("network", networkPolicyCanonicalValue(networkPolicy)),
         ValueField("cwd", textValue(cwd)),
         ValueField("environment", objectValue(environment.toArray())),
-        ValueField("approval", objectValue([
-            ValueField("capability_label", textValue(metadata.capabilityLabel)),
-            ValueField("risk", textValue(approvalRiskLevelName(metadata.assessment.level))),
-            ValueField("grant_capability", textValue(metadata.grantScope.capability)),
-            ValueField("grant_path", textValue(metadata.grantScope.pathPrefix)),
-            ValueField("grant_tool", textValue(metadata.grantScope.toolName)),
-            ValueField("grant_host", textValue(metadata.grantScope.host)),
-            ValueField("write", writeBinding)
+        ValueField("implementation", objectValue([
+            ValueField("tool_version", textValue(descriptor.implementationVersion)),
+            ValueField("fingerprint", textValue(descriptor.implementationFingerprint)),
+            ValueField("schema_digest", textValue(descriptor.schemaDigest)),
+            ValueField("effective_arguments_digest", textValue(modelPolicySha256Text(
+                canonicalApprovalValue(canonicalArguments)
+            )))
         ])),
+        ValueField("approval", approvalBindingValue(metadata, writeBinding)),
         ValueField("effect", textValue(match (effect) {
             case OperationEffectClass.ReadOnly => "read_only"
             case OperationEffectClass.WorkspaceMutation => "workspace_mutation"
@@ -1572,7 +2076,13 @@ public func normalizedToolOperationPlan(
         resolvedHosts: hosts.toArray(),
         cwd: cwd,
         relevantEnvironment: environment.toArray(),
-        approvalMetadata: Some(metadata)
+        approvalMetadata: Some(metadata),
+        toolVersion: descriptor.implementationVersion,
+        implementationFingerprint: descriptor.implementationFingerprint,
+        schemaDigest: descriptor.schemaDigest,
+        effectiveArgumentsDigest: modelPolicySha256Text(
+            canonicalApprovalValue(canonicalArguments)
+        )
     )
 }
 func primaryPlanCapability(plan: NormalizedOperationPlan): Capability {
@@ -1632,6 +2142,23 @@ func sameCapabilities(left: Array<Capability>, right: Array<Capability>): Bool {
     }
     true
 }
+func approvalBindingValue(
+    metadata: ToolApprovalMetadata,
+    writeBinding: AgentValue
+): AgentValue {
+    let fields = ArrayList<ValueField>()
+    fields.add(ValueField("capability_label", textValue(metadata.capabilityLabel)))
+    fields.add(ValueField("risk", textValue(approvalRiskLevelName(metadata.assessment.level))))
+    fields.add(ValueField("grant_capability", textValue(metadata.grantScope.capability)))
+    fields.add(ValueField("grant_path", textValue(metadata.grantScope.pathPrefix)))
+    fields.add(ValueField("grant_tool", textValue(metadata.grantScope.toolName)))
+    fields.add(ValueField("grant_host", textValue(metadata.grantScope.host)))
+    fields.add(ValueField("write", writeBinding))
+    if (!metadata.sessionApprovalAllowed) {
+        fields.add(ValueField("session_approval_allowed", boolValue(false)))
+    }
+    objectValue(fields.toArray())
+}
 
 func sameApprovalMetadata(
     left: ToolApprovalMetadata,
@@ -1645,7 +2172,8 @@ func sameApprovalMetadata(
         left.grantScope.pathPrefix == right.grantScope.pathPrefix &&
         left.grantScope.toolName == right.grantScope.toolName &&
         left.grantScope.host == right.grantScope.host &&
-        left.grantScope.sessionOnly == right.grantScope.sessionOnly
+        left.grantScope.sessionOnly == right.grantScope.sessionOnly &&
+        left.sessionApprovalAllowed == right.sessionApprovalAllowed
 }
 
 func sameReplayDisposition(

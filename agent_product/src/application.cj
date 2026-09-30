@@ -8,13 +8,13 @@ import agent_cli.*
 import agent_core.*
 import agent_domain.*
 import agent_extensions.*
+import agent_extension_runtime.*
 import persistence_runtime.*
 import tool_runtime.*
 import std.collection.*
 import std.convert.*
 import std.sync.*
 import std.time.*
-
 
 public enum ApplicationAction {
     NoAction
@@ -114,7 +114,15 @@ public class ApplicationHandoffResult {
         this.document = document
     }
 }
+class ApplicationPluginSourceCommand {
+    let source: ProductPluginSourceRequest
+    let scope: ?PluginInstallScope
 
+    init(source: ProductPluginSourceRequest, scope: ?PluginInstallScope) {
+        this.source = source
+        this.scope = scope
+    }
+}
 public class ApplicationSession <: AgentInteractionSource {
     private let product: ProductRuntime
     private let router = CommandRouter()
@@ -123,6 +131,8 @@ public class ApplicationSession <: AgentInteractionSource {
     private let queuedInteractions = ArrayList<QueuedInteraction>()
     private var sessionId: SessionId
     private var currentModel: String
+    private var nextPluginCommandId: Int64 = 1
+    private var activePluginCommandCancellation: ?CancellationSource = None
     private var currentThinking = ThinkingLevel.Medium
     private var thinkingExplicit = false
 
@@ -522,6 +532,175 @@ public class ApplicationSession <: AgentInteractionSource {
 
     public func mcpServers(): Array<ProductMcpServerSnapshot> {
         product.mcpSnapshots()
+    }
+
+    public func plugins(): Array<ProductPluginRecord> {
+        product.pluginSnapshots()
+    }
+
+    public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
+        product.javascriptPluginCommands()
+    }
+
+    public func invokeJavaScriptPluginCommand(
+        routeName: String,
+        arguments: String,
+        noticeSink: ProductJavaScriptPluginNoticeSink
+    ): Result<Unit> {
+        let cancellation = CancellationSource()
+        lock.lock()
+        let accepted = try {
+            if (activePluginCommandCancellation.isSome()) {
+                false
+            } else {
+                activePluginCommandCancellation = Some(cancellation)
+                true
+            }
+        } finally {
+            lock.unlock()
+        }
+        if (!accepted) {
+            cancellation.close()
+            return Result.Err(AgentError(
+                AgentErrorKind.Conflict,
+                "plugin.command_active",
+                "another plugin command is already active in this session"
+            ))
+        }
+        let commandId = takePluginCommandId()
+        let result = product.invokeJavaScriptPluginCommand(
+            routeName, arguments, sessionId, commandId, cancellation.token, noticeSink
+        )
+        lock.lock()
+        try { activePluginCommandCancellation = None } finally { lock.unlock() }
+        cancellation.close()
+        result
+    }
+
+    public func cancelJavaScriptPluginCommand(): Unit {
+        var active: ?CancellationSource = None
+        lock.lock()
+        try { active = activePluginCommandCancellation } finally { lock.unlock() }
+        match (active) {
+            case Some(value) => let _ = value.cancel()
+            case None => ()
+        }
+    }
+
+    private func takePluginCommandId(): String {
+        lock.lock()
+        try {
+            let id = "plugin-command-" + nextPluginCommandId.toString()
+            nextPluginCommandId += 1
+            id
+        } finally {
+            lock.unlock()
+        }
+    }
+    public func inspectPlugin(root: String): PluginPackageResult<PluginPackageDescriptor> {
+        product.inspectPlugin(root)
+    }
+
+    public func importLocalPlugin(root: String): PluginImportResult<ProductPluginRecord> {
+        product.importLocalPlugin(root)
+    }
+    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+        product.importLocalPlugin(root, scope)
+    }
+
+    public func importPluginSource(
+        source: ProductPluginSourceRequest
+    ): PluginImportResult<ProductPluginRecord> {
+        product.importPluginSource(
+            sessionId,
+            source,
+            approvalDecision: ApprovalDecision.Approve
+        )
+    }
+
+    public func importPluginSource(
+        source: ProductPluginSourceRequest,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        product.importPluginSource(
+            sessionId,
+            source,
+            scope,
+            approvalDecision: ApprovalDecision.Approve
+        )
+    }
+
+    public func updatePluginSource(
+        id: String,
+        source: ProductPluginSourceRequest
+    ): PluginImportResult<ProductPluginRecord> {
+        product.updatePluginSource(
+            id,
+            sessionId,
+            source,
+            approvalDecision: ApprovalDecision.Approve
+        )
+    }
+
+    public func updatePluginSource(
+        id: String,
+        source: ProductPluginSourceRequest,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        product.updatePluginSource(
+            id,
+            scope,
+            sessionId,
+            source,
+            approvalDecision: ApprovalDecision.Approve
+        )
+    }
+
+    public func setPluginEnabled(id: String, enabled: Bool): PluginImportResult<ProductPluginRecord> {
+        product.setPluginEnabled(id, enabled)
+    }
+
+    public func setPluginEnabled(
+        id: String,
+        enabled: Bool,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        product.setPluginEnabled(id, enabled, scope)
+    }
+
+    public func pluginDoctor(): Array<PluginImportError> {
+        product.pluginDoctor()
+    }
+    public func updateLocalPlugin(id: String, root: String): PluginImportResult<ProductPluginRecord> {
+        product.updateLocalPlugin(id, root)
+    }
+
+    public func rollbackPlugin(id: String): PluginImportResult<ProductPluginRecord> {
+        product.rollbackPlugin(id)
+    }
+
+    public func uninstallPlugin(id: String): PluginImportResult<Unit> {
+        product.uninstallPlugin(id)
+    }
+
+    public func updateLocalPlugin(
+        id: String,
+        root: String,
+        scope: PluginInstallScope
+    ): PluginImportResult<ProductPluginRecord> {
+        product.updateLocalPlugin(id, root, scope)
+    }
+
+    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+        product.rollbackPlugin(id, scope)
+    }
+
+    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginImportResult<Unit> {
+        product.uninstallPlugin(id, scope)
+    }
+
+    public func garbageCollectPlugins(): PluginImportResult<Array<String>> {
+        product.garbageCollectPlugins()
     }
 
     public func setExtensionEnabled(
@@ -1733,6 +1912,7 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func cancel(): Result<Unit> {
+        cancelJavaScriptPluginCommand()
         if (isCompacting()) {
             match (product.cancelCompaction(sessionId)) {
                 case Result.Ok(_) => ()
@@ -2111,7 +2291,10 @@ public class ApplicationSession <: AgentInteractionSource {
             case "context" => contextCommand(arguments)
             case "extensions" => extensionsCommand(arguments)
             case "mcp" => mcpCommand(arguments)
+            case "plugins" => pluginsCommand(arguments)
+            case "prompts" => promptsCommand(arguments)
             case "tree" => treeCommand(arguments)
+            case "inspect" => inspectCommand(arguments)
             case "debug" => debugCommand(arguments)
             case "rename" => renameCommand(arguments)
             case "import" => importCommand(arguments)
@@ -2126,6 +2309,35 @@ public class ApplicationSession <: AgentInteractionSource {
                         fields: [ErrorField("command", name)]
                     )
                 )
+        }
+    }
+
+    private func inspectCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        if (arguments.size > 2) { return invalidUsage("/inspect") }
+        let runId = if (arguments.isEmpty()) {
+            match (product.latestRunId(ThreadId(sessionId.value))) {
+                case Result.Ok(value) => value
+                case Result.Err(error) => return Result.Err(error)
+            }
+        } else {
+            RunId(arguments[0])
+        }
+        let beforeCursor = if (arguments.size < 2) {
+            0
+        } else {
+            try {
+                let value = Int64.parse(arguments[1])
+                if (value < 0) { return invalidUsage("/inspect") }
+                value
+            } catch (_: Exception) {
+                return invalidUsage("/inspect")
+            }
+        }
+        match (product.runInspection(
+            ThreadId(sessionId.value), runId, beforeCursor: beforeCursor, limit: 25
+        )) {
+            case Result.Ok(page) => Result.Ok(localResponse(renderRunInspection(page)))
+            case Result.Err(error) => Result.Err(error)
         }
     }
 
@@ -2403,6 +2615,351 @@ public class ApplicationSession <: AgentInteractionSource {
             }
         }
         Result.Ok(localResponse(text))
+    }
+
+    private func parsePluginSourceCommand(
+        kindName: String,
+        locator: String,
+        pin: String,
+        options: Array<String>
+    ): PluginImportResult<ApplicationPluginSourceCommand> {
+        let kind = match (kindName) {
+            case "git" => PluginSourceKind.Git
+            case "npm" => PluginSourceKind.Npm
+            case _ => return pluginImportError("plugin.command_source_invalid", "source kind must be git or npm")
+        }
+        let isNpm = match (kind) {
+            case PluginSourceKind.Npm => true
+            case _ => false
+        }
+        var scope: ?PluginInstallScope = None
+        var registryUrl = "https://registry.npmjs.org/"
+        var registrySeen = false
+        var index = 0
+        while (index < options.size) {
+            match (options[index]) {
+                case "--scope" =>
+                    if (scope.isSome() || index + 1 >= options.size) {
+                        return pluginImportError("plugin.command_options_invalid", "scope must be specified once as user or workspace")
+                    }
+                    let parsedScope = match (options[index + 1]) {
+                        case "user" => PluginInstallScope.User
+                        case "workspace" => PluginInstallScope.Workspace
+                        case _ => return pluginImportError("plugin.command_options_invalid", "scope must be user or workspace")
+                    }
+                    scope = Some(parsedScope)
+                    index += 2
+                case "--registry" =>
+                    if (!isNpm || registrySeen || index + 1 >= options.size) {
+                        return pluginImportError("plugin.command_options_invalid", "--registry is valid once for npm sources")
+                    }
+                    registryUrl = options[index + 1]
+                    registrySeen = true
+                    index += 2
+                case _ => return pluginImportError("plugin.command_options_invalid", "unknown plugin source option: " + options[index])
+            }
+        }
+        if (!isNpm) {
+            PluginImportResult.Ok(ApplicationPluginSourceCommand(
+                ProductPluginSourceRequest(kind, locator, revision: pin),
+                scope
+            ))
+        } else {
+            PluginImportResult.Ok(ApplicationPluginSourceCommand(
+                ProductPluginSourceRequest(kind, locator, version: pin, registryUrl: registryUrl),
+                scope
+            ))
+        }
+    }
+
+    private func pluginsCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        let usage = "/plugins [list|inspect <path>|import <path> [--scope user|workspace]|import git <locator> <commit> [--scope user|workspace]|import npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|update <id> <path> [--scope user|workspace]|update <id> git <locator> <commit> [--scope user|workspace]|update <id> npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|rollback <id> [--scope user|workspace]|uninstall <id> [--scope user|workspace]|enable <id> [--scope user|workspace]|disable <id> [--scope user|workspace]|doctor|gc]"
+        if (arguments.isEmpty() || arguments[0] == "list") {
+            if (arguments.size > 1) { return invalidUsage(usage) }
+            let records = plugins()
+            var text = "Plugins:"
+            if (records.isEmpty()) {
+                text += "\nNo plugins are imported."
+            } else {
+                for (record in records) {
+                    let sourceKind = match (record.sourceKind) {
+                        case PluginSourceKind.Local => "local"
+                        case PluginSourceKind.Git => "git"
+                        case PluginSourceKind.Npm => "npm"
+                    }
+                    let scopeName = match (record.scope) {
+                        case PluginInstallScope.User => "user"
+                        case PluginInstallScope.Workspace => "workspace"
+                    }
+                    let sourceLock = match (record.sourceKind) {
+                        case PluginSourceKind.Local => ""
+                        case PluginSourceKind.Git => " · commit " + record.revisionLock
+                        case PluginSourceKind.Npm => " · version " + record.versionLock + " · integrity " + record.integrityLock
+                    }
+                    text += "\n[" + (if (record.enabled) { "on" } else { "off" }) + "] " +
+                        record.descriptor.namespace + "@" + record.descriptor.version +
+                        " · " + scopeName + " · " + sourceKind + " · sha256:" + record.contentLock + " · " +
+                        record.locator + sourceLock
+                }
+            }
+            return Result.Ok(localResponse(text))
+        }
+        let action = arguments[0]
+        if (action == "inspect" && arguments.size == 2) {
+            match (inspectPlugin(arguments[1])) {
+                case PluginPackageResult.Ok(descriptor) =>
+                    let family = match (descriptor.family) {
+                        case PluginManifestFamily.Pi => "pi"
+                        case PluginManifestFamily.Codex => "codex"
+                        case PluginManifestFamily.Axyndra => "axyndra"
+                    }
+                    let ecosystem = match (descriptor.ecosystem) {
+                        case PluginEcosystem.Pi => "pi"
+                        case PluginEcosystem.Codex => "codex"
+                        case PluginEcosystem.Axyndra => "axyndra"
+                    }
+                    var text = "Plugin " + descriptor.namespace + " (" + descriptor.id + "@" + descriptor.version + ")"
+                    text += "\nFamily: " + family + ", ecosystem: " + ecosystem
+                    text += "\nCompatibility profile: " + descriptor.compatibilityProfile
+                    text += "\nSource: " + descriptor.source
+                    text += "\nDependencies:"
+                    if (descriptor.dependencies.isEmpty()) { text += " none" }
+                    for (dependency in descriptor.dependencies) {
+                        text += "\n- " + dependency.name + " " + dependency.versionRange
+                        if (dependency.optional) { text += " (optional)" }
+                        if (dependency.development) { text += " (development)" }
+                    }
+                    if (!descriptor.missingDependencies.isEmpty()) {
+                        text += "\nMissing required dependencies:"
+                        for (dependency in descriptor.missingDependencies) { text += "\n- " + dependency }
+                    }
+                    if (!descriptor.requestedCapabilities.isEmpty()) {
+                        text += "\nRequested capabilities:"
+                        for (capability in descriptor.requestedCapabilities) { text += "\n- " + capability }
+                    }
+                    if (descriptor.sdkRange != "") { text += "\nSDK range: " + descriptor.sdkRange }
+                    if (descriptor.protocolRange != "") { text += "\nProtocol range: " + descriptor.protocolRange }
+                    text += "\nComponents:"
+                    for (component in descriptor.components) {
+                        let kind = match (component.kind) {
+                            case PluginComponentKind.Skill => "skill"
+                            case PluginComponentKind.Mcp => "mcp"
+                            case PluginComponentKind.Prompt => "prompt"
+                            case PluginComponentKind.Extension => "extension"
+                            case PluginComponentKind.Hook => "hook"
+                            case PluginComponentKind.Command => "command"
+                            case PluginComponentKind.Theme => "theme"
+                            case PluginComponentKind.HostedOnly => "hosted"
+                        }
+                        let status = match (component.status) {
+                            case PluginComponentStatus.Supported => "supported"
+                            case PluginComponentStatus.Blocked => "blocked"
+                            case PluginComponentStatus.Unsupported => "unsupported"
+                            case PluginComponentStatus.Unverified => "unverified"
+                        }
+                        text += "\n- " + kind + " " + component.relativePath + " [" + status + "]"
+                    }
+                    return Result.Ok(localResponse(text))
+                case PluginPackageResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "import" && arguments.size >= 4 &&
+            (arguments[1] == "git" || arguments[1] == "npm")) {
+            let parsed = match (parsePluginSourceCommand(
+                arguments[1],
+                arguments[2],
+                arguments[3],
+                arguments[4..]
+            )) {
+                case PluginImportResult.Ok(value) => value
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+            let imported = match (parsed.scope) {
+                case Some(scope) => importPluginSource(parsed.source, scope)
+                case None => importPluginSource(parsed.source)
+            }
+            match (imported) {
+                case PluginImportResult.Ok(record) =>
+                    let pin = match (record.sourceKind) {
+                        case PluginSourceKind.Git => " at commit " + record.revisionLock
+                        case PluginSourceKind.Npm => " at " + record.versionLock + " (" + record.integrityLock + ")"
+                        case PluginSourceKind.Local => ""
+                    }
+                    return Result.Ok(localResponse(
+                        "Imported " + record.descriptor.id + "@" + record.descriptor.version +
+                            " from " + record.locator + pin + " (disabled until enabled)."
+                    ))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "import" && (arguments.size == 2 ||
+            (arguments.size == 4 && arguments[2] == "--scope"))) {
+            let imported = if (arguments.size == 2) {
+                importLocalPlugin(arguments[1])
+            } else {
+                match (arguments[3]) {
+                    case "user" => importLocalPlugin(arguments[1], PluginInstallScope.User)
+                    case "workspace" => importLocalPlugin(arguments[1], PluginInstallScope.Workspace)
+                    case _ => return invalidUsage(usage)
+                }
+            }
+            match (imported) {
+                case PluginImportResult.Ok(record) =>
+                    let scopeName = match (record.scope) {
+                        case PluginInstallScope.User => "user"
+                        case PluginInstallScope.Workspace => "workspace"
+                    }
+                    return Result.Ok(localResponse("Imported " + record.descriptor.id + "@" + record.descriptor.version +
+                        " in " + scopeName + " scope (disabled until enabled)."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "update" && arguments.size >= 5 &&
+            (arguments[2] == "git" || arguments[2] == "npm")) {
+            let parsed = match (parsePluginSourceCommand(
+                arguments[2],
+                arguments[3],
+                arguments[4],
+                arguments[5..]
+            )) {
+                case PluginImportResult.Ok(value) => value
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+            let updated = match (parsed.scope) {
+                case Some(scope) => updatePluginSource(arguments[1], parsed.source, scope)
+                case None => updatePluginSource(arguments[1], parsed.source)
+            }
+            match (updated) {
+                case PluginImportResult.Ok(record) =>
+                    let pin = match (record.sourceKind) {
+                        case PluginSourceKind.Git => " at commit " + record.revisionLock
+                        case PluginSourceKind.Npm => " at " + record.versionLock + " (" + record.integrityLock + ")"
+                        case PluginSourceKind.Local => ""
+                    }
+                    return Result.Ok(localResponse(
+                        "Updated " + record.descriptor.id + "@" + record.descriptor.version +
+                            " from " + record.locator + pin + "."
+                    ))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "update" && (arguments.size == 3 ||
+            (arguments.size == 5 && arguments[3] == "--scope"))) {
+            let updated = if (arguments.size == 3) {
+                updateLocalPlugin(arguments[1], arguments[2])
+            } else {
+                match (arguments[4]) {
+                    case "user" => updateLocalPlugin(arguments[1], arguments[2], PluginInstallScope.User)
+                    case "workspace" => updateLocalPlugin(arguments[1], arguments[2], PluginInstallScope.Workspace)
+                    case _ => return invalidUsage(usage)
+                }
+            }
+            match (updated) {
+                case PluginImportResult.Ok(record) =>
+                    return Result.Ok(localResponse("Updated " + record.descriptor.id + "@" + record.descriptor.version + "."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "rollback" && (arguments.size == 2 ||
+            (arguments.size == 4 && arguments[2] == "--scope"))) {
+            let rolledBack = if (arguments.size == 2) {
+                rollbackPlugin(arguments[1])
+            } else {
+                match (arguments[3]) {
+                    case "user" => rollbackPlugin(arguments[1], PluginInstallScope.User)
+                    case "workspace" => rollbackPlugin(arguments[1], PluginInstallScope.Workspace)
+                    case _ => return invalidUsage(usage)
+                }
+            }
+            match (rolledBack) {
+                case PluginImportResult.Ok(record) =>
+                    return Result.Ok(localResponse("Rolled back " + record.descriptor.id + "@" + record.descriptor.version + "."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "uninstall" && (arguments.size == 2 ||
+            (arguments.size == 4 && arguments[2] == "--scope"))) {
+            let uninstalled = if (arguments.size == 2) {
+                uninstallPlugin(arguments[1])
+            } else {
+                match (arguments[3]) {
+                    case "user" => uninstallPlugin(arguments[1], PluginInstallScope.User)
+                    case "workspace" => uninstallPlugin(arguments[1], PluginInstallScope.Workspace)
+                    case _ => return invalidUsage(usage)
+                }
+            }
+            match (uninstalled) {
+                case PluginImportResult.Ok(_) =>
+                    return Result.Ok(localResponse("Uninstalled plugin " + arguments[1] + "."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if ((action == "enable" || action == "disable") && (arguments.size == 2 ||
+            (arguments.size == 4 && arguments[2] == "--scope"))) {
+            let enabled = action == "enable"
+            let changed = if (arguments.size == 2) {
+                setPluginEnabled(arguments[1], enabled)
+            } else {
+                match (arguments[3]) {
+                    case "user" => setPluginEnabled(arguments[1], enabled, PluginInstallScope.User)
+                    case "workspace" => setPluginEnabled(arguments[1], enabled, PluginInstallScope.Workspace)
+                    case _ => return invalidUsage(usage)
+                }
+            }
+            match (changed) {
+                case PluginImportResult.Ok(record) =>
+                    return Result.Ok(localResponse("Plugin " + record.descriptor.id + " is now " +
+                        (if (record.enabled) { "enabled" } else { "disabled" }) + "."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        if (action == "doctor" && arguments.size == 1) {
+            let errors = pluginDoctor()
+            var text = "Plugin doctor:"
+            if (errors.isEmpty()) { text += "\nNo plugin issues detected." }
+            for (error in errors) { text += "\n- " + error.code + ": " + error.message }
+            return Result.Ok(localResponse(text))
+        }
+        if (action == "gc" && arguments.size == 1) {
+            match (garbageCollectPlugins()) {
+                case PluginImportResult.Ok(paths) =>
+                    return Result.Ok(localResponse("Garbage-collected " + paths.size.toString() + " plugin generations."))
+                case PluginImportResult.Err(error) =>
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+            }
+        }
+        invalidUsage(usage)
+    }
+
+    private func promptsCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        let usage = "/prompts [list|run <namespace/path> [arguments...]]"
+        if (arguments.isEmpty() || arguments[0] == "list") {
+            if (arguments.size > 1) { return invalidUsage(usage) }
+            let names = product.pluginPromptTemplates()
+            var text = "Prompt templates:"
+            if (names.isEmpty()) {
+                text += "\nNo enabled prompt templates."
+            } else {
+                for (name in names) { text += "\n- " + name }
+            }
+            return Result.Ok(localResponse(text))
+        }
+        if (arguments[0] != "run" || arguments.size < 2) { return invalidUsage(usage) }
+        match (product.renderPluginPromptTemplate(arguments[1], arguments[2..])) {
+            case PluginImportResult.Ok(prompt) => submit(prompt)
+            case PluginImportResult.Err(error) =>
+                Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+        }
     }
 
     private func mcpCommand(arguments: Array<String>): Result<ApplicationResponse> {

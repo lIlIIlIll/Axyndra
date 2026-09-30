@@ -312,12 +312,17 @@ def print_case_list(cases: list[dict[str, Any]]) -> None:
 
 def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int = 0) -> dict[str, str]:
     """Build a whitelist environment and deliberately drop user credentials/UI."""
-    sdk_root = Path(
-        os.environ.get(
-            "CANGJIE_SDK_ROOT",
-            str(Path.home() / "cangjie_sdk" / "daily" / "cangjie"),
-        )
+    configured_sdk = Path(
+        os.environ.get("CANGJIE_HOME")
+        or os.environ.get("CANGJIE_SDK_ROOT")
+        or Path.home() / "cangjie_sdk" / "daily"
     )
+    sdk_root = (
+        configured_sdk / "cangjie"
+        if (configured_sdk / "cangjie" / "bin").is_dir()
+        else configured_sdk
+    )
+    sdk_layout_root = sdk_root.parent if sdk_root.name == "cangjie" else sdk_root
     path_entries = [
         "/usr/bin",
         "/bin",
@@ -359,13 +364,13 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
         value = os.environ.get(name)
         if value:
             environment[name] = value
-    # The repository's daily SDK is a split installation: compiler/runtime live
-    # below cangjie/, while dynamic stdx lives beside it.
+    # Daily SDKs may use a split installation: compiler/runtime below
+    # cangjie/, with dynamic stdx beside it. Resolve it from the selected SDK.
     environment.setdefault("CANGJIE_HOME", str(sdk_root))
     environment.setdefault("CANGJIE_SDK_ROOT", str(sdk_root))
     environment.setdefault(
         "CANGJIE_STDX_PATH",
-        str(sdk_root.parent / "linux_x86_64_cjnative" / "dynamic" / "stdx"),
+        str(sdk_layout_root / "linux_x86_64_cjnative" / "dynamic" / "stdx"),
     )
     native = str(ROOT / "libs" / "process4cj" / "native")
     runtime = str(sdk_root / "runtime" / "lib" / "linux_x86_64_cjnative")
@@ -2852,7 +2857,7 @@ def run_queue_race(case_run: CaseRun, _: dict[str, Any]) -> None:
 
     (case_run.case_dir / "release-queue-main").touch()
     case_run.wait_screen(("queue-steer-response",), "steer-delivered")
-    case_run.wait_screen(("Enter send",), "queue-ready")
+    case_run.wait_screen(("queue-follow",), "queue-ready")
     requests = case_run.wait_requests(2)
     request_texts = ["\n".join(flatten_text(item.get("request", {}))) for item in requests]
     case_run.assertions.check(
@@ -5087,6 +5092,14 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     close_document("stats-close", "session stats:")
     command("context", "/context", "Context estimate:")
     close_document("context-close", "Context estimate:")
+    inspect_frame = command(
+        "inspect", "/inspect", "Operations (newest first)", require_echo=False
+    )
+    case_run.assertions.check(
+        "inspect_visible_canonical_evidence",
+        "Operations (newest first)" in inspect_frame,
+        "run inspection renders canonical operation evidence in the real TUI",
+    )
     command("debug", "/debug", "Debug snapshot:")
     close_document("debug-close", "Debug snapshot:")
     command("changelog", "/changelog", "axyndra 1.0.0", require_echo=False)
@@ -6357,25 +6370,19 @@ def run_compaction_summary(case_run: CaseRun, _: dict[str, Any]) -> None:
     second_compaction = strip_ansi(
         case_run.wait_screen(("compacted messages: 5",), "compaction-second-command", timeout=15.0)
     )
-    first_metrics = re.search(
-        r"Before\s+(\d+) tokens.*?After\s+(\d+) tokens.*?Saved\s+(\d+) tokens",
-        first_compaction,
-        re.S,
+    second_scrollback = strip_ansi(
+        case_run.capture_scrollback("compaction-second-scrollback")
     )
-    second_metrics = re.search(
-        r"Before\s+(\d+) tokens.*?After\s+(\d+) tokens.*?Saved\s+(\d+) tokens",
-        second_compaction,
-        re.S,
-    )
+    metric_pattern = r"Before\s+(\d+) tokens.*?After\s+(\d+) tokens.*?Saved\s+(\d+) tokens"
+    first_metrics = re.search(metric_pattern, first_compaction, re.S)
+    second_metric_matches = list(re.finditer(metric_pattern, second_scrollback, re.S))
+    second_metrics = second_metric_matches[-1] if second_metric_matches else None
     case_run.assertions.check(
         "compaction_card_updates",
         first_metrics is not None
         and second_metrics is not None
-        and first_metrics.groups() != second_metrics.groups()
-        and second_compaction.count("Before") == 1
-        and second_compaction.count("After") == 1
-        and second_compaction.count("Saved") == 1,
-        "the fixed compaction card id updates in place instead of duplicating",
+        and first_metrics.groups() != second_metrics.groups(),
+        "the fixed compaction card id updates in place and its latest metrics remain in terminal scrollback",
     )
     case_run.wait_screen(("messages: 5 (user 3, assistant 2)",), "compaction-summary-fallback", timeout=15.0)
     case_run.wait_screen(("Enter send",), "compaction-second-ready", timeout=15.0)

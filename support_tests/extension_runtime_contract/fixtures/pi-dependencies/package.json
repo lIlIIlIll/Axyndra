@@ -1,0 +1,1 @@
+{"name":"dependency-package","version":"1.0.0","pi":{"extensions":["./extensions/index.js"]},"dependencies":{"missing-runtime":"^1.2.0"},"optionalDependencies":{"optional-runtime":"^2.0.0"},"devDependencies":{"build-only":"^3.0.0"}}

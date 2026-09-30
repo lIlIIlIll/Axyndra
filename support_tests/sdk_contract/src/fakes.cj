@@ -370,7 +370,8 @@ func copyFakeAttempt(
         dispatchState: dispatchState,
         replayBarrier: replayBarrier,
         dispatchStartedAtMillis: dispatchStartedAtMillis,
-        providerTerminalAtMillis: providerTerminalAtMillis
+        providerTerminalAtMillis: providerTerminalAtMillis,
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 

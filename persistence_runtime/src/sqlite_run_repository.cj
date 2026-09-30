@@ -1079,6 +1079,7 @@ func toolOutputChannelKey(value: ToolOutputChannel): String {
     match (value) {
         case ToolOutputChannel.Stdout => "stdout"
         case ToolOutputChannel.Stderr => "stderr"
+        case ToolOutputChannel.Progress => "progress"
         case ToolOutputChannel.Artifact => "artifact"
         case ToolOutputChannel.Summary => "summary"
     }
@@ -1167,7 +1168,8 @@ func modelAttemptSelect(): String {
         "attempt_no,lifecycle,policy,policy_reason,started_at_millis,last_activity_at_millis," +
         "COALESCE(completed_at_millis,-1),provider_request_id,provider_response_id,failure_kind," +
         "semantic_request_digest,wire_policy_digest,dispatch_state,replay_barrier," +
-        "COALESCE(dispatch_started_at_millis,-1),COALESCE(provider_terminal_at_millis,-1) " +
+        "COALESCE(dispatch_started_at_millis,-1),COALESCE(provider_terminal_at_millis,-1)," +
+        "transcript_snapshot " +
         "FROM model_attempts"
 }
 
@@ -1206,7 +1208,8 @@ func decodeModelAttemptRow(row: SqliteRow): Result<DurableModelAttempt> {
             dispatchState: modelAttemptDispatchStateFromName(row.required(16)),
             replayBarrier: modelAttemptReplayBarrierFromName(row.required(17)),
             dispatchStartedAtMillis: sqliteOptionalMillis(row.required(18)),
-            providerTerminalAtMillis: sqliteOptionalMillis(row.required(19))
+            providerTerminalAtMillis: sqliteOptionalMillis(row.required(19)),
+            transcriptSnapshot: row.required(20)
         ))
     } catch (error: Exception) {
         sqliteRunStorageError("persistence.sqlite_model_attempt_decode", error.message)

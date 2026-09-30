@@ -50,7 +50,7 @@ Tool Call / 已批准的服务配置 / 显式用户控制命令
 - `PreparedToolInvocation` 持有原始 call 与唯一 normalized plan。`ToolExecutor.execute` 接收 prepared invocation，而不是只有 raw `ToolCall`。执行读取已批准的规范参数、权限和目标，不从当前环境偷偷扩大权限。
 - `ToolPipeline.prepare`、审批与执行检查改用同一 `OperationRuntimePort`。准备 canonical Operation，记录 binding approval，在真正调用 executor 前记录一次 Executing/handoff。Core 删除重复 prepare/handoff。执行前重新验证权限上限、实现身份和动态 spec 版本，变化返回已知的前置错误。
 - Core 仍通过 `AgentThreadRuntime.resolveOperation` 原子提交 canonical Receipt 与 ToolResult。ToolPipeline 不再写另一份 receipt 或把 intent receipt 当作完成事实。`afterResultPersisted` 仅在 canonical 语义提交成功后调用。
-- 删除 `tool_operation_intents`、intent receipt 的生产存储与解码路径。仍需独立执行的 SDK/program 子操作走现有 `prepareProgramSubOperation`，必须先有 canonical ToolCall，不保留“没有 Run 就退回旧仓库”的分支。
+- 删除 `tool_operation_intents`、intent receipt 的生产存储与解码路径。可信 SDK/CLI/MCP direct-control root 在提交带 `direct_tool` provenance 的 canonical ToolCall Item 后使用 `prepareTrustedControlOperation`；PTC 派生调用必须先经 host admission 再使用 `prepareDerivedOperation`，不保留通用 Program 子操作准备或“没有 Run 就退回旧仓库”的分支。
 - 保留 `PermissionRepository` 作为 session grant 仓库；它不是第二份 Operation ledger。内存实现与 SQLite 实现实现相同 canonical 生命周期，用真实入口修订原先直接依赖旧 intent 仓库的测试。
 - 使用已有 `OperationAttemptStage` 表达未执行和已 handoff，使用已有 `ToolResult(isError=true)` 表达已知失败。无需增加另一套 outcome enum。
 

@@ -7,6 +7,7 @@ import yjson.*
 import agent_domain.*
 import model_adapters.*
 import std.collection.*
+import process4cj.*
 import std.convert.*
 import std.env.*
 import std.fs.*
@@ -1482,47 +1483,22 @@ func ensureBrokerToken(path: String): Result<String> {
 }
 
 func secureBrokerToken(): Result<String> {
-    let file = try {
-        File("/dev/urandom", OpenMode.Read)
-    } catch (error: Exception) {
-        return brokerError<String>(
-            AgentErrorKind.Internal,
-            "hub.process_broker_random_failed",
-            error.message
-        )
-    }
     let bytes = Array<Byte>(32, repeat: 0)
-    var offset: Int64 = 0
     try {
-        while (offset < bytes.size) {
-            let buffer = Array<Byte>(bytes.size - offset, repeat: 0)
-            let count = file.read(buffer)
-            if (count <= 0) {
-                return brokerError<String>(
-                    AgentErrorKind.Internal,
-                    "hub.process_broker_random_failed",
-                    "secure random source ended unexpectedly"
-                )
-            }
-            for (index in 0..count) {
-                bytes[offset + index] = buffer[index]
-            }
-            offset += count
-        }
+        fillSecureRandom(bytes)
     } catch (error: Exception) {
         return brokerError<String>(
             AgentErrorKind.Internal,
             "hub.process_broker_random_failed",
             error.message
         )
-    } finally {
-        try { file.close() } catch (_: Exception) {}
     }
+    let digits = "0123456789abcdef".toArray()
     var token = ""
     for (byte in bytes) {
-        let encoded = byte.toString(radix: 16)
-        if (encoded.size == 1) { token += "0" }
-        token += encoded
+        let value = UInt8(byte)
+        token += String.fromUtf8([digits[Int64((value >> 4) & 0x0f)]])
+        token += String.fromUtf8([digits[Int64(value & 0x0f)]])
     }
     Result.Ok(token)
 }

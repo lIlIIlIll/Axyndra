@@ -86,7 +86,8 @@ class AstGrepTool <: ToolExecutor {
                     arguments: arguments.toArray(),
                     timeoutMillis: 30000,
                     sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
-                    networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                    networkPolicy: Some(prepared.operationPlan.networkPolicy),
+                    processLimits: context.budget.processLimits
                 )) }
             )) {
                 case Result.Ok(value) => value
@@ -246,7 +247,8 @@ class AstEditRuntime {
                         arguments: arguments.toArray(),
                         timeoutMillis: 30000,
                         sandboxMode: ProcessSandboxMode.WorkspaceReadOnly,
-                        networkPolicy: Some(prepared.operationPlan.networkPolicy)
+                        networkPolicy: Some(prepared.operationPlan.networkPolicy),
+                        processLimits: context.budget.processLimits
                     )) }
                 )) {
                     case Result.Ok(value) => value

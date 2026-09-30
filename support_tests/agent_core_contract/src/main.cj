@@ -78,6 +78,8 @@ main(): Int64 {
     }, "run completes")
     expect(model.calls == 2, "one execute primitive drives both model turns")
     modelProtocolCapabilityBoundaryContract(model)
+    runFrozenToolSnapshotContract()
+    incompleteToolSnapshotBlocksRecoveryContract()
     controlledInternalModelCallContract()
     internalTotalBudgetContract()
     standaloneInternalBudgetContract()
@@ -115,6 +117,8 @@ main(): Int64 {
     malformedToolResultProtocolContract()
     approvalBatchBarrierContract()
     toolContextApprovalResumeContract()
+    modifiedToolArgumentsAreRevalidatedAndApprovalBoundContract()
+    modifiedPlanArgumentsPublicationContract()
     approvalResumeContract()
     nonPendingDecisionDoesNotPersistContract()
     // Legacy semantic append fault fixtures remain out of scope; durable model
@@ -176,6 +180,8 @@ main(): Int64 {
     budgetModeOrthogonalToApprovalContract()
     usageAccountingContract()
     failedAttemptUsageObeysRequestBudgetContract()
+    timeoutAttemptUsageIsSettledContract()
+
     zeroUsageFailureThenPricedSuccessContract()
     contextCompactionContract()
     contextBoundaryContract()
@@ -826,6 +832,8 @@ func modelResumeCrashWindowMatrixContract(): Unit {
     preparedAttemptResumeContract()
     claimedAttemptRestartContract()
     claimedA2NeverCreatesA3Contract()
+    frozenTranscriptMismatchBlocksRecoveryContract()
+    missingTranscriptBlocksRecoveryContract()
     durableDecisionResumeStartsNoProviderContract()
 }
 
@@ -871,11 +879,85 @@ func preparedAttemptResumeContract(): Unit {
     )
 }
 
+func frozenTranscriptMismatchBlocksRecoveryContract(): Unit {
+    let runs = MemoryRuns(failClaimBeforeCommitAt: 1)
+    let model = ResumeAnswerModel()
+    let catalog = ToolCatalog()
+    let request = AgentRunRequest(
+        RunId("frozen-transcript-mismatch-run"),
+        SessionId("frozen-transcript-mismatch-session"),
+        "fixture", "reject changed adapter projection"
+    )
+    let threadRegistry = resumeThreadRegistry("frozen-transcript-mismatch")
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threadRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).start(request)
+    expect(first.isError() && model.calls == 0 &&
+        runs.modelAttempts[0].transcriptSnapshot == "resume-transcript-v1",
+        "R1 persists the exact adapter transcript before dispatch")
+    runs.failClaimBeforeCommitAt = 0
+    model.transcriptVersion = "v2"
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threadRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).resume(request)
+    expect(resumed.isError() && match (resumed.error()) {
+        case Some(error) => error.code == "model.attempt_replay_binding_invalid"
+        case None => false
+    } && model.calls == 0,
+        "R1 rejects recovery when the active adapter cannot reproduce the frozen transcript")
+}
+
+func missingTranscriptBlocksRecoveryContract(): Unit {
+    let runs = MemoryRuns(failClaimBeforeCommitAt: 1)
+    let model = ResumeAnswerModel()
+    let catalog = ToolCatalog()
+    let request = AgentRunRequest(
+        RunId("missing-transcript-run"),
+        SessionId("missing-transcript-session"),
+        "fixture", "reject an unbound legacy attempt"
+    )
+    let threadRegistry = resumeThreadRegistry("missing-transcript")
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threadRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).start(request)
+    expect(first.isError() && model.calls == 0,
+        "R1 fixture stops before dispatching its prepared Attempt")
+    runs.modelAttempts[0] = fixtureAttemptWithTranscriptSnapshot(
+        runs.modelAttempts[0], ""
+    )
+    runs.failClaimBeforeCommitAt = 0
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threadRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).resume(request)
+    expect(resumed.isError() && match (resumed.error()) {
+        case Some(error) => error.code == "model.attempt_replay_binding_invalid"
+        case None => false
+    } && model.calls == 0,
+        "R1 rejects a legacy Attempt without a frozen transcript snapshot")
+}
+
 func claimedAttemptRestartContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 1)
     let decisions = RecordingModelDecisionPort()
     let model = ResumeAnswerModel()
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("claimed-resume")
     let request = AgentRunRequest(
         RunId("claimed-resume-run"), SessionId("claimed-resume-session"),
         "fixture", "resume claimed attempt"
@@ -883,7 +965,7 @@ func claimedAttemptRestartContract(): Unit {
     let first = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-resume-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).start(request)
     expect(first.isError() && model.calls == 0 &&
@@ -893,7 +975,7 @@ func claimedAttemptRestartContract(): Unit {
     let resumed = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-resume-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
     let r2Attempt = runs.modelAttempts[1]
@@ -929,6 +1011,7 @@ func claimedA2NeverCreatesA3Contract(): Unit {
     let decisions = RecordingModelDecisionPort()
     let model = ResumeAnswerModel()
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("claimed-a2")
     let request = AgentRunRequest(
         RunId("claimed-a2-run"), SessionId("claimed-a2-session"),
         "fixture", "never create A3"
@@ -936,7 +1019,7 @@ func claimedA2NeverCreatesA3Contract(): Unit {
     let firstCore = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-a2-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     )
     expect(firstCore.start(request).isError(), "R3 A1 claim crash is injected")
@@ -944,7 +1027,7 @@ func claimedA2NeverCreatesA3Contract(): Unit {
     let secondCore = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-a2-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     )
     expect(secondCore.resume(request).isError() && runs.modelAttempts.size == 2 &&
@@ -954,7 +1037,7 @@ func claimedA2NeverCreatesA3Contract(): Unit {
     let thirdCore = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("claimed-a2-third")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     )
     let eventsBeforeReject = runs.eventLog.size
@@ -982,6 +1065,7 @@ func durableDecisionResumeStartsNoProviderContract(): Unit {
     let decisions = RecordingModelDecisionPort()
     let model = ResumeAnswerModel()
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("durable-resume")
     let request = AgentRunRequest(
         RunId("durable-resume-run"), SessionId("durable-resume-session"),
         "fixture", "reuse durable decision"
@@ -989,7 +1073,7 @@ func durableDecisionResumeStartsNoProviderContract(): Unit {
     let firstCore = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("durable-resume-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     )
     expect(firstCore.start(request).isError(), "R4 dispatch crash is injected")
@@ -1016,7 +1100,7 @@ func durableDecisionResumeStartsNoProviderContract(): Unit {
     let resumed = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("durable-resume-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
     let r4Snapshot = runs.find(request.runId).value().getOrThrow()
@@ -1039,7 +1123,16 @@ func resumeThreadRegistry(name: String): ThreadRuntimeRegistry {
 }
 
 class ResumeAnswerModel <: ModelPort {
+    var transcriptVersion = "v1"
     var calls: Int64 = 0
+    public func transcriptSnapshot(request: ModelRequest): ?String {
+        let _ = request.requestId
+        Some("resume-transcript-" + transcriptVersion)
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        snapshot.startsWith("resume-transcript-")
+    }
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
         let _ = request.requestId
         calls += 1
@@ -1329,6 +1422,19 @@ func activeSkillStackContract(): Unit {
     )
 }
 
+func internalModelTestCore(
+    modelControl: ControlledModelPort,
+    runs: RunRepository
+): AgentCore {
+    let catalog = ToolCatalog()
+    AgentCore(
+        modelControl,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+}
+
 func controlledInternalModelCallContract(): Unit {
     let runs = MemoryRuns()
     let runId = RunId("internal-model-run")
@@ -1344,6 +1450,7 @@ func controlledInternalModelCallContract(): Unit {
     )).value().getOrThrow()
     let provider = DetailedUsageModel()
     let control = ControlledModelPort(provider, runs: Some(runs))
+    let _ = internalModelTestCore(control, runs)
     let parent = AgentRunRequest(
         runId,
         sessionId,
@@ -1413,6 +1520,116 @@ func controlledInternalModelCallContract(): Unit {
             second.isError() && second.error().getOrThrow().kind == AgentErrorKind.BudgetExceeded,
         "internal reviewer calls share retry, timeout, durable usage, cost, and parent request budgets"
     )
+    let timeoutRuns = MemoryRuns()
+    let timeoutRunId = RunId("internal-model-timeout")
+    timeoutRuns.save(RunSnapshot(
+        timeoutRunId, sessionId, RunState.WaitingApproval
+    )).value().getOrThrow()
+    let timeoutProvider = TimeoutUsageModel()
+    let timeoutControl = ControlledModelPort(
+        timeoutProvider, runs: Some(timeoutRuns)
+    )
+    let _ = internalModelTestCore(timeoutControl, timeoutRuns)
+    let timeoutParent = AgentRunRequest(
+        timeoutRunId, sessionId, "fixture", "timeout parent",
+        budget: ResourceBudget(
+            maxTotalInputTokens: 100, maxTotalOutputTokens: 100
+        )
+    )
+    let timeoutRequest = ModelRequest(
+        "fixture", [], tools: [], parallelToolCalls: false,
+        requestId: "internal-billed-timeout",
+        toolChoice: ModelToolChoice.NoTools
+    )
+    let timeout = timeoutControl.executeInternal(
+        timeoutRequest,
+        InternalModelCallOptions(
+            timeoutMillis: 1000, parent: Some(timeoutParent)
+        )
+    )
+    let timeoutSnapshot = timeoutRuns.find(timeoutRunId).value().getOrThrow()
+    let timeoutUsageRecorded = timeoutRuns.eventLog.size == 2 &&
+        match (timeoutRuns.eventLog[0].payload) {
+            case AgentEventPayload.ModelUsageUpdated(usage) =>
+                usage.inputTokens == 12 && usage.outputTokens == 5 &&
+                    usage.reasoningTokens == 2 && usage.cacheReadTokens == 3 &&
+                    usage.cacheWriteTokens == 1
+            case _ => false
+        } && match (timeoutRuns.eventLog[1].payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                value.outcome == ModelRequestOutcome.Failed &&
+                    match (value.usage) {
+                        case Some(usage) => usage.inputTokens == 12 &&
+                            usage.outputTokens == 5 && usage.reasoningTokens == 2
+                        case None => false
+                    }
+            case _ => false
+        }
+    expect(
+        timeout.isError() && timeout.error().getOrThrow().code ==
+            "fixture.billed_timeout" && timeoutProvider.calls == 1 &&
+            timeoutSnapshot.inputTokens == 12 && timeoutSnapshot.outputTokens == 5 &&
+            timeoutSnapshot.reasoningTokens == 2 &&
+            timeoutSnapshot.cacheReadTokens == 3 &&
+            timeoutSnapshot.cacheWriteTokens == 1 && timeoutUsageRecorded,
+        "internal timeouts retain provider-reported usage in the Run ledger and attempt event"
+    )
+    let lateRuns = MemoryRuns()
+    let lateRunId = RunId("internal-model-late-settlement")
+    lateRuns.save(RunSnapshot(
+        lateRunId, sessionId, RunState.WaitingApproval
+    )).value().getOrThrow()
+    let lateProvider = LateSettlementModel()
+    let lateControl = ControlledModelPort(lateProvider, runs: Some(lateRuns))
+    let _ = internalModelTestCore(lateControl, lateRuns)
+    let lateParent = AgentRunRequest(
+        lateRunId, sessionId, "fixture", "late settlement parent",
+        budget: ResourceBudget(
+            maxTotalInputTokens: 100, maxTotalOutputTokens: 100
+        )
+    )
+    let lateResult = lateControl.executeInternal(
+        ModelRequest(
+            "fixture", [], tools: [], parallelToolCalls: false,
+            requestId: "internal-late-settlement",
+            toolChoice: ModelToolChoice.NoTools
+        ),
+        InternalModelCallOptions(timeoutMillis: 20, parent: Some(lateParent))
+    )
+    var settlementWaited: Int64 = 0
+    while ((lateRuns.find(lateRunId).value().getOrThrow().inputTokens < 40 ||
+        lateRuns.eventLog.size < 3) && settlementWaited < 2000) {
+        sleep(Duration.millisecond * 10)
+        settlementWaited += 10
+    }
+    let lateSnapshot = lateRuns.find(lateRunId).value().getOrThrow()
+    let lateDeltaRecorded = lateRuns.eventLog.size == 3 &&
+        match (lateRuns.eventLog[2].payload) {
+            case AgentEventPayload.ModelUsageUpdated(usage) =>
+                usage.inputTokens == 30 && usage.outputTokens == 6 &&
+                    usage.reasoningTokens == 3 &&
+                    usage.cacheReadTokens == 4 &&
+                    usage.cacheWriteTokens == 5
+            case _ => false
+        }
+    expect(
+        lateResult.isError() && lateResult.error().getOrThrow().code ==
+            "model.internal_timeout" && lateProvider.wasCancelled() &&
+            lateProvider.hasCompleted(),
+        "late provider completion does not replace the caller-visible timeout"
+    )
+    expect(
+        lateSnapshot.inputTokens == 40 && lateSnapshot.outputTokens == 8 &&
+            lateSnapshot.reasoningTokens == 3 &&
+            lateSnapshot.cacheReadTokens == 4 &&
+            lateSnapshot.cacheWriteTokens == 5,
+        "late provider completion settles full terminal usage into the Run ledger"
+    )
+    expect(
+        lateDeltaRecorded,
+        "late provider completion records only the previously uncharged usage delta"
+    )
+
     let cancelledRuns = MemoryRuns()
     let cancelledRunId = RunId("internal-model-cancelled")
     cancelledRuns.save(RunSnapshot(
@@ -1425,6 +1642,7 @@ func controlledInternalModelCallContract(): Unit {
         cancelledProvider,
         runs: Some(cancelledRuns)
     )
+    let _ = internalModelTestCore(cancelledControl, cancelledRuns)
     let cancelledParent = AgentRunRequest(
         cancelledRunId,
         sessionId,
@@ -1453,10 +1671,12 @@ func controlledInternalModelCallContract(): Unit {
         RunState.Running
     )).value().getOrThrow()
     let expiredProvider = DetailedUsageModel()
-    let expired = ControlledModelPort(
+    let expiredControl = ControlledModelPort(
         expiredProvider,
         runs: Some(expiredRuns)
-    ).executeInternal(
+    )
+    let _ = internalModelTestCore(expiredControl, expiredRuns)
+    let expired = expiredControl.executeInternal(
         request,
         InternalModelCallOptions(
             timeoutMillis: 1000,
@@ -1672,7 +1892,13 @@ func parallelToolWaveContract(): Unit {
         capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
         budget: ResourceBudget(maxConcurrentTools: 2)
     ))
-    expect(result.isOk(), "resource-planned parallel tool run completes")
+    if (result.isError()) {
+        let error = result.error().getOrThrow()
+        throw IllegalStateException(
+            "contract failed: resource-planned parallel tool run completes: " +
+                error.code + ": " + error.message
+        )
+    }
     expect(
         probe.maxActive == 2 && !probe.waveBStartedBeforeAFinished,
         "independent resources overlap while conflicting writes execute in a later wave"
@@ -2013,6 +2239,205 @@ func toolContextApprovalResumeContract(): Unit {
     )
 }
 
+func modifiedToolArgumentsAreRevalidatedAndApprovalBoundContract(): Unit {
+    let originalArguments = objectValue([ValueField("text", textValue("hello"))])
+    let modifiedArguments = objectValue([ValueField("text", textValue("modified"))])
+    let schema = objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([
+            ValueField("text", objectValue([ValueField("type", textValue("string"))]))
+        ])),
+        ValueField("required", listValue([textValue("text")])),
+        ValueField("additionalProperties", boolValue(false))
+    ])
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let tool = ModifiedArgumentsApprovalTool()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("write_preview", "approved hook fixture", schema),
+            Capability(CapabilityKind.WorkspaceWrite),
+            sideEffecting: true
+        ),
+        tool
+    ).isOk(), "modified-arguments tool registration")
+    let hooks = ContractModifyToolHook(modifiedArguments)
+    let threadRuntimes = InMemoryThreadRuntimeRegistry(
+        ContextProjector("tool-hook-approval-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let core = AgentCore(
+        TwoStepModel(toolName: "write_preview"),
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(threadRuntimes),
+        toolHooks: hooks
+    )
+    let request = AgentRunRequest(
+        RunId("tool-hook-approval-run"),
+        SessionId("tool-hook-approval-session"),
+        "fixture",
+        "approve modified hook arguments",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
+    )
+    let approval = match (core.start(request).value().getOrThrow()) {
+        case AgentRunOutcome.AwaitingApproval(_, value) => value
+        case _ => throw IllegalStateException("modified side effect must pause for approval")
+    }
+    expect(
+        canonicalAgentValue(approval.preview) == canonicalAgentValue(modifiedArguments) &&
+            hooks.beforeCalls == 1 && tool.executions == 0,
+        "approval previews the revalidated hook-modified arguments before execution"
+    )
+    let pendingThread = threadRuntimes.acquire(
+        ThreadId(request.sessionId.value), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var preservedOriginalCall = false
+    for (item in pendingThread.items) {
+        match (item.content) {
+            case ThreadItemContent.ToolCall(_, name, arguments) =>
+                if (name == "write_preview") {
+                    preservedOriginalCall = canonicalAgentValue(arguments) ==
+                        canonicalAgentValue(originalArguments)
+                }
+            case _ => ()
+        }
+    }
+    expect(preservedOriginalCall, "hook modification does not rewrite the committed model ToolCall")
+    let completed = core.decide(request, approval, ApprovalDecision.Approve)
+    expect(
+        completed.isOk() && match (completed.value().getOrThrow()) {
+            case AgentRunOutcome.Completed(snapshot) => isCompleted(snapshot.status)
+            case _ => false
+        },
+        "approval resumes with the frozen modified operation plan"
+    )
+    expect(
+        tool.executions == 1 && tool.executedArguments == canonicalAgentValue(modifiedArguments) &&
+            hooks.beforeCalls == 1 && hooks.afterCalls == 1 &&
+            hooks.afterArguments == canonicalAgentValue(modifiedArguments),
+        "approval executes exactly once with the validated arguments observed by PostToolUse"
+    )
+
+    let invalidRuns = MemoryRuns()
+    let invalidCatalog = ToolCatalog()
+    let invalidTool = ModifiedArgumentsApprovalTool()
+    expect(invalidCatalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("write_preview", "approved hook fixture", schema),
+            Capability(CapabilityKind.WorkspaceWrite),
+            sideEffecting: true
+        ),
+        invalidTool
+    ).isOk(), "invalid modified-arguments tool registration")
+    let invalidHooks = ContractModifyToolHook(
+        objectValue([ValueField("text", boolValue(true))])
+    )
+    let invalidThreads = InMemoryThreadRuntimeRegistry(
+        ContextProjector("invalid-tool-hook-arguments-contract", ConservativeThreadTokenEstimator()),
+        { => agentUtcMillis() }
+    )
+    let invalidCore = AgentCore(
+        TwoStepModel(toolName: "write_preview"),
+        invalidRuns,
+        ToolPipeline(invalidCatalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        invalidCatalog,
+        threadRuntimes: Some(invalidThreads),
+        toolHooks: invalidHooks
+    )
+    let invalidRequest = AgentRunRequest(
+        RunId("invalid-tool-hook-arguments-run"),
+        SessionId("invalid-tool-hook-arguments-session"),
+        "fixture",
+        "reject invalid hook arguments",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
+    )
+    let invalidOutcome = invalidCore.start(invalidRequest)
+    let invalidSnapshot = invalidThreads.acquire(
+        ThreadId(invalidRequest.sessionId.value), "agent-core"
+    ).value().getOrThrow().threadSnapshot()
+    var rejectedAsToolResult = false
+    for (item in invalidSnapshot.items) {
+        match (item.content) {
+            case ThreadItemContent.ToolResult(_, _, _, _, isError) =>
+                rejectedAsToolResult = isError
+            case _ => ()
+        }
+    }
+    let invalidCompleted = invalidOutcome.isOk() && match (invalidOutcome.value().getOrThrow()) {
+        case AgentRunOutcome.Completed(snapshot) => snapshot.turns == 2
+        case _ => false
+    }
+    expect(invalidOutcome.isOk(), "schema-invalid modified arguments remain recoverable")
+    expect(invalidCompleted, "run completes after a schema-invalid hook result")
+    expect(invalidTool.executions == 0, "schema-invalid modified arguments do not execute")
+    expect(invalidHooks.beforeCalls == 1, "invalid arguments were returned by the hook")
+    expect(invalidHooks.afterCalls == 1, "PostToolUse runs once for the committed invalid-argument result")
+    expect(rejectedAsToolResult, "schema-invalid modified arguments create an error ToolResult")
+}
+
+func modifiedPlanArgumentsPublicationContract(): Unit {
+    let modifiedArguments = objectValue([
+        ValueField("content", textValue("hook-approved plan"))
+    ])
+    let schema = objectValue([
+        ValueField("type", textValue("object")),
+        ValueField("properties", objectValue([
+            ValueField("content", objectValue([ValueField("type", textValue("string"))]))
+        ])),
+        ValueField("required", listValue([textValue("content")])),
+        ValueField("additionalProperties", boolValue(false))
+    ])
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("plan_write", "plan fixture", schema),
+            Capability(CapabilityKind.WorkspaceRead)
+        ),
+        EchoTool()
+    ).isOk(), "plan publication tool registration")
+    let outcome = AgentCore(
+        TwoStepModel(toolName: "plan_write"),
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(InMemoryThreadRuntimeRegistry(
+            ContextProjector("modified-plan-publication", ConservativeThreadTokenEstimator()),
+            { => agentUtcMillis() }
+        )),
+        toolHooks: ContractModifyToolHook(modifiedArguments)
+    ).start(AgentRunRequest(
+        RunId("modified-plan-publication-run"),
+        SessionId("modified-plan-publication-session"),
+        "fixture", "publish the effective plan",
+        capabilities: CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+    ))
+    var published = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.Extension(_, detail) =>
+                let codeMatches = match (detail.field("code")) {
+                    case Some(value) => value.unifiedKind == UnifiedJsonKind.Text &&
+                        value.text == "plan.updated"
+                    case None => false
+                }
+                let bodyMatches = match (detail.field("body")) {
+                    case Some(value) => value.unifiedKind == UnifiedJsonKind.Text &&
+                        value.text == "hook-approved plan"
+                    case None => false
+                }
+                if (codeMatches && bodyMatches) {
+                    published = true
+                }
+            case _ => ()
+        }
+    }
+    expect(outcome.isOk() && published,
+        "plan.updated publishes the canonical hook-modified arguments")
+}
+
 func partialToolWaveFailureContract(): Unit {
     let conversations = MemoryConversations()
     let runs = MemoryRuns()
@@ -2059,14 +2484,20 @@ func partialToolWaveFailureContract(): Unit {
         RunState.Running, RunState.Failed, createdRunning)
     expect(
         result.isError() && result.error().getOrThrow().code == "fixture.wave_fatal" &&
-            fatal.executions.load() == 1 && successful.executions == 1 &&
-            successful.persistedResults == 1 && results.size == 2 &&
+            fatal.executions.load() == 1 && successful.executions == 1,
+        "a fatal sibling fails the joined wave after both tools execute"
+    )
+    expect(
+        successful.persistedResults == 1 && results.size == 2 &&
             results[0].callId == "partial-call-fatal" && results[0].isError &&
-            results[1].callId == "partial-call-success" && !results[1].isError &&
-            snapshot.status == RunState.Failed && snapshot.modelRequests == 1 &&
+            results[1].callId == "partial-call-success" && !results[1].isError,
+        "a fatal sibling preserves both canonical terminal tool results"
+    )
+    expect(
+        snapshot.status == RunState.Failed && snapshot.modelRequests == 1 &&
             snapshot.turns == 1 && snapshot.toolCalls == 2 &&
             eventCount(runs.eventLog, "tool.execution_completed") == 1,
-        "a fatal sibling fails only after both calls have canonical terminal results"
+        "a fatal sibling records one failed run and one completed tool event"
     )
     expect(
         createdRunning >= 0 && failed >= 0 && createdRunning < failed,
@@ -3591,6 +4022,14 @@ class BudgetProbeModel <: ModelPort {
         this.usagePerCall = usagePerCall
     }
 
+    public func transcriptSnapshot(request: ModelRequest): ?String {
+        let _ = request.requestId
+        Some("budget-probe-transcript-v1")
+    }
+
+    public func validateTranscriptSnapshot(snapshot: String): Bool {
+        snapshot == "budget-probe-transcript-v1"
+    }
     public func execute(
         request: ModelRequest,
         events: ModelEventSink
@@ -3819,6 +4258,7 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 3)
     let decisions = InMemoryModelDecisionRuntimePort()
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("budget-resume")
     expect(catalog.register(
         ToolDescriptor(
             ModelToolDefinition("echo", "echo text", objectValue([])),
@@ -3836,7 +4276,7 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     let first = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).start(request)
     expect(first.isError() && model.workRequests == 2,
@@ -3855,7 +4295,7 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
     let resumed = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-resume-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
     let completed = completedSnapshotOrThrow(
@@ -3875,6 +4315,7 @@ func resumeRestoresWorkBudgetContinuityContract(): Unit {
 func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
     let runs = MemoryRuns(failClaimAfterCommitAt: 2)
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("budget-last-work")
     let model = BudgetProbeModel()
     let decisions = InMemoryModelDecisionRuntimePort()
     expect(catalog.register(
@@ -3893,7 +4334,7 @@ func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
     let first = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).start(request)
     let checkpointIsWork = match (runs.savedContinuation) {
@@ -3910,7 +4351,7 @@ func resumeLastWorkTurnKeepsWorkModeContract(): Unit {
     let resumed = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-last-work-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
     let completed = completedSnapshotOrThrow(
@@ -3930,6 +4371,7 @@ func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
     // recovery path is allowed to replay that attempt as drain attempt 2.
     let runs = MemoryRuns(failClaimAfterCommitAt: 3)
     let catalog = ToolCatalog()
+    let threadRegistry = resumeThreadRegistry("budget-drain-resume")
     let model = BudgetProbeModel()
     let decisions = InMemoryModelDecisionRuntimePort()
     expect(catalog.register(
@@ -3951,7 +4393,7 @@ func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
     let first = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-first")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).start(request)
     let checkpointPreservesDrainBucket = match (runs.savedContinuation) {
@@ -3970,7 +4412,7 @@ func resumeDrainPreservesSeparateRequestBucketsContract(): Unit {
     let resumed = AgentCore(
         model, runs,
         ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
-        catalog, threadRuntimes: Some(resumeThreadRegistry("budget-drain-resume-second")),
+        catalog, threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(decisions)
     ).resume(request)
     let completed = completedSnapshotOrThrow(
@@ -4368,6 +4810,51 @@ func failedAttemptUsageObeysRequestBudgetContract(): Unit {
     )
 }
 
+func timeoutAttemptUsageIsSettledContract(): Unit {
+    let model = TimeoutUsageModel()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let result = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    ).start(AgentRunRequest(
+        RunId("timeout-usage-run"),
+        SessionId("timeout-usage-session"),
+        "fixture",
+        "preserve provider usage reported with a timeout",
+        budget: ResourceBudget(
+            maxInputTokens: 1000,
+            maxOutputTokens: 100,
+            maxWallMillis: 5000,
+            maxIdleMillis: 1000
+        )
+    ))
+    let snapshot = runs.find(RunId("timeout-usage-run")).value().getOrThrow()
+    var attemptUsagePreserved = false
+    for (event in runs.eventLog) {
+        match (event.payload) {
+            case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                match (value.usage) {
+                    case Some(usage) => attemptUsagePreserved =
+                        usage.inputTokens == 12 && usage.outputTokens == 5 &&
+                        usage.reasoningTokens == 2 && usage.cacheReadTokens == 3 &&
+                        usage.cacheWriteTokens == 1
+                    case None => ()
+                }
+            case _ => ()
+        }
+    }
+    expect(result.isError() && result.error().getOrThrow().code ==
+        "fixture.billed_timeout" && model.calls == 1 &&
+        snapshot.status == RunState.Failed && snapshot.inputTokens == 12 &&
+        snapshot.outputTokens == 5 && snapshot.reasoningTokens == 2 &&
+        snapshot.cacheReadTokens == 3 && snapshot.cacheWriteTokens == 1 &&
+        attemptUsagePreserved,
+        "provider-reported usage remains visible when an attempt times out")
+}
+
 func zeroUsageFailureThenPricedSuccessContract(): Unit {
     let model = ZeroUsageFailureThenPricedSuccessModel()
     let runs = MemoryRuns()
@@ -4520,6 +5007,118 @@ class SteeringContractResult {
         this.model = model
         this.runs = runs
     }
+}
+func runFrozenToolSnapshotContract(): Unit {
+    let catalog = ToolCatalog()
+    let v1 = EchoTool()
+    let v2 = EchoTool()
+    let toolName = "snapshot.echo"
+    let readCapability = Capability(CapabilityKind.WorkspaceRead)
+    let schema = objectValue([])
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition(toolName, "frozen implementation v1", schema),
+            readCapability,
+            implementationVersion: "snapshot-v1",
+            implementationFingerprint: "snapshot-fingerprint-v1"
+        ),
+        v1
+    ).isOk(), "register initial snapshot tool implementation")
+    let replacement = ToolDescriptor(
+        ModelToolDefinition(toolName, "replacement implementation v2", schema),
+        readCapability,
+        implementationVersion: "snapshot-v2",
+        implementationFingerprint: "snapshot-fingerprint-v2"
+    )
+    let model = CatalogMutationModel(catalog, toolName, replacement, v2)
+    let runs = MemoryRuns()
+    let core = AgentCore(
+        model,
+        runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let outcome = core.start(AgentRunRequest(
+        RunId("snapshot-core-run"),
+        SessionId("snapshot-core-session"),
+        "fixture",
+        "execute the snapshotted tool",
+        capabilities: CapabilitySet(values: [readCapability])
+    ))
+    expect(
+        outcome.isOk() && model.requests.size == 2 &&
+            model.requests[0].tools.size == 1 && model.requests[1].tools.size == 1 &&
+            model.requests[0].tools[0].description == "frozen implementation v1" &&
+            model.requests[1].tools[0].description == "frozen implementation v1" &&
+            v1.executions == 1 && v1.persistedResults == 1 && v2.executions == 0,
+        "catalog mutation during a Run affects only later Runs, including its next model turn"
+    )
+}
+
+func incompleteToolSnapshotBlocksRecoveryContract(): Unit {
+    let runs = MemoryRuns(failClaimBeforeCommitAt: 1)
+    let decisions = InMemoryModelDecisionRuntimePort()
+    let model = ResumeAnswerModel()
+    let catalog = ToolCatalog()
+    let capability = Capability(CapabilityKind.WorkspaceWrite)
+    expect(catalog.register(
+        ToolDescriptor(
+            ModelToolDefinition("write", "write a file", objectValue([])),
+            capability,
+            implementationVersion: "identity-v1",
+            implementationFingerprint: "identity-fingerprint-v1"
+        ),
+        EchoTool()
+    ).isOk(), "register complete implementation before recovery fixture")
+    let request = AgentRunRequest(
+        RunId("missing-identity-run"), SessionId("missing-identity-session"),
+        "fixture", "recover with missing tool identity",
+        capabilities: CapabilitySet(values: [capability])
+    )
+    let completeThreads = resumeThreadRegistry("missing-identity-complete")
+    let first = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(completeThreads),
+        modelDecisionRuntime: Some(decisions)
+    ).start(request)
+    expect(first.isError() && model.calls == 0 && runs.modelAttempts.size == 1,
+        "prepared attempt persists before the injected dispatch failure")
+
+    let brokenThreads = resumeThreadRegistry("missing-identity-broken")
+    let runtime = brokenThreads.acquire(
+        ThreadId(request.sessionId.value), "workspace:default"
+    ).value().getOrThrow()
+    let incompleteLane = ModelLane(
+        ModelLaneRole.Main,
+        "configured", request.model, "agent-core",
+        ModelLaneCapabilitiesSnapshot(tools: true),
+        request.contextWindow, request.budget.maxOutputTokens,
+        request.providerSafetyMargin,
+        "conservative-v1", "never", "default",
+        ToolSetSnapshot("missing-identity-tools", [ToolSnapshotEntry(
+            "write", "write a file", objectValue([]), "identity-v1", [capability]
+        )]),
+        "system-v1"
+    )
+    let brokenStart = runtime.startTurn(
+        SemanticTurnId("turn-" + request.runId.value), request.runId,
+        ItemId("user-" + request.runId.value),
+        ThreadItemContent.UserMessage([ThreadMessagePart.Text(request.prompt)]),
+        incompleteLane, request.skillStack, createdAtMillis: 1
+    )
+    expect(brokenStart.isOk(), "install active Run with incomplete durable identity")
+    let resumed = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog, threadRuntimes: Some(brokenThreads),
+        modelDecisionRuntime: Some(decisions)
+    ).resume(request)
+    expect(resumed.isError() && match (resumed.error()) {
+        case Some(error) => error.code == "run.tool_snapshot_identity_missing"
+        case None => false
+    } && model.calls == 0 && runs.modelAttempts.size == 1,
+        "recovery blocks before provider I/O when implementation identity is absent")
 }
 
 func runSteeringContract(
@@ -5025,6 +5624,58 @@ class ResetCapabilityDeniedModel <: ModelPort {
         )
     }
 }
+class CatalogMutationModel <: ModelPort {
+    private let catalog: ToolCatalog
+    private let toolName: String
+    private let replacement: ToolDescriptor
+    private let replacementExecutor: ToolExecutor
+    var calls: Int64 = 0
+    let requests = ArrayList<ModelRequest>()
+
+    init(
+        catalog: ToolCatalog,
+        toolName: String,
+        replacement: ToolDescriptor,
+        replacementExecutor: ToolExecutor
+    ) {
+        this.catalog = catalog
+        this.toolName = toolName
+        this.replacement = replacement
+        this.replacementExecutor = replacementExecutor
+    }
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        requests.add(request)
+        calls += 1
+        events(ModelEvent.Completed)
+        if (calls == 1) {
+            if (!catalog.unregister(toolName)) {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Internal,
+                    "fixture.snapshot_retire_failed",
+                    "could not retire the initial tool registration"
+                ))
+            }
+            match (catalog.register(replacement, replacementExecutor)) {
+                case Result.Ok(_) => ()
+                case Result.Err(error) => return Result.Err(error)
+            }
+            return Result.Ok(contractModelReply([ModelBlock(
+                ModelBlockKind.ToolCall,
+                callId: "snapshot-call",
+                name: toolName,
+                arguments: objectValue([])
+            )]))
+        }
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "snapshot stable")],
+            stopReason: "end_turn"
+        ))
+    }
+}
 
 class TwoStepModel <: ModelPort {
     var calls: Int64 = 0
@@ -5320,6 +5971,56 @@ class EchoTool <: ToolExecutor {
             case None => ()
         }
         Result.Ok(())
+    }
+}
+
+class ContractModifyToolHook <: CoreToolHookRuntime {
+    private let replacement: AgentValue
+    var beforeCalls: Int64 = 0
+    var afterCalls: Int64 = 0
+    var afterArguments = ""
+
+    init(replacement: AgentValue) {
+        this.replacement = replacement
+    }
+
+    public func beforeTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        arguments: AgentValue
+    ): CoreToolHookDecision {
+        let _ = context
+        let _ = committed
+        let _ = arguments
+        beforeCalls += 1
+        CoreToolHookDecision.Modify(replacement)
+    }
+
+    public func afterTool(
+        context: ToolInvocationContext,
+        committed: CommittedToolCallRef,
+        event: CoreToolHookPostEvent
+    ): Unit {
+        let _ = context
+        let _ = committed
+        afterCalls += 1
+        afterArguments = canonicalAgentValue(event.arguments)
+    }
+}
+
+class ModifiedArgumentsApprovalTool <: ToolExecutor {
+    var executions: Int64 = 0
+    var executedArguments = ""
+
+    public func execute(
+        context: ToolInvocationContext,
+        prepared: PreparedToolInvocation
+    ): Result<ToolResult> {
+        let _ = context
+        let call = preparedToolCall(prepared)
+        executions += 1
+        executedArguments = canonicalAgentValue(call.arguments)
+        Result.Ok(ToolResult(call.callId, call.arguments))
     }
 }
 
@@ -5740,13 +6441,26 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         }
         delegate.prepare(operationId, runId, toolCall, plan)
     }
-    public func prepareProgramSubOperation(
+    public func prepareTrustedControlOperation(
         operationId: OperationId,
         runId: RunId,
         toolCallItemId: ItemId,
         plan: NormalizedOperationPlan
     ): Result<Unit> {
-        delegate.prepareProgramSubOperation(operationId, runId, toolCallItemId, plan)
+        delegate.prepareTrustedControlOperation(operationId, runId, toolCallItemId, plan)
+    }
+
+    public func prepareDerivedOperation(
+        operationId: OperationId,
+        parentOperationId: OperationId,
+        runId: RunId,
+        rootToolCall: CommittedToolCallRef,
+        requestKey: String,
+        plan: NormalizedOperationPlan
+    ): Result<OperationId> {
+        delegate.prepareDerivedOperation(
+            operationId, parentOperationId, runId, rootToolCall, requestKey, plan
+        )
     }
 
     public func waitForApproval(
@@ -6123,6 +6837,78 @@ class FailedUsageOverLimitModel <: ModelPort {
                 ErrorField("usage_cache_write_tokens", "1")
             ]
         ))
+    }
+}
+
+class TimeoutUsageModel <: ModelPort {
+    var calls: Int64 = 0
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        let _ = events
+        calls += 1
+        Result.Err(AgentError(
+            AgentErrorKind.Timeout,
+            "fixture.billed_timeout",
+            "provider timed out after reporting billable usage",
+            fields: [
+                ErrorField("usage_input_tokens", "12"),
+                ErrorField("usage_output_tokens", "5"),
+                ErrorField("usage_reasoning_tokens", "2"),
+                ErrorField("usage_cache_read_tokens", "3"),
+                ErrorField("usage_cache_write_tokens", "1")
+            ]
+        ))
+    }
+}
+
+class LateSettlementModel <: ModelPort {
+    private let lock = Mutex()
+    private var cancelled = false
+    private var completed = false
+
+    public func execute(
+        request: ModelRequest,
+        events: ModelEventSink
+    ): Result<ModelReply> {
+        let _ = request
+        events(ModelEvent.UsageUpdated(10, 2))
+        sleep(Duration.millisecond * 500)
+        events(ModelEvent.UsageUpdated(40, 8))
+        lock.lock()
+        try { completed = true } finally { lock.unlock() }
+        Result.Ok(contractModelReply(
+            [ModelBlock(ModelBlockKind.Text, text: "late completion")],
+            stopReason: "end_turn",
+            usage: Some(ModelUsage(
+                inputTokens: 40,
+                outputTokens: 8,
+                reasoningTokens: 3,
+                cacheReadTokens: 4,
+                cacheWriteTokens: 5
+            )),
+            responseId: "late-settlement-response"
+        ))
+    }
+
+    public func cancel(requestId: String): Result<Unit> {
+        let _ = requestId
+        lock.lock()
+        try { cancelled = true } finally { lock.unlock() }
+        Result.Ok(())
+    }
+
+    func wasCancelled(): Bool {
+        lock.lock()
+        try { cancelled } finally { lock.unlock() }
+    }
+
+    func hasCompleted(): Bool {
+        lock.lock()
+        try { completed } finally { lock.unlock() }
     }
 }
 
@@ -6610,7 +7396,8 @@ func fixtureAttemptWithDispatch(
         dispatchState: ModelAttemptDispatchState.DispatchClaimed,
         replayBarrier: value.replayBarrier,
         dispatchStartedAtMillis: Some(dispatchStartedAtMillis),
-        providerTerminalAtMillis: value.providerTerminalAtMillis
+        providerTerminalAtMillis: value.providerTerminalAtMillis,
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -6643,6 +7430,29 @@ func fixtureAgentValuesEqual(left: AgentValue, right: AgentValue): Bool {
     }
 }
 
+func fixtureAttemptWithTranscriptSnapshot(
+    value: DurableModelAttempt,
+    transcriptSnapshot: String
+): DurableModelAttempt {
+    DurableModelAttempt(
+        value.id, value.semanticRequestId, value.runId, value.attemptNo,
+        value.lifecycle, value.policy, value.policyReason,
+        value.startedAtMillis, value.lastActivityAtMillis,
+        parentAttemptId: value.parentAttemptId,
+        completedAtMillis: value.completedAtMillis,
+        providerRequestId: value.providerRequestId,
+        providerResponseId: value.providerResponseId,
+        failureKind: value.failureKind,
+        semanticRequestDigest: value.semanticRequestDigest,
+        wirePolicyDigest: value.wirePolicyDigest,
+        dispatchState: value.dispatchState,
+        replayBarrier: value.replayBarrier,
+        dispatchStartedAtMillis: value.dispatchStartedAtMillis,
+        providerTerminalAtMillis: value.providerTerminalAtMillis,
+        transcriptSnapshot: transcriptSnapshot
+    )
+}
+
 func fixtureAttemptWithBarrier(
     value: DurableModelAttempt,
     barrier: ModelAttemptReplayBarrier
@@ -6663,7 +7473,8 @@ func fixtureAttemptWithBarrier(
         dispatchStartedAtMillis: value.dispatchStartedAtMillis,
         providerTerminalAtMillis: if (barrier == ModelAttemptReplayBarrier.ProviderTerminal) {
             Some(agentUtcMillis())
-        } else { value.providerTerminalAtMillis }
+        } else { value.providerTerminalAtMillis },
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -6685,7 +7496,8 @@ func fixtureAttemptAbandoned(
         dispatchState: value.dispatchState,
         replayBarrier: value.replayBarrier,
         dispatchStartedAtMillis: value.dispatchStartedAtMillis,
-        providerTerminalAtMillis: value.providerTerminalAtMillis
+        providerTerminalAtMillis: value.providerTerminalAtMillis,
+        transcriptSnapshot: value.transcriptSnapshot
     )
 }
 
@@ -6701,7 +7513,8 @@ func sameFixtureDecision(
 type MemoryOperations = InMemoryOperationRuntimePort
 
 class FixtureIds <: IdGenerator {
-    var operation: Int64 = 0
+    private let lock = Mutex()
+    private var operation: Int64 = 0
 
     public func nextRunId(): RunId {
         RunId("generated-run")
@@ -6710,8 +7523,13 @@ class FixtureIds <: IdGenerator {
         SessionId("generated-session")
     }
     public func nextOperationId(): OperationId {
-        operation += 1
-        OperationId("operation-${operation}")
+        lock.lock()
+        try {
+            operation += 1
+            OperationId("operation-${operation}")
+        } finally {
+            lock.unlock()
+        }
     }
 }
 
@@ -6875,11 +7693,15 @@ func internalTotalBudgetContract(): Unit {
     for (inputLimit in [0, 50]) {
         let runs = MemoryRuns()
         let runId = RunId("internal-total")
-        runs.save(RunSnapshot(runId, SessionId("total"), RunState.Running)).value().getOrThrow()
+        runs.save(RunSnapshot(
+            runId, SessionId("total"), RunState.WaitingApproval
+        )).value().getOrThrow()
         let parent = AgentRunRequest(runId, SessionId("total"), "fixture", "total",
             budget: ResourceBudget(maxTotalInputTokens: inputLimit,
                 maxTotalOutputTokens: if (inputLimit == 0) { 10 } else { 0 }))
-        let outcome = ControlledModelPort(DetailedUsageModel(), runs: Some(runs)).executeInternal(
+        let modelControl = ControlledModelPort(DetailedUsageModel(), runs: Some(runs))
+        let _ = internalModelTestCore(modelControl, runs)
+        let outcome = modelControl.executeInternal(
             ModelRequest("fixture", [], requestId: "total", tools: [],
                 parallelToolCalls: false, toolChoice: ModelToolChoice.NoTools),
             InternalModelCallOptions(timeoutMillis: 1000, parent: Some(parent)))

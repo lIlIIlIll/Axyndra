@@ -660,6 +660,17 @@ public class ProductAcpServer {
         let requestId = nextRequestId()
         record.permissionRequestId = requestId
         record.operationId = approval.operationId.value
+        record.allowSession = approval.sessionApprovalAllowed
+        let options = ArrayList<AgentValue>()
+        options.add(permissionOption("allow_once", "Allow once", "allow_once"))
+        if (approval.sessionApprovalAllowed) {
+            options.add(permissionOption(
+                "allow_session",
+                "Allow for this session",
+                "allow_always"
+            ))
+        }
+        options.add(permissionOption("reject", "Reject", "reject_once"))
         emit(
             encodeAgentValue(
                 objectValue(
@@ -701,25 +712,7 @@ public class ProductAcpServer {
                                     ),
                                     ValueField(
                                         "options",
-                                        listValue(
-                                            [
-                                                permissionOption(
-                                                    "allow_once",
-                                                    "Allow once",
-                                                    "allow_once"
-                                                ),
-                                                permissionOption(
-                                                    "allow_session",
-                                                    "Allow for this session",
-                                                    "allow_always"
-                                                ),
-                                                permissionOption(
-                                                    "reject",
-                                                    "Reject",
-                                                    "reject_once"
-                                                )
-                                            ]
-                                        )
+                                        listValue(options.toArray())
                                     )
                                 ]
                             )
@@ -770,7 +763,7 @@ public class ProductAcpServer {
         let option = acpText(outcome, "optionId")
         let decision = if (kind == "selected" && option == "allow_once") {
             ApprovalDecision.Approve
-        } else if (kind == "selected" && option == "allow_session") {
+        } else if (kind == "selected" && option == "allow_session" && target.allowSession) {
             ApprovalDecision.ApproveSession
         } else {
             ApprovalDecision.Reject
@@ -1186,6 +1179,7 @@ func acpToolOutputChannel(channel: ToolOutputChannel): String {
     match (channel) {
         case ToolOutputChannel.Stdout => "stdout"
         case ToolOutputChannel.Stderr => "stderr"
+        case ToolOutputChannel.Progress => "progress"
         case ToolOutputChannel.Artifact => "artifact"
         case ToolOutputChannel.Summary => "summary"
     }
@@ -1207,6 +1201,7 @@ class AcpSessionRecord {
     var pendingPromptId: ?AgentValue = None
     var permissionRequestId: Int64 = -1
     var operationId = ""
+    var allowSession = false
 
     init(
         owner: AcpProductOwner,

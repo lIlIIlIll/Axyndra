@@ -47,6 +47,9 @@ public class ToolSnapshotEntry {
     public let description: String
     public let inputSchema: AgentValue
     public let executorVersion: String
+    public let implementationFingerprint: String
+    public let schemaDigest: String
+    public let availableAtSnapshot: Bool
     public let requiredCapabilities: Array<Capability>
 
     public init(
@@ -54,27 +57,84 @@ public class ToolSnapshotEntry {
         description: String,
         inputSchema: AgentValue,
         executorVersion: String,
-        requiredCapabilities: Array<Capability>
+        requiredCapabilities: Array<Capability>,
+        implementationFingerprint!: String = "",
+        schemaDigest!: String = "",
+        availableAtSnapshot!: Bool = true
     ) {
         if (name.trimAscii() == "" || executorVersion.trimAscii() == "" ||
-            inputSchema.unifiedKind != ValueKind.Object) {
+            inputSchema.unifiedKind != ValueKind.Object ||
+            (schemaDigest != "" && schemaDigest != modelPolicySha256Text(
+                canonicalAgentValue(inputSchema)
+            ))) {
             throw IllegalArgumentException(
-                "tool snapshot requires a name, object schema, and executor version"
+                "tool snapshot requires a name, object schema, and valid identity"
             )
         }
         this.name = name.trimAscii()
         this.description = description
         this.inputSchema = inputSchema
         this.executorVersion = executorVersion.trimAscii()
+        this.implementationFingerprint = implementationFingerprint.trimAscii()
+        this.schemaDigest = schemaDigest.trimAscii()
+        this.availableAtSnapshot = availableAtSnapshot
         this.requiredCapabilities = requiredCapabilities
+    }
+
+    public func hasCompleteIdentity(): Bool {
+        implementationFingerprint != "" && schemaDigest != ""
+    }
+}
+
+public class ToolHookHandlerSnapshot {
+    public let event: String
+    public let pluginId: String
+    public let pluginVersion: String
+    public let contentDigest: String
+    public let packageRoot: String
+    public let matcher: String
+    public let command: String
+    public let timeoutMillis: Int64
+
+    public init(
+        event: String,
+        pluginId: String,
+        pluginVersion: String,
+        contentDigest: String,
+        packageRoot: String,
+        matcher: String,
+        command: String,
+        timeoutMillis: Int64
+    ) {
+        if ((event != "PreToolUse" && event != "PostToolUse") ||
+            pluginId.trimAscii() == "" || pluginVersion.trimAscii() == "" ||
+            contentDigest.trimAscii() == "" || packageRoot.trimAscii() == "" ||
+            matcher.trimAscii() == "" || command.trimAscii() == "" ||
+            command.size > 8192 || command.contains("\u{0000}") ||
+            timeoutMillis < 1 || timeoutMillis > 30000) {
+            throw IllegalArgumentException("tool hook snapshot identity or limits are invalid")
+        }
+        this.event = event
+        this.pluginId = pluginId.trimAscii()
+        this.pluginVersion = pluginVersion.trimAscii()
+        this.contentDigest = contentDigest.trimAscii()
+        this.packageRoot = packageRoot.trimAscii()
+        this.matcher = matcher.trimAscii()
+        this.command = command
+        this.timeoutMillis = timeoutMillis
     }
 }
 
 public class ToolSetSnapshot {
     public let id: String
     public let entries: Array<ToolSnapshotEntry>
+    public let hookHandlers: Array<ToolHookHandlerSnapshot>
 
-    public init(id: String, entries: Array<ToolSnapshotEntry>) {
+    public init(
+        id: String,
+        entries: Array<ToolSnapshotEntry>,
+        hookHandlers!: Array<ToolHookHandlerSnapshot> = []
+    ) {
         if (id.trimAscii() == "") {
             throw IllegalArgumentException("tool-set snapshot id must not be empty")
         }
@@ -83,11 +143,20 @@ public class ToolSetSnapshot {
                 throw IllegalArgumentException("tool-set snapshot contains duplicate names")
             }
         }
+        var preCount: Int64 = 0
+        var postCount: Int64 = 0
+        for (handler in hookHandlers) {
+            if (handler.event == "PreToolUse") { preCount += 1 }
+            if (handler.event == "PostToolUse") { postCount += 1 }
+        }
+        if (preCount > 32 || postCount > 32) {
+            throw IllegalArgumentException("tool-set snapshot exceeds the per-event hook limit")
+        }
         this.id = id.trimAscii()
         this.entries = entries
+        this.hookHandlers = hookHandlers
     }
 }
-
 public class ModelLane {
     public let role: ModelLaneRole
     public let providerId: String
@@ -128,8 +197,10 @@ public class ModelLane {
             outputReserve + providerSafetyMargin >= contextWindow) {
             throw IllegalArgumentException("model lane token budget is invalid")
         }
-        if (!capabilities.tools && !toolSet.entries.isEmpty()) {
-            throw IllegalArgumentException("tool-free model lane cannot snapshot tools")
+        if (!capabilities.tools) {
+            for (entry in toolSet.entries where entry.availableAtSnapshot) {
+                throw IllegalArgumentException("tool-free model lane cannot expose tools")
+            }
         }
         this.role = role
         this.providerId = providerId.trimAscii()
@@ -206,7 +277,23 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
             ValueField("description", textValue(entry.description)),
             ValueField("input_schema", entry.inputSchema),
             ValueField("executor_version", textValue(entry.executorVersion)),
+            ValueField("implementation_fingerprint", textValue(entry.implementationFingerprint)),
+            ValueField("schema_digest", textValue(entry.schemaDigest)),
+            ValueField("available_at_snapshot", boolValue(entry.availableAtSnapshot)),
             ValueField("capabilities", listValue(capabilities.toArray()))
+        ]))
+    }
+    let hooks = ArrayList<AgentValue>()
+    for (handler in lane.toolSet.hookHandlers) {
+        hooks.add(objectValue([
+            ValueField("event", textValue(handler.event)),
+            ValueField("plugin_id", textValue(handler.pluginId)),
+            ValueField("plugin_version", textValue(handler.pluginVersion)),
+            ValueField("content_digest", textValue(handler.contentDigest)),
+            ValueField("package_root", textValue(handler.packageRoot)),
+            ValueField("matcher", textValue(handler.matcher)),
+            ValueField("command", textValue(handler.command)),
+            ValueField("timeout_millis", integerValue(handler.timeoutMillis))
         ]))
     }
     objectValue([
@@ -231,6 +318,7 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
         ValueField("cache_policy_id", textValue(lane.cachePolicyId)),
         ValueField("tool_set_id", textValue(lane.toolSet.id)),
         ValueField("tools", listValue(tools.toArray())),
+        ValueField("hooks", listValue(hooks.toArray())),
         ValueField("system_instruction_version", textValue(lane.systemInstructionVersion))
     ])
 }
@@ -257,7 +345,30 @@ public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
         tools.add(ToolSnapshotEntry(
             laneTextField(tool, "name"), laneTextField(tool, "description"),
             laneField(tool, "input_schema"), laneTextField(tool, "executor_version"),
-            capabilities.toArray()
+            capabilities.toArray(),
+            implementationFingerprint: laneOptionalTextField(tool, "implementation_fingerprint"),
+            schemaDigest: laneOptionalTextField(tool, "schema_digest"),
+            availableAtSnapshot: laneOptionalBoolField(tool, "available_at_snapshot")
+        ))
+    }
+    let hookValues = match (value.field("hooks")) {
+        case Some(item) => item
+        case None => listValue([])
+    }
+    if (hookValues.unifiedKind != ValueKind.List) {
+        throw IllegalStateException("ModelLane hooks snapshot is not a list")
+    }
+    let hooks = ArrayList<ToolHookHandlerSnapshot>()
+    for (handler in hookValues.items) {
+        hooks.add(ToolHookHandlerSnapshot(
+            laneTextField(handler, "event"),
+            laneTextField(handler, "plugin_id"),
+            laneTextField(handler, "plugin_version"),
+            laneTextField(handler, "content_digest"),
+            laneTextField(handler, "package_root"),
+            laneTextField(handler, "matcher"),
+            laneTextField(handler, "command"),
+            laneIntField(handler, "timeout_millis")
         ))
     }
     ModelLane(
@@ -277,7 +388,10 @@ public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
         laneIntField(value, "provider_safety_margin"),
         laneTextField(value, "estimator_id"), laneTextField(value, "retry_policy_id"),
         laneTextField(value, "cache_policy_id"),
-        ToolSetSnapshot(laneTextField(value, "tool_set_id"), tools.toArray()),
+        ToolSetSnapshot(
+            laneTextField(value, "tool_set_id"), tools.toArray(),
+            hookHandlers: hooks.toArray()
+        ),
         laneTextField(value, "system_instruction_version")
     )
 }
@@ -352,6 +466,28 @@ func laneTextField(value: AgentValue, name: String): String {
         throw IllegalStateException("ModelLane snapshot field is not text: " + name)
     }
     item.text
+}
+
+func laneOptionalTextField(value: AgentValue, name: String): String {
+    match (value.field(name)) {
+        case Some(item) =>
+            if (item.unifiedKind != ValueKind.Text) {
+                throw IllegalStateException("ModelLane snapshot field is not text: " + name)
+            }
+            item.text
+        case None => ""
+    }
+}
+
+func laneOptionalBoolField(value: AgentValue, name: String): Bool {
+    match (value.field(name)) {
+        case Some(item) =>
+            if (item.unifiedKind != ValueKind.Boolean) {
+                throw IllegalStateException("ModelLane snapshot field is not boolean: " + name)
+            }
+            item.asBool()
+        case None => true
+    }
 }
 
 func laneBoolField(value: AgentValue, name: String): Bool {

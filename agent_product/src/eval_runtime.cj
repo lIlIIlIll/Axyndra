@@ -5,6 +5,8 @@ import process4cj.*
 import std.collection.*
 import std.convert.*
 import std.io.*
+import std.env.*
+import std.fs.*
 import std.process.*
 import std.sync.*
 
@@ -15,6 +17,7 @@ public class EvalExecutionResult {
     public let timedOut: Bool
     public let durationMillis: Int64
     public let transportClosed: Bool
+    public let truncated: Bool
 
     public init(
         exitCode: Int64,
@@ -22,7 +25,8 @@ public class EvalExecutionResult {
         stderr!: String = "",
         timedOut!: Bool = false,
         durationMillis!: Int64 = 0,
-        transportClosed!: Bool = false
+        transportClosed!: Bool = false,
+        truncated!: Bool = false
     ) {
         this.exitCode = exitCode
         this.stdout = stdout
@@ -30,6 +34,7 @@ public class EvalExecutionResult {
         this.timedOut = timedOut
         this.durationMillis = durationMillis
         this.transportClosed = transportClosed
+        this.truncated = truncated
     }
 }
 
@@ -67,7 +72,8 @@ class PersistentEvalKernel {
     func execute(
         code: String,
         reset: Bool,
-        timeoutMillis: Int64
+        timeoutMillis: Int64,
+        outputLimitBytes: Int64
     ): Result<EvalExecutionResult> {
         executeLock.lock()
         try {
@@ -82,7 +88,27 @@ class PersistentEvalKernel {
                 (if (reset) { "1" } else { "0" }) + "|" +
                 evalHexEncode(code) + "\n"
             let responseFuture = spawn {
-                readEvalProtocolLine(process.stdOutPipe)
+                try {
+                    Result.Ok(readEvalProtocolLine(
+                        process.stdOutPipe, outputLimitBytes
+                    ))
+                } catch (error: ProcessError) {
+                    let code = match (error.kind) {
+                        case ProcessErrorKind.Frame => "eval.output_limit"
+                        case _ => "eval.protocol_read_failed"
+                    }
+                    let failed: Result<String> = Result.Err(
+                        evalRuntimeError(code, error.message)
+                    )
+                    failed
+                } catch (error: Exception) {
+                    let failed: Result<String> = Result.Err(
+                        evalRuntimeError(
+                            "eval.protocol_read_failed", error.message
+                        )
+                    )
+                    failed
+                }
             }
             try {
                 process.stdInPipe.write(request.toArray())
@@ -111,51 +137,177 @@ class PersistentEvalKernel {
                     transportClosed: true
                 ))
             }
-            parseEvalResponse(responseFuture.get())
+            match (responseFuture.get()) {
+                case Result.Ok(line) => parseEvalResponse(line)
+                case Result.Err(error) =>
+                    close()
+                    let outputLimitExceeded = error.code == "eval.output_limit"
+                    Result.Ok(EvalExecutionResult(
+                        -1,
+                        stderr: if (outputLimitExceeded) {
+                            "eval output exceeded the configured process output limit"
+                        } else {
+                            error.message
+                        },
+                        transportClosed: true,
+                        truncated: outputLimitExceeded
+                    ))
+            }
         } finally {
             executeLock.unlock()
         }
     }
 }
 
-class EvalRuntimeCommand {
-    let executable: String
+class EvalRuntimeProfile {
+    let language: String
+    let profileId: String
+    let runtimeName: String
+    let executableEnvironment: String
+    let defaultExecutable: String
     let arguments: Array<String>
+    let supportsPersistentSession: Bool
+    let supportsReset: Bool
 
-    init(executable: String, arguments: Array<String>) {
-        this.executable = executable
+    init(
+        language: String,
+        profileId: String,
+        runtimeName: String,
+        executableEnvironment: String,
+        defaultExecutable: String,
+        arguments: Array<String>,
+        supportsPersistentSession: Bool,
+        supportsReset: Bool
+    ) {
+        this.language = language
+        this.profileId = profileId
+        this.runtimeName = runtimeName
+        this.executableEnvironment = executableEnvironment
+        this.defaultExecutable = defaultExecutable
         this.arguments = arguments
+        this.supportsPersistentSession = supportsPersistentSession
+        this.supportsReset = supportsReset
     }
 }
 
-func evalRuntimeCommand(language: String): Result<EvalRuntimeCommand> {
+class EvalRuntimeCommand {
+    let profile: EvalRuntimeProfile
     let executable: String
     let arguments: Array<String>
-    match (language) {
-        case "py" =>
-            executable = "/usr/bin/python3"
-            arguments = ["-u", "-c", pythonEvalRunner()]
-        case "js" =>
-            executable = "/usr/bin/bun"
-            arguments = ["--eval", javascriptEvalRunner()]
-        case "rb" =>
-            executable = "/usr/bin/ruby"
-            arguments = ["-e", rubyEvalRunner()]
-        case "jl" =>
-            executable = "/usr/bin/julia"
-            arguments = [
-                "--startup-file=no",
-                "--history-file=no",
-                "-e",
-                juliaEvalRunner()
-            ]
-        case _ =>
-            return Result.Err(evalRuntimeError(
-                "eval.language_unsupported",
-                "unsupported eval language: " + language
-            ))
+
+    init(profile: EvalRuntimeProfile, executable: String) {
+        this.profile = profile
+        this.executable = executable
+        this.arguments = profile.arguments
     }
-    Result.Ok(EvalRuntimeCommand(executable, arguments))
+}
+
+func evalRuntimeProfile(language: String): Result<EvalRuntimeProfile> {
+    match (language) {
+        case "py" => Result.Ok(EvalRuntimeProfile(
+            "py",
+            "eval-python-stdio-v1",
+            "Python",
+            "AXYNDRA_EVAL_PYTHON_EXECUTABLE",
+            "python3",
+            ["-u", "-c", pythonEvalRunner()],
+            true,
+            true
+        ))
+        case "js" => Result.Ok(EvalRuntimeProfile(
+            "js",
+            "eval-bun-stdio-v1",
+            "Bun JavaScript",
+            "AXYNDRA_EVAL_JS_EXECUTABLE",
+            "bun",
+            ["--eval", javascriptEvalRunner()],
+            true,
+            true
+        ))
+        case "rb" => Result.Ok(EvalRuntimeProfile(
+            "rb",
+            "eval-ruby-stdio-v1",
+            "Ruby",
+            "AXYNDRA_EVAL_RUBY_EXECUTABLE",
+            "ruby",
+            ["-e", rubyEvalRunner()],
+            true,
+            true
+        ))
+        case "jl" => Result.Ok(EvalRuntimeProfile(
+            "jl",
+            "eval-julia-stdio-v1",
+            "Julia",
+            "AXYNDRA_EVAL_JULIA_EXECUTABLE",
+            "julia",
+            ["--startup-file=no", "--history-file=no", "-e", juliaEvalRunner()],
+            true,
+            true
+        ))
+        case _ => Result.Err(evalRuntimeError(
+            "eval.language_unsupported",
+            "unsupported eval language: " + language
+        ))
+    }
+}
+
+func selectEvalRuntimeCommand(language: String): Result<EvalRuntimeCommand> {
+    let profile = match (evalRuntimeProfile(language)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    if (!profile.supportsPersistentSession) {
+        return Result.Err(evalConfigurationError(
+            "eval.runtime_capability_unavailable",
+            profile.runtimeName + " does not support persistent eval sessions"
+        ))
+    }
+    let executable = match (getVariable(profile.executableEnvironment)) {
+        case Some(value) =>
+            if (value.trimAscii() == "" || !value.startsWith("/")) {
+                return Result.Err(evalConfigurationError(
+                    "eval.interpreter_path_invalid",
+                    "configured " + profile.runtimeName + " interpreter must use an absolute path"
+                ))
+            }
+            if (!exists(value)) {
+                return Result.Err(evalConfigurationError(
+                    "eval.interpreter_unavailable",
+                    "configured " + profile.runtimeName + " interpreter is unavailable"
+                ))
+            }
+            try {
+                canonicalize(value).toString()
+            } catch (_: Exception) {
+                return Result.Err(evalConfigurationError(
+                    "eval.interpreter_path_invalid",
+                    "configured " + profile.runtimeName + " interpreter path cannot be resolved"
+                ))
+            }
+        case None => profile.defaultExecutable
+    }
+    Result.Ok(EvalRuntimeCommand(profile, executable))
+}
+
+func evalRuntimeCommand(
+    language: String,
+    executable: String
+): Result<EvalRuntimeCommand> {
+    let profile = match (evalRuntimeProfile(language)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => return Result.Err(error)
+    }
+    if (executable.trimAscii() == "" || executable.contains("\u{0000}")) {
+        return Result.Err(evalConfigurationError(
+            "eval.interpreter_path_invalid",
+            profile.runtimeName + " interpreter path is invalid"
+        ))
+    }
+    Result.Ok(EvalRuntimeCommand(profile, executable))
+}
+
+func evalConfigurationError(code: String, message: String): AgentError {
+    AgentError(AgentErrorKind.Configuration, code, message)
 }
 
 // Persistent eval must be launched with the raw bwrap argv produced by
@@ -225,11 +377,21 @@ func parseEvalResponse(line: String): Result<EvalExecutionResult> {
     ))
 }
 
-func readEvalProtocolLine(stream: InputStream): String {
-    match (readLineBounded(stream, 33554432, allowPartialAtEof: true)) {
+func readEvalProtocolLine(stream: InputStream, outputLimitBytes: Int64): String {
+    match (readLineBounded(
+        stream,
+        evalProtocolLineLimit(outputLimitBytes),
+        allowPartialAtEof: true
+    )) {
         case Some(value) => value
         case None => ""
     }
+}
+
+func evalProtocolLineLimit(outputLimitBytes: Int64): Int64 {
+    if (outputLimitBytes <= 0) { return 33554432 }
+    if (outputLimitBytes > (Int64.Max - 128) / 2) { return Int64.Max }
+    outputLimitBytes * 2 + 128
 }
 
 func evalHexEncode(source: String): String {
