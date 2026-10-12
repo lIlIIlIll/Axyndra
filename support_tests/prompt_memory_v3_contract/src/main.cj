@@ -1,9 +1,16 @@
 package prompt_memory_v3_contract
+import std.sync.*
 
 import agent_core.*
 import agent_domain.*
 import persistence_runtime.*
 import std.fs.*
+import std.env.*
+import std.collection.*
+import agent_product.*
+import memory_legacy_oracle.*
+import yjson.*
+import yjson_support.*
 
 main(): Int64 {
     if (!exists(Path("target"))) {
@@ -13,11 +20,14 @@ main(): Int64 {
     try {
         promptContract()
         projectContextContract()
-        memoryLifecycleContract(root)
-        memoryHybridContract(root)
+        let host = installedMemoryContractHost(root, root + "/settings", root)
+        let policy = legacyMemoryPolicy(host.vnext.javascriptPlugins,root+"/settings",SessionId("memory-library-contract")).value().getOrThrow()
+        memoryLifecycleContract(root, policy)
+        memoryHybridContract(root, policy)
         println("prompt and memory v3 contract passed")
         0
     } finally {
+        for (host in memoryPolicyHosts) { let _ = host.close() }
         let _ = removeIfExists(root, recursive: true)
     }
 }
@@ -150,7 +160,7 @@ func projectContextContract(): Unit {
     expect(rejected, "project instructions cannot silently exceed the preload budget")
 }
 
-func memoryLifecycleContract(root: String): Unit {
+func memoryLifecycleContract(root: String, policy: ProductMemoryPolicy): Unit {
     let workspace = MemoryScope(MemoryScopeKind.Workspace, key: "/workspace/repo")
     let otherWorkspace = MemoryScope(MemoryScopeKind.Workspace, key: "/workspace/other")
     let repository = MemoryV3Repository(root + "/lifecycle")
@@ -185,7 +195,7 @@ func memoryLifecycleContract(root: String): Unit {
             kinds: [MemoryKind.Decision],
             semanticEnabled: false
         )
-    ).value().getOrThrow()
+    , policy: Some(policy)).value().getOrThrow()
     expect(
         scoped.strategy == MemorySearchStrategy.Lexical &&
         scoped.hits.size == 1 && scoped.hits[0].memory.id == decision.id,
@@ -196,7 +206,7 @@ func memoryLifecycleContract(root: String): Unit {
         repository.search(
             "release freeze",
             options: MemoryV3SearchOptions(scope: Some(workspace), semanticEnabled: false)
-        ).value().getOrThrow().hits.isEmpty(),
+        , policy: Some(policy)).value().getOrThrow().hits.isEmpty(),
         "expired memories remain auditable but are excluded from retrieval"
     )
 
@@ -240,7 +250,7 @@ func memoryLifecycleContract(root: String): Unit {
         repository.search(
             "default port",
             options: MemoryV3SearchOptions(scope: Some(workspace), semanticEnabled: false)
-        ).value().getOrThrow().hits.isEmpty(),
+        , policy: Some(policy)).value().getOrThrow().hits.isEmpty(),
         "unresolved conflicting memories are withheld from context retrieval"
     )
     let winner = repository.resolveConflict(right.id).value().getOrThrow()
@@ -261,7 +271,7 @@ func memoryLifecycleContract(root: String): Unit {
     )
 }
 
-func memoryHybridContract(root: String): Unit {
+func memoryHybridContract(root: String, policy: ProductMemoryPolicy): Unit {
     let scope = MemoryScope(MemoryScopeKind.User, key: "user-7")
     let seed = MemoryV3Repository(root + "/hybrid")
     let semantic = seed.retain(MemoryV3Draft(
@@ -282,7 +292,7 @@ func memoryHybridContract(root: String): Unit {
     let hybrid = hybridRepository.search(
         "meaning-neighbor",
         options: MemoryV3SearchOptions(scope: Some(scope))
-    ).value().getOrThrow()
+    , policy: Some(policy)).value().getOrThrow()
     expect(
         hybrid.strategy == MemorySearchStrategy.Hybrid &&
         !hybrid.embeddingFallback && hybrid.hits.size >= 1 &&
@@ -296,7 +306,7 @@ func memoryHybridContract(root: String): Unit {
     ).search(
         "concise explanations",
         options: MemoryV3SearchOptions(scope: Some(scope))
-    ).value().getOrThrow()
+    , policy: Some(policy)).value().getOrThrow()
     expect(
         failing.strategy == MemorySearchStrategy.LexicalFallback &&
         failing.embeddingFallback && failing.hits.size == 1 &&
@@ -331,4 +341,156 @@ func expect(condition: Bool, message: String): Unit {
     if (!condition) {
         throw IllegalStateException("contract failed: " + message)
     }
+}
+
+// Actual independent installed package, same public registry/config path as an
+// embedding application. No production fixture flag supplies a policy.
+let memoryPolicyHosts = ArrayList<ProductRuntime>()
+func installedMemoryContractHost(root: String, settingsRoot: String, workspaceRoot: String): ProductRuntime {
+    let host = openProduct(config: ProductConfig(settingsRoot: settingsRoot,
+        stateRoot: root + "/policy-host-" + memoryPolicyHosts.size.toString(), workspaceRoot: workspaceRoot,
+        fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false)).value().getOrThrow()
+    memoryPolicyHosts.add(host)
+    let record = match (host.importLocalPlugin(getVariable("AXYNDRA_MEMORY_PLUGIN_PACKAGE").getOrThrow())) {
+        case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error)) }
+    if (!supportRegistryOkay96(host.setPluginEnabled(supportRegistryDescriptor96(record,"namespace"), true))) { throw IllegalStateException("normal memory provider enable failed") }
+    if (!exists(Path(settingsRoot + "/plugins"))) { Directory.create(settingsRoot + "/plugins", recursive: true) }
+    File.writeTo(settingsRoot + "/plugins/policies.json", stringifyUnifiedJson(objectValue([ValueField("version", integerValue(1)),
+        ValueField("bindings", objectValue([ValueField("memory", objectValue([ValueField("namespace", textValue(supportRegistryDescriptor96(record,"namespace"))),
+            ValueField("provider", textValue("memory")), ValueField("package_digest", textValue(supportRegistryDescriptor96(record,"content_digest")))]))]))])).toArray())
+    host
+}
+
+// Test consumer DATA only. No copied metadata becomes an installed Source,
+// pin, receipt, grant, operation, or replacement public Registry record.
+// The source Registry byte carrier pays its complete copied graph before
+// allocating an Array/String/DOM. Original configuration/public fixture text
+// has no retirement protocol, so those independent loans remain paid.
+class SupportRegistryCopyDebt96 {
+    let payment:LogicalJsonOwnerReservation
+    let previous:?SupportRegistryCopyDebt96
+    init(payment:LogicalJsonOwnerReservation,previous:?SupportRegistryCopyDebt96){
+        this.payment=payment;this.previous=previous}
+}
+class SupportRegistryRecordData96 {
+    let record:ProductPluginRecord
+    private let graph:AgentValue
+    private let payment:LogicalJsonOwnerReservation
+    private let lock=Mutex()
+    private var pending:?LogicalJsonOwnerReservation=None<LogicalJsonOwnerReservation>
+    let enabled:Bool
+    let explicitlyDisabled:Bool
+    let sourceKind:PluginSourceKind
+    let scope:PluginInstallScope
+    let previous:?SupportRegistryRecordData96
+    init(record:ProductPluginRecord,graph:AgentValue,payment:LogicalJsonOwnerReservation,
+        enabled:Bool,explicitlyDisabled:Bool,sourceKind:PluginSourceKind,scope:PluginInstallScope,
+        previous:?SupportRegistryRecordData96){
+        this.record=record;this.graph=graph;this.payment=payment
+        this.enabled=enabled;this.explicitlyDisabled=explicitlyDisabled;this.sourceKind=sourceKind
+        this.scope=scope;this.previous=previous}
+    func text(key:String,descriptor!:Bool=false):String{
+        lock.lock();try{
+            if(pending.isSome()){throw LogicalJsonPayloadError("same copied metadata keeps its failed occurrence payment")}
+            let value=if(descriptor){graph.field("descriptor").getOrThrow().field(key).getOrThrow().text}
+                else{graph.field(key).getOrThrow().text}
+            let loan=payment.deriveRetainedLease();pending=Some(loan)
+            loan.ensureRetainedPeak(supportRegistryInvoice96(value.size,0))
+            supportRegistryRetain96(loan);pending=None<LogicalJsonOwnerReservation>;value
+        }finally{lock.unlock()}
+    }
+}
+class SupportRegistryCopies96 {
+    let lock=Mutex()
+    var payments:?SupportRegistryCopyDebt96=None<SupportRegistryCopyDebt96>
+    var records:?SupportRegistryRecordData96=None<SupportRegistryRecordData96>
+}
+let supportRegistryCopies96=SupportRegistryCopies96()
+func supportRegistryInvoice96(bytes:Int64,nodes:Int64):Int64{
+    if(bytes<0 || nodes<0 || nodes>(134217728-8192)/1024 ||
+        bytes>(134217728-8192-nodes*1024)/64){
+        throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity")}
+    bytes*64+nodes*1024+8192
+}
+func supportRegistryRetain96(payment:LogicalJsonOwnerReservation):Unit{
+    supportRegistryCopies96.lock.lock();try{
+        supportRegistryCopies96.payments=Some(SupportRegistryCopyDebt96(payment,supportRegistryCopies96.payments))
+    }finally{supportRegistryCopies96.lock.unlock()}
+}
+func supportRegistryText96(result:PluginRegistryResult<OwnedRegistryUtf8>):String{
+    let source=match(result){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,0))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        String.fromUtf8(bytes)
+    }finally{source.close()}
+}
+func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
+        match(error.staticReason){
+            case PluginRegistryStaticReason.MetadataCapacity=>"registry metadata cannot fit the original shared capacity"
+            case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
+            case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
+            case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
+            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+}
+func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
+    try{supportRegistryErrorText96(error)}finally{error.close()}
+}
+func supportRegistryExclusiveErrorCode96(error:PluginRegistryOwnedError):String{
+    try{error.code}finally{error.close()}
+}
+func supportRegistryDiscard96(record:ProductPluginRecord):Unit{record.close()}
+func supportRegistryOkay96(result:PluginRegistryResult<ProductPluginRecord>):Bool{
+    match(result){case PluginRegistryResult.Ok(record)=>record.close();true
+        case PluginRegistryResult.Err(error)=>error.close();false}
+}
+func supportRegistryData96(record:ProductPluginRecord):SupportRegistryRecordData96{
+    supportRegistryCopies96.lock.lock();try{
+        var current=supportRegistryCopies96.records
+        while(current.isSome()){
+            let row=current.getOrThrow()
+            if(refEq(row.record,record)){return row};current=row.previous}
+    }finally{supportRegistryCopies96.lock.unlock()}
+    // Read real immutable scalar data while the actual view is live. State
+    // replacement may revoke it later; the test's original metadata stays in
+    // this independent same-bank copy instead of resurrecting that view.
+    let enabled=record.enabled;let disabled=record.explicitlyDisabled
+    let kind=record.sourceKind;let scope=record.scope
+    let source=match(record.copyJson()){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        var quoted=false;var escaped=false;var primitive=false;var nodes:Int64=0
+        for(index in 0..size){
+            let byte=source.byteAt(index)
+            if(quoted){if(escaped){escaped=false}else if(byte==92u8){escaped=true}else if(byte==34u8){quoted=false};continue}
+            if(byte==34u8){nodes+=1;quoted=true;primitive=false}
+            else if(byte==123u8 || byte==91u8){nodes+=1;primitive=false}
+            else if(byte==44u8 || byte==58u8 || byte==125u8 || byte==93u8 || byte<=32u8){primitive=false}
+            else if(!primitive){nodes+=1;primitive=true}}
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,nodes))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        let graph=parseUnifiedJson(String.fromUtf8(bytes),maxBytes:size)
+        supportRegistryCopies96.lock.lock();try{
+            let row=SupportRegistryRecordData96(record,graph,payment,enabled,disabled,kind,scope,supportRegistryCopies96.records)
+            supportRegistryCopies96.records=Some(row);row
+        }finally{supportRegistryCopies96.lock.unlock()}
+    }finally{source.close()}
+}
+func supportRegistryRecord96(record:ProductPluginRecord):ProductPluginRecord{
+    let _=supportRegistryData96(record);record
+}
+func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
+    let row=supportRegistryData96(record)
+    // Each returned occurrence is separately paid before it can escape into
+    // configuration, a path, a fixture field, an exception or another frame.
+    row.text(key,descriptor:true)
+}
+func supportRegistryField96(record:ProductPluginRecord,key:String):String{
+    supportRegistryData96(record).text(key)
 }

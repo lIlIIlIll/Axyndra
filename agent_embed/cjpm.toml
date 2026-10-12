@@ -13,5 +13,8 @@
   "agent_ports" = { path = "../agent_ports", output-type = "static" }
   "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
   "agent_core" = { path = "../agent_core", output-type = "static" }
-  "agent_skills" = { path = "../agent_skills", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

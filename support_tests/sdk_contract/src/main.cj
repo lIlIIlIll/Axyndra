@@ -8,7 +8,6 @@ import agent_core.*
 import agent_domain.*
 import agent_ports.*
 import agent_embed.*
-import agent_skills.*
 import std.sync.*
 import tool_runtime.*
 
@@ -33,24 +32,21 @@ main(): Int64 {
 
 func explicitSkillStackReachesSdkModelLane(): Bool {
     let provider = TextProvider("skill-aware")
-    let descriptor = SkillDescriptor(
-        "sdk-review", "sdk-review", "SDK review instructions", ["review"],
-        "skill://sdk-review"
-    )
     let sdk = configuredBuilder(
         provider,
         ToolCatalog(),
         textCapabilities()
-    ).skillStack(SkillStackSnapshot([
-        SkillActivation(descriptor, "Use the SDK skill contract.")
-    ], [])).build().value().getOrThrow()
+    ).contextSnapshot(InvocationContextProjection(contributions: [InvocationContextContribution(
+        "example.sdk", "review", "context://sdk-review", "Use the SDK skill contract.",
+        ContextContentTrust.UserSelected
+    )])).build().value().getOrThrow()
     let result = sdk.run("review")
     return expect(
         result.isOk() && provider.lastSystem.contains(
-            "<active_skills trust=\"user_selected\" capabilities=\"none\">"
+            "<run_context capabilities=\"none\">"
         ) &&
             provider.lastSystem.contains("Use the SDK skill contract.") &&
-            sdk.configuration.skillStack.origin == Origin.Programmatic,
+            sdk.configuration.contextSnapshot.origin == Origin.Programmatic,
         "SDK freezes an explicit SkillStack into the Run model lane"
     )
 }

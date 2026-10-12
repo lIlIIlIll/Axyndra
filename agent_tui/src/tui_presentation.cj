@@ -14,6 +14,7 @@ class AgentPresentationAdapter {
         this.source = source
     }
 
+    func retireRetainedReferences(): Unit { pending = None }
     func prepare(size: Rect): ?HistoryBatch {
         match (pending) {
             case Some(batch) => return Some(batch)

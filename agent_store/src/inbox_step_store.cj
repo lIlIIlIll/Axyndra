@@ -48,6 +48,9 @@ public class SqliteInboxStepStore {
     public init(database: SqliteDatabase) { this.database = database }
 
     public func enqueue(entry: DurableInboxEntry): Result<InboxEnqueueOutcome> {
+        if (entry.kind == InboxEntryKind.HostService) {
+            return inboxConflict<InboxEnqueueOutcome>("host service origins require the owned maintenance start transaction")
+        }
         if (entry.status != InboxEntryStatus.Queued || entry.claimedStepId.isSome()) {
             return inboxConflict<InboxEnqueueOutcome>(
                 "only a queued Inbox entry may be enqueued"
@@ -101,6 +104,73 @@ public class SqliteInboxStepStore {
                 "inbox.enqueue_failed", error.message, entry.id
             )
         }
+    }
+
+    // Started local processing is durable and is not selected by queued replay.
+    // It is explicitly not a Model Step or a Tool execution receipt.
+    public func prepareActualRpcQueuedInput113(value: QueuedRunInitiatorData113, local: Bool,
+        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
+        let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
+        try {
+            database.transaction { transaction =>
+                requireActualRpcQueuedRow113(transaction, value)
+                if (local) {
+                    transaction.execute("UPDATE lane_inbox_entries SET status='processing',revision=revision+1 " +
+                        "WHERE id=? AND status='queued' AND claimed_step_id IS NULL",
+                        [SqlParameter.Text(value.entryId.value)])
+                    requireStoreChanged(transaction, "local queued input processing was not reserved") }
+            }
+        } catch (error: Exception) { cell.captureOriginal113(error); throw cell }
+        finally { cell.noteProducerFrameEnding113() }
+    }
+
+    public func completeReturnedRpcInput113(value: QueuedRunInitiatorData113, local: Bool, accepted: Bool,
+        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
+        let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
+        try {
+            database.transaction { transaction =>
+                let status = actualRpcQueuedStatus113(transaction, value)
+                if (local) {
+                    if (status != "processing") { throw IllegalStateException("original local input processing changed") }
+                    transaction.execute("UPDATE lane_inbox_entries SET status=?,revision=revision+1 " +
+                        "WHERE id=? AND status='processing' AND claimed_step_id IS NULL",
+                        [SqlParameter.Text(if (accepted) { "applied" } else { "rejected" }),
+                            SqlParameter.Text(value.entryId.value)])
+                    requireStoreChanged(transaction, "returned local queued input did not settle")
+                } else if (!accepted && status == "queued") {
+                    // The actual Core handler returned before any Turn claim.
+                    transaction.execute("UPDATE lane_inbox_entries SET status='rejected',revision=revision+1 " +
+                        "WHERE id=? AND status='queued' AND claimed_step_id IS NULL",
+                        [SqlParameter.Text(value.entryId.value)])
+                    requireStoreChanged(transaction, "failed unclaimed queued input did not settle")
+                } else if (status != "claimed" && status != "applied") {
+                    throw IllegalStateException("actual model input has no canonical Turn claim") }
+            }
+        } catch (error: Exception) { cell.captureOriginal113(error); throw cell }
+        finally { cell.noteProducerFrameEnding113() }
+    }
+
+    public func actualRpcQueuedInputTerminal113(value: QueuedRunInitiatorData113,
+        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Bool {
+        let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
+        try {
+            database.transaction { transaction =>
+                let status = actualRpcQueuedStatus113(transaction, value)
+                status == "applied" || status == "rejected" }
+        } catch (error: Exception) { cell.captureOriginal113(error); throw cell }
+        finally { cell.noteProducerFrameEnding113() }
+    }
+
+    public func hasPendingRpcLocalProcessing113(threadId: ThreadId): Result<Bool> {
+        try {
+            Result<Bool>.Ok(database.scalarInt("SELECT COUNT(*) FROM lane_inbox_entries " +
+                "WHERE thread_id=" + sqliteText(threadId.value) +
+                " AND status='processing' AND claimed_step_id IS NULL") > 0)
+        } catch (_: Exception) { Result<Bool>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "inbox.rpc_processing_query_failed", "durable local input requires explicit recovery")) }
     }
 
     public func rejectQueued(entryId: InboxEntryId): Result<Unit> {
@@ -324,6 +394,7 @@ public class SqliteInboxStepStore {
 func inboxEnqueueOutcome(status: String): InboxEnqueueOutcome {
     match (status) {
         case "queued" => InboxEnqueueOutcome.AlreadyQueued
+        case "processing" => InboxEnqueueOutcome.AlreadyProcessing
         case "claimed" => InboxEnqueueOutcome.AlreadyClaimed
         case "applied" => InboxEnqueueOutcome.AlreadyApplied
         case "rejected" => InboxEnqueueOutcome.AlreadyRejected
@@ -437,6 +508,7 @@ func parseInboxEntryKind(value: String): InboxEntryKind {
         case "child_run_message" => InboxEntryKind.ChildRunMessage
         case "cancel" => InboxEntryKind.Cancel
         case "close" => InboxEntryKind.Close
+        case "host_service" => InboxEntryKind.HostService
         case _ => throw IllegalStateException("unknown Inbox entry kind")
     }
 }

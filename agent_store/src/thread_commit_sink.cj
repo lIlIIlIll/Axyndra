@@ -12,10 +12,16 @@ import agent_runtime.*
 // SQLite is the canonical durable owner; ThreadCoordinator is its in-process
 // serialized cache. Every accepted transition is committed under the expected
 // Thread revision before the coordinator publishes its new snapshot.
-public class SqliteThreadCommitSink <: ThreadCommitSink {
+public class SqliteThreadCommitSink <: ThreadCommitSink & ReturningModelLaneCommitSink159 & ReturningModelLaneCutCommitSink159 {
     private let database: SqliteDatabase
 
-    public init(database: SqliteDatabase) { this.database = database }
+    private let continuationVerifier: ?ContinuationRunTransactionVerifier
+    private let knownParentAllocation: ?(Int64)->LogicalJsonOwnerReservation
+    public init(database: SqliteDatabase, continuationVerifier!: ?ContinuationRunTransactionVerifier = None,
+        knownParentAllocation!: ?(Int64)->LogicalJsonOwnerReservation = None) {
+        this.database = database; this.continuationVerifier = continuationVerifier
+        this.knownParentAllocation=knownParentAllocation
+    }
 
     public func createThread(threadId: ThreadId, workspaceId: String): AgentThreadSnapshot {
         let record = ThreadRecord(threadId, 0, workspaceId, ThreadStatus.Open, 1)
@@ -81,7 +87,16 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 }
                 // The user Item is not a worker result.
                 nextResultSequence -= 1
-            case None => ()
+            case None =>
+                // Terminal Threads retain their fencing epoch across process
+                // reopen. Read it from their existing canonical Run records in
+                // this same snapshot transaction; do not mint a second counter.
+                let epochs = transaction.query(
+                    "SELECT COALESCE(MAX(epoch),0) FROM runs WHERE thread_id=" + sqliteText(threadId.value)
+                )
+                if (epochs.size != 1) { throw IllegalStateException("durable Thread epoch is missing") }
+                activeEpoch = parseStoreInt(epochs[0].required(0), "inactive Thread epoch")
+                if (activeEpoch < 0) { throw IllegalStateException("durable Thread epoch is invalid") }
         }
         AgentThreadSnapshot(
             thread, turns, items,
@@ -89,6 +104,31 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
             activeEpoch: activeEpoch,
             nextResultSequence: nextResultSequence
         )
+    }
+
+    public func commitModelLane159(transition: ThreadTransition, input: OwnedModelLaneSnapshot159): Result<Unit> {
+        // Exactly the original synchronous transaction/codec/statement path.
+        // Neither this adapter nor SqliteDatabase stores the transition/DOM.
+        let result = commit(transition)
+        match (result) {
+            case Result.Ok(_) =>
+                // A continuation verifier receives a proof retaining the full
+                // transition and may export launch snapshots. The ordinary
+                // SQLite return alone does not retire that independent alias.
+                if (transition.continuationAdmission.isNone()) { input.recordSqlCommitReturned159() }
+            case Result.Err(_) => ()
+        }
+        result
+    }
+
+    public func commitModelLaneCut159(transition: ThreadTransition, input: OwnedModelLaneCut159): Result<Unit> {
+        let result = commit(transition)
+        match (result) {
+            case Result.Ok(_) =>
+                if (transition.continuationAdmission.isNone()) { input.recordSqlCommitReturned159() }
+            case Result.Err(_) => ()
+        }
+        result
     }
 
     public func commit(transition: ThreadTransition): Result<Unit> {
@@ -192,6 +232,12 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 let from = runStateName(transition.from)
                 let to = runStateName(transition.to)
                 let current = rows[0].required(0)
+                if (from == "waiting_approval" && to == "running" &&
+                    !transaction.query("SELECT id FROM model_attempts WHERE run_id=? AND lifecycle IN ('created','streaming') " +
+                        "AND policy_reason IN ('internal_approval_review','internal_context_compaction')",
+                        [SqlParameter.Text(runId.value)]).isEmpty()) {
+                    throw IllegalStateException("approval cannot resume while its internal model Attempt is unsettled")
+                }
                 if (current == from) {
                     transaction.execute(
                         "UPDATE runs SET state=" + sqliteText(to) + " WHERE id=" +
@@ -343,6 +389,9 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
     private func commitTransition(transaction: SqliteTransaction, transition: ThreadTransition): Unit {
         requireThreadRevision(transaction, transition.before)
         match (transition.kind) {
+            case ThreadTransitionKind.ModelLaneChanged =>
+                commitModelLaneSafeCut(transaction, transition)
+                updateThreadRecord(transaction, transition.before, transition.after)
             case ThreadTransitionKind.TurnStarted => commitTurnStart(transaction, transition)
             case ThreadTransitionKind.ExternalInputCommitted =>
                 commitExternalInput(transaction, transition)
@@ -350,6 +399,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 for (item in transition.committedItems) {
                     insertThreadItem(transaction, item)
                 }
+                for (item in transition.committedItems) { recordContextReadAdmission(transaction, transition, item) }
                 commitCanonicalDecisionProjection(transaction, transition)
                 updateThreadRecord(transaction, transition.before, transition.after)
             case ThreadTransitionKind.OperationResultCommitted =>
@@ -393,9 +443,18 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
     }
 
     private func commitTurnStart(transaction: SqliteTransaction, transition: ThreadTransition): Unit {
+        verifyContinuationTurnStart(transaction, transition, continuationVerifier)
         let turn = transition.committedTurn.getOrThrow()
         let item = transition.committedItems[0]
         let runId = turn.activeRunId.getOrThrow()
+        match (item.provenance.directOrigin) {
+            case Some(DirectCallOrigin.ManagedJob(binding)) =>
+                verifyManagedJobLaunchInTransaction(transaction, binding, agentUtcMillis())
+                channelStoreRequire(isManagedJobInitiator(item) && item.threadId.value == binding.declaration.threadId.value &&
+                    runId.value == binding.declaration.runId.value &&
+                    canonicalAgentValue(transition.runBudgetSnapshot) == canonicalAgentValue(managedJobRunBudget(binding)))
+            case _ => ()
+        }
         transaction.execute(
             "INSERT INTO turns (id,thread_id,ordinal,state,user_item_id,active_run_id) VALUES (" +
                 sqliteText(turn.id.value) + "," + sqliteText(turn.threadId.value) + "," +
@@ -410,15 +469,42 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
                 sqliteText(runId.value) + "," + sqliteText(turn.threadId.value) + "," +
                 sqliteText(turn.id.value) + "," + transition.after.activeEpoch.toString() +
                 ",'running'," + sqliteText(encodeStoredValue(transition.runLaneSnapshot)) + "," +
-                sqliteText(encodeStoredValue(transition.runSkillSnapshot)) + "," +
+                sqliteText(encodeStoredValue(transition.runContextSnapshot)) + "," +
                 sqliteText(encodeStoredValue(transition.runBudgetSnapshot)) + "," +
                 sqliteText(empty) + "," + item.createdAtMillis.toString() + ",NULL,NULL)"
         )
         commitVnextRunAdmission(transaction, transition, turn, item, runId)
         updateThreadRecord(transaction, transition.before, transition.after)
+        // Run/Turn/Item/composition/claim/revision writes are still inside the
+        // same transaction. A query deadline or cancellation that fired during
+        // verification must roll all of them back before the actual COMMIT.
+        match (transition.continuationAdmission) {
+            case Some(admission) => match (admission.verifyTransition(transition)) {
+                case Result.Err(error) => throw IllegalStateException(error.code)
+                case Result.Ok(_) => () }
+            case None => ()
+        }
     }
 
     private func commitOperationTransition(
+        transaction: SqliteTransaction,
+        transition: ThreadTransition
+    ): Unit {
+        match(knownParentAllocation){
+            case Some(allocate)=>match(transition.ownedCanonicalParent){
+                case Some(scope)=>if(isManagedChannelOwnedParentPlan(scope.plan)){
+                    withManagedKnownCanonicalParentCommit(transaction,transition,scope,allocate,{=>
+                        commitOperationTransitionOriginal(transaction,transition)})
+                }else{withLiveKnownCanonicalParentCommit(transaction,transition,scope,allocate,{=>
+                    commitOperationTransitionOriginal(transaction,transition)})}
+                case None=>commitOperationTransitionOriginal(transaction,transition)}
+            // Default retains the exact original canonical obligation. It
+            // neither mints neutral evidence nor claims known debt discharged.
+            case None=>commitOperationTransitionOriginal(transaction,transition)
+        }
+    }
+
+    private func commitOperationTransitionOriginal(
         transaction: SqliteTransaction,
         transition: ThreadTransition
     ): Unit {
@@ -432,8 +518,51 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
         if (rows.size != 1 || rows[0].required(0) != runId.value) {
             throw IllegalStateException("Operation is not owned by the expected Run")
         }
+        let taskSource = transaction.query("SELECT tool_call_item_id,normalized_plan FROM operations WHERE id=? AND run_id=?",
+            [SqlParameter.Text(receipt.operationId.value), SqlParameter.Text(runId.value)])
+        channelStoreRequire(taskSource.size == 1)
+        let taskCall = transaction.query("SELECT provenance FROM items WHERE id=?", [SqlParameter.Text(taskSource[0].required(0))])
+        channelStoreRequire(taskCall.size == 1)
+        match (effectiveDirectCallOrigin(decodeStoredProvenance(taskCall[0].required(0)))) {
+            case DirectCallOrigin.ManagedJob(binding) =>
+                requireManagedJobOriginBinding(transaction, receipt.operationId, runId, ItemId(taskSource[0].required(0)),
+                    binding, allowCancellingSettlement: true)
+                requireManagedJobPlan(transaction, ItemId(taskSource[0].required(0)), decodeOperationPlan(taskSource[0].required(1)))
+            case _ => ()
+        }
+        requireCancellationSettlementOutcome(transaction, transition, item, receipt)
+        requireDirectPreparationRejectionOutcome(transaction, transition, item, receipt)
+        if (isFrozenReadonlyDelegationParentPlan(decodeOperationPlan(taskSource[0].required(1)))) {
+            requireReadonlyDescendantsSettled(transaction, receipt.operationId, runId, receipt.outcome)
+        }
         let observedState = rows[0].required(1)
-        if (!operationStateMayCommitOutcome(observedState, receipt.outcome)) {
+        if ((observedState == "prepared" || observedState == "waiting_approval") && receipt.outcome == OperationOutcome.Failed) {
+            // A budget or validation error may settle before executor
+            // handoff. Commit its paired ToolResult atomically, only while
+            // durable ownership and the absence of handoff still hold.
+            let stage = receipt.verification.field("stage")
+            if (stage.isNone() || stage.getOrThrow().unifiedKind != ValueKind.Text ||
+                stage.getOrThrow().text != "prepared") {
+                throw IllegalStateException("Prepared failure requires pre-execution evidence")
+            }
+            requireStoreRow(transaction,
+                "SELECT o.id FROM operations o JOIN runs r ON r.id=o.run_id " +
+                    "JOIN threads t ON t.id=r.thread_id " +
+                    "JOIN turns turn ON turn.id=r.turn_id " +
+                    "JOIN items call ON call.id=o.tool_call_item_id " +
+                    "AND call.thread_id=r.thread_id AND call.turn_id=r.turn_id " +
+                    "WHERE o.id=" + sqliteText(receipt.operationId.value) +
+                    " AND r.id=" + sqliteText(runId.value) +
+                    " AND r.thread_id=" + sqliteText(item.threadId.value) +
+                    " AND r.turn_id=" + sqliteText(item.turnId.value) +
+                    " AND r.epoch=" + transition.before.activeEpoch.toString() +
+                    " AND r.state IN ('running','waiting_external','waiting_approval') " +
+                    "AND t.active_turn_id=r.turn_id AND turn.active_run_id=r.id " +
+                    "AND call.kind='tool_call' AND NOT EXISTS (SELECT 1 FROM audit_events handoff " +
+                    "WHERE handoff.operation_id=o.id AND handoff.kind='operation_execution_handoff')",
+                [receipt.operationId.value],
+                "Prepared failure does not own an active operation without executor handoff")
+        } else if (!operationStateMayCommitOutcome(observedState, receipt.outcome)) {
             throw IllegalStateException(
                 "Operation state cannot commit the observed execution outcome"
             )
@@ -461,6 +590,7 @@ public class SqliteThreadCommitSink <: ThreadCommitSink {
             }
         )
         insertThreadItem(transaction, item)
+        settleCanonicalApprovalContinuation(transaction, transition, item, receipt, observedState)
         transaction.execute(
             "UPDATE runs SET state=" + sqliteText(transition.nextRunState) +
                 " WHERE id=" + sqliteText(runId.value) + " AND thread_id=" +
@@ -697,7 +827,9 @@ func commitVnextRunAdmission(
     let threadId = turn.threadId
     let laneId = transition.executionLaneId
     let stepId = StepId("step-" + runId.value + "-0")
-    let entryId = InboxEntryId("inbox-" + runId.value)
+    let entryId = match (transition.queuedInitiator113) {
+        case Some(value) => value.entryId
+        case None => InboxEntryId("inbox-" + runId.value) }
     let compositionId = CompositionSnapshotId("composition-" + runId.value)
     let laneSnapshotId = ModelLaneSnapshotId("model-lane-" + runId.value)
 
@@ -750,22 +882,27 @@ func commitVnextRunAdmission(
         requireStoreChanged(transaction, "Run input Item Lane binding was not committed")
     }
 
-    // The accepted user Item is both the canonical Thread input and the Step
+    // The accepted initiator (user Item or host service SystemNote) is both the canonical Thread input and the Step
     // enclosure. This avoids a second shadow Item while retaining durable
     // claim ownership and replay identity.
+    match (transition.queuedInitiator113) {
+        case Some(value) => commitActualRpcQueuedInitiator113(transaction, value, turn, item, stepId,
+            transition.queuedInputPayment113.getOrThrow())
+        case None =>
     transaction.execute(
         "INSERT INTO lane_inbox_entries(" +
             "id,thread_id,lane_id,kind,payload,status,created_at_millis,claimed_step_id,revision" +
             ") VALUES (?,?,?,?,?,'claimed',?,?,2)",
         [
             SqlParameter.Text(entryId.value), SqlParameter.Text(threadId.value),
-            SqlParameter.Text(laneId.value), SqlParameter.Text("user_prompt"),
+            SqlParameter.Text(laneId.value), SqlParameter.Text(if (isHostServiceInitiator(item)) { "host_service" } else if (isExternalInitiator(item)) { "external" } else if (isInternalModelMaintenanceInitiator(item)) { "model_maintenance" } else if (isContinuationInitiatorDescription(item)) { "continuation" } else if (isManagedJobInitiator(item)) { "managed_job" } else { "user_prompt" }),
             SqlParameter.Text(encodeStoredValue(objectValue([
                 ValueField("accepted_item_id", textValue(item.id.value))
             ]))),
             SqlParameter.Int64Value(item.createdAtMillis), SqlParameter.Text(stepId.value)
         ]
     )
+    }
     transaction.execute(
         "INSERT INTO step_records(id,thread_id,lane_id,turn_id,run_id,ordinal," +
             "input_entry_id,accepted_item_id,status,opened_at_millis,settled_at_millis,revision) " +
@@ -791,7 +928,7 @@ func commitVnextRunAdmission(
         compositionId,
         profile,
         modelPolicySha256Text(encodeStoredValue(transition.runLaneSnapshot)),
-        modelPolicySha256Text(encodeStoredValue(transition.runSkillSnapshot))
+        modelPolicySha256Text(encodeStoredValue(transition.runContextSnapshot))
     )
     transaction.execute(
         "INSERT INTO composition_snapshots(id,digest,payload,created_at_millis) VALUES (?,?,?,?)",
@@ -859,6 +996,10 @@ func requireCompletedRunHasNoWorkDebt(
                 "completed Run still owns durable WorkDebt"
             )
         }
+    }
+    if (!transaction.query("SELECT id FROM model_attempts WHERE run_id=? AND lifecycle IN ('created','streaming')",
+        [SqlParameter.Text(runId.value)]).isEmpty()) {
+        throw IllegalStateException("completed Run still owns an unsettled model Attempt")
     }
     let unsettledOperations = transaction.query(
         "SELECT operations.id FROM operations LEFT JOIN operation_receipts receipt " +

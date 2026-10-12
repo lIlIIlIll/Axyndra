@@ -1,5 +1,6 @@
 package agent_tui
 
+import agent_domain.Result
 import agent_cli.*
 import core.*
 import markdown.*
@@ -53,9 +54,9 @@ func stopAgentStream(result: UpdateResult): UpdateResult {
     )
 }
 
-func productSlashHints(): Array<String> {
+func productSlashHints(extraDefinitions!:Array<SlashCommandDefinition> = []): Array<String> {
     let values = ArrayList<String>()
-    for (name in availableSlashCommands()) {
+    for (name in availableSlashCommands(extraDefinitions:extraDefinitions)) {
         values.add("/" + name)
     }
     values.toArray()
@@ -97,16 +98,38 @@ class DocumentWindowCache {
     private var width: Int64 = -1
     private var state = DocumentViewState()
     private var view: ?DocumentView = None
-    private var raster = Buffer(Rect(0, 0, 1, 1))
+    private var raster: ?Buffer = Some(Buffer(Rect(0, 0, 1, 1)))
+    private let copyReferencesLock = Mutex()
+    private var copyReferenceBorrows: Int64 = 0
+    private var internalCopyReferencesClosed = false
     private var rasterStart: Int64 = 0
     private var rasterHeight: Int64 = 0
     private var rasterValid = false
     private var layoutCount: Int64 = 0
 
     func render(document: Document, documentKey: String, scroll: Int64, area: Rect, target: Buffer): Unit {
+        copyReferencesLock.lock()
+        if (internalCopyReferencesClosed) { copyReferencesLock.unlock(); throw Exception("display.window_references_retired") }
+        copyReferenceBorrows++; copyReferencesLock.unlock()
+        try { renderBorrowedCopies(document, documentKey, scroll, area, target) }
+        finally { copyReferencesLock.lock(); try { copyReferenceBorrows-- } finally { copyReferencesLock.unlock() } }
+    }
+    private func renderBorrowedCopies(document: Document, documentKey: String, scroll: Int64, area: Rect, target: Buffer): Unit {
+        // The actual Document/view/Buffer locals and layout/paint callbacks
+        // end in this helper before the outer borrow may permit clear.
         if (area.width <= 0 || area.height <= 0) {
             return
         }
+        match (document.retainedPayment) {
+            case Some(payment) =>
+                // Inspect the actual previous view/rows and raster, including
+                // old geometry and complete combining-grapheme scalar backing,
+                // before creating the new view/rows/Buffer or changing keys.
+                let invoice = ownedTuiInvoiceAdd(
+                    retainedDocumentRasterInvoice(document, area.width, max(128, area.height * 4)),
+                    retainedPreviousCopiesInvoice())
+                if (!payment.prepareRasterCopies(invoice)) { throw Exception("display.raster_payment_required") }
+            case None => () }
         if (key != documentKey) {
             key = documentKey
             width = -1
@@ -125,22 +148,28 @@ class DocumentWindowCache {
             rasterStart + rasterHeight) {
             rasterStart = max(0, requested - wantedHeight / 3)
             rasterHeight = wantedHeight
-            raster = Buffer(Rect(0, 0, area.width, rasterHeight))
+            raster = Some(Buffer(Rect(0, 0, area.width, rasterHeight)))
             state.scroll = rasterStart
             match (view) {
-                case Some(current) => current.render(Rect(0, 0, area.width, rasterHeight), raster)
+                case Some(current) => current.render(Rect(0, 0, area.width, rasterHeight), raster.getOrThrow())
                 case None => ()
             }
             rasterValid = true
         }
         target.blitFromUnchecked(
-            raster,
+            raster.getOrThrow(),
             Rect(0, requested - rasterStart, area.width, area.height),
             area.x,
             area.y
         )
     }
 
+    func retainedPreviousCopiesInvoice(): Int64 {
+        var total: Int64 = 0
+        match (view) { case Some(current) => total = current.retainedCopiesInvoice(); case None => () }
+        match (raster) { case Some(current) => total = ownedTuiInvoiceAdd(total, retainedBufferCellInvoice(current)); case None => () }
+        total
+    }
     func layouts(): Int64 {
         layoutCount
     }
@@ -150,7 +179,17 @@ class DocumentWindowCache {
     }
 
     func bufferCapacityCells(): Int64 {
-        max(0, raster.area.width * raster.area.height)
+        match (raster) { case Some(value) => max(0, value.area.width * value.area.height); case None => 0 }
+    }
+    func tryRetireInternalWindowReferences(): Bool {
+        copyReferencesLock.lock()
+        try {
+            if (copyReferenceBorrows != 0) { return false }
+            internalCopyReferencesClosed = true
+            view = None; raster = None; key = ""; width = -1
+            state = DocumentViewState(); rasterStart = 0; rasterHeight = 0; rasterValid = false
+            true
+        } finally { copyReferencesLock.unlock() }
     }
 }
 
@@ -215,7 +254,6 @@ enum TuiModalKind {
     | Session
     | Tree
     | Agent
-    | Extensions
     | Branch
     | Settings
     | Reset
@@ -266,9 +304,26 @@ public func runAgentTui(
         externalPort.close()
         return result
     }
+    let directOutput = DirectStdOutDisplayOutput.open()
+    try { runNativeTuiProducerFrames(screen, externalPort, performanceTrace, directOutput) }
+    finally {
+        screen.noteActualNativeProducerFramesEnded()
+        screen.beginRetainedDisplayProducerClosing()
+        match (RetiredOwnedTuiScreenReferences.retire(screen)) {
+            case Some(retired) => screen.retireCopiedRegistry(retired)
+            case None => () }
+    }
+    0
+}
+
+// All actual App/presenter/Terminal/ANSI/trace producer frames must leave this
+// helper before a full Screen/registry retirement may be attempted.
+func runNativeTuiProducerFrames(screen: AgentScreen, externalPort: ExternalPort<Event>,
+    performanceTrace: ?TuiPerformanceTrace, directOutput: DirectStdOutDisplayOutput): Unit {
+    screen.bindActualNativeOutput(directOutput)
     match (performanceTrace) {
         case Some(trace) =>
-            let output = TuiTracingOutput(getStdOut(), trace)
+            let output = TuiTracingOutput(directOutput, trace)
             let app = App(
                 backend: AnsiBackend(output: output),
                 alternateScreen: false,
@@ -286,6 +341,7 @@ public func runAgentTui(
             )
         case None =>
             App(
+                backend: AnsiBackend(output: directOutput),
                 alternateScreen: false,
                 mouse: false
             ).runWithFrameProvider(
@@ -294,7 +350,6 @@ public func runAgentTui(
                 {event => screen.update(event)}
             )
     }
-    0
 }
 
 class MarkdownCacheEntry {
@@ -386,7 +441,8 @@ class HistorySlice {
 
 class AgentTranscriptSource <: VirtualTranscriptSource {
     private var snapshot: UiSnapshot
-    private let renderCard: (UiCard, Int64, String) -> Document
+    private var renderCard: (UiCard, Int64, String) -> Document
+    private var prepareCardCopies: (UiCard, Int64, Int64) -> Bool
     private var theme = axyndraTheme()
     private var generationValue: Int64 = 0
     private var retiredCountValue: Int64 = 0
@@ -406,12 +462,19 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
 
     init(
         snapshot: UiSnapshot,
-        renderCard: (UiCard, Int64, String) -> Document
+        renderCard: (UiCard, Int64, String) -> Document,
+        prepareCardCopies!: (UiCard, Int64, Int64) -> Bool = {_, _, _ => true}
     ) {
         this.snapshot = snapshot
         this.renderCard = renderCard
+        this.prepareCardCopies = prepareCardCopies
     }
 
+    func retireOwnedReferences(): Unit {
+        snapshot.cards.clear(); snapshot.cardLookupId = ""; snapshot.approvalId = None
+        snapshot = UiSnapshot(); pendingHistoryBatch = None; focusedCardId = ""
+        renderCard = {_, _, _ => Document([])}; prepareCardCopies = {_, _, _ => true}
+    }
     func setSnapshot(value: UiSnapshot): Unit {
         this.snapshot = value
         retiredCountValue = 0
@@ -829,6 +892,9 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
     }
 
+    public func prepareItemRetainedCopies(index: Int64, width: Int64, oldCopies: Int64): Bool {
+        prepareCardCopies(snapshot.cards[physicalIndex(index)], width, oldCopies)
+    }
     public func document(
         index: Int64,
         width: Int64,
@@ -879,11 +945,21 @@ func prependTranscriptPage(current: UiSnapshot, page: TuiTranscriptPage): UiSnap
 class AgentScreen <: TerminalFrameProvider {
     private let backend: AgentTuiBackend
     private let performanceTrace: ?TuiPerformanceTrace
-    private let title: String
-    private let initialPrompt: String
-    private let composer = Composer(slashHints: productSlashHints())
+    private var title: String
+    private var initialPrompt: String
+    private var composer = Composer(slashHints: productSlashHints())
     private var ui = UiSnapshot()
-    private let markdownCache = HashMap<String, MarkdownCacheEntry>()
+    private var retainedCopiedToolDisplays = ArrayList<OwnedTuiToolDisplay>()
+    private var activeOwnedToolDisplay: ?OwnedTuiToolDisplay = None
+    private var retainedCopiedFailureDisplays113 = ArrayList<OwnedTuiFailureDisplay113>()
+    private var retainedRegistryDisplays167 = ArrayList<OwnedTuiRegistryResponseDisplay167>()
+    private var activeRegistryDocument167: ?OwnedTuiRegistryResponseDisplay167 = None
+    private var terminalInternalFrameReferencesRetired = false
+    private var windowInternalReferencesRetired = false
+    private var asyncTaskReferencesRetired = false
+    private var actualNativeProducerFramesEnded = false
+    private var actualNativeOutput: ?DirectStdOutDisplayOutput = None
+    private var markdownCache = HashMap<String, MarkdownCacheEntry>()
     private let mailbox: TuiMailbox
     private let externalPort: ExternalPort<Event>
     private var mailboxChanged = false
@@ -919,12 +995,12 @@ class AgentScreen <: TerminalFrameProvider {
     private var virtualTranscriptSource: ?AgentTranscriptSource = None
     private var presentationAdapter: ?AgentPresentationAdapter = None
     private var virtualTranscriptView: ?VirtualTranscriptView = None
-    private let transcriptRanges = ArrayList<CardScreenRange>()
-    private let queuedPrompts = ArrayList<QueuedPrompt>()
+    private var transcriptRanges = ArrayList<CardScreenRange>()
+    private var queuedPrompts = ArrayList<QueuedPrompt>()
     private let queueWithdrawalLock = Mutex()
-    private let completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>()
+    private var completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>()
     private var withdrawalInFlightId = ""
-    private let toolBindings = ArrayList<ToolCardBinding>()
+    private var toolBindings = ArrayList<ToolCardBinding>()
     private var modal: ?TuiModalKind = None
     private var modalItems: Array<String> = []
     private var modalSelected: Int64 = 0
@@ -950,12 +1026,11 @@ class AgentScreen <: TerminalFrameProvider {
     private var focusedConversationLabel = "Main"
     private var mainTranscriptBeforeOrdinal: Int64 = 0
     private var mainTranscriptHasMore = false
-    private let runningSubagentIds = ArrayList<String>()
-    private var extensionItems: Array<TuiExtensionInfo> = []
+    private var runningSubagentIds = ArrayList<String>()
     private let surfaces = SurfaceHost()
-    private let planReview = PlanReviewController()
-    private let ask = AskController()
-    private let todos = TodoController()
+    private var planReview = PlanReviewController()
+    private var ask = AskController()
+    private var todos = TodoController()
     private var setupDraft: ?SetupDraft = None
     private var setupRequired = false
     private var initialSubmitted: Bool
@@ -963,7 +1038,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var cardSequence: Int64 = 0
     private var turnSequence: Int64 = 0
     private var modelRoundSequence: Int64 = 0
-    private let attemptProjection = AttemptProjection()
+    private var attemptProjection = AttemptProjection()
     private var activeToolCardId = ""
     private var activeToolCallId = ""
     private var activeToolArguments = ""
@@ -1002,7 +1077,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var themeName: String
     private var customThemeDefinitions: Array<TuiThemeDefinition>
     private var modelLabel: String
-    private let workspaceLabel: String
+    private var workspaceLabel: String
 
     init(
         backend: AgentTuiBackend,
@@ -1024,6 +1099,7 @@ class AgentScreen <: TerminalFrameProvider {
         this.initialSubmitted = this.initialPrompt == ""
         this.modelLabel = backend.currentModel()
         this.workspaceLabel = backend.workspace()
+        composer = Composer(slashHints: productSlashHints(extraDefinitions:backend.frontendSlashDefinitions()))
         this.themeName = backend.currentTheme()
         this.customThemeDefinitions = backend.customThemes()
         this.terminalUnicode = !asciiRailRequested()
@@ -1038,7 +1114,7 @@ class AgentScreen <: TerminalFrameProvider {
                 ),
                 history: section == "history"
             )
-        })
+        }, prepareCardCopies: {item, width, oldCopies => prepareOwnedCardDocument(item, width, oldCopies)})
         source.unicode = terminalUnicode
         virtualTranscriptSource = Some(source)
         presentationAdapter = Some(AgentPresentationAdapter(source))
@@ -1053,6 +1129,15 @@ class AgentScreen <: TerminalFrameProvider {
         )
         view.setUnicode(terminalUnicode)
         virtualTranscriptView = Some(view)
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => owned.observeOwnedToolDisplay(CallbackOwnedTuiToolDisplayOutput({display =>
+                // This actual queue entry carries its real copied-data owner.
+                mailbox.pushOwned(display) }))
+            case None => () }
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(owned) => owned.observeOwnedFailureDisplay113(CallbackOwnedTuiFailureDisplayOutput113({ display =>
+                mailbox.pushOwnedFailure113(display) }))
+            case None => () }
         backend.observe({event => mailbox.push(event)})
         var needsSetup = false
         for (event in backend.welcome()) {
@@ -1194,7 +1279,7 @@ class AgentScreen <: TerminalFrameProvider {
         if (planReview.isActive()) {
             return applyPlanReviewTransition(planReview.updateKey(key, working))
         }
-        if (todos.isEditing()) {
+        if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.updateKey(key))
         }
         if (ask.editorActive()) {
@@ -1471,7 +1556,7 @@ class AgentScreen <: TerminalFrameProvider {
         idleCtrlCArmed = false
         if (planReview.isActive()) {
             return planReview.paste(text)
-        } else if (todos.isEditing()) {
+        } else if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.paste(text))
         } else if (ask.editorActive()) {
             return ask.paste(text)
@@ -1602,7 +1687,7 @@ class AgentScreen <: TerminalFrameProvider {
             case Event.Mouse(mouse) =>
                 if (planReview.isActive()) {
                     planReview.updateMouse(mouse)
-                } else if (todos.isEditing()) {
+                } else if (todos.editorVisible(ui.approvalId.isSome())) {
                     applyTodoTransition(todos.updateMouse(mouse))
                 } else if (ask.editorActive()) {
                     ask.updateMouse(mouse)
@@ -2855,7 +2940,7 @@ class AgentScreen <: TerminalFrameProvider {
                 => TuiTurnResult(
                     "",
                     "todo loaded",
-                    action: TuiTurnAction.TodoLoaded(backend.todoMarkdown())
+                    action: TuiTurnAction.TodoLoaded(backend.loadTodoEditor())
                 )
             })
         }
@@ -2930,24 +3015,6 @@ class AgentScreen <: TerminalFrameProvider {
                     action: TuiTurnAction.SessionTreeLoaded(backend.sessionTree())
                 )
             })
-        }
-        if (prompt == "/extensions") {
-            return startBackground("loading extensions", {
-                => TuiTurnResult(
-                    "",
-                    "extensions",
-                    action: TuiTurnAction.ExtensionsLoaded(backend.extensions())
-                )
-            })
-        }
-        if (prompt == "/mcp") {
-            let result = backend.mcpStatus()
-            if (result.text != "") {
-                addCard(UiCardKind.Mcp, "MCP", result.text)
-            }
-            status = result.status
-            let actionResult = applyTurnAction(result.action)
-            return mergeDirty(dirtyTranscriptAndActivity(), actionResult)
         }
         if (prompt == "/settings") {
             return openModal(
@@ -3554,41 +3621,6 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     })
                 }
-            case TuiModalKind.Extensions =>
-                if (!extensionItems.isEmpty()) {
-                    let selectedExtension = extensionItems[modalSelected]
-                    let enabled = !selectedExtension.enabled
-                    closeModal(keepStatus: true)
-                    startBackground(
-                        "updating extension",
-                        {
-                            =>
-                                let ok = backend.setExtensionEnabled(
-                                    selectedExtension.id,
-                                    enabled
-                                )
-                                TuiTurnResult(
-                                    "",
-                                    if (ok) {
-                                        (if (enabled) {
-                                            "enabled: "
-                                        } else {
-                                            "disabled: "
-                                        }) + selectedExtension.id
-                                    } else {
-                                        "extension state change failed"
-                                    },
-                                    action: TuiTurnAction.ExtensionToggled(
-                                        selectedExtension.id,
-                                        ok,
-                                        backend.extensions()
-                                    )
-                                )
-                        }
-                    )
-                } else {
-                    UpdateResult.next()
-                }
             case TuiModalKind.Branch =>
                 closeModal(keepStatus: true)
                 startBackground("creating branch", {
@@ -3912,7 +3944,6 @@ class AgentScreen <: TerminalFrameProvider {
         sessionInput = ""
         sessionMode = "browse"
         sessionShowArchived = false
-        extensionItems = []
     }
 
     private func closeModal(keepStatus!: Bool = false): Unit {
@@ -3924,6 +3955,13 @@ class AgentScreen <: TerminalFrameProvider {
     }
 
     private func drainMailbox(): ?TuiTurnAction {
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(actual) => actual.pollOwnedFailureDisplays113()
+            case None => () }
+        // Retry only the already paid Screen tokens from earlier updates.
+        // No mailbox capacity, extra queue node or immediate retry loop is
+        // needed when formatting was previously refused by the real bank.
+        retryRetainedFailureProjections113()
         let events = mailbox.drain()
         if (!events.isEmpty()) {
             mailboxChanged = true
@@ -3934,6 +3972,14 @@ class AgentScreen <: TerminalFrameProvider {
         match (mailbox.takeResult()) {
             case Some(result) =>
                 mailboxChanged = true
+                match (result.action) {
+                    case TuiTurnAction.OpenDocument(_, _) => activeRegistryDocument167 = result.ownedRegistryDisplay167
+                    case _ => () }
+                match (result.ownedRegistryDisplay167) {
+                    case Some(display) =>
+                        adoptRegistryDisplay167(display)
+                        if (result.text != "") { display.noteUiCardIdentity167(assistantCardId()) }
+                    case None => () }
                 if (result.text != "") {
                     UiReducer.reduce(
                         ui,
@@ -4044,22 +4090,6 @@ class AgentScreen <: TerminalFrameProvider {
                 status = "select conversation"
                 refreshViewport()
             case TuiTurnAction.ConversationFocused(view) => applyConversationView(view)
-            case TuiTurnAction.ExtensionsLoaded(items) =>
-                extensionItems = items
-                if (items.isEmpty()) {
-                    applyTurnAction(
-                        TuiTurnAction.OpenDocument(
-                            "Extensions",
-                            "No external extensions are installed.\n\n" + "Built-in tools are product capabilities and " +
-                                "are not counted as extensions."
-                        )
-                    )
-                } else {
-                    openModal(
-                        TuiModalKind.Extensions,
-                        extensionLabels(items)
-                    )
-                }
             case TuiTurnAction.TodoLoaded(result) =>
                 applyTodoTransition(todos.open(result))
             case TuiTurnAction.ModelSelected(_, ok, current) =>
@@ -4092,16 +4122,6 @@ class AgentScreen <: TerminalFrameProvider {
                     composer.restoreDraft(draft)
                 }
                 UpdateResult.next()
-            case TuiTurnAction.ExtensionToggled(_, ok, items) =>
-                if (ok) {
-                    extensionItems = items
-                    openModal(
-                        TuiModalKind.Extensions,
-                        extensionLabels(items)
-                    )
-                } else {
-                    UpdateResult.next()
-                }
             case TuiTurnAction.ResetCompleted(value) =>
                 addCard(UiCardKind.Setup, "Session storage", value)
                 if (refreshTodoSnapshot()) {
@@ -4259,6 +4279,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         let startedAt = MonoTime.now()
         let cardId = nextCardId("tool")
+        match (activeOwnedToolDisplay) { case Some(display) => display.noteUiCardIdentity(cardId); case None => () }
         toolBindings.add(ToolCardBinding(callId, cardId, name, arguments, startedAt))
         activeToolCardId = cardId
         activeToolCallId = callId
@@ -4354,6 +4375,7 @@ class AgentScreen <: TerminalFrameProvider {
                     }
             }
         }
+        match (activeOwnedToolDisplay) { case Some(display) => display.noteUiCardIdentity(cardId); case None => () }
         let resolvedName = match (binding) {
             case Some(value) => value.name
             case None =>
@@ -4490,7 +4512,114 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
+    private func adoptRegistryDisplay167(display: OwnedTuiRegistryResponseDisplay167): Unit {
+        for (current in retainedRegistryDisplays167 where refEq(current, display)) { return }
+        let count = ownedTuiInvoiceAdd(retainedRegistryDisplays167.size, 1)
+        match (display.prepareQueueAndScreenCopies167(
+            ownedTuiInvoiceAdd(65536, ownedTuiInvoiceMultiply(count, 1024)))) {
+            case Result.Err(_) => throw Exception("display.registry_screen_payment_required")
+            case Result.Ok(_) => retainedRegistryDisplays167.add(display) }
+    }
+    private func acceptRegistryError167(display: OwnedTuiRegistryResponseDisplay167, message: String): Unit {
+        adoptRegistryDisplay167(display)
+        // Run the original card reducer once, preserving its deduplication,
+        // exact error text and transcript mutation behavior.
+        acceptAgentEvent(TuiAgentEvent.Error(message))
+        for (card in ui.cards where card.kind == UiCardKind.Error && card.title == "Error" && card.body == message) {
+            display.noteUiCardIdentity167(card.id); return }
+    }
+    private func acceptOwnedFailureDisplay113(display: OwnedTuiFailureDisplay113): Unit {
+        if (display.isProjected()) { return }
+        if (!display.isAdopted()) {
+            let count = ownedTuiInvoiceAdd(retainedCopiedFailureDisplays113.size, 1)
+            match (display.prepareQueueAndScreenCopies113(
+                ownedTuiInvoiceAdd(65536, ownedTuiInvoiceMultiply(count, 512)))) {
+                case Result.Err(_) => return; case Result.Ok(_) => () }
+            retainedCopiedFailureDisplays113.add(display); display.noteUiAdoption()
+        }
+        let result = display.withCopiedFailure113({ code, message, complete =>
+            let bytes = ownedTuiInvoiceAdd(ownedTuiInvoiceAdd(code.size, message.size), complete.size)
+            let invoice = match (ownedTuiCardFormattingInvoice(display.fundedProjectionInvoice113(), bytes)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (display.ensureCopiedDisplayRetainedPeak(invoice)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            display.noteCardFormattingPeak(invoice)
+            let cardId = nextCardId("error")
+            display.noteUiCardIdentity(cardId)
+            // Preserve code/message and every original typed field. No marker
+            // or preview is substituted for the complete paid error data.
+            UiReducer.reduce(ui, UiEvent.UpsertCard(cardId, UiCardKind.Error,
+                "Error: " + code, message + "\n\n" + complete, "failed", false, ""))
+            Result<Unit>.Ok(())
+        })
+        match (result) {
+            case Result.Ok(_) => display.noteUiProjection(); mailboxChanged = true
+            case Result.Err(_) => () // The actual adopted Screen token remains paid.
+        }
+    }
+    private func retryRetainedFailureProjections113(): Unit {
+        let count = retainedCopiedFailureDisplays113.size
+        for (index in 0..count) {
+            let actual = retainedCopiedFailureDisplays113[index]
+            if (!actual.isProjected()) { acceptOwnedFailureDisplay113(actual) }
+        }
+    }
+
+    private func acceptOwnedToolDisplay(display: OwnedTuiToolDisplay): Unit {
+        if (display.isProjected()) { return }
+        if (!display.isAdopted()) {
+            retainedCopiedToolDisplays.add(display); display.noteUiAdoption()
+        }
+        let result = display.withCopiedEvent({copied =>
+            var bytes: Int64 = 0
+            var callId = ""
+            match (copied) {
+                case TuiAgentEvent.ToolStarted(name, arguments) => bytes = name.size + arguments.size
+                case TuiAgentEvent.ToolStartedWithId(name, id, arguments) =>
+                    callId = id; bytes = name.size + id.size + arguments.size
+                case TuiAgentEvent.ToolCompleted(name, _, completion) =>
+                    bytes = name.size + completion.detailPreview.size + completion.stdoutPreview.size +
+                        completion.stderrPreview.size + completion.exitCode.size + completion.artifactId.size
+                case TuiAgentEvent.ToolCompletedWithId(name, id, _, completion) =>
+                    callId = id; bytes = name.size + id.size + completion.detailPreview.size + completion.stdoutPreview.size +
+                        completion.stderrPreview.size + completion.exitCode.size + completion.artifactId.size
+                case _ => return ownedTuiDisplayError("display.unexpected_event") }
+            // Include every existing argument/body/output/result/title/footer
+            // alongside the new completion and formatting scratch copies.
+            for (card in ui.cards where card.kind == UiCardKind.Tool &&
+                (card.toolCallId == callId || callId == "" || card.id == activeToolCardId)) {
+                bytes += card.title.size + card.body.size + card.footer.size + card.toolName.size +
+                    card.toolArguments.size + card.toolCallId.size + card.toolOutput.size + card.toolResult.size
+            }
+            for (binding in toolBindings where binding.callId == callId || callId == "") {
+                bytes += binding.arguments.size + binding.name.size + binding.callId.size + binding.cardId.size
+            }
+            bytes += activeToolArguments.size + activeToolCallId.size + activeToolCardId.size
+            let invoice = match (ownedTuiCardFormattingInvoice(display.projectionInvoice, bytes)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (display.ensureCopiedDisplayRetainedPeak(invoice)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            display.noteCardFormattingPeak(invoice)
+            activeOwnedToolDisplay = Some(display)
+            try { acceptAgentEvent(copied); Result.Ok(()) }
+            finally { activeOwnedToolDisplay = None }
+        })
+        match (result) {
+            case Result.Ok(_) => display.noteUiProjection()
+            case Result.Err(_) =>
+                // Bank pressure does not drop complete copied data or clear
+                // its payment. Retry from the actual queue after other real
+                // owners retire; no original DOM alias needs to be retained.
+                mailbox.push(TuiAgentEvent.OwnedToolDisplay(display))
+        }
+    }
+
     private func acceptAgentEvent(event: TuiAgentEvent): Unit {
+        match (event) {
+            case TuiAgentEvent.OwnedToolDisplay(display) => acceptOwnedToolDisplay(display); return
+            case TuiAgentEvent.OwnedFailureDisplay113(display) => acceptOwnedFailureDisplay113(display); return
+            case TuiAgentEvent.OwnedRegistryError167(display, message) => acceptRegistryError167(display, message); return
+            case _ => () }
         let followedBefore = scrollOffset <= 0
         match (event) {
             case TuiAgentEvent.AttemptStarted(_) | TuiAgentEvent.AttemptTextDelta(_, _) |
@@ -4515,6 +4644,9 @@ class AgentScreen <: TerminalFrameProvider {
             case _ => ()
         }
         match (event) {
+            case TuiAgentEvent.OwnedToolDisplay(display) => acceptOwnedToolDisplay(display); return
+            case TuiAgentEvent.OwnedFailureDisplay113(display) => acceptOwnedFailureDisplay113(display); return
+            case TuiAgentEvent.OwnedRegistryError167(display, message) => acceptRegistryError167(display, message); return
             case TuiAgentEvent.AttemptStarted(scope) =>
                 let previous = attemptProjection.activeAttemptId(scope.semanticRequestId)
                 attemptProjection.start(scope)
@@ -5106,12 +5238,13 @@ class AgentScreen <: TerminalFrameProvider {
     private func openComposerCompletion(): UpdateResult {
         completionSequence += 1
         let request = composer.area.beginCompletion("composer-completion-" + completionSequence.toString())
-        let plan = commandCompletionPlan(request.value, request.cursor)
+        let definitions=backend.frontendSlashDefinitions()
+        let plan = commandCompletionPlan(request.value, request.cursor, extraDefinitions:definitions)
         let pathCandidates: Array<CompletionCandidate> = match (plan.target) {
             case CommandCompletionTarget.Path => pathCompletionCandidates(workspaceLabel, plan.activePrefix)
             case _ => []
         }
-        let candidates = commandCompletionCandidates(plan, pathCandidates: pathCandidates)
+        let candidates = commandCompletionCandidates(plan, pathCandidates: pathCandidates, extraDefinitions:definitions)
         let completionItems = ArrayList<TextCompletionItem>()
         for (candidate in candidates) {
             if (completionItems.size >= 100) {
@@ -5473,8 +5606,10 @@ class AgentScreen <: TerminalFrameProvider {
     ): Document {
         let lines = ArrayList<DocumentLine>()
         var renderedAny = false
+        let paidDocuments = ArrayList<RetainedDocumentPayment>()
         for (item in items) {
             let card = renderTranscriptCardDocument(item, width, theme)
+            match (card.retainedPayment) { case Some(payment) => paidDocuments.add(payment); case None => () }
             if (card.lines.isEmpty()) {
                 continue
             }
@@ -5492,7 +5627,8 @@ class AgentScreen <: TerminalFrameProvider {
             }
             renderedAny = true
         }
-        Document(lines.toArray())
+        if (paidDocuments.isEmpty()) { Document(lines.toArray()) }
+        else { Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPaymentGroup(paidDocuments.toArray()))) }
     }
 
     private func transcriptSurfaceLines(items: Array<UiCard>, width: Int64): Array<String> {
@@ -5511,7 +5647,8 @@ class AgentScreen <: TerminalFrameProvider {
     private func renderTranscriptCardDocument(
         item: UiCard,
         width: Int64,
-        theme: ProductTheme
+        theme: ProductTheme,
+        occurrence167!: Int64 = 2
     ): Document {
         if (isApprovalRejectionToolCard(item)) {
             return Document([])
@@ -5520,6 +5657,7 @@ class AgentScreen <: TerminalFrameProvider {
             return Document([])
         }
         if (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning) {
+            if (!prepareOwnedCardDocument(item, width, 0, occurrence: occurrence167)) { throw Exception("display.document_payment_required") }
             if (item.state == "streaming") {
                 let lines = ArrayList<DocumentLine>()
                 let bodyWidth = max(1, width - 2)
@@ -5531,7 +5669,9 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     )
                 }
-                return Document(lines.toArray())
+                return match (retainedDisplayForCard(item)) {
+                    case Some(display) => Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: occurrence167)))
+                    case None => Document(lines.toArray()) }
             }
             let lines = ArrayList<DocumentLine>()
             for (line in cachedMarkdownDocument(item, theme).lines) {
@@ -5540,7 +5680,9 @@ class AgentScreen <: TerminalFrameProvider {
                     case _ => lines.add(line)
                 }
             }
-            return Document(lines.toArray())
+            return match (retainedDisplayForCard(item)) {
+                    case Some(display) => Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: occurrence167)))
+                    case None => Document(lines.toArray()) }
         }
         if (item.kind == UiCardKind.User) {
             let lines = ArrayList<DocumentLine>()
@@ -5552,6 +5694,7 @@ class AgentScreen <: TerminalFrameProvider {
             }
             return Document(lines.toArray())
         }
+        if (!prepareOwnedCardDocument(item, width, 0, occurrence: 2)) { throw Exception("display.document_payment_required") }
         let card = productTranscriptItem(
             item,
             width,
@@ -5563,15 +5706,44 @@ class AgentScreen <: TerminalFrameProvider {
                 -1
             }
         )
-        transcriptCardDocument(
+        let document = transcriptCardDocument(
             card,
             theme: productTranscriptCardTheme(theme, item)
         )
+        match (retainedDisplayForCard(item)) {
+            case Some(display) => Document(document.lines, retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: 2)))
+            case None => document }
     }
 
     // VirtualTranscriptView owns the event rail and header.  Its source must
     // therefore return only the body for structured cards; returning the
     // Reusing a TranscriptCard document here would create a nested second card.
+    private func retainedDisplayForCard(item: UiCard): ?OwnedTuiCardDisplay113 {
+        var registryIndex = retainedRegistryDisplays167.size - 1
+        while (registryIndex >= 0) {
+            let display = retainedRegistryDisplays167[registryIndex]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            registryIndex-- }
+        var index = retainedCopiedToolDisplays.size - 1
+        while (index >= 0) {
+            let display = retainedCopiedToolDisplays[index]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            index-- }
+        var failureIndex = retainedCopiedFailureDisplays113.size - 1
+        while (failureIndex >= 0) {
+            let display = retainedCopiedFailureDisplays113[failureIndex]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            failureIndex-- }
+        Option<OwnedTuiCardDisplay113>.None
+    }
+    private func prepareOwnedCardDocument(item: UiCard, width: Int64, oldCopies: Int64, occurrence!: Int64 = 0): Bool {
+        let _ = width
+        match (retainedDisplayForCard(item)) {
+            case None => true
+            case Some(display) =>
+                let invoice = ownedTuiDocumentConstructionInvoice(ownedTuiCardRetainedBytes(item), oldCopies)
+                display.prepareCardRenderCopies113(0, invoice, occurrence).isOk() }
+    }
     private func renderTranscriptBodyDocument(
         item: UiCard,
         width: Int64,
@@ -5579,7 +5751,14 @@ class AgentScreen <: TerminalFrameProvider {
         history!: Bool = false
     ): Document {
         if (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning || item.kind == UiCardKind.User) {
-            return renderTranscriptCardDocument(item, width, theme)
+            let body = renderTranscriptCardDocument(item, width, theme,
+                occurrence167: if (history) { 1 } else { 0 })
+            if (history) {
+                match (body.retainedPayment) {
+                    case Some(payment) => if (!payment.prepareHistoryCopies(ownedTuiDocumentConstructionInvoice(
+                        ownedTuiDocumentTextBytes(body), 0))) { throw Exception("display.history_payment_required") }
+                    case None => () } }
+            return body
         }
         if (isApprovalRejectionToolCard(item)) {
             return Document([])
@@ -5590,11 +5769,24 @@ class AgentScreen <: TerminalFrameProvider {
         // the card revision and materializes the specialized renderer then.
         if (!history && (item.collapsed || (item.kind == UiCardKind.Approval && !approvalCardIsWaiting(item.state)))) {
             if (item.kind == UiCardKind.Tool && isShellToolCard(item)) {
-                return agentCardBodyDocument(item, width, theme)
+                if (!prepareOwnedCardDocument(item, width, 0)) { throw Exception("display.document_payment_required") }
+                let body = agentCardBodyDocument(item, width, theme)
+                match (retainedDisplayForCard(item)) {
+                    case Some(display) => return Document(body.lines, retainedPayment: Some(OwnedTuiDocumentPayment(display)))
+                    case None => return body }
             }
             return Document([])
         }
+        let occurrence: Int64 = if (history) { 1 } else { 0 }
+        if (!prepareOwnedCardDocument(item, width, 0, occurrence: occurrence)) { throw Exception("display.document_payment_required") }
         var body = agentCardBodyDocument(item, width, theme, archive: history)
+        match (retainedDisplayForCard(item)) {
+            case Some(display) =>
+                let payment = OwnedTuiDocumentPayment(display, occurrence: occurrence)
+                body = Document(body.lines, retainedPayment: Some(payment))
+                if (history && !payment.prepareHistoryCopies(ownedTuiDocumentConstructionInvoice(
+                    ownedTuiDocumentTextBytes(body), 0))) { throw Exception("display.history_payment_required") }
+            case None => () }
         if (item.kind == UiCardKind.Approval && approvalCardIsWaiting(item.state)) {
             let lines = ArrayList<DocumentLine>()
             for (line in body.lines) {
@@ -5630,7 +5822,7 @@ class AgentScreen <: TerminalFrameProvider {
                 lines.add(
                     DocumentLine(DocumentLineKind.Paragraph, "  e  Inspect full content", style: Style(fg: theme.muted)))
             }
-            body = Document(lines.toArray())
+            body = Document(lines.toArray(), retainedPayment: body.retainedPayment)
         }
         body
     }
@@ -5834,7 +6026,7 @@ class AgentScreen <: TerminalFrameProvider {
             }
             case None => false
         }
-        let editorFullscreen = todos.isEditing() || (ask.editorActive() && !ask.inlineEditorActive())
+        let editorFullscreen = todos.editorVisible(ui.approvalId.isSome()) || (ask.editorActive() && !ask.inlineEditorActive())
         surfaces.presentationMode(
             fullscreen: agentHubActive || planReview.isActive() || modalFullscreen || editorFullscreen
         )
@@ -5852,6 +6044,173 @@ class AgentScreen <: TerminalFrameProvider {
     }
 
 
+    public func wantsRetainedDisplayProducerRetirement(): Bool { (backend as OwnedAgentTuiBackend).isSome() }
+    public func beginRetainedDisplayProducerClosing(): Unit {
+        mailbox.beginClosing()
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => owned.beginOwnedToolDisplayProducerClosing()
+            case None => () }
+    }
+    public func noteAsyncTaskReferencesRetired(retired: RetiredAsyncTaskReferences): Unit {
+        // This proves only actual runtime callable/notifier/result fields.
+        // Initial task metadata/capacity and inherited prompt/status/session
+        // data custody remain separately OPEN; no bank payment is inferred.
+        asyncTaskReferencesRetired = retired.callableReferencesRetired() &&
+            retired.notifierAndRuntimeResultReferencesRetired() }
+    func bindActualNativeOutput(output: DirectStdOutDisplayOutput): Unit {
+        if (actualNativeOutput.isSome()) { throw Exception("display.native_output_already_bound") }
+        actualNativeOutput = Some(output)
+    }
+    func noteActualNativeProducerFramesEnded(): Unit { actualNativeProducerFramesEnded = true }
+    func actualRegistryProducer167(): ?Object { backend as Object }
+    func actualRetiredFailureProducer113(): ?OwnedFailureAgentTuiBackend113 {
+        if (!actualNativeProducerFramesEnded || actualNativeOutput.isNone() ||
+            !terminalInternalFrameReferencesRetired || !windowInternalReferencesRetired || !asyncTaskReferencesRetired) {
+            return Option<OwnedFailureAgentTuiBackend113>.None }
+        backend as OwnedFailureAgentTuiBackend113
+    }
+    func retireActualNativeOutputAndScreenReferences(): Bool {
+        if (!actualNativeProducerFramesEnded || actualNativeOutput.isNone() ||
+              !terminalInternalFrameReferencesRetired || !windowInternalReferencesRetired || !asyncTaskReferencesRetired) { return false }
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(actual) => match (RetiredOwnedTuiFailureProducerFrames113.retire(this)) {
+                case None => return false
+                case Some(retired) => if (actual.discardOwnedFailureInputsAfterProducerRetirement113(retired).isError()) {
+                    return false } }
+            case None => () }
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => if (!owned.awaitOwnedToolDisplayProducerReferencesRetired()) { return false }
+            case None => return false }
+        // Flush only the exact direct output used by the actual native
+        // producer, after all its App/Terminal/ANSI/trace method frames ended.
+        match (RetiredDirectStdOutDisplayReferences.retire(actualNativeOutput.getOrThrow())) {
+            case Some(output) => if (!output.physicallyFlushed() || !output.acknowledges(actualNativeOutput.getOrThrow())) { return false }
+            case None => return false }
+        if (!planReview.tryRetireRetainedReferences()) { return false }
+        clearActualCopiedScreenReferencesFrame()
+        // Clear the actual inherited Screen fields in their own helper. An
+        // external prompt/node/backing/callback remains its own live owner;
+        // no early task payment or global bank retirement follows from this.
+        clearInheritedScreenFieldReferencesFrame()
+        actualNativeOutput = None; true
+    }
+    private func clearInheritedScreenFieldReferencesFrame(): Unit {
+        // This production call occurs only after real native App producer,
+        // runtime callable/notifier, backend callback, Window/Terminal and
+        // exact bound StdOut retirement guards. Clear the REAL fields; do not
+        // clear a parallel holder while these original fields stay alive.
+        title = ""; initialPrompt = ""; workspaceLabel = ""
+        status = ""; taskLabel = ""; turnOwnerSubagentId = ""
+        queuedPrompts = ArrayList<QueuedPrompt>()
+        queueWithdrawalLock.lock()
+        try { completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>(); withdrawalInFlightId = "" }
+        finally { queueWithdrawalLock.unlock() }
+        runningSubagentIds = ArrayList<String>()
+        treeNodes = []; sessionNodes = []; visibleSessionNodes = []
+        sessionFilter = ""; sessionInput = ""; sessionMode = ""
+        subagentItems = []; focusedSubagentId = ""; focusedConversationLabel = ""
+        documentTitle = ""; documentBody = ""; customThemeDefinitions = []
+        themeName = ""; modelLabel = ""
+        approvalSessionLabel = ""; approvalInspectTitle = ""
+        performanceBurstInitialVisibleSignature = ""
+        working = false; mainWorking = false; initialSubmitted = true
+        // Backend/session subscribers, the caller's containers/Strings, SDK
+        // task metadata and the separate performance trace are outside this
+        // field-only retirement. Their references/payment remain OPEN.
+    }
+
+    // Source control only: exercise the same REAL private field helper and
+    // retain old backing/node aliases in this caller frame. This returns no
+    // private Screen/transport receipt, payment grant or global lifetime ACK.
+    func observeInheritedFieldClearWithoutReceipt(queued: QueuedPrompt,
+        withdrawal: CompletedQueueWithdrawal, nodes: Array<TuiSessionNode>,
+        agents: Array<TuiSubagentInfo>, pluginDocument: String,
+        themes: Array<TuiThemeDefinition>): Bool {
+        queuedPrompts.add(queued); completedQueueWithdrawals.add(withdrawal)
+        runningSubagentIds.add(agents[0].id)
+        let oldQueueBacking = queuedPrompts
+        let oldWithdrawalBacking = completedQueueWithdrawals
+        let oldRunningBacking = runningSubagentIds
+        taskLabel = queued.text; status = withdrawal.id; turnOwnerSubagentId = agents[0].id
+        withdrawalInFlightId = withdrawal.id
+        treeNodes = nodes; sessionNodes = nodes; visibleSessionNodes = nodes
+        sessionFilter = nodes[0].name; sessionInput = nodes[0].summary; sessionMode = nodes[0].workMode
+        subagentItems = agents; focusedSubagentId = agents[0].id; focusedConversationLabel = agents[0].task
+        documentTitle = "Plugins"; documentBody = pluginDocument; customThemeDefinitions = themes
+        themeName = themes[0].name; modelLabel = nodes[0].model
+        approvalSessionLabel = queued.text; approvalInspectTitle = withdrawal.id
+        performanceBurstInitialVisibleSignature = queued.text
+        clearInheritedScreenFieldReferencesFrame()
+        let realFieldsEmpty = title == "" && initialPrompt == "" && workspaceLabel == "" &&
+            status == "" && taskLabel == "" && turnOwnerSubagentId == "" &&
+            queuedPrompts.isEmpty() && completedQueueWithdrawals.isEmpty() && runningSubagentIds.isEmpty() &&
+            withdrawalInFlightId == "" && treeNodes.size == 0 && sessionNodes.size == 0 && visibleSessionNodes.size == 0 &&
+            sessionFilter == "" && sessionInput == "" && sessionMode == "" && subagentItems.size == 0 &&
+            focusedSubagentId == "" && focusedConversationLabel == "" && documentTitle == "" && documentBody == "" &&
+            customThemeDefinitions.size == 0 && themeName == "" && modelLabel == "" &&
+            approvalSessionLabel == "" && approvalInspectTitle == "" && performanceBurstInitialVisibleSignature == ""
+        // Actual old ArrayList backings still own exact external data here.
+        // Replacing Screen fields must not mutate those independent owners.
+        realFieldsEmpty && oldQueueBacking.size == 1 && oldQueueBacking[0].text == queued.text &&
+            oldWithdrawalBacking.size == 1 && oldWithdrawalBacking[0].id == withdrawal.id &&
+            oldRunningBacking.size == 1 && oldRunningBacking[0] == agents[0].id
+    }
+
+    private func clearActualCopiedScreenReferencesFrame(): Unit {
+        mailbox.clearAfterProducerRetirement()
+        match (virtualTranscriptSource) { case Some(source) => source.retireOwnedReferences(); case None => () }
+        match (virtualTranscriptView) { case Some(view) => view.retireRetainedReferences(); case None => () }
+        match (presentationAdapter) { case Some(adapter) => adapter.retireRetainedReferences(); case None => () }
+        virtualTranscriptSource = None; virtualTranscriptView = None; presentationAdapter = None
+        ui.cards.clear(); ui.cardLookupId = ""; ui.approvalId = None; ui = UiSnapshot()
+        activeOwnedToolDisplay = None; retainedCopiedToolDisplays = ArrayList<OwnedTuiToolDisplay>()
+        retainedCopiedFailureDisplays113 = ArrayList<OwnedTuiFailureDisplay113>()
+        retainedRegistryDisplays167 = ArrayList<OwnedTuiRegistryResponseDisplay167>()
+        activeRegistryDocument167 = None
+        toolBindings = ArrayList<ToolCardBinding>(); transcriptRanges = ArrayList<CardScreenRange>()
+        markdownCache = HashMap<String, MarkdownCacheEntry>()
+        activeToolCardId = ""; activeToolCallId = ""; activeToolArguments = ""; activeToolStartedAt = None
+        focusedCardId = ""; approvalToolCardId = ""; approvalInspectBody = ""; approvalInspectTitle = ""
+        documentTitle = ""; documentBody = ""; documentModalCacheKey = ""; documentModalCache = Document([])
+        modal = None; modalItems = []; setupDraft = None
+        planReview = PlanReviewController()
+        ask = AskController(); todos = TodoController(); composer = Composer(slashHints: productSlashHints())
+        attemptProjection = AttemptProjection()
+    }
+    func retireCopiedRegistry(retired: RetiredOwnedTuiScreenReferences): Unit {
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => match (owned.retireOwnedToolDisplayRegistry(retired)) {
+                case Result.Err(error) => throw Exception(error.describe())
+                case Result.Ok(_) => () }
+            case None => () }
+    }
+    public func noteInternalDisplayFrameReferencesRetired(retired: RetiredInternalDisplayFrameReferences): Unit {
+        terminalInternalFrameReferencesRetired = retired.internalReferencesRetired()
+        match (RetiredDocumentWindowReferences.retire(documentWindowCache)) {
+            case Some(window) => windowInternalReferencesRetired = window.internalReferencesRetired()
+            case None => () }
+        // transport ACK is deliberately false. Neither this internal witness
+        // nor clearing a raster closes mailbox/cards/source/history/renderer
+        // or App registration owners. They remain actually paid.
+    }
+    public func prepareRetainedFrameCopies(size: Rect): Bool { prepareRetainedFrameCopies(size, 0) }
+    public func prepareRetainedFrameCopies(size: Rect, previousCopies: Int64): Bool {
+        if (retainedCopiedToolDisplays.isEmpty() && retainedCopiedFailureDisplays113.isEmpty() && retainedRegistryDisplays167.isEmpty()) { return true }
+        var bytes: Int64 = 0
+        // The actual immutable history snapshot retains old tool cards for
+        // replay. Account all owned card data, not merely visible glyphs.
+        for (card in ui.cards where retainedDisplayForCard(card).isSome()) {
+            bytes = ownedTuiInvoiceAdd(bytes, ownedTuiCardRetainedBytes(card)) }
+        if (activeRegistryDocument167.isSome()) {
+            bytes = ownedTuiInvoiceAdd(bytes, ownedTuiInvoiceAdd(documentTitle.size, documentBody.size)) }
+        let invoice = ownedTuiInvoiceAdd(previousCopies,
+            ownedTuiFrameConstructionInvoice(size.width, size.height, bytes))
+        if (!retainedCopiedToolDisplays.isEmpty()) {
+            return retainedCopiedToolDisplays[retainedCopiedToolDisplays.size - 1].prepareRenderCopies(4, invoice).isOk() }
+        if (!retainedCopiedFailureDisplays113.isEmpty()) {
+            return retainedCopiedFailureDisplays113[retainedCopiedFailureDisplays113.size - 1].prepareCardRenderCopies113(4, invoice, 0).isOk() }
+        retainedRegistryDisplays167[retainedRegistryDisplays167.size - 1].prepareCardRenderCopies113(4, invoice, 0).isOk()
+    }
     public func prepareFrame(size: Rect): PresentationFrame {
         let mode = presentationMode()
         let mouseCapture = mouseCaptureFor(mode)
@@ -5973,7 +6332,7 @@ class AgentScreen <: TerminalFrameProvider {
             renderAgentHub(canvas, surface, theme)
             return
         }
-        if (todos.isEditing()) {
+        if (todos.editorVisible(ui.approvalId.isSome())) {
             let surface = surfaces.fullscreenArea(margin: 1)
             surfaces.activate(SurfaceOwner.Todo, SurfacePlacement.Fullscreen, surface)
             surfaces.focus(SurfaceOwner.Todo)
@@ -6448,6 +6807,14 @@ class AgentScreen <: TerminalFrameProvider {
                         sessionInput
                     )
                 } else if (isDocument) {
+                    match (activeRegistryDocument167) {
+                        case Some(display) =>
+                            let invoice = ownedTuiDocumentConstructionInvoice(
+                                ownedTuiInvoiceAdd(documentTitle.size, documentBody.size),
+                                ownedTuiDocumentTextBytes(documentModalCache))
+                            if (!display.prepareCardRenderCopies113(0, invoice, 3).isOk()) {
+                                throw Exception("display.registry_document_payment_required") }
+                        case None => () }
                     let key = documentRevision.toString()
                     if (key != documentModalCacheKey) {
                         documentModalCacheKey = key
@@ -6456,7 +6823,10 @@ class AgentScreen <: TerminalFrameProvider {
                             theme: productMarkdownTheme(theme)
                         )
                     }
-                    documentModalCache
+                    match (activeRegistryDocument167) {
+                        case Some(display) => Document(documentModalCache.lines,
+                            retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: 3)))
+                        case None => documentModalCache }
                 } else {
                     modalBody(modalItems, modalSelected, theme)
                 }
@@ -9557,7 +9927,7 @@ class AgentScreen <: TerminalFrameProvider {
         let mouse = MouseEvent(MouseKind.Scroll, MouseButton.WheelUp, 8, 5)
 
         let interactive = handleInteractive(Event.Mouse(mouse))
-        let interactiveCaptured = !interactive.renderRequested && scrollOffset == 0 && todos.isEditing()
+        let interactiveCaptured = !interactive.renderRequested && scrollOffset == 0 && todos.editorVisible(ui.approvalId.isSome())
         let _ = update(Event.Mouse(mouse))
         // update() drains the asynchronous mailbox before routing interactive
         // input. A concurrently completed background action can therefore
@@ -9565,7 +9935,7 @@ class AgentScreen <: TerminalFrameProvider {
         // mouse event. Ownership is proven by the editor remaining active and
         // the underlying transcript not scrolling; renderRequested describes
         // the whole frame, not just the mouse route.
-        let directCaptured = scrollOffset == 0 && todos.isEditing()
+        let directCaptured = scrollOffset == 0 && todos.editorVisible(ui.approvalId.isSome())
 
         todos.restoreProbeState(previousTodoState)
         planReview.restoreProbe(previousPlanState)

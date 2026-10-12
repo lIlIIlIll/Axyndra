@@ -4,11 +4,12 @@ import yjson_support.*
 
 import yjson.*
 
+import agent_host_runtime.*
+import agent_extension_runtime.reserveNativeControlMetadata
 import agent_client.*
 import agent_core.*
 import agent_domain.*
 import agent_runtime.*
-import model_adapters.*
 import task_runtime.*
 import tool_runtime.*
 import std.collection.*
@@ -59,12 +60,13 @@ public class ProductSubagentSnapshot {
         toolCount: Int64,
         currentTool: String,
         durationMillis: Int64,
-        error!: String = ""
+        error!: String = "",
+        agentSource!: String = "bundled"
     ) {
         this.id = id
         this.index = index
         this.agent = agent
-        this.agentSource = "bundled"
+        this.agentSource = agentSource
         this.description = description
         this.status = status
         this.task = task
@@ -132,6 +134,7 @@ class ProductSubagentState {
     let id: String
     let index: Int64
     let agent: String
+    var agentSource: String
     let description: String
     let task: String
     let assignment: String
@@ -158,10 +161,27 @@ class ProductSubagentState {
     // A live delegation authority is not reconstructible from a task snapshot.
     let budgetAuthority: ?ToolInvocationContext
     var budgetParentRunId: RunId
+    var workflowPin: ?ProductWorkflowPin = None
+    // Original, non-serializable completion custody. Snapshots keep only its
+    // source identity; restart never reconstructs an executable continuation.
+    var pluginAdmission111: ?HostPluginChildAdmission111 = None
+    // The immutable original Main relationship never becomes authority for
+    // another incarnation. Current budget/start custody may belong to a later
+    // actual peer.send parent; the first parent's ACK proof stays separate.
+    var pluginOriginalAdmission111: ?HostPluginChildAdmission111 = Option<HostPluginChildAdmission111>.None
+    var pluginCurrentBudgetAuthority111: ?ToolInvocationContext = Option<ToolInvocationContext>.None
+    var pluginCompletion111: ?AgentValue = None
+    var pluginCompletionPending111: ?AgentValue = None
+    var pluginProjectionPayment151: ?HostPaidValueProjection151 = Option<HostPaidValueProjection151>.None
+    var pluginCompletionDone111 = false
+    var pluginCancellationRequested111 = false
+    var pluginStartAdmitted111 = false
+    let pluginWorkers111 = ArrayList<ProductPluginChildPhysicalWorker111>()
+    var pluginJobKey111: ?ProductAsyncJobKey = None
     var launchInProgress: Bool = false
     var executionInProgress: Bool = false
     var finishing: Bool = false
-    let settlementLock = Mutex()
+    let settlementLock:Mutex
 
     init(
         id: String,
@@ -177,16 +197,20 @@ class ProductSubagentState {
         parentSessionId: SessionId,
         parentToolCallId: String,
         depth: Int64,
+        agentSource!: String = "bundled",
         capabilities!: CapabilitySet = CapabilitySet(),
         capabilityCeilingKnown!: Bool = true,
         budgetAuthority!: ?ToolInvocationContext = None,
         startedAt!: Int64 = 0,
         status!: String = "running",
-        lastUpdate!: Int64 = 0
+        lastUpdate!: Int64 = 0,
+        settlementLock111!: ?Mutex = Option<Mutex>.None
     ) {
+        this.settlementLock=settlementLock111 ?? Mutex()
         this.id = id
         this.index = index
         this.agent = agent
+        this.agentSource = agentSource
         this.description = description
         this.task = task
         this.assignment = assignment
@@ -227,7 +251,8 @@ class ProductSubagentState {
             toolCount,
             currentTool,
             max(0, lastUpdate - startedAt),
-            error: error
+            error: error,
+            agentSource: agentSource
         )
     }
 }
@@ -253,6 +278,8 @@ class ProductYieldSection {
 }
 
 class ProductYieldState {
+    // Private CAS data; it cannot recover a child owner or authorize a write.
+    var revision150: Int64 = 0
     let runId: RunId
     let sections = ArrayList<ProductYieldSection>()
     var terminal: ?AgentValue = None
@@ -264,46 +291,7 @@ class ProductYieldState {
     }
 }
 
-class ProductTaskSpec {
-    let name: String
-    let agent: String
-    let task: String
-    let effort: String
-    let outputSchema: ?AgentValue
-    let schemaMode: String
 
-    init(
-        name: String,
-        agent: String,
-        task: String,
-        effort: String,
-        outputSchema: ?AgentValue,
-        schemaMode: String
-    ) {
-        this.name = name
-        this.agent = agent
-        this.task = task
-        this.effort = effort
-        this.outputSchema = outputSchema
-        this.schemaMode = schemaMode
-    }
-}
-
-class ProductTaskBatch {
-    let context: String
-    let specs: Array<ProductTaskSpec>
-    let batch: Bool
-
-    init(
-        context: String,
-        specs: Array<ProductTaskSpec>,
-        batch: Bool
-    ) {
-        this.context = context
-        this.specs = specs
-        this.batch = batch
-    }
-}
 
 class ProductSubagentReservation {
     let id: String
@@ -315,35 +303,6 @@ class ProductSubagentReservation {
     }
 }
 
-class ProductTaskResult {
-    let snapshot: ProductSubagentSnapshot
-    let exitCode: Int64
-    let output: AgentValue
-    let stderr: String
-    let schemaStatus: String
-    let schemaError: String
-    let schemaMode: String
-
-    init(
-        snapshot: ProductSubagentSnapshot,
-        exitCode: Int64,
-        output: AgentValue,
-        stderr!: String = "",
-        schemaStatus!: String = "unavailable",
-        schemaError!: String = "",
-        schemaMode!: String = "permissive"
-    ) {
-        this.snapshot = snapshot
-        this.exitCode = if (snapshot.status == "cancelled" || snapshot.status == "recovery_required") { 1 } else { exitCode }
-        this.output = output
-        this.stderr = if (snapshot.status == "cancelled" || snapshot.status == "recovery_required") {
-            if (snapshot.error != "") { snapshot.error } else { "subagent ended as " + snapshot.status }
-        } else { stderr }
-        this.schemaStatus = schemaStatus
-        this.schemaError = schemaError
-        this.schemaMode = schemaMode
-    }
-}
 
 public class ProductAsyncJobSnapshot {
     public let id: String
@@ -405,7 +364,6 @@ public class ProductAsyncJobEvent {
 
 public type ProductAsyncJobEventSink = (ProductAsyncJobEvent) -> Unit
 
-type ProductBashJobAction = (PreparedToolInvocation, OperationId) -> Result<ToolResult>
 
 class ProductAsyncJobListener {
     let id: Int64
@@ -448,6 +406,7 @@ class ProductHubMessageState {
     let rootSessionId: SessionId
     let waitCallId: String
     let reviveTarget: Bool
+    let deliveryText111: ?String
     var consumed = false
 
     init(
@@ -456,6 +415,7 @@ class ProductHubMessageState {
         rootSessionId: SessionId,
         waitCallId!: String = "",
         reviveTarget!: Bool = false,
+        deliveryText111!: ?String = Option<String>.None,
         consumed!: Bool = false
     ) {
         this.snapshot = snapshot
@@ -463,6 +423,7 @@ class ProductHubMessageState {
         this.rootSessionId = rootSessionId
         this.waitCallId = waitCallId
         this.reviveTarget = reviveTarget
+        this.deliveryText111 = deliveryText111
         this.consumed = consumed
     }
 }
@@ -550,6 +511,7 @@ class ProductAsyncJobState {
     var executing = false
     var settlementReceiptId = ""
     var settlementInjected = false
+    var projectionPayment151: ?HostPaidValueProjection151 = Option<HostPaidValueProjection151>.None
 
     init(
         id: String,
@@ -614,6 +576,29 @@ class ProductAsyncJobState {
     }
 }
 
+class ProductPeerWaitSelection171 { var value: ?ProductHubMessageState = None }
+
+class ProductJobCancelCapture172 {
+    let admission: HostPluginChildAdmission111
+    let meter: HostPaidValueProjection151
+    var failure: ?AgentError = None<AgentError>
+    init(admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151) { this.admission=admission; this.meter=meter }
+    func capture(error: AgentError): Unit {
+        let paid=admission.retainFailure172(error)
+        if (failure.isNone()) { failure=Some(paid) }
+    }
+    // emitJobEvent allocates ONE event/snapshot and passes its same reference
+    // to every sink. This charge covers the extra listener-array references and
+    // fixed wrappers. The complete graph is separately paid once by the actual
+    // retained snapshot invoice; arbitrary legacy sink copies/mutation remain
+    // outside a refundable alias protocol, never acknowledged by callback return.
+    func fundSinkSnapshot(count: Int64): Unit {
+        if (count<0 || count>(Int64.Max-16384)/2048) { throw LogicalJsonPayloadError("cancel sink invoice overflow") }
+        meter.fundAdditional151(8192,count*2+8)
+        admission.retainWorkerMetadata111(count*2048+16384)
+    }
+}
+
 public class ProductTaskRuntime {
     private let lock = Mutex()
     private let records = ArrayList<ProductSubagentState>()
@@ -635,7 +620,15 @@ public class ProductTaskRuntime {
     private let childBudgetOrder = ArrayList<String>()
     private let childBudgetLeases = HashMap<String, ChildBudgetLease>()
     private let childUsage = HashMap<String, ExecutionUsage>()
+    // Live cancellation/cleanup handles only. Facts and recovery remain in the
+    // existing jobs journal, Runtime and Operation Store.
+    private let managedJobs = HashMap<String, ProductManagedJobHandle>()
+    // Raw background/snapshot readers currently have no lease-ACK contract.
+    // Keep their exact data payments rooted; worker completion/prune/GC never
+    // refunds them. Typed background consumption/retirement remains OPEN.
+    private let projectionUnretired151 = ArrayList<HostPaidValueProjection151>()
     private let ownedWorkers = ArrayList<Future<Unit>>()
+    private let ownedPluginWorkers111 = ArrayList<ProductPluginChildPhysicalWorker111>()
     private var closing = false
     private var listenerCounter: Int64 = 0
     private var jobListenerCounter: Int64 = 0
@@ -667,7 +660,8 @@ public class ProductTaskRuntime {
                 value.stateRoot,
                 value.workspace.rootPath(),
                 shellNetworkMode: value.shellNetworkMode,
-                sandboxCaBundle: value.sandboxCaBundle
+                sandboxCaBundle: value.sandboxCaBundle,
+                supportLegacy180:allowUnsafeDirectLaunchForTests
             ))
             if (taskPersistence.isNone()) {
                 taskPersistence = Some(persistence)
@@ -684,6 +678,66 @@ public class ProductTaskRuntime {
         }
     }
 
+    // Only this supervisor's actual spawn result enters the private state.
+    // This observer is called outside that future's action. A worker finally
+    // flag, a terminal Run, or a listener's callback return is not this proof.
+    private func pluginWorkersReturnedLocked111(state: ProductSubagentState): Bool {
+        if (state.pluginWorkers111.isEmpty()) { return false }
+        for (worker in state.pluginWorkers111) {
+            if (!worker.returned()) { return false }
+        }
+        true
+    }
+
+    private func startPluginWorker111<T>(state: ProductSubagentState,
+        build: () -> (() -> Result<T>), idle!: Bool = false,
+        cleanup!: Bool = false): Result<ProductPluginChildWorkerResult111<T>> {
+        lock.lock()
+        try {
+            let actual = findSubagentLocked(state.id)
+            if (actual.isNone() || !refEq(actual.getOrThrow(), state) ||
+                state.pluginAdmission111.isNone() || (closing && !cleanup)) {
+                return taskError("child.worker_owner_changed", "actual child worker custody is unavailable") }
+            if (idle && (state.launchInProgress || state.executionInProgress ||
+                !pluginWorkersReturnedLocked111(state))) {
+                return taskError("child.execution_in_progress", "actual prior child worker has not returned") }
+            if (ownedPluginWorkers111.size > (Int64.Max - 16384) / 128 ||
+                state.pluginWorkers111.size > (Int64.Max - 16384) / 128) {
+                return taskError("child.worker_metadata_overflow", "actual worker metadata invoice overflow") }
+            try {
+                // Both growing lists, holder, closure and future are paid
+                // before construction. Existing request objects are retained
+                // by their original owner; no data payment is released here.
+                state.pluginAdmission111.getOrThrow().retainWorkerMetadata111(
+                    16384 + ownedPluginWorkers111.size * 64 + state.pluginWorkers111.size * 64)
+                let result = ProductPluginChildWorkerResult111<T>()
+                // Register paid custody BEFORE spawn. A failed list growth or
+                // action factory cannot leave an already running orphan.
+                state.pluginWorkers111.add(result.physical)
+                ownedPluginWorkers111.add(result.physical)
+                let action = build()
+                let worker = spawn { result.run(action) }
+                result.physical.worker = Some(worker)
+                // The action's first Task access waits for this lock. Its
+                // exact future is installed before any claim can observe it.
+                Result.Ok(result)
+            } catch (_: Exception) {
+                taskError("child.worker_start_failed", "actual child worker could not be supervised")
+            }
+        } finally { lock.unlock() }
+    }
+
+    private func pluginChildState111(id: String): Result<ProductSubagentState> {
+        lock.lock()
+        try {
+            match (findSubagentLocked(id)) {
+                case Some(state) =>
+                    if (state.pluginAdmission111.isSome()) { Result.Ok(state) }
+                    else { taskError("child.owner_missing", "actual installed child custody is unavailable") }
+                case None => taskError("child.owner_missing", "actual installed child custody is unavailable")
+            }
+        } finally { lock.unlock() }
+    }
     private func startOwnedWorker(action: () -> Unit): Result<Unit> {
         lock.lock()
         try {
@@ -694,17 +748,35 @@ public class ProductTaskRuntime {
                     "task runtime is closing and cannot start background work"
                 ))
             }
-            ownedWorkers.add(spawn { action() })
-            Result.Ok(())
+            try {
+                ownedWorkers.add(spawn { action() })
+                Result.Ok(())
+            } catch (_: Exception) {
+                taskError("task.worker_start_failed", "background worker could not be started")
+            }
         } finally {
             lock.unlock()
         }
+    }
+
+    // Used only to preserve a real new continuation's backend through failed
+    // shutdown. It is observation of this actual owner, never a loaded DTO.
+    func hasPluginChildDebt111(): Bool {
+        lock.lock()
+        try {
+            for (state in records where state.pluginAdmission111.isSome()) {
+                if (!state.pluginCompletionDone111 || childBudgetLeases.get(state.id).isSome() ||
+                    state.launchInProgress || state.executionInProgress || !pluginWorkersReturnedLocked111(state)) { return true }
+            }
+            false
+        } finally { lock.unlock() }
     }
 
     public func close(): Result<Unit> {
         let targets = ArrayList<ProductSubagentSnapshot>()
         let jobTargets = ArrayList<ProductAsyncJobKey>()
         let workers: Array<Future<Unit>>
+        let pluginWorkers111: Array<ProductPluginChildPhysicalWorker111>
         let supervisor: ?ProductProcessSupervisor
         let runtime: ?ProductRuntime
         lock.lock()
@@ -718,6 +790,7 @@ public class ProductTaskRuntime {
                 jobTargets.add(job.key())
             }
             workers = ownedWorkers.toArray()
+            pluginWorkers111 = ownedPluginWorkers111.toArray()
             supervisor = processSupervisor
             runtime = product
         } finally {
@@ -725,7 +798,10 @@ public class ProductTaskRuntime {
         }
         match (runtime) {
             case Some(value) =>
-                for (target in targets) { let _ = value.client.cancel(target.runId) }
+                for (target in targets) {
+                    if (isPluginChild111(target.id)) { let _ = cancelPluginChild111(value, target.id) }
+                    else { let _ = value.client.cancel(target.runId) }
+                }
                 cancelJobKeys(value, jobTargets.toArray())
             case None => ()
         }
@@ -741,6 +817,23 @@ public class ProductTaskRuntime {
                 if (firstError == "") { firstError = error.message }
             }
         }
+        for (worker in pluginWorkers111) {
+            try { worker.collect() }
+            catch (error: Exception) { if (firstError == "") { firstError = error.message } }
+        }
+        retryManagedCleanup()
+        retryPluginChildCompletions111()
+        lock.lock()
+        try {
+            if (!managedJobs.isEmpty() && firstError == "") {
+                firstError = "managed job cleanup remains quarantined; its budget and resource handles are retained"
+            }
+            for (state in records where state.pluginAdmission111.isSome()) {
+                if ((!state.pluginCompletionDone111 || childBudgetLeases.get(state.id).isSome()) && firstError == "") {
+                    firstError = "plugin child completion or budget custody remains unsettled"
+                }
+            }
+        } finally { lock.unlock() }
         if (firstError == "") {
             Result.Ok(())
         } else {
@@ -888,19 +981,6 @@ public class ProductTaskRuntime {
         rememberTaskPersistenceFailureLocked(state.parentSessionId, error)
     }
 
-    func recoveryWarningsFor(context: ToolInvocationContext): Array<String> {
-        lock.lock()
-        try {
-            let root = hubIdentityLocked(context).rootSessionId.value
-            let values = ArrayList<String>()
-            for (warning in recoveryWarnings where warning.rootSessionId == root || warning.rootSessionId == "unknown") {
-                values.add(warning.text())
-            }
-            values.toArray()
-        } finally {
-            lock.unlock()
-        }
-    }
 
     func recoveryWarningsForSession(sessionId: SessionId): Array<String> {
         lock.lock()
@@ -972,22 +1052,15 @@ public class ProductTaskRuntime {
                     "restored child has no live parent budget authority; delegate a new task")
             }
         } finally { lock.unlock() }
-        match (sendHubMessage(
+        match (deliverSubagentMessage196(
             ToolInvocationContext(
                 RunId("tui-hub-" + suffix),
                 rootSessionId,
                 CapabilitySet()
             ),
-            ToolCall(
-                "tui-hub-" + suffix,
-                "hub",
-                objectValue([])
-            ),
             subagentId,
             text,
             "",
-            false,
-            0,
             budgetAuthority: authority
         )) {
             case Result.Ok(_) => Result.Ok(())
@@ -1004,6 +1077,9 @@ public class ProductTaskRuntime {
             case Result.Err(error) => return Result.Err(error)
         }
         let target = runningSubagent(rootSessionId, subagentId)
+        if (target.isSome() && isPluginChild111(subagentId)) {
+            return cancelPluginChild111(runtime, subagentId)
+        }
         match (target) {
             case None => Result.Ok(())
             case Some(value) =>
@@ -1032,6 +1108,21 @@ public class ProductTaskRuntime {
     }
 
     public func decideSubagentApproval(
+        rootSessionId: SessionId,
+        subagentId: String,
+        decision: ApprovalDecision
+    ): Result<Unit> {
+        if (!isPluginChild111(subagentId)) {
+            return decideSubagentApprovalAction111(rootSessionId, subagentId, decision) }
+        let state = match (pluginChildState111(subagentId)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let stage = match (startPluginWorker111<Unit>(state,
+            { => { => decideSubagentApprovalAction111(rootSessionId, subagentId, decision) } }, idle: true)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        stage.collect()
+    }
+
+    private func decideSubagentApprovalAction111(
         rootSessionId: SessionId,
         subagentId: String,
         decision: ApprovalDecision
@@ -1081,6 +1172,8 @@ public class ProductTaskRuntime {
             )
         }
         try {
+            match (validatePluginChildContinuation111(subagentId)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let _ = tasks.transition(TaskId(subagentId), TaskStatus.Running)
             match (childRunAction(subagentId, { => runtime.client.decide(
                 request,
@@ -1222,208 +1315,18 @@ public class ProductTaskRuntime {
         )
     }
 
-    public func executeTask(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> {
-        let batch = match (parseProductTaskBatch(call)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Ok(
-                ToolResult(
-                    call.callId,
-                    objectValue(
-                        [
-                            ValueField("results", listValue([])),
-                            ValueField("error", textValue(error.message))
-                        ]
-                    ),
-                    isError: true
-                )
-            )
-        }
-        if (batch.batch) {
-            return executeTaskBatch(context, call, batch)
-        }
-        let spec = batch.specs[0]
-        if (asyncEnabled && !productAgentBlocks(spec.agent)) {
-            return startBackgroundTask(
-                context,
-                call,
-                spec,
-                sharedContext: batch.context
-            )
-        }
-        let result = match (runTask(
-            context,
-            call,
-            spec,
-            sharedContext: batch.context
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Ok(
-                ToolResult(
-                    call.callId,
-                    objectValue(
-                        [
-                            ValueField("results", listValue([])),
-                            ValueField("error", textValue(error.message))
-                        ]
-                    ),
-                    isError: true
-                )
-            )
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("results", listValue([productTaskResultValue(result)])),
-                        ValueField("totalDurationMs", integerValue(result.snapshot.durationMillis))
-                    ]
-                ),
-                isError: result.exitCode != 0
-            )
-        )
-    }
 
-    private func executeTaskBatch(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        batch: ProductTaskBatch
-    ): Result<ToolResult> {
-        let started = nowMillis()
-        let inline = ArrayList<ProductTaskSpec>()
-        let progress = ArrayList<AgentValue>()
-        let asyncIds = ArrayList<String>()
-        if (asyncEnabled) {
-            for (spec in batch.specs) {
-                if (productAgentBlocks(spec.agent)) {
-                    inline.add(spec)
-                } else {
-                    let launched = match (startBackgroundTask(
-                        context,
-                        call,
-                        spec,
-                        sharedContext: batch.context
-                    )) {
-                        case Result.Ok(value) => value
-                        case Result.Err(error) => return Result.Err(error)
-                    }
-                    let rows = launched.output.field("progress").getOrThrow().items
-                    for (row in rows) {
-                        progress.add(row)
-                        asyncIds.add(row.field("id").getOrThrow().text)
-                    }
-                }
-            }
-        } else {
-            inline.add(all: batch.specs)
-        }
-        let inlineValues = ArrayList<AgentValue>()
-        var failed = false
-        let inlineResults = runInlineBatch(
-            context,
-            call,
-            inline.toArray(),
-            batch.context
-        )
-        for (result in inlineResults) {
-            match (result) {
-                case Result.Ok(value) =>
-                    inlineValues.add(productTaskResultValue(value))
-                    if (value.exitCode != 0) {
-                        failed = true
-                    }
-                case Result.Err(error) =>
-                    failed = true
-                    inlineValues.add(
-                        objectValue(
-                            [
-                                ValueField("exitCode", integerValue(1)),
-                                ValueField("error", textValue(error.message))
-                            ]
-                        )
-                    )
-            }
-        }
-        let fields = ArrayList<ValueField>()
-        fields.add(
-            ValueField(
-                "results",
-                listValue(inlineValues.toArray())
-            )
-        )
-        fields.add(
-            ValueField(
-                "totalDurationMs",
-                integerValue(max(0, nowMillis() - started))
-            )
-        )
-        fields.add(
-            ValueField(
-                "progress",
-                listValue(progress.toArray())
-            )
-        )
-        if (!asyncIds.isEmpty()) {
-            fields.add(
-                ValueField(
-                    "async",
-                    objectValue(
-                        [
-                            ValueField("state", textValue("running")),
-                            ValueField("jobId", textValue(asyncIds[0])),
-                            ValueField("type", textValue("task")),
-                            ValueField(
-                                "jobIds",
-                                taskStringValues(asyncIds.toArray())
-                            )
-                        ]
-                    )
-                )
-            )
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(fields.toArray()),
-                isError: failed
-            )
-        )
-    }
 
-    private func runInlineBatch(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        specs: Array<ProductTaskSpec>,
-        sharedContext: String
-    ): Array<Result<ProductTaskResult>> {
-        let results = ArrayList<Result<ProductTaskResult>>()
-        var start: Int64 = 0
-        while (start < specs.size) {
-            let end = min(specs.size, start + 4)
-            let futures = ArrayList<Future<Result<ProductTaskResult>>>()
-            for (index in start..end) {
-                let spec = specs[index]
-                futures.add(spawn {
-                    runTask(
-                        context,
-                        call,
-                        spec,
-                        sharedContext: sharedContext
-                    )
-                })
-            }
-            for (future in futures) {
-                results.add(future.get())
-            }
-            start = end
-        }
-        results.toArray()
-    }
+
+
+
 
     public func jobsFor(sessionId: SessionId): Array<ProductAsyncJobSnapshot> {
+        // A managed worker can finish before its real resource cleanup ACK.
+        // Observe that ACK outside the jobs lock before returning cached state;
+        // retry only releases the cleanup owner, never Unknown effect or budget.
+        retryManagedCleanup()
+        retryPluginChildCompletions111()
         lock.lock()
         try {
             let values = ArrayList<ProductAsyncJobSnapshot>()
@@ -1436,129 +1339,184 @@ public class ProductTaskRuntime {
         }
     }
 
-    func startBashJob(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation,
-        command: String,
-        action: ProductBashJobAction
-    ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
-        let job: ProductAsyncJobState
+    func startManagedJob(vnext: ProductVnextControl, context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, acknowledged: () -> Bool): Result<ToolResult> {
+        if (!asyncEnabled || !context.capabilities.allows(CapabilityKind.Delegate, resource: "managed-job") ||
+            !isManagedJobLaunchPlan(prepared.operationPlan)) {
+            return taskError("task.managed_job_denied", "managed jobs require explicit delegation and an approved frozen plan") }
+        let reservation = match (vnext.reserveManagedJob(context, prepared)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let declaration = reservation.binding.declaration
+        // This Task source cannot request a model or delegate again. Positive
+        // model-token minima are descriptor constraints, refunded at zero use.
+        let budget = ExecutionBudget(maxTurns: 1, maxModelRequests: 1, maxDrainModelRequests: 1,
+            maxToolCalls: declaration.maxToolCalls, maxConcurrentTools: 1, maxInputTokens: 1, maxOutputTokens: 1,
+            maxTotalInputTokens: 1, maxTotalOutputTokens: 1, maxCostMicros: if (context.budget.maxCostMicros > 0) { 1 } else { 0 },
+            maxChildren: 0, maxDepth: 1, maxConcurrentChildren: 1,
+            deadlineMillis: declaration.deadlineMillis, processLimits: context.budget.processLimits)
+        match (reserveChildBudget(context, declaration.jobId, budget)) {
+            case Result.Err(error) => reservation.cancel(); reservation.detachUnclaimedParent(); return Result.Err(error); case Result.Ok(_) => () }
+        let handle = ProductManagedJobHandle(reservation, budget, ProductIds().nextOperationId(), acknowledged)
         let key: ProductAsyncJobKey
-        let operationId: OperationId
+        let snapshot: ProductAsyncJobSnapshot
         lock.lock()
         try {
-            let previousJobs = jobs.toArray()
-            let previousJobCounter = jobCounter
             var running: Int64 = 0
-            for (value in jobs where value.status == "running") {
-                running += 1
-            }
-            if (running >= 15) {
-                return taskError<ToolResult>(
-                    "async.capacity",
-                    "background job limit reached (15)"
-                )
-            }
+            for (value in jobs where value.status == "running") { running += 1 }
+            if (closing || running >= 15 || managedJobs.contains(declaration.jobId)) {
+                reservation.cancel(); reservation.detachUnclaimedParent()
+                let _ = settleManagedBudgetLocked(declaration.jobId, ExecutionUsage())
+                return taskError("async.capacity", "managed job capacity is unavailable") }
             jobCounter += 1
-            let id = "bash-" + nowMillis().toString() + "-" + jobCounter.toString()
-            operationId = prepared.operationId
-            job = ProductAsyncJobState(
-                id,
-                "",
-                "bash",
-                command,
-                context.sessionId,
-                hubIdentityLocked(context).rootSessionId,
-                context.runId,
-                jobCounter,
-                parentToolCallId: call.callId,
-                operationId: operationId.value
-            )
-            jobs.add(job)
-            key = job.key()
-            pruneJobsLocked()
+            let job = ProductAsyncJobState(declaration.jobId, declaration.runId.value, "managed", prepared.call.name,
+                context.sessionId, hubIdentityLocked(context).rootSessionId, context.runId, jobCounter,
+                parentToolCallId: prepared.call.callId, operationId: handle.operationId.value)
+            jobs.add(job); managedJobs[job.id] = handle; key = job.key()
             match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
                 case Result.Err(error) =>
-                    jobs.clear()
-                    jobs.add(all: previousJobs)
-                    jobCounter = previousJobCounter
-                    rememberTaskPersistenceFailureLocked(job.rootSessionId, error)
-                    return Result.Err(error)
-            }
-            // The executing marker is durable before the shell action can
-            // perform any external side effect.
-            job.executing = true
-            match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    markJobPersistenceRecoveryLocked(job, error)
-                    let _ = persistRootLocked(job.rootSessionId)
-                    return Result.Err(error)
-            }
-        } finally {
-            lock.unlock()
-        }
-        emitJobEvent("started", job.snapshot())
-        match (startOwnedWorker({ =>
-            if (jobCanStart(key)) {
-                finishBackgroundBash(
-                    context,
-                    call,
-                    key,
-                    action(prepared, operationId)
-                )
-            }
-        })) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("jobId", textValue(job.id)),
-                        ValueField("status", textValue("running")),
-                        ValueField("type", textValue("bash")),
-                        ValueField("command", textValue(command)),
-                        ValueField(
-                            "async",
-                            objectValue(
-                                [
-                                    ValueField("state", textValue("running")),
-                                    ValueField("jobId", textValue(job.id)),
-                                    ValueField("type", textValue("bash"))
-                                ]
-                            )
-                        )
-                    ]
-                )
-            )
-        )
+                    reservation.cancel(); reservation.detachUnclaimedParent(); managedJobs.remove(job.id)
+                    let _ = settleManagedBudgetLocked(job.id, ExecutionUsage())
+                    markJobPersistenceRecoveryLocked(job, error); return Result.Err(error)
+                case Result.Ok(_) => () }
+            snapshot = job.snapshot()
+        } finally { lock.unlock() }
+        match (startOwnedWorker({ => runManagedJob(vnext, context, prepared.call, key, handle) })) {
+            case Result.Err(error) =>
+                reservation.cancel(); finishManagedJob(context, prepared.call, key, handle,
+                    ProductManagedJobExecution(Result.Err(error), ExecutionUsage(), true, handle.operationId))
+                return Result.Err(error)
+            case Result.Ok(_) => () }
+        emitJobEvent("started", snapshot)
+        Result.Ok(reservation.launchResult())
     }
 
-    func sendHubMessage(
+    private func runManagedJob(vnext: ProductVnextControl, context: ToolInvocationContext,
+        call: ToolCall, key: ProductAsyncJobKey, handle: ProductManagedJobHandle): Unit {
+        var admitted = false
+        let outcome = try {
+            var failure: ?AgentError = None
+            while (true) {
+                match (vnext.managedJobLaunchReady(handle.reservation)) {
+                    case Result.Err(error) => failure = Some(error); break
+                    case Result.Ok(true) => break
+                    case Result.Ok(false) => sleep(Duration.millisecond * 5) }
+            }
+            match (failure) { case Some(error) => ProductManagedJobExecution(Result.Err(error), ExecutionUsage(), true, handle.operationId)
+                case None => match (handle.reservation.claim()) {
+                    case Result.Err(error) => ProductManagedJobExecution(Result.Err(error), ExecutionUsage(), true, handle.operationId)
+                    case Result.Ok(admission) =>
+                        handle.admission = Some(admission); admitted = true
+                        let allowed = markManagedJobExecuting(key)
+                        if (allowed.isError()) {
+                            admission.cancel()
+                            ProductManagedJobExecution(Result.Err(allowed.error().getOrThrow()), ExecutionUsage(), true, handle.operationId)
+                        } else { vnext.executeManagedJob(admission, context, handle.budget, handle.operationId) }
+                } }
+        } catch (_: Exception) {
+            handle.reservation.cancel()
+            ProductManagedJobExecution(Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "task.managed_job_worker_unknown", "managed job worker requires reconciliation")),
+                handle.budget.snapshot(), !admitted, handle.operationId)
+        }
+        finishManagedJob(context, call, key, handle, outcome)
+    }
+
+    private func markManagedJobExecuting(key: ProductAsyncJobKey): Result<Unit> {
+        lock.lock()
+        try {
+            let job = findJobLocked(key).getOrThrow()
+            if (closing || job.status != "running") { return taskError("task.managed_job_cancelled", "managed job was cancelled before execution") }
+            job.executing = true; job.updatedAt = nowMillis()
+            persistRootLocked(job.rootSessionId)
+        } finally { lock.unlock() }
+    }
+
+    private func retryManagedCleanup(): Unit {
+        let pending = ArrayList<(String, ProductManagedJobHandle)>()
+        lock.lock()
+        try { for ((id, handle) in managedJobs) {
+            var recovering = false
+            for (job in jobs where job.id == id && job.status == "recovery_required") { recovering = true }
+            if (recovering) { pending.add((id, handle)) }
+        } } finally { lock.unlock() }
+        for ((id, handle) in pending) {
+            let acknowledged = try { handle.acknowledged() } catch (_: Exception) { false }
+            if (!acknowledged) { continue }
+            lock.lock()
+            try {
+                managedJobs.remove(id)
+                for (job in jobs where job.id == id && job.status == "recovery_required") {
+                    if (job.executing) {
+                        job.executing = false
+                        job.updatedAt = nowMillis()
+                        let _ = persistRootLocked(job.rootSessionId)
+                    }
+                }
+            } finally { lock.unlock() }
+            match (handle.admission) { case Some(value) => value.detachParentAfterCleanup(); case None => handle.reservation.detachUnclaimedParent() }
+        }
+    }
+
+    private func settleManagedBudgetLocked(id: String, usage: ExecutionUsage): Result<Unit> {
+        let lease = match (childBudgetLeases.get(id)) { case None => return Result.Ok(()); case Some(value) => value }
+        childUsage[id] = usage
+        let settled = lease.settle(usage)
+        if (settled.isOk()) { childBudgetLeases.remove(id); childUsage.remove(id) }
+        match (settled) { case Result.Err(error) => Result.Err(error); case Result.Ok(_) => Result.Ok(()) }
+    }
+
+    private func finishManagedJob(context: ToolInvocationContext, call: ToolCall, key: ProductAsyncJobKey,
+        handle: ProductManagedJobHandle, outcome: ProductManagedJobExecution): Unit {
+        let snapshot: ProductAsyncJobSnapshot
+        var notify = false
+        let acknowledged = try { handle.acknowledged() } catch (_: Exception) { false }
+        lock.lock()
+        try {
+            let job = findJobLocked(key).getOrThrow()
+            if (!outcome.settled || !acknowledged) {
+                job.status = "recovery_required"; job.error = "managed job has unsettled canonical execution or cleanup"
+                // Do not refund or lose the actual cancellation/cleanup owner.
+                job.executing = !acknowledged; childUsage[job.id] = outcome.usage
+                if (acknowledged) {
+                    // Unknown effect keeps the existing child budget reserved,
+                    // while actual cleanup no longer occupies an OS owner.
+                    managedJobs.remove(job.id)
+                    match (handle.admission) { case Some(value) => value.detachParentAfterCleanup(); case None => handle.reservation.detachUnclaimedParent() }
+                }
+            } else {
+                match (outcome.result) {
+                    case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                        job.result = Some(taskPersistBoundJobResult(value.output)); job.status = if (value.isError) { "failed" } else { "completed" }
+                        job.error = if (value.isError) { "managed job returned an error" } else { "" }
+                    case Result.Err(error) =>
+                        job.status = if (error.kind == AgentErrorKind.Cancelled || handle.reservation.cancellationToken.isCancelled()) { "cancelled" } else { "failed" }
+                        job.error = error.code
+                    case _ => job.status = "failed"; job.error = "managed job did not execute its frozen plan"
+                }
+                job.executing = false
+                match (settleManagedBudgetLocked(job.id, outcome.usage)) {
+                    case Result.Err(error) => job.status = "recovery_required"; job.error = error.code
+                    case Result.Ok(_) =>
+                        managedJobs.remove(job.id)
+                        match (handle.admission) { case Some(value) => value.detachParentAfterCleanup(); case None => handle.reservation.detachUnclaimedParent() }
+                }
+            }
+            job.updatedAt = nowMillis(); prepareJobSettlementLocked(job)
+            match (persistRootLocked(job.rootSessionId)) {
+                case Result.Err(error) => markJobPersistenceRecoveryLocked(job, error)
+                case Result.Ok(_) => notify = job.status != "recovery_required" }
+            snapshot = job.snapshot()
+        } finally { lock.unlock() }
+        deliverBackgroundSnapshot(context, call, key, snapshot, notify)
+    }
+
+    private func deliverSubagentMessage196(
         context: ToolInvocationContext,
-        call: ToolCall,
         to: String,
         message: String,
         replyTo: String,
-        awaitReply: Bool,
-        timeoutMillis: Int64,
         budgetAuthority!: ?ToolInvocationContext = None
-    ): Result<ToolResult> {
-        if (awaitReply && to == "all") {
-            return taskError<ToolResult>(
-                "hub.await_broadcast",
-                "hub send await:true cannot target all"
-            )
-        }
+    ): Result<Unit> {
         let deliveries = ArrayList<ProductHubMessageState>()
         lock.lock()
         try {
@@ -1567,7 +1525,7 @@ public class ProductTaskRuntime {
             let sender = hubIdentityLocked(context)
             let targets = hubTargetsLocked(sender, to)
             if (targets.isEmpty()) {
-                return taskError<ToolResult>(
+                return taskError<Unit>(
                     "hub.peer_not_found",
                     "unknown or unavailable hub peer: " + to
                 )
@@ -1576,12 +1534,12 @@ public class ProductTaskRuntime {
                 if (target.id != "Main" && target.status != "running" && target.status != "blocked") {
                     let child = findSubagentLocked(target.id).getOrThrow()
                     if (!child.capabilityCeilingKnown) {
-                        return taskError<ToolResult>("child.redelegation_required",
+                        return taskError<Unit>("child.redelegation_required",
                             "restored child has no recorded capability ceiling; delegate a new task")
                     }
                 }
                 if (target.id == sender.id) {
-                    return taskError<ToolResult>(
+                    return taskError<Unit>(
                         "hub.self_send",
                         "hub cannot send a message to the caller"
                     )
@@ -1654,70 +1612,20 @@ public class ProductTaskRuntime {
                 }
             }
         }
-        let receipts = ArrayList<AgentValue>()
-        for (delivery in deliveries) {
-            receipts.add(
-                objectValue(
-                    [
-                        ValueField("id", textValue(delivery.snapshot.id)),
-                        ValueField("to", textValue(delivery.snapshot.to)),
-                        ValueField("delivered", boolValue(true))
-                    ]
-                )
-            )
-        }
-        let fields = ArrayList<ValueField>()
-        fields.add(ValueField("op", textValue("send")))
-        fields.add(
-            ValueField(
-                "from",
-                textValue(deliveries[0].snapshot.from)
-            )
-        )
-        fields.add(
-            ValueField(
-                "receipts",
-                listValue(receipts.toArray())
-            )
-        )
-        if (awaitReply) {
-            let waited = match (waitForHubMessage(
-                context,
-                to,
-                timeoutMillis
-            )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            fields.add(
-                ValueField(
-                    "waited",
-                    match (waited) {
-                        case Some(value) => hubMessageValue(value)
-                        case None => nullValue()
-                    }
-                )
-            )
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(fields.toArray())
-            )
-        )
+        Result<Unit>.Ok(())
     }
 
     func deliverHubMessagesAfterParentResult(
         sessionId: SessionId,
         parentToolCallId: String
     ): Result<Unit> {
-        let pending = ArrayList<ProductHubMessageSnapshot>()
+        let pending = ArrayList<ProductHubMessageState>()
         lock.lock()
         try {
             for (state in hubMessages where
                 state.targetSessionId.value == sessionId.value &&
                 state.waitCallId == parentToolCallId) {
-                pending.add(state.snapshot)
+                pending.add(state)
             }
         } finally {
             lock.unlock()
@@ -1730,8 +1638,10 @@ public class ProductTaskRuntime {
         for (message in pending) {
             match (runtime.appendExternalMessageOnce(
                 sessionId,
-                "hub-delivery:" + message.id,
-                hubMessageModelMessage(message),
+                "hub-delivery:" + message.snapshot.id,
+                match(message.deliveryText111){
+                    case Some(text)=>ModelMessage(ModelRole.User,[ModelBlock(ModelBlockKind.Text,text:text)])
+                    case None=>hubMessageModelMessage(message.snapshot)},
                 source: "hub_delivery"
             )) {
                 case Result.Ok(_) => ()
@@ -1741,117 +1651,8 @@ public class ProductTaskRuntime {
         Result.Ok(())
     }
 
-    func hubInbox(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        peek: Bool
-    ): Result<ToolResult> {
-        let messages = match (takeHubMessages(context, "", peek)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("op", textValue("inbox")),
-                        ValueField("inbox", hubMessagesValue(messages)),
-                        ValueField("peek", boolValue(peek))
-                    ]
-                )
-            )
-        )
-    }
 
-    func hubMessageWait(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        from: String,
-        timeoutMillis: Int64
-    ): Result<ToolResult> {
-        let waited = match (waitForHubMessage(
-            context,
-            from,
-            timeoutMillis
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("op", textValue("wait")),
-                        ValueField(
-                            "waited",
-                            match (waited) {
-                                case Some(value) => hubMessageValue(value)
-                                case None => nullValue()
-                            }
-                        )
-                    ]
-                )
-            )
-        )
-    }
 
-    func hubPeers(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> {
-        let peers = ArrayList<AgentValue>()
-        lock.lock()
-        try {
-            let caller = hubIdentityLocked(context)
-            peers.add(
-                objectValue(
-                    [
-                        ValueField("id", textValue("Main")),
-                        ValueField("kind", textValue("main")),
-                        ValueField(
-                            "status",
-                            textValue(if (caller.id == "Main") {
-                                "running"
-                            } else {
-                                "idle"
-                            })
-                        )
-                    ]
-                )
-            )
-            for (record in records where record.parentSessionId.value == caller.rootSessionId.value) {
-                peers.add(
-                    objectValue(
-                        [
-                            ValueField("id", textValue(record.id)),
-                            ValueField("kind", textValue("sub")),
-                            ValueField("agent", textValue(record.agent)),
-                            ValueField("status", textValue(record.status)),
-                            ValueField(
-                                "activity",
-                                textValue(record.currentTool)
-                            )
-                        ]
-                    )
-                )
-            }
-        } finally {
-            lock.unlock()
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("op", textValue("list")),
-                        ValueField("peers", listValue(peers.toArray()))
-                    ]
-                )
-            )
-        )
-    }
 
     public func waitForJobs(
         sessionId: SessionId,
@@ -1870,25 +1671,6 @@ public class ProductTaskRuntime {
             sleep(Duration.millisecond * 10)
         }
         []
-    }
-
-    public func cancelBashJobs(runId: RunId): Result<Unit> {
-        let runtime = match (attachedProduct()) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let keys = ArrayList<ProductAsyncJobKey>()
-        lock.lock()
-        try {
-            for (job in jobs where job.jobType == "bash" &&
-                job.ownerRunId.value == runId.value && job.status == "running") {
-                keys.add(job.key())
-            }
-        } finally {
-            lock.unlock()
-        }
-        cancelJobKeys(runtime, keys.toArray())
-        Result.Ok(())
     }
 
     public func cancelJobs(
@@ -1912,21 +1694,96 @@ public class ProductTaskRuntime {
         jobSelectionByKeys(keys.toArray()).snapshots
     }
 
+    // Only this actual canonical hidden cancel uses the paid opt-in. Legacy
+    // cancelJobs and lifecycle callers retain their original default path.
+    func cancelPluginJobs172(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let runtime = match (attachedProduct()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let meter = admission.createJobSnapshotMeter165()
+        try { cancelPluginJobsHelper172(runtime, context, request, admission, meter) }
+        finally { meter.closeUnpublished151() }
+    }
+    private func cancelPluginJobsHelper172(runtime: ProductRuntime, context: ToolInvocationContext,
+        request: AgentValue, admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ToolResult> {
+        // This fixed cell and every captured key are paid before construction.
+        meter.fundAdditional151(8192, 16)
+        let capture = ProductJobCancelCapture172(admission, meter)
+        let fence = match (admission.acquireJobCancelCapture172()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let keys = try { capturePluginJobKeys166(context, request, meter) } finally { fence.close() }
+        let actual = match (keys) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        cancelJobKeys(runtime, actual, paidCapture172: Some(capture))
+        // Every SQL/cancellation Err was copied while its original frame was
+        // still alive. Its actual installed owner remains reachable and paid;
+        // returning an Err or a cancellation request does not ACK that data.
+        match (capture.failure) { case Some(error) => return Result.Err(error); case None => () }
+        let observation = match (admission.acquireJobCancelEffect172()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        try { observePluginJobKeys166(context, actual, admission, meter) }
+        finally { observation.close() }
+    }
+    private func fundJobCancelTargetsLocked172(keys: Array<ProductAsyncJobKey>, capture: ProductJobCancelCapture172): Unit {
+        let invoice = ProductJobSnapshotInvoice165()
+        for (key in keys) {
+            match (findJobLocked(key)) { case Some(job) =>
+                // The exact same lock protects this invoice, snapshot and state
+                // mutation. Result/error Strings and every retained occurrence
+                // are paid, including aliases retained by ordinary job sinks.
+                let size = job.id.size + job.agentId.size + job.jobType.size + job.status.size +
+                    job.label.size + job.error.size + job.rootSessionId.value.size + job.sessionId.value.size +
+                    job.ownerRunId.value.size + job.operationId.size
+                if (size > (Int64.Max-8192)/8) { throw LogicalJsonPayloadError("cancel snapshot invoice overflow") }
+                invoice.add(size*8+8192, 48)
+                match (job.result) { case Some(value) =>
+                    let measured = capture.meter.measureBorrowedValue151(value)
+                    invoice.add(measured.bytes, measured.nodes)
+                    case None => () }
+                case None => () }
+        }
+        capture.meter.fundAdditional151(invoice.bytes, invoice.nodes)
+        if (invoice.bytes > (Int64.Max-4096)/16 || invoice.nodes > (Int64.Max-4096-invoice.bytes*16)/512) {
+            throw LogicalJsonPayloadError("cancel retained SUM overflow") }
+        // Ordinary callback APIs have no alias retirement receipt. Keep this
+        // real installed share paid rather than refund on callback return.
+        capture.admission.retainWorkerMetadata111(max(16384, invoice.bytes*16+invoice.nodes*512+4096))
+    }
+
+
+    private func jobCancelObserved172<T>(result: Result<T>, capture: ?ProductJobCancelCapture172): Unit {
+        match (result) { case Result.Err(error) => match(capture){case Some(value)=>value.capture(error);case None=>()}; case Result.Ok(_)=>() }
+    }
     private func cancelJobKeys(
         runtime: ProductRuntime,
-        keys: Array<ProductAsyncJobKey>
+        keys: Array<ProductAsyncJobKey>,
+        paidCapture172!: ?ProductJobCancelCapture172 = None<ProductJobCancelCapture172>
     ): Unit {
-        let targets = ArrayList<ProductAsyncJobTarget>()
+        let effect172 = match (paidCapture172) { case Some(capture) =>
+            match (capture.admission.acquireJobCancelEffect172()) { case Result.Ok(value) => Some(value)
+                case Result.Err(error) => capture.capture(error); return }
+            case None => None<ToolExecutionHandoffLease> }
         lock.lock()
+        let targets = try {
+            match (paidCapture172) { case Some(capture) => fundJobCancelTargetsLocked172(keys,capture); case None => () }
+            ArrayList<ProductAsyncJobTarget>()
+        } catch (error: Exception) { lock.unlock(); match(effect172){case Some(value)=>value.close();case None=>()}; throw error }
         try {
             for (key in keys) {
                 match (findJobLocked(key)) {
                     case Some(job) =>
                         if (job.status == "running") {
-                            job.status = "cancelled"
-                            job.error = "cancelled by hub"
+                            let pluginChild = match (findSubagentLocked(job.agentId)) {
+                                case Some(value) => value.pluginAdmission111.isSome(); case None => false }
+                            if (job.jobType == "managed" || pluginChild) {
+                                // This is a request, not a command outcome. The
+                                // actual worker settles its Receipt/Task once.
+                                job.error = "cancellation_requested"
+                            } else {
+                                job.status = "cancelled"
+                                job.error = "cancelled by hub"
+                                prepareJobSettlementLocked(job)
+                            }
                             job.updatedAt = nowMillis()
-                            prepareJobSettlementLocked(job)
                         }
                         targets.add(ProductAsyncJobTarget(key, job.snapshot()))
                     case None => ()
@@ -1935,6 +1792,7 @@ public class ProductTaskRuntime {
             match (persistAllTaskRootsLocked()) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) =>
+                    match(paidCapture172){case Some(capture)=>capture.capture(error);case None=>()}
                     for (key in keys) {
                         match (findJobLocked(key)) {
                             case Some(job) => markJobPersistenceRecoveryLocked(job, error)
@@ -1945,18 +1803,36 @@ public class ProductTaskRuntime {
             }
         } finally {
             lock.unlock()
+            match(effect172){case Some(value)=>value.close();case None=>()}
         }
-        for (target in targets where target.snapshot.status == "cancelled") {
+        for (target in targets) {
             let snapshot = target.snapshot
-            if (snapshot.jobType == "bash") {
-                if (snapshot.operationId != "" && snapshot.executing) {
-                    cancelBashOperation(runtime, snapshot.operationId)
+            if (snapshot.jobType == "managed") {
+                if (snapshot.status == "running") {
+                    let handle = { => lock.lock(); try { managedJobs.get(snapshot.id) } finally { lock.unlock() } }()
+                    match (handle) { case Some(value) => value.reservation.cancel(); case None => () }
+                    emitJobEvent("cancellation_requested", snapshot,paidCapture172:paidCapture172)
                 }
-            } else {
+                continue
+            }
+            let pluginChild = { => lock.lock(); try {
+                match (findSubagentLocked(snapshot.agentId)) {
+                    case Some(value) => value.pluginAdmission111.isSome(); case None => false }
+            } finally { lock.unlock() } }()
+            if (pluginChild) {
+                match (lockAndFindSubagent(target.key.rootSessionId, snapshot.agentId, "")) {
+                    case Some(child) => jobCancelObserved172(cancelPluginChild111(runtime, child.id),paidCapture172)
+                    case None => () }
+                continue
+            }
+            if (snapshot.status != "cancelled") { continue }
+            // Historical legacy Bash records remain descriptive. There is no
+            // live old process owner to recover or cancel by a persisted id.
+            if (snapshot.jobType != "bash") {
                 let child = lockAndFindSubagent(target.key.rootSessionId, snapshot.agentId, "")
                 match (child) {
                     case Some(childSnapshot) =>
-                        let _ = runtime.client.cancel(childSnapshot.runId)
+                        jobCancelObserved172(runtime.client.cancel(childSnapshot.runId),paidCapture172)
                         let _ = tasks.transition(
                             TaskId(childSnapshot.id),
                             TaskStatus.Cancelled
@@ -1970,203 +1846,88 @@ public class ProductTaskRuntime {
                     case None => ()
                 }
             }
-            emitJobEvent("cancelled", snapshot)
+            emitJobEvent("cancelled", snapshot,paidCapture172:paidCapture172)
             injectJobSettlement(target.key, waitForParent: true)
         }
     }
 
-    private func startBackgroundTask(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        spec: ProductTaskSpec,
-        sharedContext!: String = ""
-    ): Result<ToolResult> {
-        let reservation: ProductSubagentReservation
-        let job: ProductAsyncJobState
-        let key: ProductAsyncJobKey
-        lock.lock()
-        try {
-            let previousJobs = jobs.toArray()
-            let previousJobCounter = jobCounter
-            let previousSubagentCounter = subagentCounter
-            reservation = reserveSubagentLocked(spec.name)
-            jobCounter += 1
-            job = ProductAsyncJobState(
-                reservation.id,
-                reservation.id,
-                "task",
-                spec.task,
-                context.sessionId,
-                hubIdentityLocked(context).rootSessionId,
-                context.runId,
-                jobCounter,
-                parentToolCallId: call.callId
-            )
-            jobs.add(job)
-            key = job.key()
-            pruneJobsLocked()
-            match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    jobs.clear()
-                    jobs.add(all: previousJobs)
-                    jobCounter = previousJobCounter
-                    subagentCounter = previousSubagentCounter
-                    rememberTaskPersistenceFailureLocked(job.rootSessionId, error)
-                    return Result.Err(error)
-            }
-            job.executing = true
-            match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    markJobPersistenceRecoveryLocked(job, error)
-                    let _ = persistRootLocked(job.rootSessionId)
-                    return Result.Err(error)
-            }
-        } finally {
-            lock.unlock()
-        }
-        emitJobEvent("started", job.snapshot())
-        match (startOwnedWorker({ =>
-            if (jobCanStart(key)) {
-                let result = runTask(
-                    context,
-                    call,
-                    spec,
-                    sharedContext: sharedContext,
-                    reservation: Some(reservation),
-                    jobKey: Some(key)
-                )
-                finishBackgroundTask(context, call, key, result)
-            }
-        })) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        Result.Ok(
-            ToolResult(
-                call.callId,
-                objectValue(
-                    [
-                        ValueField("results", listValue([])),
-                        ValueField("totalDurationMs", integerValue(0)),
-                        ValueField("progress", listValue([asyncJobValue(job.snapshot())])),
-                        ValueField(
-                            "async",
-                            objectValue(
-                                [
-                                    ValueField("state", textValue("running")),
-                                    ValueField("jobId", textValue(job.id)),
-                                    ValueField("type", textValue("task"))
-                                ]
-                            )
-                        )
-                    ]
-                )
-            )
-        )
-    }
 
-    public func submitYield(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> {
+
+    // Scalar data from the already-owned result slot. Pure preparation is
+    // not admission; the actual write below rechecks current private custody.
+    func observePluginResultSlot150(context: ToolInvocationContext,
+        consume: (Bool, Int64, Bool) -> Unit): Result<Unit> {
         lock.lock()
         try {
-            let state = findYieldLocked(context.runId)
-            if (state.isNone()) {
-                return Result.Ok(
-                    ToolResult(
-                        call.callId,
-                        objectValue(
-                            [
-                                ValueField(
-                                    "error",
-                                    textValue("yield is only available inside a " + "delegated task")
-                                )
-                            ]
-                        ),
-                        isError: true
-                    )
-                )
-            }
-            let result = match (call.arguments.field("result")) {
-                case Some(value) =>
-                    if (value.unifiedKind != ValueKind.Object) {
-                        return yieldArgumentError(call, "result must be an object")
+            if (closing) { return taskError("child.owner_closed", "child runtime is closing") }
+            match (findYieldLocked(context.runId)) {
+                case None => consume(false, -1, false)
+                case Some(state) => consume(true, state.revision150, state.error != "") }
+            Result<Unit>.Ok(())
+        } finally { lock.unlock() }
+    }
+    // Generic mutation of an existing child result slot, never a child start,
+    // business Yield parser, canonical finalizer, or budget/physical ACK.
+    func writePluginResultSlot150(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        if (!pluginChildResultWriteInputValid150(request)) {
+            return taskError("child.result_write_invalid", "invalid frozen result write data") }
+        let input = match (admission.retainResultWriteInput150()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        // This same installed bank pays new slot/container aliases before any
+        // mutation. All retained raw DATA remains funded until actual retirement.
+        admission.retainWorkerMetadata111(16384)
+        let lease = match (admission.acquireResultWriteLease150()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let output: AgentValue
+        try {
+            lock.lock()
+            try {
+                if (closing || admission.cancellation.isCancelled()) {
+                    return taskError("child.owner_closed", "child result owner is closing or cancelled") }
+                let state = findYieldLocked(context.runId)
+                let available = input.field("available").getOrThrow().asBool()
+                let revision = Int64.parse(input.field("revision").getOrThrow().asNumberText())
+                if (available != state.isSome() || (state.isSome() && state.getOrThrow().revision150 != revision)) {
+                    return taskError("child.result_slot_changed", "result slot changed after pure preparation") }
+                let mutation = input.field("mutation").getOrThrow()
+                let kind = httpIntentText(mutation, "kind")
+                if (available) {
+                    // Only the private live record for THIS child Run/session,
+                    // actual physical worker and original reserved child budget
+                    // can own the slot. A decoded observation is insufficient.
+                    var found = false
+                    for (record in records where record.runId.value == context.runId.value) {
+                        if (found || record.sessionId.value != context.sessionId.value ||
+                            record.status != "running" || !record.executionInProgress || record.finishing ||
+                            record.pluginCancellationRequested111 || childBudgetLeases.get(record.id).isNone() ||
+                            record.budgetAuthority.isNone()) {
+                            return taskError("child.result_owner_changed", "result slot lost its actual running child custody") }
+                        found = true
                     }
-                    value
-                case None => return yieldArgumentError(call, "result is required")
-            }
-            let typeValue = call.arguments.field("type")
-            let data = result.field("data")
-            let error = result.field("error")
-            if (data.isSome() && error.isSome()) {
-                return yieldArgumentError(
-                    call,
-                    "result cannot contain both data and error"
-                )
-            }
-            let target = state.getOrThrow()
-            match (error) {
-                case Some(value) =>
-                    if (value.unifiedKind != ValueKind.Text || value.text.trimAscii() == "") {
-                        return yieldArgumentError(
-                            call,
-                            "result.error must be a non-empty string"
-                        )
-                    }
-                    target.error = value.text
-                case None => match (data) {
-                    case Some(value) => match (yieldLabels(typeValue)) {
-                        case Result.Ok(labels) =>
-                            if (labels.isEmpty()) {
-                                target.terminal = Some(value)
-                            } else if (typeValue.getOrThrow().unifiedKind == ValueKind.List) {
-                                target.sections.add(ProductYieldSection(labels, value))
-                            } else {
-                                target.terminal = Some(value)
-                            }
-                        case Result.Err(error) => return Result.Err(error)
-                    }
-                    case None => match (typeValue) {
-                        case Some(value) =>
-                            if (value.unifiedKind == ValueKind.Text && value.text.trimAscii() != "") {
-                                target.useLastTurn = true
-                            } else {
-                                return yieldArgumentError(
-                                    call,
-                                    "empty result requires a " + "terminal string type"
-                                )
-                            }
-                        case None => return yieldArgumentError(
-                            call,
-                            "result requires data or error"
-                        )
+                    if (!found) { return taskError("child.result_owner_changed", "actual running child owner is absent") }
+                    if (kind != "none") {
+                        let target = state.getOrThrow()
+                        if (target.revision150 == Int64.Max) {
+                            return taskError("child.result_revision_exhausted", "result slot revision cannot advance") }
+                        let value = mutation.field("value").getOrThrow()
+                        match (kind) {
+                            case "replace_error" => target.error = value.text
+                            case "replace_terminal" => target.terminal = Some(value)
+                            case "append_section" => target.sections.add(ProductYieldSection(
+                                mutation.field("labels").getOrThrow().items.toArray().map { label => label.text }, value))
+                            case "use_last_turn" => target.useLastTurn = true
+                            case _ => return taskError("child.result_write_invalid", "unsupported frozen slot mutation") }
+                        target.revision150 += 1
                     }
                 }
-            }
-            Result.Ok(
-                ToolResult(
-                    call.callId,
-                    objectValue(
-                        [
-                            ValueField("accepted", boolValue(true)),
-                            ValueField(
-                                "status",
-                                textValue(if (target.error == "") {
-                                    "success"
-                                } else {
-                                    "aborted"
-                                })
-                            )
-                        ]
-                    )
-                )
-            )
-        } finally {
-            lock.unlock()
-        }
+                // Known business errors are DATA inside a successful primitive
+                // receipt. Native restores the original outer ToolResult error.
+                output = input.field("result").getOrThrow()
+            } finally { lock.unlock() }
+        } finally { lease.close() }
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        Result.Ok(ToolResult(admission.callId, output))
     }
 
     public func cancel(parentRunId: RunId): Result<Unit> {
@@ -2190,6 +1951,12 @@ public class ProductTaskRuntime {
         }
         var firstError: ?AgentError = None
         for (target in targets) {
+            if (isPluginChild111(target.id)) {
+                match (cancelPluginChild111(runtime, target.id)) {
+                    case Result.Err(error) => if (firstError.isNone()) { firstError = Some(error) }
+                    case Result.Ok(_) => () }
+                continue
+            }
             match (runtime.client.cancel(target.runId)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) =>
@@ -2212,325 +1979,1437 @@ public class ProductTaskRuntime {
         }
     }
 
-    private func runTask(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        spec: ProductTaskSpec,
-        sharedContext!: String = "",
-        reservation!: ?ProductSubagentReservation = None,
-        jobKey!: ?ProductAsyncJobKey = None
-    ): Result<ProductTaskResult> {
-        let runtime = match (attachedProduct()) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
+    // One actual child per frozen intent. Background return is gated by the
+    // original Core admission notification, never by merely queuing a worker.
+    func startPluginChild111(context: ToolInvocationContext, value: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        let data = try { ProductPluginChildRequest111(value) } catch (_: Exception) {
+            return taskError("child.request_invalid", "invalid frozen child request") }
+        // The existing operator switch may run a background-requested role inline.
+        let background = data.background && asyncEnabled
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let runtime = match (attachedProduct()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        let model = if (data.modelAlias == "") { parentModel(runtime, context.sessionId) } else { data.modelAlias }
+        let base = match (runtime.prepareRequest(data.prompt, modelOverride: model, thinking: data.thinking)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        let capabilities = effectiveChildCapabilities(context.capabilities, data.ceiling, context.capabilities)
+        let child = productPluginChildRequest111(base, data, capabilities, context.budget)
+        let depth = depthForRun(context.runId) + 1
+        if (depth > child.budget.maxDepth) { return taskError("subagent.budget_exceeded", "subagent resource budget exceeded") }
+        let state = match (createPluginChild111(runtime, context, data, child, depth, admission)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        match (reserveChildBudget(context, state.id, executionBudgetFrom(child.budget))) {
+            case Result.Err(error) =>
+                let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
+                return Result.Err(error)
+            case Result.Ok(_) => () }
+        match (tasks.create(TaskId(state.id), data.prompt)) {
+            case Result.Err(error) =>
+                let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
+                return Result.Err(error)
+            case Result.Ok(_) => () }
+        let _ = tasks.transition(TaskId(state.id), TaskStatus.Running, runId: Some(child.runId))
+        if (background) { match (createPluginChildJob111(context, state)) {
+            case Result.Err(error) =>
+                let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
+                return Result.Err(error)
+            case Result.Ok(_) => () } }
+        let worker = match (startPluginWorker111<ToolResult>(state,
+            { => { => runPluginChild111(runtime, state.id, child, admission) } })) {
+            case Result.Err(error) =>
+                let _ = finishSubagent(state.id, "failed", error: error.message); releaseChildExecution(state.id)
+                return Result.Err(error)
+            case Result.Ok(value) => value }
+        if (!background && !data.admissionOnly) { return worker.collect() }
+        while (true) {
+            match (context.cancellation.check()) {
+                case Result.Err(error) => let _ = runtime.client.cancel(child.runId); return Result.Err(error)
+                case Result.Ok(_) => () }
+            lock.lock()
+            try {
+                let actual = findSubagentLocked(state.id).getOrThrow()
+                if (actual.pluginStartAdmitted111) { return pluginLaunchResultLocked111(actual, admission.callId) }
+                if (pluginWorkersReturnedLocked111(actual)) {
+                    return taskError("child.start_not_admitted", if (actual.error != "") { actual.error } else { "child returned without actual Run admission" }) }
+                if (closing || actual.status == "cancelled") {
+                    return taskError("child.cancelled_before_launch", "child custody was cancelled before actual Run admission") }
+            } finally { lock.unlock() }
+            sleep(Duration.millisecond * 5)
         }
-        let parentDepth = depthForRun(context.runId)
-        let depth = parentDepth + 1
-        let base = runtime.request(
-            spec.task,
-            modelOverride: parentModel(runtime, context.sessionId),
-            thinking: taskThinking(spec.effort)
-        )
-        let childCapabilities = effectiveChildCapabilities(
-            context.capabilities,
-            productAgentCapabilityCeiling(spec.agent),
-            context.capabilities
-        )
-        let child = productSubagentRequest(
-            base,
-            spec.agent,
-            childCapabilities,
-            context.budget,
-            sharedContext: sharedContext
-        )
-        let state = match (createSubagentState(
-            runtime,
-            context,
-            call,
-            spec,
-            child,
-            depth,
-            reservation: reservation
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
+        taskError("child.start_not_admitted", "child has no completed admission")
+    }
+
+    // Generic actual peer-membership facts only. The Native caller owns Hub
+    // op names, Main/sub presentation and legacy output assembly.
+    // Original cleanup observes existing physical ACKs outside all new gates;
+    // it never treats the Native observation/result as worker retirement.
+    func observePluginJobs165(context: ToolInvocationContext, admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retryManagedCleanup(); retryPluginChildCompletions111()
+        let lease = match (admission.acquireJobSnapshotLease165()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let result = try {
+            let meter = admission.createJobSnapshotMeter165()
+            try { observePluginJobsFrame165(context, admission, meter) }
+            finally { meter.closeUnpublished151() }
+        } finally { lease.close() }
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        result
+    }
+    private func observePluginJobsFrame165(context: ToolInvocationContext, admission: HostPluginChildAdmission111,
+        meter: HostPaidValueProjection151): Result<ToolResult> {
+        // Counter and all result measurement frames retire before meter.close.
+        meter.fundAdditional151(4096, 8)
+        let invoice = ProductJobSnapshotInvoice165()
+        lock.lock()
         try {
-            match (reserveChildBudget(context, state.id, executionBudgetFrom(child.budget))) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    let _ = finishSubagent(state.id, "failed", error: error.message)
-                    return Result.Err(error)
+            if (closing) { return taskError("peer.owner_closed", "peer owner is closing") }
+            let root = hubIdentityLocked(context).rootSessionId.value
+            for (job in jobs where job.sessionId.value == context.sessionId.value) {
+                let header = job.id.size + job.agentId.size + job.jobType.size + job.status.size + job.label.size + job.error.size
+                if (header > (Int64.Max - 1024) / 6) { return taskError("job.observation_size_invalid", "job snapshot invoice overflow") }
+                invoice.add(header * 6 + 1024, 24)
+                match (job.result) {
+                    case Some(value) =>
+                        let shape = meter.measureBorrowedValue151(value)
+                        invoice.add(shape.bytes, shape.nodes)
+                    case None => () }
             }
-            let backgroundCanStart = match (jobKey) {
-                case Some(value) => jobCanStart(value)
-                case None => true
+            for (warning in recoveryWarnings where warning.rootSessionId == root || warning.rootSessionId == "unknown") {
+                let bytes = warning.rootSessionId.size + warning.file.size + warning.reason.size
+                if (bytes > (Int64.Max - 512) / 6) { return taskError("job.observation_size_invalid", "warning invoice overflow") }
+                invoice.add(bytes * 6 + 512, 2)
             }
-            if (subagentStatus(state.id) == "cancelled" || !backgroundCanStart) {
-                let snapshot = finishSubagent(state.id, "cancelled")
-                return Result.Ok(
-                    ProductTaskResult(
-                        snapshot,
-                        1,
-                        textValue(""),
-                        stderr: "subagent was cancelled before launch"
-                    )
-                )
+            let output = admission.retainObservation(invoice.bytes, invoice.nodes, { =>
+                let values = ArrayList<AgentValue>()
+                for (job in jobs where job.sessionId.value == context.sessionId.value) {
+                    values.add(objectValue([ValueField("id",textValue(job.id)),ValueField("agent_id",textValue(job.agentId)),
+                        ValueField("type",textValue(job.jobType)),ValueField("status",textValue(job.status)),
+                        ValueField("label",textValue(job.label)),ValueField("duration_ms",integerValue(max(0,job.updatedAt-job.startedAt))),
+                        ValueField("has_result",boolValue(job.result.isSome())),ValueField("result",job.result ?? nullValue()),
+                        ValueField("error",textValue(job.error))]))
+                }
+                let warnings = ArrayList<AgentValue>()
+                for (warning in recoveryWarnings where warning.rootSessionId == root || warning.rootSessionId == "unknown") {
+                    warnings.add(textValue(warning.text())) }
+                objectValue([ValueField("schema",textValue("axyndra.job-observation/v1")),
+                    ValueField("jobs",listValue(values.toArray())),ValueField("recovery_warnings",listValue(warnings.toArray()))])
+            })
+            Result.Ok(ToolResult(admission.callId, output))
+        } finally { lock.unlock() }
+    }
+    // Native owns the Hub parser and wait output. This Kernel primitive only
+    // waits on exact original job incarnations/physical settlement witnesses.
+    func waitPluginJobs166(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retryManagedCleanup(); retryPluginChildCompletions111()
+        let meter = admission.createJobSnapshotMeter165()
+        try { waitPluginJobsFrame166(context,request,admission,meter) }
+        finally { meter.closeUnpublished151() }
+    }
+    private func waitPluginJobsFrame166(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ToolResult> {
+        // Before creating arrays, keys, counters, or indexed-reader wrappers.
+        meter.fundAdditional151(4096,8)
+        let capture = match (admission.acquireJobWaitCapture166()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let keys = try { capturePluginJobKeys166(context,request,meter) } finally { capture.close() }
+        let selected = match (keys) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let timeout = Int64.parse(request.field("timeout_ms").getOrThrow().asNumberText())
+        // Original deadline starts after exact job-generation selection.
+        let started = nowMillis()
+        while (true) {
+            // Full actual Root/operation/binding/configuration checks outside
+            // Task/Registry locks. Cancellation is never physical retirement.
+            match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            retryManagedCleanup(); retryPluginChildCompletions111()
+            let ready = pluginJobWaitReady166(selected)
+            if (ready || (timeout > 0 && nowMillis()-started >= timeout)) {
+                let fence = match (admission.acquireJobWaitObservation166()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                let output = try { observePluginJobKeys166(context,selected,admission,meter) } finally { fence.close() }
+                match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                return output
             }
-            if (depth > child.budget.maxDepth) {
-                finishSubagent(state.id, "failed")
-                return taskError<ProductTaskResult>(
-                    "subagent.budget_exceeded",
-                    "subagent resource budget exceeded",
-                    fields: [ErrorField("resource", "depth")]
-                )
+            // timeout=0 remains unbounded. The ordinary Native watchdog has
+            // not started; it cannot replace this existing Kernel wait.
+            sleep(Duration.millisecond*10)
+        }
+        taskError("job.wait_unknown","actual waiting frame did not return")
+    }
+    private func capturePluginJobKeys166(context: ToolInvocationContext, request: AgentValue,
+        meter: HostPaidValueProjection151): Result<Array<ProductAsyncJobKey>> {
+        let ids = request.field("ids").getOrThrow().asArray()
+        lock.lock()
+        try {
+            if (closing) { return taskError("peer.owner_closed","job owner is closing") }
+            // Invoice every newly retained key/node/String occurrence BEFORE
+            // allocating its array. Input IDs themselves remain original loans.
+            var bytes: Int64 = 4096; var count: Int64 = 8
+            for (job in jobs where job.sessionId.value == context.sessionId.value && jobIdSelected166(ids,job.id)) {
+                let size = job.rootSessionId.value.size+job.sessionId.value.size+job.id.size
+                if (size > (Int64.Max-1024)/6 || bytes > Int64.Max-(size*6+1024) || count > Int64.Max-8) {
+                    return taskError("job.wait_size_invalid","job key invoice overflow") }
+                bytes += size*6+1024; count += 8
             }
-            let taskId = TaskId(state.id)
-            match (tasks.create(taskId, spec.task)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    finishSubagent(state.id, "failed")
-                    return Result.Err(error)
+            meter.fundAdditional151(bytes,count)
+            let result = ArrayList<ProductAsyncJobKey>()
+            for (job in jobs where job.sessionId.value == context.sessionId.value && jobIdSelected166(ids,job.id)) {
+                result.add(job.key()) }
+            Result.Ok(result.toArray())
+        } finally { lock.unlock() }
+    }
+    private func jobIdSelected166(ids: JsonArray, id: String): Bool {
+        if (ids.size()==0) { return true }
+        for (index in 0..ids.size()) { if (ids.get(index).getOrThrow().text==id) { return true } }
+        false
+    }
+    private func pluginJobWaitReady166(keys: Array<ProductAsyncJobKey>): Bool {
+        lock.lock()
+        try {
+            if (closing) { return true }
+            var present: Int64 = 0
+            for (key in keys) {
+                match (findJobLocked(key)) { case Some(job) =>
+                    present += 1
+                    if (job.status!="running" && job.settlementInjected && pluginJobPhysicalReturnedLocked111(job)) { return true }
+                    case None => () }
             }
-            let _ = tasks.transition(
-                taskId,
-                TaskStatus.Running,
-                runId: Some(child.runId)
-            )
-            if (subagentStatus(state.id) == "cancelled") {
-                let snapshot = finishSubagent(state.id, "cancelled")
-                return Result.Ok(
-                    ProductTaskResult(
-                        snapshot,
-                        1,
-                        textValue(""),
-                        stderr: "subagent was cancelled before launch"
-                    )
-                )
+            // The original wait returns on ANY delivered settled job, or when
+            // every captured original incarnation disappeared. Never all-only.
+            present==0
+        } finally { lock.unlock() }
+    }
+    private func observePluginJobKeys166(context: ToolInvocationContext, keys: Array<ProductAsyncJobKey>,
+        admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ToolResult> {
+        meter.fundAdditional151(4096,8); let invoice=ProductJobSnapshotInvoice165()
+        lock.lock()
+        try {
+            if (closing) { return taskError("peer.owner_closed","job owner is closing") }
+            let root=hubIdentityLocked(context).rootSessionId.value
+            for (key in keys) { match (findJobLocked(key)) { case Some(job) =>
+                let size=job.id.size+job.agentId.size+job.jobType.size+job.status.size+job.label.size+job.error.size
+                if(size>(Int64.Max-1024)/6){return taskError("job.observation_size_invalid","job snapshot invoice overflow")}
+                invoice.add(size*6+1024,24)
+                match(job.result){case Some(value)=>let shape=meter.measureBorrowedValue151(value);invoice.add(shape.bytes,shape.nodes);case None=>()}
+                case None=>() } }
+            for (warning in recoveryWarnings where warning.rootSessionId==root || warning.rootSessionId=="unknown") {
+                let size=warning.rootSessionId.size+warning.file.size+warning.reason.size
+                if(size>(Int64.Max-512)/6){return taskError("job.observation_size_invalid","warning invoice overflow")}
+                invoice.add(size*6+512,2) }
+            let output=admission.retainObservation(invoice.bytes,invoice.nodes,{=>
+                let values=ArrayList<AgentValue>()
+                for(key in keys){match(findJobLocked(key)){case Some(job)=>values.add(objectValue([
+                    ValueField("id",textValue(job.id)),ValueField("agent_id",textValue(job.agentId)),ValueField("type",textValue(job.jobType)),
+                    ValueField("status",textValue(job.status)),ValueField("label",textValue(job.label)),
+                    ValueField("duration_ms",integerValue(max(0,job.updatedAt-job.startedAt))),ValueField("has_result",boolValue(job.result.isSome())),
+                    ValueField("result",job.result ?? nullValue()),ValueField("error",textValue(job.error))]));case None=>()}}
+                let warnings=ArrayList<AgentValue>()
+                for(warning in recoveryWarnings where warning.rootSessionId==root || warning.rootSessionId=="unknown"){warnings.add(textValue(warning.text()))}
+                objectValue([ValueField("schema",textValue("axyndra.job-observation/v1")),ValueField("jobs",listValue(values.toArray())),
+                    ValueField("recovery_warnings",listValue(warnings.toArray()))])})
+            Result.Ok(ToolResult(admission.callId,output))
+        } finally {lock.unlock()}
+    }
+    func observePluginPeers111(context: ToolInvocationContext, admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lock.lock()
+        try {
+            if(closing){return taskError("peer.owner_closed","peer owner is closing")}
+            let caller=hubIdentityLocked(context)
+            var encodedCeiling:Int64=512
+            var nodeCeiling:Int64=16
+            for(record in records where record.parentSessionId.value==caller.rootSessionId.value){
+                let bytes=record.id.size+record.agent.size+record.status.size+record.currentTool.size
+                if(bytes>Int64.Max/12 || encodedCeiling>Int64.Max-(bytes*6+256) || nodeCeiling>Int64.Max-12){
+                    return taskError("peer.observation_size_invalid","peer snapshot invoice overflow")}
+                encodedCeiling+=bytes*6+256
+                nodeCeiling+=12
             }
-            // ChildBudgetPool already owns child count, concurrency and aggregate
-            // usage reservations. Launch the isolated child Run directly through
-            // the same typed AgentClient as the parent instead of layering a
-            // second coordinator with a duplicate budget ledger.
-            let launched = startChildRun(runtime, state.id, child)
-            match (launched) {
-                case Result.Err(error) =>
-                    if (subagentStatus(state.id) == "cancelled") {
-                        let _ = finishSubagent(state.id, "cancelled")
-                        Result.Ok(
-                            ProductTaskResult(
-                                subagentSnapshot(state.id),
-                                1,
-                                textValue(""),
-                                stderr: "subagent was cancelled"
-                            )
-                        )
-                    } else {
-                        let _ = tasks.transition(taskId, TaskStatus.Failed)
-                        let snapshot = finishSubagent(
-                            state.id,
-                            "failed",
-                            error: error.message
-                        )
-                        Result.Ok(
-                            ProductTaskResult(
-                                snapshot,
-                                1,
-                                textValue(""),
-                                stderr: error.message
-                            )
-                        )
-                    }
-                case Result.Ok(outcome) => match (reviewSubagentOutcome(
-                    runtime,
-                    state.id,
-                    child,
-                    outcome
-                )) {
+            let output=admission.retainObservation(encodedCeiling,nodeCeiling,{=>
+                let values=ArrayList<AgentValue>()
+                for(record in records where record.parentSessionId.value==caller.rootSessionId.value){
+                    values.add(objectValue([ValueField("id",textValue(record.id)),ValueField("label",textValue(record.agent)),
+                        ValueField("status",textValue(record.status)),ValueField("activity",textValue(record.currentTool))]))
+                }
+                objectValue([ValueField("schema",textValue("axyndra.peer-observation/v1")),
+                    ValueField("caller_is_root",boolValue(caller.id=="Main")),ValueField("members",listValue(values.toArray()))])
+            })
+            Result.Ok(ToolResult(admission.callId,output))
+        } finally {lock.unlock()}
+    }
+
+    // Transport state only: actual caller's already-durable mailbox, optional
+    // consumption and original Task snapshot transaction. No Hub grammar or
+    // presentation is evaluated here; those belong to the installed package.
+    // A single actual canonical mailbox wait. The installed Native package
+    // owns Hub syntax/presentation; this owner only selects original mailbox
+    // data and persists the same consumption transaction as the old wait.
+    func waitPluginPeers171(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let meter = admission.createJobSnapshotMeter165()
+        try { waitPluginPeerFrame171(context, request, admission, meter) }
+        finally { meter.closeUnpublished151() }
+    }
+    private func waitPluginPeerFrame171(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ToolResult> {
+        // Fixed wrappers are paid before reader/identity/optional result cells.
+        // All dynamic mailbox copies below use the same installed reservation.
+        meter.fundAdditional151(8192, 16)
+        let first = ProductPeerWaitSelection171()
+        let sender = request.field("sender").getOrThrow().text
+        let timeout = Int64.parse(request.field("timeout_ms").getOrThrow().asNumberText())
+        let capture = match (admission.acquirePeerWaitCapture171()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let identity = try {
+            lock.lock()
+            try {
+                if (closing) { return taskError("peer.owner_closed", "mailbox owner is closing") }
+                let caller = hubIdentityLocked(context)
+                meter.fundAdditional151((caller.id.size + caller.rootSessionId.value.size) * 6 + 4096, 8)
+                caller
+            } finally { lock.unlock() }
+        } finally { capture.close() }
+        let started = nowMillis()
+        while (true) {
+            // Cancellation/revocation/source checks are not delivery or a
+            // physical completion. No Task/Registry lock spans this sleep.
+            match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            let fence = match (admission.acquirePeerWaitObservation171()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            let output = try {
+                observePluginPeerWait171(context, sender, identity.id, identity.rootSessionId,
+                    timeout > 0 && nowMillis() - started >= timeout, admission, meter, first)
+            } finally { fence.close() }
+            let actual = match (output) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (actual) {
+                case Some(value) =>
+                    match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    return Result.Ok(value)
+                case None => () }
+            // Original zero timeout stays unbounded, before the ordinary
+            // Native invocation watchdog begins. The controller owns Future.
+            sleep(Duration.millisecond * 10)
+        }
+        taskError("peer.wait_unknown", "actual mailbox wait did not return")
+    }
+    private func observePluginPeerWait171(context: ToolInvocationContext, sender: String,
+        callerId: String, rootSession: SessionId, timedOut: Bool,
+        admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151,
+        first: ProductPeerWaitSelection171): Result<?ToolResult> {
+        lock.lock()
+        try {
+            if (closing) { return taskError("peer.owner_closed", "mailbox owner is closing") }
+            let caller = hubIdentityLocked(context)
+            if (caller.id != callerId || caller.rootSessionId.value != rootSession.value) {
+                return taskError("peer.wait_identity_changed", "mailbox wait lost its original caller identity") }
+            var count: Int64 = 0
+            var bytes: Int64 = 4096
+            first.value = None<ProductHubMessageState>
+            for (state in hubMessages where !state.consumed && state.snapshot.to == callerId &&
+                state.rootSessionId.value == rootSession.value && state.snapshot.from == sender) {
+                let m = state.snapshot
+                // Scalar borrowed lengths only: no temporary fields Array,
+                // backing snapshot or cumulative invoice on an empty poll.
+                if (m.id.size > (Int64.Max - 4096) / 6 || bytes > Int64.Max - m.id.size * 6 - 4096) {
+                    return taskError("peer.observation_size_invalid", "mailbox wait invoice overflow") }
+                bytes += m.id.size * 6 + 4096
+                if (m.from.size > (Int64.Max - 4096) / 6 || bytes > Int64.Max - m.from.size * 6 - 4096) {
+                    return taskError("peer.observation_size_invalid", "mailbox wait invoice overflow") }
+                bytes += m.from.size * 6 + 4096
+                if (m.to.size > (Int64.Max - 4096) / 6 || bytes > Int64.Max - m.to.size * 6 - 4096) {
+                    return taskError("peer.observation_size_invalid", "mailbox wait invoice overflow") }
+                bytes += m.to.size * 6 + 4096
+                if (m.message.size > (Int64.Max - 4096) / 6 || bytes > Int64.Max - m.message.size * 6 - 4096) {
+                    return taskError("peer.observation_size_invalid", "mailbox wait invoice overflow") }
+                bytes += m.message.size * 6 + 4096
+                if (m.replyTo.size > (Int64.Max - 4096) / 6 || bytes > Int64.Max - m.replyTo.size * 6 - 4096) {
+                    return taskError("peer.observation_size_invalid", "mailbox wait invoice overflow") }
+                bytes += m.replyTo.size * 6 + 4096
+                if (count == Int64.Max) { return taskError("peer.observation_size_invalid", "mailbox count overflow") }
+                count += 1
+                if (first.value.isNone()) { first.value = Some(state) }
+            }
+            if (count == 0 && !timedOut) { return Result<?ToolResult>.Ok(None<ToolResult>) }
+            if (count > (Int64.Max - 16) / 16) {
+                return taskError("peer.observation_size_invalid", "mailbox node invoice overflow") }
+            // Count, payment and actual backing construction share this lock.
+            // An arriving message cannot enlarge an already-invoiced snapshot.
+            meter.fundAdditional151(bytes, count * 16 + 16)
+            let output = admission.retainObservation(bytes, count * 16 + 16, { =>
+                let waited = match (first.value) {
+                    case Some(state) =>
+                        let m = state.snapshot
+                        objectValue([ValueField("id", textValue(m.id)), ValueField("sender", textValue(m.from)),
+                            ValueField("recipient", textValue(m.to)), ValueField("body", textValue(m.message)),
+                            ValueField("reply_to", textValue(m.replyTo)), ValueField("created_at", integerValue(m.createdAt))])
+                    case None => nullValue() }
+                objectValue([ValueField("schema", textValue("axyndra.peer-wait-observation/v1")), ValueField("waited", waited)])
+            })
+            // Preserve original waitForHubMessage semantics: all matching
+            // messages are consumed atomically, the first is presented. A SQL
+            // failure restores every exact original state, not a replacement.
+            if (count > 0) {
+                let consumed = ArrayList<ProductHubMessageState>()
+                // Finish all fallible backing construction before mutating
+                // any original message. Paid capacity is not proof that an
+                // actual allocation cannot throw.
+                for (state in hubMessages where !state.consumed && state.snapshot.to == callerId &&
+                    state.rootSessionId.value == rootSession.value && state.snapshot.from == sender) {
+                    consumed.add(state) }
+                for (state in consumed) { state.consumed = true }
+                let saved = try { persistRootLocked(rootSession) }
+                    catch (error: Exception) {
+                        for (state in consumed) { state.consumed = false }; throw error }
+                match (saved) {
                     case Result.Err(error) =>
-                        let _ = tasks.transition(taskId, TaskStatus.Failed)
-                        let snapshot = finishSubagent(state.id, "failed", error: error.message)
-                        Result.Ok(
-                            ProductTaskResult(
-                                snapshot,
-                                1,
-                                textValue(""),
-                                stderr: error.message
-                            )
-                        )
-                    case Result.Ok(outcome) => match (outcome) {
-                        case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
-                            let _ = tasks.transition(taskId, TaskStatus.Blocked)
-                            applyRunSnapshot(state.id, snapshot)
-                            let blockedSnapshot = markSubagentAwaitingApproval(
-                                state.id,
-                                child,
-                                approval
-                            )
-                            Result.Ok(
-                                ProductTaskResult(
-                                    blockedSnapshot,
-                                    1,
-                                    textValue(""),
-                                    stderr: "subagent is awaiting approval"
-                                )
-                            )
-                        case AgentRunOutcome.Completed(snapshot) =>
-                            applyRunSnapshot(state.id, snapshot)
-                            // Automatic approval continuations may append the final
-                            // answer after start returned its first paused outcome.
-                            let messages: Array<ModelMessage> = match (runtime.messages(child.sessionId)) {
-                                case Result.Ok(value) => value
-                                case Result.Err(_) => []
-                            }
-                            finalizeCompletedTask(
-                                taskId,
-                                state.id,
-                                spec,
-                                lastAssistantText(messages)
-                            )
+                        for (state in consumed) { state.consumed = false }
+                        rememberTaskPersistenceFailureLocked(rootSession, error)
+                        return Result.Err(error)
+                    case Result.Ok(_) => () }
+            }
+            Result<?ToolResult>.Ok(Some(ToolResult(admission.callId, output)))
+        } finally { lock.unlock() }
+    }
+
+    func receivePluginPeers111(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        let lease=match(admission.acquireReceiveLease()){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        try {
+            lock.lock()
+            try {
+                if(closing){return taskError("peer.owner_closed","peer owner is closing")}
+                let caller=hubIdentityLocked(context)
+                let peek=request.field("peek").getOrThrow().asBool()
+                var encodedCeiling:Int64=512
+                var nodeCeiling:Int64=16
+                for(state in hubMessages where !state.consumed && state.snapshot.to==caller.id &&
+                    state.rootSessionId.value==caller.rootSessionId.value){
+                    let m=state.snapshot
+                    var bytes:Int64=0
+                    for(value in [m.id,m.from,m.to,m.message,m.replyTo]){
+                        if(bytes>Int64.Max-value.size){return taskError("peer.observation_size_invalid","mailbox invoice overflow")}
+                        bytes+=value.size
+                    }
+                    if(bytes>Int64.Max/12 || encodedCeiling>Int64.Max-(bytes*6+512) || nodeCeiling>Int64.Max-16){
+                        return taskError("peer.observation_size_invalid","mailbox invoice overflow")}
+                    encodedCeiling+=bytes*6+512;nodeCeiling+=16
+                }
+                // The same installed allocation pays all original fields and
+                // independent snapshot codec occurrences before constructing
+                // output or changing the persisted consumption bit.
+                let output=admission.retainObservation(encodedCeiling,nodeCeiling,{=>
+                    let values=ArrayList<AgentValue>()
+                    for(state in hubMessages where !state.consumed && state.snapshot.to==caller.id &&
+                        state.rootSessionId.value==caller.rootSessionId.value){
+                        let m=state.snapshot
+                        values.add(objectValue([ValueField("id",textValue(m.id)),ValueField("sender",textValue(m.from)),
+                            ValueField("recipient",textValue(m.to)),ValueField("body",textValue(m.message)),
+                            ValueField("reply_to",textValue(m.replyTo)),ValueField("created_at",integerValue(m.createdAt))]))
+                    }
+                    objectValue([ValueField("schema",textValue("axyndra.peer-messages/v1")),ValueField("messages",listValue(values.toArray()))])
+                })
+                if(!peek && !output.field("messages").getOrThrow().items.isEmpty()){
+                    let consumed=ArrayList<ProductHubMessageState>()
+                    for(state in hubMessages where !state.consumed && state.snapshot.to==caller.id &&
+                        state.rootSessionId.value==caller.rootSessionId.value){state.consumed=true;consumed.add(state)}
+                    match(persistRootLocked(caller.rootSessionId)){
+                        case Result.Ok(_)=>()
+                        case Result.Err(error)=>
+                            for(state in consumed){state.consumed=false}
+                            rememberTaskPersistenceFailureLocked(caller.rootSessionId,error)
+                            return Result.Err(error)
                     }
                 }
+                Result.Ok(ToolResult(admission.callId,output))
+            } finally {lock.unlock()}
+        } finally {lease.close()}
+    }
+
+    // Current same-root metadata only. Native owns the decision whether this
+    // state needs an additional canonical read; no task or budget is changed.
+    private func pluginPeerMemberSnapshotLocked111(context:ToolInvocationContext,id:String,
+        retain:(Int64,Int64,()->AgentValue)->AgentValue):Result<AgentValue> {
+        if(closing){return taskError("peer.owner_closed","member owner is closing")}
+        let caller=hubIdentityLocked(context)
+        let state=match(findSubagentLocked(id)){case Some(value)=>value
+            case None=>return taskError("peer.member_missing","member is not present in the actual root")}
+        if(state.parentSessionId.value!=caller.rootSessionId.value || state.id==caller.id) {
+            return taskError("peer.member_scope_invalid","member is foreign or the actual caller") }
+        var bytes:Int64=8192
+        for(text in [caller.id,caller.sessionId.value,caller.rootSessionId.value,state.id,state.sessionId.value,
+            state.runId.value,state.status,state.agentSource]) {
+            if(text.size>Int64.Max/12 || bytes>Int64.Max-text.size*6) {
+                return taskError("peer.observation_size_invalid","member metadata invoice overflow") }
+            bytes+=text.size*6
+        }
+        let revision=match(stateRevisions.get(caller.rootSessionId.value)){case Some(value)=>value;case None=>0}
+        Result<AgentValue>.Ok(retain(bytes,256,{=>objectValue([
+            ValueField("schema",textValue("axyndra.peer-member-snapshot/v1")),ValueField("sender",textValue(caller.id)),
+            ValueField("sender_session",textValue(caller.sessionId.value)),ValueField("root_thread",textValue(caller.rootSessionId.value)),
+            ValueField("root_revision",integerValue(revision)),ValueField("id",textValue(state.id)),
+            ValueField("thread_id",textValue(state.sessionId.value)),ValueField("run_id",textValue(state.runId.value)),
+            ValueField("status",textValue(state.status)),ValueField("source_identity",textValue(state.agentSource)),
+            ValueField("updated_at",integerValue(state.lastUpdate)),ValueField("execution_in_progress",boolValue(state.executionInProgress)),
+            ValueField("launch_in_progress",boolValue(state.launchInProgress)),ValueField("finishing",boolValue(state.finishing)),
+            ValueField("budget_held",boolValue(childBudgetLeases.get(id).isSome())),
+            ValueField("completion_done",boolValue(state.pluginCompletionDone111))])}))
+    }
+    func observePluginPeerPreparation111(context:ToolInvocationContext,id:String,
+        scope:HostPluginPeerPreparationSnapshot111):Result<AgentValue> {
+        match(scope.check(context,id)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let result:Result<AgentValue>
+        lock.lock()
+        try {result=pluginPeerMemberSnapshotLocked111(context,id,{bytes,nodes,build=>scope.retainObservation(bytes,nodes,build)})}
+        finally{lock.unlock()}
+        match(scope.check(context,id)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        result
+    }
+
+    func readPluginPeerMember111(context:ToolInvocationContext,request:AgentValue,
+        read:HostPluginPeerReadCustody111):Result<AgentValue> {
+        match(read.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let runtime=match(attachedProduct()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let id=httpIntentText(request,"recipient")
+        let priorRun:RunId
+        lock.lock()
+        try {
+            let observed=match(pluginPeerMemberSnapshotLocked111(context,id,{bytes,nodes,build=>read.retainObservation(bytes,nodes,build)})) {
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+            if(canonicalAgentValue(observed)!=canonicalAgentValue(request.field("member_snapshot").getOrThrow())) {
+                return taskError("peer.member_changed","member changed after the original preparation observation") }
+            if(closing){return taskError("peer.owner_closed","peer owner is closing")}
+            let caller=hubIdentityLocked(context)
+            let state=match(findSubagentLocked(id)){case Some(value)=>value
+                case None=>return taskError("peer.member_missing","member is not present in the actual root")}
+            if(state.parentSessionId.value!=caller.rootSessionId.value || id==caller.id) {
+                return taskError("peer.member_scope_invalid","member is foreign or the actual caller") }
+            if(!["completed","failed","cancelled"].contains(state.status) || state.executionInProgress ||
+                state.launchInProgress || state.finishing || childBudgetLeases.get(id).isSome() ||
+                !state.pluginCompletionDone111 || state.pluginAdmission111.isNone() || !pluginWorkersReturnedLocked111(state)) {
+                return taskError("peer.member_unsettled","member has no completed physical and budget custody") }
+            // This snapshot copies no history or request graph. All metadata
+            // containers are prepaid before producing even the read frame.
+            let _=read.retainObservation(4096,64,{=>nullValue()})
+            priorRun=state.runId
+        } finally {lock.unlock()}
+        let actual=match(runtime.client.find(priorRun)) {
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        if(!isTerminalRunState(actual.status) || actual.status==RunState.RecoveryRequired) {
+            return taskError("peer.member_run_unsettled","actual child Run has not reached a settled terminal state") }
+        match(read.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lock.lock()
+        try {
+            let observed=match(pluginPeerMemberSnapshotLocked111(context,id,{bytes,nodes,build=>read.retainObservation(bytes,nodes,build)})) {
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+            if(canonicalAgentValue(observed)!=canonicalAgentValue(request.field("member_snapshot").getOrThrow())) {
+                return taskError("peer.member_changed","member changed while checking its actual terminal Run") }
+            let caller=hubIdentityLocked(context)
+            let state=match(findSubagentLocked(id)){case Some(value)=>value
+                case None=>return taskError("peer.member_missing","member disappeared before its observation")}
+            if(closing || state.parentSessionId.value!=caller.rootSessionId.value || id==caller.id ||
+                state.runId.value!=priorRun.value || state.sessionId.value!=actual.sessionId.value ||
+                !["completed","failed","cancelled"].contains(state.status) || state.executionInProgress ||
+                state.launchInProgress || state.finishing || childBudgetLeases.get(id).isSome() ||
+                !state.pluginCompletionDone111 || state.pluginAdmission111.isNone() || !state.capabilityCeilingKnown ||
+                !pluginWorkersReturnedLocked111(state)) {
+                return taskError("peer.member_changed","member changed while its actual terminal Run was checked") }
+            if(messageCounter==Int64.Max){return taskError("peer.counter_exhausted","message counter cannot advance")}
+            // The prior owner is consulted for descriptive frozen data only.
+            // It is never used as the authority for the next Run. A persisted
+            // historical-definition reader will be a separate verified path;
+            // absent live data currently refuses this incomplete WIP route.
+            let definition=state.pluginAdmission111.getOrThrow().frozenDefinition111()
+            var bytes=logicalJsonWriteReservationBytes(definition,8388608)+16384
+            var nodes=logicalJsonValueNodeCount(definition)+256
+            for(text in [caller.id,caller.sessionId.value,caller.rootSessionId.value,state.id,state.sessionId.value,
+                state.runId.value,state.status,state.agentSource,httpIntentText(request.field("input_payload").getOrThrow(),"sha256")]) {
+                if(text.size>Int64.Max/12 || bytes>Int64.Max-text.size*6) {
+                    return taskError("peer.observation_size_invalid","member observation invoice overflow") }
+                bytes+=text.size*6
             }
-        } finally { releaseChildExecution(state.id) }
+            for(capability in state.capabilities.values) {
+                if(capability.resource.size>Int64.Max/12 || bytes>Int64.Max-(capability.resource.size*6+512) || nodes>Int64.Max-8) {
+                    return taskError("peer.observation_size_invalid","member ceiling invoice overflow") }
+                bytes+=capability.resource.size*6+512;nodes+=8
+            }
+            let stamp=nowMillis()
+            let output=read.retainObservation(bytes,nodes,{=>
+                let target=objectValue([ValueField("id",textValue(state.id)),ValueField("thread_id",textValue(state.sessionId.value)),
+                    ValueField("run_id",textValue(state.runId.value)),ValueField("status",textValue(state.status)),
+                    ValueField("source_identity",textValue(state.agentSource)),
+                    ValueField("capability_ceiling",taskPersistCapabilitiesValue(state.capabilities)),ValueField("definition",definition)])
+                let message=objectValue([ValueField("id",textValue("message-"+stamp.toString()+"-"+(messageCounter+1).toString())),
+                    ValueField("input_payload",request.field("input_payload").getOrThrow()),
+                    ValueField("created_at",integerValue(stamp))])
+                objectValue([ValueField("schema",textValue(PLUGIN_PEER_READ_RESULT111)),ValueField("binding",request.field("binding").getOrThrow()),
+                    ValueField("projection_digest",request.field("projection_digest").getOrThrow()),
+                    ValueField("request_sha256",textValue(modelPolicySha256Text(canonicalAgentValue(request)))),
+                    ValueField("observation",objectValue([ValueField("sender",textValue(caller.id)),
+                        ValueField("sender_session",textValue(caller.sessionId.value)),ValueField("root_thread",textValue(caller.rootSessionId.value)),
+                        ValueField("counter",integerValue(messageCounter)),ValueField("message",message),ValueField("target",target)]))])
+            })
+            Result.Ok(output)
+        } finally {lock.unlock()}
     }
 
-    private func finalizeCompletedTask(
-        taskId: TaskId,
-        subagentId: String,
-        spec: ProductTaskSpec,
-        lastText: String
-    ): Result<ProductTaskResult> {
-        let yielded = takeYield(subagentId)
-        if (yielded.error != "") {
-            let _ = tasks.transition(taskId, TaskStatus.Failed)
-            let snapshot = finishSubagent(
-                subagentId,
-                "failed",
-                error: yielded.error
-            )
-            return Result.Ok(
-                ProductTaskResult(
-                    snapshot,
-                    1,
-                    textValue(""),
-                    stderr: yielded.error
-                )
-            )
+    func pluginParentResultPersisted111(context:ToolInvocationContext,result:ToolResult):Result<Unit> {
+        // The observer chooses an already-live actual child owner. The caller
+        // cannot select a parent using a serialized receipt or matching name.
+        let parent:?OperationId
+        let persistence:?ProductTaskPersistence
+        lock.lock()
+        try {
+            var found:?OperationId=Option<OperationId>.None
+            for(state in records where state.pluginOriginalAdmission111.isSome()) {
+                let matched=state.pluginOriginalAdmission111.getOrThrow().persistedParent(context,result)
+                if(matched.isSome()){found=matched;break}
+            }
+            parent=found;persistence=taskPersistence
+        }finally{lock.unlock()}
+        if(parent.isNone()){return Result<Unit>.Ok(())}
+        if(persistence.isNone()){return taskError("peer.persistence_missing","retained parent delivery has no actual durable store")}
+        match(persistence.getOrThrow().verifyCompletedPeerParent111(parent.getOrThrow(),context.runId,context.sessionId,
+            context.epoch,result.receiptId)) {
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()
         }
-        let output = yieldedOutput(yielded, lastText)
-        let validation = validateTaskSchema(spec.outputSchema, output)
-        if (!validation.valid && spec.schemaMode == "strict") {
-            let _ = tasks.transition(taskId, TaskStatus.Failed)
-            let snapshot = finishSubagent(
-                subagentId,
-                "failed",
-                error: validation.error
-            )
-            return Result.Ok(
-                ProductTaskResult(
-                    snapshot,
-                    1,
-                    output,
-                    stderr: validation.error,
-                    schemaStatus: "invalid",
-                    schemaError: validation.error,
-                    schemaMode: spec.schemaMode
-                )
-            )
-        }
-        let snapshot = finishSubagent(subagentId, "completed")
-        if (snapshot.status == "completed") {
-            let _ = tasks.transition(taskId, TaskStatus.Completed)
-        } else if (snapshot.status == "recovery_required") {
-            let _ = tasks.transition(taskId, TaskStatus.Blocked)
-        }
-        Result.Ok(
-            ProductTaskResult(
-                snapshot,
-                if (snapshot.status == "completed") { 0 } else { 1 },
-                output,
-                stderr: if (snapshot.status == "completed") { "" } else {
-                    if (snapshot.error != "") { snapshot.error } else { "subagent ended as " + snapshot.status }
-                },
-                schemaStatus: if (spec.outputSchema.isSome()) {
-                    if (validation.valid) {
-                        "valid"
-                    } else {
-                        "invalid"
-                    }
-                } else {
-                    "unavailable"
-                },
-                schemaError: validation.error,
-                schemaMode: spec.schemaMode
-            )
-        )
+        deliverHubMessagesAfterParentResult(context.sessionId,result.callId)
     }
 
-    private func createSubagentState(
-        runtime: ProductRuntime,
-        context: ToolInvocationContext,
-        call: ToolCall,
-        spec: ProductTaskSpec,
-        child: AgentRunRequest,
-        depth: Int64,
-        reservation!: ?ProductSubagentReservation = None
-    ): Result<ProductSubagentState> {
+    // Neutral membership and transport facts. This function runs under the
+    // existing Task lock; the installed package owns prompt/output grammar.
+    private func snapshotPluginPeerDeliveryLocked111(context: ToolInvocationContext, request: AgentValue,
+        stamp: Int64, admission: HostPluginChildAdmission111): Result<AgentValue> {
+        if(closing){return taskError("peer.owner_closed","peer owner is closing")}
+        let _=admission.retainObservation(4096,64,{=>nullValue()})
+        let caller=hubIdentityLocked(context)
+        var pendingParentCall=caller.parentToolCallId
+        if(caller.sessionId.value!=caller.rootSessionId.value && taskPersistence.isSome()) {
+            let state=findSubagentLocked(caller.id).getOrThrow()
+            if(state.pluginAdmission111.isSome()) {
+                let original=match(state.pluginOriginalAdmission111) {
+                    case Some(value)=>value
+                    case None=>return taskError("peer.parent_identity_missing","actual child lost its original parent ACK relationship") }
+                if(original.originalParentOperation111.isNone()) {
+                    return taskError("peer.parent_identity_missing","actual child lost its original parent identity") }
+                let parent=original.originalParentOperation111.getOrThrow()
+                match(taskPersistence.getOrThrow().completedPeerParent111(parent,state.parentRunId,state.parentSessionId,
+                    original.originalParentEpoch111,"receipt-"+parent.value)) {
+                    case Result.Err(error)=>return Result.Err(error)
+                    case Result.Ok(true)=>pendingParentCall=""
+                    case Result.Ok(false)=>()
+                }
+            }
+        }
+        let waitForParent=pendingParentCall
+        let selector=request.field("recipient").getOrThrow()
+        let kind=httpIntentText(selector,"kind");let member=httpIntentText(selector,"id")
+        if(request.field("member_snapshot").isSome()) {
+            let snapshot=match(pluginPeerMemberSnapshotLocked111(context,member,
+                {bytes,nodes,build=>admission.retainObservation(bytes,nodes,build)})) {
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+            if(kind!="member" || canonicalAgentValue(snapshot)!=canonicalAgentValue(request.field("member_snapshot").getOrThrow())) {
+                return taskError("peer.member_changed","frozen member changed before actual publication") }
+        }
+        let body=httpIntentText(request,"body");let reply=httpIntentText(request,"reply_to")
+        let bytes=AtomicInt64(4096);let nodes=AtomicInt64(64);let count=AtomicInt64(0)
+        let visit={ emit:(String,SessionId,String,String,String)->Unit =>
+            if((kind=="root" || kind=="others") && caller.sessionId.value!=caller.rootSessionId.value) {
+                emit("Main",caller.rootSessionId,"","root",waitForParent) }
+            for(record in records where record.parentSessionId.value==caller.rootSessionId.value &&
+                ((kind=="member" && record.id==member) ||
+                 (kind=="others" && record.id!=caller.id && (record.status=="running" || record.status=="blocked")))) {
+                emit(record.id,record.sessionId,record.runId.value,record.status,"") }
+        }
+        let problem=AtomicInt64(0)
+        visit({ id,session,run,status,waitCall =>
+            if(id==caller.id){problem.store(1)}
+            else if(status!="root" && status!="running" && status!="blocked") {
+                // A fresh frozen resume primitive is required. Do not enqueue
+                // a message and report delivery without actually admitting it.
+                problem.store(2)
+            }
+            var part:Int64=1024
+            for(text in [id,session.value,run,status,waitCall,body,reply,caller.id]) {
+                if(text.size>Int64.Max/12 || part>Int64.Max-text.size*6){problem.store(3)}
+                else{part+=text.size*6}
+            }
+            if(bytes.load()>Int64.Max-part || nodes.load()>Int64.Max-32 || count.load()==Int64.Max){problem.store(3)}
+            else{let _=bytes.fetchAdd(part);let _=nodes.fetchAdd(32);let _=count.fetchAdd(1)}
+        })
+        if(problem.load()!=0){return taskError(if(problem.load()==1){"peer.self_send"}else if(problem.load()==2){"peer.resume_required"}
+            else{"peer.observation_size_invalid"},"actual recipient cannot accept this frozen delivery")}
+        if(count.load()==0){return taskError("peer.member_missing","no eligible actual member is selected")}
+        if(messageCounter>Int64.Max-count.load()){return taskError("peer.counter_exhausted","message counter cannot advance")}
+        let snapshot=admission.retainObservation(bytes.load(),nodes.load(),{=>
+            let values=ArrayList<AgentValue>();let ordinal=AtomicInt64(messageCounter)
+            visit({id,session,run,status,waitCall=>
+                let next=ordinal.fetchAdd(1)+1
+                values.add(objectValue([ValueField("id",textValue("message-"+stamp.toString()+"-"+next.toString())),
+                    ValueField("recipient",textValue(id)),ValueField("recipient_session",textValue(session.value)),
+                    ValueField("recipient_run",textValue(run)),ValueField("recipient_status",textValue(status)),
+                    ValueField("body",textValue(body)),ValueField("reply_to",textValue(reply)),
+                    ValueField("created_at",integerValue(stamp)),ValueField("wait_call_id",textValue(waitCall))]))
+            })
+            objectValue([ValueField("schema",textValue("axyndra.peer-delivery-observation/v1")),
+                ValueField("sender",textValue(caller.id)),ValueField("sender_session",textValue(caller.sessionId.value)),
+                ValueField("root_thread",textValue(caller.rootSessionId.value)),ValueField("counter",integerValue(messageCounter)),
+                ValueField("messages",listValue(values.toArray()))])
+        })
+        Result.Ok(snapshot)
+    }
+
+    // One durable publication finishes its complete original frame before the
+    // same admitted canonical child begins its original mailbox continuation.
+    // A delivered request is not a reply, worker return, or consumption ACK.
+    func sendPluginPeerReply178(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        let sent = match (sendPluginPeerMessage111(context, request, admission)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value }
+        let meter = admission.createJobSnapshotMeter165()
+        try { sendPluginPeerReplyFrame178(context, request, sent, admission, meter) }
+        finally { meter.closeUnpublished151() }
+    }
+    private func sendPluginPeerReplyFrame178(context: ToolInvocationContext, request: AgentValue,
+        sent: ToolResult, admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ToolResult> {
+        meter.fundAdditional151(8192, 16)
+        let first = ProductPeerWaitSelection171()
+        let waiting = request.field("await_reply").getOrThrow()
+        let sender = waiting.field("sender").getOrThrow().text
+        let timeout = Int64.parse(waiting.field("timeout_ms").getOrThrow().asNumberText())
+        let identity = lockPeerReplyIdentity178(context, admission, meter)
+        let caller = match (identity) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        // Original sendHubMessage starts this deadline AFTER real publication
+        // and external-delivery frames have returned; zero remains unbounded.
+        let started = nowMillis()
+        while (true) {
+            match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            let fence = match (admission.acquirePeerReplyObservation178()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            let result = try {
+                observePluginPeerWait171(context, sender, caller.id, caller.rootSessionId,
+                    timeout > 0 && nowMillis() - started >= timeout, admission, meter, first)
+            } finally { fence.close() }
+            let observed = match (result) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (observed) {
+                case Some(value) =>
+                    match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    let sendShape = meter.measureBorrowedValue151(sent.output)
+                    let replyShape = meter.measureBorrowedValue151(value.output)
+                    if (sendShape.bytes > Int64.Max - replyShape.bytes - 8192 ||
+                        sendShape.nodes > Int64.Max - replyShape.nodes - 16) {
+                        return taskError("peer.observation_size_invalid", "reply result invoice overflow") }
+                    let output = admission.retainObservation(sendShape.bytes + replyShape.bytes + 8192,
+                        sendShape.nodes + replyShape.nodes + 16, { =>
+                            objectValue([ValueField("schema", textValue("axyndra.peer-delivery-result/v1")),
+                                ValueField("sender", sent.output.field("sender").getOrThrow()),
+                                ValueField("deliveries", sent.output.field("deliveries").getOrThrow()),
+                                ValueField("waited", value.output.field("waited").getOrThrow())]) })
+                    return Result.Ok(ToolResult(admission.callId, output))
+                case None => () }
+            sleep(Duration.millisecond * 10)
+        }
+        taskError("peer.reply_unknown", "actual reply continuation did not return")
+    }
+    // Only scalar lengths of the original locked record are borrowed here.
+    // Every field retained by ProductHubIdentity is prepaid in the same meter
+    // before the original constructor can allocate or return its wrapper.
+    private func fundPeerReplyIdentityLengths178(meter: HostPaidValueProjection151,
+        idBytes: Int64, sessionBytes: Int64, rootBytes: Int64,
+        parentCallBytes: Int64, statusBytes: Int64): Result<Unit> {
+        let maximum = (Int64.Max - 4096) / 6
+        var total: Int64 = 0
+        for (bytes in [idBytes, sessionBytes, rootBytes, parentCallBytes, statusBytes]) {
+            if (bytes < 0 || bytes > maximum - total) {
+                return taskError("peer.observation_size_invalid", "reply identity invoice overflow") }
+            total += bytes
+        }
+        meter.fundAdditional151(total * 6 + 4096, 8)
+        Result<Unit>.Ok(())
+    }
+    private func lockPeerReplyIdentity178(context: ToolInvocationContext,
+        admission: HostPluginChildAdmission111, meter: HostPaidValueProjection151): Result<ProductHubIdentity> {
+        let fence = match (admission.acquirePeerReplyObservation178()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        try {
+            lock.lock()
+            try {
+                if (closing) { return taskError("peer.owner_closed", "mailbox owner is closing") }
+                for (record in records where record.runId.value == context.runId.value) {
+                    match (fundPeerReplyIdentityLengths178(meter, record.id.size, record.sessionId.value.size,
+                        record.parentSessionId.value.size, record.parentToolCallId.size, record.status.size)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    return Result.Ok(hubIdentityLocked(context))
+                }
+                // Main retains both complete SessionId values and the original
+                // constructor defaults: parentToolCallId="", status="running".
+                match (fundPeerReplyIdentityLengths178(meter, 4, context.sessionId.value.size,
+                    context.sessionId.value.size, 0, 7)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                Result.Ok(hubIdentityLocked(context))
+            } finally { lock.unlock() }
+        } finally { fence.close() }
+    }
+
+
+    func sendPluginPeerMessage111(context: ToolInvocationContext, request: AgentValue,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        if(request.field("resume").isSome()){return resumePluginPeerMember111(context,request,admission)}
+        match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let runtime=match(attachedProduct()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let stamp=nowMillis()
+        let observed:AgentValue
+        lock.lock()
+        try {observed=match(snapshotPluginPeerDeliveryLocked111(context,request,stamp,admission)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}}
+        finally{lock.unlock()}
+        // Pure formatting holds neither Registry nor Task/SQLite locks. Full
+        // Source/config/generation is checked around the actual pure callback.
+        let formatted=match(admission.formatMessage(observed)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(!httpIntentExactFields(formatted,["messages"]) || formatted.field("messages").getOrThrow().unifiedKind!=ValueKind.List ||
+            formatted.field("messages").getOrThrow().items.size!=observed.field("messages").getOrThrow().items.size) {
+            return taskError("peer.format_invalid","formatter changed the actual delivery set") }
+        let messages=observed.field("messages").getOrThrow().items
+        let texts=formatted.field("messages").getOrThrow().items
+        var outputBytes:Int64=4096
+        for(i in 0..messages.size) {
+            if(!httpIntentExactFields(texts[i],["id","content"]) || httpIntentText(texts[i],"id")!=httpIntentText(messages[i],"id") ||
+                texts[i].field("content").getOrThrow().unifiedKind!=ValueKind.Text) {
+                return taskError("peer.format_invalid","formatter returned a different message identity") }
+            for(text in [httpIntentText(texts[i],"content"),httpIntentText(messages[i],"body"),httpIntentText(messages[i],"reply_to"),
+                httpIntentText(messages[i],"recipient_session"),httpIntentText(messages[i],"recipient"),httpIntentText(messages[i],"id"),
+                httpIntentText(observed,"sender"),httpIntentText(observed,"root_thread")]) {
+                if(text.size>Int64.Max/12 || outputBytes>Int64.Max-(text.size*6+512)) {
+                    return taskError("peer.observation_size_invalid","delivery custody invoice overflow") }
+                outputBytes+=text.size*6+512
+            }
+        }
+        // Payment precedes all private message rows and immutable return data.
+        // The mounted owner retains the aliases; callback return is not ACK.
+        let deliveries=ArrayList<ProductHubMessageState>()
+        let output=admission.retainObservation(outputBytes,64+messages.size*32,{=>
+            let results=ArrayList<AgentValue>()
+            for(i in 0..messages.size) {
+                let message=messages[i]
+                let snapshot=ProductHubMessageSnapshot(httpIntentText(message,"id"),httpIntentText(observed,"sender"),
+                    httpIntentText(message,"recipient"),httpIntentText(message,"body"),httpIntentText(message,"reply_to"),stamp)
+                deliveries.add(ProductHubMessageState(snapshot,SessionId(httpIntentText(message,"recipient_session")),
+                    SessionId(httpIntentText(observed,"root_thread")),waitCallId:httpIntentText(message,"wait_call_id"),
+                    deliveryText111:Some(httpIntentText(texts[i],"content"))))
+                results.add(objectValue([ValueField("id",textValue(snapshot.id)),ValueField("recipient",textValue(snapshot.to)),
+                    ValueField("delivered",boolValue(true))]))
+            }
+            objectValue([ValueField("schema",textValue("axyndra.peer-delivery-result/v1")),
+                ValueField("sender",observed.field("sender").getOrThrow()),ValueField("deliveries",listValue(results.toArray()))])
+        })
+        let lease=match(admission.acquireSendLease()){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        try {
+            lock.lock()
+            try {
+                let current=match(snapshotPluginPeerDeliveryLocked111(context,request,stamp,admission)){
+                    case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+                if(canonicalAgentValue(current)!=canonicalAgentValue(observed)) {
+                    return taskError("peer.membership_changed","actual recipients or message revision changed before publication") }
+                match(context.cancellation.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                let previous=hubMessages.toArray();let oldCounter=messageCounter
+                for(delivery in deliveries){hubMessages.add(delivery);messageCounter+=1}
+                pruneHubMessagesLocked()
+                match(persistRootLocked(SessionId(httpIntentText(observed,"root_thread")))) {
+                    case Result.Ok(_)=>()
+                    case Result.Err(error)=>
+                        hubMessages.clear();hubMessages.add(all:previous);messageCounter=oldCounter
+                        rememberTaskPersistenceFailureLocked(SessionId(httpIntentText(observed,"root_thread")),error)
+                        return Result.Err(error)
+                }
+            } finally {lock.unlock()}
+            for(delivery in deliveries) {
+                // The original parent-result hook drains this already durable
+                // message only after its actual pending ToolResult is stored.
+                if(delivery.waitCallId!=""){continue}
+                match(context.cancellation.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                match(runtime.appendExternalMessageOnce(delivery.targetSessionId,"hub-delivery:"+delivery.snapshot.id,
+                    ModelMessage(ModelRole.User,[ModelBlock(ModelBlockKind.Text,text:delivery.deliveryText111.getOrThrow())]),
+                    source:"hub_delivery")) {
+                    case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()
+                }
+            }
+            Result.Ok(ToolResult(admission.callId,output))
+        } finally {lease.close()}
+    }
+
+    // A new incarnation is driven by this peer.send's live canonical child,
+    // never by the historical child's terminal Source. The first parent and
+    // Main ACK association remain the original immutable Task fields.
+    private func resumePluginPeerMember111(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111):Result<ToolResult> {
+        match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let runtime=match(attachedProduct()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let resume=input.field("resume").getOrThrow();let proposal=resume.field("proposal").getOrThrow()
+        let target=proposal.field("target").getOrThrow();let id=httpIntentText(target,"id")
+        let snapshot=resume.field("read_request").getOrThrow().field("member_snapshot").getOrThrow()
+        let old:ProductSubagentState
+        lock.lock()
+        try {
+            let actual=match(pluginPeerMemberSnapshotLocked111(context,id,
+                {bytes,nodes,build=>admission.retainObservation(bytes,nodes,build)})) {
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+            if(canonicalAgentValue(actual)!=canonicalAgentValue(snapshot)) {
+                return taskError("peer.member_changed","member changed before preparing its new incarnation") }
+            old=findSubagentLocked(id).getOrThrow()
+            if(!pluginWorkersReturnedLocked111(old) || old.pluginOriginalAdmission111.isNone() || !old.capabilityCeilingKnown ||
+                canonicalAgentValue(taskPersistCapabilitiesValue(old.capabilities))!=canonicalAgentValue(target.field("capability_ceiling").getOrThrow())) {
+                return taskError("peer.member_unsettled","old member has no exact settled physical owner and original ceiling") }
+        }finally{lock.unlock()}
+        let previous=match(runtime.client.find(old.runId)) {
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        if(!isTerminalRunState(previous.status) || previous.status==RunState.RecoveryRequired ||
+            previous.sessionId.value!=old.sessionId.value) {
+            return taskError("peer.member_run_unsettled","previous actual child Run is not terminal") }
+        let next=proposal.field("request").getOrThrow()
+        // Original revival uses the current Root model and thinking defaults;
+        // the Native recipe contributes only prompt/role ceiling/limits.
+        let base=match(runtime.prepareRequest(httpIntentText(next,"prompt"),sessionId:Some(old.sessionId),modelOverride:runtime.model)) {
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        let data=try{ProductPluginChildRequest111(next,base.thinking)}catch(_:Exception) {
+            return taskError("peer.resume_request_invalid","frozen resume data is invalid") }
+        let capabilities=effectiveChildCapabilities(old.capabilities,data.ceiling,context.capabilities)
+        let child=productPluginChildRequest111(base,data,capabilities,context.budget)
+        if(old.depth>child.budget.maxDepth){return taskError("subagent.budget_exceeded","subagent resource budget exceeded")}
+        match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let state=match(claimPluginPeerIncarnation111(context,input,old,child,admission)) {
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+        match(reserveChildBudget(context,id,executionBudgetFrom(child.budget))) {
+            case Result.Err(error)=>
+                let _=finishSubagent(id,"failed",error:error.message);releaseChildExecution(id);return Result.Err(error)
+            case Result.Ok(_)=>() }
+        match(startPluginWorker111<ToolResult>(state,{=>{=>runPluginChild111(runtime,id,child,admission)}})) {
+            case Result.Err(error)=>
+                let _=finishSubagent(id,"failed",error:error.message);releaseChildExecution(id);return Result.Err(error)
+            case Result.Ok(_)=>() }
+        while(true) {
+            match(context.cancellation.check()) {
+                case Result.Err(error)=>let _=cancelPluginChild111(runtime,id);return Result.Err(error)
+                case Result.Ok(_)=>() }
+            lock.lock()
+            try {
+                let actual=findSubagentLocked(id).getOrThrow()
+                if(!refEq(actual,state) || actual.runId.value!=child.runId.value) {
+                    return taskError("peer.member_changed","new incarnation lost its actual worker custody") }
+                if(actual.pluginStartAdmitted111) {
+                    let observed=resume.field("read_fact").getOrThrow().field("observation").getOrThrow()
+                    let message=proposal.field("message").getOrThrow()
+                    let output=admission.retainObservation(8192+id.size*6+httpIntentText(message,"id").size*6,128,{=>objectValue([
+                        ValueField("schema",textValue("axyndra.peer-delivery-result/v1")),ValueField("sender",observed.field("sender").getOrThrow()),
+                        ValueField("deliveries",listValue([objectValue([ValueField("id",message.field("id").getOrThrow()),
+                            ValueField("recipient",textValue(id)),ValueField("delivered",boolValue(true))])]))])})
+                    return Result.Ok(ToolResult(admission.callId,output)) }
+                if(pluginWorkersReturnedLocked111(actual) || closing || actual.status=="cancelled") {
+                    return taskError("peer.resume_not_admitted","new child returned or closed without actual Core admission") }
+            }finally{lock.unlock()}
+            sleep(Duration.millisecond*5)
+        }
+        taskError("peer.resume_not_admitted","new incarnation has no actual startup acknowledgement")
+    }
+
+    private func claimPluginPeerIncarnation111(context:ToolInvocationContext,input:AgentValue,old:ProductSubagentState,
+        request:AgentRunRequest,admission:HostPluginChildAdmission111):Result<ProductSubagentState> {
+        let resume=input.field("resume").getOrThrow();let proposal=resume.field("proposal").getOrThrow()
+        let observed=resume.field("read_fact").getOrThrow().field("observation").getOrThrow()
+        let identity=proposal.field("message").getOrThrow()
+        var bytes:Int64=16384
+        for(text in [old.id,old.agent,old.agentSource,old.description,old.task,old.assignment,old.sessionId.value,
+            old.sessionRef,old.parentRunId.value,old.parentSessionId.value,old.parentToolCallId,
+            httpIntentText(identity,"id"),httpIntentText(identity,"body"),httpIntentText(identity,"reply_to"),httpIntentText(observed,"sender")]) {
+            if(text.size>Int64.Max/12 || bytes>Int64.Max-text.size*6) {
+                return taskError("peer.resume_size_invalid","actual incarnation metadata invoice overflow") }
+            bytes+=text.size*6
+        }
+        // Pay the overlapping old/new Task and mailbox fields before making
+        // the new private state. Existing request custody is not refunded.
+        let _=admission.retainObservation(bytes,512,{=>nullValue()})
+        let state:ProductSubagentState
+        let sinks:Array<ProductSubagentEventSink>
+        old.settlementLock.lock()
+        try {
+            lock.lock()
+            try {
+                let current=match(pluginPeerMemberSnapshotLocked111(context,old.id,
+                    {count,nodes,build=>admission.retainObservation(count,nodes,build)})) {
+                    case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
+                if(closing || !refEq(findSubagentLocked(old.id).getOrThrow(),old) ||
+                    canonicalAgentValue(current)!=canonicalAgentValue(resume.field("read_request").getOrThrow().field("member_snapshot").getOrThrow()) ||
+                    old.executionInProgress || old.launchInProgress || old.finishing || childBudgetLeases.get(old.id).isSome() ||
+                    !old.pluginCompletionDone111 || !pluginWorkersReturnedLocked111(old) || old.pluginOriginalAdmission111.isNone() ||
+                    messageCounter!=taskPersistInteger(observed,"counter")) {
+                    return taskError("peer.member_changed","same member, message counter or completed custody changed before claim") }
+                match(context.cancellation.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                var index:Int64=0
+                while(index<records.size && !refEq(records[index],old)){index+=1}
+                if(index==records.size){return taskError("peer.member_changed","member disappeared before claim")}
+                let previousYields=yields.toArray();let previousMessages=hubMessages.toArray();let previousCounter=messageCounter
+                state=ProductSubagentState(old.id,old.index,old.agent,old.description,old.task,old.assignment,
+                    old.sessionId,old.sessionRef,request.runId,old.parentRunId,old.parentSessionId,old.parentToolCallId,old.depth,
+                    agentSource:admission.sourceIdentity,capabilities:request.capabilities,capabilityCeilingKnown:old.capabilityCeilingKnown,
+                    budgetAuthority:old.budgetAuthority,startedAt:old.startedAt,status:"running",lastUpdate:nowMillis(),
+                    settlementLock111:Some(old.settlementLock))
+                state.budgetParentRunId=context.runId;state.pluginAdmission111=Some(admission)
+                state.pluginOriginalAdmission111=old.pluginOriginalAdmission111;state.pluginCurrentBudgetAuthority111=Some(context)
+                state.pendingRequest=Some(request);state.executionInProgress=true
+                let message=ProductHubMessageSnapshot(httpIntentText(identity,"id"),httpIntentText(observed,"sender"),old.id,
+                    httpIntentText(identity,"body"),httpIntentText(identity,"reply_to"),taskPersistInteger(identity,"created_at"))
+                let delivery=ProductHubMessageState(message,old.sessionId,old.parentSessionId,
+                    deliveryText111:Some(httpIntentText(proposal.field("request").getOrThrow(),"prompt")))
+                records[index]=state;yields.add(ProductYieldState(request.runId));hubMessages.add(delivery);messageCounter+=1
+                match(persistRootLocked(old.parentSessionId)) {
+                    case Result.Err(error)=>
+                        records[index]=old;yields.clear();yields.add(all:previousYields)
+                        hubMessages.clear();hubMessages.add(all:previousMessages);messageCounter=previousCounter
+                        rememberTaskPersistenceFailureLocked(old.parentSessionId,error);return Result.Err(error)
+                    case Result.Ok(_)=>() }
+                sinks=listenerSinksLocked()
+            }finally{lock.unlock()}
+        }finally{old.settlementLock.unlock()}
+        emitToSinks(sinks,ProductSubagentEvent("lifecycle",state.snapshot()))
+        Result.Ok(state)
+    }
+
+    func pluginBackgroundEnabled111(): Bool { asyncEnabled }
+
+    func waitPluginChild111(context: ToolInvocationContext, receipt: VNextOperationReceipt,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        let id=httpIntentText(receipt.detail,"child_id")
+        while (true) {
+            // Recheck the actual waiting operation/source and selected package
+            // on each wait interval. No Registry lock spans child execution.
+            match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            lock.lock()
+            try {
+                let state=match(findSubagentLocked(id)){case Some(value)=>value;case None=>
+                    return taskError("child.wait_owner_missing","historical child data cannot reconstruct its live owner")}
+                if (closing || state.pluginAdmission111.isNone() || !state.pluginStartAdmitted111 ||
+                    state.parentRunId.value!=context.runId.value || state.parentSessionId.value!=context.sessionId.value ||
+                    state.parentToolCallId!=admission.parentCallId || state.runId.value!=httpIntentText(receipt.detail,"run_id") ||
+                    state.sessionId.value!=httpIntentText(receipt.detail,"thread_id") ||
+                    !admission.selectsStart(state.pluginAdmission111.getOrThrow(),receipt)) {
+                    return taskError("child.wait_owner_changed","wait is not bound to this exact actual launch custody") }
+                if (pluginWorkersReturnedLocked111(state) && !state.executionInProgress && !state.launchInProgress) {
+                    return pluginLaunchResultLocked111(state,admission.callId) }
+            } finally { lock.unlock() }
+            sleep(Duration.millisecond*5)
+        }
+        taskError("child.wait_unavailable","child wait has no acknowledged result")
+    }
+
+    private func runPluginChild111(runtime: ProductRuntime, id: String, child: AgentRunRequest,
+        admission: HostPluginChildAdmission111): Result<ToolResult> {
+        try {
+            let restriction = ProductPluginChildRestriction111(child, admission,
+                { => retainedPluginChild111(id, child, admission) }, { => acknowledgePluginChild111(runtime, id, child, admission) })
+            let started = childRunAction(id, { => runtime.client.startRestricted111(child, restriction,
+                { event => recordChildEvent(id, event) }) })
+            let initial = match (started) {
+                case Result.Err(error) =>
+                    let _ = finishSubagent(id, "failed", error: error.message)
+                    return knownPluginChildTerminal111(id, admission.callId, error)
+                case Result.Ok(item) => item }
+            let outcome = match (reviewSubagentOutcome(runtime, id, child, initial)) {
+                case Result.Err(error) =>
+                    let _ = finishSubagent(id, "failed", error: error.message)
+                    return knownPluginChildTerminal111(id, admission.callId, error)
+                case Result.Ok(item) => item }
+            match (outcome) {
+                case AgentRunOutcome.AwaitingApproval(snapshot, approval) =>
+                    applyRunSnapshot(id, snapshot)
+                    let _ = tasks.transition(TaskId(id), TaskStatus.Blocked)
+                    let _ = markSubagentAwaitingApproval(id, child, approval)
+                case AgentRunOutcome.Completed(snapshot) =>
+                    applyRunSnapshot(id, snapshot)
+                    let ended = finishSubagent(id, runStateName(snapshot.status))
+                    let _ = tasks.transition(TaskId(id), if (ended.status == "completed") { TaskStatus.Completed }
+                        else if (ended.status == "cancelled") { TaskStatus.Cancelled }
+                        else if (ended.status == "recovery_required") { TaskStatus.Blocked } else { TaskStatus.Failed })
+            }
+            lock.lock()
+            try { pluginLaunchResultLocked111(findSubagentLocked(id).getOrThrow(), admission.callId) }
+            finally { lock.unlock() }
+        } catch (error: Exception) {
+            let _ = finishSubagent(id, "failed", error: error.message)
+            knownPluginChildTerminal111(id, admission.callId,
+                AgentError(AgentErrorKind.InvalidInput, "child.worker_failed", "actual child worker did not complete"))
+        } finally {
+            releaseChildExecution(id)
+        }
+    }
+
+    // A real Run failure is observed data, not an unknown launch. This route
+    // is reachable only after finishSubagent has reloaded the actual terminal
+    // Run, run and persisted the frozen finalizer, and settled the original
+    // child budget. Unadmitted starts, cleanup debt and failed persistence keep
+    // the original Err. No Rejected/Unknown Receipt is promoted here.
+    private func knownPluginChildTerminal111(id: String, callId: String,
+        original: AgentError): Result<ToolResult> {
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            if (!state.pluginStartAdmitted111 || state.launchInProgress ||
+                !state.pluginCompletionDone111 || state.pluginCompletion111.isNone() ||
+                state.pluginCompletionPending111.isNone() || state.pendingRequest.isSome() ||
+                childBudgetLeases.get(id).isSome() ||
+                (state.status != "failed" && state.status != "cancelled")) {
+                return Result.Err(original)
+            }
+            pluginLaunchResultLocked111(state, callId)
+        } finally { lock.unlock() }
+    }
+
+    private func pluginLaunchResultLocked111(state: ProductSubagentState, callId: String): Result<ToolResult> {
+        if (!state.pluginStartAdmitted111) { return taskError("child.start_not_admitted", "no actual child Run was admitted") }
+        if (state.status == "recovery_required") { return taskError("child.completion_recovery_required", state.error) }
+        Result.Ok(ToolResult(callId, objectValue([
+            ValueField("schema", textValue("axyndra.child-launch-result/v1")), ValueField("child_id", textValue(state.id)),
+            ValueField("run_id", textValue(state.runId.value)), ValueField("thread_id", textValue(state.sessionId.value)),
+            ValueField("status", textValue(state.status)), ValueField("background", boolValue(state.pluginJobKey111.isSome())),
+            ValueField("completion", state.pluginCompletion111 ?? nullValue()),
+            ValueField("state",objectValue([ValueField("id",textValue(state.id)),ValueField("index",integerValue(state.index)),
+                ValueField("label",textValue(state.agent)),ValueField("source",textValue(state.agentSource)),
+                ValueField("description",textValue(state.description)),ValueField("prompt",textValue(state.task)),
+                ValueField("assignment",textValue(state.assignment)),ValueField("reference",textValue(state.sessionRef)),
+                ValueField("tokens",integerValue(state.tokens)),ValueField("requests",integerValue(state.requests)),
+                ValueField("duration_millis",integerValue(state.snapshot().durationMillis)),ValueField("error",textValue(state.error))]))])))
+    }
+
+    private func acknowledgePluginChild111(runtime: ProductRuntime, id: String, request: AgentRunRequest,
+        admission: HostPluginChildAdmission111): Result<Unit> {
+        match (retainedPluginChild111(id, request, admission)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let actual = match (runtime.client.find(request.runId)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (actual.runId.value != request.runId.value || actual.sessionId.value != request.sessionId.value || actual.status != RunState.Running) {
+            return taskError("child.admission_snapshot_changed", "actual child snapshot does not match this start") }
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            if (closing || state.pluginCancellationRequested111 || state.pluginStartAdmitted111 || !state.launchInProgress || !state.executionInProgress ||
+                !refEq(state.pendingRequest.getOrThrow(), request) || !refEq(state.pluginAdmission111.getOrThrow(), admission) ||
+                childBudgetLeases.get(id).isNone()) {
+                return taskError("child.admission_changed", "actual child custody changed before admission acknowledgement") }
+            // Existing durable Task snapshot records the same child Run; no
+            // separate launch/authority journal or claim is minted here.
+            match (persistRootLocked(state.parentSessionId)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            state.pluginStartAdmitted111 = true
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
+    private func createPluginChildJob111(context: ToolInvocationContext, state: ProductSubagentState): Result<Unit> {
+        lock.lock()
+        try {
+            if (closing || !refEq(findSubagentLocked(state.id).getOrThrow(), state) || state.pluginJobKey111.isSome()) {
+                return taskError("child.job_changed", "child custody cannot acquire another background worker") }
+            let previousJobs = jobs.toArray(); let previousCounter = jobCounter
+            jobCounter += 1
+            let job = ProductAsyncJobState(state.id, state.id, "task", state.description,
+                context.sessionId, state.parentSessionId, context.runId, jobCounter,
+                parentToolCallId: state.parentToolCallId, executing: true)
+            jobs.add(job); state.pluginJobKey111 = Some(job.key())
+            match (persistRootLocked(state.parentSessionId)) {
+                case Result.Err(error) =>
+                    jobs.clear(); jobs.add(all: previousJobs); jobCounter = previousCounter; state.pluginJobKey111 = None
+                    return Result.Err(error)
+                case Result.Ok(_) => Result.Ok(()) }
+        } finally { lock.unlock() }
+    }
+
+    private func isPluginChild111(id: String): Bool {
+        lock.lock()
+        try { match (findSubagentLocked(id)) { case Some(value) => value.pluginAdmission111.isSome(); case None => false } }
+        finally { lock.unlock() }
+    }
+
+    private func cancelPluginChild111(runtime: ProductRuntime, id: String): Result<Unit> {
+        let state = match (pluginChildState111(id)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let stage = match (startPluginWorker111<Unit>(state,
+            { => { => cancelPluginChildAction111(runtime, id) } }, cleanup: true)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        stage.collect()
+    }
+
+    private func cancelPluginChildAction111(runtime: ProductRuntime, id: String): Result<Unit> {
+        let runId: RunId
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            if (state.pluginAdmission111.isNone()) { return taskError("child.owner_missing", "plugin child owner is unavailable") }
+            // A pending cancellation prevents the not-yet-admitted worker
+            // from crossing Core's original startTurn even if no Run exists.
+            state.pluginCancellationRequested111 = true; runId = state.runId
+        } finally { lock.unlock() }
+        let _ = runtime.cancelApprovalReview(runId)
+        var acknowledged = false
+        for (_ in 0..50) {
+            match (runtime.client.cancel(runId)) {
+                case Result.Ok(_) => acknowledged = true
+                case Result.Err(error) =>
+                    if (error.code != "persistence.not_found" && error.code != "run.sqlite_recovery_required") { return Result.Err(error) }
+            }
+            if (acknowledged) { break }
+            let active = { => lock.lock(); try {
+                let state = findSubagentLocked(id).getOrThrow()
+                state.launchInProgress || (state.executionInProgress && !pluginWorkersReturnedLocked111(state))
+            } finally { lock.unlock() } }()
+            if (!active) { break }
+            sleep(Duration.millisecond * 10)
+        }
+        let ended = finishSubagent(id, "cancelled")
+        publishPluginChildJob111(id)
+        if (ended.status == "recovery_required") { return taskError("child.cancellation_recovery_required", ended.error) }
+        // A still-returning model worker owns its budget and finalizer. The
+        // cancellation API acknowledges the request, not an invented result.
+        Result.Ok(())
+    }
+
+    private func retryPluginChildCompletions111(): Unit {
+        let pending = ArrayList<String>()
+        lock.lock()
+        try {
+            for (state in records where state.pluginAdmission111.isSome() && state.status == "recovery_required" &&
+                state.pluginStartAdmitted111 && pluginWorkersReturnedLocked111(state) && !state.launchInProgress && !state.executionInProgress) {
+                pending.add(state.id)
+            }
+        } finally { lock.unlock() }
+        for (id in pending) {
+            // finishSubagent owns the existing exact-child settlement lock.
+            // The finalizer itself rechecks actual terminal Run/artifact; this
+            // path can neither restart a Run nor recreate an owner from disk.
+            let state = match (pluginChildState111(id)) {
+                case Result.Err(_) => continue; case Result.Ok(value) => value }
+            match (startPluginWorker111<Unit>(state, { => { =>
+                let _ = finishSubagent(id, "recovery_required")
+                publishPluginChildJob111(id)
+                Result<Unit>.Ok(())
+            } }, idle: true, cleanup: true)) {
+                case Result.Err(_) => ()
+                case Result.Ok(stage) => let _ = stage.collect()
+            }
+        }
+    }
+
+    private func publishPluginChildJob111(id: String): Unit {
+        let key: ProductAsyncJobKey
+        let snapshot: ProductAsyncJobSnapshot
+        var terminal = false
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            key = match (state.pluginJobKey111) { case None => return; case Some(value) => value }
+            let job = findJobLocked(key).getOrThrow()
+            job.status = state.status; job.error = state.error
+            job.executing = state.launchInProgress || state.executionInProgress
+            job.updatedAt = nowMillis()
+            // This is logical result publication inside the worker. The
+            // physical Future must separately return before wait or restart.
+            terminal = !job.executing && state.pluginCompletionDone111 && childBudgetLeases.get(id).isNone() &&
+                (state.status == "completed" || state.status == "failed" || state.status == "cancelled")
+            if (terminal) { job.result = state.pluginCompletion111; prepareJobSettlementLocked(job) }
+            else if (job.status == "recovery_required") { prepareJobSettlementLocked(job) }
+            match (persistRootLocked(job.rootSessionId)) {
+                case Result.Err(error) => markJobPersistenceRecoveryLocked(job, error); terminal = false
+                case Result.Ok(_) => () }
+            snapshot = job.snapshot()
+        } finally { lock.unlock() }
+        if (terminal) { emitJobEvent("settled", snapshot); injectJobSettlement(key, waitForParent: true) }
+        else { emitJobEvent(if (snapshot.status == "recovery_required") { "recovery_required" } else { "updated" }, snapshot) }
+    }
+
+    private func createPluginChild111(runtime: ProductRuntime, context: ToolInvocationContext,
+        data: ProductPluginChildRequest111, request: AgentRunRequest, depth: Int64,
+        admission: HostPluginChildAdmission111): Result<ProductSubagentState> {
         lock.lock()
         let state: ProductSubagentState
         let sinks: Array<ProductSubagentEventSink>
         try {
-            let previousRecords = records.toArray()
-            let previousYields = yields.toArray()
-            let previousSubagentCounter = subagentCounter
-            let allocated = match (reservation) {
-                case Some(value) => value
-                case None => reserveSubagentLocked(spec.name)
-            }
-            state = ProductSubagentState(
-                allocated.id,
-                allocated.index,
-                spec.agent,
-                productAgentDescription(spec.agent),
-                spec.task,
-                spec.task,
-                child.sessionId,
-                runtime.sessionReference(child.sessionId),
-                child.runId,
-                context.runId,
-                context.sessionId,
-                call.callId,
-                depth,
-                capabilities: child.capabilities,
-                budgetAuthority: Some(context)
-            )
-            state.executionInProgress = true
-            state.pendingRequest = Some(child)
-            records.add(state)
-            yields.add(ProductYieldState(child.runId))
-            pruneSubagentsLocked()
+            if (closing) { return taskError("task.runtime_closing", "child runtime is closing") }
+            let previousRecords = records.toArray(); let previousYields = yields.toArray()
+            let previousCounter = subagentCounter
+            let allocated = reserveSubagentLocked(data.label)
+            state = ProductSubagentState(allocated.id, allocated.index, data.label, data.description,
+                data.prompt, data.prompt, request.sessionId, runtime.sessionReference(request.sessionId), request.runId,
+                context.runId, context.sessionId, admission.parentCallId, depth,
+                agentSource: admission.sourceIdentity, capabilities: request.capabilities, budgetAuthority: Some(context))
+            state.pluginAdmission111 = Some(admission)
+            state.pluginOriginalAdmission111 = Some(admission)
+            state.pluginCurrentBudgetAuthority111 = Some(context)
+            state.executionInProgress = true; state.pendingRequest = Some(request)
+            records.add(state); yields.add(ProductYieldState(request.runId)); pruneSubagentsLocked()
             match (persistRootLocked(context.sessionId)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) =>
-                    records.clear()
-                    records.add(all: previousRecords)
-                    yields.clear()
-                    yields.add(all: previousYields)
-                    subagentCounter = previousSubagentCounter
+                    records.clear(); records.add(all: previousRecords)
+                    yields.clear(); yields.add(all: previousYields); subagentCounter = previousCounter
                     rememberTaskPersistenceFailureLocked(context.sessionId, error)
-                    return Result.Err(error)
-            }
+                    return Result.Err(error) }
             sinks = listenerSinksLocked()
-        } finally {
-            lock.unlock()
-        }
-        emitToSinks(
-            sinks,
-            ProductSubagentEvent("lifecycle", state.snapshot())
-        )
+        } finally { lock.unlock() }
+        emitToSinks(sinks, ProductSubagentEvent("lifecycle", state.snapshot()))
         Result.Ok(state)
     }
+
+    // Called within the short Core admission window. The actual reservation,
+    // request and one live primitive owner must still be the same objects.
+    private func retainedPluginChild111(id: String, request: AgentRunRequest,
+        admission: HostPluginChildAdmission111): Result<Unit> {
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            if (closing || state.pluginCancellationRequested111 || state.status != "running" || !state.launchInProgress || !state.executionInProgress ||
+                state.finishing || state.pluginAdmission111.isNone() || !refEq(state.pluginAdmission111.getOrThrow(), admission) ||
+                state.pendingRequest.isNone() || !refEq(state.pendingRequest.getOrThrow(), request) ||
+                state.runId.value != request.runId.value || state.sessionId.value != request.sessionId.value ||
+                childBudgetLeases.get(id).isNone()) {
+                return taskError("child.admission_changed", "actual child custody or budget reservation changed") }
+            match (state.pluginCurrentBudgetAuthority111) {
+                case None => return taskError("child.authority_missing", "child lost its actual parent budget authority")
+                case Some(parent) =>
+                    if (parent.currentBudgetMode() == BudgetMode.Draining || parent.currentBudgetMode() == BudgetMode.Exhausted) {
+                        return taskError("child.spawn_denied_budget_draining", "parent stopped child admission") }
+                    parent.cancellation.check() }
+        } finally { lock.unlock() }
+    }
+
+    private func validatePluginChildContinuation111(id: String): Result<Unit> {
+        let admission: ?HostPluginChildAdmission111
+        lock.lock()
+        try { admission = findSubagentLocked(id).getOrThrow().pluginAdmission111 }
+        finally { lock.unlock() }
+        match (admission) {
+            case None => Result.Ok(())
+            case Some(value) => value.validateContinuation() }
+    }
+
+    // Caller owns the existing per-child settlementLock. No other finalizer
+    // can run or settle this budget while the exact Native recipe is consumed.
+    private func finalizePluginChild111(id: String, requestedStatus: String,
+        requestedError: String): Result<(String, String)> {
+        let state: ProductSubagentState
+        let admission: HostPluginChildAdmission111
+        lock.lock()
+        try {
+            state = findSubagentLocked(id).getOrThrow()
+            admission = state.pluginAdmission111.getOrThrow()
+            // Revalidate the actual terminal Run even when a prior finalizer
+            // was persisted but its later Task publication failed.
+            if (state.launchInProgress) { return taskError("child.execution_in_progress", "actual child execution has not returned") }
+        } finally { lock.unlock() }
+        let runtime = match (attachedProduct()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+        let snapshot: ?RunSnapshot = match (runtime.client.find(state.runId)) {
+            case Result.Ok(item) => Some(item)
+            case Result.Err(error) => if (error.code == "persistence.not_found") { None } else { return Result.Err(error) } }
+        let observedRunId = state.runId.value
+        let actualStatus = match (snapshot) {
+            case Some(item) =>
+                if (!isTerminalRunState(item.status) || item.status == RunState.RecoveryRequired) {
+                    return taskError("child.execution_unsettled", "actual child Run still owns execution or recovery debt") }
+                applyRunSnapshot(id, item)
+                runStateName(item.status)
+            case None => if (requestedStatus == "failed" || requestedStatus == "cancelled") { requestedStatus }
+                else { return taskError("child.run_missing", "no actual child Run proves the requested terminal state") } }
+        let yielded: ProductYieldState
+        let yieldedRevision: Int64
+        lock.lock()
+        try { yielded = findYieldLocked(state.runId).getOrThrow(); yieldedRevision = yielded.revision150 }
+        finally { lock.unlock() }
+        // Cancellation of the original child must not prevent settling a
+        // genuinely terminal result. This bounded pure query has no observer,
+        // Source, new spawn authority or executable continuation.
+        let retained = { => lock.lock(); try { state.pluginCompletionPending111 } finally { lock.unlock() } }()
+        let value: AgentValue = match (retained) {
+            case Some(item) =>
+                match (admission.validateContinuation()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                item
+            case None =>
+                let owner = match (admission.deriveCompletionProjectionPayment151()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                let payment = try { HostPaidValueProjection151(owner) }
+                    catch (error: Exception) { owner.close(); throw error }
+                var transferred = false
+                try {
+                    let completionSource = CancellationSource(deadlineMillis: agentUtcMillis() + 5000)
+                    let captured = ProductChildCompletionCapture151()
+                    try {
+                        if (snapshot.isSome()) {
+                            let read = runtime.withTaskFinalText151(state.sessionId,
+                                { invoice => payment.deriveDataPhase151(invoice) },
+                                { => completionSource.token.check() }, { lastText =>
+                                    captured.value = Some(productCompleteChildProjection151(admission, payment, state,
+                                        yielded, actualStatus, requestedError, lastText, completionSource.token)) })
+                            match (read) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                        } else {
+                            captured.value = Some(productCompleteChildProjection151(admission, payment, state,
+                                yielded, actualStatus, requestedError, "", completionSource.token)) }
+                    } finally { completionSource.close() }
+                    let projected = match (captured.take()) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                    // The CAS helper holds no result alias after returning. A
+                    // refused transfer clears the capture BEFORE the outer
+                    // finally clears the private backing and closes its owner.
+                    let committed = try { retainCompletedPluginProjection151(id, state, observedRunId,
+                        yielded, yieldedRevision, projected) }
+                        finally { projected.result = Option<AgentValue>.None }
+                    match (committed) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    transferred = true
+                    state.pluginCompletionPending111.getOrThrow()
+                } finally { if (!transferred) { payment.closeUnpublished151() } }
+        }
+        let accepted = value.field("accepted").getOrThrow().asBool()
+        let status = if (actualStatus == "completed" && !accepted) { "failed" } else { actualStatus }
+        let diagnostic = if (!accepted) { value.field("diagnostic").getOrThrow().text } else { requestedError }
+        lock.lock()
+        try {
+            if (!refEq(findSubagentLocked(id).getOrThrow(), state) || state.runId.value != observedRunId) {
+                return taskError("child.completion_changed", "child changed during terminal interpretation") }
+            if (state.pluginCompletionDone111) { return Result.Ok((status, diagnostic)) }
+            state.pluginCompletion111 = Some(value.field("output").getOrThrow())
+            state.pluginCompletionDone111 = true
+            // Persist the complete observed result before settling its child
+            // budget. A journal error retains the original owner/reservation.
+            match (persistRootLocked(state.parentSessionId)) {
+                case Result.Err(error) =>
+                    state.pluginCompletion111 = None; state.pluginCompletionDone111 = false
+                    return Result.Err(error)
+                case Result.Ok(_) => () }
+            // Keep the original paid full response for exact retry after a
+            // later state-publication failure; no new query or refund.
+            Result.Ok((status, diagnostic))
+        } finally { lock.unlock() }
+    }
+
+    private func retainCompletedPluginProjection151(id: String, state: ProductSubagentState,
+        observedRunId: String, yielded: ProductYieldState, yieldedRevision: Int64,
+        projected: ProductChildProjection151): Result<Unit> {
+        lock.lock()
+        try {
+            if (!refEq(findSubagentLocked(id).getOrThrow(), state) || state.runId.value != observedRunId ||
+                !refEq(findYieldLocked(state.runId).getOrThrow(), yielded) || yielded.revision150 != yieldedRevision) {
+                return taskError("child.completion_changed", "child or result slot changed during terminal projection") }
+            projected.payment.fundAdditional151(4096, 4)
+            projectionUnretired151.add(projected.payment)
+            state.pluginProjectionPayment151 = Some(projected.payment)
+            state.pluginCompletionPending111 = projected.result
+            Result<Unit>.Ok(())
+        } finally { lock.unlock() }
+    }
+
+
+
+
+
+
 
     private func reserveSubagentLocked(requested: String): ProductSubagentReservation {
         subagentCounter += 1
@@ -2653,22 +3532,46 @@ public class ProductTaskRuntime {
             case Some(value) => value
             case None => return
         }
+        // Delivery to an already admitted child is generic coordination and
+        // needs no fresh role query. Recheck under the same lock as revival.
+        lock.lock()
+        try {
+            let current = findSubagentLocked(id).getOrThrow()
+            if (current.status == "running" || current.status == "blocked") {
+                let _ = runtime.appendExternalMessageOnce(current.sessionId, "hub-message-" + message.id,
+                    hubMessageModelMessage(message), source: "hub")
+                return
+            }
+            if (current.status == "recovery_required") { return }
+        } finally { lock.unlock() }
+        // Reviving a completed plugin child requires a new frozen canonical
+        // primitive. The old generic mailbox cannot mint that live owner.
+        if (state.agentSource.startsWith("plugin:")) { return }
+        let role = match (queryProductWorkflowRole(runtime, state.agent, authority.sessionId,
+            authority.cancellation, authority.runId.value + ":revive:" + id)) {
+            // No new Run was claimed. Keep the durable message and original
+            // child's historical outcome; a policy failure cannot rewrite it.
+            case Result.Err(_) => return
+            case Result.Ok(value) => value }
         let childCapabilities = effectiveChildCapabilities(
-            capabilitiesForSubagent(id), productAgentCapabilityCeiling(state.agent), authority.capabilities
+            capabilitiesForSubagent(id), role.ceiling, authority.capabilities
         )
-        let base = runtime.request(
+        let base = match (runtime.prepareRequest(
             hubMessagePrompt(message),
             sessionId: Some(state.sessionId),
             modelOverride: runtime.model
-        )
+        )) { case Result.Err(error) =>
+            let _ = finishSubagent(id, "failed", error: error.code + ": " + error.message)
+            return
+            case Result.Ok(value) => value }
         let request = productSubagentRequest(
             base,
-            state.agent,
+            role,
             childCapabilities,
             authority.budget
         )
         while (true) {
-            let claimed = claimRevivedChild(runtime, id, message, request, authority)
+            let claimed = claimRevivedChild(runtime, id, message, request, authority, role.pin)
             if (claimed < 0) { return }
             if (claimed > 0) { break }
             match (authority.cancellation.check()) {
@@ -2713,7 +3616,7 @@ public class ProductTaskRuntime {
     // -1 delivered to a live generation or left a recovery-required record.
     private func claimRevivedChild(
         runtime: ProductRuntime, id: String, message: ProductHubMessageSnapshot,
-        request: AgentRunRequest, authority: ToolInvocationContext
+        request: AgentRunRequest, authority: ToolInvocationContext, workflowPin: ProductWorkflowPin
     ): Int64 {
         let sinks: Array<ProductSubagentEventSink>
         let snapshot: ProductSubagentSnapshot
@@ -2735,6 +3638,8 @@ public class ProductTaskRuntime {
             }
             current.executionInProgress = true
             current.runId = request.runId
+            current.workflowPin = Some(workflowPin)
+            current.agentSource = workflowPin.sourceIdentity()
             current.budgetParentRunId = authority.runId
             current.capabilities = request.capabilities
             current.status = "running"
@@ -2772,12 +3677,21 @@ public class ProductTaskRuntime {
         lock.lock()
         try { findSubagentLocked(id).getOrThrow().executionInProgress = false }
         finally { lock.unlock() }
+        publishPluginChildJob111(id)
     }
 
     private func startChildRun(
         runtime: ProductRuntime, id: String, request: AgentRunRequest
     ): Result<AgentRunOutcome> {
         childRunAction(id, { =>
+            let pin: ProductWorkflowPin
+            lock.lock()
+            try {
+                pin = match (findSubagentLocked(id).getOrThrow().workflowPin) {
+                    case Some(value) => value
+                    case None => return workflowConsumerError("workflow.live_policy_missing") }
+            } finally { lock.unlock() }
+            match (pin.validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             runtime.client.start(request, { event => recordChildEvent(id, event) })
         })
     }
@@ -2817,6 +3731,8 @@ public class ProductTaskRuntime {
                         if (runtime.approvalSettings.mode == ApprovalRoutingMode.Manual) {
                             return Result.Ok(outcome)
                         }
+                        match (validatePluginChildContinuation111(id)) {
+                            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                         let review = runtime.reviewApproval(
                             request,
                             approval,
@@ -2939,9 +3855,34 @@ public class ProductTaskRuntime {
 
     private func settleAndFinishSubagent(
         id: String,
-        status: String,
+        requestedStatus: String,
         error!: String = ""
     ): ProductSubagentSnapshot {
+        var status = requestedStatus
+        var finalError111 = error
+        let pluginOwned: Bool
+        lock.lock()
+        try {
+            let state = findSubagentLocked(id).getOrThrow()
+            pluginOwned = state.pluginAdmission111.isSome()
+            if (pluginOwned && state.launchInProgress) { return state.snapshot() }
+        } finally { lock.unlock() }
+        if (pluginOwned && status != "blocked") {
+            match (finalizePluginChild111(id, status, finalError111)) {
+                case Result.Ok((nextStatus, nextError)) => status = nextStatus; finalError111 = nextError
+                case Result.Err(failure) =>
+                    lock.lock()
+                    try {
+                        let state = findSubagentLocked(id).getOrThrow()
+                        state.status = "recovery_required"
+                        state.error = "recovery_required: frozen child completion did not settle: " + failure.message
+                        state.lastUpdate = nowMillis()
+                        let _ = persistRootLocked(state.parentSessionId)
+                        // No budget settlement, owner clear or fake completion.
+                        return state.snapshot()
+                    } finally { lock.unlock() }
+            }
+        }
         lock.lock()
         try {
             let state = findSubagentLocked(id).getOrThrow()
@@ -2960,7 +3901,7 @@ public class ProductTaskRuntime {
         } else if (subagentStatus(id) == "cancelled") { "cancelled" } else { status }
         let effectiveError = match (budgetSettlementError) {
             case Some(value) => "recovery_required: child budget settlement failed: " + value.message
-            case None => error
+            case None => finalError111
         }
         lock.lock()
         let snapshot: ProductSubagentSnapshot
@@ -3158,15 +4099,7 @@ public class ProductTaskRuntime {
         } finally { lock.unlock() }
     }
 
-    private func takeYield(subagentId: String): ProductYieldState {
-        lock.lock()
-        try {
-            let state = findSubagentLocked(subagentId).getOrThrow()
-            findYieldLocked(state.runId).getOrThrow()
-        } finally {
-            lock.unlock()
-        }
-    }
+
 
     private func attachedProduct(): Result<ProductRuntime> {
         lock.lock()
@@ -3410,61 +4343,139 @@ public class ProductTaskRuntime {
         targets.toArray()
     }
 
-    func executeProcessOperation(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        op: String
-    ): Result<ToolResult> {
-        let supervisor = match (processSupervisorValue()) {
-            case Some(value) => value
-            case None => return taskError<ToolResult>(
-                "hub.process_supervisor_unavailable",
-                "process supervisor is not attached"
-            )
-        }
-        let broker = match (processBrokerValue()) {
-            case Some(value) => value
-            case None => return taskError<ToolResult>(
-                "hub.process_broker_unavailable",
-                "process broker is not attached"
-            )
-        }
-        if (op == "start") {
-            if (daemonBoolean(call, "persist", false) || daemonBoolean(call, "detached", false)) {
-                if (supervisor.contains(daemonText(call, "name"))) {
-                    return taskError<ToolResult>(
-                        "hub.process_exists",
-                        "process already exists in the local supervisor"
-                    )
-                }
-                return broker.execute(call, op, context.sessionId.value)
-            }
-            return supervisor.execute(call, op, context.sessionId.value)
-        }
-        if (op == "ps") {
-            let local = match (supervisor.execute(call, op, context.sessionId.value)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            let remoteResult = match (broker.executeIfConfigured(
-                call,
-                op,
-                context.sessionId.value
-            )) {
-                case Some(value) => value
-                case None => return Result.Ok(local)
-            }
-            let remote = match (remoteResult) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            return mergeProcessLists(call.callId, local, remote)
-        }
-        let name = daemonText(call, "name")
-        if (name != "" && supervisor.contains(name)) {
-            return supervisor.execute(call, op, context.sessionId.value)
-        }
-        broker.execute(call, op, context.sessionId.value)
+
+    // Only actual resource facts are supplied here. Native owns all eight
+    // grammars, defaults, readiness and output projections.
+    func pluginProcessFacts180(meter:HostPaidValueProjection151):Result<AgentValue>{
+        lock.lock()
+        try{
+            let actual=match(product){case Some(value)=>value;case None=>return taskError<AgentValue>(
+                "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
+            meter.fundAdditional151(65536,16)
+            Result.Ok(objectValue([ValueField("shell_mode",textValue(shellNetworkModeName(actual.shellNetworkMode))),
+                ValueField("broker_available",boolValue(processBroker.isSome()))]))
+        }finally{lock.unlock()}
+    }
+    func observePluginProcessPreparation180(context:ToolInvocationContext,request:AgentValue,
+        meter:HostPaidValueProjection151):Result<AgentValue>{
+        let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<AgentValue>(
+            "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
+        let op=httpIntentText(request,"op")
+        if(op=="start" || op=="ps" || supervisor.contains(httpIntentText(request,"name"))){
+            return Result.Ok(supervisor.captureNativeProcessTarget180(request,meter))}
+        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<AgentValue>(
+            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
+        broker.captureDerivedTarget180(request,meter)
+    }
+    func executePluginProcess180(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111):Result<ToolResult>{
+        let lease=match(admission.acquireHubProcessService180()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let producer=lease.reserveControlBeforeClosure180()
+        producer.fundProducerFrameBeforeEffect180(65536)
+        let response=ProductActualProcessResponse180()
+        producer.invokeSynchronousHelper180({=>
+            match(executePluginProcessActualBody180(context,input,admission,lease)){
+                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error)
+                case Result.Ok(value)=>response.result=Some(value)}
+        })
+        // The entire original operation body/codec/SQL/socket frame returned
+        // before classification/publication. Unknown launch/cleanup stays in
+        // its original registered state and the paid producer.
+        producer.noteSynchronousHelperReturned180()
+        if(producer.hasOriginalFailure180()){
+            return admission.publishActualProcessFailure180(context,producer)}
+        let result=response.result.getOrThrow();response.result=None<ToolResult>
+        if(!producer.retireObservedReturn()){
+            throw HostHubProcessHeldProducerFailure180(producer)}
+        // No source refund is inferred here. The exact Returning159 witness
+        // only clears callback-to-Source aliases after their actual helpers
+        // returned; output/error consumers and physical owners stay separate.
+        let _=lease.collectNonPersistentRevocationReturn180()
+        Result<ToolResult>.Ok(result)
+    }
+
+    func observePluginProcess197(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111):Result<ToolResult>{
+        if(!pluginHubProcessObservationInputValid197(input)){
+            return taskError<ToolResult>("hub.process_observation_invalid","observation cannot request a process mutation")}
+        let lease=match(admission.acquireHubProcessObservation197()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let producer=lease.reserveControlBeforeClosure180()
+        producer.fundProducerFrameBeforeEffect180(65536)
+        let response=ProductActualProcessResponse180()
+        producer.invokeSynchronousHelper180({=>
+            match(observePluginProcessActualBody197(context,input,admission,lease)){
+                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error)
+                case Result.Ok(value)=>response.result=Some(value)}
+        })
+        // The entire original operation body/codec/SQL/socket frame returned
+        // before classification/publication. Unknown launch/cleanup stays in
+        // its original registered state and the paid producer.
+        producer.noteSynchronousHelperReturned180()
+        if(producer.hasOriginalFailure180()){
+            return admission.publishActualProcessFailure180(context,producer)}
+        let result=response.result.getOrThrow();response.result=None<ToolResult>
+        if(!producer.retireObservedReturn()){
+            throw HostHubProcessHeldProducerFailure180(producer)}
+        // No source refund is inferred here. The exact Returning159 witness
+        // only clears callback-to-Source aliases after their actual helpers
+        // returned; output/error consumers and physical owners stay separate.
+        let _=lease.collectNonPersistentRevocationReturn180()
+        Result<ToolResult>.Ok(result)
+    }
+
+    private func observePluginProcessActualBody197(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111,lease:HostHubDerivedProcessLease180):Result<ToolResult>{
+        if(!pluginHubProcessObservationInputValid197(input)){
+            return taskError<ToolResult>("hub.process_observation_invalid","observation cannot request a process mutation")}
+        let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
+            "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
+        let request=input.field("request").getOrThrow();let op=httpIntentText(request,"op")
+        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
+            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
+        if(op=="ps"){
+            let local=match(supervisor.observeNativeProcess180(request,context.sessionId.value,lease)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            let remote=match(broker.executeDerivedIfConfigured180(request,context.sessionId.value,lease)){
+                case None=>return Result.Ok(local);case Some(Result.Err(error))=>local.releasePayload();return Result.Err(error)
+                case Some(Result.Ok(value))=>value}
+            // Original list projection is retained; both actual payload loans
+            // survive the whole merge helper, and are released afterwards.
+            try{lease.fundBorrowedDataBeforeCopy180(local.output);lease.fundBorrowedDataBeforeCopy180(remote.output)
+                mergeProcessObservations201(admission.callId,local,remote)}
+            finally{local.releasePayload();remote.releasePayload()}}
+        if(supervisor.contains(httpIntentText(request,"name"))){
+            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
+        broker.executeDerived180(request,context.sessionId.value,lease)
+    }
+
+    private func executePluginProcessActualBody180(context:ToolInvocationContext,input:AgentValue,
+        admission:HostPluginChildAdmission111,lease:HostHubDerivedProcessLease180):Result<ToolResult>{
+        let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
+            "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
+        let request=input.field("request").getOrThrow();let op=httpIntentText(request,"op")
+        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
+            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
+        if(op=="start"){
+            let spec=request.field("spec").getOrThrow()
+            if(spec.field("persist").getOrThrow().asBool() || spec.field("detached").getOrThrow().asBool()){
+                if(supervisor.contains(httpIntentText(spec,"name"))){return taskError<ToolResult>(
+                    "hub.process_exists","process already exists in the local supervisor")}
+                return broker.executeDerived180(request,context.sessionId.value,lease)}
+            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
+        if(op=="ps"){
+            let local=match(supervisor.observeNativeProcess180(request,context.sessionId.value,lease)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            let remote=match(broker.executeDerivedIfConfigured180(request,context.sessionId.value,lease)){
+                case None=>return Result.Ok(local);case Some(Result.Err(error))=>local.releasePayload();return Result.Err(error)
+                case Some(Result.Ok(value))=>value}
+            // Original list projection is retained; both actual payload loans
+            // survive the whole merge helper, and are released afterwards.
+            try{lease.fundBorrowedDataBeforeCopy180(local.output);lease.fundBorrowedDataBeforeCopy180(remote.output)
+                mergeProcessObservations201(admission.callId,local,remote)}
+            finally{local.releasePayload();remote.releasePayload()}}
+        if(supervisor.contains(httpIntentText(request,"name"))){
+            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
+        broker.executeDerived180(request,context.sessionId.value,lease)
     }
 
     private func processSupervisorValue(): ?ProductProcessSupervisor {
@@ -3485,60 +4496,7 @@ public class ProductTaskRuntime {
         }
     }
 
-    private func takeHubMessages(
-        context: ToolInvocationContext,
-        from: String,
-        peek: Bool
-    ): Result<Array<ProductHubMessageSnapshot>> {
-        lock.lock()
-        try {
-            let caller = hubIdentityLocked(context)
-            let values = ArrayList<ProductHubMessageSnapshot>()
-            let consumed = ArrayList<ProductHubMessageState>()
-            for (state in hubMessages where !state.consumed && state.snapshot.to == caller.id &&
-                state.rootSessionId.value == caller.rootSessionId.value && (from == "" || state.snapshot.from == from)) {
-                values.add(state.snapshot)
-                if (!peek) {
-                    state.consumed = true
-                    consumed.add(state)
-                }
-            }
-            if (!peek && !values.isEmpty()) {
-                match (persistRootLocked(caller.rootSessionId)) {
-                    case Result.Ok(_) => ()
-                    case Result.Err(error) =>
-                        for (state in consumed) { state.consumed = false }
-                        rememberTaskPersistenceFailureLocked(caller.rootSessionId, error)
-                        return Result.Err(error)
-                }
-            }
-            Result.Ok(values.toArray())
-        } finally {
-            lock.unlock()
-        }
-    }
 
-    private func waitForHubMessage(
-        context: ToolInvocationContext,
-        from: String,
-        timeoutMillis: Int64
-    ): Result<?ProductHubMessageSnapshot> {
-        let started = nowMillis()
-        while (true) {
-            let values = match (takeHubMessages(context, from, false)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            if (!values.isEmpty()) {
-                return Result.Ok(Some(values[0]))
-            }
-            if (timeoutMillis > 0 && nowMillis() - started >= timeoutMillis) {
-                return Result.Ok(None)
-            }
-            sleep(Duration.millisecond * 10)
-        }
-        Result.Ok(None)
-    }
 
     private func pruneHubMessagesLocked(): Unit {
         while (true) {
@@ -3604,11 +4562,13 @@ public class ProductTaskRuntime {
 
     private func emitJobEvent(
         kind: String,
-        snapshot: ProductAsyncJobSnapshot
+        snapshot: ProductAsyncJobSnapshot,
+        paidCapture172!: ?ProductJobCancelCapture172 = None<ProductJobCancelCapture172>
     ): Unit {
         let sinks: Array<ProductAsyncJobEventSink>
         lock.lock()
         try {
+            match(paidCapture172){case Some(capture)=>capture.fundSinkSnapshot(jobListeners.size);case None=>()}
             sinks = jobListenerSinksLocked()
         } finally {
             lock.unlock()
@@ -3636,6 +4596,22 @@ public class ProductTaskRuntime {
         }
     }
 
+    private func pluginJobPhysicalReturnedLocked111(job: ProductAsyncJobState): Bool {
+        match (findSubagentLocked(job.agentId)) {
+            case Some(state) =>
+                if (state.pluginAdmission111.isSome() && state.pluginJobKey111.isSome()) {
+                    let key = state.pluginJobKey111.getOrThrow()
+                    if (key.rootSessionId.value == job.rootSessionId.value &&
+                        key.sessionId.value == job.sessionId.value && key.id == job.id &&
+                        key.instanceId == job.instanceId) { return pluginWorkersReturnedLocked111(state) }
+                }
+            case None => ()
+        }
+        // Old completed jobs no longer own the current incarnation. Replacing
+        // it already required the old future set to have physically returned.
+        true
+    }
+
     private func jobSelectionByKeys(keys: Array<ProductAsyncJobKey>): ProductAsyncJobSelection {
         lock.lock()
         try {
@@ -3645,7 +4621,7 @@ public class ProductTaskRuntime {
                 match (findJobLocked(key)) {
                     case Some(job) =>
                         values.add(job.snapshot())
-                        if (job.status != "running" && job.settlementInjected) {
+                        if (job.status != "running" && job.settlementInjected && pluginJobPhysicalReturnedLocked111(job)) {
                             settledAndDelivered = true
                         }
                     case None => ()
@@ -3669,121 +4645,7 @@ public class ProductTaskRuntime {
         }
     }
 
-    private func finishBackgroundTask(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        key: ProductAsyncJobKey,
-        outcome: Result<ProductTaskResult>
-    ): Unit {
-        let snapshot: ProductAsyncJobSnapshot
-        var emitSettlement = false
-        lock.lock()
-        try {
-            let job = findJobLocked(key).getOrThrow()
-            if (job.status == "cancelled") {
-                emitSettlement = false
-                job.executing = false
-                prepareJobSettlementLocked(job)
-            } else {
-                emitSettlement = true
-                match (outcome) {
-                    case Result.Ok(value) =>
-                        job.result = Some(taskPersistBoundJobResult(productTaskResultValue(value)))
-                        job.status = if (value.exitCode == 0) {
-                            "completed"
-                        } else if (value.snapshot.status == "cancelled") {
-                            "cancelled"
-                        } else if (value.snapshot.status == "blocked") {
-                            "blocked"
-                        } else {
-                            "failed"
-                        }
-                        job.error = value.stderr
-                    case Result.Err(error) =>
-                        job.status = "failed"
-                        job.error = error.message
-                }
-                job.updatedAt = nowMillis()
-                job.executing = false
-                prepareJobSettlementLocked(job)
-            }
-            match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    markJobPersistenceRecoveryLocked(job, error)
-                    let _ = persistRootLocked(job.rootSessionId)
-                    emitSettlement = false
-            }
-            snapshot = job.snapshot()
-        } finally {
-            lock.unlock()
-        }
-        deliverBackgroundSnapshot(
-            context,
-            call,
-            key,
-            snapshot,
-            emitSettlement
-        )
-    }
 
-    private func finishBackgroundBash(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        key: ProductAsyncJobKey,
-        outcome: Result<ToolResult>
-    ): Unit {
-        let snapshot: ProductAsyncJobSnapshot
-        var emitSettlement = false
-        lock.lock()
-        try {
-            let job = findJobLocked(key).getOrThrow()
-            if (job.status == "cancelled") {
-                emitSettlement = false
-                job.executing = false
-                prepareJobSettlementLocked(job)
-            } else {
-                emitSettlement = true
-                match (outcome) {
-                    case Result.Ok(value) =>
-                        job.result = Some(taskPersistBoundJobResult(value.output))
-                        job.status = if (value.isError) {
-                            "failed"
-                        } else {
-                            "completed"
-                        }
-                        job.error = if (value.isError) {
-                            "bash job failed"
-                        } else {
-                            ""
-                        }
-                    case Result.Err(error) =>
-                        job.status = "failed"
-                        job.error = error.message
-                }
-                job.updatedAt = nowMillis()
-                job.executing = false
-                prepareJobSettlementLocked(job)
-            }
-            match (persistRootLocked(job.rootSessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) =>
-                    markJobPersistenceRecoveryLocked(job, error)
-                    let _ = persistRootLocked(job.rootSessionId)
-                    emitSettlement = false
-            }
-            snapshot = job.snapshot()
-        } finally {
-            lock.unlock()
-        }
-        deliverBackgroundSnapshot(
-            context,
-            call,
-            key,
-            snapshot,
-            emitSettlement
-        )
-    }
 
     private func deliverBackgroundSnapshot(
         context: ToolInvocationContext,
@@ -4063,199 +4925,8 @@ public class ProductTaskRuntime {
     }
 }
 
-public class ProductTaskTool <: ToolExecutor {
-    private let runtime: ProductTaskRuntime
 
-    public init(runtime: ProductTaskRuntime) {
-        this.runtime = runtime
-    }
 
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
-        runtime.executeTask(context, call)
-    }
-
-    public func cancel(runId: RunId): Result<Unit> {
-        runtime.cancel(runId)
-    }
-
-    public func afterResultPersisted(
-        context: ToolInvocationContext,
-        result: ToolResult
-    ): Result<Unit> {
-        runtime.deliverHubMessagesAfterParentResult(
-            context.sessionId, result.callId
-        )
-    }
-}
-
-public class ProductYieldTool <: ToolExecutor {
-    private let runtime: ProductTaskRuntime
-
-    public init(runtime: ProductTaskRuntime) {
-        this.runtime = runtime
-    }
-
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
-        runtime.submitYield(context, call)
-    }
-}
-
-public class ProductHubTool <: ToolExecutor {
-    private let runtime: ProductTaskRuntime
-
-    public init(runtime: ProductTaskRuntime) {
-        this.runtime = runtime
-    }
-
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        let call = ToolCall(
-            prepared.call.callId,
-            prepared.call.name,
-            prepared.operationPlan.canonicalArguments
-        )
-        let op = match (productTaskText(call, "op", true)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let processName = daemonText(call, "name")
-        if (op == "send" && processName != "") {
-            if (daemonText(call, "to") != "") {
-                return taskError<ToolResult>(
-                    "hub.send_target_conflict",
-                    "to and name are mutually exclusive for hub send"
-                )
-            }
-            return runtime.executeProcessOperation(context, call, op)
-        }
-        if (op == "wait" && processName != "") {
-            return runtime.executeProcessOperation(context, call, op)
-        }
-        if (op == "start" || op == "ps" || op == "logs" || op == "stop" || op == "restart" || op == "describe") {
-            return runtime.executeProcessOperation(context, call, op)
-        }
-        if (op == "send") {
-            let to = match (productTaskText(call, "to", true)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            let message = match (productTaskText(
-                call,
-                "message",
-                true
-            )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            let replyTo = match (productTaskText(
-                call,
-                "replyTo",
-                false
-            )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            let timeout = match (jobTimeout(call)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            return runtime.sendHubMessage(
-                context,
-                call,
-                to,
-                message,
-                replyTo,
-                optionalBoolean(call, "await", false),
-                timeout
-            )
-        }
-        if (op == "inbox") {
-            return runtime.hubInbox(
-                context,
-                call,
-                optionalBoolean(call, "peek", false)
-            )
-        }
-        if (op == "list") {
-            return runtime.hubPeers(context, call)
-        }
-        let from = match (productTaskText(call, "from", false)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (op == "wait" && from != "") {
-            let timeout = match (jobTimeout(call)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            return runtime.hubMessageWait(
-                context,
-                call,
-                from,
-                timeout
-            )
-        }
-        let ids = match (jobIds(call)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let snapshots = match (op) {
-            case "jobs" =>
-                if (!ids.isEmpty()) {
-                    return taskError<ToolResult>(
-                        "hub.invalid_arguments",
-                        "hub jobs does not accept ids"
-                    )
-                }
-                runtime.jobsFor(context.sessionId)
-            case "wait" =>
-                let timeout = match (jobTimeout(call)) {
-                    case Result.Ok(value) => value
-                    case Result.Err(error) => return Result.Err(error)
-                }
-                runtime.waitForJobs(context.sessionId, ids, timeout)
-            case "cancel" =>
-                if (ids.isEmpty()) {
-                    return taskError<ToolResult>(
-                        "hub.ids_required",
-                        "hub cancel requires one or more job ids"
-                    )
-                }
-                runtime.cancelJobs(context.sessionId, ids)
-            case _ => return taskError<ToolResult>(
-                "hub.op_invalid",
-                "unsupported hub operation: " + op
-            )
-        }
-        let fields = ArrayList<ValueField>()
-        fields.add(ValueField("op", textValue(op)))
-        fields.add(ValueField("jobs", asyncJobsValue(snapshots)))
-        let warnings = runtime.recoveryWarningsFor(context)
-        if (!warnings.isEmpty()) {
-            fields.add(ValueField("recoveryWarnings", taskStringValues(warnings)))
-        }
-        Result.Ok(ToolResult(call.callId, objectValue(fields.toArray())))
-    }
-
-}
 
 class TaskSchemaValidation {
     let valid: Bool
@@ -4267,229 +4938,6 @@ class TaskSchemaValidation {
     }
 }
 
-func parseProductTaskBatch(call: ToolCall): Result<ProductTaskBatch> {
-    let tasksValue = call.arguments.field("tasks")
-    if (tasksValue.isNone()) {
-        let context = match (productTaskText(call, "context", false)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        return match (parseProductTask(call)) {
-            case Result.Ok(value) => Result.Ok(ProductTaskBatch(context, [value], false))
-            case Result.Err(error) => Result.Err(error)
-        }
-    }
-    for (field in call.arguments.fields) {
-        if (field.name != "context" && field.name != "tasks" && field.name != "network") {
-            return taskError<ProductTaskBatch>(
-                "task.invalid_arguments",
-                "batch task only accepts context and tasks"
-            )
-        }
-    }
-    let context = match (call.arguments.field("context")) {
-        case Some(value) =>
-            if (value.unifiedKind != ValueKind.Text || value.text.trimAscii() == "") {
-                return taskError<ProductTaskBatch>(
-                    "task.context_required",
-                    "batch task requires non-empty context"
-                )
-            }
-            value.text
-        case None => return taskError<ProductTaskBatch>(
-            "task.context_required",
-            "batch task requires non-empty context"
-        )
-    }
-    let raw = tasksValue.getOrThrow()
-    if (raw.unifiedKind != ValueKind.List || raw.items.isEmpty() || raw.items.size > 8) {
-        return taskError<ProductTaskBatch>(
-            "task.batch_size",
-            "tasks must contain between 1 and 8 task items"
-        )
-    }
-    let specs = ArrayList<ProductTaskSpec>()
-    let names = ArrayList<String>()
-    var index: Int64 = 0
-    for (item in raw.items) {
-        if (item.unifiedKind != ValueKind.Object) {
-            return taskError<ProductTaskBatch>(
-                "task.item_invalid",
-                "every tasks item must be an object"
-            )
-        }
-        let spec = match (parseProductTask(
-            ToolCall(
-                call.callId + "-" + index.toString(),
-                "task",
-                item
-            )
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (spec.name != "") {
-            if (containsTaskStringIgnoreAsciiCase(
-                names.toArray(),
-                spec.name
-            )) {
-                return taskError<ProductTaskBatch>(
-                    "task.name_duplicate",
-                    "task names must be unique within a batch"
-                )
-            }
-            names.add(spec.name)
-        }
-        specs.add(spec)
-        index += 1
-    }
-    Result.Ok(ProductTaskBatch(context, specs.toArray(), true))
-}
-
-func parseProductTask(call: ToolCall): Result<ProductTaskSpec> {
-    for (field in call.arguments.fields) {
-        if (field.name != "name" && field.name != "agent" && field.name != "task" && field.name != "effort" &&
-            field.name != "context" && field.name != "outputSchema" && field.name != "schemaMode" &&
-            field.name != "network") {
-            return taskError<ProductTaskSpec>(
-                "task.invalid_arguments",
-                "unknown task argument: " + field.name
-            )
-        }
-    }
-    let name = match (productTaskText(call, "name", false)) {
-        case Result.Ok(value) => normalizeTaskName(value)
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let agent = match (productTaskText(call, "agent", false)) {
-        case Result.Ok(value) =>
-            if (value == "") {
-                "task"
-            } else {
-                value
-            }
-        case Result.Err(error) => return Result.Err(error)
-    }
-    if (!validProductAgent(agent)) {
-        return taskError<ProductTaskSpec>(
-            "task.agent_unknown",
-            "unknown bundled agent: " + agent
-        )
-    }
-    let task = match (productTaskText(call, "task", true)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let effort = match (productTaskText(
-        call,
-        "effort",
-        false
-    )) {
-        case Result.Ok(value) =>
-            if (value == "") {
-                "med"
-            } else {
-                value
-            }
-        case Result.Err(error) => return Result.Err(error)
-    }
-    if (effort != "lo" && effort != "med" && effort != "hi") {
-        return taskError<ProductTaskSpec>(
-            "task.effort_invalid",
-            "effort must be lo, med, or hi"
-        )
-    }
-    let schemaMode = match (productTaskText(
-        call,
-        "schemaMode",
-        false
-    )) {
-        case Result.Ok(value) =>
-            if (value == "") {
-                "permissive"
-            } else {
-                value
-            }
-        case Result.Err(error) => return Result.Err(error)
-    }
-    if (schemaMode != "permissive" && schemaMode != "strict") {
-        return taskError<ProductTaskSpec>(
-            "task.schema_mode_invalid",
-            "schemaMode must be permissive or strict"
-        )
-    }
-    let outputSchema: ?AgentValue = match (call.arguments.field("outputSchema")) {
-        case Some(value) =>
-            if (value.unifiedKind == ValueKind.Null) {
-                None
-            } else if (value.unifiedKind == ValueKind.Object || value.unifiedKind == ValueKind.Boolean || value.unifiedKind == ValueKind.Text) {
-                Some(value)
-            } else {
-                return taskError<ProductTaskSpec>(
-                    "task.output_schema_invalid",
-                    "outputSchema must be an object, boolean, string, or null"
-                )
-            }
-        case None => None
-    }
-    Result.Ok(
-        ProductTaskSpec(
-            name,
-            agent,
-            task,
-            effort,
-            outputSchema,
-            schemaMode
-        )
-    )
-}
-
-func productTaskText(
-    call: ToolCall,
-    name: String,
-    required: Bool
-): Result<String> {
-    match (call.arguments.field(name)) {
-        case Some(value) =>
-            if (value.unifiedKind != ValueKind.Text) {
-                taskError<String>(
-                    "task.invalid_arguments",
-                    name + " must be a string"
-                )
-            } else if (required && value.text.trimAscii() == "") {
-                taskError<String>(
-                    "task.invalid_arguments",
-                    name + " must not be empty"
-                )
-            } else {
-                Result.Ok(value.text.trimAscii())
-            }
-        case None =>
-            if (required) {
-                taskError<String>(
-                    "task.invalid_arguments",
-                    name + " is required"
-                )
-            } else {
-                Result.Ok("")
-            }
-    }
-}
-
-func normalizeTaskName(source: String): String {
-    if (source == "") {
-        return ""
-    }
-    var result = source.replace("\n", " ").replace("\r", " ").replace("\t", " ").trimAscii()
-    while (result.contains("  ")) {
-        result = result.replace("  ", " ")
-    }
-    if (result.size <= 80) {
-        result
-    } else {
-        result[..79] + "…"
-    }
-}
 
 public class ProductBundledAgentDefinition {
     public let name: String
@@ -4516,80 +4964,18 @@ public class ProductBundledAgentDefinition {
     }
 }
 
-public func bundledProductAgents(): Array<ProductBundledAgentDefinition> {
-    let values = ArrayList<ProductBundledAgentDefinition>()
-    for (name in [
-        "designer",
-        "librarian",
-        "reviewer",
-        "scout",
-        "sonic",
-        "task"
-    ]) {
-        values.add(
-            ProductBundledAgentDefinition(
-                name,
-                productAgentDescription(name),
-                productAgentPrompt(name),
-                spawns: if (name == "task") {
-                    "*"
-                } else {
-                    ""
-                },
-                model: if (name == "task") {
-                    "@task"
-                } else if (name == "sonic") {
-                    "@smol"
-                } else {
-                    ""
-                },
-                thinkingLevel: if (name == "sonic") {
-                    "medium"
-                } else {
-                    ""
-                }
-            )
-        )
-    }
-    values.toArray()
-}
-
-func validProductAgent(agent: String): Bool {
-    agent == "task" || agent == "scout" || agent == "designer" || agent == "reviewer" || agent == "librarian" ||
-        agent == "sonic"
-}
-
-func productAgentDescription(agent: String): String {
-    match (agent) {
-        case "scout" => "Fast codebase exploration and evidence gathering"
-        case "designer" => "Architecture and implementation design"
-        case "reviewer" => "Correctness and regression review"
-        case "librarian" => "Documentation and source research"
-        case "sonic" => "Focused low-latency execution"
-        case _ => "General delegated implementation"
-    }
-}
-
-func productAgentPrompt(agent: String): String {
-    "You are the " + agent + " delegated agent. " + productAgentDescription(agent) +
-        ". Complete only the assigned task. " +
-        "Once the requested evidence is available, stop exploring and immediately use the yield tool for structured " +
-        "output; do not continue reasoning or issue redundant tool calls. " +
-        "If yield is not appropriate, end with a concise final report."
-}
-
 // Child runs have their own literal stable prefix. Reusing a parent's cache
 // key after replacing its system prompt would associate different prefixes
 // with one key. Shared context remains delimited, external turn data.
-func productSubagentPrompt(agent: String, sharedContext: String): PromptBuild {
+func productSubagentPrompt(role: ProductWorkflowRole, sharedContext: String): PromptBuild {
     let builder = PromptBuilder()
     builder.add(PromptSection(
         PromptSectionKind.Base,
         PromptTrust.System,
         PromptStability.Stable,
-        "axyndra-subagent-" + agent,
-        "1",
-        productAgentPrompt(agent)
+        role.source,
+        role.version,
+        role.prompt
     ))
     if (sharedContext.trimAscii() != "") {
         builder.add(PromptSection(
@@ -4606,13 +4992,13 @@ func productSubagentPrompt(agent: String, sharedContext: String): PromptBuild {
 
 func productSubagentRequest(
     base: AgentRunRequest,
-    agent: String,
+    role: ProductWorkflowRole,
     capabilities: CapabilitySet,
     parentBudget: ExecutionBudget,
     sharedContext!: String = ""
 ): AgentRunRequest {
     let remaining = parentBudget.remainingCumulativeBudget()
-    let promptBuild = productSubagentPrompt(agent, sharedContext)
+    let promptBuild = productSubagentPrompt(role, sharedContext)
     AgentRunRequest(
         base.runId,
         base.sessionId,
@@ -4620,12 +5006,21 @@ func productSubagentRequest(
         base.prompt,
         system: promptBuild.text,
         thinking: base.thinking,
+        userRequestedThinking: base.requestedPolicy.userRequestedThinking,
+        thinkingSource: base.requestedPolicy.thinkingSource,
+        modelCapabilitiesSnapshot: Some(base.modelCapabilitiesSnapshot),
+        resolverVersion: base.resolverVersion,
+        interactions: base.interactions,
         capabilities: effectiveChildCapabilities(
-            capabilities, productAgentCapabilityCeiling(agent), capabilities
+            capabilities, role.ceiling, capabilities
         ),
         budget: ResourceBudget(
             maxInputTokens: base.budget.maxInputTokens,
-            maxOutputTokens: min(8000, base.budget.maxOutputTokens),
+            maxOutputTokens: min(role.limits.maxOutputTokens, base.budget.maxOutputTokens),
+            requestOutputBudget: Some(RequestOutputBudget(min(role.limits.maxOutputTokens, base.budget.maxOutputTokens),
+                minVisibleResponseTokens: base.budget.requestOutputBudget.minVisibleResponseTokens)),
+            maxDrainModelRequests: base.budget.maxDrainModelRequests,
+            maxDrainTurns: base.budget.maxDrainTurns,
             maxTotalInputTokens: productChildCumulativeLimit(
                 base.budget.maxTotalInputTokens,
                 parentBudget.maxTotalInputTokens,
@@ -4636,18 +5031,14 @@ func productSubagentRequest(
                 parentBudget.maxTotalOutputTokens,
                 remaining.outputTokens
             ),
-            maxModelRequests: min(12, base.budget.maxModelRequests),
-            maxTurns: min(12, base.budget.maxTurns),
-            maxToolCalls: min(24, base.budget.maxToolCalls),
-            maxWallMillis: if (base.budget.maxWallMillis == 0) {
-                300000
-            } else {
-                min(300000, base.budget.maxWallMillis)
-            },
-            maxIdleMillis: min(90000, base.budget.maxIdleMillis),
-            maxChildren: min(8, base.budget.maxChildren),
-            maxDepth: min(4, base.budget.maxDepth),
-            maxConcurrentChildren: min(4, base.budget.maxConcurrentChildren),
+            maxModelRequests: min(role.limits.maxModelRequests, base.budget.maxModelRequests),
+            maxTurns: min(role.limits.maxTurns, base.budget.maxTurns),
+            maxToolCalls: min(role.limits.maxToolCalls, base.budget.maxToolCalls),
+            maxWallMillis: productRequestedChildLimit(role.limits.maxWallMillis, base.budget.maxWallMillis),
+            maxIdleMillis: min(role.limits.maxIdleMillis, base.budget.maxIdleMillis),
+            maxChildren: min(role.limits.maxChildren, base.budget.maxChildren),
+            maxDepth: min(role.limits.maxDepth, base.budget.maxDepth),
+            maxConcurrentChildren: min(role.limits.maxConcurrentChildren, base.budget.maxConcurrentChildren),
             maxContextMessages: base.budget.maxContextMessages,
             maxConcurrentTools: base.budget.maxConcurrentTools,
             processLimits: base.budget.processLimits,
@@ -4660,7 +5051,7 @@ func productSubagentRequest(
                 base.budget.deadlineMillis, parentBudget.deadlineMillis
             )
         ),
-        approvalModeOverride: None,
+        approvalModeOverride: Option<ApprovalMode>.None,
         autoRetry: base.autoRetry,
         serviceTier: base.serviceTier,
         pricing: base.pricing,
@@ -4672,7 +5063,12 @@ func productSubagentRequest(
             case ModelCachePolicy.Default => ""
         },
         parallelToolCalls: base.parallelToolCalls,
-        toolContext: base.toolContext
+        toolContext: base.toolContext,
+        contextSnapshot: base.contextSnapshot,
+        initializeContext: base.initializeContext,
+        contextWindow: base.contextWindow,
+        providerSafetyMargin: base.providerSafetyMargin,
+        executionLaneId: base.executionLaneId
     )
 }
 
@@ -4694,34 +5090,12 @@ func productChildDeadline(requested: Int64, parent: Int64): Int64 {
     min(requested, parent)
 }
 
-// Role ceilings are product policy; effective capabilities remain
-// intersected with the parent's grant and runtime sandbox ceiling.
-func productAgentCapabilityCeiling(agent: String): CapabilitySet {
-    let values = ArrayList<Capability>()
-    values.add(Capability(CapabilityKind.WorkspaceRead))
-    values.add(Capability(CapabilityKind.PeerMessage))
-    if (agent == "librarian") {
-        values.add(Capability(CapabilityKind.NetworkAccess))
-    }
-    if (agent == "task" || agent == "sonic") {
-        values.add(Capability(CapabilityKind.WorkspaceWrite))
-        values.add(Capability(CapabilityKind.ProcessSpawn))
-    }
-    if (agent == "task") {
-        values.add(Capability(CapabilityKind.NetworkAccess))
-        values.add(Capability(CapabilityKind.ExtensionInvoke))
-        values.add(Capability(CapabilityKind.Delegate))
-    }
-    CapabilitySet(values: values.toArray())
+// Zero in a Host wall-time budget is the existing unbounded sentinel. A positive
+// plugin request can restrict that ceiling; it can never make it unbounded.
+func productRequestedChildLimit(requested: Int64, host: Int64): Int64 {
+    if (host == 0) { requested } else { min(requested, host) }
 }
 
-func taskThinking(effort: String): ThinkingLevel {
-    match (effort) {
-        case "lo" => ThinkingLevel.Low
-        case "hi" => ThinkingLevel.High
-        case _ => ThinkingLevel.Medium
-    }
-}
 
 func parentModel(
     product: ProductRuntime,
@@ -4805,71 +5179,6 @@ func lastAssistantText(messages: Array<ModelMessage>): String {
         }
     }
     result
-}
-
-func yieldedOutput(state: ProductYieldState, lastText: String): AgentValue {
-    match (state.terminal) {
-        case Some(value) => value
-        case None =>
-            if (state.useLastTurn) {
-                return textValue(lastText)
-            }
-            if (!state.sections.isEmpty()) {
-                let fields = ArrayList<ValueField>()
-                for (section in state.sections) {
-                    for (label in section.labels) {
-                        fields.add(ValueField(label, section.data))
-                    }
-                }
-                return objectValue(fields.toArray())
-            }
-            let parsed = decodeAgentValue(lastText)
-            match (parsed) {
-                case Result.Ok(value) => value
-                case Result.Err(_) => textValue(lastText)
-            }
-    }
-}
-
-func yieldLabels(value: ?AgentValue): Result<Array<String>> {
-    match (value) {
-        case None => Result.Ok([])
-        case Some(field) =>
-            if (field.unifiedKind == ValueKind.Text) {
-                if (field.text.trimAscii() == "") {
-                    taskError<Array<String>>(
-                        "yield.type_invalid",
-                        "type must be a non-empty string"
-                    )
-                } else {
-                    Result.Ok([field.text])
-                }
-            } else if (field.unifiedKind == ValueKind.List) {
-                let labels = ArrayList<String>()
-                for (item in field.items) {
-                    if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
-                        return taskError<Array<String>>(
-                            "yield.type_invalid",
-                            "type must be a string or non-empty string array"
-                        )
-                    }
-                    labels.add(item.text)
-                }
-                if (labels.isEmpty()) {
-                    taskError<Array<String>>(
-                        "yield.type_invalid",
-                        "type must be a string or non-empty string array"
-                    )
-                } else {
-                    Result.Ok(labels.toArray())
-                }
-            } else {
-                taskError<Array<String>>(
-                    "yield.type_invalid",
-                    "type must be a string or non-empty string array"
-                )
-            }
-    }
 }
 
 func validateTaskSchema(
@@ -4960,56 +5269,6 @@ func taskSchemaKindMatches(expected: String, actual: ValueKind): Bool {
     }
 }
 
-func productTaskResultValue(result: ProductTaskResult): AgentValue {
-    let snapshot = result.snapshot
-    let fields = ArrayList<ValueField>()
-    fields.add(ValueField("index", integerValue(snapshot.index)))
-    fields.add(ValueField("id", textValue(snapshot.id)))
-    fields.add(ValueField("agent", textValue(snapshot.agent)))
-    fields.add(
-        ValueField(
-            "agentSource",
-            textValue(snapshot.agentSource)
-        )
-    )
-    fields.add(ValueField("task", textValue(snapshot.task)))
-    fields.add(ValueField("assignment", textValue(snapshot.assignment)))
-    fields.add(ValueField("exitCode", integerValue(result.exitCode)))
-    fields.add(
-        ValueField(
-            "output",
-            textValue(if (result.output.unifiedKind == ValueKind.Text) {
-                result.output.text
-            } else {
-                encodeAgentValue(result.output)
-            })
-        )
-    )
-    fields.add(ValueField("stderr", textValue(result.stderr)))
-    fields.add(ValueField("truncated", boolValue(false)))
-    fields.add(ValueField("tokens", integerValue(snapshot.tokens)))
-    fields.add(ValueField("requests", integerValue(snapshot.requests)))
-    fields.add(ValueField("sessionRef", textValue(snapshot.sessionRef)))
-    fields.add(ValueField("runId", textValue(snapshot.runId.value)))
-    fields.add(ValueField("status", textValue(snapshot.status)))
-    if (result.schemaStatus != "unavailable") {
-        fields.add(
-            ValueField(
-                "structuredOutput",
-                objectValue(
-                    [
-                        ValueField("source", textValue("caller")),
-                        ValueField("mode", textValue(result.schemaMode)),
-                        ValueField("status", textValue(result.schemaStatus)),
-                        ValueField("data", result.output),
-                        ValueField("error", textValue(result.schemaError))
-                    ]
-                )
-            )
-        )
-    }
-    objectValue(fields.toArray())
-}
 
 func asyncJobValue(job: ProductAsyncJobSnapshot): AgentValue {
     let fields = ArrayList<ValueField>()
@@ -5034,36 +5293,7 @@ func asyncJobValue(job: ProductAsyncJobSnapshot): AgentValue {
     objectValue(fields.toArray())
 }
 
-func hubMessageValue(message: ProductHubMessageSnapshot): AgentValue {
-    let fields = ArrayList<ValueField>()
-    fields.add(ValueField("id", textValue(message.id)))
-    fields.add(ValueField("from", textValue(message.from)))
-    fields.add(ValueField("to", textValue(message.to)))
-    fields.add(ValueField("message", textValue(message.message)))
-    if (message.replyTo != "") {
-        fields.add(
-            ValueField(
-                "replyTo",
-                textValue(message.replyTo)
-            )
-        )
-    }
-    fields.add(
-        ValueField(
-            "createdAt",
-            integerValue(message.createdAt)
-        )
-    )
-    objectValue(fields.toArray())
-}
 
-func hubMessagesValue(messages: Array<ProductHubMessageSnapshot>): AgentValue {
-    let values = ArrayList<AgentValue>()
-    for (message in messages) {
-        values.add(hubMessageValue(message))
-    }
-    listValue(values.toArray())
-}
 
 func hubMessageModelMessage(message: ProductHubMessageSnapshot): ModelMessage {
     ModelMessage(
@@ -5081,13 +5311,6 @@ func hubMessagePrompt(message: ProductHubMessageSnapshot): String {
     "<hub-message from=\"" + message.from + "\" id=\"" + message.id + "\">" + message.message + "</hub-message>"
 }
 
-func asyncJobsValue(jobs: Array<ProductAsyncJobSnapshot>): AgentValue {
-    let values = ArrayList<AgentValue>()
-    for (job in jobs) {
-        values.add(asyncJobValue(job))
-    }
-    listValue(values.toArray())
-}
 
 func taskStringValues(values: Array<String>): AgentValue {
     let encoded = ArrayList<AgentValue>()
@@ -5095,26 +5318,6 @@ func taskStringValues(values: Array<String>): AgentValue {
         encoded.add(textValue(value))
     }
     listValue(encoded.toArray())
-}
-
-func cancelBashOperation(
-    runtime: ProductRuntime,
-    operationId: String
-): Unit {
-    for (_ in 0..100) {
-        match (runtime.abortBash(OperationId(operationId))) {
-            case Result.Ok(_) => return
-            case Result.Err(error) =>
-                if (error.code != "process.operation_not_running") {
-                    return
-                }
-        }
-        sleep(Duration.millisecond * 10)
-    }
-}
-
-func productAgentBlocks(agent: String): Bool {
-    agent == "scout"
 }
 
 func containsTaskString(
@@ -5125,41 +5328,6 @@ func containsTaskString(
         return true
     }
     false
-}
-
-func containsTaskStringIgnoreAsciiCase(
-    values: Array<String>,
-    expected: String
-): Bool {
-    for (value in values where taskStringsEqualIgnoreAsciiCase(value, expected)) {
-        return true
-    }
-    false
-}
-
-func taskStringsEqualIgnoreAsciiCase(
-    left: String,
-    right: String
-): Bool {
-    let leftBytes = unsafe { left.rawData() }
-    let rightBytes = unsafe { right.rawData() }
-    if (leftBytes.size != rightBytes.size) {
-        return false
-    }
-    for (index in 0..leftBytes.size) {
-        if (taskAsciiLower(leftBytes[index]) != taskAsciiLower(rightBytes[index])) {
-            return false
-        }
-    }
-    true
-}
-
-func taskAsciiLower(value: Byte): Byte {
-    if (value >= b'A' && value <= b'Z') {
-        value + b' '
-    } else {
-        value
-    }
 }
 
 func messagesContainToolResult(
@@ -5174,72 +5342,7 @@ func messagesContainToolResult(
     false
 }
 
-func jobIds(call: ToolCall): Result<Array<String>> {
-    let value = match (call.arguments.field("ids")) {
-        case Some(value) => value
-        case None => return Result.Ok([])
-    }
-    if (value.unifiedKind != ValueKind.List) {
-        return taskError<Array<String>>(
-            "hub.ids_invalid",
-            "hub ids must be an array of strings"
-        )
-    }
-    let ids = ArrayList<String>()
-    for (item in value.items) {
-        if (item.unifiedKind != ValueKind.Text || item.text.trimAscii() == "") {
-            return taskError<Array<String>>(
-                "hub.ids_invalid",
-                "hub ids must contain non-empty strings"
-            )
-        }
-        if (!containsTaskString(ids.toArray(), item.text)) {
-            ids.add(item.text)
-        }
-    }
-    Result.Ok(ids.toArray())
-}
 
-func jobTimeout(call: ToolCall): Result<Int64> {
-    let value = match (call.arguments.field("timeoutMs")) {
-        case Some(value) => value
-        case None => return Result.Ok(30000)
-    }
-    if (value.unifiedKind != ValueKind.Number) {
-        return taskError<Int64>(
-            "hub.timeout_invalid",
-            "hub timeoutMs must be a non-negative integer"
-        )
-    }
-    let timeout = try {
-        Int64.parse(value.asNumberText())
-    } catch (_: Exception) {
-        return taskError<Int64>(
-            "hub.timeout_invalid",
-            "hub timeoutMs must be a non-negative integer"
-        )
-    }
-    if (timeout < 0 || timeout > 300000) {
-        return taskError<Int64>(
-            "hub.timeout_invalid",
-            "hub timeoutMs must be between 0 and 300000"
-        )
-    }
-    Result.Ok(timeout)
-}
-
-func yieldArgumentError(
-    call: ToolCall,
-    message: String
-): Result<ToolResult> {
-    Result.Ok(
-        ToolResult(
-            call.callId,
-            objectValue([ValueField("error", textValue(message))]),
-            isError: true
-        )
-    )
-}
 
 func emitToSinks(
     sinks: Array<ProductSubagentEventSink>,
@@ -5260,33 +5363,52 @@ func addTaskRoot(values: ArrayList<String>, root: String): Unit {
     values.add(root)
 }
 
-func mergeProcessLists(
+func mergeProcessObservations201(
     callId: String,
     local: ToolResult,
     remote: ToolResult
 ): Result<ToolResult> {
+    // Both actual input graphs were funded against the existing derived lease
+    // before this helper. This combines DATA only; it grants no process access.
     let values = ArrayList<AgentValue>()
+    let warnings = ArrayList<AgentValue>()
     for (result in [local, remote]) {
-        let daemons = match (result.output.field("daemons")) {
-            case Some(value) => value
-            case None => return taskError<ToolResult>(
-                "hub.process_list_invalid",
-                "process supervisor returned no daemon list"
-            )
-        }
-        if (daemons.unifiedKind != ValueKind.List) {
+        let output = result.output
+        if (!httpIntentExactFields(output, ["schema", "op", "facts"]) ||
+            httpIntentText(output, "schema") != "axyndra.hub-process-observation/v1" ||
+            httpIntentText(output, "op") != "ps") {
             return taskError<ToolResult>(
-                "hub.process_list_invalid",
-                "process supervisor returned an invalid daemon list"
-            )
+                "hub.process_list_invalid", "process supervisor returned an invalid observation envelope")
+        }
+        let facts = output.field("facts").getOrThrow()
+        if (!httpIntentExactFields(facts, ["daemons", "recovery_warnings"])) {
+            return taskError<ToolResult>(
+                "hub.process_list_invalid", "process supervisor returned incomplete process facts")
+        }
+        let daemons = facts.field("daemons").getOrThrow()
+        let recovery = facts.field("recovery_warnings").getOrThrow()
+        if (daemons.unifiedKind != ValueKind.List || recovery.unifiedKind != ValueKind.List) {
+            return taskError<ToolResult>(
+                "hub.process_list_invalid", "process supervisor returned an invalid daemon or warning list")
+        }
+        for (warning in recovery.items) {
+            if (warning.unifiedKind != ValueKind.Text) {
+                return taskError<ToolResult>(
+                    "hub.process_list_invalid", "process supervisor returned a non-text recovery warning")
+            }
         }
         for (daemon in daemons.items) { values.add(daemon) }
+        for (warning in recovery.items) { warnings.add(warning) }
     }
     Result.Ok(ToolResult(
         callId,
         objectValue([
+            ValueField("schema", textValue("axyndra.hub-process-observation/v1")),
             ValueField("op", textValue("ps")),
-            ValueField("daemons", listValue(values.toArray()))
+            ValueField("facts", objectValue([
+                ValueField("daemons", listValue(values.toArray())),
+                ValueField("recovery_warnings", listValue(warnings.toArray()))
+            ]))
         ]),
         isError: local.isError || remote.isError
     ))
@@ -5305,4 +5427,16 @@ func taskError<T>(
             fields: fields
         )
     )
+}
+
+// Fixed paid counter only; no Source, state transition or completion claim.
+class ProductJobSnapshotInvoice165 {
+    var bytes: Int64 = 512
+    var nodes: Int64 = 16
+    init() {}
+    func add(bytes: Int64, nodes: Int64): Unit {
+        if (bytes < 0 || nodes < 0 || this.bytes > Int64.Max - bytes || this.nodes > Int64.Max - nodes) {
+            throw LogicalJsonPayloadError("job snapshot retained SUM overflow") }
+        this.bytes += bytes; this.nodes += nodes
+    }
 }

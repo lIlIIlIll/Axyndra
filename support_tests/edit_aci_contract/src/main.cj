@@ -2,6 +2,7 @@ package edit_aci_contract
 
 import agent_domain.*
 import agent_product.*
+import workspace_legacy_oracle.*
 import std.env.*
 
 main(): Int64 {

@@ -1,0 +1,26 @@
+{
+  "schema": "axyndra.package-defaults/v1",
+  "workspace": "plugins/workspace",
+  "plugins": [
+    {
+      "package": "plugins/workspace",
+      "enabled": true
+    },
+    {
+      "package": "plugins/shell",
+      "enabled": true
+    },
+    {
+      "package": "plugins/shell_readonly",
+      "enabled": true
+    },
+    {
+      "package": "plugins/model-providers",
+      "enabled": true
+    },
+    {
+      "package": "plugins/program",
+      "enabled": true
+    }
+  ]
+}

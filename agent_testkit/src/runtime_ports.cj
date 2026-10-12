@@ -607,7 +607,7 @@ func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuatio
         left.resolverVersion == right.resolverVersion &&
         left.contextWindow == right.contextWindow &&
         left.providerSafetyMargin == right.providerSafetyMargin &&
-        agentValuesEqual(left.skillStackPayload, right.skillStackPayload) &&
+        agentValuesEqual(left.contextSnapshotPayload, right.contextSnapshotPayload) &&
         agentValuesEqual(left.toolContextPayload, right.toolContextPayload) &&
         sameRequestedPolicy(left.requestedPolicy, right.requestedPolicy) &&
         sameCapabilitiesSnapshot(

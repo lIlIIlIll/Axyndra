@@ -524,7 +524,9 @@ public class WorkspaceSandbox {
 
     public func execute(
         command: WorkspaceSandboxCommand,
-        onStarted!: ?SandboxProcessStarted = None
+        onStarted!: ?SandboxProcessStarted = None,
+        acquireLaunch!: ?() -> SandboxProcessLaunchLease = None,
+        inputReturn159f!: ?SandboxStdinReturn159f = None
     ): SandboxResult<SandboxExecutionResult> {
         match (availability()) {
             case SandboxResult.Err(error) => return SandboxResult.Err(error)
@@ -540,11 +542,14 @@ public class WorkspaceSandbox {
         let requestedRedactor = requested.redactor()
         let budget = BoundedOutputBudget(policy.resources.maxOutputBytes)
         try {
-            let process = startSandboxProcess(
+            // The optional restriction spans only the actual spawn. Sandbox
+            // probes/planning, onStarted and output/cleanup run outside it.
+            let launchLease: ?SandboxProcessLaunchLease = match (acquireLaunch) { case Some(acquire) => Some(acquire()); case None => None }
+            let process = try { startSandboxProcess(
                 planValue.launcherExecutable,
                 planValue.launcherArguments,
                 policy.resources.maxOutputBytes
-            )
+            ) } finally { match (launchLease) { case Some(lease) => lease.close(); case None => () } }
             try {
                 match (onStarted) {
                     case Some(callback) => callback(process)
@@ -554,12 +559,25 @@ public class WorkspaceSandbox {
                 let stderr = spawn { readBounded(process.stderr, budget) }
                 match (command.standardInput) {
                     case Some(value) =>
-                        let writer = spawn {
-                            process.writeStdin(value.toArray())
-                            process.flushInput()
-                            let _ = process.closeInput()
+                        match (inputReturn159f) {
+                            case None =>
+                                let writer = spawn {
+                                    process.writeStdin(value.toArray())
+                                    process.flushInput()
+                                    let _ = process.closeInput()
+                                }
+                                writer.get()
+                            case Some(custody) =>
+                                custody.installWriter159f(value, process)
+                                // The original caller already waited here before
+                                // reading either output result. Both drain tasks
+                                // and the independent cancellation monitor are
+                                // running. Execute this exact paid input helper
+                                // on that caller, eliminating a redundant SDK
+                                // task/closure; this does not enter a poll pump.
+                                custody.writeInputFrame159f()
+                                custody.clearReturnedWriter159f()
                         }
-                        writer.get()
                     case None => let _ = process.closeInput()
                 }
                 let output = stdout.get()

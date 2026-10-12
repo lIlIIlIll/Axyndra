@@ -11,35 +11,31 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "logical_json_payload" = { path = "../libs/logical_json_payload", output-type = "static" }
+  "agent_host_runtime" = { path = "../agent_host_runtime", output-type = "static" }
+  "agent_plugin_registry" = { path = "../agent_plugin_registry", output-type = "static" }
+  "agent_history" = { path = "../agent_history", output-type = "static" }
+  "model_fixture_runtime" = { path = "../model_fixture_runtime", output-type = "static" }
+  "model_provider_runtime" = { path = "../model_provider_runtime", output-type = "static" }
   "agent_cli" = { path = "../agent_cli", output-type = "static" }
   "agent_app_protocol" = { path = "../agent_app_protocol", output-type = "static" }
   "agent_client" = { path = "../agent_client", output-type = "static" }
   "agent_core" = { path = "../agent_core", output-type = "static" }
   "agent_domain" = { path = "../agent_domain", output-type = "static" }
-  "agent_extensions" = { path = "../agent_extensions", output-type = "static" }
-  "agent_mcp" = { path = "../agent_mcp", output-type = "static" }
   "agent_protocol" = { path = "../agent_protocol", output-type = "static" }
   "agent_ports" = { path = "../agent_ports", output-type = "static" }
   "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
   "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
   "agent_extension_runtime" = { path = "../agent_extension_runtime", output-type = "static" }
-  "agent_skills" = { path = "../agent_skills", output-type = "static" }
   "agent_store" = { path = "../agent_store", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
-  "lsp4cj" = { path = "../libs/lsp4cj", output-type = "static" }
-  "dap4cj" = { path = "../libs/dap4cj", output-type = "static" }
-  "model_adapters" = { path = "../model_adapters", output-type = "static" }
   "persistence_runtime" = { path = "../persistence_runtime", output-type = "static" }
   "process4cj" = { path = "../libs/process4cj", output-type = "static" }
   "run_control" = { path = "../run_control", output-type = "static" }
   "sandbox4cj" = { path = "../libs/sandbox4cj", output-type = "static" }
   "task_runtime" = { path = "../task_runtime", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }
-  "workspace_search_extension" = { path = "../extensions/workspace_search_extension", output-type = "static" }
-  "workspace_write_extension" = { path = "../extensions/workspace_write_extension", output-type = "static" }
-  "ast_extension" = { path = "../extensions/ast_extension", output-type = "static" }
-  "web_search_extension" = { path = "../extensions/web_search_extension", output-type = "static" }
 
 [target.x86_64-unknown-linux-gnu]
   [target.x86_64-unknown-linux-gnu.bin-dependencies]

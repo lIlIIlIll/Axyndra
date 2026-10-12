@@ -128,6 +128,14 @@ class PlanReviewController {
     private var themeName = ""
     private var customThemeDefinitions: Array<TuiThemeDefinition> = []
 
+    func tryRetireRetainedReferences(): Bool {
+        if (RetiredDocumentWindowReferences.retire(planReviewWindowCache).isNone()) { return false }
+        planReviewDocumentCache = Document([]); planReviewSectionsCache = []
+        planReviewPreviewCache = MarkdownPreviewIndex([]); planReviewAnnotations.clear()
+        planReviewDocumentCacheKey = ""; planReviewPreviewCacheKey = ""; documentBody = ""
+        planReviewAnnotationSection = ""; planReviewAnnotationLine = ""; planReviewHash = ""
+        planReviewEditor.setValue(""); true
+    }
     func isActive(): Bool {
         planReviewHash != ""
     }

@@ -601,6 +601,7 @@ public class CancellationRegistration {
     private let inner: process.CancellationRegistration
     init(inner: process.CancellationRegistration) { this.inner = inner }
     public func dispose(): Unit { inner.dispose() }
+    public func callbacksReturned159(): Bool { inner.callbacksReturned159() }
 }
 
 public class CancellationToken {
@@ -645,6 +646,13 @@ public class CancellationToken {
             { cause => invokeCancellationCallback(callback, agentCancellationReason(cause)) },
             nowMillis: nowMillis
         ))
+    }
+
+    public func onCancelReturning159(callback: CancellationCallback,
+        nowMillis!: Int64 = agentUtcMillis()): CancellationRegistration {
+        CancellationRegistration(inner.onCancelReturning159(
+            { cause => invokeCancellationCallback(callback, agentCancellationReason(cause)) },
+            nowMillis: nowMillis))
     }
 
     func primitive(): process.CancellationToken { inner }
@@ -1535,39 +1543,49 @@ public class ModelCapabilities {
     }
 
     public func validate(request: ModelRequest): Result<Unit> {
-        if (requestContainsImages(request)) {
+        validateInputShape159(requestContainsImages(request), request.structuredOutput.isSome(),
+            !request.tools.isEmpty(), request.parallelToolCalls, request.thinking,
+            request.cachePolicy, request.cacheKey, request.maxOutputTokens)
+    }
+
+    // Closed DATA shape used by SDK preflight. The original validate body below
+    // retains every original branch/error and its original evaluation order.
+    public func validateInputShape159(hasImages: Bool, hasStructuredOutput: Bool,
+        hasTools: Bool, parallelToolCalls: Bool, thinking: ThinkingLevel,
+        cachePolicy: ModelCachePolicy, cacheKey: String, requestedOutputTokens: Int64): Result<Unit> {
+        if (hasImages) {
             match (require(ModelFeature.Vision)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(_) => ()
             }
         }
-        if (request.structuredOutput.isSome()) {
+        if (hasStructuredOutput) {
             match (require(ModelFeature.StructuredOutput)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(_) => ()
             }
         }
-        if (!request.tools.isEmpty()) {
+        if (hasTools) {
             match (require(ModelFeature.ToolCalling)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(_) => ()
             }
         }
-        if (request.parallelToolCalls && !request.tools.isEmpty()) {
+        if (parallelToolCalls && hasTools) {
             match (require(ModelFeature.ParallelToolCalling)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(_) => ()
             }
         }
-        if (request.thinking != ThinkingLevel.Off) {
+        if (thinking != ThinkingLevel.Off) {
             match (require(ModelFeature.Reasoning)) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(_) => ()
             }
         }
-        match (request.cachePolicy) {
+        match (cachePolicy) {
             case ModelCachePolicy.StablePrefix =>
-                if (request.cacheKey == "") {
+                if (cacheKey == "") {
                     return Result.Err(AgentError(
                         AgentErrorKind.InvalidInput,
                         "model.cache_key_required",
@@ -1580,13 +1598,13 @@ public class ModelCapabilities {
                 }
             case _ => ()
         }
-        if (request.maxOutputTokens > maxOutputTokens) {
+        if (requestedOutputTokens > maxOutputTokens) {
             return Result.Err(AgentError(
                 AgentErrorKind.InvalidInput,
                 "model.output_limit_exceeded",
                 "requested output tokens exceed model capability",
                 fields: [
-                    ErrorField("requested", request.maxOutputTokens.toString()),
+                    ErrorField("requested", requestedOutputTokens.toString()),
                     ErrorField("limit", maxOutputTokens.toString())
                 ]
             ))
@@ -1615,4 +1633,10 @@ func modelFeatureName(feature: ModelFeature): String {
         case ModelFeature.StructuredOutput => "structured_output"
         case ModelFeature.PromptCache => "prompt_cache"
     }
+}
+
+// Borrow a read-only view of an existing process token. This cannot create a
+// cancellation source, cancel a token, or create any invocation/Grant identity.
+public func borrowProcessCancellationToken(token: process.CancellationToken): CancellationToken {
+    CancellationToken(token)
 }

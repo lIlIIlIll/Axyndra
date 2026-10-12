@@ -1,5 +1,8 @@
 package agent_store
 
+import yjson.*
+import yjson_support.*
+
 import agent_domain.*
 import agent_runtime.*
 import std.collection.*
@@ -75,6 +78,7 @@ public class SqliteThreadSeedStore {
                     )
                 }
                 for (item in snapshot.items) {
+                    if (isContinuationInitiatorDescription(item)) { throw IllegalStateException("seed cannot copy a live continuation origin") }
                     transaction.execute(
                         "INSERT INTO items " +
                             "(id,thread_id,turn_id,ordinal,kind,payload,provenance,created_at_millis) " +
@@ -90,6 +94,7 @@ public class SqliteThreadSeedStore {
                             SqlParameter.Int64Value(item.createdAtMillis)
                         ]
                     )
+                    if (isContinuationHistoryDescription(item)) { insertContinuationHistoryCopy(transaction, item) }
                 }
             }
             Result.Ok(())
@@ -345,9 +350,12 @@ public func completedThreadCloneSnapshot(
             targetTurn,
             item.ordinal,
             content,
-            ItemProvenance(
-                "fork", runId: Some(runId), operationId: operationId
-            ),
+            if (isContinuationInitiatorDescription(item) || isContinuationHistoryDescription(item)) {
+                ItemProvenance("continuation_history", runId: Some(runId), continuationHistory: Some(ContinuationHistorySource(
+                    item.threadId.value, item.turnId.value, item.provenance.runId.getOrThrow().value, item.id.value,
+                    if (isContinuationInitiatorDescription(item)) { item.provenance.continuationOrigin.getOrThrow().requestDigest }
+                    else { item.provenance.continuationHistory.getOrThrow().requestDigest })))
+            } else { ItemProvenance("fork", runId: Some(runId), operationId: operationId) },
             createdAtMillis: item.createdAtMillis
         ))
     }
@@ -379,7 +387,8 @@ func seedSourceTurnOrdinal(
 
 func seedSourceUserOrdinal(items: Array<ThreadItem>, turn: TurnRecord): Int64 {
     for (item in items where item.id.value == turn.userItemId.value &&
-        item.turnId.value == turn.id.value && item.kind == ItemKind.UserMessage) {
+        item.turnId.value == turn.id.value && (item.kind == ItemKind.UserMessage ||
+            isContinuationInitiatorDescription(item) || isContinuationHistoryDescription(item))) {
         return item.ordinal
     }
     throw IllegalArgumentException("seed source Turn is missing its user Item")
@@ -495,7 +504,7 @@ func validateCompletedSeedProtocol(snapshot: AgentThreadSnapshot): Unit {
 
 func seedUserItem(items: Array<ThreadItem>, turn: TurnRecord): ThreadItem {
     for (item in items where item.id.value == turn.userItemId.value &&
-        item.turnId.value == turn.id.value && item.kind == ItemKind.UserMessage) {
+        item.turnId.value == turn.id.value && (item.kind == ItemKind.UserMessage || isContinuationHistoryDescription(item))) {
         return item
     }
     throw IllegalArgumentException("completed seed Turn is missing its user Item")

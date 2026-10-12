@@ -8,8 +8,8 @@ import agent_domain.*
 import agent_product.*
 import agent_tui.*
 import tool_runtime.*
-import model_adapters.*
 import std.collection.*
+import std.env.*
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -231,17 +231,21 @@ class ProductTuiBackendPlanReviewTests {
             Directory.create("target", recursive: true)
         }
         let root = Directory.createTemp("target").toString()
+        var actualProduct205: ?ProductRuntime = None<ProductRuntime>
         try {
             let workspace = root + "/workspace"
             Directory.create(workspace, recursive: true)
             let product = openProduct(
                 config: ProductConfig(
                     stateRoot: root + "/state",
+                    settingsRoot: root + "/settings",
                     workspaceRoot: workspace,
                     fixture: true,
                     asyncEnabled: false
                 )
             ).value().getOrThrow()
+            actualProduct205 = Some(product)
+            installAppPlanWorkflowFixture(product)
             let backend = ProductTuiBackend(product)
             let events = ArrayList<TuiAgentEvent>()
             let sink: TuiAgentEventSink = {event => events.add(event)}
@@ -334,7 +338,10 @@ class ProductTuiBackendPlanReviewTests {
             })
             @Expect(staleReview.status, "plan review failed: Plan mode is not active.")
         } finally {
-            let _ = removeIfExists(root, recursive: true)
+            try { match (actualProduct205) {
+                case Some(value) => value.close().value().getOrThrow()
+                case None => () } }
+            finally { let _ = removeIfExists(root, recursive: true) }
         }
     }
 
@@ -344,17 +351,21 @@ class ProductTuiBackendPlanReviewTests {
             Directory.create("target", recursive: true)
         }
         let root = Directory.createTemp("target").toString()
+        var actualProduct205: ?ProductRuntime = None<ProductRuntime>
         try {
             let workspace = root + "/workspace"
             Directory.create(workspace, recursive: true)
             let product = openProduct(
                 config: ProductConfig(
                     stateRoot: root + "/state",
+                    settingsRoot: root + "/settings",
                     workspaceRoot: workspace,
                     fixture: true,
                     asyncEnabled: false
                 )
             ).value().getOrThrow()
+            actualProduct205 = Some(product)
+            installAppPlanWorkflowFixture(product)
             let applicationSession = product.applicationSession()
             let backend = ProductTuiBackend(product, applicationSession: applicationSession)
             let sink: TuiAgentEventSink = {_ => ()}
@@ -398,7 +409,10 @@ class ProductTuiBackendPlanReviewTests {
             @Expect(backend.currentSession(), previousSession)
             @Expect(applicationSession.queuedCount(), 1)
         } finally {
-            let _ = removeIfExists(root, recursive: true)
+            try { match (actualProduct205) {
+                case Some(value) => value.close().value().getOrThrow()
+                case None => () } }
+            finally { let _ = removeIfExists(root, recursive: true) }
         }
     }
 
@@ -427,100 +441,12 @@ class ProductTuiBackendPlanReviewTests {
     }
 }
 
-@Test
-class ProductTuiBackendMcpStatusTests {
-    @TestCase
-    func mcpStatusReflectsClosedServerAfterBackendConstruction(): Unit {
-        if (!exists(Path("target"))) {
-            Directory.create("target", recursive: true)
-        }
-        let root = Directory.createTemp("target").toString()
-        try {
-            let settings = root + "/settings"
-            let workspace = root + "/workspace"
-            Directory.create(settings, recursive: true)
-            Directory.create(workspace, recursive: true)
-            File.writeTo(
-                settings + "/config.yml",
-                "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
-            )
-            File.writeTo(
-                settings + "/models.yml",
-                ("models:\n" +
-                    "  - id: product-contract\n" +
-                    "    provider: local\n" +
-                    "    context_window: 200000\n" +
-                    "    max_output_tokens: 8192\n" +
-                    "    thinking:\n" +
-                    "      mode: none\n").toArray()
-            )
-            File.writeTo(
-                settings + "/providers.yml",
-                ("providers:\n" +
-                    "  - id: local\n" +
-                    "    provider: custom\n" +
-                    "    protocol: completions\n" +
-                    "    dialect: generic_chat\n" +
-                    "    base_url: http://127.0.0.1:11434\n" +
-                    "    api_key_env: MCP_PRODUCT_UNUSED_PROVIDER_KEY\n").toArray()
-            )
-            let fixtureScript = workspace + "/mcp_fixture.py"
-            File.writeTo(
-                fixtureScript,
-                ("import json\n" +
-                    "import sys\n" +
-                    "\n" +
-                    "for line in sys.stdin:\n" +
-                    "    request = json.loads(line)\n" +
-                    "    request_id = request.get(\"id\")\n" +
-                    "    if request_id is None:\n" +
-                    "        continue\n" +
-                    "    method = request.get(\"method\", \"\")\n" +
-                    "    if method == \"server/discover\":\n" +
-                    "        result = {\"supportedVersions\": [\"2026-07-28\"], \"capabilities\": {\"tools\": {\"listChanged\": False}}, \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
-                    "    elif method == \"tools/list\":\n" +
-                    "        result = {\"tools\": [], \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
-                    "    else:\n" +
-                    "        result = {}\n" +
-                    "    result[\"resultType\"] = \"complete\"\n" +
-                    "    result[\"_meta\"] = {\"io.modelcontextprotocol/serverInfo\": {\"name\": \"status-fixture\", \"version\": \"1.0.0\"}}\n" +
-                    "    response = {\"jsonrpc\": \"2.0\", \"id\": request_id, \"result\": result}\n" +
-                    "    sys.stdout.write(json.dumps(response, separators=(\",\", \":\")) + \"\\n\")\n" +
-                    "    sys.stdout.flush()\n").toArray()
-            )
-            File.writeTo(
-                settings + "/mcp.yml",
-                ("version: 1\n" +
-                    "servers:\n" +
-                    "  - id: refresh\n" +
-                    "    enabled: true\n" +
-                    "    transport: stdio\n" +
-                    "    command: /usr/bin/python3\n" +
-                    "    args:\n" +
-                    "      - \"-B\"\n" +
-                    "      - \"-u\"\n" +
-                    "      - \"" + fixtureScript + "\"\n" +
-                    "    max_frame_bytes: 65536\n" +
-                    "    request_timeout_ms: 1000\n" +
-                    "    graceful_shutdown_ms: 1000\n").toArray()
-            )
-            let product = openProduct(config: ProductConfig(
-                settingsRoot: settings,
-                stateRoot: root + "/state",
-                workspaceRoot: workspace,
-                approvalMode: ApprovalMode.Yolo,
-                asyncEnabled: false
-            )).value().getOrThrow()
-            try {
-                let backend = ProductTuiBackend(product)
-                @Expect(backend.mcpStatus().text.contains("[ready] refresh"))
-                @Expect(product.closeMcp().isOk())
-                @Expect(backend.mcpStatus().text.contains("[stopped] refresh"))
-            } finally {
-                let _ = product.closeMcp()
-            }
-        } finally {
-            let _ = removeIfExists(root, recursive: true)
-        }
-    }
+
+// Explicit test-only installation of the same actual operator-selected native
+// contribution. This helper creates no Source, grant, ModelDecision or Receipt.
+func installAppPlanWorkflowFixture(product: ProductRuntime): Unit {
+    let record=match(product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow())){
+        case PluginRegistryResult.Ok(value)=>value;case PluginRegistryResult.Err(error)=>throw IllegalStateException(error.code)}
+    try { appInstallPlanWorkflowScoped205(product, record) }
+    finally { record.close() }
 }

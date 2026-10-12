@@ -238,15 +238,15 @@ approval:
 | `persistence_runtime` | 仓储实现、bounded events、schema 生命周期 |
 | `run_control` | run 应用服务 |
 | `task_runtime` | 独立 task 生命周期 |
-| `agent_mcp` | `mcp4cj` 产品配置、secret 解析、AgentError 映射和 ToolPipeline bridge |
 | `agent_client` | CLI、CI、RPC、未来 cjtui 的稳定边界 |
 | `agent_cli` | 类型化控制命令与自然 prompt 分流 |
 | `agent_extensions` | `agent_sdk` 到 ToolPipeline 的产品 authority adapter，以及内部 trusted integration |
 | `agent_embed` | 复用同一 AgentCore 的内部 `AgentBuilder`、Headless 与 JSONL 事件投影 |
 | `agent_sdk` | 第三方协作式 Extension 的最小 metadata/schema/intent/output 公共契约 |
 | `agent_extension_runtime` | 内部 manifest 校验、兼容性与 Extension 生命周期控制面 |
-| `extensions/*` | 仅依赖 `agent_sdk`/通用库的 first-party cooperative extensions；当前包括 workspace search/write、AST 与 Web Search |
-| `axyndra_agent_testkit` | 第三方安全的 SDK extension contract、确定性时钟/ID/取消与实验性 fault plan |
+| `extensions/*` | 仍静态装配的 workspace search/write 协作式扩展，；MCP 协议由独立安装的插件负责；迁移进度见下方 |
+| `plugins/ast`、`plugins/web_search` | 独立构建、安装和启停的原生进程插件；分别拥有 AST 查询/编辑与网页搜索业务实现 |
+| `axyndra_agent_testkit` | Native SDK 3 的纯数据 handler contract、确定性时钟/ID/取消与实验性 fault plan |
 | `agent_testkit` | omp 内部 Agent/ToolPipeline/recovery doubles 与 benchmark 聚合 |
 | `agent_product` | composition root、本地安全工具和磁盘基础设施 |
 | `agent_rpc` | JSONL RPC server 与进程隔离 transport |
@@ -255,6 +255,9 @@ approval:
 
 完整依赖方向和约束见 [docs/architecture.md](docs/architecture.md)，依赖审计见
 [docs/dependencies.md](docs/dependencies.md)。
+插件分批外迁状态见 [docs/plugin-first-migration.md](docs/plugin-first-migration.md)；
+原生端点契约见 [docs/plugin-process-protocol.md](docs/plugin-process-protocol.md)，
+网页搜索的受控 HTTP 与显式配置见 [docs/plugin-http-services.md](docs/plugin-http-services.md)。
 stdx 候选迁移的适配职责和验收门槛见 [docs/stdx-migration.md](docs/stdx-migration.md)；
 能力状态、安全边界和验证口径见 [docs/runtime-capabilities.md](docs/runtime-capabilities.md)。
 
@@ -303,7 +306,13 @@ alternate screen；消息写入终端原生 scrollback，滚轮等终端自身�
 不会发送给模型。
 
 `/plan [request]` 进入只读 Plan Mode，结构化计划可通过 `/plan-review` 审阅。
-在存在最新 `plan_write` 计划时，也可用独立短句直接批准并开始新的执行运行：
+Coding/Full 默认绑定实际安装的 Workflow `plan_tool: "plan_write"` 贡献，公开工具名为
+`plugin.axyndra:workflow.plan_write`；宿主没有静态 `plan_write` 执行器。独立安装需在
+`plugins/policies.json` 的 `workflow` 绑定中设置 `namespace`、`provider`、当前
+`package_digest` 和 `plan_tool`。贡献必须声明 `execution_profile: "data_only"`，
+只使用 WorkspaceRead，并由原 canonical pipeline 持久化 ToolCall、ToolResult 和 Receipt。
+缺失或变更的安装/绑定在启用模式或批准前失败；旧计划仅供历史查看，不恢复执行或审批权威。
+在存在最新已完成的当前 native 计划时，也可用独立短句直接批准并开始新的执行运行：
 `执行吧`、`开始执行`、`执行计划`、`按计划执行`、`批准并执行`、`继续执行`，
 以及 `execute`、`execute it`、`execute the plan`、`start execution`、
 `approve and execute`、`proceed with execution`。仅匹配完整短句（允许一个句末感叹号或句号）；

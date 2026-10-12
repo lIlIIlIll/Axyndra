@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_store.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.sync.*
@@ -68,6 +67,36 @@ class ProductTaskPersistence {
     private let recoveryWarnings = ArrayList<ProductTaskRecoveryWarning>()
     private let blockedRoots = ArrayList<String>()
     private let database: SqliteDatabase
+
+    // Only immutable canonical slot identities are read here. The retained
+    // actual child owner has already matched Run/epoch/call/budget/parent.
+    // No payload is decoded and no Source or new admission is constructed.
+    func completedPeerParent111(parent:OperationId,run:RunId,thread:SessionId,epoch:Int64,receipt:String):Result<Bool> {
+        try {
+            let valid=database.transaction{tx:SqliteTransaction=>
+                let rows=tx.query("SELECT r.id FROM operation_receipts r JOIN operations o ON o.id=r.operation_id " +
+                    "JOIN operation_effect_records e ON e.operation_id=o.id JOIN operation_state_registers s ON s.operation_id=o.id " +
+                    "JOIN runs n ON n.id=o.run_id JOIN items i ON i.id=e.reserved_result_item_id " +
+                    "WHERE o.id=? AND o.run_id=? AND e.run_id=o.run_id AND n.thread_id=? AND n.epoch=? " +
+                    "AND r.id=? AND r.id=e.reserved_receipt_id AND r.outcome='completed' AND o.state='committed' AND s.state=o.state " +
+                    "AND o.normalized_plan=e.normalized_plan AND i.kind='tool_result' AND i.thread_id=n.thread_id AND i.turn_id=n.turn_id LIMIT 2",
+                    [SqlParameter.Text(parent.value),SqlParameter.Text(run.value),SqlParameter.Text(thread.value),
+                        SqlParameter.Int64Value(epoch),SqlParameter.Text(receipt)])
+                rows.size==1
+            }
+            Result.Ok(valid)
+        }catch(_:Exception){Result.Err(AgentError(AgentErrorKind.RecoveryRequired,"peer.parent_result_unavailable",
+            "actual durable parent completion could not be verified"))}
+    }
+
+    func verifyCompletedPeerParent111(parent:OperationId,run:RunId,thread:SessionId,epoch:Int64,receipt:String):Result<Unit> {
+        match(completedPeerParent111(parent,run,thread,epoch,receipt)) {
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(true)=>Result<Unit>.Ok(())
+            case Result.Ok(false)=>Result.Err(AgentError(AgentErrorKind.RecoveryRequired,"peer.parent_result_not_durable",
+                "retained parent has no exact Completed canonical Receipt/result slot"))
+        }
+    }
 
     init(database: SqliteDatabase) {
         this.database = database
@@ -230,10 +259,11 @@ func taskPersistRootValue(
 }
 
 func taskPersistSubagentValue(state: ProductSubagentState): AgentValue {
-    objectValue([
+    let original = objectValue([
         ValueField("id", textValue(state.id)),
         ValueField("index", integerValue(state.index)),
         ValueField("agent", textValue(state.agent)),
+        ValueField("agentSource", textValue(state.agentSource)),
         ValueField("description", textValue(state.description)),
         ValueField("task", textValue(state.task)),
         ValueField("assignment", textValue(state.assignment)),
@@ -255,6 +285,11 @@ func taskPersistSubagentValue(state: ProductSubagentState): AgentValue {
         ValueField("currentTool", textValue(state.currentTool)),
         ValueField("error", textValue(state.error))
     ])
+    if (!state.agentSource.startsWith("plugin:")) { return original }
+    let fields = ArrayList<ValueField>(original.fields.toArray())
+    fields.add(ValueField("pluginCompletionDone111", boolValue(state.pluginCompletionDone111)))
+    fields.add(ValueField("pluginCompletion111", state.pluginCompletion111 ?? nullValue()))
+    objectValue(fields.toArray())
 }
 
 func taskPersistJobValue(state: ProductAsyncJobState): AgentValue {
@@ -349,7 +384,7 @@ func taskPersistWriteError<T>(reason: String, rootSessionId: String): Result<T> 
 }
 
 func taskPersistMessageValue(state: ProductHubMessageState): AgentValue {
-    objectValue([
+    let value=objectValue([
         ValueField("id", textValue(state.snapshot.id)),
         ValueField("from", textValue(state.snapshot.from)),
         ValueField("to", textValue(state.snapshot.to)),
@@ -361,6 +396,8 @@ func taskPersistMessageValue(state: ProductHubMessageState): AgentValue {
         ValueField("reviveTarget", boolValue(state.reviveTarget)),
         ValueField("consumed", boolValue(state.consumed))
     ])
+    match(state.deliveryText111){case Some(text)=>value.put("deliveryText111",textValue(text));case None=>()}
+    value
 }
 
 func taskPersistDecodeRoot(value: AgentValue): ProductTaskPersistedRoot {
@@ -457,6 +494,7 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
         SessionId(rootSessionId),
         taskPersistText(value, "parentToolCallId"),
         taskPersistNonNegative(value, "depth"),
+        agentSource: if (value.field("agentSource").isSome()) { taskPersistNonEmptyText(value, "agentSource") } else { "bundled" },
         capabilities: taskPersistCapabilities(value),
         capabilityCeilingKnown: taskPersistCapabilityCeilingKnown(value),
         startedAt: startedAt,
@@ -468,6 +506,19 @@ func taskPersistDecodeSubagent(value: AgentValue, rootSessionId: String): Produc
     state.toolCount = taskPersistNonNegative(value, "toolCount")
     state.currentTool = if (interrupted) { "" } else { taskPersistText(value, "currentTool") }
     state.error = restoredError
+    if (value.field("pluginCompletionDone111").isSome() || value.field("pluginCompletion111").isSome()) {
+        if (!state.agentSource.startsWith("plugin:") || value.field("pluginCompletionDone111").isNone() ||
+            value.field("pluginCompletion111").isNone()) {
+            throw IllegalArgumentException("plugin result metadata has no recorded plugin child") }
+        let done = value.field("pluginCompletionDone111").getOrThrow()
+        if (done.unifiedKind != ValueKind.Boolean) { throw IllegalArgumentException("invalid plugin result flag") }
+        state.pluginCompletionDone111 = done.asBool()
+        let output = value.field("pluginCompletion111").getOrThrow()
+        if (state.pluginCompletionDone111) { state.pluginCompletion111 = Some(output) }
+        else if (output.unifiedKind != ValueKind.Null) { throw IllegalArgumentException("unconfirmed plugin result") }
+        // The recorded output is historical data only. A process restart does
+        // not recreate admission, cancellation, budget lease or continuation.
+    }
     // pendingRequest, approval state, and denial history are
     // intentionally never decoded from disk.
     state
@@ -518,9 +569,11 @@ func taskPersistDecodeJob(
     taskPersistRequireObject(value, "async job")
     let id = taskPersistNonEmptyText(value, "id")
     let sessionId = taskPersistNonEmptyText(value, "sessionId")
-    let jobType = taskPersistKnownStatus(taskPersistNonEmptyText(value, "jobType"), ["task", "bash"], "job type")
+    let jobType = taskPersistKnownStatus(taskPersistNonEmptyText(value, "jobType"), ["task", "bash", "managed"], "job type")
     let agentId = taskPersistText(value, "agentId")
-    if ((jobType == "task" && (agentId == "" || agentId != id)) || (jobType == "bash" && agentId != "")) {
+    if ((jobType == "task" && (agentId == "" || agentId != id)) || (jobType == "bash" && agentId != "") ||
+        (jobType == "managed" && (agentId == "" || agentId == id ||
+            taskPersistText(value, "operationId") == "" || taskPersistText(value, "parentToolCallId") == ""))) {
         throw IllegalArgumentException("async job identity does not match its type")
     }
     let status = taskPersistKnownStatus(
@@ -578,7 +631,7 @@ func taskPersistDecodeJob(
         startedAt: startedAt,
         status: restoredStatus,
         updatedAt: updatedAt,
-        result: if (resultField.unifiedKind == ValueKind.Null) { None } else { Some(resultField) },
+        result: if (resultField.unifiedKind == ValueKind.Null) { Option<AgentValue>.None } else { Some(resultField) },
         error: restoredError,
         executing: false,
         settlementReceiptId: receipt,
@@ -602,6 +655,9 @@ func taskPersistDecodeMessage(value: AgentValue, rootSessionId: String): Product
         waitCallId: taskPersistText(value, "waitCallId"),
         // Delivery/revival workers are process-local and are never restarted.
         reviveTarget: false,
+        deliveryText111: match(value.field("deliveryText111")){
+            case None=>Option<String>.None
+            case Some(_)=>Some(taskPersistText(value,"deliveryText111"))},
         consumed: taskPersistBoolean(value, "consumed")
     )
 }

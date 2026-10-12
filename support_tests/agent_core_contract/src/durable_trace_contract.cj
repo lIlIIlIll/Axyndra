@@ -6,7 +6,6 @@ import agent_core.*
 import agent_domain.*
 import agent_ports.*
 import agent_runtime.*
-import agent_skills.*
 import agent_store.*
 import persistence_runtime.*
 import std.collection.*
@@ -252,12 +251,6 @@ func durableOperationId(database: SqliteDatabase, runId: RunId): OperationId {
     OperationId(rows[0].required(0))
 }
 
-func durableRunContinuationCleared(database: SqliteDatabase, runId: RunId): Bool {
-    database.scalarInt(
-        "SELECT COUNT(*) FROM run_continuations WHERE run_id=" + sqliteText(runId.value)
-    ) == 0
-}
-
 func durableAttemptRows(database: SqliteDatabase, runId: RunId): Array<SqliteRow> {
     database.query(
         "SELECT id,attempt_no,lifecycle,replay_barrier FROM model_attempts WHERE run_id=" +
@@ -338,6 +331,48 @@ func durableModelDispatchWorker(root: String): Int64 {
     0
 }
 
+func durableContextPayload(database: SqliteDatabase, runId: RunId): String {
+    let rows = database.query("SELECT payload FROM run_continuations WHERE run_id=?", [SqlParameter.Text(runId.value)])
+    expect(rows.size == 1, "context fault injection identifies exactly one persisted continuation")
+    rows[0].required(0)
+}
+
+func durableReplaceContextPayload(database: SqliteDatabase, runId: RunId, previous: String, replacement: String): Unit {
+    expect(durableContextPayload(database, runId) == previous, "context fixture CAS starts from the exact retained bytes")
+    database.execute("UPDATE run_continuations SET payload=? WHERE run_id=? AND payload=?",
+        [SqlParameter.Text(replacement), SqlParameter.Text(runId.value), SqlParameter.Text(previous)])
+    expect(durableContextPayload(database, runId) == replacement, "context fixture CAS changes only the identified payload")
+}
+
+func durableInjectFutureContext(
+    database: SqliteDatabase, runs: SqliteRunRepository, runId: RunId, schema: String
+): (String, String) {
+    let original = durableContextPayload(database, runId)
+    let frozen = runs.continuation(runId).value().getOrThrow()
+    frozen.contextSnapshotPayload.put("schema", textValue(schema))
+    let refusedWrite = runs.saveContinuation(frozen)
+    let actual = match (refusedWrite.error()) { case Some(error) => error.describe(); case None => "unexpected successful write" }
+    expect(refusedWrite.isError() && refusedWrite.error().getOrThrow().code == "persistence.conflict",
+        "ordinary persistence must reject changing a sealed context binding: " + actual)
+    expect(durableContextPayload(database, runId) == original,
+        "rejected ordinary context write preserves the original continuation bytes")
+
+    // Historical corruption is injected through one exact SQL row, not an authorized repository transition.
+    // Re-seal the public outer codec so recovery actually reaches the unsupported inner context schema.
+    let durable = decodeDurableRunContinuation(original)
+    let snapshot = optionalRunRequestSnapshotFromDurableContinuation(durable).getOrThrow()
+    snapshot.field("skill_stack").getOrThrow().put("schema", textValue(schema))
+    let changed = encodeDurableRunContinuation(withRunRequestSnapshotProjection(durable, snapshot))
+    let checked = decodeDurableRunContinuation(changed)
+    expect(changed != original && encodeDurableRunContinuation(checked) == changed &&
+        optionalRunRequestSnapshotFromDurableContinuation(checked).getOrThrow()
+            .field("skill_stack").getOrThrow().field("schema").getOrThrow().text == schema,
+        "future context fixture remains a valid sealed outer continuation with the exact changed inner schema")
+    durableReplaceContextPayload(database, runId, original, changed)
+    println("Durable future context fixture: canonical write rejected persistence.conflict; exact sealed history injected")
+    (original, changed)
+}
+
 func durableModelRestartTraceContract(root: String): Unit {
     durableLaunchWorker("model-dispatch", root)
     let database = SqliteDatabase(durableDatabasePath(root))
@@ -369,6 +404,17 @@ func durableModelRestartTraceContract(root: String): Unit {
             "caller drift must not replace the frozen request",
             autoRetry: false
         )
+        let (original, preserved) = durableInjectFutureContext(
+            database, runs, callerRequest.runId, "axyndra.run-context/future")
+        let attemptsBefore = database.scalarInt("SELECT COUNT(*) FROM model_attempts")
+        let refused = core.resume(callerRequest)
+        expect(refused.isError() && refused.error().getOrThrow().kind == AgentErrorKind.RecoveryRequired &&
+            refused.error().getOrThrow().code == "context.snapshot_unsupported_or_invalid",
+            "unsupported context returns typed model recovery error without throwing")
+        expect(model.calls == 0 && database.scalarInt("SELECT COUNT(*) FROM model_attempts") == attemptsBefore &&
+            database.query("SELECT payload FROM run_continuations WHERE run_id='durable-model-run'")[0].required(0) == preserved,
+            "unsupported model context preserves historical continuation and creates no provider IO or Attempt")
+        durableReplaceContextPayload(database, callerRequest.runId, preserved, original)
         let resumed = core.resume(callerRequest).value().getOrThrow()
         expect(match (resumed) {
             case AgentRunOutcome.Completed(snapshot) =>
@@ -418,8 +464,53 @@ func durableModelRestartTraceContract(root: String): Unit {
                 sqliteText("durable-model-run") + "))"
             ) == 1,
             "durable restart stores one Decision and one canonical projection")
-        expect(durableRunContinuationCleared(database, RunId("durable-model-run")),
-            "durable restart clears the running-model continuation")
+        let settledRows = database.query(
+            "SELECT phase,active_attempt_id,payload,digest FROM run_continuations " +
+                "WHERE run_id='durable-model-run'")
+        expect(settledRows.size == 1 && settledRows[0].required(0) == "checkpoint" &&
+            settledRows[0][1].isNone(), "durable restart retains one inactive checkpoint")
+        let settled = decodeDurableRunContinuation(settledRows[0].required(2))
+        expect(settled.isSealed() && settled.digest == settledRows[0].required(3) &&
+            settled.runId.value == "durable-model-run" &&
+            runExecutionPhaseName(settled.phase) == "checkpoint" &&
+            settled.attemptId.isNone() && settled.pendingOperationId.isNone() &&
+            settled.pendingApprovalId.isNone() && settled.waitingExternal.isNone() &&
+            settled.toolBatch.isNone() && settled.workDebt.isEmpty(),
+            "durable settled checkpoint has no executable attempt or foreground debt")
+        let proof = database.query(
+            "SELECT a.id,d.id FROM model_attempts a JOIN model_decisions d ON d.attempt_id=a.id " +
+                "WHERE a.run_id='durable-model-run' AND a.lifecycle='completed' " +
+                "AND a.completed_at_millis IS NOT NULL AND d.validation_status='validated' " +
+                "AND d.canonical_committed_at_millis IS NOT NULL")
+        expect(proof.size == 1 && proof[0].required(0) == attempts[1].required(0),
+            "durable settled checkpoint refers to the actual completed retry and committed Decision")
+        let phase = runExecutionPhasePayload(settled.phase)
+        expect(phase.field("settled_model_attempt_id").getOrThrow().text == proof[0].required(0) &&
+            phase.field("committed_decision_id").getOrThrow().text == proof[0].required(1),
+            "durable checkpoint binds the exact completed Attempt and Decision")
+        let audit = database.query("SELECT payload FROM audit_events " +
+            "WHERE run_id='durable-model-run' AND kind='model_continuation_settled'")
+        expect(audit.size == 1 && audit[0].required(0) == encodeStoredValue(objectValue([
+            ValueField("attempt_id", textValue(proof[0].required(0))),
+            ValueField("decision_id", textValue(proof[0].required(1)))])),
+            "durable settlement audit agrees exactly with the checkpoint proof")
+        let reopened = SqliteDatabase(durableDatabasePath(root))
+        try {
+            let pending = SqliteRunRepository(reopened).pendingRecoveryContinuation(SessionId("durable-model-session"))
+            expect(pending.isOk() && pending.value().getOrThrow().isNone(),
+                "reopened repository exposes no settled model execution for recovery")
+        } finally { reopened.close() }
+        let repeated = core.resume(callerRequest)
+        expect(repeated.isError() && model.calls == 1 &&
+            durableAttemptRows(database, RunId("durable-model-run")).size == 2 &&
+            database.scalarInt("SELECT COUNT(*) FROM model_decisions WHERE attempt_id IN " +
+                "(SELECT id FROM model_attempts WHERE run_id='durable-model-run')") == 1 &&
+            database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE run_id='durable-model-run' " +
+                "AND kind='model_continuation_settled'") == 1 &&
+            database.query("SELECT payload FROM run_continuations WHERE run_id='durable-model-run'")[0].required(0) ==
+                settledRows[0].required(2),
+            "resuming a settled checkpoint refuses replay without model, Decision or checkpoint mutation")
+        println("Durable settled model checkpoint contract passed: sealed proof, reopened recovery and no replay")
     } finally {
         database.close()
     }
@@ -475,6 +566,17 @@ func durableReceiptWorker(root: String): Int64 {
         case AgentRunOutcome.AwaitingApproval(_, value) => value
         case _ => throw IllegalStateException("durable receipt worker did not pause for approval")
     }
+    let (original, preserved) = durableInjectFutureContext(
+        database, runs, durableToolRequest().runId, "legacy.nonempty.skill.snapshot")
+    let approvalsBefore = database.scalarInt("SELECT COUNT(*) FROM approvals")
+    let refused = core.decide(durableToolRequest(), approval, ApprovalDecision.Approve)
+    expect(refused.isError() && refused.error().getOrThrow().code == "context.snapshot_unsupported_or_invalid",
+        "unsupported context returns typed approval recovery error before consuming decision")
+    expect(database.scalarInt("SELECT COUNT(*) FROM approvals") == approvalsBefore &&
+        database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0 && !exists(Path(effectPath)) &&
+        database.query("SELECT payload FROM run_continuations WHERE run_id='durable-tool-run'")[0].required(0) == preserved,
+        "invalid context cannot consume actual pending approval, write effect, Receipt or historical bytes")
+    durableReplaceContextPayload(database, durableToolRequest().runId, preserved, original)
     let _ = core.decide(durableToolRequest(), approval, ApprovalDecision.Approve)
     while (true) {
         sleep(Duration.second)
@@ -611,6 +713,17 @@ func durableUnknownEffectTraceContract(root: String): Unit {
         expect(recovered.isError() && recovered.error().getOrThrow().code ==
             "thread.recovery_actions_pending",
             "durable Thread recovery refuses an unknown-effect Operation")
+        // The same genuinely killed, once-effectful operation must not become
+        // resumable merely because a request/budget projection can be inspected.
+        let boundaryRuns = SqliteRunRepository(database)
+        let boundaryModel = DurableResumeAnswerModel()
+        let boundaryCore = AgentCore(boundaryModel, boundaryRuns, pipeline, catalog,
+            threadRuntimes: Some(registry), operationRuntime: Some(operations),
+            modelDecisionRuntime: Some(SqliteModelDecisionStore(database)))
+        expect(boundaryCore.resumeContextBoundary(durableToolRequest()).isError() &&
+            boundaryModel.calls == 0 && durableEffectCount(effectPath) == 1 &&
+            database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0,
+            "context-boundary recovery never replays actual unknown effect or fabricates Receipt107")
         let replay = pipeline.decide(context, operationId, ApprovalDecision.Approve)
         expect(replay.isError() && replay.error().getOrThrow().code ==
             "operation.execution_prepare_failed",

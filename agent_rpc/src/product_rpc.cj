@@ -7,8 +7,9 @@ import yjson.*
 import agent_cli.*
 import agent_core.*
 import agent_domain.*
+import agent_runtime.*
+import agent_store.RpcQueuedStoreFailure113
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.sync.*
@@ -16,16 +17,35 @@ import std.sync.*
 public class ProductJsonlRpcServer {
     private let session: ApplicationSession
     private let emit: (String) -> Unit
+    private let ownedOutput: ?OwnedRpcFrameOutput
+    private let ownedDeliveries = ArrayList<OwnedProductRpcEventDelivery>()
+    private let ownedFailureDeliveries113 = RpcOwnedFailureQueue113()
+    private let unadmittedFailure113 = AtomicBool(false)
     private var hostTools: ?RpcHostToolBridge = None
     private var hostUris: ?RpcHostUriBridge = None
     private let lock = Mutex()
     private let frameLock = Mutex()
     private var running = false
-    private let bashWorkers = ArrayList<RpcBashWorker>()
+    // One actual prompt/decision Future; never infer retirement from running.
+    private var runWorker113: ?Future<Unit> = None<Future<Unit>>
+    private var runWorkerStartingFailed113 = false
+    // One actual Native-bank root; each concurrent worker derives a SUM-paid
+    // child without another pool, transfer slot or 16 MiB floor.
+    private var workerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var runWorkerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var commandWorkerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var runWorkerBasePeak113: Int64 = 0
+    private var queuedWorkerPeak113: Int64 = 0
+    private var workerPaymentFailed113 = false
+    private var queuedInputCustody113: ?RpcQueuedRetainedInput113 = None<RpcQueuedRetainedInput113>
+    private var workerSnapshotArrays113: Int64 = 0
+    private var workerJoinFrames113: Int64 = 0
+    private var bashWorkers: ?ArrayList<RpcBashWorker> = None<ArrayList<RpcBashWorker>>
     private var closing = false
     private var interactionProfile = "none"
     private var activePluginCommandRequestId = ""
     private var pluginCommandWorker: ?Future<Unit> = None
+    private var pluginCommandStartingFailed113 = false
     private var protocolVersion: Int64 = 1
     private var chunkCounter: Int64 = 0
     private var thinkingLevel = "medium"
@@ -36,10 +56,12 @@ public class ProductJsonlRpcServer {
 
     public init(
         session: ApplicationSession,
-        emit: (String) -> Unit
+        emit: (String) -> Unit,
+        ownedOutput!: ?OwnedRpcFrameOutput = None
     ) {
         this.session = session
         this.emit = emit
+        this.ownedOutput = ownedOutput
         this.hostTools = Some(
             RpcHostToolBridge(
                 session,
@@ -52,6 +74,7 @@ public class ProductJsonlRpcServer {
                 {frame => emitFrame(frame)}
             )
         )
+        if (ownedOutput.isNone()) {
         session.subscribe({
             event => emitFrame(
                 encodeAgentValue(
@@ -66,6 +89,23 @@ public class ProductJsonlRpcServer {
                 )
             )
         })
+        } else {
+            session.subscribeOwned({
+            event => emitFrame(
+                encodeAgentValue(
+                    objectValue(
+                        [
+                            ValueField("type", textValue("agent_event")),
+                            ValueField("sequence", integerValue(event.sequence)),
+                            ValueField("runId", textValue(event.runId.value)),
+                            ValueField("event", eventProtocolDetail(event))
+                        ]
+                    )
+                )
+            )
+        }, CallbackOwnedAgentEventSink({ event => emitOwnedEvent(event) }),
+            failures: Some(ProductRpcFailureSink113({ value => admitOwnedFailure113(value) })))
+        }
         session.subscribeSubagents({
             event => emitSubagentFrame(event)
         })
@@ -163,12 +203,12 @@ public class ProductJsonlRpcServer {
                 )
                 if (isRunning() || session.approval().isSome()) {
                     if (streamingBehavior == "steer") {
-                        match (session.enqueue("", "steer", message)) {
+                        match (queueInteraction("steer", message)) {
                             case Result.Ok(_) => success(id, command)
                             case Result.Err(error) => failure(id, command, error.message)
                         }
                     } else if (streamingBehavior == "followUp") {
-                        match (session.enqueue("", "follow_up", message)) {
+                        match (queueInteraction("follow_up", message)) {
                             case Result.Ok(_) => success(id, command)
                             case Result.Err(error) => failure(id, command, error.message)
                         }
@@ -180,7 +220,7 @@ public class ProductJsonlRpcServer {
                         )
                     }
                 } else {
-                    if (startPrompt(RpcPrompt(id, command, message))) {
+                    if (startPrompt(id, command, message)) {
                         success(id, command)
                     } else {
                         failure(
@@ -214,8 +254,8 @@ public class ProductJsonlRpcServer {
                 }
                 match (session.cancel()) {
                     case Result.Ok(_) =>
-                        scheduleDeferred(RpcPrompt(id, command, message))
-                        success(id, command)
+                        if (scheduleDeferred(id, command, message)) { success(id, command) }
+                        else { failure(id, command, "RPC server is closing or retiring its prior request") }
                     case Result.Err(error) => failure(id, command, error.message)
                 }
             case "abort" => match (session.cancel()) {
@@ -275,7 +315,7 @@ public class ProductJsonlRpcServer {
                 case Result.Err(error) => failure(id, command, error.message)
             }
             case "get_state" => success(id, command, data: stateValue())
-            case "get_available_commands" => success(id, command, data: commandsValue())
+            case "get_available_commands" => success(id, command, data: commandsValue(session.frontendSlashDefinitions()))
             case "get_plugin_commands" => success(id, command, data: pluginCommandsValue())
             case "plugin_command" => startPluginCommand(
                 id, command, productTextField(value, "routeName"),
@@ -312,19 +352,18 @@ public class ProductJsonlRpcServer {
                         "todo phases are required"
                     )
                 }
-                match (session.setTodoPhases(phases)) {
-                    case Result.Ok(_) => success(
-                        id,
-                        command,
-                        data: objectValue(
-                            [
-                                ValueField(
-                                    "todoPhases",
-                                    encodeTodoPhases(phases)
-                                )
-                            ]
-                        )
-                    )
+                match (session.replaceTodoPhases(phases)) {
+                    case Result.Ok(response) =>
+                        match(response.approval){
+                            case Some(request)=>emitFrame(encodeAgentValue(productApprovalFrame(request)))
+                            case None=>()}
+                        let committed=if(response.approval.isNone()){
+                            match(session.todoPhases()){case Result.Ok(value)=>encodeTodoPhases(value);case Result.Err(error)=>return failure(id,command,error.message)}
+                        }else{nullValue()}
+                        success(id,command,data:objectValue([
+                            ValueField("todoPhases",committed),
+                            ValueField("awaitingApproval",boolValue(response.approval.isSome())),
+                            ValueField("output",textValue(response.text))]))
                     case Result.Err(error) => failure(id, command, error.message)
                 }
             case "set_host_tools" => match (hostToolBridge().setTools(value)) {
@@ -564,18 +603,143 @@ public class ProductJsonlRpcServer {
         }
     }
 
-    private func startPrompt(prompt: RpcPrompt): Bool {
+    // Caller holds the existing short server lock. No source, receipt or
+    // resource refund is created by this physical-return check.
+    private func runWorkerReturnedLocked113(): Bool {
+        if (runWorkerStartingFailed113 || pluginCommandStartingFailed113 || workerPaymentFailed113) { return false }
+        rpcWorkerReturned113(runWorker113) && rpcWorkerReturned113(pluginCommandWorker)
+    }
+
+    private func reserveWorkerMetadataLocked113(peak: Int64): ?LogicalJsonOwnerReservation {
+        try {
+            if (workerMetadata113.isNone()) {
+                workerMetadata113 = Some(reserveProductControlMetadata113(4096))
+            }
+            let child = workerMetadata113.getOrThrow().deriveRetainedLease()
+            try { child.ensureRetainedPeak(peak); Some(child) }
+            catch (_: Exception) { child.close(); None<LogicalJsonOwnerReservation> }
+        } catch (_: Exception) { None<LogicalJsonOwnerReservation> }
+    }
+
+    // These helpers return ONLY a reservation, after the observed Future and
+    // its retained action have been removed from all server fields.
+    private func takeReturnedRunMetadataLocked113(): ?LogicalJsonOwnerReservation {
+        if (runWorkerStartingFailed113 || !rpcWorkerReturned113(runWorker113)) {
+            return None<LogicalJsonOwnerReservation>
+        }
+        runWorker113 = None<Future<Unit>>
+        let paid = runWorkerMetadata113
+        runWorkerMetadata113 = None<LogicalJsonOwnerReservation>
+        runWorkerBasePeak113 = 0; queuedWorkerPeak113 = 0
+        match (queuedInputCustody113) {
+            case Some(source) => if (paid.isSome() && refEq(source.payment, paid.getOrThrow())) {
+                return None<LogicalJsonOwnerReservation> }
+            case None => () }
+        paid
+    }
+    private func takeReturnedCommandMetadataLocked113(): ?LogicalJsonOwnerReservation {
+        if (pluginCommandStartingFailed113 || !rpcWorkerReturned113(pluginCommandWorker)) {
+            return None<LogicalJsonOwnerReservation>
+        }
+        pluginCommandWorker = None<Future<Unit>>
+        let paid = commandWorkerMetadata113
+        commandWorkerMetadata113 = None<LogicalJsonOwnerReservation>
+        paid
+    }
+    private func retireReturnedWorkerMetadataLocked113(): Unit {
+        // A joining close frame may still retain a Future/holder snapshot.
+        if (workerJoinFrames113 != 0 || workerPaymentFailed113) { return }
+        rpcCloseWorkerMetadata113(takeRetiredQueuedSource113())
+        rpcCloseWorkerMetadata113(takeReturnedRunMetadataLocked113())
+        rpcCloseWorkerMetadata113(takeReturnedCommandMetadataLocked113())
+    }
+
+    private func startRunWorkerLocked113(paid: LogicalJsonOwnerReservation,
+        peak: Int64, action: () -> Unit): Unit {
+        runWorkerMetadata113 = Some(paid)
+        runWorkerBasePeak113 = peak; queuedWorkerPeak113 = 0
+        // Mark debt BEFORE spawn. A throwing/unknown spawn remains closed.
+        // Its actual Future is registered before unlocking the short gate.
+        runWorkerStartingFailed113 = true
+        runWorker113 = Some(spawn { action() })
+        runWorkerStartingFailed113 = false
+    }
+
+    public func beginRunWorkerShutdown113(): Unit {
+        lock.lock(); try { closing = true } finally { lock.unlock() }
+    }
+
+    // Nonblocking. The existing Main has no finite exit deadline. A concrete
+    // frontend exit policy and cancellation/waiting remain a separate change;
+    // this DATA query neither invents a timeout nor starts or ACKs a Run.
+    public func collectRunWorkerRetirement113(): Bool {
         lock.lock()
         try {
-            if (running || session.approval().isSome()) {
+            // closing is a gate, not evidence that any callback returned.
+            if (!closing || workerJoinFrames113 != 0 || !runWorkerReturnedLocked113()) { return false }
+            if (!allBashWorkersReturnedLocked113()) { return false }
+            rpcCloseWorkerMetadata113(takeRetiredQueuedSource113())
+            if (queuedInputCustody113.isSome()) { return false }
+            // takeRetiredWorkerRoot drops every Future/action/holder/list in a
+            // separate frame. Only the real allocation survives its return.
+            rpcCloseWorkerMetadata113(takeRetiredWorkerRootLocked113())
+            true
+        } finally { lock.unlock() }
+    }
+
+    private func allBashWorkersReturnedLocked113(): Bool {
+        match (bashWorkers) {
+            case None => true
+            case Some(workers) =>
+                for (worker in workers) {
+                    if (!worker.rejectedFrameReturned113 && (worker.future.isNone() || !rpcWorkerReturned113(worker.future))) { return false }
+                }
+                true
+        }
+    }
+    private func takeReturnedBashMetadataLocked113(index: Int64): ?LogicalJsonOwnerReservation {
+        let workers = bashWorkers.getOrThrow()
+        let worker = workers[index]
+        if (!worker.rejectedFrameReturned113 && (worker.future.isNone() || !rpcWorkerReturned113(worker.future))) {
+            return None<LogicalJsonOwnerReservation>
+        }
+        worker.future = None<Future<Unit>>
+        let paid = worker.metadata113
+        worker.metadata113 = None<LogicalJsonOwnerReservation>
+        workers.remove(at: index)
+        paid
+    }
+    private func takeRetiredWorkerRootLocked113(): ?LogicalJsonOwnerReservation {
+        retireReturnedWorkerMetadataLocked113()
+        match (bashWorkers) {
+            case Some(workers) =>
+                while (!workers.isEmpty()) { rpcCloseWorkerMetadata113(takeReturnedBashMetadataLocked113(0)) }
+            case None => ()
+        }
+        // Clearing a list alone can retain its backing array. Drop that real
+        // container too, before the physical shared root may be released.
+        bashWorkers = None<ArrayList<RpcBashWorker>>
+        let paid = workerMetadata113
+        workerMetadata113 = None<LogicalJsonOwnerReservation>
+        paid
+    }
+
+    private func startPrompt(id: String, command: String, message: String): Bool {
+        lock.lock()
+        try {
+            if (closing || running || session.approval().isSome() || !runWorkerReturnedLocked113()) {
                 return false
             }
+            retireReturnedWorkerMetadataLocked113()
+            let peak = rpcWorkerInputPeak113(id, command, message)
+            let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                case Some(value) => value; case None => return false }
+            // Funding precedes BOTH the prompt object and the action closure.
+            let prompt = RpcPrompt(id, command, message)
             running = true
-        } finally {
-            lock.unlock()
-        }
-        let _ = spawn {runPrompts(prompt)}
-        true
+            startRunWorkerLocked113(paid, peak, { => runPrompts(prompt) })
+            true
+        } finally { lock.unlock() }
     }
 
     private func pluginCommandsValue(): AgentValue {
@@ -608,14 +772,21 @@ public class ProductJsonlRpcServer {
         lock.lock()
         let accepted = try {
             if (closing || running || activePluginCommandRequestId != "" ||
-                session.approval().isSome()) {
+                session.approval().isSome() || !runWorkerReturnedLocked113()) {
                 false
             } else {
+                retireReturnedWorkerMetadataLocked113()
+                let peak = rpcWorkerInputPeak113(id, routeName, arguments)
+                let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                    case Some(value) => value; case None => return failure(id, command, "RPC worker metadata capacity is exhausted") }
+                commandWorkerMetadata113 = Some(paid)
                 activePluginCommandRequestId = id
                 running = true
+                pluginCommandStartingFailed113 = true
                 pluginCommandWorker = Some(spawn {
                     runPluginCommand(id, routeName, arguments)
                 })
+                pluginCommandStartingFailed113 = false
                 true
             }
         } finally {
@@ -655,12 +826,14 @@ public class ProductJsonlRpcServer {
             lock.unlock()
         }
         match (result) {
-            case Result.Ok(_) => emitFrame(encodeAgentValue(objectValue([
+            case Result.Ok(_) => match (session.approval()) {
+                case Some(approval) => emitFrame(encodeAgentValue(productApprovalFrame(approval)))
+                case None => emitFrame(encodeAgentValue(objectValue([
                 ValueField("type", textValue("plugin_command_completed")),
                 ValueField("requestId", textValue(id)),
                 ValueField("routeName", textValue(routeName)),
                 ValueField("ok", boolValue(true))
-            ])))
+            ]))) }
             case Result.Err(error) => emitFrame(encodeAgentValue(objectValue([
                 ValueField("type", textValue("plugin_command_completed")),
                 ValueField("requestId", textValue(id)),
@@ -678,6 +851,7 @@ public class ProductJsonlRpcServer {
     ): Result<Unit> {
         lock.lock()
         try {
+            if (closing) { return ownedRpcOutputError("rpc.server_closing") }
             if (activePluginCommandRequestId != "") {
                 return Result.Err(AgentError(
                     AgentErrorKind.Conflict,
@@ -688,46 +862,134 @@ public class ProductJsonlRpcServer {
             if (running || session.approval().isSome()) {
                 return session.enqueue("", kind, message)
             }
+            // Do not accept a message after the old safe-boundary dequeue
+            // has ended while its callback/Future is still returning.
+            if (!runWorkerReturnedLocked113()) { return ownedRpcOutputError("rpc.prior_worker_pending") }
+            retireReturnedWorkerMetadataLocked113()
+            let peak = rpcWorkerInputPeak113("", kind, message)
+            let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                case Some(value) => value; case None => return ownedRpcOutputError("rpc.worker_metadata_capacity") }
             running = true
-        } finally {
-            lock.unlock()
-        }
-        let _ = spawn {
-            runPrompts(
-                RpcPrompt(
-                    "",
-                    kind,
-                    message,
-                    publishResult: false
-                )
-            )
-        }
-        Result.Ok(())
+            startRunWorkerLocked113(paid, peak, { =>
+                runPrompts(RpcPrompt("", kind, message, publishResult: false))
+            })
+            Result.Ok(())
+        } finally { lock.unlock() }
     }
 
-    private func scheduleDeferred(prompt: RpcPrompt): Unit {
+    private func scheduleDeferred(id: String, command: String, message: String): Bool {
         lock.lock()
         try {
+            if (closing) { return false }
             if (running || session.approval().isSome()) {
-                let _ = session.enqueue(
-                    prompt.id,
-                    prompt.command,
-                    prompt.message
-                )
-                return
+                return session.enqueue(id, command, message).isOk()
             }
+            if (!runWorkerReturnedLocked113()) { return false }
+            retireReturnedWorkerMetadataLocked113()
+            let peak = rpcWorkerInputPeak113(id, command, message)
+            let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                case Some(value) => value; case None => return false }
+            // Funding precedes BOTH the prompt object and the action closure.
+            let prompt = RpcPrompt(id, command, message)
             running = true
-        } finally {
-            lock.unlock()
+            startRunWorkerLocked113(paid, peak, { => runPrompts(prompt) })
+            true
+        } finally { lock.unlock() }
+    }
+
+    private func runRpcQueuedInput113(value: QueuedInteraction): Result<ApplicationResponse> {
+        lock.lock()
+        let source = try {
+            if (queuedInputCustody113.isSome()) { throw IllegalStateException("rpc.previous_queued_source_pending") }
+            let paid = runWorkerMetadata113.getOrThrow()
+            let inputPeak = rpcWorkerAdd113(runWorkerBasePeak113, rpcWorkerAdd113(queuedWorkerPeak113, queuedWorkerPeak113))
+            paid.ensureRetainedPeak(rpcWorkerAdd113(inputPeak, 65536))
+            let actual = RpcQueuedRetainedInput113(value, paid, inputPeak)
+            queuedInputCustody113 = Some(actual)
+            actual
+        } finally { lock.unlock() }
+        try {
+            let origin = match (session.prepareRpcQueuedInitiator113(value, { bytes =>
+                try {
+                    if (bytes > (Int64.Max - 65536) / 64) { return ownedRpcOutputError("rpc.queued_extent_overflow") }
+                    source.payment.ensureRetainedPeak(rpcWorkerAdd113(source.inputPeak, 65536 + bytes * 64))
+                    Result<Unit>.Ok(())
+                } catch (_: Exception) { ownedRpcOutputError("rpc.queued_metadata_capacity") }
+            })) {
+                case Result.Ok(actual) => actual
+                case Result.Err(error) =>
+                    source.capturePrimary(error); source.uncertain = true
+                    lock.lock(); try { workerPaymentFailed113 = true; closing = true } finally { lock.unlock() }
+                    return Result<ApplicationResponse>.Err(error) }
+            source.origin = Some(origin)
+            let result = session.handleRpcQueuedAtReturnedBoundary113(value, origin,
+                { bytes => source.allocate(bytes) }, { error => source.capturePrimary(error) }, source.payment,
+                { cell => source.retainStoreCell113(cell) })
+            // The WHOLE synchronous App/Store helper has now returned.
+            source.retireReturnedStoreCells113()
+            result
+        } catch (failure: RpcQueuedStoreFailure113) {
+            source.admitStoreFailure113(failure); source.uncertain = true
+            lock.lock(); try { workerPaymentFailed113 = true; closing = true } finally { lock.unlock() }
+            Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "rpc.queued_settlement_pending", "the original queued SQL producer remains held for recovery"))
+        } catch (failure: OwnedCanonicalPaidFailure113) {
+            // Move before a fallible gate; neither the primary nor this full
+            // secondary can disappear because another callback returned.
+            source.secondary = Some(failure.takeConsumer()); source.uncertain = true
+            lock.lock(); try { workerPaymentFailed113 = true; closing = true } finally { lock.unlock() }
+            Result<ApplicationResponse>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "rpc.queued_settlement_pending", "the original queued input needs paid settlement recovery"))
+        } catch (error: Exception) {
+            source.unknown = Some(error); source.uncertain = true
+            lock.lock(); try { workerPaymentFailed113 = true; closing = true } finally { lock.unlock() }
+            throw error
         }
-        let _ = spawn {runPrompts(prompt)}
+    }
+
+    // Return only the lease after this helper's node/data locals disappear.
+    // An active current worker continues to pay its original/current aliases.
+    private func takeRetiredQueuedSource113(): ?LogicalJsonOwnerReservation {
+        let source = match (queuedInputCustody113) {
+            case None => return None<LogicalJsonOwnerReservation>; case Some(value) => value }
+        if (source.uncertain || source.secondary.isSome() || source.origin.isNone()) {
+            return None<LogicalJsonOwnerReservation> }
+        try {
+            let done = session.rpcQueuedReferencesRetired113(source.origin.getOrThrow(),
+                { bytes => source.allocate(bytes) }, { cell => source.retainStoreCell113(cell) })
+            // Same whole-helper-return witness, also when the SQL says nonterminal.
+            source.retireReturnedStoreCells113()
+            if (!done) { return None<LogicalJsonOwnerReservation> }
+        } catch (failure: RpcQueuedStoreFailure113) {
+            source.admitStoreFailure113(failure); source.uncertain = true
+            workerPaymentFailed113 = true; closing = true
+            return None<LogicalJsonOwnerReservation>
+        } catch (failure: OwnedCanonicalPaidFailure113) {
+            source.secondary = Some(failure.takeConsumer()); source.uncertain = true
+            workerPaymentFailed113 = true; closing = true
+            return None<LogicalJsonOwnerReservation>
+        } catch (failure: Exception) {
+            source.unknown = Some(failure); source.uncertain = true
+            workerPaymentFailed113 = true; closing = true
+            return None<LogicalJsonOwnerReservation>
+        }
+        match (source.primary) {
+            case Some(consumer) => if (!consumer.isAcknowledged()) { return None<LogicalJsonOwnerReservation> }
+            case None => () }
+        let paid = source.payment
+        queuedInputCustody113 = None<RpcQueuedRetainedInput113>
+        if (runWorkerMetadata113.isSome() && refEq(runWorkerMetadata113.getOrThrow(), paid)) {
+            return None<LogicalJsonOwnerReservation> }
+        Some(paid)
     }
 
     private func runPrompts(first: RpcPrompt): Unit {
         var current: ?RpcPrompt = Some(first)
         while (current.isSome()) {
             let prompt = current.getOrThrow()
-            let result = session.handle(prompt.message)
+            let result = match (prompt.queued113) {
+                case Some(value) => runRpcQueuedInput113(value)
+                case None => session.handle(prompt.message) }
             if (prompt.publishResult) {
                 publishPromptResult(prompt, result)
             }
@@ -738,25 +1000,23 @@ public class ProductJsonlRpcServer {
     private func startDecision(decision: RpcDecision): Bool {
         lock.lock()
         try {
-            if (running) {
-                return false
-            }
+            if (closing || running || !runWorkerReturnedLocked113()) { return false }
+            retireReturnedWorkerMetadataLocked113()
+            let peak = rpcWorkerAdd113(rpcWorkerInputPeak113(decision.id, decision.command,
+                decision.operationId), rpcWorkerDecisionPeak113(decision.decision))
+            let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                case Some(value) => value; case None => return false }
             running = true
-        } finally {
-            lock.unlock()
-        }
-        let _ = spawn {
-            let result = session.decide(
-                decision.operationId,
-                decision.decision
-            )
-            publishDecision(decision, result)
-            match (takeNext(result)) {
-                case Some(prompt) => runPrompts(prompt)
-                case None => ()
-            }
-        }
-        true
+            startRunWorkerLocked113(paid, peak, { =>
+                let result = session.decide(decision.operationId, decision.decision)
+                publishDecision(decision, result)
+                match (takeNext(result)) {
+                    case Some(prompt) => runPrompts(prompt)
+                    case None => ()
+                }
+            })
+            true
+        } finally { lock.unlock() }
     }
 
     private func publishDecision(
@@ -764,13 +1024,11 @@ public class ProductJsonlRpcServer {
         result: Result<ApplicationResponse>
     ): Unit {
         match (result) {
-            case Result.Err(error) => emitFrame(
-                failure(
-                    decision.id,
-                    decision.command,
-                    error.message
-                )
-            )
+            case Result.Err(error) =>
+                if (!publishOwnedCheckpointFailure113(decision.id, decision.command, error)) {
+                    emitFrame(failure(decision.id, decision.command, error.message))
+                }
+                match (session.approval()) { case Some(approval) => emitFrame(encodeAgentValue(productApprovalFrame(approval))); case None => () }
             case Result.Ok(response) => match (response.approval) {
                 case Some(approval) => emitFrame(encodeAgentValue(productApprovalFrame(approval)))
                 case None => ()
@@ -781,12 +1039,47 @@ public class ProductJsonlRpcServer {
     private func takeNext(result: Result<ApplicationResponse>): ?RpcPrompt {
         lock.lock()
         try {
-            match (session.takeQueuedAtSafeBoundary(result)) {
+            rpcCloseWorkerMetadata113(takeRetiredQueuedSource113())
+            if (queuedInputCustody113.isSome()) { running = false; return None<RpcPrompt> }
+        } finally { lock.unlock() }
+        if (hasOwnedCheckpointFailureOutput113()) {
+            lock.lock()
+            try { running = false } finally { lock.unlock() }
+            return None<RpcPrompt>
+        }
+        lock.lock()
+        try {
+            // Drain only entries accepted before closing. New external queue
+            // admission is already closed under this same lock.
+            let consumerPayment = runWorkerMetadata113.getOrThrow()
+            let selected = session.takeRpcQueuedAtReturnedBoundaryWithDataPayment113(result, { bytes =>
+                try {
+                    // The first prompt remains captured by the actual Future.
+                    // At a boundary, old current and next queued inputs can
+                    // overlap. Two maximum live queued invoices cover both;
+                    // completed sequential inputs do not accumulate forever.
+                    let nextPeak = rpcWorkerExtentPeak113(bytes)
+                    let maximum = max(queuedWorkerPeak113, nextPeak)
+                    let total = rpcWorkerAdd113(runWorkerBasePeak113, rpcWorkerAdd113(maximum, maximum))
+                    consumerPayment.ensureRetainedPeak(total)
+                    queuedWorkerPeak113 = maximum
+                    Result<Unit>.Ok(())
+                } catch (_: Exception) { ownedRpcOutputError("rpc.worker_metadata_capacity") }
+            })
+            let queued = match (selected) {
+                case Result.Ok(value) => value
+                case Result.Err(_) =>
+                    // The exact queue entry was NOT removed. Physical return
+                    // alone cannot retire its unpaid admission or permit retry.
+                    workerPaymentFailed113 = true; closing = true; running = false
+                    return None<RpcPrompt>
+            }
+            match (queued) {
                 case Some(next) => Some(
                     RpcPrompt(
                         next.correlationId,
                         next.kind,
-                        next.input
+                        next.input, queued113: Some(next)
                     )
                 )
                 case None =>
@@ -798,18 +1091,46 @@ public class ProductJsonlRpcServer {
         }
     }
 
+    private func publishQueuedFailure113(prompt: RpcPrompt): Bool {
+        let source = match (queuedInputCustody113) { case Some(value) => value; case None => return false }
+        if (prompt.queued113.isNone() || !refEq(prompt.queued113.getOrThrow(), source.value)) { return false }
+        let consumer = match (source.primary) {
+            case Some(value) => value
+            case None => match (source.secondary) {
+                case Some(value) => value
+                case None =>
+                    // Exact input recognition is independent of fallible
+                    // full-consumer capture. Keep original raw/cell debt;
+                    // no synthetic short response, ACK or gate retirement.
+                    unadmittedFailure113.store(true)
+                    return true } }
+        let extra = if (source.primary.isSome()) { source.secondary } else { None<OwnedFailureDataConsumer113> }
+        frameLock.lock()
+        try {
+            if (!source.primaryRegistered) {
+                match (rpcPrepareQueuedFailureData113(consumer, extra, prompt.id, prompt.command, protocolVersion)) {
+                    case Result.Err(_) => unadmittedFailure113.store(true)
+                    case Result.Ok(value) =>
+                        ownedFailureDeliveries113.append(value)
+                        source.primaryRegistered = true
+                }
+            }
+        } finally { frameLock.unlock() }
+        collectOwnedCheckpointFailures113()
+        // Recognition is not ACK. A refused or unsupported output keeps the
+        // exact primary and source node paid, with no short second response.
+        true
+    }
+
     private func publishPromptResult(
         prompt: RpcPrompt,
         result: Result<ApplicationResponse>
     ): Unit {
         match (result) {
-            case Result.Err(error) => emitFrame(
-                failure(
-                    prompt.id,
-                    prompt.command,
-                    error.message
-                )
-            )
+            case Result.Err(error) =>
+                if (!publishQueuedFailure113(prompt) && !publishOwnedCheckpointFailure113(prompt.id, prompt.command, error)) {
+                    emitFrame(failure(prompt.id, prompt.command, error.message))
+                }
             case Result.Ok(response) =>
                 if (!response.agentInvoked && response.text != "") {
                     emitFrame(
@@ -1159,22 +1480,120 @@ public class ProductJsonlRpcServer {
         }
     }
 
-    public func close(cancelBash!: Bool = true): Unit {
+    // Package-internal numbers from the actual server/ledger locks. This
+    // read does not fund, join, admit or retire any work.
+    func observedWorkerJoinState113(): (Int64, Int64, Int64, Int64, Int64) {
         lock.lock()
-        closing = true
+        try {
+            let usage = match (workerMetadata113) {
+                case Some(value) => value.retainedCustodyUsage113()
+                case None => (0, 0, 0)
+            }
+            (workerJoinFrames113, workerSnapshotArrays113, usage[0], usage[1], usage[2])
+        } finally { lock.unlock() }
+    }
+
+    // Package-only scalar read. Server/source/cell use their actual locks.
+    // Only real Future.tryGet proves worker return; no read ACKs or retires.
+    func observedQueuedSqlCustody113(): (Int64, Int64, Bool, Bool) {
+        lock.lock()
+        try {
+            let cells = match (queuedInputCustody113) {
+                case Some(actual) => actual.observedStoreCustody113()
+                case None => (0, 0) }
+            (cells[0], cells[1], rpcWorkerReturned113(runWorker113), unadmittedFailure113.load())
+        } finally { lock.unlock() }
+    }
+
+    public func close(cancelBash!: Bool = true): Unit {
+        // This caller owns a distinct share of the existing worker bank.
+        // Payment precedes every snapshot/Future alias created by the helper.
+        let join = beginWorkerJoin113()
+        try { waitAcceptedWorkers113(cancelBash) }
+        finally {
+            // The complete wait frame (including its holder array and Future
+            // locals) has returned or unwound; no snapshot escapes that frame.
+            // Close only this join share before permitting worker retirement.
+            rpcCloseWorkerMetadata113(join)
+            lock.lock(); try { workerJoinFrames113-- } finally { lock.unlock() }
+        }
+        if (!collectRunWorkerRetirement113()) {
+            throw IllegalStateException("rpc.worker_failure_cleanup_required")
+        }
+    }
+
+    private func beginWorkerJoin113(): ?LogicalJsonOwnerReservation {
+        lock.lock()
+        try {
+            closing = true
+            if (workerJoinFrames113 == Int64.Max) {
+                throw IllegalStateException("rpc.worker_metadata_overflow") }
+            let root = match (workerMetadata113) {
+                case Some(actual) => actual
+                case None =>
+                    // No worker root implies no retained worker to snapshot.
+                    // Do not create a fresh root just to close an empty server.
+                    if (runWorker113.isSome() || pluginCommandWorker.isSome() || bashWorkers.isSome() ||
+                        runWorkerStartingFailed113 || pluginCommandStartingFailed113) {
+                        throw IllegalStateException("rpc.worker_metadata_missing") }
+                    workerJoinFrames113++
+                    return None<LogicalJsonOwnerReservation>
+            }
+            let count = match (bashWorkers) { case Some(value) => value.size; case None => 0 }
+            let peak = rpcWorkerJoinPeak113(count)
+            // deriveRetainedLease adds THIS close's invoice to all concurrent
+            // joins and worker children in the same original physical bank.
+            let paid = root.deriveRetainedLease()
+            try { paid.ensureRetainedPeak(peak) }
+            catch (_: Exception) {
+                paid.close()
+                throw IllegalStateException("rpc.worker_metadata_capacity")
+            }
+            workerJoinFrames113++
+            Some(paid)
+        } finally { lock.unlock() }
+    }
+
+    private func waitAcceptedWorkers113(cancelBash: Bool): Unit {
+        lock.lock()
         interactionProfile = "none"
         let commandActive = activePluginCommandRequestId != ""
-        let workers = bashWorkers.toArray()
         let commandWorker = pluginCommandWorker
-        lock.unlock()
+        let promptWorker113 = runWorker113
+        let unknownWorker113 = runWorkerStartingFailed113 || pluginCommandStartingFailed113
+        // Admission is closed and joinFrames blocks retirement, so the exact
+        // holder count cannot grow between the prepaid gate and this snapshot.
+        let workers = try {
+            match (bashWorkers) {
+                case Some(value) =>
+                    let actual = value.toArray()
+                    // Count only a successfully allocated real snapshot.
+                    if (workerSnapshotArrays113 < Int64.Max) { workerSnapshotArrays113++ }
+                    Some(actual)
+                case None => None<Array<RpcBashWorker>>
+            }
+        } finally { lock.unlock() }
         session.setAskInteractive(false)
         if (commandActive) { session.cancelJavaScriptPluginCommand() }
         if (cancelBash) { let _ = session.abortBash() }
+        // The compatibility close retains its original wait outside the lock.
+        // Main has no original finite exit window; a future frontend policy
+        // must not confuse this method with a new product timeout.
+        if (unknownWorker113) { throw IllegalStateException("rpc.worker_start_cleanup_required") }
+        match (promptWorker113) {
+            case Some(worker) => try { worker.get() }
+                catch (_: Exception) { throw IllegalStateException("rpc.worker_failure_cleanup_required") }
+            case None => ()
+        }
         var failureMessage: ?String = None
-        for (worker in workers) {
-            try { worker.future.getOrThrow().get() } catch (error: Exception) {
-                if (failureMessage.isNone()) { failureMessage = Some(error.message) }
+        match (workers) {
+            case Some(actual) => for (worker in actual) {
+                if (worker.rejectedFrameReturned113) { continue }
+                try { worker.future.getOrThrow().get() } catch (error: Exception) {
+                    if (failureMessage.isNone()) { failureMessage = Some(error.message) }
+                }
             }
+            case None => ()
         }
         match (commandWorker) {
             case Some(worker) => try { worker.get() } catch (error: Exception) {
@@ -1191,13 +1610,48 @@ public class ProductJsonlRpcServer {
     private func startBash(id: String, command: String, source: String): String {
         lock.lock()
         try {
-            if (closing) { return failure(id, command, "RPC server is closing") }
-            var index: Int64 = 0
-            while (index < bashWorkers.size) {
-                let complete = bashWorkers[index].completed
-                if (complete) { bashWorkers.remove(at: index) } else { index += 1 }
+            let answer = startBashPaidFrameLocked113(id, command, source)
+            // Only here have the real producer/helper/action frames returned.
+            // The marking helper retains no holder alias after it returns.
+            markReturnedBashRejectionsLocked113()
+            answer
+        } finally { lock.unlock() }
+    }
+
+    private func markReturnedBashRejectionsLocked113(): Unit {
+        match (bashWorkers) {
+            case Some(workers) => for (worker in workers) {
+                if (worker.rejectedBeforeSpawn113) { worker.rejectedFrameReturned113 = true }
             }
-            let owned = RpcBashWorker()
+            case None => ()
+        }
+    }
+
+    private func startBashPaidFrameLocked113(id: String, command: String, source: String): String {
+            if (closing) { return failure(id, command, "RPC server is closing") }
+            if (workerJoinFrames113 != 0 || workerPaymentFailed113) {
+                return failure(id, command, "RPC worker cleanup is pending") }
+            if (bashWorkers.isSome()) {
+                var index: Int64 = 0
+                while (index < bashWorkers.getOrThrow().size) {
+                    let complete = bashWorkers.getOrThrow()[index].rejectedFrameReturned113 ||
+                        (bashWorkers.getOrThrow()[index].future.isSome() &&
+                            rpcWorkerReturned113(bashWorkers.getOrThrow()[index].future))
+                    if (complete) { rpcCloseWorkerMetadata113(takeReturnedBashMetadataLocked113(index)) }
+                    else { index += 1 }
+                }
+            }
+            let peak = rpcWorkerInputPeak113(id, command, source)
+            let paid = match (reserveWorkerMetadataLocked113(peak)) {
+                case Some(value) => value; case None => return failure(id, command, "RPC worker metadata capacity is exhausted") }
+            let count = match (bashWorkers) { case Some(value) => value.size; case None => 0 }
+            try { workerMetadata113.getOrThrow().ensureRetainedPeak(rpcWorkerListPeak113(rpcWorkerAdd113(count, 1))) }
+            catch (_: Exception) { paid.close(); return failure(id, command, "RPC worker metadata capacity is exhausted") }
+            if (bashWorkers.isNone()) { bashWorkers = Some(ArrayList<RpcBashWorker>()) }
+            let owned = RpcBashWorker(paid)
+            // Publish a holder before the actual producer can spawn. An
+            // unexpected throw keeps future=None and therefore stays Held.
+            bashWorkers.getOrThrow().add(owned)
             match (session.executeBashAsync(source, {result =>
                 try { emitFrame(bashReply(id, command, result)) } finally {
                     lock.lock()
@@ -1207,11 +1661,16 @@ public class ProductJsonlRpcServer {
             })) {
                 case Result.Ok(worker) =>
                     owned.future = Some(worker)
-                    bashWorkers.add(owned)
                     ""
-                case Result.Err(error) => failure(id, command, error.message)
+                // The actual Session producer returns Err only before its
+                // spawn, while acquiring the canonical Bash invocation.
+                case Result.Err(error) =>
+                    // Known pre-spawn rejection has no physical producer.
+                    // Keep this funded holder until the caller/helper frame
+                    // returns; a later collector may retire the empty record.
+                    owned.rejectedBeforeSpawn113 = true
+                    failure(id, command, error.message)
             }
-        } finally { lock.unlock() }
     }
 
     private func bashReply(
@@ -1235,11 +1694,19 @@ public class ProductJsonlRpcServer {
                         ),
                         ValueField("exitCode", integerValue(result.exitCode)),
                         ValueField("timedOut", boolValue(result.timedOut)),
-                        ValueField("truncated", boolValue(false))
+                        ValueField("truncated", boolValue(result.truncated))
                     ]
                 )
             )
-            case Result.Err(error) => failure(id, command, error.message)
+            case Result.Err(error) =>
+                if(error.code=="application.bash_approval_required"){
+                    match(session.approval()){
+                        case Some(approval)=>
+                            emitFrame(encodeAgentValue(productApprovalFrame(approval)))
+                            return success(id,command,data:objectValue([ValueField("awaitingApproval",boolValue(true)),
+                                ValueField("operationId",textValue(approval.operationId.value))]))
+                        case None=>()}}
+                failureCode(id,command,error.code,error.message)
         }
     }
 
@@ -1577,7 +2044,9 @@ public class ProductJsonlRpcServer {
                     ]
                 )
             )
-            case Result.Err(error) => failure(id, command, error.message)
+            case Result.Err(error) =>
+                if (publishOwnedCheckpointFailure113(id, command, error)) { "" }
+                else { failure(id, command, error.message) }
         }
     }
 
@@ -1596,6 +2065,7 @@ public class ProductJsonlRpcServer {
     }
 
     private func stateValue(): AgentValue {
+        let todoProjection=session.todoPhases()
         let messageCount = match (session.messages()) {
             case Result.Ok(messages) => messages.size
             case Result.Err(_) => 0
@@ -1644,11 +2114,15 @@ public class ProductJsonlRpcServer {
                 ),
                 ValueField(
                     "todoPhases",
-                    match (session.todoPhases()) {
+                    match (todoProjection) {
                         case Result.Ok(phases) => encodeTodoPhases(phases)
                         case Result.Err(_) => listValue([])
                     }
                 ),
+                // Explicit component failure accompanies an empty projection;
+                // absence is never presented as authoritative empty Todo state.
+                ValueField("todoComponentError",match(todoProjection){
+                    case Result.Ok(_)=>nullValue();case Result.Err(error)=>textValue(error.code)}),
                 ValueField(
                     "awaitingApproval",
                     boolValue(session.approval().isSome())
@@ -1735,6 +2209,121 @@ public class ProductJsonlRpcServer {
 
     private func queuedCount(): Int64 {
         session.queuedCount()
+    }
+
+    // New failure output is an explicit capability of the same concrete
+    // output object. A legacy String callback cannot provide a physical ACK.
+    private func failureOutput113(): ?OwnedRpcFailureOutput113 {
+        match (ownedOutput) {
+            case Some(value) => value as OwnedRpcFailureOutput113
+            case None => None<OwnedRpcFailureOutput113>
+        }
+    }
+
+    private func admitOwnedFailure113(value: OwnedFailureRunPublication113): Bool {
+        frameLock.lock()
+        try {
+            let delivery = match (rpcPrepareFailurePublication113(value, "", "", true, protocolVersion)) {
+                case Result.Err(_) => return false
+                case Result.Ok(actual) => actual
+            }
+            ownedFailureDeliveries113.append(delivery)
+            // Registration is acceptance. Offering happens on a later DATA
+            // collection entry, after the Application admission callback ends.
+            true
+        } finally { frameLock.unlock() }
+    }
+
+    private func publishOwnedCheckpointFailure113(id: String, command: String, marker: AgentError): Bool {
+        let matched = session.hasOwnedCheckpointFailure113(marker)
+        if (!matched) { return false }
+        let accepted = session.admitOwnedCheckpointFailure113(marker, { result =>
+            frameLock.lock()
+            try {
+                let prepared = match (result) {
+                    case OwnedAgentRunResult113.Failed(value) =>
+                        rpcPrepareFailurePublication113(value, id, command, false, protocolVersion)
+                    case OwnedAgentRunResult113.Pending(value) =>
+                        rpcPrepareFailureData113(value, id, command, protocolVersion)
+                    case _ => return false
+                }
+                match (prepared) {
+                    case Result.Err(_) => false
+                    case Result.Ok(value) => ownedFailureDeliveries113.append(value); true
+                }
+            } finally { frameLock.unlock() }
+        })
+        // Failed payment leaves the exact original marker/result in App;
+        // recognized failures never emit the short static marker as a second
+        // ordinary response or masquerade as a successful Application result.
+        if (!accepted && session.hasOwnedCheckpointFailure113(marker)) { unadmittedFailure113.store(true) }
+        collectOwnedCheckpointFailures113()
+        true
+    }
+
+    public func collectOwnedCheckpointFailures113(): Unit {
+        frameLock.lock()
+        try {
+            let _ = ownedFailureDeliveries113.collect()
+            while (ownedFailureDeliveries113.pending()) {
+                ownedFailureDeliveries113.offer(failureOutput113(), { => chunkCounter++; "rpc-" + chunkCounter.toString() })
+                if (!ownedFailureDeliveries113.collect()) { break }
+            }
+        } finally { frameLock.unlock() }
+        session.collectOwnedCheckpointFailure113()
+    }
+
+    public func hasOwnedCheckpointFailureOutput113(): Bool {
+        frameLock.lock()
+        try { unadmittedFailure113.load() || ownedFailureDeliveries113.pending() } finally { frameLock.unlock() }
+    }
+
+    // Startup uses exactly the installed App marker and the existing paid
+    // caller admission/complete eight-field output path. True means recognized
+    // ownership, never output consumption; false preserves the plain fallback.
+    public func admitStartupCheckpointFailure113(marker: AgentError): Bool {
+        publishOwnedCheckpointFailure113("", "startup", marker)
+    }
+
+    // ONLY a paid frontend producer may call this potentially blocking method.
+    // The parent queries its real Future, not this frame/output lock. All old
+    // event/failure emit methods and their one-offer/ACK contracts stay intact.
+    public func collectFrontendOutputRetirement113(): Bool {
+        collectOwnedCheckpointFailures113()
+        frameLock.lock()
+        try {
+            var index: Int64 = 0
+            while (index < ownedDeliveries.size) {
+                if (ownedDeliveries[index].isAcknowledged() ||
+                    ownedDeliveries[index].closeAfterDeliveryRetirement().isOk()) {
+                    ownedDeliveries.remove(at: index)
+                } else { index += 1 }
+            }
+            !unadmittedFailure113.load() && !ownedFailureDeliveries113.pending() && ownedDeliveries.isEmpty()
+        } finally { frameLock.unlock() }
+    }
+
+    private func emitOwnedEvent(event: OwnedAgentEvent): Result<Unit> {
+        frameLock.lock()
+        try {
+            var index: Int64 = 0
+            while (index < ownedDeliveries.size) {
+                if (ownedDeliveries[index].isAcknowledged() ||
+                    ownedDeliveries[index].closeAfterDeliveryRetirement().isOk()) { ownedDeliveries.remove(at: index) }
+                else { return ownedRpcOutputError("rpc.owned_prior_delivery_pending") }
+            }
+            let delivery = OwnedProductRpcEventDelivery(event, ownedOutput.getOrThrow())
+            ownedDeliveries.add(delivery)
+            let result = try {
+                delivery.run(protocolVersion, { => chunkCounter++; "rpc-" + chunkCounter.toString() })
+            } finally {
+                // Physical error cleanup does not replay output or turn the
+                // failed delivery into success. Unknown output debt stays
+                // under this actual registered delivery for later ACK.
+                let _ = delivery.closeAfterDeliveryRetirement()
+            }
+            result
+        } finally { frameLock.unlock() }
     }
 
     private func emitFrame(logical: String): Unit {
@@ -1848,17 +2437,20 @@ class RpcPrompt {
     let command: String
     let message: String
     let publishResult: Bool
+    let queued113: ?QueuedInteraction
 
     init(
         id: String,
         command: String,
         message: String,
-        publishResult!: Bool = true
+        publishResult!: Bool = true,
+        queued113!: ?QueuedInteraction = None<QueuedInteraction>
     ) {
         this.id = id
         this.command = command
         this.message = message
         this.publishResult = publishResult
+        this.queued113 = queued113
     }
 }
 
@@ -1881,11 +2473,11 @@ class RpcDecision {
     }
 }
 
-func commandsValue(): AgentValue {
+func commandsValue(extraDefinitions:Array<SlashCommandDefinition>): AgentValue {
     let values = ArrayList<AgentValue>()
     // Slash-command discovery is UI/product metadata. Keep it independent
     // from availableRpcCommands(), which is the transport protocol inventory.
-    for (command in slashCommandDefinitions()) {
+    for (command in presentedSlashCommandDefinitions(extraDefinitions)) {
         values.add(slashCommandValue(command))
     }
     objectValue([ValueField("commands", listValue(values.toArray()))])
@@ -2598,9 +3190,161 @@ func minInt(first: Int64, second: Int64): Int64 {
     }
 }
 
-// The completion flag is protected by the server lock. Inspecting a Future
-// itself is not a nonblocking liveness probe on every supported SDK.
+// A returned callback flag is progress only. Retirement requires the same
+// physical Future tryGet witness used by the actual child worker owner.
 class RpcBashWorker {
-    var future: ?Future<Unit> = None
+    var future: ?Future<Unit> = None<Future<Unit>>
+    var metadata113: ?LogicalJsonOwnerReservation
+    var rejectedBeforeSpawn113 = false
+    var rejectedFrameReturned113 = false
     var completed = false
+    init(paid: LogicalJsonOwnerReservation) { metadata113 = Some(paid) }
 }
+
+// No cancellation, scheduler flag or callback return can manufacture this
+// observation. Exceptional/unknown completion stays retained and closed.
+private func rpcWorkerReturned113(worker: ?Future<Unit>): Bool {
+    match (worker) {
+        case None => true
+        case Some(actual) => try { actual.tryGet().isSome() } catch (_: Exception) { false }
+    }
+}
+
+// Numeric extents only: no UTF8 arrays, raw copies or new semantic input cap.
+// Fixed 64 KiB covers each actual Future, action, holder and short helper frames;
+// the original complete captured input is billed separately at eight copies.
+private func rpcWorkerAdd113(first: Int64, second: Int64): Int64 {
+    if (first < 0 || second < 0 || first > Int64.Max - second) {
+        throw IllegalStateException("rpc.worker_metadata_overflow") }
+    first + second
+}
+private func rpcWorkerExtentPeak113(bytes: Int64): Int64 {
+    if (bytes < 0 || bytes > (Int64.Max - 65536) / 8) {
+        throw IllegalStateException("rpc.worker_metadata_overflow") }
+    65536 + bytes * 8
+}
+private func rpcWorkerInputPeak113(first: String, second: String, third: String): Int64 {
+    rpcWorkerExtentPeak113(rpcWorkerAdd113(first.size, rpcWorkerAdd113(second.size, third.size)))
+}
+private func rpcWorkerDecisionPeak113(decision: ApprovalDecision): Int64 {
+    match (decision) {
+        case ApprovalDecision.RejectWithReason(reason) => rpcWorkerExtentPeak113(reason.size)
+        case _ => 4096
+    }
+}
+private func rpcWorkerListPeak113(count: Int64): Int64 {
+    if (count < 0 || count > (Int64.Max - 65536) / 512) {
+        throw IllegalStateException("rpc.worker_metadata_overflow") }
+    // Retained server-list backing remains paid with its actual holders.
+    65536 + count * 512
+}
+private func rpcWorkerJoinPeak113(count: Int64): Int64 {
+    if (count < 0 || count > (Int64.Max - 65536) / 512) {
+        throw IllegalStateException("rpc.worker_metadata_overflow") }
+    // Each live close owns its own exact-length reference array, header,
+    // iterator and prompt/command Future locals. Captured input remains paid
+    // by the original worker children until ALL join frames have returned.
+    65536 + count * 512
+}
+private func rpcCloseWorkerMetadata113(value: ?LogicalJsonOwnerReservation): Unit {
+    match (value) { case Some(actual) => actual.close(); case None => () }
+}
+// File-private paid custody. A failed preparation/SQL/capture keeps this
+// exact queue object and old worker payment reachable, without re-enqueue.
+class RpcQueuedRetainedInput113 {
+    let value: QueuedInteraction
+    let payment: LogicalJsonOwnerReservation
+    let inputPeak: Int64
+    var primaryRegistered = false
+    var primaryRaw113: ?AgentError = None<AgentError>
+    private let storeLock113 = Mutex()
+    private var storeCells113: ?RpcQueuedStoreFailure113 = None<RpcQueuedStoreFailure113>
+    var unknown: ?Exception = None<Exception>
+    var origin: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>
+    var primary: ?OwnedFailureDataConsumer113 = None<OwnedFailureDataConsumer113>
+    var secondary: ?OwnedFailureDataConsumer113 = None<OwnedFailureDataConsumer113>
+    var uncertain = false
+    init(value: QueuedInteraction, payment: LogicalJsonOwnerReservation, inputPeak: Int64) {
+        this.value = value; this.payment = payment; this.inputPeak = inputPeak
+    }
+    func retainStoreCell113(cell: RpcQueuedStoreFailure113): Unit {
+        storeLock113.lock()
+        try {
+            let expected = origin.getOrThrow()
+            if (!cell.matches113(expected)) { throw IllegalStateException("SQL custody has another original input") }
+            cell.previous113 = storeCells113
+            storeCells113 = Some(cell)
+        } finally { storeLock113.unlock() }
+    }
+    func admitStoreFailure113(cell: RpcQueuedStoreFailure113): Unit {
+        storeLock113.lock()
+        try {
+            var found = false
+            var cursor = storeCells113
+            while (cursor.isSome()) {
+                let current = cursor.getOrThrow()
+                if (refEq(current, cell)) { found = true; break }
+                cursor = current.previous113
+            }
+            if (!found || secondary.isSome()) { throw IllegalStateException("original SQL failure cell was not registered") }
+            // Existing paid node accepts before any transfer. False retains
+            // the exact original exception with no fake consumer or output.
+            let _ = cell.admitConsumer113({ consumer => secondary = Some(consumer); true })
+        } finally { storeLock113.unlock() }
+    }
+    private func takeReturnedStoreCellPaymentHelper113(): ?LogicalJsonOwnerReservation {
+        storeLock113.lock()
+        try {
+            var previous: ?RpcQueuedStoreFailure113 = None<RpcQueuedStoreFailure113>
+            var cursor = storeCells113
+            while (cursor.isSome()) {
+                let cell = cursor.getOrThrow()
+                let next = cell.previous113
+                let paid = cell.takeRetirementPaymentAfterReturned113()
+                if (paid.isSome()) {
+                    match (previous) { case Some(actual) => actual.previous113 = next
+                        case None => storeCells113 = next }
+                    return paid
+                }
+                previous = cursor; cursor = next
+            }
+            None<LogicalJsonOwnerReservation>
+        } finally { storeLock113.unlock() }
+    }
+    func retireReturnedStoreCells113(): Unit {
+        // Actual whole App/Store return precedes this helper; unlink and its
+        // lock/Future-free local frame return before child payment close.
+        while (true) {
+            let paid = takeReturnedStoreCellPaymentHelper113()
+            match (paid) { case Some(actual) => actual.close(); case None => return }
+        }
+    }
+    func observedStoreCustody113(): (Int64, Int64) {
+        storeLock113.lock()
+        try {
+            var count: Int64 = 0; var held: Int64 = 0
+            var cursor = storeCells113
+            while (cursor.isSome()) {
+                let cell = cursor.getOrThrow()
+                count++
+                if (cell.observedOriginalWithoutConsumer113()) { held++ }
+                cursor = cell.previous113
+            }
+            (count, held)
+        } finally { storeLock113.unlock() }
+    }
+
+    func allocate(bytes: Int64): LogicalJsonOwnerReservation {
+        let child = payment.deriveRetainedLease()
+        try { child.ensureRetainedPeak(bytes); child }
+        catch (error: Exception) { child.close(); throw error }
+    }
+    func capturePrimary(error: AgentError): Unit {
+        if (primaryRaw113.isSome()) { throw IllegalStateException("original primary input is already retained") }
+        primaryRaw113 = Some(error)
+        match (captureOwnedFailureData113<Unit>(error, { bytes => allocate(bytes) })) {
+            case OwnedFailureDataOutcome113.Failure(value) => primary = Some(value)
+            case _ => throw IllegalStateException("original primary capture returned no consumer") }
+    }
+}
+

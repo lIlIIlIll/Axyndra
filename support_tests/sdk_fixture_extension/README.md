@@ -1,6 +1,3 @@
-# Frozen stable SDK consumer
+# Frozen Native SDK 3 consumer
 
-This fixture models source written against the stable `agent_sdk` 1.x surface.
-It intentionally uses no experimental API. Do not update it for ordinary SDK
-changes: changing this source is part of an explicit major-version baseline
-replacement.
+The actual public NativePluginHandler exercises complete NUL/Unicode output, validation, duplicate declaration rejection, cancellation and deadline observations. The separate native_sdk_fixture wrapper uses the current bounded Native wire loop. Original cooperative source and assertions remain in legacy_sdk_fixture_extension and still run from sdk_fixture_extension_runner. Ordinary compatible v3 changes must not rewrite these consumer checks to conceal a break.

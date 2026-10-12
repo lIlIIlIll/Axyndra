@@ -8,6 +8,7 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "memory_legacy_oracle" = { path = "../memory_legacy_oracle", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }

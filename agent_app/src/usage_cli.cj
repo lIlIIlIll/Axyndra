@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.fs.*

@@ -19,3 +19,4 @@
   "model_adapters" = { path = "../../model_adapters", output-type = "static" }
   "persistence_runtime" = { path = "../../persistence_runtime", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "workspace_legacy_oracle" = { path = "../workspace_legacy_oracle", output-type = "static" }

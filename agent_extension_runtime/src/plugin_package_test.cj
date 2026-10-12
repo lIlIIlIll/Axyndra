@@ -107,7 +107,7 @@ class PluginPackageContractTests {
     }
 
     @TestCase
-    func codexPortableMcpMappingIsSupported(): Unit {
+    func codexInlineConnectionObjectsDoNotBecomeContributions(): Unit {
         let result = parsePluginPackageManifest(
             PluginManifestFamily.Codex,
             "{\"name\":\"codex-mcp\",\"version\":\"1.0.0\",\"mcp\":{\"servers\":{\"local\":{\"command\":\"node\"}}}}",
@@ -115,9 +115,8 @@ class PluginPackageContractTests {
         )
         @Expect(match (result) {
             case PluginPackageResult.Ok(value) =>
-                value.components.size == 1 &&
-                value.components[0].kind == PluginComponentKind.Mcp &&
-                value.components[0].status == PluginComponentStatus.Supported
+                value.components.isEmpty() && value.entrypoint == "" &&
+                value.requestedCapabilities.isEmpty()
             case PluginPackageResult.Err(_) => false
         })
     }

@@ -538,7 +538,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     var saw80x24 = false
     var saw60x18 = false
     var sawSessionTree = false
-    var sawExtensions = false
+    var sawPlugins = false
     var sawInlineAgentHub = false
     for (snapshot in result.snapshots) {
         if (cardMode && snapshot.contains("The tool completed; summarize its result.")) {
@@ -657,8 +657,8 @@ func runHeadless(screen: AgentScreen): Int64 {
         if (snapshot.contains("Session tree")) {
             sawSessionTree = true
         }
-        if (snapshot.contains("Extensions") && snapshot.contains("No external extensions are installed.")) {
-            sawExtensions = true
+        if (snapshot.contains("Plugins") && snapshot.contains("Plugins:")) {
+            sawPlugins = true
         }
         if (snapshot.contains("Agent Hub") && snapshot.contains("Main") && snapshot.contains("task spawns appear here") &&
             snapshot.contains("Enter switch") && !snapshot.contains("Select subagent") &&
@@ -693,8 +693,8 @@ func runHeadless(screen: AgentScreen): Int64 {
             "headless cjtui snapshot assertion failed:" + " chinese=" + sawSmallChinese.toString() + " status=" +
                 sawLargeStatus.toString() + " cards=" + sawCards.toString() + " tool-card=" + sawToolCard.toString() +
                 " approval-risk=" + sawApprovalRisk.toString() + " branch=" + sawBranch.toString() + " diagnostics=" +
-                sawDiagnostics.toString() + " tree=" + sawSessionTree.toString() + " extensions=" +
-                sawExtensions.toString() + " agent-hub=" + sawInlineAgentHub.toString() + " todo=" +
+                sawDiagnostics.toString() + " tree=" + sawSessionTree.toString() + " plugins=" +
+                sawPlugins.toString() + " agent-hub=" + sawInlineAgentHub.toString() + " todo=" +
                 sawTodoEditor.toString() + " todo-saved=" + sawTodoSaved.toString() + " todo-copy=" +
                 sawTodoCopy.toString() + " todo-strip=" + sawTodoStrip.toString() + " ask=" + sawAsk.toString() +
                 " ask-single-square=" + sawAskSingleSquare.toString() + " ask-single-selected=" +

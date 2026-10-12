@@ -123,7 +123,6 @@ func modalTitle(kind: TuiModalKind): String {
         case TuiModalKind.Session => "Select session"
         case TuiModalKind.Tree => "Session tree"
         case TuiModalKind.Agent => "Select subagent"
-        case TuiModalKind.Extensions => "Extensions"
         case TuiModalKind.Branch => "Create branch from message"
         case TuiModalKind.Settings => "Settings"
         case TuiModalKind.Reset => "Confirm archive/reset"
@@ -270,22 +269,6 @@ func subagentStatusSummary(items: Array<TuiSubagentInfo>): String {
         result += part
     }
     result
-}
-
-func extensionLabels(extensions: Array<TuiExtensionInfo>): Array<String> {
-    let values = ArrayList<String>()
-    for (extension in extensions) {
-        var label = (if (extension.enabled) {
-            "[on] "
-        } else {
-            "[off] "
-        }) + extension.id + " · " + extension.source
-        if (!extension.tools.isEmpty()) {
-            label += " · " + extension.tools.size.toString() + " tool(s)"
-        }
-        values.add(label)
-    }
-    values.toArray()
 }
 
 func treeLabels(nodes: Array<TuiSessionNode>): Array<String> {

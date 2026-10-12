@@ -7,7 +7,6 @@ import yjson.*
 import agent_domain.*
 import agent_core.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 
 func runReviewerDryRun(product: ProductRuntime): Int64 {

@@ -6,15 +6,19 @@ import yjson.*
 
 import std.collection.*
 import std.convert.*
+import std.time.MonoTime
 import agent_domain.*
 
 // SQLite payloads use a byte-length-framed canonical value encoding. It is
 // deliberately independent from provider and App Protocol JSON so durable
 // recovery never needs a model adapter or transport package.
 public func encodeStoredValue(value: AgentValue): String {
+    let encodeTimer = channelWriteMemoDiagnosticStart()
     let output = ArrayList<Byte>()
     appendStoredValue(output, value)
-    String.fromUtf8(output.toArray())
+    let encoded = String.fromUtf8(output.toArray())
+    if (encoded.size >= 1048576) { channelWriteMemoDiagnosticRecord(10, encodeTimer, a: encoded.size) }
+    encoded
 }
 
 func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
@@ -43,13 +47,15 @@ func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
 
 func appendStoredFrame(output: ArrayList<Byte>, value: String): Unit {
     let bytes = unsafe { value.rawData() }
-    for (byte in bytes.size.toString().toArray()) { output.add(byte) }
+    output.add(all: bytes.size.toString().toArray())
     output.add(b':')
-    for (byte in bytes) { output.add(byte) }
+    output.add(all: bytes)
 }
 
 public func decodeStoredValue(source: String): AgentValue {
-    StoredValueParser(source).parse()
+    let parseTimer: ?MonoTime = if (source.size >= 1048576) { channelWriteMemoDiagnosticStart() } else { None }
+    try { StoredValueParser(source).parse() }
+    finally { channelWriteMemoDiagnosticRecord(8, parseTimer, a: source.size) }
 }
 
 public func encodeStoredThreadContent(content: ThreadItemContent): String {
@@ -147,7 +153,7 @@ public func decodeStoredThreadContent(source: String): ThreadItemContent {
 }
 
 public func encodeStoredProvenance(provenance: ItemProvenance): String {
-    encodeStoredValue(objectValue([
+    let value = objectValue([
         ValueField("source", textValue(provenance.source)),
         ValueField("run_id", match (provenance.runId) {
             case Some(value) => textValue(value.value)
@@ -157,7 +163,22 @@ public func encodeStoredProvenance(provenance: ItemProvenance): String {
             case Some(value) => textValue(value.value)
             case None => nullValue()
         })
-    ]))
+    ])
+    match (provenance.directOrigin) {
+        case Some(origin) => value.put("direct_origin", directCallOriginValue(origin))
+        case None => () // Preserve exact historical encoding for ordinary user/model Items.
+    }
+    match (provenance.continuationOrigin) {
+        case Some(origin) => value.put("continuation_origin", continuationRunOriginValue(origin))
+        case None => () // Do not change the bytes of any existing origin.
+    }
+    match (provenance.completedInitiatorHistory173e) {
+        case Some(history) => value.put("completed_initiator_history", completedInitiatorHistoryValue173e(history)); case None => () }
+    match (provenance.continuationHistory) {
+        case Some(source) => value.put("continuation_history", continuationHistorySourceValue(source))
+        case None => ()
+    }
+    encodeStoredValue(value)
 }
 
 public func decodeStoredProvenance(source: String): ItemProvenance {
@@ -165,7 +186,19 @@ public func decodeStoredProvenance(source: String): ItemProvenance {
     ItemProvenance(
         storedTextField(value, "source"),
         runId: storedOptionalRunId(value),
-        operationId: storedOptionalOperationId(value)
+        operationId: storedOptionalOperationId(value),
+        directOrigin: match (value.field("direct_origin")) {
+            case Some(origin) => Some(directCallOriginFromValue(origin))
+            case None => None
+        },
+        continuationOrigin: match (value.field("continuation_origin")) {
+            case Some(origin) => Some(continuationRunOriginFromValue(origin)); case None => None
+        },
+        completedInitiatorHistory173e: match(value.field("completed_initiator_history")){
+            case Some(history)=>Some(completedInitiatorHistoryFromValue173e(history));case None=>None<CompletedInitiatorHistory173e>},
+        continuationHistory: match (value.field("continuation_history")) {
+            case Some(source) => Some(continuationHistorySourceFromValue(source)); case None => None
+        }
     )
 }
 

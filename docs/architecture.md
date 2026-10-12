@@ -1,5 +1,7 @@
 # Product architecture
 
+> Skills migration: current production uses the installed Skills ContextProvider and canonical generic context reads; see [installed Skills context](skill-routing.md). Older test timings and legacy type names below are historical evidence, not validation of this replacement.
+
 Axyndra 只有一份真实产品实现。产品不再以任何外部项目或隐式 sibling checkout 作为
 兼容基准，本仓库的类型、协议、持久化 schema 和门禁才是行为依据。
 
@@ -43,8 +45,8 @@ client、domain、product 边界工作，不另建 Agent loop。
 ```text
 dependent → dependency
 
-agent_mcp       → agent_protocol → agent_domain
-agent_extensions→ agent_mcp + tool_runtime
+plugins/mcp     → mcp4cj → jsonrpc4cj
+agent_extensions→ tool_runtime
 agent_ports     → agent_domain
 tool_runtime    → agent_ports + agent_domain
 agent_core      → tool_runtime + agent_ports + agent_domain
@@ -101,11 +103,8 @@ Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`a
   capability 绑定，不能用 Prompt 绕过。
 - 并行 Tool Call 由 Core 按 `maxConcurrentTools`、声明的并发语义和冲突关系分 wave；
   结果恢复原调用顺序，取消和部分失败仍走类型化结果。
-- MCP client/server 共享 `agent_protocol` 的 JSON-RPC 2.0 值与关联规则。stdio
-  使用长生命周期子进程管道，Streamable HTTP 使用 `stdx.net.http`；发现出的远端
-  Tool 经 `agent_extensions` 转成普通 descriptor/executor，仍进入同一 ToolPipeline。
-  插件声明不能绑定宿主环境变量或凭据；需要认证的 MCP 必须由操作者在受信任的
-  `mcp.yml` 中配置。
+- MCP 协议由独立插件和协议库实现。宿主仅提供有来源、审批与 Receipt 的通用服务；操作者配置与凭据授权使用通用配置，包声明不授予权限。旧配置字节与历史保留，迁移验收见 `docs/mcp-plugin-migration.md`。
+
 - Approval 只是逻辑授权，不是操作系统隔离。`agent_product` 通过
   `sandbox4cj` 负责 workspace mount、进程/网络 namespace、资源上限、最小环境
   和 secret 脱敏；若 Linux、bubblewrap 或所需 namespace 不可用，返回
@@ -129,7 +128,7 @@ Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`a
 | Budgets / Run control | `agent_core/src/runtime_control.cj` 的 `CoreRunControl`、`BudgetCounter`；`run_control` / `agent_domain/src/v3_control.cj` 的 `ExecutionBudget`、`RunState`、`BudgetMode` | CoreRunControl 持有 cancellation source、active IDs 和 ledger；请求、turn、token/cost、drain charge 通过同一 Run accounting 更新。Draining 是显式状态/预算分支，不是重新填充默认 headroom。 | 重建局部 counter、把 drain 当普通 work、或让 child 预算绕过父 ledger 会导致超额执行和终态前 work debt。 | `workCannotUseDrainHeadroomContract`、`drainPreflightBlocksNearCostBoundaryContract`、`resumeDrainPreservesSeparateRequestBucketsContract`、`failedAttemptUsageObeysRequestBudgetContract`、`childBudgetPoolSettlesWorkPlusDrainContract` | **已有且本次验证**：`agent_core_contract` 通过。 |
 | Completion / cancel / join / quarantine | `agent_runtime/src/run_lifecycle.cj` 的 `RunLifecycle`；`agent_runtime/src/thread_runtime.cj` 的 settling/terminal path | `RunLifecycle` 维护 child ownership，进入 joining 后拒绝新 child，join 后将不能安全加入的 work quarantine；Thread runtime 解锁等待 join，随后通过 Thread sink 提交 terminal transition。join 与 SQLite commit 不共享跨边界 transaction。 | 把 cancellation 当即时终态、在 join 前发布 terminal，或让 late result 重新打开 Thread 会留下 dangling child 和不可解释的 receipt。 | `structuredCancellationContract`、`quarantineContract`、`settlementReentryContract`、`rejectedSettlementContract` | **已有且本次验证**：`run_lifecycle_vnext_contract`、`thread_runtime_contract` 通过。 |
 | Persistence transaction boundaries | `persistence_runtime/src/sqlite_run_repository.cj`；`agent_store/src/thread_commit_sink.cj`；`agent_store/src/operation_commit.cj`；`agent_store/src/operation_runtime_store.cj` | Attempt policy/restart、Thread transition、operation-result receipt/item/run/thread projection 分别在各自 sink/repository transaction 内完成；`AgentStore.commitOperationResult` 能在一个 SQLite transaction 中联合写 operation receipt、operation state、ToolResult Item、Run 和 Thread revision。model call、内存预算、executor 外部副作用、task snapshot 不在同一跨组件 transaction。 | 把“一个 SQLite transaction”误写成“整个 product operation 原子”会掩盖 handoff 后崩溃、外部副作用与 transcript/task snapshot 的恢复窗口。 | `attemptPolicyAtomicityContract`、`retryAttemptAtomicityContract`、`restartAttemptAtomicityContract`、`continuationCasIdempotencyContract`、`durableCommitRollbackContract`、`repeatedCrashRecoveryContract` | **已有且本次验证**：`sqlite_run_repository_contract`、`agent_store_contract`、`chaos_contract` 通过；真实 product restart replay 仍未单独验证。 |
-| Product composition / Skills / process / eval / extensions | `agent_product/src/product.cj` 的 `ProductRuntime`；`agent_product/src/skill_runtime.cj` 的 `ProductSkillRuntime`；`agent_product/src/local_infrastructure.cj` 的 `LocalProcessPort`；`agent_extension_runtime/src/runtime.cj` / `safe_lifecycle.cj` | Composition root 组装唯一 AgentCore、Thread registry、ToolPipeline、stores 与 process port；Skill snapshot 在 admission 时冻结；process/eval 属于 product resource owner；compiled extension runtime 负责 discovery/validation/activation lifecycle，不拥有 Thread semantics。 | 把 skill discovery、process/eval kernel 或 extension lifecycle 直接变成 semantic commit owner，会绕过 Run/Operation/approval boundary；动态 package/JS host 仍不应从当前 lifecycle 代码推断为已交付。 | `product_prompt_contract`、`product_contract`、`skill_runtime_vnext_contract`、`extensions_contract` | **已有且本次验证**：product skill fixture 与 product build 通过；compiled-extension/eval 的完整宿主矩阵未运行。 |
+| Product composition / Skills / process / eval / extensions | `agent_product/src/product.cj` 的 `ProductRuntime`；`plugins/skills/src/discovery.cj` 的 `ProductSkillRuntime`；`agent_product/src/local_infrastructure.cj` 的 `LocalProcessPort`；`agent_extension_runtime/src/runtime.cj` / `safe_lifecycle.cj` | Composition root 组装唯一 AgentCore、Thread registry、ToolPipeline、stores 与 process port；Skill snapshot 在 admission 时冻结；process/eval 属于 product resource owner；compiled extension runtime 负责 discovery/validation/activation lifecycle，不拥有 Thread semantics。 | 把 skill discovery、process/eval kernel 或 extension lifecycle 直接变成 semantic commit owner，会绕过 Run/Operation/approval boundary；动态 package/JS host 仍不应从当前 lifecycle 代码推断为已交付。 | `product_prompt_contract`、`product_contract`、`skill_runtime_vnext_contract`、`extensions_contract` | **已有且本次验证**：product skill fixture 与 product build 通过；compiled-extension/eval 的完整宿主矩阵未运行。 |
 | Durable handoff / external effect / result replay | `tool_runtime/src/tools.cj` 的 `executePrepared`；`agent_store/src/operation_runtime_store.cj` 的 `markExecuting` / `markExecutionHandoff`；`agent_store/src/operation_commit.cj` | `loadPlan/loadCommittedToolResult → current descriptor/capability recheck → markExecuting → markExecutionHandoff → afterHandoff → executor → commitOperationResult`。handoff 是 executor 前最后一个 durable marker；已有 committed result 直接 replay，未确认外部结果不能猜测为 success。 | 在 handoff 前后重新 resolve raw invocation，或把 Unknown 当可安全 retry，会重复外部 effect；把 receipt 与 semantic Item 拆成无 owner 的独立写也会污染 transcript。 | `operation_domain_vnext_contract`、`agent_store_contract`、`chaos_contract`、`tool_runtime_contract` | **已有且本次验证**：prepared-only、receipt 与 crash-state contracts 通过；真实外部 effect replay 未运行。 |
 | Programmatic tool calling | `agent_product/src/program_runtime.cj` (`ProductToolProgramProcessRuntime`, `ToolProgramSubcallHost`); `agent_store/src/operation_runtime_store.cj` (`prepareDerivedOperation`, `settleDerivedOperation`) | AgentCore enters an independent bounded Program worker only from a validated, committed `run_program` root. The host admits fixed read-only calls as derived Operations and persists child Receipts without Thread Items. For each child, Core releases the parent slot, charges the child against the same Run tool-call and active-tool budget, and transfers the slot back after child settlement; trusted SDK/CLI/MCP calls use a separate canonical-control root path. `maxParallelCalls=1`. | Treating Program calls as raw authority can bypass the root capability ceiling; claiming parallel execution beyond the one-slot limit can violate ordering and starvation assumptions. | `product_thread_runtime_contract`, `tool_runtime_contract`, `agent_store_contract` | E3-03/E3-04 verified: pinned-SDK Product, AgentCore, and Tool Runtime contracts passed, including one-slot child handoff, shared budget charging, and budget-exhaustion rejection. Later E3 acceptance remains separate. |
 | Managed async job / final message settlement | `agent_product/src/task_product.cj` 的 `ProductAsyncJobState` / `startBashJob`；`agent_product/src/task_persistence.cj`；`agent_product/src/product.cj` 的 `appendExternalMessageOnce` | worker 捕获 `PreparedToolInvocation` 和 `operationId`，不重新 resolve raw call；task snapshot、process outcome、external message、receipt/ack 是不同持久化步骤，最终消息使用 once-only delivery identity。 | 把 async worker 当第二 executor/semantic owner，或声称 task snapshot、外部 effect、Thread message 同一 transaction，会掩盖 process crash、late settlement 和 duplicate delivery 窗口。 | `task_persistence_contract`、`product_contract`、`rpc` frontend regression | **已有但未验证**：当前源码有 handoff/settlement path，但 E3/E4 的 crash/replay/PTY matrix 尚未运行。 |
@@ -205,7 +204,7 @@ async task snapshot 或其他 repository 调用。
 - schema 迁移逐版本显式注册，不保留旧文件仓储的双读或 runtime 双写路径。
 - Memory v3 使用追加事件保留历史，支持 scope/kind/expiry、纠正/删除、冲突解决、
   lexical 检索和可选 semantic rerank；embedding 失败时显式回退 lexical。
-- `axyndra_agent_testkit` 提供只依赖 SDK 的 extension contract、确定性时钟/ID/取消；
+- `axyndra_agent_testkit` 3 提供只依赖 Native SDK 的纯数据 handler contract、确定性时钟/ID/取消；
   `agent_testkit` 仅在内部提供 scripted Provider/Tool/policy、仓储故障注入与
   P50/P95/P99 聚合。它是测试能力，不等于真实 Provider、PTY 或发布环境证明。
 
@@ -246,9 +245,9 @@ the result is `unknown`, not a no-effect conflict. The host retains the
 staging file for recovery and reports its path. It does not attempt a
 pathname-based rollback that could overwrite a newer edit.
 
-## Schema v26 evolution and rollback boundary
+## Schema v28 evolution and rollback boundary
 
-The current SQLite schema is v26. Migrations remain incremental rather than
+The current SQLite schema is v28. Migrations remain incremental rather than
 preallocating future structures:
 
 - v22 removes the obsolete tool-intent/receipt side ledgers after canonical
@@ -261,7 +260,13 @@ preallocating future structures:
 - v25 rewrites persisted Run snapshot format version 2 to version 3 before the
   version-3-only runtime decoder reads those snapshots;
 - v26 quarantines active model Attempts whose pre-v23 records have no frozen
-  transcript snapshot, updating both canonical and product Run state before recovery.
+  transcript snapshot, updating both canonical and product Run state before recovery;
+- v27 appends host-owned derived-call identity, root and depth provenance without
+  inventing authority for historical rows;
+- v28 moves nonempty legacy Todo/Goal bytes into namespaced `plugin_documents` in
+  the same transaction as the version change. Unsupported payloads remain exact
+  historical bytes; the old metadata columns are a read-only archive, not a second
+  write owner.
 
 Startup applies each step under `BEGIN IMMEDIATE`; an exception rolls the whole
 step back before `user_version` advances. Operators must stop other writers and

@@ -1,13 +1,18 @@
 package agent_product
 
+import agent_plugin_registry.*
+
+import agent_plugin_registry.{pluginImportError}
+
 import yjson_support.*
 
 import yjson.*
 
 import agent_cli.*
 import agent_core.*
+import agent_runtime.*
+import agent_store.RpcQueuedStoreFailure113
 import agent_domain.*
-import agent_extensions.*
 import agent_extension_runtime.*
 import persistence_runtime.*
 import tool_runtime.*
@@ -123,16 +128,39 @@ class ApplicationPluginSourceCommand {
         this.scope = scope
     }
 }
-public class ApplicationSession <: AgentInteractionSource {
+public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSource {
     private let product: ProductRuntime
     private let router = CommandRouter()
     private let lock = Mutex()
+    private var retirableSubscriptions113: ?ArrayList<ApplicationOwnedSubscription113> = None<ArrayList<ApplicationOwnedSubscription113>>
+    private var unregisteredSubscription113: ?ApplicationOwnedSubscription113 = None<ApplicationOwnedSubscription113>
+    private var retirableDispatchFrames113: Int64 = 0
+    private var retirableCleanupFrames113: Int64 = 0
     private let subscribers = ArrayList<AgentEventSink>()
+    private let ownedSubscribers = ArrayList<OwnedAgentEventSink>()
+    private let ownedFailureSubscribers113 = ArrayList<?OwnedFailureEventSink113>()
+    private let pendingOwnedFailureEvents113 = ArrayList<ApplicationOwnedFailureEventGroup113>()
+    private var pendingCheckpointSlot113: ?ApplicationOwnedCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+    private let pendingOwnedEvents = ArrayList<OwnedAgentEvent>()
+    private var legacyEventSubscribers: Int64 = 0
     private let queuedInteractions = ArrayList<QueuedInteraction>()
     private var sessionId: SessionId
     private var currentModel: String
     private var nextPluginCommandId: Int64 = 1
     private var activePluginCommandCancellation: ?CancellationSource = None
+    private var activePluginCommandControl: ?ApplicationPluginCommandControl = None
+    private var todoEditorSnapshot: ?ProductTodoEditorSnapshot = None
+    private var todoEditorInvocation: ?ProductTodoInvocation = None
+    private var todoEditorAction = ""
+    private var todoEditorCompletion: ?ProductTodoEditorCompletion = None
+    private var activeTodoInvocation: ?ProductTodoInvocation = None
+    private var activeTodoSelection: ?ProductTodoSelection = None
+    private var activeTodoResource: ?ProductWorkspaceInvocation = None
+    private let todoResourceAncestors=ArrayList<ProductWorkspaceInvocation>()
+    private let todoRetiredDocuments=ArrayList<ProductTodoInvocation>()
+    private var activePluginContinuation: ?ProductContinuationOwner = None
+    private var pluginContinuationControlled = false
+    private var activePluginServiceStartup: ?ApplicationPluginServiceStartup = None
     private var currentThinking = ThinkingLevel.Medium
     private var thinkingExplicit = false
 
@@ -165,17 +193,24 @@ public class ApplicationSession <: AgentInteractionSource {
     private var compacting = false
     private var theme = "axyndra"
     private var currentRequest: ?AgentRunRequest = None
+    private var currentRequestCancelling = false
     private var compactionSequence: Int64 = 0
     private var pendingApproval: ?ApprovalRequest = None
     private var pendingRecovery: ?AgentError = None
     private var pendingModelResume = false
+    private var pendingContextBoundaryResume = false
     private let recentApprovalDenials = ArrayList<String>()
     private let bashLock = Mutex()
-    private var currentBashOperation: ?OperationId = None
+    private var currentBashInvocation: ?ProductNativeToolInvocation = None
+    private var bashStarting=false
+    private var bashCancellationRequested=false
     private var askInteractive = false
     private var planModeEnabled = false
     private var planWriteBaseline: Int64 = 0
     private var planCorrectionAttempted = false
+    private var currentPlanTool = ""
+    private var currentPlanVersion = ""
+    private var currentPlanFingerprint = ""
     private var vibeModeEnabled = false
     private var loopModeEnabled = false
     private var loopPrompt = ""
@@ -213,18 +248,25 @@ public class ApplicationSession <: AgentInteractionSource {
         if (migrateModel) {
             let _ = product.setSessionModel(this.sessionId, this.currentModel)
         }
-        let _ = product.pauseRestoredGoal(this.sessionId)
         restoreWorkMode(this.sessionId)
         restoreQueuedInteractions()
         restorePendingContinuation()
     }
 
     // Changing the active view must not withdraw work owned by the source session.
-    private func activateSession(value: SessionId): Unit {
+    private func activateSession(value: SessionId): Result<Unit> {
+        match(todoDocumentInvocation()){
+            case Some(invocation)=>match(clearTodoTransfer(invocation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            case None=>()}
+        let _ = cancelPluginCommandControl()
+        let _ = abortBash()
+        revokePluginContinuation()
         moveAskSurface(sessionId, value)
         lock.lock()
         try {
             sessionId = value
+            todoEditorSnapshot=None<ProductTodoEditorSnapshot>
+            todoEditorCompletion=None<ProductTodoEditorCompletion>
             queuedInteractions.clear()
             pendingRecovery = None
             restoreQueuedInteractions()
@@ -234,9 +276,18 @@ public class ApplicationSession <: AgentInteractionSource {
         restoreWorkMode(value)
         restorePendingContinuation()
         disableLoop()
+        Result.Ok(())
     }
 
     private func restoreQueuedInteractions(): Unit {
+        match (product.vnext.hasPendingRpcLocalProcessing113(ThreadId(sessionId.value))) {
+            case Result.Err(error) => pendingRecovery = Some(error); return
+            case Result.Ok(true) =>
+                pendingRecovery = Some(AgentError(AgentErrorKind.RecoveryRequired,
+                    "inbox.rpc_processing_recovery_required", "a local queued input began before restart and cannot be replayed"))
+                return
+            case Result.Ok(false) => ()
+        }
         match (product.vnext.pendingLaneInputs(ThreadId(sessionId.value))) {
             case Result.Ok(entries) =>
                 for (entry in entries) {
@@ -272,9 +323,13 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     private func restorePendingContinuation(): Unit {
-        setCurrentRequest(None)
+        setCurrentRequest(Option<AgentRunRequest>.None)
         pendingApproval = None
         pendingModelResume = false
+        pendingContextBoundaryResume = false
+        let boundary = match (product.pendingContextBoundary(sessionId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => pendingRecovery = Some(error); return }
         let approvalContinuation: ?RunContinuation = match (product.pendingContinuation(sessionId)) {
             case Result.Ok(Some(value)) =>
                 Some(value)
@@ -286,6 +341,17 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(None) => None
             case Result.Err(error) => pendingRecovery = Some(error); None
         }
+        if (boundary.isSome() && (approvalContinuation.isSome() || modelContinuation.isSome())) {
+            pendingRecovery = Some(AgentError(AgentErrorKind.RecoveryRequired, "context.boundary_continuation_conflict",
+                "context boundary conflicts with another pending execution")); return }
+        if (boundary.isSome()) {
+            let restored = match (product.contextBoundaryRequest(boundary.getOrThrow(), Some(this), ownedEvents: Some(ownedEventSink()))) {
+                case Result.Ok(value) => value; case Result.Err(error) => pendingRecovery = Some(error); return }
+            setCurrentRequest(Some(restored))
+            pendingContextBoundaryResume = true
+            currentModel = restored.model
+            return
+        }
         if (approvalContinuation.isSome() && modelContinuation.isSome()) {
             pendingRecovery = Some(AgentError(
                 AgentErrorKind.RecoveryRequired,
@@ -296,12 +362,20 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         match (approvalContinuation) {
             case Some(value) =>
-                setCurrentRequest(Some(product.continuationRequest(value, Some(this))))
+                let restored = match (product.continuationRequest(value, Some(this), ownedEvents: Some(ownedEventSink()))) {
+                    case Result.Ok(request) => request
+                    case Result.Err(error) => pendingRecovery = Some(error); return
+                }
+                setCurrentRequest(Some(restored))
                 pendingApproval = Some(value.approval)
                 currentModel = value.model
             case None => match (modelContinuation) {
                 case Some(value) =>
-                    setCurrentRequest(Some(product.continuationRequest(value, Some(this))))
+                    let restored = match (product.continuationRequest(value, Some(this), ownedEvents: Some(ownedEventSink()))) {
+                        case Result.Ok(request) => request
+                        case Result.Err(error) => pendingRecovery = Some(error); return
+                    }
+                    setCurrentRequest(Some(restored))
                     pendingModelResume = true
                     currentModel = value.model
                 case None => ()
@@ -317,7 +391,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case Some(error) => return Result.Err(error)
             case None => ()
         }
-        if (!pendingModelResume) { return Result.Ok(None) }
+        if (!pendingModelResume && !pendingContextBoundaryResume) { return Result.Ok(Option<ApplicationResponse>.None) }
         let request = match (currentRequestSnapshot()) {
             case Some(value) => value
             case None => return Result.Err(AgentError(
@@ -326,16 +400,20 @@ public class ApplicationSession <: AgentInteractionSource {
                 "startup model continuation has no reconstructed request"
             ))
         }
-        match (product.client.resume(request, eventSink())) {
+        let resumed = if (pendingContextBoundaryResume) { this.resumeContextBoundaryOwnedCheckpointApplication113(request, eventSink()) }
+            else { this.resumeOwnedCheckpointApplication113(request, eventSink()) }
+        match (resumed) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                setCurrentRequest(None)
+                setCurrentRequest(Option<AgentRunRequest>.None)
                 pendingModelResume = false
+                pendingContextBoundaryResume = false
                 match (finishCompletedRun(snapshot, false)) {
                     case Result.Ok(value) => Result.Ok(Some(value))
                     case Result.Err(error) => Result.Err(error)
                 }
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) =>
                 pendingModelResume = false
+                pendingContextBoundaryResume = false
                 match (settleApproval(request, snapshot, approval, false)) {
                     case Result.Ok(value) => Result.Ok(Some(value))
                     case Result.Err(error) => Result.Err(error)
@@ -367,6 +445,7 @@ public class ApplicationSession <: AgentInteractionSource {
         lock.lock()
         try {
             currentRequest = value
+            currentRequestCancelling = false
         } finally {
             lock.unlock()
         }
@@ -452,14 +531,15 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func tools(): Array<ModelToolDefinition> {
-        product.tools()
+        product.tools(threadId: Some(ThreadId(sessionId.value)))
     }
 
     public func activeTools(): Array<ModelToolDefinition> {
         if (planModeEnabled || vibeModeEnabled) {
-            product.toolsFor(CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]))
+            product.toolsFor(product.readonlyToolCapabilities(sessionId),
+                threadId: Some(ThreadId(sessionId.value)))
         } else {
-            product.tools()
+            product.tools(threadId: Some(ThreadId(sessionId.value)))
         }
     }
 
@@ -489,8 +569,12 @@ public class ApplicationSession <: AgentInteractionSource {
         product.workspace.rootPath()
     }
 
-    public func bundledAgents(): Array<ProductBundledAgentDefinition> {
-        bundledProductAgents()
+    public func bundledAgents(): Result<Array<ProductBundledAgentDefinition>> {
+        queryProductWorkflowAgents(product, sessionId)
+    }
+
+    public func invokeWorkspaceTool(contribution: String, arguments: AgentValue): Result<ProductWorkspaceInvocation> {
+        product.invokeWorkspaceTool(sessionId,contribution,arguments)
     }
 
     public func invokeLocalTool(
@@ -522,69 +606,277 @@ public class ApplicationSession <: AgentInteractionSource {
         product.unregisterUriScheme(scheme)
     }
 
-    public func uriSchemes(): Array<String> {
-        product.uriSchemes()
+    public func uriSchemes(custody!: ?OwnedApplicationRegistryResponse161 = None): Array<String> {
+        product.uriSchemes(custody: custody)
     }
 
-    public func extensions(): Array<ExtensionSnapshot> {
-        product.extensionSnapshots()
-    }
-
-    public func mcpServers(): Array<ProductMcpServerSnapshot> {
-        product.mcpSnapshots()
-    }
-
-    public func plugins(): Array<ProductPluginRecord> {
+    public func plugins(): OwnedPluginRecordList {
         product.pluginSnapshots()
+    }
+
+    // A persistent session selects its own Thread; callers cannot enumerate or
+    // stop another Thread's retained services through this facade.
+    public func pluginServiceStatuses(): Array<AgentValue> {
+        lock.lock(); let target = try { sessionId } finally { lock.unlock() }
+        let values = ArrayList<AgentValue>()
+        for (value in product.pluginServiceStatuses() where lifecycleText(value, "target_thread_id") == target.value) {
+            values.add(value)
+        }
+        values.toArray()
+    }
+
+    public func startPluginService(namespace: String, serviceId: String, route: String,
+        approved!: Bool = false): Result<ToolInvocationResult> {
+        // Approval is explicit even in a Yolo model session. No configuration
+        // read, process creation or canonical Operation precedes this decision.
+        if (!approved) {
+            return Result.Err(AgentError(AgentErrorKind.PermissionDenied, "plugin.service_approval_required",
+                "review the operator lifecycle configuration and use --approve to start this session service"))
+        }
+        lock.lock()
+        let startup = try {
+            if (activePluginServiceStartup.isSome()) {
+                return Result.Err(AgentError(AgentErrorKind.Conflict, "plugin.service_start_active",
+                    "another service startup is active in this application session"))
+            }
+            let value = ApplicationPluginServiceStartup(sessionId, namespace, serviceId)
+            activePluginServiceStartup = Some(value)
+            value
+        } finally { lock.unlock() }
+        try {
+            product.startPluginService(startup.target, namespace, serviceId, route,
+                approvalDecision: ApprovalDecision.Approve, cancellation: startup.cancellation.token)
+        } finally {
+            lock.lock()
+            try {
+                if (activePluginServiceStartup.isSome() && refEq(activePluginServiceStartup.getOrThrow(), startup)) {
+                    activePluginServiceStartup = None
+                }
+            } finally { lock.unlock() }
+            startup.cancellation.close()
+        }
+    }
+
+    private func cancelPluginServiceStartup(target!: ?SessionId = None, namespace!: String = "", serviceId!: String = ""): Unit {
+        lock.lock(); let startup = try { activePluginServiceStartup } finally { lock.unlock() }
+        match (startup) {
+            case Some(value) => if ((target.isNone() || value.target.value == target.getOrThrow().value) &&
+                (namespace == "" || value.namespace == namespace) && (serviceId == "" || value.serviceId == serviceId)) {
+                let _ = value.cancellation.cancel()
+            }
+            case None => ()
+        }
+    }
+
+    public func stopPluginService(namespace: String, serviceId: String): Result<Unit> {
+        lock.lock(); let target = try { sessionId } finally { lock.unlock() }
+        cancelPluginServiceStartup(target: Some(target), namespace: namespace, serviceId: serviceId)
+        product.stopPluginService(target, namespace, serviceId)
+    }
+
+    public func closePluginServices(): Result<Unit> {
+        lock.lock(); let target = try { sessionId } finally { lock.unlock() }
+        cancelPluginServiceStartup(target: Some(target))
+        product.stopPluginServices(target)
     }
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         product.javascriptPluginCommands()
     }
 
-    public func invokeJavaScriptPluginCommand(
-        routeName: String,
-        arguments: String,
-        noticeSink: ProductJavaScriptPluginNoticeSink
-    ): Result<Unit> {
+    public func invokeJavaScriptPluginCommand(routeName: String, arguments: String,
+        noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
+        match(invokeOwnedPluginCommand(routeName,arguments,noticeSink)){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(response)=>
+                if(response.text!=""){noticeSink("info",response.text)}
+                Result.Ok(())}
+    }
+
+    private func invokeOwnedPluginCommand(routeName: String, arguments: String,
+        noticeSink: ProductJavaScriptPluginNoticeSink, todoSelection!: ?ProductTodoSelection = None): Result<ApplicationResponse> {
         let cancellation = CancellationSource()
-        lock.lock()
-        let accepted = try {
-            if (activePluginCommandCancellation.isSome()) {
-                false
-            } else {
-                activePluginCommandCancellation = Some(cancellation)
-                true
-            }
-        } finally {
-            lock.unlock()
-        }
-        if (!accepted) {
-            cancellation.close()
-            return Result.Err(AgentError(
-                AgentErrorKind.Conflict,
-                "plugin.command_active",
-                "another plugin command is already active in this session"
-            ))
-        }
         let commandId = takePluginCommandId()
-        let result = product.invokeJavaScriptPluginCommand(
-            routeName, arguments, sessionId, commandId, cancellation.token, noticeSink
-        )
         lock.lock()
-        try { activePluginCommandCancellation = None } finally { lock.unlock() }
-        cancellation.close()
+        let target = try {
+            if (activeTodoInvocation.isSome() || activePluginCommandCancellation.isSome() || currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome()) {
+                cancellation.close()
+                return commandControlError("plugin.command_session_busy") }
+            match(todoSelection){
+                case Some(selected)=>if(sessionId.value!=selected.session.value){
+                    cancellation.close();return productTodoFrontendError("todo.session_changed")}
+                case None=>()}
+            todoEditorCompletion=None<ProductTodoEditorCompletion>
+            activePluginCommandCancellation = Some(cancellation)
+            sessionId
+        } finally { lock.unlock() }
+        let scope = ProductPluginCommandScope(target, commandId, routeName, arguments, cancellation.token,
+            { => match(pluginCommandCurrent(target,cancellation)){
+                case Result.Err(error)=>Result.Err(error)
+                case Result.Ok(_)=>match(todoSelection){case None=>Result.Ok(());case Some(value)=>value.current()}} },
+            { => match(pluginContinuationSessionCurrent(target)){
+                case Result.Err(error)=>Result.Err(error)
+                case Result.Ok(_)=>match(todoSelection){case None=>Result.Ok(());case Some(value)=>value.current()}} },
+            { proposal => preparePluginUserControl(target, proposal) })
+        let control = ApplicationPluginCommandControl(product, scope, cancellation,
+            { proposal, next => acceptPluginUserControl(target, cancellation, proposal, next) })
+        lock.lock()
+        try { activePluginCommandControl = Some(control) } finally { lock.unlock() }
+        let result = control.invoke(routeName, arguments, noticeSink)
+        finishPluginCommandControl(control)
         result
     }
 
-    public func cancelJavaScriptPluginCommand(): Unit {
-        var active: ?CancellationSource = None
+    private func invokeOwnedGoalCommand(routeName: String, arguments: String,
+        noticeSink: ProductJavaScriptPluginNoticeSink, selection: ProductGoalSelection, legacyBytes!: ?String = None): Result<ApplicationResponse> {
+        let cancellation = CancellationSource()
+        let commandId = takePluginCommandId()
         lock.lock()
-        try { active = activePluginCommandCancellation } finally { lock.unlock() }
-        match (active) {
-            case Some(value) => let _ = value.cancel()
-            case None => ()
+        let target = try {
+            if (activePluginCommandCancellation.isSome() || currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome()) {
+                cancellation.close()
+                return commandControlError("plugin.command_session_busy") }
+            if(sessionId.value!=selection.session.value){
+                cancellation.close();return productGoalPresentationError("goal.selection_session_changed")}
+            activePluginCommandCancellation = Some(cancellation)
+            sessionId
+        } finally { lock.unlock() }
+        let scope = ProductPluginCommandScope(target, commandId, routeName, arguments, cancellation.token,
+            { => match(pluginCommandCurrent(target,cancellation)){
+                case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>
+                    currentGoalCommandSelection(selection,legacyBytes)} },
+            { => match(pluginContinuationSessionCurrent(target)){
+                case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>
+                    currentGoalCommandSelection(selection,legacyBytes)} },
+            { proposal => preparePluginUserControl(target, proposal) })
+        let control = ApplicationPluginCommandControl(product, scope, cancellation,
+            { proposal, next => acceptPluginUserControl(target, cancellation, proposal, next) })
+        lock.lock()
+        try { activePluginCommandControl = Some(control) } finally { lock.unlock() }
+        let result = control.invoke(routeName, arguments, noticeSink)
+        finishPluginCommandControl(control)
+        result
+    }
+
+    private func currentGoalCommandSelection(selection: ProductGoalSelection, legacyBytes: ?String): Result<Unit> {
+        match(selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        match(legacyBytes){case None=>();case Some(expected)=>
+            let value=match(product.legacyGoalForMigration(selection.session)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            if(value!=expected){return productGoalPresentationError("goal.legacy_changed")}}
+        Result.Ok(())
+    }
+
+    private func goalCommand(arguments: String): Result<ApplicationResponse> {
+        let target=id()
+        let selection=match(selectProductGoal(product,target)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let canonical=match(product.goalState(target)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        // Current documents use the selected native command. Archived cold
+        // bytes participate only in explicit migration or an empty document.
+        if(arguments.trimAscii()!="migrate" && canonical.isSome()){
+            return invokeOwnedGoalCommand(selection.route,arguments,{ _, _ => () },selection)}
+        let legacyRaw=match(product.legacyGoalForMigration(target)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let legacy=try{parseUnifiedJson(legacyRaw,maxBytes:8388608,maxDepth:32)}
+            catch(_:Exception){return productGoalPresentationError("goal.legacy_format_readonly")}
+        let migrating=arguments.trimAscii()=="migrate"
+        if(migrating){
+            if(canonical.isSome() || legacy.unifiedKind==ValueKind.Null){
+                return productGoalPresentationError("goal.legacy_migration_not_empty")}
+            // Preserve and fingerprint the actual cold SQL bytes, including
+            // whitespace/field order. A pending approval re-reads those bytes.
+            let encoded=legacyRaw
+            let payload=encodeAgentValue(objectValue([ValueField("legacy_document",textValue(encoded)),
+                ValueField("legacy_sha256",textValue(modelPolicySha256Text(encoded)))]))
+            // This explicitly bounded cold-format migration is a command
+            // convenience, independent of the eight MiB canonical Doc limit.
+            // Unsupported inputs remain read-only before any Root/write.
+            if(payload.toArray().size>16384){return productGoalPresentationError("goal.legacy_format_readonly")}
+            return invokeOwnedGoalCommand(selection.route,"migrate "+payload,{ _, _ => () },selection,legacyBytes:Some(encoded))
         }
+        if(canonical.isNone() && legacy.unifiedKind!=ValueKind.Null){
+            return productGoalPresentationError("goal.legacy_migration_required")}
+        // Native business parsing runs through the original retained command
+        // owner, approval and user-control participant. UI data creates no Root.
+        invokeOwnedGoalCommand(selection.route,arguments,{ _, _ => () },selection)
+    }
+
+    private func pluginCommandCurrent(target: SessionId, cancellation: CancellationSource): Result<Unit> {
+        lock.lock()
+        try {
+            if (sessionId.value != target.value || activePluginCommandCancellation.isNone() ||
+                !refEq(activePluginCommandCancellation.getOrThrow(), cancellation)) {
+                return commandControlError("plugin.command_session_changed") }
+            cancellation.token.check()
+        } finally { lock.unlock() }
+    }
+    private func pluginContinuationSessionCurrent(target: SessionId): Result<Unit> {
+        lock.lock(); try {
+            if (sessionId.value != target.value) { commandControlError("continuation.session_changed") }
+            else { Result.Ok(()) }
+        } finally { lock.unlock() }
+    }
+    private func preparePluginUserControl(target: SessionId, proposal: ProductCommandProposal): Result<String> {
+        let raw = proposal.control().getOrThrow()
+        lock.lock()
+        let previous = try {
+            if (sessionId.value != target.value) { return commandControlError("plugin.command_session_changed") }
+            activePluginContinuation
+        } finally { lock.unlock() }
+        match (previous) {
+            case Some(owner) =>
+                if (owner.address.threadId.value == target.value && owner.address.namespace == proposal.binding.namespace &&
+                    owner.address.documentKey == httpIntentText(raw, "document_key")) {
+                    if (httpIntentText(raw, "action") == "pause" || httpIntentText(raw, "action") == "close") { owner.revoke() }
+                    return Result.Ok(owner.prompt)
+                }
+            case None => () }
+        Result.Ok("")
+    }
+    private func acceptPluginUserControl(target: SessionId, cancellation: CancellationSource,
+        proposal: ProductCommandProposal, next: ?ProductContinuationOwner): Result<Unit> {
+        if (proposal.control().isNone()) { return Result.Ok(()) }
+        lock.lock()
+        let update = try {
+            if (sessionId.value != target.value || activePluginCommandCancellation.isNone() ||
+                !refEq(activePluginCommandCancellation.getOrThrow(), cancellation) || cancellation.token.isCancelled()) {
+                (false, Option<ProductContinuationOwner>.None)
+            } else {
+                let old = activePluginContinuation; activePluginContinuation = next; pluginContinuationControlled = true; (true, old)
+            }
+        } finally { lock.unlock() }
+        if (!update[0]) {
+            match (next) { case Some(value) => value.revoke(); case None => () }
+            return commandControlError("plugin.command_session_changed") }
+        match (update[1]) { case Some(value) => value.revoke(); case None => () }
+        Result.Ok(())
+    }
+    private func finishPluginCommandControl(control: ApplicationPluginCommandControl): Unit {
+        if (!control.isClosed()) { return }
+        lock.lock()
+        try {
+            if (activePluginCommandControl.isSome() && refEq(activePluginCommandControl.getOrThrow(), control)) {
+                activePluginCommandControl = None; activePluginCommandCancellation = None }
+        } finally { lock.unlock() }
+    }
+    private func pluginCommandControl(): ?ApplicationPluginCommandControl {
+        lock.lock(); try { activePluginCommandControl } finally { lock.unlock() }
+    }
+    private func cancelPluginCommandControl(): Result<Unit> {
+        lock.lock()
+        let actual = try { (activePluginCommandCancellation, activePluginCommandControl) } finally { lock.unlock() }
+        match (actual[0]) { case Some(value) => let _ = value.cancel(); case None => () }
+        match (actual[1]) {
+            case Some(value) => let result = value.cancel(); finishPluginCommandControl(value); result
+            case None => Result.Ok(()) }
+    }
+    public func cancelJavaScriptPluginCommand(): Unit { let _ = cancelPluginCommandControl() }
+
+    private func revokePluginContinuation(): Unit {
+        lock.lock(); let previous = try { let old = activePluginContinuation; activePluginContinuation = None; old } finally { lock.unlock() }
+        match (previous) { case Some(value) => value.revoke(); case None => () }
     }
 
     private func takePluginCommandId(): String {
@@ -597,20 +889,20 @@ public class ApplicationSession <: AgentInteractionSource {
             lock.unlock()
         }
     }
-    public func inspectPlugin(root: String): PluginPackageResult<PluginPackageDescriptor> {
+    public func inspectPlugin(root: String): PluginRegistryResult<OwnedPluginPackageDescriptor> {
         product.inspectPlugin(root)
     }
 
-    public func importLocalPlugin(root: String): PluginImportResult<ProductPluginRecord> {
+    public func importLocalPlugin(root: String): PluginRegistryResult<ProductPluginRecord> {
         product.importLocalPlugin(root)
     }
-    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginRegistryResult<ProductPluginRecord> {
         product.importLocalPlugin(root, scope)
     }
 
     public func importPluginSource(
         source: ProductPluginSourceRequest
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.importPluginSource(
             sessionId,
             source,
@@ -621,7 +913,7 @@ public class ApplicationSession <: AgentInteractionSource {
     public func importPluginSource(
         source: ProductPluginSourceRequest,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.importPluginSource(
             sessionId,
             source,
@@ -633,7 +925,7 @@ public class ApplicationSession <: AgentInteractionSource {
     public func updatePluginSource(
         id: String,
         source: ProductPluginSourceRequest
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.updatePluginSource(
             id,
             sessionId,
@@ -646,7 +938,7 @@ public class ApplicationSession <: AgentInteractionSource {
         id: String,
         source: ProductPluginSourceRequest,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.updatePluginSource(
             id,
             scope,
@@ -656,7 +948,7 @@ public class ApplicationSession <: AgentInteractionSource {
         )
     }
 
-    public func setPluginEnabled(id: String, enabled: Bool): PluginImportResult<ProductPluginRecord> {
+    public func setPluginEnabled(id: String, enabled: Bool): PluginRegistryResult<ProductPluginRecord> {
         product.setPluginEnabled(id, enabled)
     }
 
@@ -664,22 +956,22 @@ public class ApplicationSession <: AgentInteractionSource {
         id: String,
         enabled: Bool,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.setPluginEnabled(id, enabled, scope)
     }
 
-    public func pluginDoctor(): Array<PluginImportError> {
-        product.pluginDoctor()
+    public func pluginDoctor(custody!: ?OwnedApplicationRegistryResponse161 = None): Array<PluginRegistryOwnedError> {
+        product.pluginDoctor(custody: custody)
     }
-    public func updateLocalPlugin(id: String, root: String): PluginImportResult<ProductPluginRecord> {
+    public func updateLocalPlugin(id: String, root: String): PluginRegistryResult<ProductPluginRecord> {
         product.updateLocalPlugin(id, root)
     }
 
-    public func rollbackPlugin(id: String): PluginImportResult<ProductPluginRecord> {
+    public func rollbackPlugin(id: String): PluginRegistryResult<ProductPluginRecord> {
         product.rollbackPlugin(id)
     }
 
-    public func uninstallPlugin(id: String): PluginImportResult<Unit> {
+    public func uninstallPlugin(id: String): PluginRegistryResult<Unit> {
         product.uninstallPlugin(id)
     }
 
@@ -687,27 +979,20 @@ public class ApplicationSession <: AgentInteractionSource {
         id: String,
         root: String,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         product.updateLocalPlugin(id, root, scope)
     }
 
-    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginRegistryResult<ProductPluginRecord> {
         product.rollbackPlugin(id, scope)
     }
 
-    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginImportResult<Unit> {
+    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginRegistryResult<Unit> {
         product.uninstallPlugin(id, scope)
     }
 
-    public func garbageCollectPlugins(): PluginImportResult<Array<String>> {
+    public func garbageCollectPlugins(): PluginRegistryResult<OwnedRegistryTextList> {
         product.garbageCollectPlugins()
-    }
-
-    public func setExtensionEnabled(
-        extensionId: String,
-        enabled: Bool
-    ): Result<Unit> {
-        product.setExtensionEnabled(extensionId, enabled)
     }
 
     public func setAskInteractive(enabled: Bool): Unit {
@@ -829,12 +1114,28 @@ public class ApplicationSession <: AgentInteractionSource {
         product.login(profileId: profileId)
     }
 
-    public func todoPhases(): Result<Array<TodoPhase>> {
+    public func todoPhases(): Result<Array<ProductTodoPhase>> {
         product.todoPhases(sessionId)
     }
 
-    public func setTodoPhases(phases: Array<TodoPhase>): Result<Unit> {
-        product.setTodoPhases(sessionId, phases)
+    public func replaceTodoPhases(phases: Array<ProductTodoPhase>): Result<ApplicationResponse> {
+        let target=todoSessionId()
+        let selection=match(selectProductTodo(product,target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let digest=match(product.todoDocumentDigest(target,selection)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue("replace_phases")),
+            ValueField("phases",encodeTodoPhases(phases)),ValueField("expected_digest",textValue(digest))]))
+    }
+
+    // The historical Unit API cannot report an uncommitted replacement as
+    // success. The retained actual operation remains available to approval().
+    public func setTodoPhases(phases: Array<ProductTodoPhase>): Result<Unit> {
+        match(replaceTodoPhases(phases)){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(response)=>match(response.approval){
+                case Some(request)=>Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                    "todo.approval_required","Todo replacement is awaiting document approval",
+                    fields:[ErrorField("operation_id",request.operationId.value)]))
+                case None=>Result.Ok(())}}
     }
 
     public func runStats(): Result<SessionRunStats> {
@@ -891,21 +1192,6 @@ public class ApplicationSession <: AgentInteractionSource {
         name: String
     ): Result<Unit> {
         product.removeSshHost(scope, name)
-    }
-
-    public func searchWeb(
-        query: String,
-        provider: String,
-        recency: String,
-        limit: ?Int64
-    ): Result<ToolResult> {
-        product.searchWeb(
-            sessionId,
-            query,
-            provider,
-            recency,
-            limit
-        )
     }
 
     public func setAutoRetry(enabled: Bool): Unit {
@@ -983,16 +1269,8 @@ public class ApplicationSession <: AgentInteractionSource {
                 case Result.Err(error) => return Result.Err(error)
             }
         }
-        match (product.pauseGoal(sessionId)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (product.pauseRestoredGoal(value)) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
         currentModel = restored
-        activateSession(value)
+        match(activateSession(value)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         Result.Ok(())
     }
 
@@ -1001,7 +1279,7 @@ public class ApplicationSession <: AgentInteractionSource {
         match (product.forkSession(sessionId, target)) {
             case Result.Ok(_) => match (product.setSessionModel(target, currentModel)) {
                 case Result.Ok(_) =>
-                    activateSession(target)
+                    match(activateSession(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
                     Result.Ok(target)
                 case Result.Err(error) => Result.Err(error)
             }
@@ -1093,7 +1371,7 @@ public class ApplicationSession <: AgentInteractionSource {
             prefix.toArray()
         )) {
             case Result.Ok(_) =>
-                activateSession(target)
+                match(activateSession(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
                 Result.Ok(ApplicationBranchResult(target, text))
             case Result.Err(error) => Result.Err(error)
         }
@@ -1130,20 +1408,20 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Err(error) => return Result.Err(error)
         }
         let prompt = handoffPrompt(customInstructions)
-        let base = product.request(
+        let base = match (product.prepareRequest(
             prompt,
             sessionId: Some(temporary),
             modelOverride: currentModel,
             thinking: effectiveThinking(),
             userRequestedThinking: explicitRequestedThinking(),
             thinkingSource: requestedThinkingSource()
-        )
+        )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let request = handoffRunRequest(base)
         setCurrentRequest(Some(request))
         let outcome = try {
-            product.client.start(request, eventSink())
+            this.startOwnedCheckpointApplication113(request, eventSink())
         } finally {
-            setCurrentRequest(None)
+            setCurrentRequest(Option<AgentRunRequest>.None)
         }
         let document = match (outcome) {
             case Result.Ok(AgentRunOutcome.Completed(_)) => match (product.messages(temporary)) {
@@ -1203,71 +1481,129 @@ public class ApplicationSession <: AgentInteractionSource {
             ]
         )) {
             case Result.Ok(_) =>
-                activateSession(target)
+                match(activateSession(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
                 Result.Ok(ApplicationHandoffResult(target, document))
             case Result.Err(error) => Result.Err(error)
         }
     }
 
-    private func reserveBash(command: String): Result<OperationId> {
-        if (command.trimAscii() == "") {
-            return Result.Err(AgentError(AgentErrorKind.InvalidInput,
-                "application.bash_empty", "bash command must not be empty"))
-        }
+    // The convenience API retains the actual native Direct owner. No process
+    // reservation or service-startup approval can authorize this command.
+    private func acquireBashInvocation(command: String, networkPolicy!: ?NetworkPolicy=None): Result<ProductNativeToolInvocation> {
+        if(command.trimAscii()==""){
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput,"application.bash_empty","bash command must not be empty"))}
         bashLock.lock()
-        try {
-            if (currentBashOperation.isSome()) {
-                return Result.Err(AgentError(AgentErrorKind.Conflict,
-                    "application.bash_busy", "bash command is already running"))
-            }
-            let operationId = product.ids.nextOperationId()
-            product.reserveBash(operationId)
-            currentBashOperation = Some(operationId)
-            Result.Ok(operationId)
-        } finally { bashLock.unlock() }
+        try{
+            if(bashStarting || currentBashInvocation.isSome()){
+                return Result.Err(AgentError(AgentErrorKind.Conflict,"application.bash_busy","bash command is already retained"))}
+            bashStarting=true;bashCancellationRequested=false
+        }finally{bashLock.unlock()}
+        let target=id()
+        let selected=product.acquireShellToolInvocation(target,networkPolicy:networkPolicy)
+        bashLock.lock()
+        try{
+            bashStarting=false
+            match(selected){
+                case Result.Err(error)=>return Result.Err(error)
+                case Result.Ok(value)=>
+                    currentBashInvocation=Some(value)
+                    if(bashCancellationRequested || id().value!=target.value){let _=value.cancel()}
+                    Result.Ok(value)}
+        }finally{bashLock.unlock()}
     }
 
-    private func executeReservedBash(command: String, operationId: OperationId): Result<ProcessResult> {
-        try { product.executeBash(command, operationId) } finally {
-            bashLock.lock()
-            product.releaseBash(operationId)
-            currentBashOperation = None
-            bashLock.unlock()
-        }
+    private func bashInvocation(): ?ProductNativeToolInvocation {
+        bashLock.lock();try{currentBashInvocation}finally{bashLock.unlock()}
     }
 
-    public func executeBash(command: String): Result<ProcessResult> {
-        match (reserveBash(command)) {
-            case Result.Ok(operationId) => executeReservedBash(command, operationId)
-            case Result.Err(error) => Result.Err(error)
-        }
+    private func closeBashInvocation(actual: ProductNativeToolInvocation): Result<Unit> {
+        match(actual.close()){
+            case Result.Err(error)=>return Result.Err(error)
+            case Result.Ok(_)=>()}
+        bashLock.lock()
+        try{
+            if(currentBashInvocation.isSome() && refEq(currentBashInvocation.getOrThrow(),actual)){
+                currentBashInvocation=None}
+        }finally{bashLock.unlock()}
+        Result.Ok(())
     }
 
-    public func executeBashAsync(
-        command: String,
-        complete: (Result<ProcessResult>) -> Unit
-    ): Result<Future<Unit>> {
-        let operationId = match (reserveBash(command)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
+    private func completedBashInvocation(actual: ProductNativeToolInvocation): Result<ProcessResult> {
+        match(actual.approval()){
+            case Some(approval)=>return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                "application.bash_approval_required","the retained native command requires its own explicit decision",
+                fields:[ErrorField("operation_id",approval.operationId.value),ErrorField("tool",approval.toolName)]))
+            case None=>()}
+        let result=match(actual.output()){
+            case Result.Err(error)=>Result<ProcessResult>.Err(error)
+            case Result.Ok(output)=>nativeShellProcessResult(output)}
+        // Both success and execution error still own the actual output charge.
+        // Failed cleanup keeps this same invocation reachable for a later ACK.
+        match(closeBashInvocation(actual)){
+            case Result.Err(error)=>return Result.Err(error)
+            case Result.Ok(_)=>result}
+    }
+
+    private func executeAcquiredBash(arguments: AgentValue, actual: ProductNativeToolInvocation): Result<ProcessResult> {
+        match(actual.start(arguments,
+            ExecutionBudget(maxToolCalls:2,maxConcurrentTools:1))){
+            case Result.Err(error)=>actual.recordFailure(error)
+            case Result.Ok(_)=>()}
+        completedBashInvocation(actual)
+    }
+
+    public func executeBash(command: String, timeoutMillis!: Int64=10000,
+        networkPolicy!: ?NetworkPolicy=None): Result<ProcessResult> {
+        if(timeoutMillis<=0 || timeoutMillis>600000){
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput,"shell.invalid_timeout","native Shell command timeout must be 1..600000ms within the operator service ceilings"))}
+        match(acquireBashInvocation(command,networkPolicy:networkPolicy)){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(actual)=>executeAcquiredBash(objectValue([
+                ValueField("command",textValue(command)),ValueField("timeout_ms",integerValue(timeoutMillis))]),actual)}
+    }
+
+    public func executeBashAsync(command: String, complete: (Result<ProcessResult>) -> Unit): Result<Future<Unit>> {
+        let actual=match(acquireBashInvocation(command)){
+            case Result.Err(error)=>return Result.Err(error)
+            case Result.Ok(value)=>value}
+        // The actual owner is published before the task may start. Cancellation
+        // never targets an unowned PID or a newly looked-up catalog descriptor.
         Result.Ok(spawn {
-            let result = try { executeReservedBash(command, operationId) } catch (error: Exception) {
-                Result<ProcessResult>.Err(AgentError(AgentErrorKind.Internal,
-                    "application.bash_failed", error.message))
-            }
+            let result=try{executeAcquiredBash(objectValue([ValueField("command",textValue(command)),ValueField("timeout_ms",integerValue(10000))]),actual)}catch(_:Exception){
+                let error=AgentError(AgentErrorKind.RecoveryRequired,"application.bash_failed","native command retains canonical cleanup")
+                actual.recordFailure(error)
+                match(closeBashInvocation(actual)){
+                    case Result.Err(closeError)=>Result<ProcessResult>.Err(closeError)
+                    case Result.Ok(_)=>Result<ProcessResult>.Err(error)}}
             complete(result)
         })
     }
 
+    private func decideBashInvocation(actual: ProductNativeToolInvocation, operationId: String,
+        decision: ApprovalDecision): Result<ApplicationResponse> {
+        let decided=actual.decide(operationId,decision)
+        if(decided.isError() && actual.approval().isSome()){return Result.Err(decided.error().getOrThrow())}
+        match(actual.approval()){
+            case Some(value)=>return Result.Ok(ApplicationResponse(false,approval:Some(value)))
+            case None=>()}
+        match(completedBashInvocation(actual)){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(value)=>Result.Ok(ApplicationResponse(false,text:encodeAgentValue(objectValue([
+                ValueField("stdout",textValue(value.stdout)),ValueField("stderr",textValue(value.stderr)),
+                ValueField("exitCode",integerValue(value.exitCode)),ValueField("timedOut",boolValue(value.timedOut)),
+                ValueField("workingDirectory",textValue(value.workingDirectory)),ValueField("truncated",boolValue(value.truncated))]))))}
+    }
+
     public func abortBash(): Result<Unit> {
         bashLock.lock()
-        try {
-            match (currentBashOperation) {
-                case Some(operationId) => product.abortBash(operationId)
-                case None => Result.Ok(())
-            }
-        } finally { bashLock.unlock() }
+        let selected=try{bashCancellationRequested=true;currentBashInvocation}finally{bashLock.unlock()}
+        match(selected){
+            case None=>Result.Ok(())
+            case Some(actual)=>
+                match(actual.cancel()){
+                    case Result.Err(error)=>return Result.Err(error)
+                    case Result.Ok(_)=>()}
+                closeBashInvocation(actual)}
     }
 
     public func exportHtml(outputPath: String): Result<String> {
@@ -1283,26 +1619,279 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func dumpLlmRequest(): Result<String> {
+        let guidance=match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         product.dumpLlmRequest(
             sessionId,
             currentModel,
             effectiveThinking(),
-            modeSystem: activeModeSystem(),
-            guide: capabilityGuide(),
+            modeSystem: guidance.system,
+            guide: guidance.guide,
             readOnly: planModeEnabled || vibeModeEnabled,
             workMode: workMode()
         )
     }
 
+    public func frontendSlashDefinitions():Array<SlashCommandDefinition>{
+        match(selectProductTodo(product,todoSessionId())){
+            case Result.Ok(_)=>[productTodoSlashDefinition()]
+            case Result.Err(_)=>[]}
+    }
+
     public func todoMarkdown(): Result<String> {
-        todoMarkdownForSession(product, sessionId)
+        match(product.todoPhases(todoSessionId())){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(phases)=>Result.Ok(productTodoDisplayMarkdown(phases))}
+    }
+
+    // Only opening an editor freezes its original native document digest.
+    // Display refreshes cannot silently authorize an old buffer against a new revision.
+    public func loadTodoEditor(): Result<String> {
+        let result=readTodoMarkdown(true)
+        if(result.isOk()){let _=takeTodoEditorCompletion()}
+        result
+    }
+
+    private func readTodoMarkdown(forEditor: Bool): Result<String> {
+        let selection=match(selectProductTodo(product,todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let response=match(invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue("view"))]),editorAction:if(forEditor){"view"}else{""})){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(response.approval.isSome()){return productTodoFrontendError("todo.view_approval_pending")}
+        let shown=match(parseProductTodoFrontend(response.text,"view")){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(forEditor){
+            lock.lock();try{
+                if(sessionId.value!=selection.session.value){return productTodoFrontendError("todo.session_changed")}
+                todoEditorSnapshot=Some(ProductTodoEditorSnapshot(selection,httpIntentText(shown,"document_digest")))
+            }finally{lock.unlock()}}
+        Result.Ok(httpIntentText(shown,"markdown"))
     }
 
     public func replaceTodoMarkdown(markdown: String): Result<String> {
-        replaceTodoMarkdownForSession(product, sessionId, markdown)
+        lock.lock();let previous=try{todoEditorSnapshot}finally{lock.unlock()}
+        let shown=match(previous){case None=>return productTodoFrontendError("todo.editor_read_required");case Some(value)=>value}
+        if(shown.selection.session.value!=todoSessionId().value){return productTodoFrontendError("todo.session_changed")}
+        match(shown.selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let response=match(invokeTodoInput(shown.selection,objectValue([ValueField("frontend_action",textValue("replace_markdown")),
+            ValueField("text",textValue(markdown)),ValueField("expected_digest",textValue(shown.digest))]),editorAction:"replace_markdown")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(response.approval.isSome()){return Result.Ok("Todo replacement is awaiting its document approval "+response.approval.getOrThrow().operationId.value)}
+        let result=match(parseProductTodoFrontend(response.text,"replace_markdown")){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        lock.lock();try{todoEditorSnapshot=Some(ProductTodoEditorSnapshot(shown.selection,httpIntentText(result,"document_digest")))}finally{lock.unlock()}
+        let _=takeTodoEditorCompletion()
+        Result.Ok("Saved the selected native Todo document.")
+    }
+
+    public func takeTodoEditorCompletion(): ?ProductTodoEditorCompletion {
+        lock.lock();let selected=try{
+            let value=(todoEditorCompletion,sessionId);todoEditorCompletion=None<ProductTodoEditorCompletion>;value
+        }finally{lock.unlock()}
+        match(selected[0]){
+            case Some(value)=>if(value.current(selected[1]).isOk()){Some(value)}else{None<ProductTodoEditorCompletion>}
+            case None=>None<ProductTodoEditorCompletion>}
+    }
+
+    private func todoSessionId(): SessionId {
+        lock.lock();try{sessionId}finally{lock.unlock()}
+    }
+
+    private func invokeTodoInput(selection: ProductTodoSelection, input: AgentValue, editorAction!:String=""): Result<ApplicationResponse> {
+        if(selection.session.value!=todoSessionId().value){return productTodoFrontendError("todo.session_changed")}
+        match(selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lock.lock()
+        try{
+            if(sessionId.value!=selection.session.value){return productTodoFrontendError("todo.session_changed")}
+            if(activeTodoSelection.isSome() || activeTodoInvocation.isSome() || activePluginCommandCancellation.isSome() || currentRequest.isSome() ||
+                pendingApproval.isSome() || pendingRecovery.isSome()){
+                return productTodoFrontendError("todo.session_busy")}
+            activeTodoSelection=Some(selection)
+            todoEditorCompletion=None<ProductTodoEditorCompletion>
+        }finally{lock.unlock()}
+        let cold: ?String=if(httpIntentText(input,"frontend_action")=="migrate"){
+            Some(httpIntentText(input,"legacy_json"))}else{None}
+        let invocation=ProductTodoInvocation(product,selection,"todo-"+takePluginCommandId(),{=>todoInvocationCurrent(selection,cold)})
+        lock.lock();try{
+            activeTodoInvocation=Some(invocation)
+            if(editorAction!=""){
+                todoEditorInvocation=Some(invocation);todoEditorAction=editorAction;todoEditorCompletion=None<ProductTodoEditorCompletion>}
+        }finally{lock.unlock()}
+        let result=invocation.start(input)
+        if(result.isError()){
+            let error=result.error().getOrThrow();let _=clearTodoDocument(invocation);return Result.Err(error)}
+        todoDocumentResponse(invocation)
+    }
+
+    private func todoInvocationCurrent(selection: ProductTodoSelection,cold: ?String): Result<Unit> {
+        match(todoDocumentCurrent(selection)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        match(cold){
+            case Some(frozen)=>
+                let actual=match(product.legacyTodoPayload(selection.session)){
+                    case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+                if(actual!=frozen){return productTodoFrontendError("todo.migration_input_changed")}
+            case None=>()}
+        Result.Ok(())
+    }
+    private func todoDocumentCurrent(selection: ProductTodoSelection): Result<Unit> {
+        lock.lock()
+        let same=try{sessionId.value==selection.session.value && activeTodoSelection.isSome() &&
+            refEq(activeTodoSelection.getOrThrow(),selection)}finally{lock.unlock()}
+        if(!same){return productTodoFrontendError("todo.session_changed")}
+        selection.current()
+    }
+    private func todoDocumentInvocation(): ?ProductTodoInvocation {
+        lock.lock();try{activeTodoInvocation}finally{lock.unlock()}
+    }
+    private func clearTodoDocument(invocation: ProductTodoInvocation): Result<Unit> {
+        // Retire the actual source owner only after its cleanup acknowledges.
+        match(invocation.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lock.lock();try{
+            if(activeTodoInvocation.isSome() && refEq(activeTodoInvocation.getOrThrow(),invocation)){
+                activeTodoInvocation=None;activeTodoSelection=None}
+            if(todoEditorInvocation.isSome() && refEq(todoEditorInvocation.getOrThrow(),invocation)){
+                todoEditorInvocation=None<ProductTodoInvocation>;todoEditorAction=""}
+            Result.Ok(())
+        }finally{lock.unlock()}
+    }
+    private func todoDocumentResponse(invocation: ProductTodoInvocation): Result<ApplicationResponse> {
+        match(invocation.approval()){
+            case Some(approval)=>return Result.Ok(ApplicationResponse(false,text:"approval required",approval:Some(approval)))
+            case None=>()}
+        let output=invocation.output()
+        match(output){
+            case Result.Err(error)=>let _=clearTodoDocument(invocation);Result.Err(error)
+            case Result.Ok(value)=>
+                if(invocation.transferAction()!=""){
+                    return Result.Ok(ApplicationResponse(false,text:value+"\nNo resource was accessed. Submit /todo resource to open its independent Root and review its own operation approval."))}
+                lock.lock();let editor=try{
+                    if(todoEditorInvocation.isSome() && refEq(todoEditorInvocation.getOrThrow(),invocation)){todoEditorAction}else{""}
+                }finally{lock.unlock()}
+                let presentation:?AgentValue=if(editor!=""){
+                    match(parseProductTodoFrontend(value,editor)){case Result.Err(error)=>let _=clearTodoDocument(invocation);return Result.Err(error);case Result.Ok(parsed)=>Some(parsed)}
+                }else{None<AgentValue>}
+                match(presentation){case Some(shown)=>
+                    match(invocation.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                    lock.lock();try{
+                        if(sessionId.value!=invocation.selection.session.value || activeTodoInvocation.isNone() ||
+                            !refEq(activeTodoInvocation.getOrThrow(),invocation) || todoEditorInvocation.isNone() ||
+                            !refEq(todoEditorInvocation.getOrThrow(),invocation)){
+                            return productTodoFrontendError("todo.session_changed")}
+                        // No later write can occupy the slot between retirement and publication.
+                        activeTodoInvocation=None<ProductTodoInvocation>;activeTodoSelection=None<ProductTodoSelection>
+                        todoEditorInvocation=None<ProductTodoInvocation>;todoEditorAction=""
+                        todoEditorSnapshot=Some(ProductTodoEditorSnapshot(invocation.selection,httpIntentText(shown,"document_digest")))
+                        todoEditorCompletion=Some(ProductTodoEditorCompletion(invocation,editor=="replace_markdown",httpIntentText(shown,"markdown"),httpIntentText(shown,"document_digest")))
+                    }finally{lock.unlock()}
+                    case None=>match(clearTodoDocument(invocation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}}
+                Result.Ok(ApplicationResponse(false,text:value))}
+    }
+
+    private func todoCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        if(arguments.size==1 && arguments[0]=="resource"){return startTodoResource()}
+        if(arguments.size==1 && arguments[0]=="commit"){return commitTodoImport()}
+        let selection=match(selectProductTodo(product,todoSessionId())){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(!arguments.isEmpty() && ["import","export"].contains(arguments[0])){
+            if(arguments.size>2){return productTodoFrontendError("todo.resource_arguments")}
+            let target=if(arguments.size==1){"TODO.md"}else{arguments[1]}
+            return invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue(arguments[0])),
+                ValueField(if(arguments[0]=="import"){"reference"}else{"destination"},textValue(target))]))}
+        if(arguments.size==1 && arguments[0]=="migrate"){
+            let raw=match(product.legacyTodoPayload(selection.session)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            return invokeTodoInput(selection,objectValue([ValueField("frontend_action",textValue("migrate")),
+                ValueField("legacy_json",textValue(raw)),ValueField("legacy_digest",textValue(modelPolicySha256Text(raw)))]))}
+        let encoded=ArrayList<String>()
+        for(argument in arguments){encoded.add(stringifyUnifiedJson(textValue(argument)))}
+        var raw=""
+        for(index in 0..encoded.size){if(index>0){raw+=" "};raw+=encoded[index]}
+        invokeOwnedPluginCommand(selection.route,raw,{_,_=>()},todoSelection:Some(selection))
+    }
+
+    private func todoResourceInvocation(): ?ProductWorkspaceInvocation {
+        lock.lock();try{activeTodoResource}finally{lock.unlock()}
+    }
+    private func startTodoResource(): Result<ApplicationResponse> {
+        let parent=match(todoDocumentInvocation()){case None=>return productTodoFrontendError("todo.transfer_missing");case Some(value)=>value}
+        match(todoDocumentCurrent(parent.selection)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let previous=todoResourceInvocation()
+        let next=match(previous){case None=>parent.beginResource();case Some(value)=>value.beginResource()}
+        let resource=match(next){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        lock.lock();try{
+            match(previous){case Some(value)=>todoResourceAncestors.add(value);case None=>()}
+            activeTodoResource=Some(resource)
+        }finally{lock.unlock()}
+        todoResourceResponse(parent,resource)
+    }
+    private func todoResourceResponse(parent: ProductTodoInvocation,resource: ProductWorkspaceInvocation): Result<ApplicationResponse> {
+        match(resource.approval()){
+            case Some(value)=>return Result.Ok(ApplicationResponse(false,text:"approval required",approval:Some(value)))
+            case None=>()}
+        let output=match(resource.output()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(parent.transferAction()=="import"){
+            return Result.Ok(ApplicationResponse(false,text:stringifyUnifiedJson(output)+
+                "\nIf this is a resource request, submit /todo resource again. A complete raw read may be submitted with /todo commit; this creates a distinct document Root and never inherits the resource permission."))}
+        let text=stringifyUnifiedJson(output)
+        match(clearTodoTransfer(parent)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        Result.Ok(ApplicationResponse(false,text:text))
+    }
+    private func clearTodoTransfer(parent: ProductTodoInvocation): Result<Unit> {
+        match(todoResourceInvocation()){
+            case Some(value)=>match(value.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            case None=>()}
+        lock.lock();let ancestors=try{todoResourceAncestors.toArray()}finally{lock.unlock()}
+        for(value in ancestors){match(value.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}}
+        lock.lock();try{activeTodoResource=None;todoResourceAncestors.clear()}finally{lock.unlock()}
+        match(cleanupRetiredTodoDocuments()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        clearTodoDocument(parent)
+    }
+    private func cleanupRetiredTodoDocuments(): Result<Unit> {
+        lock.lock();let previous=try{todoRetiredDocuments.toArray()}finally{lock.unlock()}
+        for(value in previous){
+            match(value.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            lock.lock();try{
+                var index:Int64=0
+                while(index<todoRetiredDocuments.size){
+                    if(refEq(todoRetiredDocuments[index],value)){todoRetiredDocuments.remove(at:index)}else{index+=1}}
+            }finally{lock.unlock()}}
+        Result.Ok(())
+    }
+    private func commitTodoImport(): Result<ApplicationResponse> {
+        let parent=match(todoDocumentInvocation()){case None=>return productTodoFrontendError("todo.transfer_missing");case Some(value)=>value}
+        let resource=match(todoResourceInvocation()){case None=>return productTodoFrontendError("todo.resource_read_required");case Some(value)=>value}
+        match(todoDocumentCurrent(parent.selection)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let value=match(resource.output()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(result)=>result}
+        let content=value.field("content") ?? nullValue()
+        let truncated=value.field("truncated") ?? nullValue()
+        if(content.unifiedKind!=ValueKind.Text || truncated.unifiedKind!=ValueKind.Boolean || truncated.asBool() ||
+            value.field("returned_bytes").isNone() || value.field("bytes").isNone()){
+            return productTodoFrontendError("todo.complete_raw_read_required")}
+        let count=content.text.toArray().size
+        let returned=try{Int64.parse(value.field("returned_bytes").getOrThrow().asNumberText())}catch(_:Exception){-1}
+        let total=try{Int64.parse(value.field("bytes").getOrThrow().asNumberText())}catch(_:Exception){-1}
+        if(count!=returned || returned!=total){return productTodoFrontendError("todo.complete_raw_read_required")}
+        let digest=match(parent.importDigest()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(result)=>result}
+        let input=objectValue([ValueField("frontend_action",textValue("replace_markdown")),ValueField("text",content),
+            ValueField("expected_digest",textValue(digest))])
+        // Keep both original charged results alive until the new ordinary
+        // Root has frozen and copied its parameters. Its own ContextRead/CAS,
+        // current tuple and approval are independent of those read Roots.
+        let selection=parent.selection
+        let next=ProductTodoInvocation(product,selection,"todo-"+takePluginCommandId(),{=>todoDocumentCurrent(selection)})
+        lock.lock();try{
+            todoRetiredDocuments.add(parent);activeTodoInvocation=Some(next)
+        }finally{lock.unlock()}
+        let result=next.start(input)
+        match(resource.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lock.lock();let ancestors=try{todoResourceAncestors.toArray()}finally{lock.unlock()}
+        for(value in ancestors){match(value.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}}
+        lock.lock();try{activeTodoResource=None;todoResourceAncestors.clear()}finally{lock.unlock()}
+        match(cleanupRetiredTodoDocuments()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        match(result){case Result.Err(error)=>let _=clearTodoDocument(next);Result.Err(error);case Result.Ok(_)=>todoDocumentResponse(next)}
     }
 
     public func approval(): ?ApprovalRequest {
+        match(bashInvocation()){case Some(actual)=>match(actual.approval()){case Some(value)=>return Some(value);case None=>()};case None=>()}
+        match(todoResourceInvocation()){
+            case Some(value)=>match(value.approval()){case Some(request)=>return Some(request);case None=>()}
+            case None=>()}
+        match(todoDocumentInvocation()){case Some(value)=>return value.approval();case None=>()}
+        match (pluginCommandControl()) { case Some(value) => return value.approval(); case None => () }
         pendingApproval
     }
 
@@ -1310,9 +1899,193 @@ public class ApplicationSession <: AgentInteractionSource {
         lock.lock()
         try {
             subscribers.add(sink)
+            legacyEventSubscribers++
         } finally {
             lock.unlock()
         }
+    }
+
+    // Both callbacks belong to the same concrete observer. The ordinary
+    // callback keeps existing small-event behavior; the owned callback must
+    // explicitly retire the actual complete-result alias it receives.
+    public func subscribeOwned(ordinary: AgentEventSink, owned: OwnedAgentEventSink,
+        failures!: ?OwnedFailureEventSink113 = None<OwnedFailureEventSink113>): Unit {
+        lock.lock()
+        try { subscribers.add(ordinary); ownedSubscribers.add(owned); ownedFailureSubscribers113.add(failures) }
+        finally { lock.unlock() }
+    }
+
+    public func subscribeRetirableOwned113(paid: LogicalJsonOwnerReservation,
+        ordinary: AgentEventSink, owned: OwnedAgentEventSink,
+        failures!: ?OwnedFailureEventSink113 = None<OwnedFailureEventSink113>): ApplicationOwnedSubscription113 {
+        // Caller pays before constructing the callbacks supplied here.
+        paid.ensureRetainedPeak(65536)
+        lock.lock()
+        try {
+            if (unregisteredSubscription113.isSome() || retirableDispatchFrames113 != 0 || retirableCleanupFrames113 != 0) {
+                throw IllegalStateException("an actual subscription registration or dispatch is still active")
+            }
+            let token = ApplicationOwnedSubscription113(paid, ordinary, owned, failures,
+                subscribers.size, ownedSubscribers.size, ownedFailureSubscribers113.size)
+            // A partial array/closure registration remains reachable here.
+            // It is not claimed to have retired merely because add() throws.
+            unregisteredSubscription113 = Some(token)
+            subscribers.add({ event => token.emitOrdinary113(event) }); token.ordinaryInstalled = true
+            ownedSubscribers.add(token); token.ownedInstalled = true
+            ownedFailureSubscribers113.add(Some(token)); token.failureInstalled = true
+            if (retirableSubscriptions113.isNone()) {
+                retirableSubscriptions113 = Some(ArrayList<ApplicationOwnedSubscription113>())
+            }
+            retirableSubscriptions113.getOrThrow().add(token)
+            unregisteredSubscription113 = None<ApplicationOwnedSubscription113>
+            token
+        } finally { lock.unlock() }
+    }
+    public func unsubscribeRetirableOwned113(token: ApplicationOwnedSubscription113): Bool {
+        lock.lock()
+        try {
+            if (retirableDispatchFrames113 != 0 || retirableCleanupFrames113 != 0) { return false }
+            match (unregisteredSubscription113) {
+                case Some(_) =>
+                    // A throwing array registration has no full helper-return
+                    // witness. Its exact token/payment stays in this App slot.
+                    return false
+                case None => ()
+            }
+            match (retirableSubscriptions113) {
+                case Some(actual) =>
+                    for (index in 0..actual.size) {
+                        if (refEq(actual[index], token)) {
+                            if (!token.prepareAliasRemoval113()) { return false }
+                            // Store the original token BEFORE fallible removal.
+                            // Any throw keeps callbacks/payment reachable here.
+                            unregisteredSubscription113 = Some(token)
+                            removeRetirableAliasesLocked113(token)
+                            actual.remove(at: index)
+                            if (actual.isEmpty()) { retirableSubscriptions113 = None<ArrayList<ApplicationOwnedSubscription113>> }
+                            token.commitAliasesRemoved113()
+                            unregisteredSubscription113 = None<ApplicationOwnedSubscription113>
+                            return true
+                        }
+                    }
+                case None => ()
+            }
+            token.isRetired113()
+        } finally { lock.unlock() }
+    }
+    private func removeRetirableAliasesLocked113(token: ApplicationOwnedSubscription113): Unit {
+        if (token.failureInstalled) {
+            ownedFailureSubscribers113.remove(at: token.failureIndex); token.failureInstalled = false
+        }
+        if (token.ownedInstalled) { ownedSubscribers.remove(at: token.ownedIndex); token.ownedInstalled = false }
+        if (token.ordinaryInstalled) { subscribers.remove(at: token.ordinaryIndex); token.ordinaryInstalled = false }
+        match (retirableSubscriptions113) {
+            case Some(actual) => for (other in actual) {
+                if (!refEq(other, token)) {
+                    if (other.ownedIndex > token.ownedIndex) { other.ownedIndex-- }
+                    if (other.failureIndex > token.failureIndex) { other.failureIndex-- }
+                    if (other.ordinaryIndex > token.ordinaryIndex) { other.ordinaryIndex-- }
+                }
+            }
+            case None => ()
+        }
+        match (unregisteredSubscription113) {
+            case Some(other) => if (!refEq(other, token)) {
+                if (other.ownedIndex > token.ownedIndex) { other.ownedIndex-- }
+                if (other.failureIndex > token.failureIndex) { other.failureIndex-- }
+                if (other.ordinaryIndex > token.ordinaryIndex) { other.ordinaryIndex-- }
+            }
+            case None => ()
+        }
+    }
+    private func beginRetirableDispatch113(): ?ApplicationSubscriptionDispatchPayment113 {
+        lock.lock()
+        try {
+            if (retirableDispatchFrames113 == Int64.Max) { throw IllegalStateException("subscription dispatch count overflow") }
+            let count = subscriptionInvoiceAdd113(subscribers.size,
+                subscriptionInvoiceAdd113(ownedSubscribers.size, ownedFailureSubscribers113.size))
+            let peak = subscriptionInvoiceAdd113(8192, subscriptionInvoiceMultiply113(count, 512))
+            let selected = match (retirableSubscriptions113) {
+                case Some(actual) => if (actual.isEmpty()) { unregisteredSubscription113 } else { Some(actual[0]) }
+                case None => unregisteredSubscription113
+            }
+            let payment = match (selected) {
+                case Some(token) => Some(token.deriveDispatchPayment113(peak))
+                case None => None<ApplicationSubscriptionDispatchPayment113>
+            }
+            retirableDispatchFrames113++
+            payment
+        } finally { lock.unlock() }
+    }
+    private func endRetirableDispatch113(paid: ?ApplicationSubscriptionDispatchPayment113): Unit {
+        // The complete original dispatch helper and its copied target array
+        // returned before this counter changes or this real child retires.
+        lock.lock()
+        try { retirableCleanupFrames113++; retirableDispatchFrames113-- }
+        finally { lock.unlock() }
+        try { retireSubscriptionDispatchHelper113(paid) }
+        finally {
+            lock.lock(); try { retirableCleanupFrames113-- } finally { lock.unlock() }
+        }
+    }
+    private func retireSubscriptionDispatchHelper113(paid: ?ApplicationSubscriptionDispatchPayment113): Unit {
+        match (paid) { case Some(actual) => actual.retireAfterHelper113(); case None => () }
+    }
+
+    public func ownedEventSink(): OwnedAgentEventSink {
+        ApplicationOwnedEventSink113({ event => deliverOwnedEvent(event) },
+            { value => deliverOwnedFailureEvent113(value) })
+    }
+
+    private func collectOwnedEventAcknowledgementsLocked(): Unit {
+        var index: Int64 = 0
+        while (index < pendingOwnedEvents.size) {
+            if (pendingOwnedEvents[index].isAcknowledged()) { pendingOwnedEvents.remove(at: index) }
+            else { index++ }
+        }
+    }
+    private func deliverOwnedEvent(event: OwnedAgentEvent): Result<Unit> {
+        let paid = beginRetirableDispatch113()
+        try { deliverOwnedEventRetirableBody113(event) } finally { endRetirableDispatch113(paid) }
+    }
+
+
+    private func deliverOwnedEventRetirableBody113(event: OwnedAgentEvent): Result<Unit> {
+        let targets = ArrayList<OwnedAgentEventSink>()
+        lock.lock()
+        try {
+            collectOwnedEventAcknowledgementsLocked()
+            // A failed writer/unknown observer remains in this actual Session.
+            // A callback result or a new delivery never discards that debt.
+            if (!pendingOwnedEvents.isEmpty()) {
+                return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "event.delivery_ack_pending", "an actual event consumer has not retired its retained result")) }
+            if (ownedSubscribers.size > (Int64.Max - 8192) / 256) {
+                return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "event.delivery_size_overflow", "actual observer metadata extent cannot be represented")) }
+            match (event.ensureAdditionalRetainedPeak(8192 + ownedSubscribers.size * 256)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            pendingOwnedEvents.add(event)
+            if (legacyEventSubscribers != 0) {
+                return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "event.observer_owned_contract_required", "a registered observer has no actual retained-result acknowledgement")) }
+            for (observer in ownedSubscribers) { targets.add(observer) }
+        } finally { lock.unlock() }
+        for (observer in targets) {
+            let child = match (event.fanout()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            lock.lock(); try { pendingOwnedEvents.add(child) } finally { lock.unlock() }
+            match (observer.emit(child)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            if (!child.isAcknowledged()) {
+                return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "event.delivery_ack_pending", "the actual observer still owns its complete-result alias")) }
+        }
+        match (event.closeAfterEventRetirement()) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) =>
+                lock.lock(); try { collectOwnedEventAcknowledgementsLocked() } finally { lock.unlock() }
+                Result.Ok(()) }
     }
 
     public func enqueue(
@@ -1510,6 +2283,77 @@ public class ApplicationSession <: AgentInteractionSource {
         nextQueued()
     }
 
+    // Optional DATA-only consumer preparation. Original queue/default APIs
+    // stay unchanged. The callback receives only the selected UTF8 byte sum;
+    // it cannot grant execution, persist a Source, or remove the entry itself.
+    public func takeQueuedWithDataPayment113(result: Result<ApplicationResponse>,
+        pay: (Int64) -> Result<Unit>): Result<?QueuedInteraction> {
+        match (result) {
+            case Result.Ok(response) => if (response.approval.isSome()) {
+                return Result<?QueuedInteraction>.Ok(None<QueuedInteraction>) }
+            case Result.Err(_) => ()
+        }
+        lock.lock()
+        try {
+            for (index in 0..queuedInteractions.size) {
+                let next = queuedInteractions[index]
+                if (next.kind != "steer" && next.kind != "follow_up") {
+                    if (next.correlationId.size > Int64.Max - next.kind.size ||
+                        next.correlationId.size + next.kind.size > Int64.Max - next.input.size) {
+                        return Result<?QueuedInteraction>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                            "application.queued_data_extent_overflow", "queued data requires its paid consumer")) }
+                    let bytes = next.correlationId.size + next.kind.size + next.input.size
+                    match (pay(bytes)) {
+                        case Result.Err(error) => return Result<?QueuedInteraction>.Err(error)
+                        case Result.Ok(_) => () }
+                    queuedInteractions.remove(at: index)
+                    return Result<?QueuedInteraction>.Ok(Some(next))
+                }
+            }
+            Result<?QueuedInteraction>.Ok(None<QueuedInteraction>)
+        } finally { lock.unlock() }
+    }
+
+    // Only the RPC worker calls this after the complete handle/decide and
+    // output helpers have returned. Core keeps its original same-Run follow-up
+    // injection API; ordinary nextQueued never consumes those entries.
+    public func takeRpcQueuedAtReturnedBoundaryWithDataPayment113(result: Result<ApplicationResponse>,
+        pay: (Int64) -> Result<Unit>): Result<?QueuedInteraction> {
+        match (result) {
+            case Result.Ok(response) => if (response.approval.isSome()) {
+                return Result<?QueuedInteraction>.Ok(None<QueuedInteraction>) }
+            case Result.Err(_) => ()
+        }
+        lock.lock()
+        try {
+            collectOwnedFailureAcknowledgements113()
+            let followUpBoundary = currentRequest.isNone() && !currentRequestCancelling &&
+                pendingApproval.isNone() && pendingRecovery.isNone() &&
+                !pendingModelResume && !pendingContextBoundaryResume &&
+                pendingCheckpointSlot113.isNone() && pendingOwnedFailureEvents113.isEmpty()
+            for (index in 0..queuedInteractions.size) {
+                let next = queuedInteractions[index]
+                if (next.kind != "steer" && (next.kind != "follow_up" || followUpBoundary)) {
+                    if (next.correlationId.size > Int64.Max - next.kind.size ||
+                        next.correlationId.size + next.kind.size > Int64.Max - next.input.size ||
+                        next.correlationId.size + next.kind.size + next.input.size >
+                            Int64.Max - next.durableItemId.size) {
+                        return Result<?QueuedInteraction>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                            "application.queued_data_extent_overflow", "queued data requires its paid consumer")) }
+                    // The exact queue object, including its durable identity,
+                    // overlaps the old RPC prompt until the helper returns.
+                    let bytes = next.correlationId.size + next.kind.size + next.input.size + next.durableItemId.size
+                    match (pay(bytes)) {
+                        case Result.Err(error) => return Result<?QueuedInteraction>.Err(error)
+                        case Result.Ok(_) => () }
+                    queuedInteractions.remove(at: index)
+                    return Result<?QueuedInteraction>.Ok(Some(next))
+                }
+            }
+            Result<?QueuedInteraction>.Ok(None<QueuedInteraction>)
+        } finally { lock.unlock() }
+    }
+
     public func queuedCount(): Int64 {
         lock.lock()
         try {
@@ -1535,7 +2379,448 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
+    private func reserveOwnedCheckpointSlot113(run: RunId): ?ApplicationOwnedCheckpointSlot113 {
+        lock.lock()
+        try {
+            collectOwnedFailureAcknowledgements113()
+            if (pendingCheckpointSlot113.isSome()) { return None<ApplicationOwnedCheckpointSlot113> }
+            if (run.value.size > (Int64.Max - 16384) / 8) { return None<ApplicationOwnedCheckpointSlot113> }
+            let paid = reserveNativeControlMetadata(16384 + run.value.size * 8)
+            try {
+                let slot = ApplicationOwnedCheckpointSlot113(run, paid)
+                pendingCheckpointSlot113 = Some(slot)
+                Some(slot)
+            } catch (error: Exception) { paid.close(); throw error }
+        } finally { lock.unlock() }
+    }
+    private func pendingCheckpointMarker113(): AgentError {
+        lock.lock()
+        try { match (pendingCheckpointSlot113) {
+            case Some(slot) => slot.blockingMarker()
+            case None => APPLICATION_OWNED_FAILURE_MARKER113 } }
+        finally { lock.unlock() }
+    }
+    private func captureOwnedClientOutcome113(slot: ApplicationOwnedCheckpointSlot113,
+        value: OwnedAgentRunResult113): Result<AgentRunOutcome> {
+        lock.lock()
+        try {
+            match (pendingCheckpointSlot113) {
+                case Some(current) => if (!refEq(current, slot)) {
+                    throw IllegalStateException("reserved checkpoint slot identity changed") }
+                case None => throw IllegalStateException("reserved checkpoint slot disappeared")
+            }
+            match (value) {
+                case OwnedAgentRunResult113.Existing(original) =>
+                    pendingCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+                    slot.retireMetadata(); return original
+                case _ => match (slot.install(value)) {
+                    case Result.Err(error) => return Result<AgentRunOutcome>.Err(error)
+                    case Result.Ok(_) => () }
+            }
+            Result<AgentRunOutcome>.Err(slot.blockingMarker())
+        } finally { lock.unlock() }
+    }
+    private func invokeOwnedCheckpointApplication113(run: RunId,
+        invoke: () -> OwnedAgentRunResult113): Result<AgentRunOutcome> {
+        let selected = try { reserveOwnedCheckpointSlot113(run) }
+            catch (_: Exception) { return Result<AgentRunOutcome>.Err(APPLICATION_OWNED_FAILURE_MARKER113) }
+        let slot = match (selected) {
+            case Some(actual) => actual
+            case None => return Result<AgentRunOutcome>.Err(pendingCheckpointMarker113()) }
+        // The slot is already reserved under the Session lock; a concurrent
+        // call cannot enter the real client or replace this invocation's data.
+        let value = try { invoke() }
+            catch (error: OwnedCanonicalPaidFailure113) { OwnedAgentRunResult113.Pending(error.takeConsumer()) }
+            catch (_: Exception) { OwnedAgentRunResult113.Held }
+        captureOwnedClientOutcome113(slot, value)
+    }
+    private func startOwnedCheckpointApplication113(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
+        invokeOwnedCheckpointApplication113(request.runId,
+            { => product.client.startOwnedCheckpointFailure113(request, events) })
+    }
+    private func resumeContextBoundaryOwnedCheckpointApplication113(request: AgentRunRequest,
+        events: AgentEventSink): Result<AgentRunOutcome> {
+        invokeOwnedCheckpointApplication113(request.runId,
+            { => product.client.resumeContextBoundaryOwnedCheckpointFailure113(request, events) })
+    }
+    private func resumeOwnedCheckpointApplication113(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
+        invokeOwnedCheckpointApplication113(request.runId,
+            { => product.client.resumeOwnedCheckpointFailure113(request, events) })
+    }
+    private func decideOwnedCheckpointApplication113(request: AgentRunRequest, approval: ApprovalRequest,
+        decision: ApprovalDecision, events: AgentEventSink): Result<AgentRunOutcome> {
+        invokeOwnedCheckpointApplication113(request.runId,
+            { => product.client.decideOwnedCheckpointFailure113(request, approval, decision, events) })
+    }
+    // The callback must register its actual paid delivery before true; on
+    // false it retains no new alias. There is no ACK or raw error getter here.
+    // A concurrent take/admit sees handingOff and cannot transfer twice.
+    // Exact identity query only. No dynamic data copy, transfer or ACK.
+    // A held or currently offered slot is still matched; an already moved
+    // caller and fixed allocation-pressure metadata are not handoff keys.
+    // The original reserved Session slot is the authority for this scalar
+    // Run identity, including a Pending DATA caller without publication. Its
+    // owner remains live under the SAME Session lock for this callback; no
+    // Run alias may escape without the recipient first paying its own copy.
+    public func withOwnedCheckpointRunIdentity113(marker: AgentError,
+        consume: (RunId) -> Result<Unit>): Result<Bool> {
+        lock.lock()
+        try {
+            let actual = match (pendingCheckpointSlot113) { case Some(value) => value; case None => return Result<Bool>.Ok(false) }
+            if (!actual.matches(marker) || actual.isInvoking() || actual.isHandingOff()) { return Result<Bool>.Ok(false) }
+            match (actual.withRunIdentity113(consume)) {
+                case Result.Err(error) => Result<Bool>.Err(error)
+                case Result.Ok(_) => Result<Bool>.Ok(true) }
+        } finally { lock.unlock() }
+    }
+
+    public func hasOwnedCheckpointFailure113(marker: AgentError): Bool {
+        if (product.hasOwnedMaintenanceFailure173(sessionId, marker)) { return true }
+        lock.lock()
+        try { match (pendingCheckpointSlot113) {
+            case Some(slot) => slot.matches(marker) && !slot.isTransferred()
+            case None => false } }
+        finally { lock.unlock() }
+    }
+    public func admitOwnedCheckpointFailure113(marker: AgentError,
+        accept: (OwnedAgentRunResult113) -> Bool): Bool {
+        if (product.hasOwnedMaintenanceFailure173(sessionId, marker)) {
+            return product.admitOwnedMaintenanceFailure173(sessionId, marker, accept) }
+        var selected: ?ApplicationOwnedCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+        var offered: ?OwnedAgentRunResult113 = None<OwnedAgentRunResult113>
+        lock.lock()
+        try {
+            match (pendingCheckpointSlot113) {
+                case Some(slot) => if (slot.matches(marker)) {
+                    offered = slot.beginHandoff(); if (offered.isSome()) { selected = Some(slot) } }
+                case None => ()
+            }
+        } finally { lock.unlock() }
+        if (selected.isNone()) { return false }
+        var accepted = false
+        try { accepted = accept(offered.getOrThrow()) }
+        finally {
+            lock.lock(); try { selected.getOrThrow().finishHandoff(accepted) } finally { lock.unlock() }
+        }
+        accepted
+    }
+    // Same reserved invocation and paid slot as the original admission.
+    // A held poll only asks the real installed Core to refresh its existing
+    // publication ACKs. It never starts/resumes/decides another execution.
+    public func pollAndAdmitOwnedCheckpointFailure113(marker: AgentError,
+        accept: (OwnedAgentRunResult113) -> Bool): Bool {
+        collectOwnedCheckpointFailure113()
+        if (product.hasOwnedMaintenanceFailure173(sessionId, marker)) {
+            return product.admitOwnedMaintenanceFailure173(sessionId, marker, accept) }
+        var selected: ?ApplicationOwnedCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+        lock.lock()
+        try { match (pendingCheckpointSlot113) {
+            case Some(slot) => if (slot.matches(marker) && slot.beginHeldPoll()) { selected = Some(slot) }
+            case None => () } }
+        finally { lock.unlock() }
+        match (selected) {
+            case Some(slot) =>
+                // The handingOff flag keeps this real slot/run/owner alive
+                // until the actual client call and all its frames return.
+                let value = try { product.client.takeOwnedCheckpointFailure113(slot.getRunData113()) }
+                    catch (failure: OwnedCanonicalPaidFailure113) { OwnedAgentRunResult113.Pending(failure.takeConsumer()) }
+                    catch (_: Exception) { OwnedAgentRunResult113.Held }
+                lock.lock()
+                try {
+                    match (pendingCheckpointSlot113) {
+                        case Some(current) => if (!refEq(current, slot)) {
+                            throw IllegalStateException("held checkpoint poll changed its reserved invocation") }
+                        case None => throw IllegalStateException("held checkpoint poll lost its reserved invocation") }
+                    if (!slot.isHandingOff() || slot.isTransferred() || !slot.isHeld()) {
+                        throw IllegalStateException("held checkpoint poll changed its paid state") }
+                    slot.finishHandoff(false)
+                    match (value) {
+                        case OwnedAgentRunResult113.Held => return false
+                        case OwnedAgentRunResult113.Existing(_) => return false
+                        case _ => let _ = slot.installHeldOutcome113(value)
+                    }
+                } finally { lock.unlock() }
+            case None => () }
+        // false or throw retains the actual installed value in this same
+        // slot. This bool registers a consumer and never acknowledges one.
+        admitOwnedCheckpointFailure113(marker, accept)
+    }
+    public func takeOwnedCheckpointFailure113(marker: AgentError): ?OwnedAgentRunResult113 {
+        if (product.hasOwnedMaintenanceFailure173(sessionId, marker)) {
+            return product.takeOwnedMaintenanceFailure173(sessionId, marker) }
+        lock.lock()
+        try {
+            match (pendingCheckpointSlot113) {
+                case Some(slot) => if (slot.matches(marker)) {
+                    match (slot.beginHandoff()) {
+                        case Some(value) => slot.finishHandoff(true); return Some(value)
+                        case None => () }
+                }
+                case None => () }
+            None<OwnedAgentRunResult113>
+        } finally { lock.unlock() }
+    }
+    public func prepareOwnedCheckpointWave113(run: RunId,
+        fund: (Int64)->Result<Unit>): (Bool, Int64, Int64) {
+        match (fund(65536)) { case Result.Err(_) => return (false, 0, 0); case Result.Ok(_) => () }
+        let events = ApplicationOwnedEventSink113({ event => deliverOwnedEvent(event) },
+            { value => deliverOwnedFailureEvent113(value, waveRun113: Some(run)) })
+        product.client.prepareOwnedCheckpointWave113(run, events: Some(events))
+    }
+
+    public func retireOwnedCheckpointProducerWitness113(run: RunId): Unit {
+        product.client.retireOwnedCheckpointProducerWitness113(run)
+    }
+
+    public func takeOwnedCheckpointFailure113(run: RunId): OwnedAgentRunResult113 {
+        collectOwnedCheckpointFailure113()
+        var selected: ?ApplicationOwnedCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+        lock.lock()
+        try {
+            match (pendingCheckpointSlot113) {
+                case Some(slot) => if (slot.matches(run)) {
+                    if (slot.isInvoking() || slot.isHandingOff()) { return OwnedAgentRunResult113.Held }
+                    if (!slot.isTransferred()) {
+                        match (slot.beginHandoff()) {
+                            case Some(value) => slot.finishHandoff(true); return value
+                            case None =>
+                                if (!slot.beginHeldPoll()) { return OwnedAgentRunResult113.Held }
+                                selected = Some(slot)
+                        }
+                    }
+                } else { return OwnedAgentRunResult113.Held }
+                case None => ()
+            }
+        } finally { lock.unlock() }
+        // Refresh actual Core ACK flags and a genuinely held outcome. This
+        // polling path never invokes start/resume/decide or the observer again.
+        let value = try { product.client.takeOwnedCheckpointFailure113(run) }
+            catch (error: OwnedCanonicalPaidFailure113) { OwnedAgentRunResult113.Pending(error.takeConsumer()) }
+            catch (_: Exception) { OwnedAgentRunResult113.Held }
+        match (selected) {
+            case Some(slot) =>
+                lock.lock()
+                try {
+                    if (!slot.isTransferred() && slot.isHandingOff() && slot.isHeld()) {
+                        slot.finishHandoff(false)
+                        match (value) {
+                            case OwnedAgentRunResult113.Existing(_) =>
+                                pendingCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+                                slot.retireMetadata(); return value
+                            case OwnedAgentRunResult113.Held => return value
+                            case _ => match (slot.install(value)) {
+                                case Result.Err(_) => return OwnedAgentRunResult113.Held
+                                case Result.Ok(_) => () }
+                        }
+                        let actual = slot.beginHandoff().getOrThrow()
+                        slot.finishHandoff(true); return actual
+                    }
+                    // A reserved held poll has no parallel caller admission.
+                    throw IllegalStateException("held checkpoint poll changed identity")
+                } finally { lock.unlock() }
+            case None => value
+        }
+    }
+    public func collectOwnedCheckpointFailure113(): Unit {
+        product.collectOwnedMaintenanceFailures173()
+        lock.lock(); try { collectOwnedFailureAcknowledgements113() } finally { lock.unlock() }
+    }
+    private func collectOwnedFailureAcknowledgements113(): Unit {
+        var index: Int64 = 0
+        while (index < pendingOwnedFailureEvents113.size) {
+            let group = pendingOwnedFailureEvents113[index]
+            let _ = group.settle()
+            if (group.isRetired()) { pendingOwnedFailureEvents113.remove(at: index) }
+            else { index++ }
+        }
+        match (pendingCheckpointSlot113) {
+            case Some(slot) => if (slot.isConsumed()) {
+                pendingCheckpointSlot113 = None<ApplicationOwnedCheckpointSlot113>
+                slot.retireMetadata() }
+            case None => ()
+        }
+    }
+    private func acceptsOwnedCheckpointWave113(value: OwnedFailureRunPublication113, run: ?RunId): Bool {
+        let actual = match (run) { case Some(selected) => selected; case None => return false }
+        if (!value.matchesRun(actual)) { return false }
+        for (group in pendingOwnedFailureEvents113) { if (!group.matchesRun113(actual)) { return false } }
+        true
+    }
+    public func ownedCheckpointEventExpectation113(run: RunId, sequence: Int64): ?Bool {
+        product.client.ownedCheckpointEventExpectation113(run, sequence)
+    }
+
+    private func deliverOwnedFailureEvent113(value: OwnedFailureRunPublication113,
+        waveRun113!: ?RunId = None<RunId>): OwnedFailureEventAdmissionOutcome113 {
+        let paid = beginRetirableDispatch113()
+        try { deliverOwnedFailureEvent113RetirableBody113(value, waveRun113: waveRun113) } finally { endRetirableDispatch113(paid) }
+    }
+
+    private func deliverOwnedFailureEvent113RetirableBody113(value: OwnedFailureRunPublication113,
+        waveRun113!: ?RunId = None<RunId>): OwnedFailureEventAdmissionOutcome113 {
+        var targets: ?ArrayList<OwnedFailureEventAdmission113> = None<ArrayList<OwnedFailureEventAdmission113>>
+        var selected: ?ApplicationOwnedFailureEventGroup113 = None<ApplicationOwnedFailureEventGroup113>
+        lock.lock()
+        try {
+            collectOwnedFailureAcknowledgements113()
+            if ((!pendingOwnedFailureEvents113.isEmpty() && !acceptsOwnedCheckpointWave113(value, waveRun113)) || legacyEventSubscribers != 0 ||
+                ownedFailureSubscribers113.size != ownedSubscribers.size ||
+                ownedFailureSubscribers113.size > (Int64.Max - 8192) / 512) {
+                return OwnedFailureEventAdmissionOutcome113.Held }
+            // Unknown sinks cannot admit this channel; no callback return,
+            // thrown exception or error code is interpreted as acceptance.
+            for (target in ownedFailureSubscribers113) {
+                match (target) {
+                    case Some(actual) => match (actual as OwnedFailureEventAdmission113) {
+                        case None => return OwnedFailureEventAdmissionOutcome113.Held
+                        case Some(_) => () }
+                    case None => return OwnedFailureEventAdmissionOutcome113.Held }
+            }
+            let borrowed = value.withError({ _, fund => fund(coreOwnedWaveAppInvoice113(ownedFailureSubscribers113.size, pendingOwnedFailureEvents113.size, waveRun113.isSome())) })
+            if (borrowed.isError()) { return OwnedFailureEventAdmissionOutcome113.Held }
+            let actualTargets = ArrayList<OwnedFailureEventAdmission113>()
+            for (target in ownedFailureSubscribers113) {
+                actualTargets.add((target.getOrThrow() as OwnedFailureEventAdmission113).getOrThrow()) }
+            targets = Some(actualTargets)
+            let group = ApplicationOwnedFailureEventGroup113(value)
+            selected = Some(group); pendingOwnedFailureEvents113.add(group)
+        } finally { lock.unlock() }
+        let group = selected.getOrThrow()
+        for (target in targets.getOrThrow()) {
+            let child = match (value.retainConsumer()) {
+                case Result.Err(_) => return OwnedFailureEventAdmissionOutcome113.Held
+                case Result.Ok(actual) => actual }
+            group.add(child)
+            let admitted = try { target.admitOwnedFailure113(child) }
+                catch (_: Exception) { return OwnedFailureEventAdmissionOutcome113.Held }
+            match (admitted) {
+                case OwnedFailureEventAdmissionOutcome113.Accepted => ()
+                case OwnedFailureEventAdmissionOutcome113.Failed(error) => return OwnedFailureEventAdmissionOutcome113.Failed(error)
+                case OwnedFailureEventAdmissionOutcome113.Held => return OwnedFailureEventAdmissionOutcome113.Held }
+        }
+        group.finishDispatch()
+        collectOwnedCheckpointFailure113()
+        OwnedFailureEventAdmissionOutcome113.Accepted
+    }
+
+    // One original business implementation, with an explicit DATA payer.
+    public func ownedRegistryCommand161(input: String): ?OwnedApplicationRegistryResponse161 {
+        if (!productRegistryStartsWithSlash161(input)) { return None }
+        let seed = plugins()
+        let peak = if (input.size > (134217728 - 65536) / 64) {
+            seed.close(); throw LogicalJsonPayloadError("registry response cannot fit the original shared capacity")
+        } else { input.size * 64 + 65536 }
+        let header = try { seed.deriveCopiedDataPayment(peak) } finally { seed.close() }
+        let custody = OwnedApplicationRegistryResponse161(header, peak)
+        var published = false
+        try { published = prepareOwnedRegistryCommandFrame161(input, custody) }
+        catch (error: LogicalJsonPayloadError) {
+            // The entire private builder unwound before this known failure
+            // can close unpublished DATA. No output or external response exists.
+            custody.markProducerReturned161()
+            custody.closeUnpublishedAfterBuilderReturned161()
+            throw error
+        }
+        catch (error: Exception) { productRegistryHoldUnknownResponse161(custody); throw error }
+        custody.markProducerReturned161()
+        if (!published) { custody.closeUnpublishedAfterBuilderReturned161(); return None }
+        Some(custody)
+    }
+    private func prepareOwnedRegistryCommandFrame161(input: String, custody: OwnedApplicationRegistryResponse161): Bool {
+        match (router.route(input)) {
+            case Result.Ok(RoutedInput.Command(ClientCommand.Builtin(name, arguments))) =>
+                if (name != "plugins" && name != "extensions") { return false }
+                if (!arguments.isEmpty() && arguments[0] == "service") { return false }
+                custody.installResponse161(pluginsCommand(arguments, custody: Some(custody)))
+                true
+            case Result.Err(error) => custody.installResponse161(Result.Err(error)); true
+            case _ => false
+        }
+    }
+
+    // The caller pays before the borrowed current Session scalar is wrapped,
+    // hashed or joined with the original queued identity. No Source is minted.
+    public func prepareRpcQueuedInitiator113(value: QueuedInteraction,
+        pay: (Int64) -> Result<Unit>): Result<QueuedRunInitiatorData113> {
+        lock.lock()
+        try {
+            collectOwnedFailureAcknowledgements113()
+            collectOwnedEventAcknowledgementsLocked()
+            if (currentRequest.isSome() || currentRequestCancelling || pendingApproval.isSome() ||
+                pendingRecovery.isSome() || pendingModelResume || pendingContextBoundaryResume ||
+                pendingCheckpointSlot113.isSome() || !pendingOwnedFailureEvents113.isEmpty()) {
+                return Result<QueuedRunInitiatorData113>.Err(AgentError(AgentErrorKind.Conflict,
+                    "application.queued_boundary_changed", "the original returned RPC boundary changed")) }
+            var bytes: Int64 = 0
+            for (size in [sessionId.value.size, value.durableItemId.size, value.correlationId.size,
+                value.kind.size, value.input.size]) {
+                if (size > Int64.Max - bytes) { return Result<QueuedRunInitiatorData113>.Err(AgentError(
+                    AgentErrorKind.RecoveryRequired, "application.queued_data_extent_overflow",
+                    "queued data requires its paid consumer")) }
+                bytes += size }
+            match (pay(bytes)) { case Result.Err(error) => return Result<QueuedRunInitiatorData113>.Err(error)
+                case Result.Ok(_) => () }
+            let actual = QueuedRunInitiatorData113(InboxEntryId(value.durableItemId),
+                ThreadId(sessionId.value), LaneId("main"), value.correlationId, value.kind, value.input)
+            Result<QueuedRunInitiatorData113>.Ok(actual)
+        } finally { lock.unlock() }
+    }
+
+    public func handleRpcQueuedAtReturnedBoundary113(value: QueuedInteraction,
+        origin: QueuedRunInitiatorData113, allocate: (Int64) -> LogicalJsonOwnerReservation,
+        capturePrimary: (AgentError) -> Unit, inputPayment: LogicalJsonOwnerReservation,
+        retainStore: (RpcQueuedStoreFailure113) -> Unit): Result<ApplicationResponse> {
+        if (value.durableItemId != origin.entryId.value || value.correlationId != origin.correlationId ||
+            value.kind != origin.kind || value.input != origin.input || sessionId.value != origin.threadId.value) {
+            let error = AgentError(AgentErrorKind.Conflict,
+                "application.queued_origin_changed", "the queued input and actual Session no longer match")
+            capturePrimary(error)
+            return Result<ApplicationResponse>.Err(error) }
+        // A prompt claims this exact row in the original canonical Turn TX.
+        // A local command first reserves Processing, without a fake Step.
+        let local = value.input.startsWith("/") || (planModeEnabled && isPlanApprovalPhrase(value.input))
+        product.vnext.prepareActualRpcQueuedInput113(origin, local, allocate, retainStore)
+        let result = if (local) { handle(value.input) } else {
+            submit(value.input, queuedInitiator113: Some(origin), queuedInputPayment113: Some(inputPayment)) }
+        match (result) {
+            case Result.Err(error) =>
+                if (hasOwnedCheckpointFailure113(error)) { return result }
+                // Preserve all primary fields before a fallible settlement;
+                // the caller's real same-bank node owns this independent share.
+                capturePrimary(error)
+            case Result.Ok(_) => () }
+        product.vnext.completeReturnedRpcInput113(origin, local, result.isOk(), allocate, retainStore)
+        result
+    }
+
+    // This query does not consume DATA. The original App aliases/true ACK
+    // bookkeeping, and the actual persisted row, must BOTH be settled.
+    public func rpcQueuedReferencesRetired113(origin: QueuedRunInitiatorData113,
+        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        retainStore: (RpcQueuedStoreFailure113) -> Unit): Bool {
+        lock.lock()
+        try {
+            collectOwnedFailureAcknowledgements113()
+            collectOwnedEventAcknowledgementsLocked()
+            match (currentRequest) {
+                case Some(request) => match (request.queuedInitiator113) {
+                    case Some(actual) => if (refEq(actual, origin)) { return false }
+                    case None => () }
+                case None => () }
+            if (pendingCheckpointSlot113.isSome() || !pendingOwnedFailureEvents113.isEmpty()) { return false }
+            product.vnext.actualRpcQueuedInputTerminal113(origin, allocate, retainStore)
+        } finally { lock.unlock() }
+    }
+
     public func handle(input: String): Result<ApplicationResponse> {
+        let trimmed=input.trimAscii()
+        if(trimmed=="/todo" || trimmed.startsWith("/todo ") || trimmed.startsWith("/todo\t") || trimmed.startsWith("/todo\n") || trimmed.startsWith("/todo\r")){
+            let parsed=match(parseCommandInput(trimmed)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            let arguments=ArrayList<String>()
+            for(index in 1..parsed.tokens.size){arguments.add(parsed.tokens[index].value)}
+            return todoCommand(arguments.toArray())
+        }
         match (router.route(input)) {
             case Result.Ok(RoutedInput.Prompt(prompt)) => if (planModeEnabled && isPlanApprovalPhrase(prompt)) {
                 flattenPlanApprovalOutcome(
@@ -1614,7 +2899,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 )
             )
         }
-        let review = match (latestPlanReview(requireStructured)) {
+        // Approving a displayed historical plan is a new frontend request.
+        // Require a current actual selected contribution and a successful
+        // canonical native plan before consuming Plan mode or human approval.
+        let approvalGuidance=match(activeWorkflowGuidance()){
+            case Result.Err(error)=>return PlanApprovalOutcome.NotConsumed(error);case Result.Ok(value)=>value}
+        let review = match (latestPlanReview(true)) {
             case Result.Ok(Some(value)) => value
             case Result.Ok(None) => return PlanApprovalOutcome.NotConsumed(
                 AgentError(
@@ -1647,6 +2937,14 @@ public class ApplicationSession <: AgentInteractionSource {
                 )
             )
         }
+        match(approvalGuidance.validateCurrent()){
+            case Result.Err(error)=>return PlanApprovalOutcome.NotConsumed(error);case Result.Ok(_)=>()}
+        let currentBinding=product.vnext.publishedToolIdentity(approvalGuidance.planTool,
+            threadId:Some(ThreadId(sessionId.value)))
+        if(currentBinding.isNone() || currentBinding.getOrThrow().implementationVersion!=approvalGuidance.planVersion ||
+            currentBinding.getOrThrow().implementationFingerprint!=approvalGuidance.planFingerprint){
+            return PlanApprovalOutcome.NotConsumed(AgentError(AgentErrorKind.Conflict,
+                "workflow.source_changed","selected plan contribution changed before approval was consumed"))}
         match (setWorkMode("")) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return PlanApprovalOutcome.NotConsumed(error)
@@ -1694,7 +2992,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
-        activateSession(target)
+        match(activateSession(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         planModeEnabled = false
         vibeModeEnabled = false
         disableLoop()
@@ -1737,11 +3035,14 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
+        match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        if(completedPlanCount(values,currentBinding:true)==0){return Result.Err(AgentError(
+            AgentErrorKind.Conflict,"application.plan_approval_missing","No current completed native plan is available for editing."))}
         var targetIndex: Int64 = -1
         var index = values.size
         while (index > 0) {
             index -= 1
-            if (planWriteContent(values[index]) != "") {
+            if (planReviewContent(values[index], values, descriptiveHistory:false,currentBinding:true) != "") {
                 targetIndex = index
                 break
             }
@@ -1755,7 +3056,7 @@ public class ApplicationSession <: AgentInteractionSource {
                 )
             )
         }
-        let current = "Latest plan:\n\n" + planWriteContent(values[targetIndex])
+        let current = "Latest plan:\n\n" + planReviewContent(values[targetIndex], values,descriptiveHistory:false,currentBinding:true)
         if (expectedHash != "" && planReviewHash(current) != expectedHash) {
             return Result.Err(
                 AgentError(
@@ -1783,12 +3084,13 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
-    public func submit(prompt: String): Result<ApplicationResponse> {
+    public func submit(prompt: String, queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
+        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>): Result<ApplicationResponse> {
         match (pendingRecovery) {
             case Some(error) => return Result.Err(error)
             case None => ()
         }
-        if (pendingModelResume) {
+        if (pendingModelResume || pendingContextBoundaryResume) {
             return match (resumeStartup()) {
                 case Result.Ok(Some(value)) => Result.Ok(value)
                 case Result.Ok(None) => Result.Err(AgentError(
@@ -1817,35 +3119,37 @@ public class ApplicationSession <: AgentInteractionSource {
         }
         planWriteBaseline = if (planModeEnabled) {
             match (product.messages(sessionId)) {
-                case Result.Ok(values) => planWriteCount(values)
+                case Result.Ok(values) => completedPlanCount(values)
                 case Result.Err(error) => return Result.Err(error)
             }
         } else {
             0
         }
         planCorrectionAttempted = false
-        let request = product.request(
+        let guidance=match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let request = match (product.prepareRequest(
             prompt,
-            sessionId: Some(sessionId),
+            sessionId: Some(match (queuedInitiator113) { case Some(value) => SessionId(value.threadId.value); case None => sessionId }),
             modelOverride: currentModel,
             thinking: effectiveThinking(),
             userRequestedThinking: explicitRequestedThinking(),
             thinkingSource: requestedThinkingSource(),
             interactions: Some(this),
-            modeSystem: activeModeSystem(),
-            guide: capabilityGuide(),
-            readOnly: planModeEnabled || vibeModeEnabled
-        )
+            modeSystem: guidance.system,
+            guide: guidance.guide,
+            readOnly: planModeEnabled || vibeModeEnabled,
+            queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113
+        )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         setCurrentRequest(Some(request))
-        let clientResult = product.client.start(request, eventSink())
+        let clientResult = this.startOwnedCheckpointApplication113(request, eventSink())
         match (clientResult) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                setCurrentRequest(None)
+                setCurrentRequest(Option<AgentRunRequest>.None)
                 finishCompletedRun(snapshot, true)
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, approval)) =>
                 settleApproval(request, snapshot, approval, true)
             case Result.Err(error) =>
-                setCurrentRequest(None)
+                setCurrentRequest(Option<AgentRunRequest>.None)
                 Result.Err(error)
         }
     }
@@ -1854,6 +3158,35 @@ public class ApplicationSession <: AgentInteractionSource {
         operationId: String,
         decision: ApprovalDecision
     ): Result<ApplicationResponse> {
+        match(bashInvocation()){
+            case Some(actual)=>match(actual.approval()){
+                case Some(approval)=>if(approval.operationId.value==operationId){return decideBashInvocation(actual,operationId,decision)}
+                case None=>()}
+            case None=>()}
+        match(todoResourceInvocation()){
+            case Some(resource)=>
+                let parent=match(todoDocumentInvocation()){case None=>return productTodoFrontendError("todo.transfer_missing");case Some(value)=>value}
+                match(todoDocumentCurrent(parent.selection)){case Result.Err(error)=>let _=clearTodoTransfer(parent);return Result.Err(error);case Result.Ok(_)=>()}
+                let result=resource.decide(operationId,decision)
+                if(result.isError()){return Result.Err(result.error().getOrThrow())}
+                return todoResourceResponse(parent,resource)
+            case None=>()}
+        match(todoDocumentInvocation()){
+            case Some(invocation)=>
+                let result=invocation.decide(operationId,decision)
+                if(result.isError()){
+                    let error=result.error().getOrThrow()
+                    if(invocation.approval().isNone()){let _=clearTodoDocument(invocation)}
+                    return Result.Err(error)}
+                return todoDocumentResponse(invocation)
+            case None=>()}
+        match (pluginCommandControl()) {
+            case Some(control) =>
+                let result = control.decide(operationId, decision)
+                finishPluginCommandControl(control)
+                return result
+            case None => ()
+        }
         match (pendingRecovery) {
             case Some(error) => return Result.Err(error)
             case None => ()
@@ -1882,14 +3215,14 @@ public class ApplicationSession <: AgentInteractionSource {
             )
         }
         let sourced = sourcedApprovalRequest(approval, ApprovalDecisionSource.User)
-        match (product.client.decide(
+        match (this.decideOwnedCheckpointApplication113(
             request,
             sourced,
             decision,
             eventSink()
         )) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                setCurrentRequest(None)
+                setCurrentRequest(Option<AgentRunRequest>.None)
                 pendingApproval = None
                 finishCompletedRun(snapshot, false)
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) => settleApproval(request, snapshot, next,
@@ -1899,7 +3232,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     case Result.Ok(snapshot) => if (snapshot.status == RunState.WaitingApproval) {
                         pendingApproval = Some(approval)
                     } else {
-                        setCurrentRequest(None)
+                        setCurrentRequest(Option<AgentRunRequest>.None)
                         pendingApproval = None
                         if (snapshot.status == RunState.RecoveryRequired) {
                             pendingRecovery = Some(error)
@@ -1912,21 +3245,34 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     public func cancel(): Result<Unit> {
-        cancelJavaScriptPluginCommand()
+        lock.lock();try{todoEditorCompletion=None<ProductTodoEditorCompletion>}finally{lock.unlock()}
+        match(todoDocumentInvocation()){
+            case Some(invocation)=>match(clearTodoTransfer(invocation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            case None=>()}
+        lock.lock(); let startupTarget = try { sessionId } finally { lock.unlock() }
+        cancelPluginServiceStartup(target: Some(startupTarget))
+        match (cancelPluginCommandControl()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match(abortBash()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        revokePluginContinuation()
         if (isCompacting()) {
             match (product.cancelCompaction(sessionId)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
         }
-        match (currentRequestSnapshot()) {
+        lock.lock()
+        let cancelling = try {
+            currentRequestCancelling = currentRequest.isSome()
+            currentRequest
+        } finally { lock.unlock() }
+        match (cancelling) {
             case Some(request) =>
                 let _ = product.cancelApprovalReview(request.runId)
                 match (product.client.cancel(request.runId)) {
                 case Result.Ok(_) =>
-                    setCurrentRequest(None)
+                    setCurrentRequest(Option<AgentRunRequest>.None)
                     pendingApproval = None
-                    product.pauseGoal(sessionId)
+                    Result.Ok(())
                 case Result.Err(error) => Result.Err(error)
                 }
             case None =>
@@ -1941,21 +3287,30 @@ public class ApplicationSession <: AgentInteractionSource {
     }
 
     private func settleApproval(
-        request: AgentRunRequest,
+        previous: AgentRunRequest,
         snapshot: RunSnapshot,
         approval: ApprovalRequest,
         agentInvoked: Bool
     ): Result<ApplicationResponse> {
+        // The returned card belongs to Core's latest sealed continuation, not
+        // necessarily the context that the Application originally submitted.
+        lock.lock()
+        let request = try {
+            if (!ownsApprovalRequest(previous)) { return staleApplicationApproval() }
+            let refreshed = match (product.currentApprovalRequest(previous, snapshot, approval)) {
+                case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+            currentRequest = Some(refreshed)
+            refreshed
+        } finally { lock.unlock() }
         let mode = product.approvalSettings.mode
         if (mode == ApprovalRoutingMode.Manual) {
-            match (product.persistPendingApproval(request, approval)) {
+            match (publishPendingApproval(request, approval)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
-            pendingApproval = Some(approval)
             return approvalResponse(snapshot, approval, agentInvoked)
         }
-        emitApprovalReviewEvent(snapshot, approval, "approval.reviewing", None)
+        emitApprovalReviewEvent(snapshot, approval, "approval.reviewing", Option<ApprovalReview>.None)
         let review = if (mode == ApprovalRoutingMode.Trusted) {
             ApprovalReview(
                 ApprovalReviewDecision.Approve,
@@ -1982,11 +3337,10 @@ public class ApplicationSession <: AgentInteractionSource {
         )
         match (review.decision) {
             case ApprovalReviewDecision.AskUser =>
-                match (product.persistPendingApproval(request, reviewed)) {
+                match (publishPendingApproval(request, reviewed)) {
                     case Result.Ok(_) => ()
                     case Result.Err(error) => return Result.Err(error)
                 }
-                pendingApproval = Some(reviewed)
                 emitApprovalReviewEvent(
                     snapshot,
                     reviewed,
@@ -2028,15 +3382,36 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
+    // Called under the Application lock; reference identity also prevents an
+    // older completion from overwriting a newly restored or switched request.
+    private func ownsApprovalRequest(request: AgentRunRequest): Bool {
+        !currentRequestCancelling && sessionId.value == request.sessionId.value &&
+            match (currentRequest) { case Some(value) => refEq(value, request); case None => false }
+    }
+
+    private func publishPendingApproval(request: AgentRunRequest, approval: ApprovalRequest): Result<Unit> {
+        lock.lock()
+        try {
+            if (!ownsApprovalRequest(request)) { return staleApplicationApproval() }
+            match (product.persistPendingApproval(request, approval)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            pendingApproval = Some(approval)
+            Result.Ok(())
+        } finally { lock.unlock() }
+    }
+
     private func continueAfterAutomaticDecision(
         request: AgentRunRequest,
         approval: ApprovalRequest,
         decision: ApprovalDecision,
         agentInvoked: Bool
     ): Result<ApplicationResponse> {
-        match (product.client.decide(request, approval, decision, eventSink())) {
+        lock.lock()
+        let current = try { ownsApprovalRequest(request) } finally { lock.unlock() }
+        if (!current) { return staleApplicationApproval() }
+        match (this.decideOwnedCheckpointApplication113(request, approval, decision, eventSink())) {
             case Result.Ok(AgentRunOutcome.Completed(snapshot)) =>
-                setCurrentRequest(None)
+                setCurrentRequest(Option<AgentRunRequest>.None)
                 pendingApproval = None
                 finishCompletedRun(snapshot, agentInvoked)
             case Result.Ok(AgentRunOutcome.AwaitingApproval(snapshot, next)) => settleApproval(request, snapshot, next,
@@ -2046,7 +3421,7 @@ public class ApplicationSession <: AgentInteractionSource {
                     case Result.Ok(snapshot) => if (snapshot.status == RunState.WaitingApproval) {
                         pendingApproval = Some(approval)
                     } else {
-                        setCurrentRequest(None)
+                        setCurrentRequest(Option<AgentRunRequest>.None)
                         pendingApproval = None
                         if (snapshot.status == RunState.RecoveryRequired) {
                             pendingRecovery = Some(error)
@@ -2170,7 +3545,7 @@ public class ApplicationSession <: AgentInteractionSource {
         match (product.setSessionModel(target, product.model)) {
             case Result.Ok(_) =>
                 currentModel = product.model
-                activateSession(target)
+                match(activateSession(target)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
                 planModeEnabled = false
                 vibeModeEnabled = false
                 disableLoop()
@@ -2179,15 +3554,17 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
+    private func exitResponse(): Result<ApplicationResponse> {
+        match (closePluginServices()) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => Result.Ok(ApplicationResponse(false, exitRequested: true))
+        }
+    }
+
     private func execute(command: ClientCommand): Result<ApplicationResponse> {
         match (command) {
-            case ClientCommand.Help => Result.Ok(localResponse(commandHelp()))
-            case ClientCommand.Exit => Result.Ok(
-                ApplicationResponse(
-                    false,
-                    exitRequested: true
-                )
-            )
+            case ClientCommand.Help => Result.Ok(localResponse(commandHelp(frontendSlashDefinitions())))
+            case ClientCommand.Exit => exitResponse()
             case ClientCommand.NewSession => newSessionResponse()
             case ClientCommand.Approve(operationId) => decide(operationId, ApprovalDecision.Approve)
             case ClientCommand.ApproveSession(operationId) => decide(operationId, ApprovalDecision.ApproveSession)
@@ -2219,13 +3596,8 @@ public class ApplicationSession <: AgentInteractionSource {
         arguments: Array<String>
     ): Result<ApplicationResponse> {
         match (name) {
-            case "help" => Result.Ok(localResponse(commandHelp()))
-            case "exit" | "quit" => Result.Ok(
-                ApplicationResponse(
-                    false,
-                    exitRequested: true
-                )
-            )
+            case "help" => Result.Ok(localResponse(commandHelp(frontendSlashDefinitions())))
+            case "exit" | "quit" => exitResponse()
             case "new" | "clear" => newSessionResponse()
             case "cancel" => match (cancel()) {
                 case Result.Ok(_) => Result.Ok(localResponse("cancelled"))
@@ -2271,14 +3643,13 @@ public class ApplicationSession <: AgentInteractionSource {
             case "handoff" => handoffCommand(arguments)
             case "export" => exportCommand(arguments)
             case "dump" => dumpCommand(arguments)
-            case "todo" => handleTodoSlash(product, sessionId, arguments)
             case "goal" =>
                 if (planModeEnabled) {
                     modeConflict("goal", "plan")
                 } else if (vibeModeEnabled) {
                     modeConflict("goal", "vibe")
                 } else {
-                    handleGoalSlash(product, sessionId, arguments)
+                    goalCommand(joinCommandArguments(arguments))
                 }
             case "plan" => planCommand(arguments)
             case "plan-review" => planReviewCommand(arguments)
@@ -2289,8 +3660,7 @@ public class ApplicationSession <: AgentInteractionSource {
             case "changelog" => changelogCommand(arguments)
             case "hotkeys" => hotkeysCommand(arguments)
             case "context" => contextCommand(arguments)
-            case "extensions" => extensionsCommand(arguments)
-            case "mcp" => mcpCommand(arguments)
+            case "extensions" => pluginsCommand(arguments)
             case "plugins" => pluginsCommand(arguments)
             case "prompts" => promptsCommand(arguments)
             case "tree" => treeCommand(arguments)
@@ -2355,6 +3725,10 @@ public class ApplicationSession <: AgentInteractionSource {
             }
             return Result.Ok(localResponse("Plan mode disabled."))
         }
+        match(queryProductWorkflowGuidance(product,sessionId,"plan",product.toolsFor(
+            CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),threadId:Some(ThreadId(sessionId.value))))){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>
+                currentPlanTool=value.planTool;currentPlanVersion=value.planVersion;currentPlanFingerprint=value.planFingerprint}
         match (setWorkMode("plan")) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
@@ -2393,18 +3767,22 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        // Structured plans are authoritative even when a later assistant
-        // message contains ordinary text.
+        // Historical display remains available. A new approval requires a
+        // current native binding and its exact successful canonical Receipt.
+        if(requireStructured){
+            match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            if(completedPlanCount(values,currentBinding:true)==0){return Result.Ok(Option<String>.None)}
+        }
         var index = values.size
         while (index > 0) {
             index -= 1
-            let written = planWriteContent(values[index])
+            let written = planReviewContent(values[index], values,descriptiveHistory:!requireStructured,currentBinding:requireStructured)
             if (written != "") {
                 return Result.Ok(Some("Latest plan:\n\n" + written))
             }
         }
         if (requireStructured) {
-            return Result.Ok(None)
+            return Result.Ok(Option<String>.None)
         }
         index = values.size
         while (index > 0) {
@@ -2416,7 +3794,7 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
         }
-        Result.Ok(None)
+        Result.Ok(Option<String>.None)
     }
 
     private func vibeCommand(arguments: Array<String>): Result<ApplicationResponse> {
@@ -2433,6 +3811,9 @@ public class ApplicationSession <: AgentInteractionSource {
         if (goalIsPresent()) {
             return modeConflict("vibe", "goal")
         }
+        match(queryProductWorkflowGuidance(product,sessionId,"vibe",product.toolsFor(
+            CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),threadId:Some(ThreadId(sessionId.value))))){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         match (setWorkMode("vibe")) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
@@ -2581,42 +3962,6 @@ public class ApplicationSession <: AgentInteractionSource {
                     "never cumulative run usage."))
     }
 
-    private func extensionsCommand(arguments: Array<String>): Result<ApplicationResponse> {
-        if (!arguments.isEmpty()) {
-            return invalidUsage("/extensions")
-        }
-        let schemes = uriSchemes()
-        let registered = extensions()
-        var text = "Extension control center:"
-        if (registered.isEmpty()) {
-            text += "\nNo external extensions are installed."
-        } else {
-            for (extension in registered) {
-                text += "\n" + (if (extension.enabled) {
-                    "[on] "
-                } else {
-                    "[off] "
-                }) + extension.id + " · " + extension.source
-                if (!extension.tools.isEmpty()) {
-                    text += "\n  tools:"
-                    for (tool in extension.tools) {
-                        text += " " + tool
-                    }
-                }
-            }
-        }
-        text += "\nBuilt-in tools are product capabilities and are not " + "counted as extensions."
-        if (schemes.isEmpty()) {
-            text += "\nNo extension URI handlers are registered."
-        } else {
-            text += "\nRegistered URI schemes:"
-            for (scheme in schemes) {
-                text += " " + scheme
-            }
-        }
-        Result.Ok(localResponse(text))
-    }
-
     private func parsePluginSourceCommand(
         kindName: String,
         locator: String,
@@ -2672,11 +4017,49 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
-    private func pluginsCommand(arguments: Array<String>): Result<ApplicationResponse> {
-        let usage = "/plugins [list|inspect <path>|import <path> [--scope user|workspace]|import git <locator> <commit> [--scope user|workspace]|import npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|update <id> <path> [--scope user|workspace]|update <id> git <locator> <commit> [--scope user|workspace]|update <id> npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|rollback <id> [--scope user|workspace]|uninstall <id> [--scope user|workspace]|enable <id> [--scope user|workspace]|disable <id> [--scope user|workspace]|doctor|gc]"
+    private func pluginServiceCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        let usage = "/plugins service list | start <namespace> <service-id> <route> --approve | stop <namespace> <service-id>"
+        if (arguments.size == 1 && arguments[0] == "list") {
+            var text = "Session services:"
+            let values = pluginServiceStatuses()
+            if (values.isEmpty()) { text += "\nNo retained service instances in this Thread." }
+            for (value in values) {
+                text += "\n" + lifecycleText(value, "plugin") + " / " + lifecycleText(value, "service_id") +
+                    " · " + lifecycleText(value, "state") + " · cleanup " +
+                    (if (value.field("cleanup_acknowledged").getOrThrow().asBool()) { "acknowledged" } else { "retained" })
+            }
+            return Result.Ok(localResponse(text))
+        }
+        if (arguments.size >= 1 && arguments[0] == "start") {
+            if (arguments.size != 4 && arguments.size != 5) { return invalidUsage(usage) }
+            if (arguments.size == 5 && arguments[4] != "--approve") { return invalidUsage(usage) }
+            match (startPluginService(arguments[1], arguments[2], arguments[3], approved: arguments.size == 5)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                    if (value.isError) {
+                        return Result.Err(AgentError(AgentErrorKind.Protocol, "plugin.service_start_failed",
+                            "service startup failed; inspect its canonical Operation and Receipt"))
+                    }
+                    return Result.Ok(localResponse("Service started in this live session: " + arguments[1] + " / " + arguments[2]))
+                case Result.Ok(_) => return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
+                    "plugin.service_start_not_completed", "service startup did not complete"))
+            }
+        }
+        if (arguments.size == 3 && arguments[0] == "stop") {
+            return match (stopPluginService(arguments[1], arguments[2])) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => Result.Ok(localResponse("Service stopped; cleanup acknowledged: " + arguments[1] + " / " + arguments[2]))
+            }
+        }
+        invalidUsage(usage)
+    }
+
+    private func pluginsCommand(arguments: Array<String>, custody!: ?OwnedApplicationRegistryResponse161 = None): Result<ApplicationResponse> {
+        if (!arguments.isEmpty() && arguments[0] == "service") { return pluginServiceCommand(arguments[1..]) }
+        let usage = "/plugins [list|inspect <path> [--json]|import <path> [--scope user|workspace]|import git <locator> <commit> [--scope user|workspace]|import npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|update <id> <path> [--scope user|workspace]|update <id> git <locator> <commit> [--scope user|workspace]|update <id> npm <name> <exact-version> [--registry <url>] [--scope user|workspace]|rollback <id> [--scope user|workspace]|uninstall <id> [--scope user|workspace]|enable <id> [--scope user|workspace]|disable <id> [--scope user|workspace]|doctor|gc|service list|service start <namespace> <service-id> <route> --approve|service stop <namespace> <service-id>]"
         if (arguments.isEmpty() || arguments[0] == "list") {
             if (arguments.size > 1) { return invalidUsage(usage) }
-            let records = plugins()
+            let records = productRegistryRecords83(plugins(), custody: custody)
             var text = "Plugins:"
             if (records.isEmpty()) {
                 text += "\nNo plugins are imported."
@@ -2693,21 +4076,33 @@ public class ApplicationSession <: AgentInteractionSource {
                     }
                     let sourceLock = match (record.sourceKind) {
                         case PluginSourceKind.Local => ""
-                        case PluginSourceKind.Git => " · commit " + record.revisionLock
-                        case PluginSourceKind.Npm => " · version " + record.versionLock + " · integrity " + record.integrityLock
+                        case PluginSourceKind.Git => " · commit " + productRegistryCopyText83(record.copyText(PluginRecordText.RevisionLock), custody: custody)
+                        case PluginSourceKind.Npm => " · version " + productRegistryCopyText83(record.copyText(PluginRecordText.VersionLock), custody: custody) + " · integrity " + productRegistryCopyText83(record.copyText(PluginRecordText.IntegrityLock), custody: custody)
                     }
                     text += "\n[" + (if (record.enabled) { "on" } else { "off" }) + "] " +
-                        record.descriptor.namespace + "@" + record.descriptor.version +
-                        " · " + scopeName + " · " + sourceKind + " · sha256:" + record.contentLock + " · " +
-                        record.locator + sourceLock
+                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) +
+                        " · " + scopeName + " · " + sourceKind + " · sha256:" + productRegistryCopyText83(record.copyText(PluginRecordText.ContentLock), custody: custody) + " · " +
+                        productRegistryCopyText83(record.copyText(PluginRecordText.Locator), custody: custody) + sourceLock
                 }
+            }
+            let schemes = uriSchemes(custody: custody)
+            if (schemes.isEmpty()) {
+                text += "\nNo URI handlers are registered."
+            } else {
+                text += "\nRegistered URI schemes:"
+                for (scheme in schemes) { text += " " + scheme }
             }
             return Result.Ok(localResponse(text))
         }
         let action = arguments[0]
-        if (action == "inspect" && arguments.size == 2) {
+        if (action == "inspect" && (arguments.size == 2 ||
+            (arguments.size == 3 && arguments[2] == "--json"))) {
             match (inspectPlugin(arguments[1])) {
-                case PluginPackageResult.Ok(descriptor) =>
+                case PluginRegistryResult.Ok(descriptor) =>
+                    productRegistryKeepDescriptor161(descriptor, custody)
+                    if (arguments.size == 3) {
+                        return Result.Ok(localResponse(productRegistryCopyText83(descriptor.copyDiagnosticJson(), custody: custody)))
+                    }
                     let family = match (descriptor.family) {
                         case PluginManifestFamily.Pi => "pi"
                         case PluginManifestFamily.Codex => "codex"
@@ -2718,29 +4113,39 @@ public class ApplicationSession <: AgentInteractionSource {
                         case PluginEcosystem.Codex => "codex"
                         case PluginEcosystem.Axyndra => "axyndra"
                     }
-                    var text = "Plugin " + descriptor.namespace + " (" + descriptor.id + "@" + descriptor.version + ")"
+                    var text = "Plugin " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace), custody: custody) + " (" + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version), custody: custody) + ")"
                     text += "\nFamily: " + family + ", ecosystem: " + ecosystem
-                    text += "\nCompatibility profile: " + descriptor.compatibilityProfile
-                    text += "\nSource: " + descriptor.source
+                    text += "\nCompatibility profile: " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.CompatibilityProfile), custody: custody)
+                    text += "\nEntry kind: " + pluginEntryKindName(descriptor.entryKind)
+                    if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint), custody: custody) != "") { text += "\nEntrypoint: " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint), custody: custody) }
+                    text += "\nContributions:"
+                    if (productRegistryContributions83(descriptor, custody: custody).isEmpty()) { text += " none declared" }
+                    for (contribution in productRegistryContributions83(descriptor, custody: custody)) {
+                        text += "\n- " + pluginContributionKindName(contribution.kind) + " " + productRegistryCopyText83(contribution.copyText(PluginContributionText.Name), custody: custody)
+                    }
+                    if (descriptor.entryKind == PluginEntryKind.LegacyProcess) {
+                        text += "\nActivation: blocked; migrate legacy-process to native-executable"
+                    }
+                    text += "\nSource: " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Source), custody: custody)
                     text += "\nDependencies:"
-                    if (descriptor.dependencies.isEmpty()) { text += " none" }
-                    for (dependency in descriptor.dependencies) {
-                        text += "\n- " + dependency.name + " " + dependency.versionRange
+                    if (productRegistryDependencies83(descriptor, custody: custody).isEmpty()) { text += " none" }
+                    for (dependency in productRegistryDependencies83(descriptor, custody: custody)) {
+                        text += "\n- " + productRegistryCopyText83(dependency.copyText(PluginDependencyText.Name), custody: custody) + " " + productRegistryCopyText83(dependency.copyText(PluginDependencyText.VersionRange), custody: custody)
                         if (dependency.optional) { text += " (optional)" }
                         if (dependency.development) { text += " (development)" }
                     }
-                    if (!descriptor.missingDependencies.isEmpty()) {
+                    if (!productRegistryMissingDependencies83(descriptor, custody: custody).isEmpty()) {
                         text += "\nMissing required dependencies:"
-                        for (dependency in descriptor.missingDependencies) { text += "\n- " + dependency }
+                        for (dependency in productRegistryMissingDependencies83(descriptor, custody: custody)) { text += "\n- " + dependency }
                     }
-                    if (!descriptor.requestedCapabilities.isEmpty()) {
+                    if (!productRegistryCapabilities83(descriptor, custody: custody).isEmpty()) {
                         text += "\nRequested capabilities:"
-                        for (capability in descriptor.requestedCapabilities) { text += "\n- " + capability }
+                        for (capability in productRegistryCapabilities83(descriptor, custody: custody)) { text += "\n- " + capability }
                     }
-                    if (descriptor.sdkRange != "") { text += "\nSDK range: " + descriptor.sdkRange }
-                    if (descriptor.protocolRange != "") { text += "\nProtocol range: " + descriptor.protocolRange }
+                    if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.SdkRange), custody: custody) != "") { text += "\nSDK range: " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.SdkRange), custody: custody) }
+                    if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ProtocolRange), custody: custody) != "") { text += "\nProtocol range: " + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ProtocolRange), custody: custody) }
                     text += "\nComponents:"
-                    for (component in descriptor.components) {
+                    for (component in productRegistryComponents83(descriptor, custody: custody)) {
                         let kind = match (component.kind) {
                             case PluginComponentKind.Skill => "skill"
                             case PluginComponentKind.Mcp => "mcp"
@@ -2757,11 +4162,13 @@ public class ApplicationSession <: AgentInteractionSource {
                             case PluginComponentStatus.Unsupported => "unsupported"
                             case PluginComponentStatus.Unverified => "unverified"
                         }
-                        text += "\n- " + kind + " " + component.relativePath + " [" + status + "]"
+                        text += "\n- " + kind + " " + productRegistryCopyText83(component.copyText(PluginComponentText.RelativePath), custody: custody) + " [" + status + "]"
                     }
                     return Result.Ok(localResponse(text))
-                case PluginPackageResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody),
+                        fields: [ErrorField("source", productRegistryErrorText83(error, PluginRegistryErrorText.Source, custody: custody)), ErrorField("field", productRegistryErrorText83(error, PluginRegistryErrorText.Field, custody: custody))]))
             }
         }
         if (action == "import" && arguments.size >= 4 &&
@@ -2781,18 +4188,20 @@ public class ApplicationSession <: AgentInteractionSource {
                 case None => importPluginSource(parsed.source)
             }
             match (imported) {
-                case PluginImportResult.Ok(record) =>
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
                     let pin = match (record.sourceKind) {
-                        case PluginSourceKind.Git => " at commit " + record.revisionLock
-                        case PluginSourceKind.Npm => " at " + record.versionLock + " (" + record.integrityLock + ")"
+                        case PluginSourceKind.Git => " at commit " + productRegistryCopyText83(record.copyText(PluginRecordText.RevisionLock), custody: custody)
+                        case PluginSourceKind.Npm => " at " + productRegistryCopyText83(record.copyText(PluginRecordText.VersionLock), custody: custody) + " (" + productRegistryCopyText83(record.copyText(PluginRecordText.IntegrityLock), custody: custody) + ")"
                         case PluginSourceKind.Local => ""
                     }
                     return Result.Ok(localResponse(
-                        "Imported " + record.descriptor.id + "@" + record.descriptor.version +
-                            " from " + record.locator + pin + " (disabled until enabled)."
+                        "Imported " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) +
+                            " from " + productRegistryCopyText83(record.copyText(PluginRecordText.Locator), custody: custody) + pin + " (disabled until enabled)."
                     ))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "import" && (arguments.size == 2 ||
@@ -2807,15 +4216,17 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
             match (imported) {
-                case PluginImportResult.Ok(record) =>
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
                     let scopeName = match (record.scope) {
                         case PluginInstallScope.User => "user"
                         case PluginInstallScope.Workspace => "workspace"
                     }
-                    return Result.Ok(localResponse("Imported " + record.descriptor.id + "@" + record.descriptor.version +
+                    return Result.Ok(localResponse("Imported " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) +
                         " in " + scopeName + " scope (disabled until enabled)."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "update" && arguments.size >= 5 &&
@@ -2835,18 +4246,20 @@ public class ApplicationSession <: AgentInteractionSource {
                 case None => updatePluginSource(arguments[1], parsed.source)
             }
             match (updated) {
-                case PluginImportResult.Ok(record) =>
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
                     let pin = match (record.sourceKind) {
-                        case PluginSourceKind.Git => " at commit " + record.revisionLock
-                        case PluginSourceKind.Npm => " at " + record.versionLock + " (" + record.integrityLock + ")"
+                        case PluginSourceKind.Git => " at commit " + productRegistryCopyText83(record.copyText(PluginRecordText.RevisionLock), custody: custody)
+                        case PluginSourceKind.Npm => " at " + productRegistryCopyText83(record.copyText(PluginRecordText.VersionLock), custody: custody) + " (" + productRegistryCopyText83(record.copyText(PluginRecordText.IntegrityLock), custody: custody) + ")"
                         case PluginSourceKind.Local => ""
                     }
                     return Result.Ok(localResponse(
-                        "Updated " + record.descriptor.id + "@" + record.descriptor.version +
-                            " from " + record.locator + pin + "."
+                        "Updated " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) +
+                            " from " + productRegistryCopyText83(record.copyText(PluginRecordText.Locator), custody: custody) + pin + "."
                     ))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "update" && (arguments.size == 3 ||
@@ -2861,10 +4274,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
             match (updated) {
-                case PluginImportResult.Ok(record) =>
-                    return Result.Ok(localResponse("Updated " + record.descriptor.id + "@" + record.descriptor.version + "."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
+                    return Result.Ok(localResponse("Updated " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) + "."))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "rollback" && (arguments.size == 2 ||
@@ -2879,10 +4294,12 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
             match (rolledBack) {
-                case PluginImportResult.Ok(record) =>
-                    return Result.Ok(localResponse("Rolled back " + record.descriptor.id + "@" + record.descriptor.version + "."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
+                    return Result.Ok(localResponse("Rolled back " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + "@" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version), custody: custody) + "."))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "uninstall" && (arguments.size == 2 ||
@@ -2897,10 +4314,11 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
             match (uninstalled) {
-                case PluginImportResult.Ok(_) =>
+                case PluginRegistryResult.Ok(_) =>
                     return Result.Ok(localResponse("Uninstalled plugin " + arguments[1] + "."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if ((action == "enable" || action == "disable") && (arguments.size == 2 ||
@@ -2916,26 +4334,30 @@ public class ApplicationSession <: AgentInteractionSource {
                 }
             }
             match (changed) {
-                case PluginImportResult.Ok(record) =>
-                    return Result.Ok(localResponse("Plugin " + record.descriptor.id + " is now " +
+                case PluginRegistryResult.Ok(record) =>
+                    let _ = productRegistryKeepRecord161(record, custody)
+                    return Result.Ok(localResponse("Plugin " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id), custody: custody) + " is now " +
                         (if (record.enabled) { "enabled" } else { "disabled" }) + "."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         if (action == "doctor" && arguments.size == 1) {
-            let errors = pluginDoctor()
+            let errors = pluginDoctor(custody: custody)
             var text = "Plugin doctor:"
             if (errors.isEmpty()) { text += "\nNo plugin issues detected." }
-            for (error in errors) { text += "\n- " + error.code + ": " + error.message }
+            for (error in errors) { text += "\n- " + error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody) }
             return Result.Ok(localResponse(text))
         }
         if (action == "gc" && arguments.size == 1) {
             match (garbageCollectPlugins()) {
-                case PluginImportResult.Ok(paths) =>
+                case PluginRegistryResult.Ok(paths) =>
+                    productRegistryKeepTextList161(paths, custody)
                     return Result.Ok(localResponse("Garbage-collected " + paths.size.toString() + " plugin generations."))
-                case PluginImportResult.Err(error) =>
-                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, error.message))
+                case PluginRegistryResult.Err(error) =>
+                    productRegistryKeepError161(error, custody)
+                    return Result.Err(AgentError(AgentErrorKind.InvalidInput, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message, custody: custody)))
             }
         }
         invalidUsage(usage)
@@ -2962,33 +4384,6 @@ public class ApplicationSession <: AgentInteractionSource {
         }
     }
 
-    private func mcpCommand(arguments: Array<String>): Result<ApplicationResponse> {
-        if (!arguments.isEmpty()) {
-            return invalidUsage("/mcp")
-        }
-        let servers = mcpServers()
-        var text = "MCP servers:"
-        if (servers.isEmpty()) {
-            text += "\nNo MCP servers are configured."
-        } else {
-            for (server in servers) {
-                text += "\n[" + productMcpStatusName(server.status) + "] " + server.id + " · " +
-                    productMcpTransportName(server.transport) + " · " + server.tools.size.toString() + " tools"
-                if (server.sandboxed) {
-                    text += " · sandbox " + (if (server.workspaceReadOnly) { "ro" } else { "rw" }) +
-                        " · network " + networkPolicyModeName(server.networkPolicy.mode)
-                }
-                if (!server.tools.isEmpty()) {
-                    text += "\n  tools:"
-                    for (tool in server.tools) { text += " " + tool }
-                }
-                if (server.errorCode != "") {
-                    text += "\n  error: " + server.errorCode
-                }
-            }
-        }
-        Result.Ok(localResponse(text))
-    }
 
     private func treeCommand(arguments: Array<String>): Result<ApplicationResponse> {
         if (!arguments.isEmpty()) {
@@ -3568,23 +4963,55 @@ public class ApplicationSession <: AgentInteractionSource {
             case Result.Err(error) => Result.Err(error)
         }
     }
-
     private func eventSink(): AgentEventSink {
+        { event =>
+            let paid = beginRetirableDispatch113()
+            try { invokeRetirableOrdinary113(event, paid) } finally { endRetirableDispatch113(paid) }
+        }
+    }
+    private func invokeRetirableOrdinary113(event: AgentEvent, paid: ?ApplicationSubscriptionDispatchPayment113): Unit {
+        eventSinkRetirableBody113(paid)(event)
+    }
+    
+
+
+    private func eventSinkRetirableBody113(paid: ?ApplicationSubscriptionDispatchPayment113): AgentEventSink {
         {
             event =>
                 let targets = ArrayList<AgentEventSink>()
                 lock.lock()
                 try {
+                    match (paid) { case Some(actual) => actual.ensureBeforeSnapshot113(
+                        subscriptionInvoiceAdd113(8192, subscriptionInvoiceMultiply113(subscribers.size, 512)))
+                        case None => () }
                     for (subscriber in subscribers) {
                         targets.add(subscriber)
                     }
                 } finally {
                     lock.unlock()
                 }
-                for (target in targets) {
-                    target(event)
-                }
+                for (target in targets) { target(event) }
+                let planEvent=planCompletionEvent(event,planHistoryTool())
+                match(planEvent){case Some(value)=>for(target in targets){target(value)};case None=>()}
         }
+    }
+
+    // Presentation projection only; original generic Core event stays intact.
+    private func planCompletionEvent(event: AgentEvent, name: String): ?AgentEvent {
+        match(event.payload){case AgentEventPayload.Extension(AgentEventKind.Tool,detail)=>
+            let selectedName=httpIntentText(detail,"name")
+            if(httpIntentText(detail,"code")!="tool.execution_completed" || !(if(name!=""){selectedName==name}else{productPlanToolHistoryNameMatches205(product,selectedName)}) ||
+                httpIntentText(detail,"receipt_id")=="" || detail.field("is_error").isNone() ||
+                detail.field("is_error").getOrThrow().asBool()){return None}
+            let arguments=match(product.vnext.completedDataToolArguments(ThreadId(sessionId.value),event.meta.runId,
+                httpIntentText(detail,"receipt_id"),httpIntentText(detail,"call_id"),selectedName)){
+                case Result.Err(_)=>return None;case Result.Ok(value)=>value}
+            let body=httpIntentText(arguments,"content").trimAscii()
+            if(body==""){return None}
+            Some(AgentEvent(event.meta,AgentEventPayload.Extension(AgentEventKind.Transcript,objectValue([
+                ValueField("code",textValue("plan.updated")),ValueField("id",textValue(httpIntentText(detail,"call_id"))),
+                ValueField("body",textValue(body))]))))
+            case _=>None}
     }
 
     private func finishCompletedRun(
@@ -3598,29 +5025,28 @@ public class ApplicationSession <: AgentInteractionSource {
                 case Result.Ok(values) => values
                 case Result.Err(error) => return Result.Err(error)
             }
-            if (planWriteCount(messages) <= planWriteBaseline) {
+            if (completedPlanCount(messages) <= planWriteBaseline) {
                 if (planCorrectionAttempted) {
                     return Result.Err(missingPlanError())
                 }
                 planCorrectionAttempted = true
-                let correction = product.request(
-                    "Plan mode protocol correction: the previous response did not call plan_write. " +
-                        "Do not continue investigating and do not answer with plain text. Write the complete " +
-                        "plan now with exactly the required sections, then call plan_write once.",
+                let guidance=match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+                let correction = match (product.prepareRequest(
+                    guidance.correction,
                     sessionId: Some(sessionId),
                     modelOverride: currentModel,
                     thinking: effectiveThinking(),
                     userRequestedThinking: explicitRequestedThinking(),
                     thinkingSource: requestedThinkingSource(),
                     interactions: Some(this),
-                    modeSystem: activeModeSystem(),
-                    guide: capabilityGuide(),
+                    modeSystem: guidance.system,
+                    guide: guidance.guide,
                     readOnly: true
-                )
+                )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
                 setCurrentRequest(Some(correction))
-                match (product.client.start(correction, eventSink())) {
+                match (this.startOwnedCheckpointApplication113(correction, eventSink())) {
                     case Result.Ok(AgentRunOutcome.Completed(next)) =>
-                        setCurrentRequest(None)
+                        setCurrentRequest(Option<AgentRunRequest>.None)
                         snapshot = next
                     case Result.Ok(AgentRunOutcome.AwaitingApproval(waiting, approval)) => return settleApproval(
                         correction,
@@ -3629,14 +5055,14 @@ public class ApplicationSession <: AgentInteractionSource {
                         agentInvoked
                     )
                     case Result.Err(error) =>
-                        setCurrentRequest(None)
+                        setCurrentRequest(Option<AgentRunRequest>.None)
                         return Result.Err(error)
                 }
                 let correctedMessages = match (product.messages(sessionId)) {
                     case Result.Ok(values) => values
                     case Result.Err(error) => return Result.Err(error)
                 }
-                if (planWriteCount(correctedMessages) <= planWriteBaseline) {
+                if (completedPlanCount(correctedMessages) <= planWriteBaseline) {
                     return Result.Err(missingPlanError())
                 }
             }
@@ -3646,47 +5072,33 @@ public class ApplicationSession <: AgentInteractionSource {
             }
         }
         while (true) {
-            match (product.finalizeGoalRun(sessionId)) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) => return Result.Err(error)
+            lock.lock()
+            let pluginContinuation = try { (pluginContinuationControlled, activePluginContinuation) } finally { lock.unlock() }
+            if (pluginContinuation[0]) {
+                let owner = match (pluginContinuation[1]) { case Some(value) => value; case None => break }
+                let guidance=match(activeWorkflowGuidance()){case Result.Err(error)=>owner.revoke();return Result.Err(error);case Result.Ok(value)=>value}
+                let request = match (product.prepareRequest(owner.prompt, sessionId: Some(sessionId), modelOverride: currentModel,
+                    thinking: effectiveThinking(), userRequestedThinking: explicitRequestedThinking(), thinkingSource: requestedThinkingSource(),
+                    interactions: Some(this), modeSystem: guidance.system, readOnly: planModeEnabled || vibeModeEnabled)) {
+                    case Result.Err(error) => owner.revoke(); return Result.Err(error); case Result.Ok(value) => value }
+                let continuation = match (product.preparePluginContinuation(owner, request)) {
+                    case Result.Err(error) =>
+                        owner.revoke()
+                        // Exhaustion/revocation/data changes stop future admission;
+                        // they never rewrite the completed Run or mint a retry.
+                        if (error.kind == AgentErrorKind.PermissionDenied) { break }
+                        return Result.Err(error)
+                    case Result.Ok(value) => value }
+                setCurrentRequest(Some(request))
+                let outcome = try { product.client.startContinuation(continuation, eventSink()) } finally { owner.releaseAdmission() }
+                match (outcome) {
+                    case Result.Ok(AgentRunOutcome.Completed(next)) => setCurrentRequest(Option<AgentRunRequest>.None); snapshot = next; continue
+                    case Result.Ok(AgentRunOutcome.AwaitingApproval(waiting, approval)) => return settleApproval(request, waiting, approval, agentInvoked)
+                    case Result.Err(error) => setCurrentRequest(Option<AgentRunRequest>.None); owner.revoke(); return Result.Err(error) }
             }
-            let goal = match (product.goalState(sessionId)) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => return Result.Err(error)
-            }
-            let shouldContinue = match (goal) {
-                case Some(value) => value.enabled && value.status == "active"
-                case None => false
-            }
-            if (!shouldContinue) {
-                break
-            }
-            let continuation = product.request(
-                "Continue working on the active goal.",
-                sessionId: Some(sessionId),
-                modelOverride: currentModel,
-                thinking: effectiveThinking(),
-                userRequestedThinking: explicitRequestedThinking(),
-                thinkingSource: requestedThinkingSource(),
-                interactions: Some(this),
-                modeSystem: activeModeSystem(),
-                readOnly: planModeEnabled || vibeModeEnabled
-            )
-            setCurrentRequest(Some(continuation))
-            match (product.client.start(continuation, eventSink())) {
-                case Result.Ok(AgentRunOutcome.Completed(next)) =>
-                    setCurrentRequest(None)
-                    snapshot = next
-                case Result.Ok(AgentRunOutcome.AwaitingApproval(waiting, approval)) => return settleApproval(
-                    continuation,
-                    waiting,
-                    approval,
-                    agentInvoked
-                )
-                case Result.Err(error) =>
-                    setCurrentRequest(None)
-                    return Result.Err(error)
-            }
+            // Only a retained actual user-approved PluginContinuationOwner
+            // may admit another Run. A goal presentation is data only.
+            break
         }
         match (compactAtSafeBoundary()) {
             case Result.Ok(_) => ()
@@ -3713,58 +5125,55 @@ public class ApplicationSession <: AgentInteractionSource {
         )
     }
 
-    // Lightweight capability and workflow guidance, sent with every turn
-    // (the tool schemas themselves are always attached; this tells the model
-    // how to pick and sequence them).
-    private func capabilityGuide(): String {
-        var names = ""
-        for (definition in activeTools()) {
-            if (names != "") {
-                names += ", "
+    // New selected native plans are read only through their actual completed
+    // canonical Receipt/result. Failed/unknown ToolCalls cannot satisfy Plan.
+    // User review edits and legacy plan text remain descriptive history only.
+    private func planReviewContent(message: ModelMessage, messages: Array<ModelMessage>,
+        descriptiveHistory!: Bool = true, currentBinding!: Bool = false): String {
+        if(message.role==ModelRole.User){return planWriteContent(message)}
+        let name=planHistoryTool()
+        var found=""
+        for(block in message.blocks where block.kind==ModelBlockKind.ToolCall){
+            if(descriptiveHistory && block.name=="plan_write") { found=planWriteContent(message) }
+            else if((name!="" && block.name==name) || (name=="" && productPlanToolHistoryNameMatches205(product,block.name))){
+                for(result in messages){
+                    for(reply in result.blocks where reply.kind==ModelBlockKind.ToolResult &&
+                        reply.callId==block.callId && reply.receiptId!="" && !reply.isError){
+                        match(product.vnext.completedDataToolHistoryArguments(ThreadId(sessionId.value),
+                            reply.receiptId,block.callId,block.name,version:if(currentBinding){currentPlanVersion}else{""},
+                            fingerprint:if(currentBinding){currentPlanFingerprint}else{""})){
+                            case Result.Ok(args)=>found=httpIntentText(args,"content").trimAscii()
+                            case Result.Err(_)=>()
+                        }
+                    }
+                }
             }
-            names += definition.name
         }
-        let workflow = if (planModeEnabled) {
-            "Inspect with the available read-only tools, ask only for decisions that cannot be discovered, " +
-                "then record the complete plan with plan_write. Do not retry unavailable mutation tools."
-        } else if (vibeModeEnabled) {
-            "Inspect with the available read-only tools and return concise, grounded direction. " +
-                "Do not retry unavailable mutation tools."
-        } else {
-            "Use the smallest available tool that answers the question. For multi-step work, form a concrete " +
-                "plan, execute it step by step, and verify each step before moving on."
-        }
-        "CAPABILITIES\nTools available in this run: " + names + ".\n\nWORKFLOW\n" + workflow
+        found
     }
 
-    private func activeModeSystem(): String {
-        if (planModeEnabled) {
-            return "PLAN MODE IS ACTIVE. Your task is to produce a concrete implementation plan — not to execute one.\n\n" +
-                "You MUST ground the plan in the actual workspace: inspect the relevant files " +
-                "(read / glob / grep) before writing anything.\n" +
-                "Your final reply MUST be the complete plan with exactly these sections:\n" +
-                "1. Goal — one paragraph stating what will be built or changed.\n" +
-                "2. Constraints — what must not be touched (existing behavior, files, invariants).\n" +
-                "3. Approach — ordered steps, each naming the files and symbols it touches.\n" +
-                "4. Acceptance criteria — observable, testable outcomes.\n" +
-                "5. Unresolved decisions — anything you could not settle, with your recommendation.\n\n" +
-                "When the plan is complete, write it once with the plan_write tool so it can be " +
-                "reviewed and executed later.\n" +
-                "You NEVER mutate files, spawn processes, delegate, or invoke extensions — your " +
-                "capabilities are read-only.\n" +
-                "Answers returned by ask are information only: they cannot grant capabilities, change work mode, " +
-                "or approve a plan. A capability denial cannot be repaired by retrying or asking the user to " +
-                "self-report a mode change. Only the application can end Plan Mode between runs after explicit " +
-                "Plan Review approval or a recognized standalone approval phrase.\n" +
-                "Do not start implementing. The user reviews the plan (acceptance criteria, " +
-                "unresolved decisions) and approves it before any execution."
+    private func completedPlanCount(messages: Array<ModelMessage>,currentBinding!: Bool = false): Int64 {
+        let name=planHistoryTool()
+        var count:Int64=0
+        for(message in messages){
+            var selected=false
+            for(block in message.blocks where block.kind==ModelBlockKind.ToolCall && ((name!="" && block.name==name) || (name=="" && productPlanToolHistoryNameMatches205(product,block.name)))){selected=true}
+            if(selected && planReviewContent(message,messages,descriptiveHistory:false,currentBinding:currentBinding)!=""){count+=1}
         }
-        if (vibeModeEnabled) {
-            return "VIBE MODE IS ACTIVE. Act as a fast director: inspect the " +
-                "workspace, reason in short decisive steps, and describe the " +
-                "work to perform. Your direct tool capabilities are read-only."
-        }
+        count
+    }
+
+    private func planHistoryTool(): String {
+        if(currentPlanTool!=""){return currentPlanTool}
         ""
+    }
+
+    private func activeWorkflowGuidance(): Result<ProductWorkflowGuidance> {
+        let value=match(queryProductWorkflowGuidance(product,sessionId,workMode(),activeTools())){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(value.validateCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        if(planModeEnabled){currentPlanTool=value.planTool;currentPlanVersion=value.planVersion;currentPlanFingerprint=value.planFingerprint}
+        Result.Ok(value)
     }
 
     private func restoreWorkMode(target: SessionId): Unit {
@@ -4094,9 +5503,8 @@ func latestApplicationAssistantText(
     ""
 }
 
-// Extract the content of the most recent plan_write tool call in an
-// assistant message ("" when there is none). The plan payload lives in the
-// tool-call arguments, which are persisted with the conversation.
+// Descriptive parser for legacy plan history and explicit review edits.
+// Current completion and approval use the actual canonical Receipt bridge.
 func planWriteContent(message: ModelMessage): String {
     var found = ""
     for (block in message.blocks where block.kind == ModelBlockKind.ToolCall) {
@@ -4127,16 +5535,6 @@ func stripPlanReviewPrefix(value: String): String {
     } else {
         value
     }
-}
-
-func planWriteCount(messages: Array<ModelMessage>): Int64 {
-    var count: Int64 = 0
-    for (message in messages) {
-        if (planWriteContent(message) != "") {
-            count += 1
-        }
-    }
-    count
 }
 
 func isPlanApprovalPhrase(value: String): Bool {
@@ -4187,7 +5585,7 @@ func missingPlanError(): AgentError {
     AgentError(
         AgentErrorKind.Provider,
         "application.plan_missing",
-        "Plan mode response did not produce a structured plan with plan_write after one corrective retry"
+        "Plan mode response did not produce a structured plan with the selected plan Tool after one corrective retry"
     )
 }
 
@@ -4267,10 +5665,11 @@ func handoffRunRequest(base: AgentRunRequest): AgentRunRequest {
         cacheKey: base.cacheKey,
         parallelToolCalls: base.parallelToolCalls,
         toolContext: base.toolContext,
-        skillStack: base.skillStack,
+        contextSnapshot: base.contextSnapshot,
         contextWindow: base.contextWindow,
         providerSafetyMargin: base.providerSafetyMargin,
-        executionLaneId: base.executionLaneId
+        executionLaneId: base.executionLaneId,
+        ownedEvents: base.ownedEvents
     )
 }
 
@@ -4352,11 +5751,11 @@ func sshSlashLine(host: ProductSshHost, scope: String): String {
     }) + " [" + scope + "]"
 }
 
-func commandHelp(): String {
+func commandHelp(extraDefinitions:Array<SlashCommandDefinition>): String {
     var result = "Commands\n\n"
     result += "Type a command, or use Tab to complete it.\n"
     var group = ""
-    for (command in slashCommandDefinitions()) {
+    for (command in presentedSlashCommandDefinitions(extraDefinitions)) {
         if (command.group != group) {
             group = command.group
             result += "\n" + group + "\n\n"
@@ -4367,4 +5766,20 @@ func commandHelp(): String {
     }
     result += "\nTip: /hotkeys shows keyboard controls; /cancel stops active work."
     result
+}
+
+func staleApplicationApproval<T>(): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.Conflict, "application.approval_request_stale",
+        "approval completion no longer belongs to the current Application request"))
+}
+
+
+
+private func coreOwnedWaveAppInvoice113(targets: Int64, groups: Int64, wave: Bool): Int64 {
+    if (targets < 0 || groups < 0 || targets > (Int64.Max - 8192) / 512) {
+        throw IllegalStateException("checkpoint target invoice overflow") }
+    let amount = 8192 + targets * 512
+    if (!wave) { return amount }
+    if (groups > (Int64.Max - amount) / 512) { throw IllegalStateException("checkpoint pending group invoice overflow") }
+    amount + groups * 512
 }
