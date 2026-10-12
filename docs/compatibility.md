@@ -53,3 +53,28 @@ Cancellation is idempotent and a deadline expires at nowMillis >= expiresAtMilli
 Denial, cancellation, deadline and Host failure remain distinct. Public handler
 unit tests demonstrate data-contract behavior, not actual InstalledRoot policy,
 physical close acknowledgement, cross-platform execution, or global capacity.
+
+## Persisted state and inspection
+
+The current SQLite format is **schema v28**. It is independent of the Native
+wire SDK version and author-source package versions above. Migration v28 moves
+nonempty legacy Todo/Goal bytes into namespaced `plugin_documents` in the same
+transaction as the schema version change; unsupported historical payloads
+remain data, not executable plugin configuration or authorization. The old
+metadata columns are a read-only archive, not a second write owner.
+
+Schema migrations are forward-only. Stop other writers and back up the database
+and every referenced artifact blob before upgrading. Rolling back an executable
+or a plugin does not downgrade the database; restore the matching complete
+pre-upgrade database-and-blob backup for an older executable. The incremental
+migration and recovery boundaries are documented in [architecture](architecture.md).
+These format rules do not establish completion of the current migration's
+runtime acceptance; see [the draft status](issue-45-draft-status.md).
+
+`/inspect [run-id] [before-operation-cursor]` reads the canonical Run inspection
+projection without calling a model. Omitting `run-id` selects the current
+Thread's latest Run; `before-operation-cursor` paginates its Operations. Missing
+plugin versions or unavailable executors do not make historical records
+executable: inspection preserves evidence, while continuation must report its
+actual recovery requirement. CLI, RPC and TUI consume the same host projection
+rather than reconstructing execution authority in a frontend.
