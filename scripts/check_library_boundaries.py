@@ -22,10 +22,6 @@ SDK_FORBIDDEN = {
     "agent_embed", "agent_tui",
 }
 SDK_EXTENSION_ROOTS = {
-    "extensions/ast_extension",
-    "extensions/web_search_extension",
-    "extensions/workspace_search_extension",
-    "extensions/workspace_write_extension",
     "support_tests/sdk_fixture_extension",
 }
 PUBLIC_TESTKIT = ROOT / "axyndra_agent_testkit"
@@ -189,12 +185,12 @@ else:
         for source in sorted((runtime_root / "src").glob("**/*.cj"))
     )
     manifest_match = re.search(
-        r"public class ExtensionManifest\s*\{(?P<body>.*?)\n\}",
+        r"public class PluginPackageDescriptor\s*\{(?P<body>.*?)\n\}",
         runtime_text,
         re.DOTALL,
     )
     if manifest_match is None:
-        errors.append("agent_extension_runtime has no explicit ExtensionManifest schema")
+        errors.append("agent_extension_runtime has no explicit Native PluginPackageDescriptor schema")
     else:
         body = manifest_match.group("body")
         for dangerous in (
@@ -202,13 +198,28 @@ else:
             "audit", "persistence", "sandbox",
         ):
             if re.search(rf"public let {dangerous}\b", body, re.IGNORECASE):
-                errors.append(f"ExtensionManifest exposes forbidden authority field {dangerous}")
+                errors.append(f"PluginPackageDescriptor exposes forbidden authority field {dangerous}")
 
 product_tools = (ROOT / "agent_product" / "src" / "tools.cj").read_text(encoding="utf-8")
-if re.search(r"extensions\.install\(\s*(?:Workspace(?:Search|Write)|Ast|WebSearch)Extension", product_tools):
-    errors.append("first-party SDK dogfood bypasses ExtensionRuntime lifecycle")
-if "startBuiltInExtensionRuntime" not in product_tools:
-    errors.append("first-party SDK dogfood is not assembled through ExtensionRuntime")
+retired_business_api = (
+    "ExtensionTool", "ExtensionInstaller", "ExtensionOperationHost",
+    "CompiledExtensionProvider", "CompiledExtensionLifecycleAdapter",
+    "WorkspaceSearchIntent", "WorkspaceWriteIntent", "HostOperationIntent",
+    "OperationIntent",
+)
+for source in sorted(ROOT.glob("**/*.cj")):
+    relative = source.relative_to(ROOT)
+    if any(part in {"target", ".git", "vendor", "support_tests"} for part in relative.parts):
+        continue
+    value = source.read_text(encoding="utf-8")
+    for symbol in retired_business_api:
+        if re.search(rf"\b{symbol}\b", value):
+            errors.append(f"retired business SDK remains in production: {relative}: {symbol}")
+    if re.search(r"^\s*import\s+legacy_extension_", value, re.MULTILINE):
+        errors.append(f"production imports a historical oracle package: {relative}")
+for member in sorted(members):
+    if member == "agent_extensions" or member.startswith("support_tests/legacy_"):
+        errors.append(f"historical SDK package remains a production workspace member: {member}")
 for legacy in ("installAstTools", "registerAstGrepTool", "registerAstEditTool", "installWebSearchTools"):
     if re.search(rf"\b{legacy}\b", product_tools):
         errors.append(f"migrated first-party extension retains legacy registration path {legacy}")

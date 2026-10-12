@@ -1,0 +1,85 @@
+{
+  "schema": "axyndra.context-profile/v1",
+  "id": "coding",
+  "provider": {
+    "package": "plugins/skills",
+    "contribution": "skills",
+    "enabled_by_distribution": true
+  },
+  "context": {
+    "version": 4,
+    "namespace": "${provider_namespace}",
+    "package_digest": "${provider_package_digest}",
+    "provider": "skills",
+    "resources": [
+      {
+        "source": "${settings_root}/managed-skills",
+        "path": "managed",
+        "mode": "optional_header_directory",
+        "max_bytes": 4096,
+        "max_file_bytes": 65536,
+        "start_marker": "---",
+        "end_marker": "---",
+        "trim_ascii": true,
+        "basename": "SKILL.md",
+        "depth": 1,
+        "max_files": 128
+      },
+      {
+        "source": "${settings_root}/skills",
+        "path": "user",
+        "mode": "optional_header_directory",
+        "max_bytes": 4096,
+        "max_file_bytes": 65536,
+        "start_marker": "---",
+        "end_marker": "---",
+        "trim_ascii": true,
+        "basename": "SKILL.md",
+        "depth": 1,
+        "max_files": 128
+      },
+      {
+        "source": "${workspace_root}/.omp/skills",
+        "path": "workspace",
+        "mode": "optional_header_directory",
+        "max_bytes": 4096,
+        "max_file_bytes": 65536,
+        "start_marker": "---",
+        "end_marker": "---",
+        "trim_ascii": true,
+        "basename": "SKILL.md",
+        "depth": 1,
+        "max_files": 128
+      }
+    ],
+    "query": {
+      "schema": "axyndra.skills-query/v1",
+      "action": "prepare",
+      "include_catalog": true,
+      "lazy_references": true,
+      "resource_roots": [
+        "managed",
+        "user",
+        "workspace"
+      ]
+    },
+    "prompt_field": "prompt",
+    "component_sources": {
+      "kinds": [
+        "skill"
+      ],
+      "index": {
+        "basename": "SKILL.md",
+        "max_file_bytes": 65536,
+        "depth": 31,
+        "max_directories": 1024
+      },
+      "header": {
+        "max_bytes": 4096,
+        "start_marker": "---",
+        "end_marker": "---",
+        "trim_ascii": true
+      }
+    }
+  }
+}

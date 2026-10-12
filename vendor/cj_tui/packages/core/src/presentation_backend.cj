@@ -92,6 +92,14 @@ public struct PresentationFrame {
 // single contract. renderHistory is called from inside Terminal.draw before
 // the mutable viewport is flushed, so a failed write cannot be acknowledged.
 public interface TerminalFrameProvider {
+    // Called before HistoryBatch, Terminal buffers, dirty snapshots, diff
+    // plans, ANSI builders or backend transport copies are allocated.
+    func prepareRetainedFrameCopies(_: Rect): Bool { true }
+    func prepareRetainedFrameCopies(size: Rect, _: Int64): Bool { prepareRetainedFrameCopies(size) }
+    func noteInternalDisplayFrameReferencesRetired(_: RetiredInternalDisplayFrameReferences): Unit {}
+    func wantsRetainedDisplayProducerRetirement(): Bool { false }
+    func beginRetainedDisplayProducerClosing(): Unit {}
+    func noteAsyncTaskReferencesRetired(_: RetiredAsyncTaskReferences): Unit {}
     func prepareFrame(size: Rect): PresentationFrame
     func renderViewport(frame: Frame): Unit
     func renderHistory(batchId: Int64, startRow: Int64, frame: Frame): Unit

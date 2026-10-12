@@ -21,6 +21,7 @@ main(): Int64 {
             approvalMode: ApprovalMode.Yolo,
             asyncEnabled: false
         )).value().getOrThrow()
+        installWorkflowContractPolicy(product)
         let application = product.applicationSession()
         let capturedChildRequests = ArrayList<ModelRequest>()
         application.subscribeSubagents({ event =>
@@ -95,7 +96,7 @@ main(): Int64 {
                     ",system=" + childRequest.system
             )
         }
-        product.closeMcp().value().getOrThrow()
+        product.close().value().getOrThrow()
         println("subagent product contract passed")
         0
     } finally {

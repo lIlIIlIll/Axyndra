@@ -5,6 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import std.collection.*
+import std.convert.*
 import agent_domain.*
 import agent_runtime.*
 
@@ -44,8 +45,10 @@ public class SqliteContextCheckpointStore <: ContextCheckpointRepository {
                 "checkpoint digest does not bind the canonical Thread prefix"
             )
         }
-        let payload = encodeCheckpointPayload(checkpoint)
+        match (validateStoredContextCheckpoint(checkpoint)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         try {
+            let payload = encodeCheckpointPayload(checkpoint)
+            if (payload.size > 8388608) { return checkpointStoreError("context.checkpoint_capacity", "checkpoint payload exceeds the durable decoder bound") }
             database.transaction { transaction =>
                 requireStoreRow(
                     transaction,
@@ -123,18 +126,57 @@ public class SqliteContextCheckpointStore <: ContextCheckpointRepository {
     }
 }
 
-func encodeCheckpointPayload(checkpoint: ContextCheckpoint): String {
+func checkpointPayloadValue(checkpoint: ContextCheckpoint): AgentValue {
     let notes = ArrayList<AgentValue>()
     for (note in checkpoint.durableNotes) { notes.add(textValue(note)) }
     let artifacts = ArrayList<AgentValue>()
     for (reference in checkpoint.artifactReferences) { artifacts.add(textValue(reference)) }
-    encodeStoredValue(objectValue([
+    objectValue([
         ValueField("structured_summary", checkpoint.structuredSummary),
         ValueField("active_state", checkpoint.activeState),
         ValueField("active_goal", textValue(checkpoint.activeGoal)),
         ValueField("durable_notes", listValue(notes.toArray())),
         ValueField("artifact_references", listValue(artifacts.toArray()))
-    ]))
+    ])
+}
+
+func encodeCheckpointPayload(checkpoint: ContextCheckpoint): String { encodeStoredValue(checkpointPayloadValue(checkpoint)) }
+
+// The exact complete payload (including goal/notes/artifact references), not
+// only summary text, must fit the existing StoredValueParser byte/depth/count
+// contract. This read-only preflight is also used before any overview model
+// dispatch. It does not acquire checkpoint or execution authority.
+public func validateStoredContextCheckpoint(checkpoint: ContextCheckpoint): Result<Unit> {
+    try {
+        if (!CheckpointStoredBound().value(checkpointPayloadValue(checkpoint), 0)) {
+            return checkpointStoreError("context.checkpoint_capacity", "complete checkpoint exceeds the durable codec boundary") }
+        Result.Ok(())
+    } catch (_: Exception) { checkpointStoreError("context.checkpoint_capacity", "checkpoint cannot be encoded durably") }
+}
+class CheckpointStoredBound {
+    private var remaining: Int64 = 8388608
+    private func take(size: Int64): Bool {
+        if (size < 0 || size > remaining) { return false }; remaining -= size; true
+    }
+    private func frame(size: Int64): Bool { take(size) && take(size.toString().size + 1) }
+    func value(item: AgentValue, depth: Int64): Bool {
+        if (depth > 64 || !take(1)) { return false }
+        match (item.unifiedKind) {
+            case ValueKind.Null | ValueKind.Boolean => true
+            case ValueKind.Text => frame(item.text.size)
+            case ValueKind.Number => frame(item.asNumberText().size)
+            case ValueKind.List =>
+                if (item.items.size > 1000000 || !frame(item.items.size.toString().size)) { return false }
+                for (child in item.items) { if (!value(child, depth + 1)) { return false } }; true
+            case ValueKind.Object =>
+                if (item.fields.size > 1000000 || !frame(item.fields.size.toString().size)) { return false }
+                let names = HashSet<String>()
+                for (field in item.fields) {
+                    if (names.contains(field.name) || !frame(field.name.size) || !value(field.value, depth + 1)) { return false }
+                    names.add(field.name)
+                }; true
+        }
+    }
 }
 
 func decodeCheckpointPayload(

@@ -8,10 +8,10 @@ import agent_core.*
 import agent_domain.*
 import agent_ports.*
 import agent_runtime.*
-import agent_skills.*
 import std.collection.*
 import std.sync.*
 import std.time.*
+import std.env.*
 import tool_runtime.*
 func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
     ToolCall(
@@ -22,10 +22,34 @@ func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
 }
 
 main(): Int64 {
+    if(getCommandLine().contains("--tool-read-sequence-contract")){
+        coreToolReadSequenceContract();return 0
+    }
+    if (getCommandLine().contains("--cancel-publication-failure-contract")) {
+        coreCancellationPublicationFailureContract()
+        return 0
+    }
+    for (mode in ["approve", "reject", "cancel_wait", "cancel_wait_retry", "budget", "cancel_read", "hook_freeze", "revoke_parent", "fact_changed"]) {
+        if (getCommandLine().contains("--context-read-continuation-mode-" + mode)) {
+            coreContextReadContinuationContract(selected: mode)
+            return 0
+        }
+    }
+    if (getCommandLine().contains("--context-read-continuation-contract")) {
+        coreContextReadContinuationContract()
+        coreCancellationPublicationFailureContract()
+        return 0
+    }
+    match (maybeRunContextCutRecoveryWorker()) {
+        case Some(code) => return code
+        case None => ()
+    }
     match (maybeRunDurableCoreTraceWorker()) {
         case Some(code) => return code
         case None => ()
     }
+    coreStartRestrictionContract111()
+    coreStartNotificationContract111()
     let conversations = MemoryConversations()
     let runs = MemoryRuns()
     let operations = MemoryOperations()
@@ -79,6 +103,11 @@ main(): Int64 {
     expect(model.calls == 2, "one execute primitive drives both model turns")
     modelProtocolCapabilityBoundaryContract(model)
     runFrozenToolSnapshotContract()
+    coreCatalogSafeCutContracts()
+    coreContextSnapshotCutContracts()
+    coreContextBoundaryBudgetJsonReopenContract107()
+    coreContextReadUpdateContract()
+    threadScopedCoreCatalogContracts()
     incompleteToolSnapshotBlocksRecoveryContract()
     controlledInternalModelCallContract()
     internalTotalBudgetContract()
@@ -108,6 +137,7 @@ main(): Int64 {
     )
     typedLifecycleContract(runs.eventLog, request.runId)
     activeSkillStackContract()
+    invalidSkillContextCannotCreateRunContract()
     toolBudgetPreparationFailureContract()
     conflictingToolDependencyContract()
     parallelToolWaveContract()
@@ -116,6 +146,10 @@ main(): Int64 {
     partialWaveHandoffFailureContract()
     malformedToolResultProtocolContract()
     approvalBatchBarrierContract()
+    approvalNestedSlotContract()
+    coreContextReadContinuationContract()
+    coreToolReadSequenceContract()
+    coreCancellationPublicationFailureContract()
     toolContextApprovalResumeContract()
     modifiedToolArgumentsAreRevalidatedAndApprovalBoundContract()
     modifiedPlanArgumentsPublicationContract()
@@ -185,6 +219,7 @@ main(): Int64 {
     zeroUsageFailureThenPricedSuccessContract()
     contextCompactionContract()
     contextBoundaryContract()
+    continuationCoreContracts()
     durableCoreTrajectoriesContract()
     println("agent_core contract passed")
     0
@@ -1402,24 +1437,46 @@ func activeSkillStackContract(): Unit {
         ToolPipeline(ToolCatalog(), MemoryOperations(), MemoryAudit(), FixtureIds()),
         ToolCatalog()
     )
-    let descriptor = SkillDescriptor(
-        "review", "review", "Review changed code", ["review"], "skill://review"
-    )
     let result = core.start(AgentRunRequest(
         RunId("skill-run"),
         SessionId("skill-session"),
         "fixture",
         "review this",
-        skillStack: SkillStackSnapshot([
-            SkillActivation(descriptor, "Inspect correctness and cite evidence.")
-        ], [])
+        contextSnapshot: InvocationContextProjection(contributions: [InvocationContextContribution(
+            "example.review", "review", "context://review", "Inspect correctness and cite evidence.",
+            ContextContentTrust.UserSelected
+        )])
     ))
     expect(result.isOk(), "active Skill Run completes")
     expect(
-        model.system.contains("<active_skills trust=\"user_selected\" capabilities=\"none\">") &&
+        model.system.contains("<run_context capabilities=\"none\">") &&
             model.system.contains("Inspect correctness and cite evidence."),
         "active Skill instructions enter the frozen model system prefix"
     )
+}
+
+func invalidSkillContextCannotCreateRunContract(): Unit {
+    let model = SkillObservingModel()
+    let runs = MemoryRuns()
+    let catalog = ToolCatalog()
+    let core = AgentCore(
+        model, runs,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog
+    )
+    let result = core.start(AgentRunRequest(
+        RunId("invalid-context-run"), SessionId("invalid-context-session"), "fixture", "review",
+        contextSnapshot: InvocationContextProjection(contributions: [InvocationContextContribution(
+            "example.review", "review", "context://review",
+            String.fromUtf8(Array<Byte>(RUN_CONTEXT_SNAPSHOT_MAX_BYTES + 1, repeat: 65)),
+            ContextContentTrust.UserSelected
+        )])
+    ))
+    expect(result.isError() && result.error().getOrThrow().code == "context.snapshot_invalid",
+        "oversized context is rejected as structured input failure")
+    expect(runs.snapshots.isEmpty() && runs.eventLog.isEmpty() &&
+        runs.modelAttempts.isEmpty() && model.system == "",
+        "context projection validates before durable Run admission or provider execution")
 }
 
 func internalModelTestCore(
@@ -1511,6 +1568,21 @@ func controlledInternalModelCallContract(): Unit {
             }
         case _ => false
     }
+    match (first) {
+        case Result.Err(error) => println("internal reviewer first actual error: " + error.describe())
+        case Result.Ok(_) => println("internal reviewer first actual result: Ok")
+    }
+    match (second) {
+        case Result.Err(error) => println("internal reviewer second actual error: " + error.describe())
+        case Result.Ok(_) => println("internal reviewer second actual result: Ok")
+    }
+    println("internal reviewer actual counts: calls=" + provider.calls.toString() +
+        " requests=" + charged.modelRequests.toString() + " sequence=" + charged.sequence.toString() +
+        " events=" + runs.eventLog.size.toString() + " usage_event=" + durableUsageEvent.toString() +
+        " attempt_event=" + durableAttemptEvent.toString() + " input=" + charged.inputTokens.toString() +
+        " output=" + charged.outputTokens.toString() + " reasoning=" + charged.reasoningTokens.toString() +
+        " cache_read=" + charged.cacheReadTokens.toString() + " cache_write=" + charged.cacheWriteTokens.toString() +
+        " cost=" + (match (charged.costMicros) { case Some(value) => value.toString(); case None => "None" }))
     expect(
         first.isOk() && provider.calls == 1 && charged.modelRequests == 2 &&
             charged.sequence == 2 && durableUsageEvent && durableAttemptEvent &&
@@ -2391,6 +2463,7 @@ func modifiedPlanArgumentsPublicationContract(): Unit {
     ])
     let runs = MemoryRuns()
     let catalog = ToolCatalog()
+    let operations = MemoryOperations()
     expect(catalog.register(
         ToolDescriptor(
             ModelToolDefinition("plan_write", "plan fixture", schema),
@@ -2401,7 +2474,7 @@ func modifiedPlanArgumentsPublicationContract(): Unit {
     let outcome = AgentCore(
         TwoStepModel(toolName: "plan_write"),
         runs,
-        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()),
         catalog,
         threadRuntimes: Some(InMemoryThreadRuntimeRegistry(
             ContextProjector("modified-plan-publication", ConservativeThreadTokenEstimator()),
@@ -2420,14 +2493,17 @@ func modifiedPlanArgumentsPublicationContract(): Unit {
             case AgentEventPayload.Extension(_, detail) =>
                 let codeMatches = match (detail.field("code")) {
                     case Some(value) => value.unifiedKind == UnifiedJsonKind.Text &&
-                        value.text == "plan.updated"
+                        value.text == "tool.execution_completed"
                     case None => false
                 }
-                let bodyMatches = match (detail.field("body")) {
-                    case Some(value) => value.unifiedKind == UnifiedJsonKind.Text &&
-                        value.text == "hook-approved plan"
-                    case None => false
-                }
+                let receiptId = match(detail.field("receipt_id")){
+                    case Some(value)=>value.text;case None=>""}
+                let bodyMatches = if(receiptId.startsWith("receipt-")){
+                    match(operations.loadPlan(OperationId(receiptId.removePrefix("receipt-")),
+                        RunId("modified-plan-publication-run"))){
+                        case Result.Ok(plan)=>httpIntentText(plan.canonicalArguments,"content")=="hook-approved plan"
+                        case Result.Err(_)=>false}
+                }else{false}
                 if (codeMatches && bodyMatches) {
                     published = true
                 }
@@ -2435,7 +2511,7 @@ func modifiedPlanArgumentsPublicationContract(): Unit {
         }
     }
     expect(outcome.isOk() && published,
-        "plan.updated publishes the canonical hook-modified arguments")
+        "completed Tool Receipt retains the canonical hook-modified arguments")
 }
 
 func partialToolWaveFailureContract(): Unit {
@@ -5049,9 +5125,9 @@ func runFrozenToolSnapshotContract(): Unit {
         outcome.isOk() && model.requests.size == 2 &&
             model.requests[0].tools.size == 1 && model.requests[1].tools.size == 1 &&
             model.requests[0].tools[0].description == "frozen implementation v1" &&
-            model.requests[1].tools[0].description == "frozen implementation v1" &&
+            model.requests[1].tools[0].description == "replacement implementation v2" &&
             v1.executions == 1 && v1.persistedResults == 1 && v2.executions == 0,
-        "catalog mutation during a Run affects only later Runs, including its next model turn"
+        "catalog mutation preserves the current call and becomes visible at the next canonical model cut"
     )
 }
 
@@ -5105,7 +5181,7 @@ func incompleteToolSnapshotBlocksRecoveryContract(): Unit {
         SemanticTurnId("turn-" + request.runId.value), request.runId,
         ItemId("user-" + request.runId.value),
         ThreadItemContent.UserMessage([ThreadMessagePart.Text(request.prompt)]),
-        incompleteLane, request.skillStack, createdAtMillis: 1
+        incompleteLane, request.contextSnapshot, createdAtMillis: 1
     )
     expect(brokenStart.isOk(), "install active Run with incomplete durable identity")
     let resumed = AgentCore(
@@ -6450,6 +6526,10 @@ class FailingSecondExecutionRuntime <: OperationRuntimePort {
         delegate.prepareTrustedControlOperation(operationId, runId, toolCallItemId, plan)
     }
 
+    public func prepareDerivedInvocation(operation: OperationId, parent: OperationId, run: RunId,
+        source: OperationRootSource, key: String, call: ToolCall, plan: NormalizedOperationPlan): Result<OperationId> {
+        delegate.prepareDerivedInvocation(operation, parent, run, source, key, call, plan)
+    }
     public func prepareDerivedOperation(
         operationId: OperationId,
         parentOperationId: OperationId,

@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = {
-    "agent_sdk": ROOT / "compat" / "agent-sdk-v2.api.json",
-    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v2.api.json",
+    "agent_sdk": ROOT / "compat" / "agent-sdk-native-v3.api.json",
+    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-native-v3.api.json",
 }
 
 

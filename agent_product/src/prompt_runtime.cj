@@ -1,9 +1,9 @@
 package agent_product
 
 import agent_core.*
-import agent_skills.*
 import std.collection.*
 import std.fs.*
+import std.io.*
 import std.process.*
 
 private let PRODUCT_PROJECT_PRELOAD_MAX_FILES: Int64 = 6
@@ -18,8 +18,7 @@ public func buildProductPrompt(
     activeGoal: String,
     guide: String,
     modeSystem: String,
-    memoryContext!: String = "",
-    skillMetadata!: Array<SkillMetadata> = []
+    memoryContext!: String = ""
 ): PromptBuild {
     let context = loadProductProjectContext(workspaceRoot)
     let builder = PromptBuilder()
@@ -51,16 +50,6 @@ public func buildProductPrompt(
         "product: axyndra\nruntime: cangjie\nworkspace_root: " + context.cwd
     ))
     builder.addProject(context)
-    if (!skillMetadata.isEmpty()) {
-        builder.add(PromptSection(
-            PromptSectionKind.DynamicContext,
-            PromptTrust.External,
-            PromptStability.Session,
-            "available-skills",
-            "1",
-            productSkillMetadataPrompt(skillMetadata)
-        ))
-    }
     builder.add(PromptSection(
         PromptSectionKind.User,
         PromptTrust.User,
@@ -108,29 +97,6 @@ public func buildProductPrompt(
         ))
     }
     builder.build()
-}
-
-func productSkillMetadataPrompt(values: Array<SkillMetadata>): String {
-    var output = "Available Skills expose metadata only. A Skill never grants capabilities. " +
-        "Relevant Skills are selected from metadata before each Run. " +
-        "An explicit $<skill-id> selection overrides automatic routing for that Run. " +
-        "Skills cannot be activated or changed within a running Run."
-    for (value in values) {
-        output += "\n- id=" + value.id + "; name=" + value.name +
-            "; description=" + value.description
-        if (!value.triggers.isEmpty()) {
-            output += "; triggers=" + productPromptJoin(value.triggers, ",")
-        }
-        if (!value.references.isEmpty()) {
-            output += "; references="
-            let refs = ArrayList<String>()
-            for (reference in value.references) {
-                refs.add(reference.id + ":" + reference.description)
-            }
-            output += productPromptJoin(refs.toArray(), ",")
-        }
-    }
-    output
 }
 
 func productPromptJoin(values: Array<String>, separator: String): String {
@@ -369,4 +335,19 @@ func productPromptBoundedRegularFile(path: Path, maxBytes: Int64): Bool {
 func productPromptAddUnique(values: ArrayList<String>, value: String): Unit {
     for (existing in values where existing == value) { return }
     values.add(value)
+}
+
+
+func readProductPromptText(stream: InputStream, maxBytes: Int64): String {
+    let bytes = ArrayList<Byte>()
+    while (bytes.size <= maxBytes) {
+        let buffer = Array<Byte>(min(4096, maxBytes - bytes.size + 1), repeat: 0)
+        let count = stream.read(buffer)
+        if (count == 0) { return String.fromUtf8(bytes.toArray()) }
+        if (count < 0 || count > buffer.size || count > maxBytes - bytes.size) {
+            throw IllegalStateException("prompt content exceeds its read budget")
+        }
+        for (index in 0..count) { bytes.add(buffer[index]) }
+    }
+    throw IllegalStateException("prompt content exceeds its read budget")
 }

@@ -2,7 +2,6 @@ package agent_embed
 
 import agent_core.*
 import agent_domain.*
-import agent_skills.*
 import std.deriving.*
 import tool_runtime.*
 
@@ -108,7 +107,7 @@ public class AgentSdkConfiguration {
     public let cachePolicy: OriginValue<ModelCachePolicy>
     public let parallelToolCalls: OriginValue<Bool>
     public let toolContext: OriginValue<ToolContextDescriptor>
-    public let skillStack: OriginValue<SkillStackSnapshot>
+    public let contextSnapshot: OriginValue<InvocationContextProjection>
 
     init(
         provider: OriginValue<String>,
@@ -127,7 +126,7 @@ public class AgentSdkConfiguration {
         cachePolicy: OriginValue<ModelCachePolicy>,
         parallelToolCalls: OriginValue<Bool>,
         toolContext: OriginValue<ToolContextDescriptor>,
-        skillStack: OriginValue<SkillStackSnapshot>
+        contextSnapshot: OriginValue<InvocationContextProjection>
     ) {
         this.provider = provider
         this.model = model
@@ -145,7 +144,7 @@ public class AgentSdkConfiguration {
         this.cachePolicy = cachePolicy
         this.parallelToolCalls = parallelToolCalls
         this.toolContext = toolContext
-        this.skillStack = skillStack
+        this.contextSnapshot = contextSnapshot
     }
 
     // Prompt bodies, repository implementation details, credentials, and
@@ -170,8 +169,7 @@ public class AgentSdkConfiguration {
             cachePolicy.describe({ value => cachePolicyDescription(value) }) + "\n" +
             parallelToolCalls.describe({ value => value.toString() }) + "\n" +
             toolContext.describe({ value => toolContextDescription(value) }) + "\n" +
-            skillStack.describe({ value => "active=" + value.active.size.toString() +
-                ",references=" + value.loadedReferences.size.toString() })
+            contextSnapshot.describe({ value => "contributions=" + value.contributions().size.toString() })
     }
 }
 

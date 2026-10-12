@@ -240,6 +240,11 @@ public func effectiveProviderHeaders(
 }
 
 public interface ProviderTransport {
+    // Opt-in for transports that deliver the entire successful SSE response
+    // through chunks and deliberately do not retain a second captured body.
+    // Existing ports keep their replay behavior by default.
+    func usesIncrementalStreamReply(): Bool { false }
+
     func post(
         provider: ProviderSpec,
         payload: String,
@@ -778,28 +783,113 @@ func providerProtocolName(protocol: ProviderProtocol): String {
     }
 }
 
+// The vendor stream uses compound locations (choice/tool/content/output).
+// Project them to unique bounded Domain block ids for this request. A Tool
+// start is block-begin evidence even when the codec omits its redundant
+// ContentBlockStarted event. Duplicate explicit begins and unmatched ends
+// still fail; neither terminal evidence nor Tool completion is invented.
+class ProviderProjectedBlock {
+    let index: Int64
+    let kind: String
+    var explicitBegin: Bool
+    var completed = false
+    init(index: Int64, kind: String, explicitBegin: Bool) {
+        this.index = index; this.kind = kind; this.explicitBegin = explicitBegin
+    }
+}
+
+class ProviderStreamBlocks {
+    private let entries = HashMap<String, ProviderProjectedBlock>()
+    private let order = ArrayList<String>()
+    private let used = HashSet<Int64>()
+
+    func begin(identity: LlmWireEventIdentity, kind: String, explicitBegin: Bool,
+        events: domain.ModelEventSink): Unit {
+        let key = streamIdentityKey(identity)
+        match (entries.get(key)) {
+            case Some(block) =>
+                if (block.completed || block.kind != kind || (explicitBegin && block.explicitBegin)) { invalid() }
+                if (explicitBegin) { block.explicitBegin = true }
+                return
+            case None => ()
+        }
+        if (entries.size >= 4096) { invalid() }
+        var index = streamIdentityIndex(identity)
+        if (index < 0 || index > 4095) { invalid() }
+        if (used.contains(index)) {
+            index = 0
+            while (used.contains(index) && index <= 4095) { index++ }
+            if (index > 4095) { invalid() }
+        }
+        used.add(index); entries[key] = ProviderProjectedBlock(index, kind, explicitBegin)
+        order.add(key)
+        events(domain.ModelEvent.ProviderProgress(domain.ProviderStreamEvent.ContentBlockStarted(index, kind)))
+    }
+
+    func end(identity: LlmWireEventIdentity, kind: String, events: domain.ModelEventSink): Unit {
+        let block = match (entries.get(streamIdentityKey(identity))) {
+            case Some(value) => value; case None => invalid(); throw IllegalStateException("unreachable")
+        }
+        if (block.completed || block.kind != kind) { invalid() }
+        block.completed = true
+        events(domain.ModelEvent.ProviderProgress(domain.ProviderStreamEvent.ContentBlockCompleted(block.index, kind)))
+    }
+
+    // Chat ends its whole choice rather than each Tool block. Close only
+    // already observed starts backed by complete arguments in the codec's
+    // validated terminal reply, before emitting that terminal. Incomplete
+    // calls fail with observed usage and cannot produce a canonical Decision.
+    func completeTools(reply: LlmWireReply, calls: ?HashMap<String, String>, events: domain.ModelEventSink): Unit {
+        for (key in order) {
+            let block = entries.get(key).getOrThrow()
+            if (block.completed) { continue }
+            let callId: ?String = match (calls) {
+                case Some(values) => values.get(key)
+                case None => None
+            }
+            var complete = false
+            for (value in reply.blocks) {
+                if (let LlmWireOutputBlock.ToolCall(call) <- value) {
+                    if (callId == Some(call.callId)) {
+                        match (call.arguments) { case LlmWireToolArguments.Complete(_) => complete = true; case _ => () }
+                    }
+                }
+            }
+            if (block.kind != "tool_call" || !complete || callId.isNone()) {
+                throw LlmWireError(LlmWireErrorKind.InvalidWire, "model.stream_tool_terminal_incomplete",
+                    "provider terminal does not complete an observed Tool", usage: Some(reply.usage))
+            }
+            block.completed = true
+            events(domain.ModelEvent.ProviderProgress(domain.ProviderStreamEvent.ContentBlockCompleted(block.index, block.kind)))
+            events(domain.ModelEvent.ToolCallCompleted(callId.getOrThrow()))
+        }
+    }
+
+    private func invalid(): Unit {
+        throw LlmWireError(LlmWireErrorKind.InvalidWire, "model.stream_block_order", "provider block event order is invalid")
+    }
+}
+
 func emitLlmWireEvent(
     event: LlmWireEvent,
     protocol: ProviderProtocol,
     events: domain.ModelEventSink,
+    blocks: ProviderStreamBlocks,
     toolCallIds!: ?HashMap<String, String> = None
 ): Unit {
     match (event) {
         case LlmWireEvent.StreamStarted(_, _) => events(domain.ModelEvent.ProviderProgress(
             domain.ProviderStreamEvent.StreamStarted(terminalEventKind(protocol))
         ))
-        case LlmWireEvent.ContentBlockStarted(kind, identity) => events(domain.ModelEvent.ProviderProgress(
-            domain.ProviderStreamEvent.ContentBlockStarted(
-                streamIdentityIndex(identity),
-                streamBlockKindName(kind)
-            )
-        ))
+        case LlmWireEvent.ContentBlockStarted(kind, identity) =>
+            blocks.begin(identity, streamBlockKindName(kind), true, events)
         case LlmWireEvent.TextDelta(text, _) => events(domain.ModelEvent.TextDelta(text))
         case LlmWireEvent.ReasoningDelta(text, _) => events(domain.ModelEvent.ReasoningDelta(text))
         case LlmWireEvent.RefusalDelta(text, _) => events(domain.ModelEvent.TextDelta(text))
         case LlmWireEvent.CitationAdded(_, _) => ()
         case LlmWireEvent.RefusalObserved(_) => ()
         case LlmWireEvent.ToolCallStarted(identity) =>
+            blocks.begin(identity.location, "tool_call", false, events)
             match (toolCallIds) {
                 case Some(values) => values[streamIdentityKey(identity.location)] = identity.callId
                 case None => ()
@@ -808,12 +898,7 @@ func emitLlmWireEvent(
         case LlmWireEvent.ToolArgumentsDelta(text, identity) =>
             events(domain.ModelEvent.ToolArgumentsDelta(identity.callId, text))
         case LlmWireEvent.ContentBlockCompleted(kind, identity) =>
-            events(domain.ModelEvent.ProviderProgress(
-                domain.ProviderStreamEvent.ContentBlockCompleted(
-                    streamIdentityIndex(identity),
-                    streamBlockKindName(kind)
-                )
-            ))
+            blocks.end(identity, streamBlockKindName(kind), events)
             if (let LlmWireStreamBlockKind.ToolCall <- kind) {
                 match (toolCallIds) {
                     case Some(values) => match (values.get(streamIdentityKey(identity))) {
@@ -832,6 +917,7 @@ func emitLlmWireEvent(
         case LlmWireEvent.ChoiceCompleted(_, _) => ()
         case LlmWireEvent.TerminalObserved(terminal) => match (terminal) {
             case LlmWireTerminal.Completed(reply) =>
+                blocks.completeTools(reply, toolCallIds, events)
                 let input = providerInputUsageTotal(protocol, reply.usage)
                 let output = optionalUsageValue(reply.usage.outputTokens)
                 events(domain.ModelEvent.UsageUpdated(input, output))
@@ -901,14 +987,19 @@ func terminalEventKind(protocol: ProviderProtocol): String {
 }
 
 // A request owns one incremental decoder for the whole SSE byte stream.
-// Errors are retained locally and normalized from the complete response body
-// by decodeProviderReply, so a callback cannot escape across transport code.
+// Callback errors stay local. Existing transports normalize by captured-body
+// replay; opt-in transports reuse this exact decoder terminal/error, including
+// partial usage, through the same decodeProviderReply normalization.
 class ProviderStreamProjection {
     private let decoder: LlmWireStreamDecoder
     private let protocol: ProviderProtocol
     private let events: domain.ModelEventSink
     private let toolCallIds = HashMap<String, String>()
+    private let blocks = ProviderStreamBlocks()
     private var failed: Bool = false
+    private var failure: ?LlmWireError = None
+    private var terminal: ?LlmWireTerminal = None
+    private var finished = false
 
     init(codec: LlmWireCodec, protocol: ProviderProtocol, events: domain.ModelEventSink) {
         this.decoder = codec.newStreamDecoder()
@@ -921,28 +1012,47 @@ class ProviderStreamProjection {
         try {
             match (decoder.push(chunk)) {
                 case LlmWireResult.Ok(update) => emit(update)
-                case LlmWireResult.Err(_) => failed = true
+                case LlmWireResult.Err(error) => failed = true; failure = Some(error)
             }
+        } catch (error: LlmWireError) {
+            failed = true; failure = Some(error)
         } catch (_: Exception) {
             failed = true
         }
     }
 
     func finish(): Unit {
+        if (finished) { return }
+        finished = true
         if (failed) { return }
         try {
             match (decoder.finish()) {
                 case LlmWireResult.Ok(update) => emit(update)
-                case LlmWireResult.Err(_) => failed = true
+                case LlmWireResult.Err(error) => failed = true; failure = Some(error)
             }
+        } catch (error: LlmWireError) {
+            failed = true; failure = Some(error)
         } catch (_: Exception) {
             failed = true
         }
     }
 
+    func completedReply(): LlmWireReply {
+        finish()
+        match (failure) { case Some(error) => throw error; case None => () }
+        if (failed) { throw LlmWireError(LlmWireErrorKind.InvalidWire,
+            "model.stream_callback_failed", "provider stream callback failed") }
+        match (terminal) {
+            case Some(value) => completedWireReply(value)
+            case None => throw LlmWireError(LlmWireErrorKind.InvalidWire,
+                "llm.stream_terminal_missing", "provider stream ended without a terminal response")
+        }
+    }
+
     private func emit(update: LlmWireStreamUpdate): Unit {
+        match (update.terminal) { case Some(value) => terminal = Some(value); case None => () }
         for (event in update.events) {
-            emitLlmWireEvent(event, protocol, events, toolCallIds: Some(toolCallIds))
+            emitLlmWireEvent(event, protocol, events, blocks, toolCallIds: Some(toolCallIds))
         }
     }
 }
@@ -1131,7 +1241,8 @@ public class ProviderModelPort <: ports.ModelPort {
                     } else {
                         events
                     },
-                    request.structuredOutput
+                    request.structuredOutput,
+                    streamProjection: if (request.streaming && transport.usesIncrementalStreamReply()) { projection } else { None }
                 )
                 if (request.streaming && reply.isOk()) {
                     events(domain.ModelEvent.Completed)
@@ -1188,1520 +1299,6 @@ public func defaultProviderCapabilities(): domain.ModelCapabilities {
         contextWindowTokens: 1000000,
         maxOutputTokens: 200000
     )
-}
-
-public class FixtureModelPort <: ports.ModelPort {
-    private let failFirst: Bool
-    private var calls: Int64 = 0
-    // Last request's thinking level, for contract probes (e.g. plan mode
-    // must force High even when the session default is lower).
-    public var lastThinking: domain.ThinkingLevel = domain.ThinkingLevel.Medium
-    // Fixture-only observation point for end-to-end Product request contracts.
-    // Production transports never read or populate this field.
-    public var lastRequest: ?domain.ModelRequest = None
-    private let scriptedLock = Mutex()
-    private let scriptedReplies = ArrayList<domain.ModelReply>()
-    private var scriptedReplySequence: Int64 = 0
-
-    public init(failFirst!: Bool = false) {
-        this.failFirst = failFirst
-    }
-
-    public func enqueueToolCallReply(
-        callId: String,
-        name: String,
-        arguments: domain.AgentValue
-    ): Unit {
-        scriptedLock.lock()
-        try {
-            scriptedReplySequence += 1
-            scriptedReplies.add(fixtureTerminalReply(
-                [domain.ModelBlock(
-                    domain.ModelBlockKind.ToolCall,
-                    callId: callId,
-                    name: name,
-                    arguments: arguments
-                )],
-                stopReason: "tool_use",
-                inputTokens: 1,
-                outputTokens: 1,
-                providerId: "fixture",
-                responseId: "fixture-scripted-" + scriptedReplySequence.toString()
-            ))
-        } finally {
-            scriptedLock.unlock()
-        }
-    }
-
-    private func takeScriptedReply(): ?domain.ModelReply {
-        scriptedLock.lock()
-        try {
-            if (scriptedReplies.isEmpty()) {
-                None
-            } else {
-                Some(scriptedReplies.remove(at: 0))
-            }
-        } finally {
-            scriptedLock.unlock()
-        }
-    }
-    public func execute(
-        request: domain.ModelRequest,
-        events: domain.ModelEventSink
-    ): domain.Result<domain.ModelReply> {
-        lastRequest = Some(request)
-        lastThinking = request.thinking
-        calls += 1
-        if (failFirst && calls == 1) {
-            return domain.Result.Err(
-                domain.AgentError(
-                    domain.AgentErrorKind.Transport,
-                    "fixture.transport",
-                    "fixture transport failure",
-                    retryable: true,
-                    fallbackAllowed: true
-                )
-            )
-        }
-        match (takeScriptedReply()) {
-            case Some(reply) => return domain.Result.Ok(reply)
-            case None => ()
-        }
-        let lastText = if (request.messages.isEmpty()) {
-            ""
-        } else {
-            messageText(request.messages[request.messages.size - 1])
-        }
-        if (lastText.startsWith("[plan-review approved ") &&
-            lastText.contains("FIXTURE-APPROVED-PLAN-EXECUTION-FAILURE")) {
-            return domain.Result.Err(
-                domain.AgentError(
-                    domain.AgentErrorKind.Transport,
-                    "fixture.plan_execution_failed",
-                    "fixture approved-plan execution failed",
-                    retryable: false,
-                    fallbackAllowed: false
-                )
-            )
-        }
-        if (request.system.contains("COMPACTION_SEMANTIC_SUMMARIZER")) {
-            if (lastText.contains("FIXTURE-COMPACTION-SUMMARY-FAILURE")) {
-                return domain.Result.Err(
-                    domain.AgentError(
-                        domain.AgentErrorKind.Transport,
-                        "fixture.compaction_summary_failed",
-                        "fixture compaction summarizer failed",
-                        retryable: false,
-                        fallbackAllowed: true
-                    )
-                )
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.Text,
-                            text: "The session established concrete facts and left clearly identified work for the next turn."
-                        )
-                    ],
-                    stopReason: "end_turn",
-                    inputTokens: request.messages.size,
-                    outputTokens: 18,
-                    providerId: "fixture",
-                    responseId: "fixture-compaction-summary-" + calls.toString()
-                )
-            )
-        }
-        if (request.system.contains("INDEPENDENT_APPROVAL_REVIEWER")) {
-            let normalized = lastText.toAsciiLower()
-            let decision = if (normalized.contains("\"sensitive_data\"") || normalized.contains("\"system_change\"") ||
-                normalized.contains("rm -rf /")) {
-                "{\"decision\":\"deny\",\"reason\":\"The operation crosses a permanent safety boundary or exposes sensitive data.\",\"riskLevel\":\"critical\",\"approvedCapabilities\":[]}"
-            } else if (normalized.contains("\"git_destructive\"") || normalized.contains("\"outside_workspace\"") ||
-                normalized.contains("\"network\"")) {
-                "{\"decision\":\"ask_user\",\"reason\":\"The operation has external or destructive side effects that require explicit user confirmation.\",\"riskLevel\":\"high\",\"approvedCapabilities\":[]}"
-            } else {
-                "{\"decision\":\"approve\",\"reason\":\"The scoped operation matches the user request and remains within the workspace.\",\"riskLevel\":\"low\",\"approvedCapabilities\":[\"workspace.write\"]}"
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [domain.ModelBlock(domain.ModelBlockKind.Text, text: decision)],
-                    stopReason: "end_turn",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-approval-" + calls.toString()
-                )
-            )
-        }
-        if ((lastText == "fixture approval safe" || lastText == "fixture approval dangerous" || lastText ==
-            "fixture approval ask" || lastText == "fixture approval execution failure") && hasTool(request.tools,
-            if (lastText == "fixture approval safe" || lastText == "fixture approval execution failure") {
-                "write"
-            } else {
-                "bash"
-            })) {
-            let block = if (lastText == "fixture approval safe" || lastText == "fixture approval execution failure") {
-                domain.ModelBlock(
-                    domain.ModelBlockKind.ToolCall,
-                    callId: if (lastText == "fixture approval safe") {
-                        "fixture-approval-safe"
-                    } else {
-                        "fixture-approval-execution-failure"
-                    },
-                    name: "write",
-                    arguments: domain.objectValue(
-                        [
-                            domain.ValueField("path", domain.textValue(if (lastText == "fixture approval safe") {
-                                "tmp/result.txt"
-                            } else {
-                                "../missing-parent/child.txt"
-                            })),
-                            domain.ValueField("content", domain.textValue("hello\n"))
-                        ]
-                    )
-                )
-            } else {
-                domain.ModelBlock(
-                    domain.ModelBlockKind.ToolCall,
-                    callId: "fixture-approval-risk",
-                    name: "bash",
-                    arguments: domain.objectValue(
-                        [domain.ValueField("command",
-                            domain.textValue(if (lastText == "fixture approval dangerous") {
-                                "rm -rf /"
-                            } else {
-                                "git push --force origin main"
-                            }))])
-                )
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [block],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-approval-tool-" + calls.toString()
-                )
-            )
-        }
-        match (fixtureHubProcessBlock(lastText)) {
-            case Some(block) =>
-                if (hasTool(request.tools, "hub")) {
-                    if (request.streaming) {
-                        events(
-                            domain.ModelEvent.ToolCallStarted(
-                                block.callId,
-                                "hub"
-                            )
-                        )
-                        events(domain.ModelEvent.ToolCallCompleted(block.callId))
-                        events(domain.ModelEvent.Completed)
-                    }
-                    return domain.Result.Ok(
-                        fixtureTerminalReply(
-                            [block],
-                            stopReason: "tool_use",
-                            inputTokens: request.messages.size,
-                            outputTokens: 1,
-                            providerId: "fixture",
-                            responseId: "fixture-" + calls.toString()
-                        )
-                    )
-                }
-            case None => ()
-        }
-        if (lastText == "fixture ask" && hasTool(request.tools, "ask")) {
-            let block = domain.ModelBlock(
-                domain.ModelBlockKind.ToolCall,
-                callId: "fixture-ask-call",
-                name: "ask",
-                arguments: domain.objectValue(
-                    [
-                        domain.ValueField(
-                            "questions",
-                            domain.listValue(
-                                [
-                                    domain.objectValue(
-                                        [
-                                            domain.ValueField("id", domain.textValue("features")),
-                                            domain.ValueField(
-                                                "question",
-                                                domain.textValue("Which features should be enabled?")
-                                            ),
-                                            domain.ValueField(
-                                                "options",
-                                                domain.listValue(
-                                                    [
-                                                        domain.objectValue(
-                                                            [
-                                                                domain.ValueField("label", domain.textValue("Search")),
-                                                                domain.ValueField(
-                                                                    "description",
-                                                                    domain.textValue("Fast workspace lookup")
-                                                                )
-                                                            ]
-                                                        ),
-                                                        domain.objectValue(
-                                                            [
-                                                                domain.ValueField("label", domain.textValue("Export")),
-                                                                domain.ValueField(
-                                                                    "description",
-                                                                    domain.textValue("Portable reports")
-                                                                ),
-                                                                domain.ValueField(
-                                                                    "preview",
-                                                                    domain.textValue("HTML and JSON")
-                                                                )
-                                                            ]
-                                                        )
-                                                    ]
-                                                )
-                                            ),
-                                            domain.ValueField("multi", domain.boolValue(true)),
-                                            domain.ValueField("recommended", domain.integerValue(1))
-                                        ]
-                                    ),
-                                    domain.objectValue(
-                                        [
-                                            domain.ValueField("id", domain.textValue("verification")),
-                                            domain.ValueField(
-                                                "question",
-                                                domain.textValue("Which verification should run?")
-                                            ),
-                                            domain.ValueField(
-                                                "options",
-                                                domain.listValue(
-                                                    [
-                                                        domain.objectValue(
-                                                            [
-                                                                domain.ValueField(
-                                                                    "label",
-                                                                    domain.textValue("Node tests")
-                                                                ),
-                                                                domain.ValueField(
-                                                                    "description",
-                                                                    domain.textValue("Run the core engine contract")
-                                                                )
-                                                            ]
-                                                        ),
-                                                        domain.objectValue(
-                                                            [
-                                                                domain.ValueField(
-                                                                    "label",
-                                                                    domain.textValue("Manual only")
-                                                                ),
-                                                                domain.ValueField(
-                                                                    "description",
-                                                                    domain.textValue("Skip automated verification")
-                                                                )
-                                                            ]
-                                                        )
-                                                    ]
-                                                )
-                                            ),
-                                            domain.ValueField("recommended", domain.integerValue(0))
-                                        ]
-                                    )
-                                ]
-                            )
-                        )
-                    ]
-                )
-            )
-            if (request.streaming) {
-                events(domain.ModelEvent.ToolCallStarted(block.callId, "ask"))
-                events(domain.ModelEvent.ToolCallCompleted(block.callId))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [block],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-ask"
-                )
-            )
-        }
-        if ((lastText == "fixture plan write" || lastText.startsWith("Plan mode protocol correction:")) && hasTool(
-            request.tools, "plan_write")) {
-            let block = domain.ModelBlock(
-                domain.ModelBlockKind.ToolCall,
-                callId: "fixture-plan-call",
-                name: "plan_write",
-                arguments: domain.objectValue(
-                    [
-                        domain.ValueField(
-                            "content",
-                            domain.textValue(
-                                "Goal: ship a plan\nConstraints: read-only\n" +
-                                    "Approach: inspect then write\nAcceptance: contract passes\n" + "Unresolved: none")
-                        )
-                    ]
-                )
-            )
-            if (request.streaming) {
-                events(domain.ModelEvent.ToolCallStarted(block.callId, "plan_write"))
-                events(domain.ModelEvent.ToolCallCompleted(block.callId))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [block],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-plan"
-                )
-            )
-        }
-        if (lastText == "fixture task batch" && hasTool(request.tools, "task")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-task-batch-call",
-                        "task"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-task-batch-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            let items = ArrayList<domain.AgentValue>()
-            for (name in ["fixture-batch-a", "fixture-batch-b"]) {
-                items.add(
-                    domain.objectValue(
-                        [
-                            domain.ValueField(
-                                "name",
-                                domain.textValue(name)
-                            ),
-                            domain.ValueField(
-                                "agent",
-                                domain.textValue("reviewer")
-                            ),
-                            domain.ValueField(
-                                "task",
-                                domain.textValue("child fixture yield")
-                            )
-                        ]
-                    )
-                )
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-task-batch-call",
-                            name: "task",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "context",
-                                        domain.textValue("shared fixture context")
-                                    ),
-                                    domain.ValueField(
-                                        "tasks",
-                                        domain.listValue(items.toArray())
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture hub jobs" && hasTool(request.tools, "hub")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-hub-jobs-call",
-                        "hub"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-hub-jobs-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-hub-jobs-call",
-                            name: "hub",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "op",
-                                        domain.textValue("jobs")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if ((lastText == "fixture hub inbox" || lastText == "fixture hub list") && hasTool(request.tools, "hub")) {
-            let op = if (lastText == "fixture hub inbox") {
-                "inbox"
-            } else {
-                "list"
-            }
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-hub-" + op + "-call",
-                        "hub"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-hub-" + op + "-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-hub-" + op + "-call",
-                            name: "hub",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "op",
-                                        domain.textValue(op)
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture hub send child" && hasTool(request.tools, "hub")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-hub-send-child-call",
-                        "hub"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-hub-send-child-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-hub-send-child-call",
-                            name: "hub",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "op",
-                                        domain.textValue("send")
-                                    ),
-                                    domain.ValueField(
-                                        "to",
-                                        domain.textValue("fixture-hub-child")
-                                    ),
-                                    domain.ValueField(
-                                        "message",
-                                        domain.textValue("follow up child")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture task write" && hasTool(request.tools, "task")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-task-write-call",
-                        "task"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-task-write-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-task-write-call",
-                            name: "task",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "context",
-                                        domain.textValue("fixture write child context")
-                                    ),
-                                    domain.ValueField(
-                                        "tasks",
-                                        domain.listValue(
-                                            [
-                                                domain.objectValue(
-                                                    [
-                                                        domain.ValueField(
-                                                            "name",
-                                                            domain.textValue("fixture-write-child")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "agent",
-                                                            domain.textValue("task")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "task",
-                                                            domain.textValue("child fixture write")
-                                                        )
-                                                    ]
-                                                )
-                                            ]
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture task hub send" && hasTool(request.tools, "task")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-task-hub-call",
-                        "task"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-task-hub-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-task-hub-call",
-                            name: "task",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "context",
-                                        domain.textValue("fixture hub child context")
-                                    ),
-                                    domain.ValueField(
-                                        "tasks",
-                                        domain.listValue(
-                                            [
-                                                domain.objectValue(
-                                                    [
-                                                        domain.ValueField(
-                                                            "name",
-                                                            domain.textValue("fixture-hub-child")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "agent",
-                                                            domain.textValue("reviewer")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "task",
-                                                            domain.textValue("child fixture hub send")
-                                                        )
-                                                    ]
-                                                )
-                                            ]
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if ((lastText == "fixture async bash" || lastText == "fixture async bash wait") && hasTool(request.tools, "bash")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-async-bash-call",
-                        "bash"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-async-bash-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            let command = if (lastText == "fixture async bash wait") {
-                "sleep 5"
-            } else {
-                "printf async-bash-result"
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-async-bash-call",
-                            name: "bash",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "command",
-                                        domain.textValue(command)
-                                    ),
-                                    domain.ValueField(
-                                        "async",
-                                        domain.boolValue(true)
-                                    ),
-                                    domain.ValueField(
-                                        "timeout",
-                                        domain.integerValue(10)
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture task" && hasTool(request.tools, "task")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-task-call",
-                        "task"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-task-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-task-call",
-                            name: "task",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "context",
-                                        domain.textValue("single child fixture context")
-                                    ),
-                                    domain.ValueField(
-                                        "tasks",
-                                        domain.listValue(
-                                            [
-                                                domain.objectValue(
-                                                    [
-                                                        domain.ValueField(
-                                                            "name",
-                                                            domain.textValue("fixture-child")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "agent",
-                                                            domain.textValue("reviewer")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "task",
-                                                            domain.textValue("child fixture yield")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "outputSchema",
-                                                            domain.objectValue(
-                                                                [
-                                                                    domain.ValueField(
-                                                                        "type",
-                                                                        domain.textValue("object")
-                                                                    ),
-                                                                    domain.ValueField(
-                                                                        "properties",
-                                                                        domain.objectValue(
-                                                                            [
-                                                                                domain.ValueField(
-                                                                                    "answer",
-                                                                                    domain.objectValue(
-                                                                                        [
-                                                                                            domain.ValueField(
-                                                                                                "type",
-                                                                                                domain.textValue(
-                                                                                                    "string")
-                                                                                            )
-                                                                                        ]
-                                                                                    )
-                                                                                )
-                                                                            ]
-                                                                        )
-                                                                    ),
-                                                                    domain.ValueField(
-                                                                        "required",
-                                                                        domain.listValue(
-                                                                            [domain.textValue("answer")])
-                                                                    )
-                                                                ]
-                                                            )
-                                                        ),
-                                                        domain.ValueField(
-                                                            "schemaMode",
-                                                            domain.textValue("strict")
-                                                        )
-                                                    ]
-                                                )
-                                            ]
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture task cancel" && hasTool(request.tools, "task")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-task-cancel-call",
-                        "task"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-task-cancel-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-task-cancel-call",
-                            name: "task",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "context",
-                                        domain.textValue("fixture cancellation context")
-                                    ),
-                                    domain.ValueField(
-                                        "tasks",
-                                        domain.listValue(
-                                            [
-                                                domain.objectValue(
-                                                    [
-                                                        domain.ValueField(
-                                                            "name",
-                                                            domain.textValue("fixture-cancel-child")
-                                                        ),
-                                                        domain.ValueField(
-                                                            "task",
-                                                            domain.textValue("child fixture bash wait")
-                                                        )
-                                                    ]
-                                                )
-                                            ]
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "child fixture yield" && hasTool(request.tools, "yield")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-yield-call",
-                        "yield"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-yield-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-yield-call",
-                            name: "yield",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "result",
-                                        domain.objectValue(
-                                            [
-                                                domain.ValueField(
-                                                    "data",
-                                                    domain.objectValue(
-                                                        [
-                                                            domain.ValueField(
-                                                                "answer",
-                                                                domain.textValue("reviewed")
-                                                            )
-                                                        ]
-                                                    )
-                                                )
-                                            ]
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "child fixture bash wait" && hasTool(request.tools, "bash")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-child-bash-wait",
-                        "bash"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-child-bash-wait"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-child-bash-wait",
-                            name: "bash",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "command",
-                                        domain.textValue("sleep 5")
-                                    ),
-                                    domain.ValueField(
-                                        "timeout",
-                                        domain.integerValue(10000)
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "child fixture write" && hasTool(request.tools, "write")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-child-write",
-                        "write"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-child-write"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-child-write",
-                            name: "write",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "path",
-                                        domain.textValue("child-approved.txt")
-                                    ),
-                                    domain.ValueField(
-                                        "content",
-                                        domain.textValue("written by child\n")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "child fixture hub send" && hasTool(request.tools, "hub")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-child-hub-send",
-                        "hub"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-child-hub-send"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-child-hub-send",
-                            name: "hub",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "op",
-                                        domain.textValue("send")
-                                    ),
-                                    domain.ValueField(
-                                        "to",
-                                        domain.textValue("Main")
-                                    ),
-                                    domain.ValueField(
-                                        "message",
-                                        domain.textValue("child report delivered")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture vnext read" && hasTool(request.tools, "read")) {
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-vnext-read",
-                            name: "read",
-                            arguments: domain.objectValue([
-                                domain.ValueField("path", domain.textValue("input.txt"))
-                            ])
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-vnext-read-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture host uri read" && hasTool(request.tools, "read")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-host-uri-read",
-                        "read"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-host-uri-read"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-host-uri-read",
-                            name: "read",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "path",
-                                        domain.textValue("hostdoc://guide")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture host uri write" && hasTool(request.tools, "write")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-host-uri-write",
-                        "write"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-host-uri-write"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-host-uri-write",
-                            name: "write",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "path",
-                                        domain.textValue("hostdoc://guide")
-                                    ),
-                                    domain.ValueField(
-                                        "content",
-                                        domain.textValue("updated by fixture")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "fixture host tool" && hasTool(request.tools, "host_echo")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-host-call",
-                        "host_echo"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-host-call"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-host-call",
-                            name: "host_echo",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "text",
-                                        domain.textValue("from fixture")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        if (lastText == "Continue working on the active goal." && hasTool(request.tools, "goal")) {
-            if (request.streaming) {
-                events(
-                    domain.ModelEvent.ToolCallStarted(
-                        "fixture-goal-complete",
-                        "goal"
-                    )
-                )
-                events(domain.ModelEvent.ToolCallCompleted("fixture-goal-complete"))
-                events(domain.ModelEvent.Completed)
-            }
-            return domain.Result.Ok(
-                fixtureTerminalReply(
-                    [
-                        domain.ModelBlock(
-                            domain.ModelBlockKind.ToolCall,
-                            callId: "fixture-goal-complete",
-                            name: "goal",
-                            arguments: domain.objectValue(
-                                [
-                                    domain.ValueField(
-                                        "op",
-                                        domain.textValue("complete")
-                                    )
-                                ]
-                            )
-                        )
-                    ],
-                    stopReason: "tool_use",
-                    inputTokens: request.messages.size,
-                    outputTokens: 1,
-                    providerId: "fixture",
-                    responseId: "fixture-" + calls.toString()
-                )
-            )
-        }
-        let text = if (request.messages.size == 0) {
-            "fixture response"
-        } else if (lastText == "fixture split json secrets") {
-            "prefix sk-app-SPLIT-PRIVATE-VALUE suffix\n" +
-                "Authorization: Bearer APP-HEADER-SECRET\nvisible-app-text\n" +
-                "-----BEGIN PRIVATE KEY-----\nAPP-PEM-PRIVATE-BODY\n-----END PRIVATE KEY-----\n"
-        } else {
-            "fixture response for " + messageText(request.messages[request.messages.size - 1])
-        }
-        if (request.streaming) {
-            if (lastText == "fixture split json secrets") {
-                events(domain.ModelEvent.TextDelta("prefix sk-app-SPLIT"))
-                events(domain.ModelEvent.TextDelta(
-                    "-PRIVATE-VALUE suffix\nAuthorization: Bear"
-                ))
-                events(domain.ModelEvent.TextDelta(
-                    "er APP-HEADER-SECRET\nvisible-app-text\n"
-                ))
-                events(domain.ModelEvent.TextDelta(
-                    "-----BEGIN PRIVATE KEY-----\nAPP-PEM-"
-                ))
-                events(domain.ModelEvent.TextDelta(
-                    "PRIVATE-BODY\n-----END PRIVATE KEY-----\n"
-                ))
-            } else {
-                events(domain.ModelEvent.TextDelta(text))
-            }
-            events(domain.ModelEvent.Completed)
-        }
-        domain.Result.Ok(
-            fixtureTerminalReply(
-                [domain.ModelBlock(domain.ModelBlockKind.Text, text: text)],
-                stopReason: "end_turn",
-                inputTokens: request.messages.size,
-                outputTokens: 1,
-                providerId: "fixture",
-                responseId: "fixture-" + calls.toString()
-            )
-        )
-    }
-}
-
-// Fixture responses still cross the same strict provider-terminal boundary as
-// real adapters. Keeping the evidence here prevents tests and local product
-// modes from reviving the removed "HTTP success implies complete" shortcut.
-func fixtureTerminalReply(
-    blocks: Array<domain.ModelBlock>,
-    stopReason!: String = "end_turn",
-    inputTokens!: Int64 = 0,
-    outputTokens!: Int64 = 0,
-    providerId!: String = "fixture",
-    responseId!: String = ""
-): domain.ModelReply {
-    var hasTool = false
-    var hasRefusal = false
-    for (block in blocks) {
-        match (block.kind) {
-            case domain.ModelBlockKind.ToolCall => hasTool = true
-            case domain.ModelBlockKind.Refusal => hasRefusal = true
-            case _ => ()
-        }
-    }
-    domain.ModelReply(
-        blocks,
-        stopReason: stopReason,
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-        providerId: providerId,
-        responseId: responseId,
-        terminalEvidence: Some(domain.TerminalEvidence(
-            "fixture", "fixture_terminal", rawStopReason: stopReason,
-            messageTerminalObserved: true, streamEofObserved: true,
-            adapterVersion: "fixture-v1"
-        )),
-        completionDisposition: if (hasTool) {
-            domain.CompletionDisposition.ToolUse
-        } else { domain.CompletionDisposition.Complete },
-        decisionOutcome: if (hasRefusal) {
-            domain.DecisionOutcome.Refusal
-        } else if (hasTool) {
-            domain.DecisionOutcome.ToolCalls
-        } else { domain.DecisionOutcome.Response },
-        validationVersion: 1
-    )
-}
-
-func fixtureHubProcessBlock(prompt: String): ?domain.ModelBlock {
-    let prefix = "fixture hub process "
-    if (!prompt.startsWith(prefix)) {
-        return None
-    }
-    let action = prompt[prefix.size..prompt.size]
-    let fields = ArrayList<domain.ValueField>()
-    let op: String
-    match (action) {
-        case "start" =>
-            op = "start"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "application",
-                    domain.textValue("/bin/bash")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "args",
-                    domain.listValue(
-                        [
-                            domain.textValue("-lc"),
-                            domain.textValue(
-                                "printf 'READY\\n'; " + "while IFS= read -r -d $'\\r' line; do " +
-                                    "printf 'ECHO:%s\\n' \"$line\"; " + "[ \"$line\" = quit ] && exit 0; done")
-                        ]
-                    )
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "pty",
-                    domain.boolValue(false)
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "ready",
-                    domain.objectValue(
-                        [
-                            domain.ValueField(
-                                "log",
-                                domain.textValue("READY")
-                            ),
-                            domain.ValueField(
-                                "timeout",
-                                domain.integerValue(2)
-                            )
-                        ]
-                    )
-                )
-            )
-        case "start-again" =>
-            op = "start"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "application",
-                    domain.textValue("/bin/bash")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "args",
-                    domain.listValue(
-                        [
-                            domain.textValue("-lc"),
-                            domain.textValue("printf 'SECOND\\n'")
-                        ]
-                    )
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "pty",
-                    domain.boolValue(false)
-                )
-            )
-        case "logs" =>
-            op = "logs"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "lines",
-                    domain.integerValue(20)
-                )
-            )
-        case "send" =>
-            op = "send"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "text",
-                    domain.textValue("hello")
-                )
-            )
-        case "wait" =>
-            op = "wait"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "pattern",
-                    domain.textValue("ECHO:hello")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "timeout",
-                    domain.integerValue(2)
-                )
-            )
-        case "describe" =>
-            op = "describe"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-        case "restart" =>
-            op = "restart"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "network",
-                    domain.objectValue([
-                        domain.ValueField("mode", domain.textValue("denied"))
-                    ])
-                )
-            )
-        case "ps" => op = "ps"
-        case "stop" =>
-            op = "stop"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-daemon")
-                )
-            )
-        case "persist" =>
-            op = "start"
-            fields.add(
-                domain.ValueField(
-                    "name",
-                    domain.textValue("fixture-persist")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "application",
-                    domain.textValue("/bin/true")
-                )
-            )
-            fields.add(
-                domain.ValueField(
-                    "persist",
-                    domain.boolValue(true)
-                )
-            )
-        case _ => return None
-    }
-    fields.add(domain.ValueField("op", domain.textValue(op)))
-    Some(
-        domain.ModelBlock(
-            domain.ModelBlockKind.ToolCall,
-            callId: "fixture-hub-process-" + action + "-call",
-            name: "hub",
-            arguments: domain.objectValue(fields.toArray())
-        )
-    )
-}
-
-func hasTool(
-    tools: Array<domain.ModelToolDefinition>,
-    name: String
-): Bool {
-    for (tool in tools where tool.name == name) {
-        return true
-    }
-    false
 }
 
 public class LifecycleModelPort <: ports.ModelPort {
@@ -3003,43 +1600,11 @@ func exponentialBackoffMillis(attempt: Int64): Int64 {
     min(delay, MAX_RETRY_DELAY_MILLIS)
 }
 
-public func fixtureModelPort(): ports.ModelPort {
-    FixtureModelPort()
-}
-
-public func primaryFixtureModelPort(): ports.ModelPort {
-    FixtureModelPort(failFirst: true)
-}
-
 public func providerModelPort(
     provider: ProviderSpec,
     transport!: ProviderTransport = NativeProviderTransport()
 ): ports.ModelPort {
     ProviderModelPort(provider, transport)
-}
-
-public func encodeAgentValue(value: domain.AgentValue): String {
-    stringifyUnifiedJson(value)
-}
-
-public func decodeAgentValue(
-    source: String,
-    maxBytes!: Int64 = 1048576
-): domain.Result<domain.AgentValue> {
-    try {
-        domain.Result.Ok(parseUnifiedJson(source, maxBytes: maxBytes))
-    } catch (error: JsonException) {
-        domain.Result.Err(
-            domain.AgentError(
-                domain.AgentErrorKind.Protocol,
-                "value.invalid_json",
-                error.message,
-                fields: [
-                    domain.ErrorField("json_error_kind", error.code)
-                ]
-            )
-        )
-    }
 }
 
 func toLlmWireReasoningEffort(level: domain.ThinkingLevel): LlmWireReasoningEffort {
@@ -3148,7 +1713,7 @@ func parseLlmWireJson(source: String): LlmWireJson {
 }
 
 func agentValueLlmJson(value: domain.AgentValue): LlmWireJson {
-    parseLlmWireJson(encodeAgentValue(value))
+    parseLlmWireJson(domain.encodeAgentValue(value))
 }
 
 func legacyReplayDialectId(dialect: ProviderDialect): String {
@@ -3275,7 +1840,7 @@ func toLlmWireBlock(
         case domain.ModelBlockKind.ToolResult => LlmWireBlock.ToolResult(LlmWireToolResultBlock(
             block.callId,
             [LlmWireToolResultContent.Text(LlmWireTextBlock(
-                if (block.text == "") { encodeAgentValue(block.arguments) } else { block.text }
+                if (block.text == "") { domain.encodeAgentValue(block.arguments) } else { block.text }
             ))],
             isError: block.isError
         ))
@@ -3335,12 +1900,12 @@ func retiredToolCallHistoryBlock(block: domain.ModelBlock): LlmWireBlock {
     LlmWireBlock.Text(LlmWireTextBlock(
         "[Historical call to unavailable tool " + block.name +
             "; call_id=" + block.callId + " ]\nArguments: " +
-            encodeAgentValue(block.arguments)
+            domain.encodeAgentValue(block.arguments)
     ))
 }
 
 func retiredToolResultHistoryBlock(block: domain.ModelBlock): LlmWireBlock {
-    let content = if (block.text == "") { encodeAgentValue(block.arguments) } else { block.text }
+    let content = if (block.text == "") { domain.encodeAgentValue(block.arguments) } else { block.text }
     LlmWireBlock.Text(LlmWireTextBlock(
         "[Historical result from unavailable tool; call_id=" + block.callId +
             "; error=" + block.isError.toString() + " ]\n" + content
@@ -3837,11 +2402,13 @@ func decodeProviderReply(
     body: String,
     streaming: Bool,
     events: domain.ModelEventSink,
-    structuredOutput: ?domain.StructuredOutputSpec
+    structuredOutput: ?domain.StructuredOutputSpec,
+    streamProjection!: ?ProviderStreamProjection = None
 ): domain.Result<domain.ModelReply> {
     try {
         let wireReply = if (streaming) {
-            decodeEventStream(body, provider, events)
+            match (streamProjection) { case Some(value) => value.completedReply()
+                case None => decodeEventStream(body, provider, events) }
         } else {
             decodeFixedWireReply(
                 body,
@@ -4081,7 +2648,7 @@ func attachStructuredOutput(
             fallbackAllowed: true
         ))
     }
-    let value = match (decodeAgentValue(source)) {
+    let value = match (domain.decodeAgentValue(source)) {
         case domain.Result.Ok(parsed) => parsed
         case domain.Result.Err(error) => return domain.Result.Err(domain.AgentError(
             domain.AgentErrorKind.Protocol,
@@ -4149,7 +2716,7 @@ func fromLlmWireReply(
                 ()
             } else { match (value.arguments) {
                 case LlmWireToolArguments.Complete(json) =>
-                    let arguments = match (decodeAgentValue(json.stringify())) {
+                    let arguments = match (domain.decodeAgentValue(json.stringify())) {
                         case domain.Result.Ok(parsed) => parsed
                         case domain.Result.Err(error) => throw IllegalArgumentException(error.message)
                     }
@@ -4163,7 +2730,7 @@ func fromLlmWireReply(
                 // data. Keep it projectable so tool_runtime can issue its
                 // normal recoverable invalid-arguments result.
                 case LlmWireToolArguments.InvalidShape(json) =>
-                    let arguments = match (decodeAgentValue(json.stringify())) {
+                    let arguments = match (domain.decodeAgentValue(json.stringify())) {
                         case domain.Result.Ok(parsed) => parsed
                         case domain.Result.Err(error) => throw IllegalArgumentException(error.message)
                     }
@@ -4216,6 +2783,11 @@ func fromLlmWireReply(
     } else {
         "response_body"
     }
+    // A terminal response proves completion, not provider token accounting.
+    // Preserve the SDK distinction between missing counters and Some(0).
+    let hasObservedUsage = reply.usage.inputTokens.isSome() ||
+        reply.usage.outputTokens.isSome() || reply.usage.reasoningTokens.isSome() ||
+        reply.usage.cacheReadTokens.isSome() || reply.usage.cacheWriteTokens.isSome()
     domain.ModelReply(
         blocks.toArray(),
         stopReason: reply.rawStopReason,
@@ -4225,16 +2797,18 @@ func fromLlmWireReply(
             reasoningTokens: optionalUsageValue(reply.usage.reasoningTokens),
             cacheReadTokens: optionalUsageValue(reply.usage.cacheReadTokens),
             cacheWriteTokens: optionalUsageValue(reply.usage.cacheWriteTokens),
-            source: if (streaming) {
+            source: if (!hasObservedUsage) {
+                domain.ModelUsageSource.Unknown
+            } else if (streaming) {
                 domain.ModelUsageSource.ProviderStreamFinal
             } else {
                 domain.ModelUsageSource.ProviderFinal
             },
-            evidence: Some(domain.ModelUsageEvidence(
+            evidence: if (hasObservedUsage) { Some(domain.ModelUsageEvidence(
                 providerProtocolName(protocol),
                 usageEventKind,
                 providerResponseId: reply.responseId
-            ))
+            )) } else { None }
         )),
         acceptedOutput: !blocks.isEmpty() && match (disposition) {
             case domain.CompletionDisposition.OutputLimited |
@@ -4397,6 +2971,7 @@ func decodeEventStream(
     )
     let decoder = codec.newStreamDecoder()
     let toolCallIds = HashMap<String, String>()
+    let blocks = ProviderStreamBlocks()
     var pushedTerminal: ?LlmWireTerminal = None
     // The transport callbacks normally deliver one SSE line at a time, but
     // this replay path receives the captured body as one String. Feed it with
@@ -4406,7 +2981,7 @@ func decodeEventStream(
     for (byte in source.toArray()) {
         line.add(byte)
         if (byte == b'\n' || byte == b'\r') {
-            match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds)) {
+            match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds, blocks)) {
                 case Some(value) => pushedTerminal = Some(value)
                 case None => ()
             }
@@ -4414,7 +2989,7 @@ func decodeEventStream(
         }
     }
     if (!line.isEmpty()) {
-        match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds)) {
+        match (pushStreamReplayChunk(decoder, line.toArray(), provider.protocol, events, toolCallIds, blocks)) {
             case Some(value) => pushedTerminal = Some(value)
             case None => ()
         }
@@ -4424,7 +2999,7 @@ func decodeEventStream(
         case LlmWireResult.Err(error) => throw error
     }
     for (event in finished.events) {
-        emitLlmWireEvent(event, provider.protocol, events, toolCallIds: Some(toolCallIds))
+        emitLlmWireEvent(event, provider.protocol, events, blocks, toolCallIds: Some(toolCallIds))
     }
     let terminal = match (finished.terminal) {
         case Some(value) => value
@@ -4445,14 +3020,15 @@ func pushStreamReplayChunk(
     chunk: Array<Byte>,
     protocol: ProviderProtocol,
     events: domain.ModelEventSink,
-    toolCallIds: HashMap<String, String>
+    toolCallIds: HashMap<String, String>,
+    blocks: ProviderStreamBlocks
 ): ?LlmWireTerminal {
     let update = match (decoder.push(chunk)) {
         case LlmWireResult.Ok(value) => value
         case LlmWireResult.Err(error) => throw error
     }
     for (event in update.events) {
-        emitLlmWireEvent(event, protocol, events, toolCallIds: Some(toolCallIds))
+        emitLlmWireEvent(event, protocol, events, blocks, toolCallIds: Some(toolCallIds))
     }
     update.terminal
 }
@@ -4494,17 +3070,6 @@ func validateModelRequestContent(request: domain.ModelRequest): domain.Result<Un
     domain.Result.Ok(())
 }
 
-
-func messageText(message: domain.ModelMessage): String {
-    var result = ""
-    for (block in message.blocks) {
-        match (block.kind) {
-            case domain.ModelBlockKind.Text => result += block.text
-            case _ => ()
-        }
-    }
-    result
-}
 
 func curlConfig(provider: ProviderSpec, apiKey: String, streaming: Bool): String {
     var result = ""

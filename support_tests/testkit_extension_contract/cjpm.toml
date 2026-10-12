@@ -7,11 +7,10 @@
   output-type = "executable"
 
 [dependencies]
+  "legacy_extension_sdk" = { path = "../legacy_extension_sdk", output-type = "static" }
   "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
-  "axyndra_agent_testkit" = { path = "../../axyndra_agent_testkit", output-type = "static" }
-  "workspace_search_extension" = { path = "../../extensions/workspace_search_extension", output-type = "static" }
-  "workspace_write_extension" = { path = "../../extensions/workspace_write_extension", output-type = "static" }
-  "ast_extension" = { path = "../../extensions/ast_extension", output-type = "static" }
-  "web_search_extension" = { path = "../../extensions/web_search_extension", output-type = "static" }
+  "legacy_extension_testkit" = { path = "../legacy_extension_testkit", output-type = "static" }
+  "workspace_search_extension" = { path = "../workspace_search_legacy_oracle", output-type = "static" }
+  "workspace_write_extension" = { path = "../workspace_write_legacy_oracle", output-type = "static" }

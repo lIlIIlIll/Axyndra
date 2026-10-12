@@ -5,7 +5,6 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
@@ -197,7 +196,7 @@ func continuationRequestBindingValue(value: RunContinuation): AgentValue {
             case None => nullValue()
         }),
         ValueField("resolver_version", integerValue(Int64(value.resolverVersion))),
-        ValueField("skill_stack", value.skillStackPayload),
+        ValueField("skill_stack", value.contextSnapshotPayload),
         ValueField("context_window", integerValue(value.contextWindow)),
         ValueField("provider_safety_margin", integerValue(value.providerSafetyMargin)),
         ValueField("tool_context", value.toolContextPayload),
@@ -595,7 +594,7 @@ func continuationValue(
             case None => nullValue()
         }),
         ValueField("resolver_version", integerValue(Int64(value.resolverVersion))),
-        ValueField("skill_stack", value.skillStackPayload),
+        ValueField("skill_stack", value.contextSnapshotPayload),
         ValueField("context_window", integerValue(value.contextWindow)),
         ValueField("provider_safety_margin", integerValue(value.providerSafetyMargin)),
         ValueField("tool_context", value.toolContextPayload),
@@ -634,7 +633,7 @@ func modelCapabilitiesSnapshotValue(value: ModelExecutionCapabilitiesSnapshot): 
             ValueField("budget_tokens", integerValue(tier.budgetTokens))
         ]))
     }
-    objectValue([
+    let encoded = objectValue([
         ValueField("snapshot_schema_version", integerValue(Int64(value.snapshotSchemaVersion))),
         ValueField("model_id", textValue(value.modelId)),
         ValueField("thinking_mode", textValue(thinkingControlModeName(value.thinking.mode))),
@@ -644,6 +643,8 @@ func modelCapabilitiesSnapshotValue(value: ModelExecutionCapabilitiesSnapshot): 
         ValueField("endpoint_max_output_tokens", optionalIntegerValue(value.endpointMaxOutputTokens)),
         ValueField("capability_fingerprint", textValue(value.capabilityFingerprint))
     ])
+    if (value.configurationDigest != "") { encoded.put("configuration_digest", textValue(value.configurationDigest)) }
+    encoded
 }
 
 func runningModelCheckpointValue(value: RunningModelCheckpoint): AgentValue {
@@ -805,6 +806,11 @@ func modelCapabilitiesSnapshotFromValue(
             maxOutput,
             endpointMaxOutputTokens: endpoint,
             capabilityFingerprint: fingerprint,
+            configurationDigest: match (value.field("configuration_digest")) {
+                case None => ""
+                case Some(raw) => if (raw.unifiedKind == ValueKind.Text) { raw.text }
+                    else { throw IllegalArgumentException("model configuration digest must be text") }
+            },
             snapshotSchemaVersion: UInt32(version)
         ))
     } catch (error: Exception) {
@@ -1183,7 +1189,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
                     parallelToolCalls: parallelToolCalls,
                     requestedPolicy: policy,
                     modelCapabilitiesSnapshot: capabilitiesSnapshot,
-                    resolverVersion: UInt32(resolverVersion), skillStackPayload: skillStack,
+                    resolverVersion: UInt32(resolverVersion), contextSnapshotPayload: skillStack,
                     contextWindow: contextWindow, providerSafetyMargin: safetyMargin,
                     toolContextPayload: toolContext,
                     executionLaneId: LaneId(executionLaneId)
@@ -1212,7 +1218,7 @@ func decodeContinuation(source: String): Result<RunContinuation> {
                     imageInputs: imageInputs.toArray(), structuredOutput: structuredOutput,
                     cachePolicy: cachePolicy, cacheKey: cacheKey,
                     parallelToolCalls: parallelToolCalls,
-                    resolverVersion: UInt32(resolverVersion), skillStackPayload: skillStack,
+                    resolverVersion: UInt32(resolverVersion), contextSnapshotPayload: skillStack,
                     contextWindow: contextWindow, providerSafetyMargin: safetyMargin,
                     toolContextPayload: toolContext,
                     executionLaneId: LaneId(executionLaneId)
@@ -2617,6 +2623,11 @@ func errorValue(error: AgentError): AgentValue {
 }
 
 func strictErrorFrom(value: AgentValue): Result<AgentError> {
+    for (name in ["attempt_failure", "observation"]) {
+        match (value.field(name)) { case Some(item) => if (item.unifiedKind != ValueKind.Null) {
+            return codecError("complete failure attachments require the paid typed reader") }
+            case None => () }
+    }
     if (value.unifiedKind != ValueKind.Object) {
         return codecError("run snapshot error must be an object or null")
     }

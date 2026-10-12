@@ -17,17 +17,17 @@ public class StepId {
 @Derive[Equatable]
 public enum InboxEntryKind {
     UserPrompt | Steering | ContextInjection | ApprovalDecision
-    | ExternalCompletion | ChildRunMessage | Cancel | Close
+    | ExternalCompletion | ChildRunMessage | Cancel | Close | HostService
 }
 
 @Derive[Equatable]
 public enum InboxEntryStatus {
-    Queued | Claimed | Applied | Rejected | Superseded
+    Queued | Processing | Claimed | Applied | Rejected | Superseded
 }
 
 @Derive[Equatable]
 public enum InboxEnqueueOutcome {
-    Inserted | AlreadyQueued | AlreadyClaimed | AlreadyApplied
+    Inserted | AlreadyQueued | AlreadyProcessing | AlreadyClaimed | AlreadyApplied
     | AlreadyRejected | AlreadySuperseded
 }
 
@@ -145,12 +145,14 @@ public func inboxEntryKindName(value: InboxEntryKind): String {
         case InboxEntryKind.ChildRunMessage => "child_run_message"
         case InboxEntryKind.Cancel => "cancel"
         case InboxEntryKind.Close => "close"
+        case InboxEntryKind.HostService => "host_service"
     }
 }
 
 public func inboxEntryStatusName(value: InboxEntryStatus): String {
     match (value) {
         case InboxEntryStatus.Queued => "queued"
+        case InboxEntryStatus.Processing => "processing"
         case InboxEntryStatus.Claimed => "claimed"
         case InboxEntryStatus.Applied => "applied"
         case InboxEntryStatus.Rejected => "rejected"

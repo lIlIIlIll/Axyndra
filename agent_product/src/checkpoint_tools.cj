@@ -8,118 +8,60 @@ import agent_domain.*
 import agent_core.*
 import agent_runtime.*
 import agent_store.*
+import agent_extension_runtime.reserveNativeDocumentPayload
 import tool_runtime.*
 import std.collection.*
 import std.time.*
 
 public class CheckpointRuntime {
     private let database: SqliteDatabase
+    private let policy: ?ProductCheckpointExecutionPolicy
+    private let savePolicy: ?ProductCheckpointSavePolicy113
+    private let ownedSavePolicy113: ?ProductOwnedCheckpointSavePolicy113
 
-    public init(database: SqliteDatabase) {
-        this.database = database
+    private let summary: ?(SessionId, Array<ModelMessage>, CancellationToken) -> Result<ProductCompactionStructure>
+    public init(database: SqliteDatabase,
+        summary!: ?(SessionId, Array<ModelMessage>, CancellationToken) -> Result<ProductCompactionStructure> = None,
+        policy!: ?ProductCheckpointExecutionPolicy = None<ProductCheckpointExecutionPolicy>,
+        savePolicy!: ?ProductCheckpointSavePolicy113 = None<ProductCheckpointSavePolicy113>,
+        ownedSavePolicy113!: ?ProductOwnedCheckpointSavePolicy113 = None<ProductOwnedCheckpointSavePolicy113>) {
+        this.database = database; this.summary = summary; this.policy = policy; this.savePolicy = savePolicy
+        this.ownedSavePolicy113 = ownedSavePolicy113
     }
 
-    func checkpoint(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> {
-        let goal = match (requiredString(call, "goal")) {
-            case Result.Ok(value) => value.trimAscii()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (goal == "") {
-            return invalidArgument(
-                call,
-                "goal",
-                "investigation goal must not be empty"
-            )
-        }
-        let state = match (checkpointState(context.sessionId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (state.active) {
-            return Result.Err(AgentError(
-                AgentErrorKind.Conflict,
-                "tool.checkpoint_active",
-                "Checkpoint already active."
-            ))
-        }
-        let startedAt = checkpointTimestamp()
-        Result.Ok(ToolResult(
-            call.callId,
-            objectValue([
-                ValueField(
-                    "content",
-                    textValue(
-                        "Checkpoint created.\nGoal: " + goal + "\n" +
-                            "Run your investigation, then call rewind with " +
-                            "a concise report."
-                    )
-                ),
-                ValueField("goal", textValue(goal)),
-                ValueField("started_at", textValue(startedAt))
-            ])
-        ))
+    func checkpoint(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+        invokeInstalledPolicy(context, call)
     }
 
-    func rewind(
-        context: ToolInvocationContext,
-        call: ToolCall
-    ): Result<ToolResult> {
-        let report = match (requiredString(call, "report")) {
-            case Result.Ok(value) => value.trimAscii()
-            case Result.Err(error) => return Result.Err(error)
+    func rewind(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+        invokeInstalledPolicy(context, call)
+    }
+
+    private func invokeInstalledPolicy(context: ToolInvocationContext, call: ToolCall): Result<ToolResult> {
+        match (policy) {
+            case Some(actual) => actual(context, call, { => loadThread(context.sessionId) }, { => checkpointTimestamp() })
+            case None => Result.Err(AgentError(AgentErrorKind.Configuration, "checkpoint.policy_required",
+                "checkpoint execution requires the current installed policy"))
         }
-        if (report == "") {
-            return invalidArgument(
-                call,
-                "report",
-                "Report cannot be empty."
-            )
-        }
-        let state = match (checkpointState(context.sessionId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (!state.active) {
-            return Result.Err(AgentError(
-                AgentErrorKind.Conflict,
-                if (state.completed) {
-                    "tool.checkpoint_completed"
-                } else {
-                    "tool.checkpoint_missing"
-                },
-                if (state.completed) {
-                    "Checkpoint already completed; continue from the " +
-                        "retained rewind report instead of calling rewind again."
-                } else {
-                    "No active checkpoint. Create a checkpoint before " +
-                        "calling rewind."
-                }
-            ))
-        }
-        Result.Ok(ToolResult(
-            call.callId,
-            objectValue([
-                ValueField(
-                    "content",
-                    textValue(
-                        "Rewind requested.\n" +
-                            "Report captured for context replacement."
-                    )
-                ),
-                ValueField("report", textValue(report)),
-                ValueField("rewound", boolValue(true)),
-                ValueField("rewound_at", textValue(checkpointTimestamp()))
-            ])
-        ))
     }
 
     func applyRewind(
         context: ToolInvocationContext,
-        result: ToolResult
+        result: ToolResult,
+        directBoundary!: ?DirectPostCanonicalProjectionBoundary = None<DirectPostCanonicalProjectionBoundary>,
+        originalPlan!: ?NormalizedOperationPlan = None<NormalizedOperationPlan>
     ): Result<Unit> {
+        match (savePolicy) {
+            case Some(actual) =>
+                let structure: (SessionId, Array<ModelMessage>, CancellationToken) -> Result<ProductCompactionStructure> =
+                    { session: SessionId, messages: Array<ModelMessage>, cancellation: CancellationToken =>
+                        match (summary) { case Some(value) => value(session, messages, cancellation)
+                            case None => productPolicySelectionError<ProductCompactionStructure>("compaction.not_configured") } }
+                return actual(context, result, { => loadThread(context.sessionId) }, structure,
+                    { thread: AgentThreadSnapshot, through: Int64, activeGoal: String, projection: AgentValue, current: () -> Result<Unit> =>
+                        saveNativeProjection113(context, result, thread, through, activeGoal, projection, directBoundary, originalPlan, current) })
+            case None => ()
+        }
         let report = match (result.output.field("report")) {
             case Some(value) =>
                 if (value.unifiedKind == ValueKind.Text) {
@@ -164,15 +106,25 @@ public class CheckpointRuntime {
             prefix.add(item)
         }
         let goal = checkpointGoal(thread, checkpointOrdinal)
-        let summary = compactionSummary(
-            modelMessagesFromCanonicalItems(prefix.toArray())
-        ) + "\n\nCheckpoint investigation report:\n" + report
+        let policy = match (summary) {
+            case Some(value) => value
+            case None => return productPolicySelectionError("compaction.not_configured")
+        }
+        let structure = match (policy(context.sessionId, modelMessagesFromCanonicalItems(prefix.toArray()), context.cancellation)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
+        }
+        var combinedOwner: ?ProductPolicyValueLease = None
+        try {
+        let combined = retainProductPolicyText([structure.text, "\n\nCheckpoint investigation report:\n", report])
+        combinedOwner = Some(combined)
+        let summaryText = combined.value.text
         let checkpoint = ContextCheckpoint(
             "tool-rewind-" + context.sessionId.value + "-" + result.callId,
             thread.thread.id,
             rewindOrdinal,
             objectValue([
-                ValueField("deterministic_summary", textValue(summary)),
+                ValueField("deterministic_summary", textValue(summaryText)),
+                ValueField("structured_policy", structure.provenance),
                 ValueField("checkpoint_goal", textValue(goal)),
                 ValueField("rewind_call_id", textValue(result.callId))
             ]),
@@ -181,9 +133,62 @@ public class CheckpointRuntime {
             "agent-core",
             activeGoal: goal
         )
-        SqliteContextCheckpointStore(database).save(
-            checkpoint, thread, agentUtcMillis()
-        )
+        match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (structure.validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (thread.activeRunId.isSome()) {
+            if (thread.activeRunId.getOrThrow().value != context.runId.value ||
+                thread.activeEpoch != context.epoch) {
+                return productPolicySelectionError("checkpoint.current_invocation_changed") }
+            let plan = match (originalPlan) { case Some(value) => value
+                case None => return productPolicySelectionError("checkpoint.original_frozen_plan_missing") }
+            let store = SqlitePostCanonicalCheckpointStore(database, { bytes: Int64 => reserveNativeDocumentPayload(bytes) })
+            match (directBoundary) {
+                case Some(boundary) => store.saveDirect(checkpoint, thread.thread, context.contextProjection,
+                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), boundary,
+                    { => context.cancellation.check() })
+                case None => store.save(checkpoint, thread.thread, context.runId, context.epoch, context.contextProjection,
+                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), { => context.cancellation.check() }) }
+
+        } else {
+            // Preserve original completed-thread replay/idempotency and fork
+            // projections. This legacy data save does not resume a live Run.
+            SqliteContextCheckpointStore(database).save(checkpoint, thread, agentUtcMillis())
+        }
+        } catch (_: Exception) { productPolicySelectionError("compaction.checkpoint_capacity") }
+        finally {
+            match (combinedOwner) { case Some(value) => value.close(); case None => () }
+            structure.close()
+        }
+    }
+
+    // Only the already-canonical result and original retained plan enter the
+    // actual Store. Native recipe data cannot choose the legal save boundary.
+    private func saveNativeProjection113(context: ToolInvocationContext, result: ToolResult,
+        thread: AgentThreadSnapshot, through: Int64, activeGoal: String, projection: AgentValue,
+        directBoundary: ?DirectPostCanonicalProjectionBoundary, originalPlan: ?NormalizedOperationPlan, current: () -> Result<Unit>): Result<Unit> {
+        let guard: () -> Result<Unit> = { =>
+            match (context.cancellation.check()) { case Result.Err(error) => Result<Unit>.Err(error); case Result.Ok(_) => current() } }
+        match (guard()) { case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(_) => () }
+        let checkpoint = ContextCheckpoint(
+            "tool-rewind-" + context.sessionId.value + "-" + result.callId,
+            thread.thread.id, through, projection, contextSourceDigest(thread, through),
+            "agent-product-v1", "agent-core", activeGoal: activeGoal)
+        match (guard()) { case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(_) => () }
+        if (thread.activeRunId.isSome()) {
+            if (thread.activeRunId.getOrThrow().value != context.runId.value || thread.activeEpoch != context.epoch) {
+                return productPolicySelectionError<Unit>("checkpoint.current_invocation_changed") }
+            let plan = match (originalPlan) { case Some(value) => value
+                case None => return productPolicySelectionError<Unit>("checkpoint.original_frozen_plan_missing") }
+            let store = SqlitePostCanonicalCheckpointStore(database, { bytes: Int64 => reserveNativeDocumentPayload(bytes) })
+            match (directBoundary) {
+                case Some(boundary) => store.saveDirect(checkpoint, thread.thread, context.contextProjection,
+                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), boundary, guard)
+                case None => store.save(checkpoint, thread.thread, context.runId, context.epoch, context.contextProjection,
+                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), guard) }
+        } else {
+            // Original completed-thread replay/fork support remains a data save.
+            SqliteContextCheckpointStore(database).save(checkpoint, thread, agentUtcMillis())
+        }
     }
 
     private func loadThread(sessionId: SessionId): Result<AgentThreadSnapshot> {
@@ -209,39 +214,55 @@ public class CheckpointRuntime {
         }
     }
 
-    private func checkpointState(
-        sessionId: SessionId
-    ): Result<CheckpointHistoryState> {
-        let thread = match (loadThread(sessionId)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let checkpointOrdinal = latestCheckpointOrdinal(thread)
-        if (checkpointOrdinal < 1) {
-            return Result.Ok(CheckpointHistoryState(false, false))
-        }
-        for (item in thread.items where item.ordinal > checkpointOrdinal) {
-            match (item.content) {
-                case ThreadItemContent.ToolResult(callId, _, _, _, isError) =>
-                    if (!isError && toolNameForCall(thread, callId.value) == "rewind") {
-                        return Result.Ok(CheckpointHistoryState(false, true))
-                    }
-                case _ => ()
-            }
-        }
-        Result.Ok(CheckpointHistoryState(true, false))
+    // Only the actual published executor selects this opt-in. None preserves
+    // the original completed-thread replay callback; it is not a Source grant.
+    func applyRewindOwned113(context: ToolInvocationContext, result: ToolResult,
+        originalPlan: NormalizedOperationPlan,
+        directBoundary: ?DirectPostCanonicalProjectionBoundary): ?OwnedFailureDataOutcome113<Unit> {
+        let actual = match (ownedSavePolicy113) { case Some(value) => value
+            case None => return None<OwnedFailureDataOutcome113<Unit>> }
+        let allocate: (Int64) -> LogicalJsonOwnerReservation = { bytes => reserveNativeDocumentPayload(bytes) }
+        let cursor = SqlitePaidCanonicalThreadCursor113(database, allocate)
+        // This read chooses DATA representation only. A failed/missing header
+        // is rechecked after the Native report validation, preserving its
+        // original error ordering. No effect or operation is performed here.
+        var completed = false
+        let route = allocate(65536)
+        try {
+            if (context.sessionId.value.size > (Int64.Max - 65536) / 8) {
+                throw IllegalStateException("checkpoint route metadata payment overflow") }
+            route.ensureRetainedPeak(65536 + context.sessionId.value.size * 8)
+            completed = database.scalarInt("SELECT COUNT(*) FROM threads WHERE id=" +
+                sqliteText(context.sessionId.value) + " AND active_turn_id IS NULL") == 1
+        } catch (_: Exception) { () }
+        finally { route.close() }
+        if (completed) { return None<OwnedFailureDataOutcome113<Unit>> }
+        Some(actual(context, result, cursor, allocate,
+            { header, through, goal, sourceDigest, projection, current =>
+                saveOwnedNativeProjection113(context, result, header, through, goal, sourceDigest,
+                    projection, originalPlan, directBoundary, current) }))
     }
+    private func saveOwnedNativeProjection113(context: ToolInvocationContext, result: ToolResult,
+        thread: ThreadRecord, through: Int64, activeGoal: String, sourceDigest: String, projection: AgentValue,
+        originalPlan: NormalizedOperationPlan, directBoundary: ?DirectPostCanonicalProjectionBoundary,
+        current: () -> Result<Unit>): Result<Unit> {
+        let guard: () -> Result<Unit> = { => match (context.cancellation.check()) {
+            case Result.Err(error) => Result<Unit>.Err(error); case Result.Ok(_) => current() } }
+        match (guard()) { case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(_) => () }
+        let checkpoint = ContextCheckpoint("tool-rewind-" + context.sessionId.value + "-" + result.callId,
+            thread.id, through, projection, sourceDigest, "agent-product-v1", "agent-core", activeGoal: activeGoal)
+        let store = SqlitePostCanonicalCheckpointStore(database, { bytes => reserveNativeDocumentPayload(bytes) })
+        match (directBoundary) {
+            case Some(boundary) => store.saveDirect(checkpoint, thread, context.contextProjection,
+                context.toolSetSnapshot, "rewind", originalPlan, result, agentUtcMillis(), boundary, guard)
+            case None => store.save(checkpoint, thread, context.runId, context.epoch, context.contextProjection,
+                context.toolSetSnapshot, "rewind", originalPlan, result, agentUtcMillis(), guard) }
+    }
+
+    
 }
 
-class CheckpointHistoryState {
-    let active: Bool
-    let completed: Bool
 
-    init(active: Bool, completed: Bool) {
-        this.active = active
-        this.completed = completed
-    }
-}
 
 class CheckpointTool <: ToolExecutor {
     private let runtime: CheckpointRuntime
@@ -263,7 +284,8 @@ class CheckpointTool <: ToolExecutor {
     }
 }
 
-class RewindTool <: ToolExecutor {
+class RewindTool <: ToolExecutor & DirectPostCanonicalToolObserver & PreparedPostCanonicalToolObserver &
+    PaidPreparedPostCanonicalToolObserver113 & PaidDirectPostCanonicalToolObserver113 {
     private let runtime: CheckpointRuntime
 
     init(runtime: CheckpointRuntime) { this.runtime = runtime }
@@ -287,6 +309,29 @@ class RewindTool <: ToolExecutor {
         result: ToolResult
     ): Result<Unit> {
         runtime.applyRewind(context, result)
+    }
+
+    public func afterPreparedResultPersisted(context: ToolInvocationContext,
+        originalPlan: NormalizedOperationPlan, result: ToolResult): Result<Unit> {
+        runtime.applyRewind(context, result, originalPlan: Some(originalPlan))
+    }
+
+    public func afterDirectResultPersisted(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, result: ToolResult,
+        boundary: DirectPostCanonicalProjectionBoundary): Result<Unit> {
+        // Summary generation is outside the Runtime/Scope/SQL loan. Only the
+        // final Store saveDirect borrows the real boundary and original bank.
+        runtime.applyRewind(context, result, directBoundary: Some(boundary), originalPlan: Some(prepared.operationPlan))
+    }
+
+    public func afterPreparedResultPersistedOwned113(context: ToolInvocationContext,
+        originalPlan: NormalizedOperationPlan, result: ToolResult): ?OwnedFailureDataOutcome113<Unit> {
+        runtime.applyRewindOwned113(context, result, originalPlan, None<DirectPostCanonicalProjectionBoundary>)
+    }
+    public func afterDirectResultPersistedOwned113(context: ToolInvocationContext,
+        prepared: PreparedToolInvocation, result: ToolResult,
+        boundary: DirectPostCanonicalProjectionBoundary): ?OwnedFailureDataOutcome113<Unit> {
+        runtime.applyRewindOwned113(context, result, prepared.operationPlan, Some(boundary))
     }
 }
 

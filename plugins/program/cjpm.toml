@@ -1,0 +1,17 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "program_plugin"
+  version = "1.0.0"
+  description = "Restricted Program algorithms in an independent native Tool endpoint"
+  output-type = "executable"
+
+[dependencies]
+  "program_language" = { path = "language", output-type = "static" }
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "process4cj" = { path = "../../libs/process4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

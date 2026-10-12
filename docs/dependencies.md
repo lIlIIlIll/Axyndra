@@ -8,12 +8,12 @@
 
 数据来源分为四层：
 
-1. 根 `cjpm.toml` 的 `workspace.members` 定义生产包集合，共 38 个包。
+1. 根 `cjpm.toml` 的 `workspace.members` 定义生产包集合，共 37 个包。独立 `plugins/ast` 和 `plugins/web_search` 另行构建，不计入宿主 workspace。
 2. 每个 workspace 包的 `cjpm.toml` 定义直接依赖、来源类型、输出类型和 native/link 元数据；`packaging/public-packages.toml` 定义发布分类和公开运行要求。
 3. 根及包级 `cjpm.lock` 定义可复现的远程 pin。源码 API 对照分别来自已锁定的 yjson/llm4cj 源码和相邻候选库工作树；候选工作树不是 Axyndra 当前依赖。
 4. `.cj` 的 import、process 调用、构建脚本和 support test manifest 用来区分源码依赖、传递依赖、宿主工具和运行时前置条件。源码匹配不等于编译、链接或运行验收通过。
 
-当前 pin gate 读取 72 个 yjson lock、34 个 llm4cj lock 和 72 个 yjson manifest；各 lockfile version 均为 0。workspace 与 support-test 的锁文件仍可能只包含 yjson，只有实际声明 llm4cj 的依赖闭包才包含 llm4cj 行。所有含 yjson 的锁文件都使用同一个 tag 与 commit，含 llm4cj 的锁文件也使用同一个 tag 与 commit。scripts/dependency_pin_gate.py 同时验证 yjson manifest、yjson lock 和 llm4cj lock 的 git/tag/commitId 一致性。
+当前 pin gate 读取 80 个 yjson lock、35 个 llm4cj lock 和 72 个 yjson manifest；各 lockfile version 均为 0。workspace 与 support-test 的锁文件仍可能只包含 yjson，只有实际声明 llm4cj 的依赖闭包才包含 llm4cj 行。所有含 yjson 的锁文件都使用同一个 tag 与 commit，含 llm4cj 的锁文件也使用同一个 tag 与 commit。scripts/dependency_pin_gate.py 同时验证 yjson manifest、yjson lock 和 llm4cj lock 的 git/tag/commitId 一致性。
 
 ## 外部来源与完整 pin
 
@@ -56,35 +56,32 @@ yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba
 | `agent_domain` | internal/packages | `process4cj` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `agent_app_protocol` | internal/packages | `agent_domain` [path] | — |
 | `agent_skills` | internal/packages | `agent_domain` [path]；`skill_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_runtime` | internal/packages | `agent_domain` [path]；`agent_skills` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_store` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`agent_skills` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | `link-option = "-lsqlite3"` |
+| `agent_runtime` | internal/packages | `agent_domain` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `agent_store` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | `link-option = "-lsqlite3"` |
 | `agent_protocol` | internal/packages | `agent_domain` [path]；`jsonrpc4cj` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `agent_ports` | internal/packages | `agent_domain` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_core` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`agent_skills` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `tool_runtime` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`agent_skills` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `agent_core` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `tool_runtime` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `persistence_runtime` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_store` [path]；`model_adapters` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `run_control` | internal/packages | `agent_core` [path]；`agent_domain` [path]；`agent_ports` [path] | — |
 | `task_runtime` | internal/packages | `agent_domain` [path] | — |
 | `agent_client` | internal/packages | `agent_core` [path]；`agent_domain` [path]；`run_control` [path] | — |
 | `agent_cli` | internal/packages | `agent_domain` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_extensions` | internal/packages | `agent_domain` [path]；`agent_mcp` [path]；`agent_sdk` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_mcp` | internal/packages | `agent_domain` [path]；`agent_protocol` [path]；`mcp4cj` [path]；`process4cj` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | x86_64 target bin path `${CANGJIE_STDX_PATH}` |
+| `agent_extensions` | internal/packages | `agent_domain` [path]；`agent_sdk` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `model_adapters` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`llm4cj` [git:llm4cj pin]；`process4cj` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | x86_64 target bin path `${CANGJIE_STDX_PATH}` |
-| `agent_embed` | internal/packages | `agent_core` [path]；`agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`agent_skills` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `agent_embed` | internal/packages | `agent_core` [path]；`agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `agent_sdk` | ecosystem | `yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_extension_runtime` | internal/packages | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `agent_extension_runtime` | internal/packages | `agent_domain` [path]；`agent_sdk` [path]；`process4cj` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `extensions/workspace_search_extension` | internal/packages | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `extensions/workspace_write_extension` | internal/packages | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `extensions/ast_extension` | internal/packages | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `extensions/web_search_extension` | internal/packages | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
 | `axyndra_agent_testkit` | ecosystem | `agent_sdk` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_testkit` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
-| `agent_product` | internal/packages | `agent_app_protocol` [path]；`agent_cli` [path]；`agent_client` [path]；`agent_core` [path]；`agent_domain` [path]；`agent_extension_runtime` [path]；`agent_extensions` [path]；`agent_mcp` [path]；`agent_ports` [path]；`agent_protocol` [path]；`agent_runtime` [path]；`agent_sdk` [path]；`agent_skills` [path]；`agent_store` [path]；`ast_extension` [path]；`dap4cj` [path]；`lsp4cj` [path]；`model_adapters` [path]；`persistence_runtime` [path]；`process4cj` [path]；`run_control` [path]；`sandbox4cj` [path]；`task_runtime` [path]；`tool_runtime` [path]；`web_search_extension` [path]；`workspace_search_extension` [path]；`workspace_write_extension` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | x86_64 target bin path `${CANGJIE_STDX_PATH}`；`link-option = "-lsqlite3"` |
+| `agent_testkit` | internal/packages | `agent_domain` [path]；`agent_ports` [path]；`agent_runtime` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | — |
+| `agent_product` | internal/packages | `agent_app_protocol` [path]；`agent_cli` [path]；`agent_client` [path]；`agent_core` [path]；`agent_domain` [path]；`agent_extension_runtime` [path]；`agent_history` [path]；`agent_host_runtime` [path]；`agent_plugin_registry` [path]；`agent_ports` [path]；`agent_protocol` [path]；`agent_runtime` [path]；`agent_sdk` [path]；`agent_store` [path]；`agent_testkit` [path]；`model_provider_runtime` [path]；`persistence_runtime` [path]；`process4cj` [path]；`run_control` [path]；`sandbox4cj` [path]；`task_runtime` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | x86_64 target bin path `${CANGJIE_STDX_PATH}`；`link-option = "-lsqlite3"` |
 | `agent_rpc` | internal/packages | `agent_cli` [path]；`agent_core` [path]；`agent_domain` [path]；`agent_product` [path]；`model_adapters` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | `link-option = "-lsqlite3"` |
 | `agent_tui` | internal/packages | `agent_cli` [path]；`core` [vendor path]；`markdown` [vendor path] | — |
-| `agent_app` | internal/packages | `agent_app_protocol` [path]；`agent_cli` [path]；`agent_client` [path]；`agent_core` [path]；`agent_domain` [path]；`agent_embed` [path]；`agent_mcp` [path]；`agent_product` [path]；`agent_rpc` [path]；`agent_tui` [path]；`core` [vendor path]；`model_adapters` [path]；`process4cj` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | `link-option = "-lsqlite3"` |
+| `agent_app` | internal/packages | `agent_app_protocol` [path]；`agent_cli` [path]；`agent_client` [path]；`agent_core` [path]；`agent_domain` [path]；`agent_embed` [path]；`agent_product` [path]；`agent_rpc` [path]；`agent_tui` [path]；`core` [vendor path]；`model_adapters` [path]；`process4cj` [path]；`tool_runtime` [path]；`yjson` [git:yjson pin]；`yjson_support` [path] | `link-option = "-lsqlite3"` |
 
-根 workspace 中有 31 个包直接声明 yjson。`agent_sdk` 的直接依赖只有 yjson 和 `yjson_support`，它不直接依赖 `agent_core`、`tool_runtime` 或产品 authority 包。静态依赖的 link option 不会自动传播到聚合 unittest executable，所以 `agent_store`、`agent_product`、`agent_rpc` 和 `agent_app` 的 SQLite 要求必须分别保留。
+根 workspace 中有 30 个包直接声明 yjson。`agent_sdk` 的直接依赖只有 yjson 和 `yjson_support`，它不直接依赖 `agent_core`、`tool_runtime` 或产品 authority 包。静态依赖的 link option 不会自动传播到聚合 unittest executable，所以 `agent_store`、`agent_product`、`agent_rpc` 和 `agent_app` 的 SQLite 要求必须分别保留。
 
 ## workspace 外的包和测试闭包
 
@@ -97,6 +94,12 @@ yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba
 - `vendor/cj_tui/packages/markdown` 依赖同目录的 `core` 和 `cj_markdown`。
 
 根 workspace 只有 `agent_tui` 和 `agent_app` 直接使用其中的 `core`；`agent_tui` 还使用 `markdown`。这些路径不是新的 stdx 依赖。
+
+### 独立进程插件
+
+`plugins/ast` 和 `plugins/web_search` 分别声明 `ast_plugin` 和 `web_search_plugin`，由独立 manifest 构建，不加入根 workspace，也不被宿主 path 依赖。AST 使用通用只读进程和文件计划服务，Web 使用预先冻结请求的通用 HTTP 服务；业务 schema、provider 选择和结果转换位于插件。两包都随独立交付物携带所需非系统动态库，AST 另携带锁定的 ast-grep engine。宿主的 `process4cj`、隔离和 HTTP 传输仍是通用基础设施依赖。
+
+旧 `extensions/ast_extension` 和 `extensions/web_search_extension` 已删除。旧 MCP 静态适配层已从生产图移除；安装与兼容行为须按 `docs/mcp-plugin-migration.md` 独立验收。独立插件也由 `plugin_boundary_gate.py` 纳入依赖图及禁止宿主依赖的分类；包数量与当前依赖图以重新运行的 boundary gate 输出为准。
 
 ### 独立 sandbox experiment
 
@@ -111,12 +114,11 @@ yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba
 | 生产消费者 | 直接使用或覆盖它的 support test | 触发的证据 |
 | --- | --- | --- |
 | `mcp4cj` | `support_tests/mcp_conformance_server`、`support_tests/native_provider_security_contract` | MCP conformance、原生 provider 安全和 HTTP/TLS 运行路径 |
-| `agent_mcp` | `support_tests/mcp_contract`、`support_tests/mcp_extension_contract`、`support_tests/mcp_product_contract`、`support_tests/product_mcp_server_contract` | JSON-RPC、MCP-to-extension、产品组合和 server bridge |
 | `process4cj` | `support_tests/sqlite_run_repository_contract`、`support_tests/thread_runtime_contract` | SQLite repository 和 thread runtime 的 process/cancellation 交互 |
 | `model_adapters` | `support_tests/acp_lifecycle_contract`、`support_tests/artifact_contract`、`support_tests/direct_runtime_sandbox_contract`、`support_tests/gc_contract`、`support_tests/handoff_request_contract`、`support_tests/model_adapters_contract`、`support_tests/native_provider_security_contract`、`support_tests/product_continuation_contract`、`support_tests/product_contract`、`support_tests/product_prompt_contract`、`support_tests/product_rpc_contract`、`support_tests/product_thread_runtime_contract` | provider wire、凭据安全、retry/fallback、产品和 runtime 组合 |
-| `agent_product` | 产品、MCP、GitHub、web search、sandbox、RPC、continuation、memory、prompt 等相关 contracts | composition root 对工具和 runtime 的组合证据 |
+| `agent_product` | 产品、MCP、GitHub、sandbox、RPC、continuation、memory、prompt 等相关 contracts，以及 `PluginHttp*` 真实 HTTP 单元 | composition root 对工具和 runtime 的组合证据 |
 
-其中 6 个 support-test manifest 显式声明 `${CANGJIE_STDX_PATH}`：`checkpoint_compaction_contract`、`mcp_conformance_server`、`mcp_contract`、`mcp_extension_contract`、`native_provider_security_contract` 和 `prompt_memory_v3_contract`。只有两处 support-test 源码直接 import stdx：`support_tests/mcp_contract/src/main.cj` 和 `libs/mcp4cj/src/mcp_test.cj`；其他测试通过被测包的 target 和传递依赖获得构建要求。
+其中所列 support-test manifest 显式声明 `${CANGJIE_STDX_PATH}`：`checkpoint_compaction_contract`、`mcp_conformance_server`、`mcp_contract`、`native_provider_security_contract` 和 `prompt_memory_v3_contract`。只有两处 support-test 源码直接 import stdx：`support_tests/mcp_contract/src/main.cj` 和 `libs/mcp4cj/src/mcp_test.cj`；其他测试通过被测包的 target 和传递依赖获得构建要求。
 
 两个需要递归解析的跨测试目录 path dependency 是 `support_tests/extension_runtime_contract` 和 `support_tests/sdk_fixture_extension_runner` 对 `../sdk_fixture_extension` 的引用。它们不是根 workspace package，也不能被文档清单遗漏。
 
@@ -133,17 +135,15 @@ yjson 使用 release tag 0.1.0，锁文件将其解析为 commit c91859feb77aeba
 
 安全随机数消费者 `model_adapters/src/adapters.cj`、`agent_product/src/product.cj` 和 `agent_product/src/process_broker.cj` 已统一使用 `process4cj.fillSecureRandom`；它们不再依赖 `stdx.crypto`。
 
-直接 stdx import 的测试文件是 `libs/mcp4cj/src/mcp_test.cj` 和 `support_tests/mcp_contract/src/main.cj`。`agent_mcp/src/transport.cj` 中关于 stdio/transport 的说明字符串不是 import，不计入源码使用数。
+直接 stdx import 的测试文件是 `libs/mcp4cj/src/mcp_test.cj` 和 `support_tests/mcp_contract/src/main.cj`。历史适配层已删除，不计入当前源码使用数。
 
-对应 manifest 中明确设置 `${CANGJIE_STDX_PATH}` 的四个 workspace 包是 `libs/mcp4cj`、`agent_mcp`、`model_adapters` 和 `agent_product`。`libs/process4cj` 的 target path 是 `native`，它是 C shim 的本地物料，不应误计为 stdx path。
+对应 manifest 中明确设置 `${CANGJIE_STDX_PATH}` 的所列 workspace 包是 `libs/mcp4cj`、`model_adapters` 和 `agent_product`。`libs/process4cj` 的 target path 是 `native`，它是 C shim 的本地物料，不应误计为 stdx path。
 
 ### 传递闭包
 从两个直接 stdx 源码消费者沿 workspace manifest 的反向依赖闭包计算，受 stdx 影响的 8 个 workspace 包是：
 
 ```text
 agent_app
-agent_extensions
-agent_mcp
 agent_product
 agent_rpc
 libs/mcp4cj
@@ -174,15 +174,15 @@ persistence_runtime
 | bubblewrap | `sandbox4cj` / `agent_product` 的 workspace sandbox | `libs/sandbox4cj/src/sandbox.cj` 默认使用 `/usr/bin/bwrap`，并验证 namespace 隔离；Linux 或 bubblewrap 不可用时返回 `Unsupported`，不退回裸执行。 |
 | `timeout` | sandbox command 的 deadline wrapper | 默认 executable 为 `/usr/bin/timeout`；缺失时 sandbox availability 失败。 |
 | `prlimit` | 仅当 `SandboxResourceLimits` 启用 address-space、file-size、open-files、processes 或 CPU limit | sandbox command 会在配置了 process limits 时加入 `/usr/bin/prlimit`；默认不因未配置资源上限而要求它。 |
-| `curl` | `ProductWebSearchRuntime` 的 Brave、Tavily、SearXNG web search | `CurlWebSearchTransport` 解析 `/usr/bin/curl` 或 `/usr/local/bin/curl`，通过 `ProcessPort` 在只读 workspace、允许网络的 sandbox 中运行；对应 API key/URL 由 provider 配置决定。 |
+| `curl` | 通用插件 `network.http` 受控服务 | 固定 `/usr/bin/curl`，首参数 `-q`，通过只读隔离 ProcessPort 和 Mediated gateway 执行已批准意图，无自动重定向/重试；秘密只在宿主按 operator grant 注入。Brave/Tavily/SearxNG 算法属于独立 `plugins/web_search`，宿主不选择 provider，默认目录没有网页搜索工具。 |
 | `git`、`gh` | GitHub tool 的 repo/file/PR/Actions 操作，及 worktree runtime | `ProductGithubRuntime` 默认解析 `/usr/bin/gh`、`/usr/local/bin/gh`、`/usr/bin/git`、`/usr/local/bin/git`；`gh api` 读文件，`gh pr` 做 checkout，`git push` 走显式批准的写操作。缺失只影响这些功能，不是基础 Agent loop 的所有用户前置。 |
 | ripgrep (`rg`) | `grep` 和 `glob` 产品工具 | `agent_product/src/tools.cj` 以 `rg` argv 执行 workspace search/file listing，带只读 sandbox、超时和输出限制；产品未把它写成固定 `/usr/bin/rg`，由宿主 PATH 提供。 |
-| `ast-grep` | `ast_grep` 和 `ast_edit` 工具 | `agent_product/src/ast_tools.cj` 固定调用 `/usr/bin/ast-grep`；AST edit 先生成 proposal，另有显式 resolve/reject 生命周期。 |
+| `ast-grep` | 独立 `plugins/ast` 查询与编辑提案 | 插件随包携带固定摘要的 engine，经通用 `process.readonly` 执行；默认产品没有 AST 工具或系统 ast-grep 依赖。编辑只产生只读提案，交由通用 `file.plan.propose` 存储，实际变更另走既有 `apply_file_plan` 审批。 |
 | `/bin/bash`、`/bin/sh`、`script` | `bash` 工具、clipboard staging、pty 分支 | shell 工具用 `/bin/bash --noprofile --norc -lc`；pty 分支使用 `script` 包装；clipboard 的可信 UI 边界使用 `/bin/sh` 和系统 clipboard 命令。它们受产品 process/sandbox policy，不等同于允许模型直接突破边界。 |
 | Python、Bun、Ruby、Julia | `eval` 工具按语言选择 `/usr/bin/python3`、`/usr/bin/bun`、`/usr/bin/ruby`、`/usr/bin/julia` | 仅启用对应 eval 语言时需要；eval 请求仍进入 workspace read-write sandbox 和输出/超时限制。 |
 | LSP server executable | `lsp` runtime | `agent_product/src/lsp_runtime.cj` 从 host 配置读取 executable、argv、文件类型、初始化选项和环境 binding，通过 `lsp4cj` 与长生命周期 managed process 通信；host 必须供应语言服务器。 |
-| DAP executable | `debug` runtime | `agent_product/src/dap_runtime.cj` 从 host 配置读取 adapter executable 和 argv，通过 `dap4cj` 与 managed process 通信；host 必须供应 debug adapter。网络 attach 还必须由 adapter profile 显式允许。 |
-| MCP stdio server executable | `mcp4cj` / `agent_mcp` 的 stdio transport | MCP 配置提供 executable、argv 和显式环境 binding；长生命周期子进程由 process4cj 管理。Streamable HTTP 则使用 stdx HTTP，不要求 MCP library 固定一个 server executable。 |
+| DAP executable | installed `axyndra:dap` service | `plugins/dap` selects the configured adapter and its exact arguments. The installed service requests process work through the existing canonical Host; there is no Product built-in DAP executor. Current binary parity and cleanup tests remain required. |
+| MCP stdio server executable | `mcp4cj` 独立库/插件 的 stdio transport | MCP 配置提供 executable、argv 和显式环境 binding；长生命周期子进程由 process4cj 管理。Streamable HTTP 则使用 stdx HTTP，不要求 MCP library 固定一个 server executable。 |
 | SSH executable | 当前 `/ssh` 配置命令 | `agent_product/src/ssh_runtime.cj` 当前读写 project/user 的 `ssh.json`，源码没有把 `ssh` executable 接入这条配置管理路径。因此 SSH host 配置不是本轮可证明的 SSH 子进程运行要求；不要把它写成所有用户的安装前提。 |
 | `patchelf`、`ldd`、可用 `awk`/`grep` | `scripts/package_candidate.sh` | `patchelf` 是 relocatable candidate 的硬要求；`ldd` 用于递归动态库闭包和最终缺库检查，`rp-awk`/`rp-grep` 不存在时脚本回退到系统 `awk`/`grep`。 |
 
@@ -229,7 +229,6 @@ python3 -B ../Wirestack/tools/build_native_dependencies.py --plan
 ```text
 agent_app
 agent_extensions
-agent_mcp
 agent_product
 agent_rpc
 libs/mcp4cj

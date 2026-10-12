@@ -12,6 +12,7 @@ func v1Schema(): Array<String> {
         "CREATE TABLE approval_decisions (operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL)",
         "CREATE TABLE session_permission_grants (thread_id TEXT NOT NULL, digest TEXT NOT NULL, payload TEXT NOT NULL, created_at_millis INTEGER NOT NULL, PRIMARY KEY(thread_id,digest))",
         "CREATE TABLE thread_metadata (thread_id TEXT PRIMARY KEY, name TEXT NOT NULL, summary TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, model TEXT NOT NULL, workspace_root TEXT NOT NULL, cwd TEXT NOT NULL, fast_mode INTEGER NOT NULL, parent_thread_ref TEXT NOT NULL, work_mode TEXT NOT NULL, draft TEXT NOT NULL, todo_payload TEXT NOT NULL, goal_payload TEXT NOT NULL)",
+        "CREATE TABLE plugin_documents (thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, namespace TEXT NOT NULL, document_key TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), payload TEXT NOT NULL, PRIMARY KEY(thread_id,lane_id,namespace,document_key))",
         "CREATE TABLE run_model_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, request_sequence INTEGER NOT NULL, role TEXT NOT NULL, estimated_input_tokens INTEGER NOT NULL, actual_input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, reasoning_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL, cost_micros INTEGER, created_at_millis INTEGER NOT NULL, UNIQUE(run_id, request_sequence))",
         "CREATE TABLE model_attempts (id TEXT PRIMARY KEY, semantic_request_id TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, parent_attempt_id TEXT REFERENCES model_attempts(id), attempt_no INTEGER NOT NULL, lifecycle TEXT NOT NULL, policy TEXT NOT NULL, policy_reason TEXT NOT NULL, started_at_millis INTEGER NOT NULL, last_activity_at_millis INTEGER NOT NULL, completed_at_millis INTEGER, provider_request_id TEXT NOT NULL, provider_response_id TEXT NOT NULL, failure_kind TEXT NOT NULL, semantic_request_digest TEXT NOT NULL, wire_policy_digest TEXT NOT NULL, dispatch_state TEXT NOT NULL, replay_barrier TEXT NOT NULL, dispatch_started_at_millis INTEGER, provider_terminal_at_millis INTEGER, UNIQUE(semantic_request_id,attempt_no))",
         "CREATE TABLE model_decisions (id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL UNIQUE REFERENCES model_attempts(id) ON DELETE CASCADE, semantic_request_id TEXT NOT NULL, validation_status TEXT NOT NULL, completion_disposition TEXT NOT NULL, decision_outcome TEXT NOT NULL, content_hash TEXT NOT NULL, replay_hash TEXT NOT NULL, provider_id TEXT NOT NULL, provider_response_id TEXT NOT NULL, terminal_evidence TEXT NOT NULL, validator_version INTEGER NOT NULL, created_at_millis INTEGER NOT NULL, canonical_committed_at_millis INTEGER)",
@@ -312,5 +313,28 @@ func v26Migration(): Array<String> {
             "SELECT rc.run_id FROM run_continuations rc " +
             "JOIN model_attempts ma ON ma.id=rc.active_attempt_id " +
             "WHERE length(trim(ma.transcript_snapshot))=0)"
+    ]
+}
+
+// Existing derived rows have no trustworthy child call identity. Preserve
+// them as depth-zero legacy records; never infer identity from a request key.
+func v27Migration(): Array<String> {
+    [
+        "ALTER TABLE derived_operation_admissions ADD COLUMN child_call_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE derived_operation_admissions ADD COLUMN root_operation_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE derived_operation_admissions ADD COLUMN depth INTEGER NOT NULL DEFAULT 0 CHECK(depth >= 0 AND depth <= 8)",
+        "CREATE UNIQUE INDEX derived_child_call_identity ON derived_operation_admissions(parent_operation_id,child_call_id) WHERE child_call_id <> ''"
+    ]
+}
+
+// Preserve the exact old payload bytes, including corrupt values: decoding is
+// an explicit read error, never a reason to discard user history. Metadata may
+// predate a canonical Thread, so this table intentionally has no threads FK.
+// Old columns become a read-only migration archive; there is no dual writing.
+func v28Migration(): Array<String> {
+    [
+        "CREATE TABLE plugin_documents (thread_id TEXT NOT NULL, lane_id TEXT NOT NULL, namespace TEXT NOT NULL, document_key TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), payload TEXT NOT NULL, PRIMARY KEY(thread_id,lane_id,namespace,document_key))",
+        "INSERT INTO plugin_documents(thread_id,lane_id,namespace,document_key,revision,payload) SELECT thread_id,'main','axyndra:workflow','todo',1,todo_payload FROM thread_metadata WHERE todo_payload<>''",
+        "INSERT INTO plugin_documents(thread_id,lane_id,namespace,document_key,revision,payload) SELECT thread_id,'main','axyndra:workflow','goal',1,goal_payload FROM thread_metadata WHERE goal_payload<>''"
     ]
 }

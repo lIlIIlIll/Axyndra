@@ -50,6 +50,10 @@ public class FaultInjectingModelPort <: ModelPort {
         this.profile = profile
     }
 
+    public func validatePolicySnapshot(model: String, snapshot: ?ModelExecutionCapabilitiesSnapshot): Result<Unit> {
+        inner.validatePolicySnapshot(model, snapshot)
+    }
+
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
         var current: Int64 = 0
         var shouldInject = false

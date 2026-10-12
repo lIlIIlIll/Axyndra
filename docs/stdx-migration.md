@@ -40,9 +40,9 @@ ProviderTransport.cancel(requestId: String): domain.Result<Unit>
 
 `model_adapters` 负责把 Agent request/response 投影到 llm4cj wire DTO，解析凭据，默认校验 HTTPS/loopback URL；Provider Profile 可显式 opt-in 远程 HTTP，绑定 request ID，维护总 deadline 和取消，控制 64 MiB response 上限，脱敏错误和流片段，并决定 retry/fallback。Wirestack 只提供通用 HTTP/TLS/response body/cancellation primitive，不认识 `ProviderSpec`、Agent error code 或 provider 名称。
 
-### `libs/mcp4cj` 和 `agent_mcp` 分层
+### `libs/mcp4cj` 和独立插件分层
 
-`libs/mcp4cj` 相对 HTTP/SSE 库是上层。它拥有 MCP header、JSON-RPC 关联、notification/subscription、request-scope 生命周期、MCP protocol error 和现有 `/mcp` wire 形状。`agent_mcp` 继续拥有产品配置、secret environment binding、server lifecycle 和 `AgentError` 映射。
+`libs/mcp4cj` 相对 HTTP/SSE 库是上层。它拥有 MCP header、JSON-RPC 关联、notification/subscription、request-scope 生命周期、MCP protocol error 和现有 `/mcp` wire 形状。宿主通用服务拥有操作者授权、凭据边界与规范 Operation/Receipt；独立插件拥有协议配置与 MCP lifecycle。旧环境注入的完整迁移仍须按 MCP 迁移矩阵验收。
 
 MCP server/client 不为了复用 provider adapter 而共用产品错误模型；`libs/*` 不反向依赖 Agent 包。stdio 继续是长生命周期 process4cj 子进程，Streamable HTTP 继续是 stdx HTTP 的 MCP transport，直到 Wirestack 通过下面的 HTTP server/client 合同。
 

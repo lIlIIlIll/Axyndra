@@ -495,38 +495,76 @@ func nextDue(now: MonoTime, previous: MonoTime, every: Duration, policy: FrameMi
 }
 
 class AsyncTaskState {
-    let id: String
-    let future: Future<Event>
-    let notifier: Future<Unit>
+    var id: String
+    var future: ?Future<Event> = None
+    var notifier: ?Future<Unit> = None
+    let references: AsyncTaskReferenceCell
     var cancelRequested: Bool = false
+    var delivered: Bool = false
 
-    init(id: String, future: Future<Event>, notifier: Future<Unit>) {
-        this.id = id
-        this.future = future
-        this.notifier = notifier
+    init(id: String, references: AsyncTaskReferenceCell) {
+        this.id = id; this.references = references
+    }
+    func cancelFuture(): Unit {
+        match (future) { case Some(actual) => actual.cancel(); case None => () }
+    }
+    func runNotifier(wake: ExternalPort<Unit>, entryDelay: ?(() -> Unit)): Unit {
+        // The spawned closure captures this mutable state, never a separate
+        // immutable Future. All actual delay/Future/result/wake borrow locals
+        // leave the helper before the protected completion marker is set.
+        try { runNotifierBorrowedFrame(wake, entryDelay) }
+        finally { references.noteNotifierFrameEnded() }
+    }
+    private func runNotifierBorrowedFrame(wake: ExternalPort<Unit>, entryDelay: ?(() -> Unit)): Unit {
+        match (entryDelay) { case Some(actual) => actual(); case None => () }
+        awaitTaskResultBorrowedFrame()
+        _ = wake.tryEnqueue(())
+    }
+    private func awaitTaskResultBorrowedFrame(): Unit {
+        let actual = future.getOrThrow()
+        try { _ = actual.get() } catch (_: Exception) {}
+    }
+    private func awaitNotifierCompletionFrame(): Unit {
+        try { _ = notifier.getOrThrow().get() } catch (_: Exception) {}
+    }
+    func clearActualRuntimeReferences(): Unit {
+        if (!references.referencesRetired() || !references.actualNotifierFrameEnded()) {
+            throw Exception("async:actual-references-still-live")
+        }
+        // Result availability/cancellation alone cannot authorize this. The
+        // notifier's real borrowing helper must have ended first; then await
+        // its closure return and leave that Future local's helper frame.
+        awaitNotifierCompletionFrame()
+        future = None; notifier = None; id = ""
     }
 }
 
 public class AsyncRuntime {
-    private let tasks = ArrayList<AsyncTaskState>()
+    private var tasks = ArrayList<AsyncTaskState>()
     private let completionWake = ExternalPort<Unit>(capacity: 1)
+    private let notifierEntryDelay: ?(() -> Unit)
 
-    public init() {}
+    public init() { notifierEntryDelay = None }
+    // Package-private control: delay the actual spawned notifier, rather than
+    // substituting a fabricated completion/Future/physical-ACK witness.
+    init(notifierEntryDelay: () -> Unit) { this.notifierEntryDelay = Some(notifierEntryDelay) }
 
     public func start(id: String, task: () -> Event): Event {
         cancel(id)
+        let references = AsyncTaskReferenceCell(task)
+        let state = AsyncTaskState(id, references)
+        // Register in the original list BEFORE either fallible spawn. No
+        // already-admitted callback can be lost if later registration fails.
+        // Authentic preallocation payment for this metadata remains OPEN.
+        tasks.add(state)
         let future = spawn {
-            try {
-                task()
-            } catch (e: Exception) {
-                Event.AsyncFailed(id, e.message)
-            }
+            try { references.run() }
+            catch (e: Exception) { Event.AsyncFailed(id, e.message) }
         }
-        let notifier = spawn {
-            try { _ = future.get() } catch (_: Exception) {}
-            _ = completionWake.tryEnqueue(())
-        }
-        tasks.add(AsyncTaskState(id, future, notifier))
+        state.future = Some(future)
+        let wake = completionWake
+        let entryDelay = notifierEntryDelay
+        state.notifier = Some(spawn { state.runNotifier(wake, entryDelay) })
         Event.AsyncStarted(id)
     }
 
@@ -540,10 +578,10 @@ public class AsyncRuntime {
 
     public func cancel(id: String): Bool {
         for (task in tasks) {
-            if (task.id == id) {
-                task.cancelRequested = true
-                task.future.cancel()
-                return true
+            // A delivered record exists solely for real reference custody;
+            // original cancel/reused-ID semantics apply only to pending work.
+            if (!task.delivered && task.id == id) {
+                task.cancelRequested = true; task.cancelFuture(); return true
             }
         }
         false
@@ -555,33 +593,81 @@ public class AsyncRuntime {
         var index: Int64 = 0
         while (index < tasks.size) {
             let task = tasks[index]
-            match (task.future.tryGet()) {
-                case Some(event) =>
-                    tasks.remove(at: index)
-                    if (task.cancelRequested) {
-                        out.add(Event.AsyncCancelled(task.id))
-                    } else {
-                        match (event) {
-                            case Event.AsyncFailed(_, message) => out.add(Event.AsyncFailed(task.id, message))
-                            case _ => out.add(Event.AsyncCompleted(task.id, event))
+            if (!task.delivered) {
+                match (task.future.getOrThrow().tryGet()) {
+                    case Some(event) =>
+                        task.delivered = true
+                        task.references.beginClosing()
+                        if (task.cancelRequested) {
+                            out.add(Event.AsyncCancelled(task.id))
+                        } else {
+                            match (event) {
+                                case Event.AsyncFailed(_, message) => out.add(Event.AsyncFailed(task.id, message))
+                                case _ => out.add(Event.AsyncCompleted(task.id, event))
+                            }
                         }
-                    }
-                case None => index++
+                    case None => ()
+                }
             }
+            // Keep the SAME existing record after delivery while the actual
+            // notifier/callable still borrows references. No second holding
+            // registry, duplicated result or completion-is-ACK inference.
+            if (task.delivered && task.references.referencesRetired() && task.references.actualNotifierFrameEnded()) {
+                task.clearActualRuntimeReferences()
+                tasks.remove(at: index)
+            } else { index++ }
         }
         out.toArray()
     }
 
     public func pendingCount(): Int64 {
-        tasks.size
+        var pending: Int64 = 0
+        for (task in tasks where !task.delivered) { pending++ }
+        pending
+    }
+    // Actual source-control observations, not public retirement grants.
+    func retainedReferenceTaskCount(): Int64 { tasks.size }
+    func allActualNotifierFramesEnded(): Bool {
+        for (task in tasks) { if (!task.references.actualNotifierFrameEnded()) { return false } }
+        true
     }
 
+    func retirementWaitingOnActualNotifier(): Bool {
+        for (task in tasks) { if (task.references.actualRetirementWaitingOnNotifier()) { return true } }
+        false
+    }
     public func eventSource(): EventSource { completionWake.eventSource() }
 
-    func cancelAll(): Unit {
+    func retireTaskReferences(): Unit {
+        retireTaskReferencesFrame()
+        // Every old record's stored data cleared inside its actual helper;
+        // all helper locals ended before replacing the old list backing.
+        // Task/list/SDK metadata payment and capacity are separately OPEN.
+        tasks = ArrayList<AsyncTaskState>()
+    }
+    private func retireTaskReferencesFrame(): Unit {
         for (task in tasks) {
-            task.cancelRequested = true
-            task.future.cancel()
+            task.references.beginClosing()
+            if (!task.delivered) { task.cancelRequested = true; task.cancelFuture() }
+        }
+        completionWake.close()
+        for (task in tasks) {
+            // A failed/uncertain spawn cannot fabricate a notifier ACK. Its
+            // actual record and any admitted task remain held; no receipt.
+            if (task.notifier.isNone()) { throw Exception("async:notifier-admission-unacknowledged") }
+            while (!task.references.referencesRetired() || !task.references.actualNotifierFrameEnded()) {
+                if (!task.references.actualNotifierFrameEnded()) {
+                    task.references.noteActualRetirementWaitingOnNotifier(true)
+                }
+                sleep(Duration.millisecond)
+            }
+            task.references.noteActualRetirementWaitingOnNotifier(false)
+            task.clearActualRuntimeReferences()
+        }
+    }
+    func cancelAll(): Unit {
+        for (task in tasks where !task.delivered) {
+            task.cancelRequested = true; task.cancelFuture()
         }
         completionWake.close()
     }
@@ -1782,7 +1868,11 @@ public class App {
                             case None => ()
                         }
                         let prepared: ?PresentationFrame = match (frameProvider) {
-                            case Some(provider) => Some(provider.prepareFrame(backend.size()))
+                            case Some(provider) =>
+                                let geometry = backend.size()
+                                if (!provider.prepareRetainedFrameCopies(geometry, terminal.retainedFrameCopiesInvoice())) {
+                                    throw Exception("display.frame_payment_required") }
+                                Some(provider.prepareFrame(geometry))
                             case None => None
                         }
                         let presentationChanged = match ((presentationBackend, prepared)) {
@@ -2075,7 +2165,13 @@ public class App {
                     case None => ()
                 }
                 timerRuntime.clear()
-                asyncRuntime.cancelAll()
+                match (frameProvider) { case Some(provider) => provider.beginRetainedDisplayProducerClosing(); case None => () }
+                match (frameProvider) {
+                    case Some(provider) =>
+                        if (provider.wantsRetainedDisplayProducerRetirement()) {
+                            provider.noteAsyncTaskReferencesRetired(RetiredAsyncTaskReferences.retire(asyncRuntime))
+                        } else { asyncRuntime.cancelAll() }
+                    case None => asyncRuntime.cancelAll() }
                 lifecycle.closeOwnedPtys(ptyRuntime)
                 try {
                     eventWaiter.close()
@@ -2088,6 +2184,12 @@ public class App {
                     case Some(port) => port.close()
                     case None => ()
                 }
+                // Every draw helper/while-frame local has ended. This only
+                // retires internal Terminal references; unknown transport
+                // snapshots and product copied-data owners keep their debt.
+                match ((frameProvider, RetiredInternalDisplayFrameReferences.retire(terminal))) {
+                    case (Some(provider), Some(retired)) => provider.noteInternalDisplayFrameReferencesRetired(retired)
+                    case _ => () }
             }
         }
     }

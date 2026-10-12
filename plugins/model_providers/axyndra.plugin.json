@@ -1,0 +1,25 @@
+{
+  "id": "model-providers",
+  "version": "1.2.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/model-providers",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "network.http"
+  ],
+  "contributions": [
+    {
+      "kind": "model_provider",
+      "name": "openai-chat-completions"
+    },
+    {
+      "kind": "model_provider",
+      "name": "openai-responses"
+    },
+    {
+      "kind": "model_provider",
+      "name": "anthropic-messages"
+    }
+  ]
+}

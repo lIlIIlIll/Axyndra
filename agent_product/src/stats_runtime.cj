@@ -439,7 +439,7 @@ class StatsAccumulator {
             totalCostMicros: if (requests > 0 && costKnown) {
                 Some(costMicros)
             } else {
-                None
+                Option<Int64>.None
             },
             totalRuns: runs,
             totalTurns: turns,

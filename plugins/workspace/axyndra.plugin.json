@@ -1,0 +1,33 @@
+{
+  "id": "workspace",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/workspace-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "process.readview"
+  ],
+  "contributions": [
+    {
+      "kind": "tool",
+      "name": "read"
+    },
+    {
+      "kind": "tool",
+      "name": "grep"
+    },
+    {
+      "kind": "tool",
+      "name": "glob"
+    },
+    {
+      "kind": "tool",
+      "name": "edit"
+    },
+    {
+      "kind": "tool",
+      "name": "write"
+    }
+  ]
+}

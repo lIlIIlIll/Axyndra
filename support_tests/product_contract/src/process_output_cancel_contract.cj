@@ -5,6 +5,8 @@ import yjson.*
 import agent_domain.*
 import agent_runtime.*
 import agent_product.*
+import workspace_legacy_oracle.*
+import eval_native_contract.*
 import agent_testkit.*
 import tool_runtime.*
 import std.env.*
@@ -137,13 +139,22 @@ func runProcessRemediationContracts(root: String): Unit {
         expect(exists(Path(cooperativeReadyFile)) &&
                 processes.hasActiveOperation(cooperativeOperation),
             "cooperative process is ready before cancellation")
+        // Terminal operation cancellation deliberately forces the owned tree:
+        // a TERM trap must not append new filesystem effects after revocation.
+        let cooperativeCancelStarted = MonoTime.now()
         expect(processes.cancel(cooperativeOperation).isOk(),
             "cooperative cancellation is accepted")
         let cooperativeResult = cooperative.get().value().getOrThrow()
         expect(
-            exists(Path(cooperativeStoppedFile)) && !cooperativeResult.timedOut &&
-                !processes.hasActiveOperation(cooperativeOperation),
-            "TERM handler completes before forced escalation"
+            !exists(Path(cooperativeStoppedFile)) && cooperativeResult.exitCode != 0 &&
+                !cooperativeResult.timedOut && !processes.hasActiveOperation(cooperativeOperation) &&
+                (MonoTime.now() - cooperativeCancelStarted).toMilliseconds() < 3000,
+            "terminal cancellation prevents TERM-hook effects: stopped=" + exists(Path(cooperativeStoppedFile)).toString() +
+                " timedOut=" + cooperativeResult.timedOut.toString() + " active=" +
+                processes.hasActiveOperation(cooperativeOperation).toString() + " exit=" +
+                cooperativeResult.exitCode.toString() + " elapsed_ms=" +
+                (MonoTime.now() - cooperativeCancelStarted).toMilliseconds().toString() +
+                " stderr=" + cooperativeResult.stderr
         )
     } finally {
         let _ = processes.cancel(cooperativeOperation)
@@ -154,9 +165,9 @@ func runProcessRemediationContracts(root: String): Unit {
     runEscapedDescendantCancellationContract(directory, processes)
     runThreadedDescendantCancellationContract(directory, processes)
     runDisplayServerEnvironmentContracts(directory, processes)
-    runEvalStartupFailureContract(processes)
+    runEvalStartupFailureContract(directory)
     let catalog = ToolCatalog()
-    installLocalTools(catalog, workspace, processes).value().getOrThrow()
+    installLegacyLocalTools(catalog, workspace, processes).value().getOrThrow()
     let pipeline = ToolPipeline(catalog, InMemoryOperationRuntimePort(), RecordingAuditPort(), ProductIds(),
         policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo))
     let source = CancellationSource()
@@ -202,58 +213,28 @@ func runProcessRemediationContracts(root: String): Unit {
     println("process lifecycle, eval startup, output and cancellation contracts passed")
 }
 
-func runEvalStartupFailureContract(processes: LocalProcessPort): Unit {
-    let sessionId = SessionId("silent-eval-startup")
-    let failedOperation = OperationId("silent-eval-startup")
-    let failed = processes.executeEval(
-        sessionId,
-        "py",
-        "40 + 2",
-        false,
-        ProcessRequest(
-            "/usr/bin/true",
-            operationId: failedOperation,
-            timeoutMillis: 1000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
-        )
-    )
-    match (failed) {
-        case Result.Err(error) =>
-            expect(
-                error.code == "eval.runtime_write_failed",
-                "silent eval startup failure has a stable transport diagnostic"
-            )
-        case Result.Ok(value) =>
-            expect(
-                value.exitCode == -1 && value.transportClosed && !value.timedOut,
-                "silent eval runtime exit is classified as a closed transport"
-            )
-    }
-    expect(!processes.hasActiveOperation(failedOperation),
-        "failed eval startup releases its active process registration")
-    let recoveredOperation = OperationId("silent-eval-recovered")
-    let recovered = match (processes.executeEval(
-        sessionId,
-        "py",
-        "40 + 2",
-        false,
-        ProcessRequest(
-            "python3",
-            operationId: recoveredOperation,
-            timeoutMillis: 3000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-            networkPolicy: Some(NetworkPolicy(NetworkPolicyMode.Denied))
-        )
-    )) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-    }
-    expect(
-        recovered.exitCode == 0 && recovered.stdout.trimAscii() == "42" &&
-            !recovered.transportClosed && !processes.hasActiveOperation(recoveredOperation),
-        "eval starts a fresh process after a no-response runtime"
-    )
+func runEvalStartupFailureContract(directory: String): Unit {
+    let nativeScope = NativeEvalContractScope(directory)
+    let thread = SessionId("silent-eval-startup")
+    try {
+        let silent = nativeScope.binding("py", executable: "/usr/bin/true", startupTimeoutMillis: 1000)
+        expect(nativeEvalFailed(silent.start(thread)), "silent Eval runner never publishes a successful service")
+        silent.waitReleased()
+        expect(!silent.visible(thread) && silent.childReceipts() == 0 &&
+            silent.count("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')") == 0,
+            "failed eval startup releases actual ownership and never executes a cell")
+        // A new executable/profile is an explicit frontend startup. No failed
+        // invocation or lease is replayed by a raw kernel cache.
+        let recovered = nativeScope.binding("py", executable: "python3")
+        nativeEvalStartChecked(recovered, thread)
+        let actual = completedFrom(nativeEvalObservedCellSnapshot(recovered.call(thread,
+            evalCall("silent-eval-recovered", "py", "40 + 2", timeout: 3))))
+        expect(!actual.isError && actual.receiptId.isSome() &&
+            actual.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
+            actual.output.field("stdout").getOrThrow().text.trimAscii() == "42" && recovered.childReceipts() == 1 &&
+            recovered.count("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')") == 0,
+            "eval starts an explicitly approved fresh service after a no-response runtime")
+    } finally { nativeScope.close() }
 }
 
 func runEscapedDescendantCancellationContract(

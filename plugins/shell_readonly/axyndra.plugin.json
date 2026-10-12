@@ -1,0 +1,17 @@
+{
+  "id": "shell-readonly",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/shell-readonly-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "process.readview"
+  ],
+  "contributions": [
+    {
+      "kind": "tool",
+      "name": "exec"
+    }
+  ]
+}

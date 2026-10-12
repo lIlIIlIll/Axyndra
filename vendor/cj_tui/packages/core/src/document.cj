@@ -83,9 +83,11 @@ public class DocumentLine {
 
 public class Document {
     public let lines: Array<DocumentLine>
+    public let retainedPayment: ?RetainedDocumentPayment
 
-    public init(lines: Array<DocumentLine>) {
+    public init(lines: Array<DocumentLine>, retainedPayment!: ?RetainedDocumentPayment = None) {
         this.lines = lines
+        this.retainedPayment = retainedPayment
     }
 
     public static func plain(text: String, style!: Style = Style.default()): Document {
@@ -313,6 +315,11 @@ public class DocumentView <: Widget {
         this.cacheLayout = cacheLayout
     }
 
+    // Indexed measurement of the actual still-live old document and cache.
+    // It creates no rows/scalar snapshot and grants no Source authority.
+    public func retainedCopiesInvoice(): Int64 {
+        retainedDisplayAdd(retainedDocumentInvoice(document), retainedStyledRowsInvoice(cachedRows)) }
+
     public func renderedLineCount(width: Int64): Int64 {
         renderRows(document, width).size
     }
@@ -439,6 +446,7 @@ public class DocumentView <: Widget {
 
     private func renderRows(document: Document, width: Int64): Array<StyledLine> {
         if (cacheLayout && cachedWidth == width) { return cachedRows }
+        prepareDocumentLayoutPayment(document, width, cachedRows)
         let rows = ArrayList<StyledLine>()
         for (line in document.lines) {
             appendLineRows(rows, line, width)
@@ -458,6 +466,7 @@ public class DocumentView <: Widget {
             let to = min(all.size, from + max(0, count))
             return all[from..to]
         }
+        if (count > 0) { prepareDocumentLayoutPayment(document, width, cachedRows) }
         let rows = ArrayList<StyledLine>()
         if (count <= 0) { return rows.toArray() }
         let from = max(0, start)
