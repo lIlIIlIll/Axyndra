@@ -85,6 +85,7 @@
   test-members = [
     "agent_plugin_registry",
     "agent_history",
+    "agent_minimal",
 
     "libs/yjson_support",
     "libs/logical_json_payload",
