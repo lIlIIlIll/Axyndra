@@ -80,7 +80,7 @@ Host adapters expose only generic document read/CAS, ContextRead, approval and
 already controlled filesystem proposal/application services.
 
 Retire the business algorithms and static registrations in
-`agent_product/src/todo_tool.cj`, `todo_slash.cj`, `goal_runtime.cj`,
+[agent_product/src/todo_tool.cj (pre-migration main)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/todo_tool.cj), `todo_slash.cj`, `goal_runtime.cj`,
 `goal_slash.cj`, and `tools.cj` (`TodoTool`, `GoalTool`, `PlanWriteTool`). Switch
 `ProductRuntime` getters/setters, Application/TUI/RPC editing and compaction
 consumers to the selected installed contribution and the generic documents.
