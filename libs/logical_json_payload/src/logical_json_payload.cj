@@ -422,19 +422,43 @@ public func writeLogicalJsonPayload(window: String, sequence: Int64, messageType
     send("payload_end", [])
 }
 
+// Allocation preflight, not JSON validation. Keep the original lexical-node
+// definition (including field names and malformed input); the bounded parser
+// remains responsible for syntax, UTF-8 and nesting validation.
 public func logicalJsonNodeCount(source: String): Int64 {
-    var quoted = false; var escaped = false; var scalar = false; var nodes: Int64 = 0
-    for (byte in source.toArray()) {
-        if (quoted) {
-            if (escaped) { escaped = false }
-            else if (byte == b'\\') { escaped = true }
-            else if (byte == b'"') { quoted = false }
-        } else if (byte == b'"') { quoted = true; scalar = false; nodes += 1 }
-        else if (byte == b'{' || byte == b'[') { scalar = false; nodes += 1 }
-        else if (byte == b',' || byte == b':' || byte == b'}' || byte == b']' ||
-            byte == b' ' || byte == b'\t' || byte == b'\r' || byte == b'\n') { scalar = false }
-        else if (!scalar) { scalar = true; nodes += 1 }
-        if (nodes > 65536) { throw LogicalJsonPayloadError("logical JSON has too many lexical nodes") }
+    var offset: Int64 = 0
+    var nodes: Int64 = 0
+    var scalar = false
+    while (offset < source.size) {
+        let byte = source[offset]
+        if (byte == b'"') {
+            scalar = false; nodes += 1
+            if (nodes > 65536) { throw LogicalJsonPayloadError("logical JSON has too many lexical nodes") }
+            offset += 1
+            // Search on the original String, without copying its entire byte
+            // array or revisiting ordinary string bytes in the scalar loop.
+            // Only a quote preceded by an even backslash run ends the string.
+            // Each search advances; each backward run stays within that search
+            // interval. Even escape-heavy or unterminated input stays linear.
+            while (true) {
+                let quote = match (source.indexOf(b'"', offset)) {
+                    case Some(value) => value
+                    case None => return nodes
+                }
+                var runStart = quote
+                while (runStart > offset && source[runStart - 1] == b'\\') { runStart -= 1 }
+                let escaped = (quote - runStart) % 2 != 0
+                offset = quote + 1
+                if (!escaped) { break }
+            }
+        } else {
+            if (byte == b'{' || byte == b'[') { scalar = false; nodes += 1 }
+            else if (byte == b',' || byte == b':' || byte == b'}' || byte == b']' ||
+                byte == b' ' || byte == b'\t' || byte == b'\r' || byte == b'\n') { scalar = false }
+            else if (!scalar) { scalar = true; nodes += 1 }
+            if (nodes > 65536) { throw LogicalJsonPayloadError("logical JSON has too many lexical nodes") }
+            offset += 1
+        }
     }
     nodes
 }
