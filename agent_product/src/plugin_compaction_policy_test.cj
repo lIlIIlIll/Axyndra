@@ -22,6 +22,8 @@ class CompactionPolicyFixture {
     let product: ProductRuntime
     let database: SqliteDatabase
     let record: ?agent_plugin_registry.ProductPluginRecord
+    private let registryOwners = ProductRegistryTestOwners()
+    private let registry: ?agent_plugin_registry.PluginRegistry
     let session = SessionId("installed-compaction")
     init(install!: Bool = true, hybrid!: Bool = true, failure!: Bool = false, seedDefaultHistory!: Bool = true) {
         let root = pluginContractTemp("compaction-policy")
@@ -35,8 +37,15 @@ class CompactionPolicyFixture {
                 case PluginRegistryResult.Ok(value) => value
                 case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message)) }
             @Expect(opened.setPluginEnabled(productRegistryCopyText83(value.descriptor.copyText(PluginDescriptorText.Namespace)), true).isOk())
-            Some(value)
-        } else { None }
+            let actualRegistry = registryOwners.openRegistry(root + "/settings", root)
+            registry = Some(actualRegistry)
+            let actual = match (actualRegistry.resolveForMutation(productRegistryCopyText83(value.descriptor.copyText(PluginDescriptorText.Namespace)))) {
+                case PluginRegistryResult.Ok(result) => result
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+            }
+            value.close()
+            Some(actual)
+        } else { registry = None; None }
         this.root = root; this.product = opened; this.record = selected
         this.database = SqliteDatabase(root + "/state/state.db")
         if (install) { writeSelection(productRegistryCopyText83(selected.getOrThrow().descriptor.copyText(PluginDescriptorText.ContentDigest))) }
@@ -86,7 +95,12 @@ class CompactionPolicyFixture {
         @Expect(database.scalarInt("SELECT COUNT(*) FROM operations"), 0)
         @Expect(database.scalarInt("SELECT COUNT(*) FROM context_checkpoints"), 0)
     }
-    func close(): Unit { let _ = product.close(); database.close(); remove(root, recursive: true) }
+    func host(): ProductJavaScriptPluginHost {
+        let result = ProductJavaScriptPluginHost(settingsRoot: root + "/settings")
+        lifecycleTestRequire(result.ownRegistry(registry.getOrThrow()))
+        result
+    }
+    func close(): Unit { let _ = product.close(); database.close(); registryOwners.close(); remove(root, recursive: true) }
 }
 
 @Test
@@ -138,6 +152,31 @@ class InstalledCompactionPolicyTests {
             @Expect(f.originalItems(), before); f.noExecutionOrCheckpoint()
         } finally { f.close() }
     }
+    @TestCase
+    func missingSettingsIsUnconfiguredButDanglingSettingsIsInvalid(): Unit {
+        let root = pluginContractTemp("policy-root-boundary")
+        let target = root + "/target"
+        let dangling = root + "/dangling"
+        // pluginContractTemp only mints a unique path; the boundary fixture must
+        // create its own root before creating target or the dangling link. The
+        // asserted facts are unchanged: settings is still absent, and the link
+        // is still present while its target is gone.
+        Directory.create(root, recursive: true)
+        try {
+            let missing = root + "/settings"
+            Directory.create(target)
+            SymbolicLink.create(dangling, to: target)
+            remove(target)
+            @Expect(loadProductPolicySelection(missing, "compaction").error().getOrThrow().code, "policy.not_configured")
+            @Expect(!exists(Path(missing)))
+            @Expect(loadProductPolicySelection(dangling, "compaction").error().getOrThrow().code, "policy.configuration_invalid")
+        } finally {
+            Directory.create(target)
+            remove(dangling)
+            remove(root, recursive: true)
+        }
+    }
+
     @TestCase
     func disabledPolicyCannotUseHostSummaryFallback(): Unit {
         let f = CompactionPolicyFixture()
@@ -297,7 +336,7 @@ class InstalledCompactionPolicyTests {
     func scopeCancellationInTheGapBetweenNativeProposalAndModelStopsAdmission(): Unit {
         let policy = CompactionPolicyFixture(hybrid: false)
         let model = InternalModelFixture()
-        let host = ProductJavaScriptPluginHost(settingsRoot: policy.root + "/settings")
+        let host = policy.host()
         let owner = InstalledCompactionSummarizer(model.control, host, policy.root + "/settings")
         let scope = owner.openScope(model.parent.sessionId)
         let proposals = ArrayList<ProductCompactionStructure>()
@@ -332,7 +371,7 @@ class InstalledCompactionPolicyTests {
     func localRecipesStillRejectChangedConfigurationGenerationAndPackageBeforeTheNextInvocation(): Unit {
         for (change in ["configuration", "generation", "package"]) {
             let f = CompactionPolicyFixture(hybrid: false)
-            let host = ProductJavaScriptPluginHost(settingsRoot: f.root + "/settings")
+            let host = f.host()
             let cancellation = CompactionTestCancellationSource()
             var owned: ?ProductCompactionReferenceQuery = None
             try {
@@ -369,7 +408,7 @@ class InstalledCompactionPolicyTests {
         let policy = CompactionPolicyFixture(hybrid: false)
         let model = InternalModelFixture(mode: "hang", thinkingCapabilities: Some(ThinkingCapabilities(
             ThinkingControlMode.Effort, supportedLevels: [ThinkingLevel.Low])))
-        let host = ProductJavaScriptPluginHost(settingsRoot: policy.root + "/settings")
+        let host = policy.host()
         let owner = InstalledCompactionSummarizer(model.control, host, policy.root + "/settings")
         let scope = owner.openScope(model.parent.sessionId)
         let proposals = ArrayList<ProductCompactionStructure>()
