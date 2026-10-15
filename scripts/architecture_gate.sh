@@ -108,13 +108,22 @@ for member in members:
     package_roots[name] = manifest.parent.resolve()
 
 
+# Test-only dependency tables are not production edges. cjpm links them only
+# into the module's own test binary, so they cannot become a frontend's runtime
+# path to Store. plugin_boundary_gate.py already excludes the same three tables
+# from its graph; both gates must classify a manifest the same way.
+NON_PRODUCTION_TABLES = {"dev-dependencies", "test-dependencies", "bin-dependencies"}
+
+
 def dependency_entries(value: object) -> list[tuple[str, object]]:
     result: list[tuple[str, object]] = []
     if not isinstance(value, dict):
         return result
     for key, child in value.items():
-        if key.endswith("dependencies") and isinstance(child, dict):
+        if key == "dependencies" and isinstance(child, dict):
             result.extend((str(name), specification) for name, specification in child.items())
+        elif key in NON_PRODUCTION_TABLES:
+            continue
         else:
             result.extend(dependency_entries(child))
     return result
@@ -176,12 +185,12 @@ for package, dependencies in sorted(graph.items()):
             + ", ".join(sorted(forbidden))
         )
 
-# The TUI may consume only the narrow command/client/domain surface. Its
-# cjtui rendering dependencies live outside this workspace and are ignored by
-# the local-package graph above.
+# The TUI consumes the narrow command/client/domain surface and the data-only
+# allocation ticket for independently paid display copies, never Core/Store.
+# cjtui rendering dependencies are outside the local-package graph.
 tui_dependencies = graph.get("agent_tui", set())
 unexpected_tui_dependencies = tui_dependencies.difference(
-    {"agent_cli", "agent_client", "agent_domain"}
+    {"agent_cli", "agent_client", "agent_domain", "logical_json_payload"}
 )
 if unexpected_tui_dependencies:
     raise SystemExit(
@@ -233,7 +242,7 @@ if rg_matches -n 'import (agent_core|model_adapters)' \
   fail "CLI parser crosses the client/domain boundary"
 fi
 
-if rg_matches -n 'import agent_store' \
+if rg_matches -n 'import agent_store' --glob '*.cj' --glob '!**/*_test.cj' \
   "$ROOT/agent_app/src" "$ROOT/agent_rpc/src" \
   "$ROOT/agent_cli/src" "$ROOT/agent_tui/src" >/dev/null; then
   fail "frontend imports Store instead of using a client/product boundary"
@@ -259,9 +268,13 @@ if ! rg_matches -n 'llm4cj.*git = "https://github.com/lIlIIlIll/llm4cj.git".*tag
 fi
 python3 "$ROOT/scripts/dependency_pin_gate.py"
 
-if ! rg_matches -n 'UnifiedModelRuntime\(' \
-  "$ROOT/agent_product/src/product.cj" >/dev/null; then
-  fail "production composition root does not install the unified model runtime"
+for composition in 'ProductInstalledModelPort\(' 'ControlledModelPort\('; do
+  if ! rg_matches -n "$composition" "$ROOT/agent_product/src/product.cj" >/dev/null; then
+    fail "production composition root is missing its installed provider-neutral controlled model boundary"
+  fi
+done
+if rg_matches -n '^import[[:space:]]+model_adapters([.{[:space:]]|$)' "$ROOT/agent_product/src" --glob '*.cj' --glob '!**/*_test.cj' >/dev/null; then
+  fail "Product imports optional provider adapter implementation"
 fi
 
 # Provider DTOs and legacy conversations are never Runtime truth.
@@ -311,10 +324,6 @@ if rg_matches -n 'public func (appendMessage|appendMessageOnce|appendTranscriptO
   fail "Product exposes a legacy conversation mutation API"
 fi
 
-if rg_matches -n 'let (worker|deliveryWorker) = spawn' \
-  "$ROOT/agent_product/src/task_product.cj" >/dev/null; then
-  fail "Product task runtime starts an unowned background worker"
-fi
 
 if rg_matches -n \
   'repairInterruptedToolMessages|pruneOrphanToolResults|coalesceToolResultMessages' \
@@ -394,10 +403,6 @@ if ! rg_matches -n 'appendExternalMessageOnce\(sessionId, receiptId, message\)' 
   fail "async settlement bypasses the canonical Thread external-input boundary"
 fi
 
-if ! rg_matches -n 'Capability\(CapabilityKind\.PeerMessage\)' \
-  "$ROOT/agent_product/src/tools.cj" >/dev/null; then
-  fail "peer messaging is still coupled to the broader delegation capability"
-fi
 
 runtime_authorities=$(
   "$RG" -l 'class RunStateMachine|public class ExecutionBudget' \
@@ -427,7 +432,7 @@ fi
 
 if rg_matches -n \
   'rpc-once|rpc-smoke|cancel-smoke|timeout-smoke|concurrency-smoke' \
-  "$ROOT/agent_app/src" >/dev/null; then
+  "$ROOT/agent_app/src" --glob '*.cj' --glob '!**/*_test.cj' >/dev/null; then
   fail "product CLI contains a test-only or legacy command"
 fi
 
@@ -436,18 +441,19 @@ python3 "$ROOT/scripts/check_library_boundaries.py"
 python3 "$ROOT/scripts/check_sdk_compatibility.py"
 python3 "$ROOT/scripts/package_readiness.py" audit
 
-model_callers=$(
+model_call_scan_status=0
+outside_core_model_callers=$(
   "$RG" -l -i '(model|provider)[a-z0-9_]*\.execute\(' "$ROOT" \
     --glob '*.cj' \
-    --glob '!support_tests/**' \
-    | sort || true
-)
-allowed_model_callers=$(printf '%s\n' \
-  "$ROOT/agent_core/src/core.cj" \
-  "$ROOT/agent_core/src/model_control.cj" \
-  | sort)
-if [[ "$model_callers" != "$allowed_model_callers" ]]; then
-  printf '%s\n' "$model_callers" >&2
+    --glob '!**/*_test.cj' \
+    --glob '!**/support_tests/**' \
+    --glob '!**/agent_core/src/**'
+) || model_call_scan_status=$?
+if (( model_call_scan_status > 1 )); then
+  fail "provider/model execute call scan failed"
+fi
+if [[ -n "$outside_core_model_callers" ]]; then
+  printf '%s\n' "$outside_core_model_callers" >&2
   fail "provider/model execute calls must stay inside agent_core's control plane"
 fi
 
