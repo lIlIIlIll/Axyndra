@@ -1674,12 +1674,36 @@ public class AgentThreadRuntime {
             match (active) {
                 case Some(value) =>
                     let thread = coordinator.snapshot()
+                    // A checkpoint saved by this Run's own rewind call covers
+                    // that call's ToolResult and, therefore, also this Turn's
+                    // initiator Item. Projecting it would hide the Turn intent
+                    // that the current model request must still name, so the
+                    // active Turn's own coverage is excluded here. Completed
+                    // Turns are unaffected: their initiator is already behind
+                    // the checkpoint, which is the intended rewind behavior.
                     let selected: ?ContextCheckpoint = match (checkpoint) {
                         case Some(explicit) => Some(explicit)
                         case None => match (checkpointRepository) {
                             case Some(repository) =>
                                 value.lane.markHistoricalLaneExport159()
-                                repository.loadLatest(thread, projector.version, value.lane.protocol)
+                                var initiatorItem = ""
+                                for (turn in thread.turns) {
+                                    if (turn.id.value == value.turnId.value) { initiatorItem = turn.initiatorItemId.value }
+                                }
+                                var initiatorOrdinal: Int64 = 0
+                                for (item in thread.items) {
+                                    if (item.id.value == initiatorItem) { initiatorOrdinal = item.ordinal }
+                                }
+                                let latest = repository.loadLatest(thread, projector.version, value.lane.protocol)
+                                match (latest) {
+                                    case Some(candidate) =>
+                                        if (initiatorOrdinal > 0 && candidate.coversThroughItemOrdinal >= initiatorOrdinal) {
+                                            None
+                                        } else {
+                                            Some(candidate)
+                                        }
+                                    case None => None
+                                }
                             case None => None
                         }
                     }
