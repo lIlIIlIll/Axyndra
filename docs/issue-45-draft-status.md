@@ -256,6 +256,36 @@ applicability; they do not establish the entire row as passed.
 
 ## Current failure boundaries and next verification
 
+**Current state after the E90-E105 work (supersedes the older notes below where they conflict).**
+
+- Three real defects were found and fixed in production/test code, each with
+  before/after evidence: the frozen plan environment contradiction (E90), the
+  masked registry-capacity classification (E95), and the rewind checkpoint that
+  hid its own Turn intent (E98). `tool_runtime` 55/55, `agent_domain` 174/174 and
+  `agent_runtime` 29/29 pass, and the previously blocked Core rewind consumer and
+  the plan-review pressure consumer both pass now.
+- The complete workspace gate builds all sixteen plugin fixtures from source and
+  passes **26 of 27 packages** (E93, re-confirmed in E97); an isolated rebuild of
+  the unmodified Native sources reproduces the frozen artifacts byte-for-byte
+  (E94). `agent_product` is the only failing package.
+- The exact size of `agent_product`'s remaining failure set is **not**
+  established. The gate stops at the first failing case, and the two ad-hoc
+  sweeps attempted in this session were invalid instruments (E101), so no
+  trustworthy per-case count exists yet.
+- The single blocking implementation item is the shared Host bank lifetime
+  (E91, E103). A 16 MiB floor per `acquire` against a 128 MiB aggregate allows at
+  most eight owners, each fixture mount retains roughly 33.9 MB past its closure,
+  and session slot reservations charge the same floor. The consumers blocked by
+  it are the private-field loop representatives, the Core checkpoint/history
+  family (which reports the designed `application.owned_failure_pending`
+  terminal, E102/E104) and the maintenance-failure bank-pressure assertion.
+- The cheapest candidate fix was falsified: removing the unconditional
+  success-path `retainLegacy159()` at `javascript_plugin_host.cj:599` and
+  rebuilding leaves the loop failure identical (E105). The remaining work needs
+  the counted private-claim ownership design, not a one-line retention change.
+- All A0-A7 and DoD-1..DoD-6 acceptance requirements remain open, and
+  whole-workspace acceptance cannot be claimed while `agent_product` fails.
+
 - The complete working-source architecture gate now passes (E77), and its real
   non-Core Model-caller negative is rejected. It does not prove runtime authority
   or physical worker return. Both original async lifecycle cases fail in E74;
