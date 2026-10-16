@@ -730,7 +730,18 @@ public open class HostJavaScriptPluginHost {
         if (generation.isClosing()) { return hostPluginResourceError("policy.provider_revoked", "policy provider was revoked") }
         let packageMatches = match (registryPackageMatches81(generation.descriptor.root, namespace: Some(namespace),
             digest: Some(generation.descriptor.contentDigest))) {
-            case Result.Err(_) => return hostPluginResourceError("policy.provider_changed", "policy package cannot be verified")
+            case Result.Err(error) =>
+                // Registry inspection needs the same shared metadata bank as the
+                // caller's own bounded query. When the bank is exhausted the
+                // inspection fails with the capacity code, which is a bounded
+                // resource limit, not evidence that the installed package
+                // changed. Preserve that fact so a caller under pressure still
+                // observes the limit it actually hit; every other inspection
+                // failure keeps the existing changed-package classification.
+                if (error.code == "plugin.registry_metadata_capacity") {
+                    return hostPluginResourceError("policy.query_limit", "policy package cannot be inspected within the original aggregate")
+                }
+                return hostPluginResourceError("policy.provider_changed", "policy package cannot be verified")
             case Result.Ok(value) => value }
         if (!packageMatches) {
             return hostPluginResourceError("policy.provider_changed", "policy package differs from the installed snapshot") }
