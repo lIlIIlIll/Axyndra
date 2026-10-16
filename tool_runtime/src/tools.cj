@@ -5824,6 +5824,14 @@ func networkPolicyForNormalizedCall(
     }
 }
 
+// Presentation hints for terminal-aware consumers. They are recorded in the
+// live ordinary Tool context but never in a frozen durable plan environment,
+// whose emptiness the frozen plugin families require. Plugin workers still
+// receive them through the sandbox environment allowlist.
+func isPresentationEnvironmentHint180(name: String): Bool {
+    name == "TERM" || name == "COLORTERM" || name == "NO_COLOR"
+}
+
 public func normalizedToolOperationPlan(
     context: ToolInvocationContext,
     call: ToolCall,
@@ -5850,8 +5858,16 @@ public func normalizedToolOperationPlan(
             }
         }
     }
+    // A plan's environment is part of the frozen binding that gets hashed and
+    // persisted, so it must not carry per-invocation terminal state. The
+    // product seeds TERM/COLORTERM/NO_COLOR into the ordinary Tool context as
+    // presentation hints; those stay in the live context (managed jobs and
+    // external authority scopes still bind them) and reach plugin workers
+    // through the sandbox environment allowlist. Frozen plugin families
+    // require an empty plan environment, and a terminal-dependent plan would
+    // change its binding digest between a terminal and a non-terminal caller.
     let environment = ArrayList<ValueField>()
-    for (entry in context.environment.entries()) {
+    for (entry in context.environment.entries() where !isPresentationEnvironmentHint180(entry.name)) {
         environment.add(ValueField(entry.name, textValue(entry.value)))
     }
     let effect = if (!descriptor.sideEffecting) {
