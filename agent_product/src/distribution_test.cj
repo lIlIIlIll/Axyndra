@@ -20,6 +20,10 @@ class CodingDistributionFixture {
     let bundle: String
     let digest: String
     init() {
+        // The shipped recipe binds ${settings_root}/... sources and the initial
+        // context parser canonicalizes that root, so the fixture must create the
+        // settings root it hands to openProduct, like the other fixtures do.
+        if (!exists(Path(root + "/settings"))) { Directory.create(root + "/settings", recursive: true) }
         let target = root + "/installed/share/axyndra"
         Directory.create(target + "/plugins/skills", recursive: true)
         pluginCopySnapshotTreeSecure(getVariable("AXYNDRA_SKILLS_PLUGIN_PACKAGE").getOrThrow(), target + "/plugins/skills")
