@@ -159,6 +159,7 @@ func createWorkflowContractGoal(product: ProductRuntime, session: SessionId, obj
     let todoTool = objectValue([ValueField("name", textValue("todo")), ValueField("preparation_provider", textValue("prepare_document")),
         ValueField("documents", listValue([todoRight]))])
     let goalTool = objectValue([ValueField("name", textValue("goal")),
+        ValueField("preparation_provider", textValue("prepare_document")),
         ValueField("documents", listValue([goalRight]))])
     File.writeTo(directory + "/documents.json", stringifyUnifiedJson(objectValue([
         ValueField("version", integerValue(1)), ValueField("plugins", listValue([objectValue([

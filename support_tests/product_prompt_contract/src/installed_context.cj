@@ -101,6 +101,7 @@ func promptCreateGoal(product: ProductRuntime, session: SessionId, temporary: St
         ValueField("version", integerValue(1)), ValueField("plugins", listValue([objectValue([
             ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(digest)),
             ValueField("tools", listValue([objectValue([ValueField("name", textValue("goal")),
+                ValueField("preparation_provider", textValue("prepare_document")),
                 ValueField("documents", listValue([goalRight]))])]))])]))])).toArray())
     File.writeTo(directory + "/goal-tools.json", stringifyUnifiedJson(objectValue([
         ValueField("schema", textValue("axyndra.goal-tools/v1")), ValueField("namespace", textValue(namespace)),
