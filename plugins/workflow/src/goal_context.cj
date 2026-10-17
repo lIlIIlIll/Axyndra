@@ -15,7 +15,14 @@ func workflowGoalContext(input: AgentValue): AgentValue {
     let identity=input.field("_axyndra_context_provider").getOrThrow()
     workflowFields(identity,["namespace","package_digest","generation","provider"])
     let namespace=workflowText(identity,"namespace")
-    if(!httpServicePluginNamespace(namespace) || !httpIntentDigest(workflowText(identity,"package_digest")) ||
+    // Accept the real tagged PluginPackageDescriptor identity the Host supplies
+    // (sha256:<64hex>) as well as the existing raw SHA pure-data dialect, the
+    // same convention the Memory context provider uses. This is a descriptive
+    // input check only: actual package ownership is verified by Host/Store from
+    // the frozen provider and the canonical fact, so no allowance is created.
+    if(!httpServicePluginNamespace(namespace) ||
+        !(httpIntentDigest(workflowText(identity,"package_digest")) ||
+          httpServicePackageDigest(workflowText(identity,"package_digest"))) ||
         workflowText(identity,"provider")!="goal_context"){
         throw PureProviderError("workflow.context_identity_invalid","content requires the supplied current package description")}
     let generation=workflowText(identity,"generation")
