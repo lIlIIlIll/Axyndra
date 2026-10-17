@@ -2,6 +2,7 @@ package product_prompt_contract
 
 import agent_domain.*
 import agent_product.*
+import tool_runtime.*
 import agent_testkit.FixtureModelPort
 import std.collection.*
 import std.fs.*
