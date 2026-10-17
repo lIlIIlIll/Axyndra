@@ -682,7 +682,7 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
         repository.setWorkMode(source, "plan").isOk() &&
         repository.setDraft(source, "draft").isOk() &&
         seedHistoricalTodoPayload(database,source,listValue([textValue("verify")])).isOk() &&
-        repository.setGoalState(source, objectValue([
+        seedHistoricalGoalPayload(database, source, objectValue([
             ValueField("objective", textValue("finish"))
         ])).isOk(), "SQLite Thread metadata accepts public product fields")
     expect(repository.copy(source, target).isOk() &&
@@ -873,6 +873,20 @@ func interiorRetentionGapContract(root: String): Unit {
         expect(pruning.events(runId, 4).value().getOrThrow().resyncRequired,
             "retained interleaved envelope cannot hide a pruned stream")
     } finally { database.close() }
+}
+
+// Same cold pre-migration seeding pattern as the todo payload below: the
+// production repository exposes only the goalState reader, and product tests
+// seed goal_payload through SQL, so this contract updates the already-created
+// fixture row directly instead of calling a production writer that never
+// existed.
+func seedHistoricalGoalPayload(database:SqliteDatabase,session:SessionId,value:AgentValue):Result<Unit>{
+    if(value.unifiedKind!=ValueKind.Object){return Result.Err(AgentError(AgentErrorKind.InvalidInput,"persistence.goal_payload_not_object","goal payload must be an object"))}
+    try{
+        database.transaction<Unit>({ tx=>
+            tx.execute("UPDATE thread_metadata SET goal_payload=? WHERE thread_id=?",[SqlParameter.Text(encodeAgentValue(value)),SqlParameter.Text(session.value)])})
+        Result.Ok(())
+    }catch(error:Exception){Result.Err(AgentError(AgentErrorKind.Internal,"persistence.session_metadata_write",error.message))}
 }
 
 // Preserve cold pre-migration payload/copy coverage without restoring a
