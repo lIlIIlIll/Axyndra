@@ -735,6 +735,25 @@ func readCapabilityFor(
     workspace.readCapability(path)
 }
 
+// Local copy of the retired product order helper. This historical oracle
+// already mirrors the retired business algorithms so the contract can compare
+// against the original behaviour without depending on production internals.
+func higherApprovalRisk(left: ApprovalRiskLevel, right: ApprovalRiskLevel): ApprovalRiskLevel {
+    if (approvalRiskRank(left) >= approvalRiskRank(right)) {
+        left
+    } else {
+        right
+    }
+}
+func approvalRiskRank(level: ApprovalRiskLevel): Int64 {
+    match (level) {
+        case ApprovalRiskLevel.Low => 0
+        case ApprovalRiskLevel.Medium => 1
+        case ApprovalRiskLevel.High => 2
+        case ApprovalRiskLevel.Critical => 3
+    }
+}
+
 func readRequiresApprovalFor(
     workspace: LocalWorkspace,
     uriRouter: InternalUriRouter,
