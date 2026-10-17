@@ -7,7 +7,9 @@ import std.unittest.testmacro.*
 class LogicalJsonSharedCustodyTests {
     @TestCase
     func concurrentChildPeaksUseTheOriginalAggregateSumAndOnePhysicalSlot():Unit {
-        let pool=LogicalJsonOwnerBudget()
+        // Pins the aggregate this case was written against: the shared-custody
+        // sum invariant is about the CONFIGURED capacity, not the pool default.
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let parent=pool.acquire(1)
         let first=parent.deriveRetainedLease()
         let second=parent.deriveRetainedLease()
@@ -27,7 +29,7 @@ class LogicalJsonSharedCustodyTests {
 
     @TestCase
     func parentCloseCannotRetireAChildBeforeItsActualUserCloses():Unit {
-        let pool=LogicalJsonOwnerBudget()
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let parent=pool.acquire(1)
         let child=parent.deriveRetainedLease()
         try {
@@ -45,7 +47,7 @@ class LogicalJsonSharedCustodyTests {
 
     @TestCase
     func independentOwnersAndFixedBuffersStillPressureTheSameOriginalPool():Unit {
-        let pool=LogicalJsonOwnerBudget()
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let parent=pool.acquire(1)
         let child=parent.deriveRetainedLease()
         let independent=pool.acquire(1)

@@ -7,7 +7,9 @@ import std.unittest.testmacro.*
 class LogicalJsonCopiedDisplayGrowthTests {
     @TestCase
     func SharedHighWaterGrowsBeforeAllocationAndFailurePreservesEveryOldTicket(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let row = pool.acquire(1)
+        // This case asserts the aggregate-pressure growth path, so it pins the
+        // aggregate it was written against instead of the pool default.
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728); let row = pool.acquire(1)
         row.ensureRetainedPeak(67108864)
         let copy = row.acquireCopiedDisplayAllocation(131072).value().getOrThrow()
         let cache = copy.retainCopiedDisplayAllocation().value().getOrThrow()

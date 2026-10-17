@@ -26,7 +26,9 @@ class LogicalJsonCopiedDisplayTests {
     }
     @TestCase
     func OriginalAggregatePressureRollsBackEveryPartiallyAcquiredFixedTicket(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let row = pool.acquire(1)
+        // This case asserts the aggregate-pressure rollback, so it pins the
+        // aggregate it was written against instead of the pool default.
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728); let row = pool.acquire(1)
         row.ensureRetainedPeak(67108864)
         let pressure = pool.acquire(1)
         @Expect(row.acquireCopiedDisplayAllocation(50331648).isOk(), false)
