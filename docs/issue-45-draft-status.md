@@ -354,6 +354,21 @@ applicability; they do not establish the entire row as passed.
 - All A0-A7 and DoD-1..DoD-6 acceptance requirements remain open, and
   whole-workspace acceptance cannot be claimed while `agent_product` fails.
 
+- A second independent boundary was measured this session: the release
+  contract stage. `release_gate.sh` stops at the first failing contract, and
+  the draft commit had taken that whole stage out of service - `goal_contract`,
+  `product_thread_runtime_contract`, `sqlite_run_repository_contract`,
+  `memory_contract`, `product_prompt_contract` and `sandbox_contract` were all
+  green in the base release list. After the repairs recorded as E126-E137 the
+  layer measures 50 of 51 packages building (`contract-audit3.log`), so six
+  previously-broken release contracts are restored and only `goal_contract`
+  remains; `goal_contract` was never edited by the draft, so its break is a
+  regression against the deleted goal runtime rather than an expected gap.
+- `product_prompt_contract` builds but still cannot run to completion: its
+  `retain` call reaches the Memory package contribution through an unprepared
+  Direct invocation, which the runtime rejects by design (E139). Its goal
+  assertions therefore have no execution evidence yet.
+
 - The complete working-source architecture gate now passes (E77), and its real
   non-Core Model-caller negative is rejected. It does not prove runtime authority
   or physical worker return. Both original async lifecycle cases fail in E74;
