@@ -78,6 +78,15 @@ public class LogicalJsonOwnerBudget {
     func release(cost: Int64): Unit {
         lock.lock(); try { charged -= cost; count -= 1 } finally { lock.unlock() }
     }
+    // Return a live owner's excess above its current need. The owner keeps its
+    // slot (count unchanged) and its 16 MiB floor; only the high-water growth
+    // that no consumer still requires comes back to the aggregate.
+    func shrink(excess: Int64): Unit {
+        lock.lock()
+        try {
+            if (excess > 0) { charged -= min(excess, charged) }
+        } finally { lock.unlock() }
+    }
     func releaseFixedBuffer(cost: Int64): Unit {
         lock.lock(); try { charged -= cost; fixedBufferCount -= 1 } finally { lock.unlock() }
     }
@@ -136,6 +145,12 @@ public class LogicalJsonOwnerReservation {
                 case None => if (closed) { (0, 0, 0) } else { (declared, cost, 1) }
             }
         } finally { lock.unlock() }
+    }
+    // Private bank identity is compared here, never exported as a token or
+    // allocator. Closed or foreign reservations cannot pay another producer.
+    public func paysSamePrivateBankData180(original: LogicalJsonOwnerReservation): Bool {
+        lock.lock()
+        try { !closed && refEq(owner, original.owner) } finally { lock.unlock() }
     }
     public func derivePaidDataPhase328(bytes:Int64):LogicalJsonOwnerReservation{
         owner.requireDataPhaseMessageExtent328(bytes)
@@ -244,6 +259,14 @@ class LogicalJsonSharedCustody {
             if (leases.contains(id)) {
                 sum -= leases[id] + 1024; leases.remove(id)
                 if (leases.isEmpty()) { owner.release(cost) }
+                else {
+                    // Every child lease for this custody has ended for the
+                    // ones closed so far; never keep a closed child's peak
+                    // charged. Keep the 16 MiB floor and the owner's live
+                    // slot, and return only the excess above the live sum.
+                    let floor = max(16777216, sum)
+                    if (cost > floor) { owner.shrink(cost - floor); cost = floor }
+                }
             }
         } finally { lock.unlock() }
     }
@@ -369,13 +392,25 @@ public class LogicalJsonReceiver {
             if (text.size < 2 || text.size > LOGICAL_JSON_CHUNK_BYTES * 2 || text.size % 2 != 0 || text.size / 2 > buffer.size - offset) {
                 throw LogicalJsonPayloadError("logical payload chunk exceeds its remaining bound")
             }
-            let bytes = text.toArray()
-            for (index in 0..bytes.size / 2) {
-                let high = logicalJsonHex(bytes[index * 2]); let low = logicalJsonHex(bytes[index * 2 + 1])
-                if (high < 0 || low < 0) { throw LogicalJsonPayloadError("logical payload chunk is not canonical hexadecimal") }
-                buffer[offset + index] = UInt8(high * 16 + low)
+            // Bounds above prove every source pair and destination byte is
+            // inside its live buffer. Pin only for this synchronous decode;
+            // avoid a cloned hex Array and generic array callbacks per byte.
+            unsafe {
+                let source = acquireArrayRawData(text.rawData())
+                try {
+                    let target = acquireArrayRawData(buffer)
+                    try {
+                        for (index in 0..text.size / 2) {
+                            let high = logicalJsonHex(source.pointer.read(index * 2))
+                            let low = logicalJsonHex(source.pointer.read(index * 2 + 1))
+                            if (high < 0 || low < 0) {
+                                throw LogicalJsonPayloadError("logical payload chunk is not canonical hexadecimal") }
+                            target.pointer.write(offset + index, UInt8(high * 16 + low))
+                        }
+                    } finally { releaseArrayRawData(target) }
+                } finally { releaseArrayRawData(source) }
             }
-            offset += bytes.size / 2; return None
+            offset += text.size / 2; return None
         }
         if (kind != "payload_end" || !httpIntentExactFields(header, ["schema", "window", "transfer_sequence"]) || offset != buffer.size) {
             throw LogicalJsonPayloadError("logical payload is incomplete")
@@ -441,14 +476,14 @@ public func logicalJsonNodeCount(source: String): Int64 {
             // Each search advances; each backward run stays within that search
             // interval. Even escape-heavy or unterminated input stays linear.
             while (true) {
-                let quote = match (source.indexOf(b'"', offset)) {
+                let closingQuote = match (source.indexOf(b'"', offset)) {
                     case Some(value) => value
                     case None => return nodes
                 }
-                var runStart = quote
+                var runStart = closingQuote
                 while (runStart > offset && source[runStart - 1] == b'\\') { runStart -= 1 }
-                let escaped = (quote - runStart) % 2 != 0
-                offset = quote + 1
+                let escaped = (closingQuote - runStart) % 2 != 0
+                offset = closingQuote + 1
                 if (!escaped) { break }
             }
         } else {
