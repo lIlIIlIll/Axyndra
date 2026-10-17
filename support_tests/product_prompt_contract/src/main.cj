@@ -128,6 +128,8 @@ func verifyProductPrompt(temporary: String): Unit {
         case None => throw IllegalStateException("fixture request probe is unavailable")
     }
 
+    let _ = promptInstallComponent(product, "AXYNDRA_MEMORY_PLUGIN_PACKAGE")
+
     let firstSession = SessionId("product-prompt-session-a")
     let _ = product.invokeLocalTool(
         firstSession,
@@ -165,7 +167,7 @@ func verifyProductPrompt(temporary: String): Unit {
             ]))
         ])
     ).value().getOrThrow()
-    let _ = product.createGoal(firstSession, "DYNAMIC-GOAL-A").value().getOrThrow()
+    promptCreateGoal(product, firstSession, temporary, "DYNAMIC-GOAL-A")
     let firstRun = product.request(
         "PROMPT-MEMORY-QUERY first",
         sessionId: Some(firstSession),
@@ -179,7 +181,7 @@ func verifyProductPrompt(temporary: String): Unit {
     let first = probe.lastRequest.getOrThrow()
 
     let secondSession = SessionId("product-prompt-session-b")
-    let _ = product.createGoal(secondSession, "DYNAMIC-GOAL-B").value().getOrThrow()
+    promptCreateGoal(product, secondSession, temporary, "DYNAMIC-GOAL-B")
     let secondRun = product.request(
         "PROMPT-MEMORY-QUERY second",
         sessionId: Some(secondSession),

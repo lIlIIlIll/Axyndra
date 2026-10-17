@@ -15,6 +15,9 @@ import std.env.*
 import tool_runtime.*
 
 let memoryPolicyHosts = ArrayList<ProductRuntime>()
+// Installed identity per settings root, reused by every restarted host over that
+// same root instead of re-importing the package the registry already holds.
+let memoryContractInstalledComponents = HashMap<String, (String, String)>()
 main(): Int64 {
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
@@ -875,14 +878,24 @@ func installedMemoryContractHost(root: String, settingsRoot: String, workspaceRo
         stateRoot: root + "/policy-host-" + memoryPolicyHosts.size.toString(), workspaceRoot: workspaceRoot,
         fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false)).value().getOrThrow()
     memoryPolicyHosts.add(host)
-    let record = match (host.importLocalPlugin(getVariable("AXYNDRA_MEMORY_PLUGIN_PACKAGE").getOrThrow())) {
-        case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
-        case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error)) }
-    if (!supportRegistryOkay96(host.setPluginEnabled(supportRegistryDescriptor96(record,"namespace"), true))) { throw IllegalStateException("normal memory provider enable failed") }
+    // The package is imported once per settings root. A restarted host over the
+    // same root reuses the already installed and enabled component instead of
+    // re-importing it, which the registry correctly refuses as a duplicate.
+    let (namespace, digest) = match (memoryContractInstalledComponents.get(settingsRoot)) {
+        case Some(value) => value
+        case None =>
+            let record = match (host.importLocalPlugin(getVariable("AXYNDRA_MEMORY_PLUGIN_PACKAGE").getOrThrow())) {
+                case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(supportRegistryExclusiveErrorCode96(error)) }
+            let installed = (supportRegistryDescriptor96(record,"namespace"), supportRegistryDescriptor96(record,"content_digest"))
+            memoryContractInstalledComponents[settingsRoot] = installed
+            installed
+    }
+    if (!supportRegistryOkay96(host.setPluginEnabled(namespace, true))) { throw IllegalStateException("normal memory provider enable failed") }
     if (!exists(Path(settingsRoot + "/plugins"))) { Directory.create(settingsRoot + "/plugins", recursive: true) }
     File.writeTo(settingsRoot + "/plugins/policies.json", stringifyUnifiedJson(objectValue([ValueField("version", integerValue(1)),
-        ValueField("bindings", objectValue([ValueField("memory", objectValue([ValueField("namespace", textValue(supportRegistryDescriptor96(record,"namespace"))),
-            ValueField("provider", textValue("memory")), ValueField("package_digest", textValue(supportRegistryDescriptor96(record,"content_digest")))]))]))])).toArray())
+        ValueField("bindings", objectValue([ValueField("memory", objectValue([ValueField("namespace", textValue(namespace)),
+            ValueField("provider", textValue("memory")), ValueField("package_digest", textValue(digest))]))]))])).toArray())
     host
 }
 
