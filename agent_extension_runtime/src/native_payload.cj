@@ -36,11 +36,17 @@ public func nativeControlMetadataUsage113(): (Int64, Int64) {
     nativePayloadOwnerBudget.usage()
 }
 
+// Exact numeric observation of this bank's fixed aggregate; no owner escapes.
+public func nativeControlMetadataCapacity113(): Int64 {
+    nativePayloadOwnerBudget.capacity()
+}
+
 type NativePayloadProcessReservation = LogicalJsonReservation
 class NativePayloadProcessBudget {
     let inner = LogicalJsonProcessBudget(nativePayloadOwnerBudget)
     func acquire(bytes: Int64): NativePayloadProcessReservation {
-        try { inner.acquire(bytes) } catch (error: LogicalJsonPayloadError) { payloadFailure(error.message) }
+        try { inner.acquire(bytes) }
+        catch (error: LogicalJsonPayloadError) { payloadFailure(error.message) }
     }
 }
 

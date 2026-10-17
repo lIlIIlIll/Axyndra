@@ -31,6 +31,10 @@ private func originalMaintenanceEightField173c(): AgentError {
                 providerTerminalObserved: true, openContentBlockCount: 2, toolCallsStarted: 3, toolCallsCompleted: 1))),
         observation: Some(OperationObservation("{\"value\":\"雪🙂\\u0000\"}")))
 }
+// The pool's own fixed aggregate, so the pressure assertions track the
+// configured capacity instead of duplicating one literal number.
+private func nativeControlMetadataCapacity173c(): Int64 { nativeControlMetadataCapacityReader173c() }
+
 private func expectMaintenanceEightLoan173c(actual: OwnedFailureDataConsumer113, pressure: Bool): Unit {
     @Expect(actual.withError({ error, fund =>
         @Expect(error.kind, AgentErrorKind.Cancelled); @Expect(error.code, "maintenance.original.complete173c")
@@ -43,7 +47,7 @@ private func expectMaintenanceEightLoan173c(actual: OwnedFailureDataConsumer113,
         @Expect(d.openContentBlockCount, 2); @Expect(d.toolCallsStarted, 3); @Expect(d.toolCallsCompleted, 1)
         error.observation.getOrThrow().withFrozenEncodedData113({ bytes =>
             @Expect(bytes, "{\"value\":\"雪🙂\\u0000\"}") })
-        if (pressure) { @Expect(fund(134217728).isError()) }
+        if (pressure) { @Expect(fund(nativeControlMetadataCapacity173c()).isError()) }
         @Expect(actual.acknowledgeAfterConsumption().isError())
     }).isOk())
     @Expect(!actual.isAcknowledged())
@@ -72,8 +76,8 @@ private func actualNativeMaintenanceFailure173c(f: CompactionPolicyFixture,
                 match (pressure) {
                     case Some(actual) =>
                         let current = nativeControlMetadataUsage113()
-                        actual.ensureRetainedPeak(134217728 - current[1] + 16777216)
-                        @Expect(nativeControlMetadataUsage113()[1], 134217728)
+                        actual.ensureRetainedPeak(nativeControlMetadataCapacity173c() - current[1] + 16777216)
+                        @Expect(nativeControlMetadataUsage113()[1], nativeControlMetadataCapacity173c())
                     case None => () }
                 // No holder allocation/payment is permitted after this move.
                 throw failure
@@ -103,7 +107,7 @@ class InstalledMaintenanceFailureConsumer173cTests {
             let foreignSession = f.product.applicationSession(sessionId: Some(SessionId("other-maintenance173c")))
             @Expect(!foreignSession.hasOwnedCheckpointFailure113(marker))
             @Expect(!session.hasOwnedCheckpointFailure113(AgentError(marker.kind, marker.code, marker.message)))
-            @Expect(nativeControlMetadataUsage113()[1], 134217728)
+            @Expect(nativeControlMetadataUsage113()[1], nativeControlMetadataCapacity173c())
             @Expect(!session.pollAndAdmitOwnedCheckpointFailure113(marker, { value =>
                 expectMaintenanceEightLoan173c(capture.offer(value), true); false }))
             // A share may fit the already-paid root's original high-water;

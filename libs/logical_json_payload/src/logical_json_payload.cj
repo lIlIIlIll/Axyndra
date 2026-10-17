@@ -24,7 +24,12 @@ public class LogicalJsonOwnerBudget {
     private var charged: Int64 = 0
     private var count: Int64 = 0
     private var fixedBufferCount: Int64 = 0
-    public init(maximumCharged!: Int64 = 134217728,
+    // The aggregate must be able to hold the pool's own concurrency bound:
+    // maximumTransfers reservations each cost at least the 16 MiB floor, so a
+    // 128 MiB aggregate could not admit even a quarter of the declared 32
+    // transfers and exhausted on ordinary multi-owner requests. Keep the 16 MiB
+    // floor and the 32-transfer bound and size the aggregate to their product.
+    public init(maximumCharged!: Int64 = 536870912,
         maximumMessage!: Int64 = 16777216, maximumTransfers!: Int64 = 32) {
         if (maximumCharged < 16777216 || maximumCharged > 1073741824 ||
             maximumMessage < 1 || maximumMessage > LOGICAL_JSON_HARD_BYTES ||
@@ -82,6 +87,9 @@ public class LogicalJsonOwnerBudget {
         lock.lock(); try { charged -= cost; fixedBufferCount -= 1 } finally { lock.unlock() }
     }
     public func usage(): (Int64, Int64) { lock.lock(); try { (count + fixedBufferCount, charged) } finally { lock.unlock() } }
+    // The fixed aggregate this pool was configured with. Numeric only; a reader
+    // can compute remaining capacity but cannot widen or resize the pool.
+    public func capacity(): Int64 { maximumCharged }
 }
 
 public class LogicalJsonFixedBufferReservation {
