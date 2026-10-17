@@ -78,15 +78,6 @@ public class LogicalJsonOwnerBudget {
     func release(cost: Int64): Unit {
         lock.lock(); try { charged -= cost; count -= 1 } finally { lock.unlock() }
     }
-    // Return a live owner's excess above its current need. The owner keeps its
-    // slot (count unchanged) and its 16 MiB floor; only the high-water growth
-    // that no consumer still requires comes back to the aggregate.
-    func shrink(excess: Int64): Unit {
-        lock.lock()
-        try {
-            if (excess > 0) { charged -= min(excess, charged) }
-        } finally { lock.unlock() }
-    }
     func releaseFixedBuffer(cost: Int64): Unit {
         lock.lock(); try { charged -= cost; fixedBufferCount -= 1 } finally { lock.unlock() }
     }
@@ -258,15 +249,14 @@ class LogicalJsonSharedCustody {
         try {
             if (leases.contains(id)) {
                 sum -= leases[id] + 1024; leases.remove(id)
+                // The shared high-water charge intentionally remains paid
+                // until the actual original closes, even after its derived
+                // children close: their concurrent peaks were added to this
+                // same aggregate, and the sum is what the original single-bank
+                // contract asserts (`agent_domain` DerivedDataPhasesSum...).
+                // Releasing the excess here would under-count that peak, so
+                // keep this behaviour.
                 if (leases.isEmpty()) { owner.release(cost) }
-                else {
-                    // Every child lease for this custody has ended for the
-                    // ones closed so far; never keep a closed child's peak
-                    // charged. Keep the 16 MiB floor and the owner's live
-                    // slot, and return only the excess above the live sum.
-                    let floor = max(16777216, sum)
-                    if (cost > floor) { owner.shrink(cost - floor); cost = floor }
-                }
             }
         } finally { lock.unlock() }
     }
