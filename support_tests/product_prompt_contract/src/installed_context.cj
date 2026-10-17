@@ -76,6 +76,9 @@ class PromptRegistryCopyDebt {
     }
 }
 var promptRegistryCopyDebt: ?PromptRegistryCopyDebt = None<PromptRegistryCopyDebt>
+// Installed workflow goal identity, reused by every session instead of
+// re-importing the package the registry already holds.
+var promptInstalledGoalComponent: ?(String, String) = None<(String, String)>
 
 // The copied descriptor text is paid from the SAME private registry bank the
 // source path uses, exactly as the sibling installed contracts do. No payment
@@ -113,12 +116,21 @@ func promptWithRegistryCopies(action: () -> Unit): Unit {
 
 func promptCreateGoal(product: ProductRuntime, session: SessionId, objective: String): Unit {
     promptWithRegistryCopies({ =>
-    let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace)) {
-        case PluginRegistryResult.Ok(value) => value
-        case PluginRegistryResult.Err(_) => throw IllegalStateException("workflow goal component import failed") }
-    let namespace = promptRegistryText(record.descriptor.copyText(PluginDescriptorText.Namespace))
-    let digest = promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest))
-    record.close()
+    // The package is imported once per settings root. This helper runs for every
+    // session, so a second import of the same package must reuse the identity
+    // already installed rather than being refused as a duplicate namespace.
+    let (namespace, digest) = match (promptInstalledGoalComponent) {
+        case Some(value) => value
+        case None =>
+            let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(_) => throw IllegalStateException("workflow goal component import failed") }
+            let installed = (promptRegistryText(record.descriptor.copyText(PluginDescriptorText.Namespace)),
+                promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest)))
+            record.close()
+            promptInstalledGoalComponent = Some(installed)
+            installed
+    }
     let directory = product.settingsRoot + "/plugins"
     if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
     let goalRight = objectValue([ValueField("key", textValue("goal")), ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])
