@@ -6210,7 +6210,7 @@ func runStructuredCompactionSummaryContract(
     product: ProductRuntime
 ): Unit {
     let session = SessionId("structured-compaction")
-    product.createGoal(session, "Preserve deterministic compaction facts").value().getOrThrow()
+    createWorkflowContractGoal(product, session, "Preserve deterministic compaction facts")
     product.applicationSession(sessionId:Some(session)).setTodoPhases([ProductTodoPhase(
         "Verification",
         [ProductTodoItem("rerun product contract", status: ProductTodoStatus.InProgress)]
@@ -6300,7 +6300,7 @@ func runHybridCompactionSummaryContracts(root: String): Unit {
             ValueField("package_digest", textValue(supportRegistryDescriptor96(installed,"content_digest")))]))]))])).toArray())
 
     let hybridSession = SessionId("hybrid-compaction")
-    product.createGoal(hybridSession, "Preserve facts while adding semantic context").value().getOrThrow()
+    createWorkflowContractGoal(product, hybridSession, "Preserve facts while adding semantic context")
     let hybridMessages = ArrayList<ModelMessage>()
     hybridMessages.add(ModelMessage(
         ModelRole.User,

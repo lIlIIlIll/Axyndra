@@ -142,3 +142,36 @@ func configureWorkflowYieldContract150(product: ProductRuntime, record: ProductP
     }
     if(!matched){entries.add(selected);settings.put("plugins",listValue(entries.toArray()));File.writeTo(path,stringifyUnifiedJson(settings).toArray())}
 }
+
+// Canonical goal creation for the structured-compaction and hybrid-compaction
+// scopes. A goal is a document owned by the workflow plugin, so the contract
+// installs and enables the actual package, grants the goal document right and
+// the ordinary operator selection, then runs the real /goal command. No goal
+// writer, fixture-only executor, alias or continuation authority is created.
+func createWorkflowContractGoal(product: ProductRuntime, session: SessionId, objective: String): Unit {
+    let record = installWorkflowContractPolicy(product)
+    let namespace = supportRegistryDescriptor96(record,"namespace")
+    let digest = supportRegistryDescriptor96(record,"content_digest")
+    let directory = product.settingsRoot + "/plugins"
+    if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
+    let todoRight = objectValue([ValueField("key", textValue("todo")), ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])
+    let goalRight = objectValue([ValueField("key", textValue("goal")), ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])
+    let todoTool = objectValue([ValueField("name", textValue("todo")), ValueField("preparation_provider", textValue("prepare_document")),
+        ValueField("documents", listValue([todoRight]))])
+    let goalTool = objectValue([ValueField("name", textValue("goal")),
+        ValueField("documents", listValue([goalRight]))])
+    File.writeTo(directory + "/documents.json", stringifyUnifiedJson(objectValue([
+        ValueField("version", integerValue(1)), ValueField("plugins", listValue([objectValue([
+            ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(digest)),
+            ValueField("tools", listValue([todoTool, goalTool]))])]))])).toArray())
+    File.writeTo(directory + "/goal-tools.json", stringifyUnifiedJson(objectValue([
+        ValueField("schema", textValue("axyndra.goal-tools/v1")), ValueField("namespace", textValue(namespace)),
+        ValueField("package_digest", textValue(digest)), ValueField("tool", textValue("goal")),
+        ValueField("command", textValue("goal"))])).toArray())
+    let application = product.applicationSession(sessionId: Some(session))
+    let routes = application.javascriptPluginCommands().filter { value => value.extensionId == namespace && value.name == "goal" }
+    if (routes.size != 1) { throw IllegalStateException("the selected workflow goal command route is unavailable") }
+    match (application.invokeJavaScriptPluginCommand(routes[0].routeName, "set \"" + objective + "\"", { _, _ => () })) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException("canonical goal creation failed: " + error.code) }
+}
