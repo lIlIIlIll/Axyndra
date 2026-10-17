@@ -17,6 +17,12 @@ public class OwnedCanonicalResultRetirement {
         this.thread = thread; this.item = item; this.revision = revision; this.lease = lease; this.readback = readback
     }
     public func matches(actual: ToolResultPayloadLease): Bool { refEq(lease, actual) }
+    // Retire this record's actual payload lease. Its readback deliveries have
+    // ended and the coordinator has already removed the record from its index,
+    // so the retained allocation must return to the same shared bank. Closing
+    // is idempotent and retires only this record's own lease; it grants no
+    // Source, Known result, receipt or external effect.
+    public func close(): Unit { lease.close() }
     public func visitCommittedItem(guard: () -> Result<Unit>,
         consume: (ThreadItem, OwnedCanonicalThreadItemCustody) -> Result<Unit>): Result<Unit> {
         readback.visitItem(thread, revision, item, guard, consume)

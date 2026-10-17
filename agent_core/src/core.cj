@@ -4409,6 +4409,13 @@ public class AgentCore <: AgentRunner {
         control.retainCanonicalDelivery(persisted)
         match (persisted.run()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         control.releaseCanonicalDelivery(persisted)
+        // Every readback delivery above has ended, so this record's original
+        // result allocation is no longer needed. The coordinator already
+        // removed it from its index when it was taken, so closing retires its
+        // actual payload lease and returns that charge to the same shared
+        // bank instead of holding it for the life of the thread. Retiring it
+        // grants no Source, Known result, receipt or effect.
+        record.close()
         // This route accepts only Completed. The original loop-state switch
         // resets this counter for every Completed, after event/hook success;
         // it retains no result field and does not alter the previous tool name.
