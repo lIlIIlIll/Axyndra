@@ -124,7 +124,12 @@ func installProfileConfigurationContractModel(product: ProductRuntime, settingsR
 // duplicate import or replace an unexpected package/selection.
 func requireConfigurationContractCompaction(product: ProductRuntime, expected: ProductPluginRecord): Unit {
     var matches: Int64 = 0
-    for (current in product.pluginSnapshots() where supportRegistryDescriptor96(current,"namespace") == supportRegistryDescriptor96(expected,"namespace")) {
+    // The public snapshot list is index-addressed, not an iterator; walk it
+    // explicitly and keep the same namespace filter.
+    let snapshots = product.pluginSnapshots()
+    for (index in 0..snapshots.size) {
+        let current = snapshots.at(index)
+        if (supportRegistryDescriptor96(current,"namespace") != supportRegistryDescriptor96(expected,"namespace")) { continue }
         expect(supportRegistryDescriptor96(current,"root") == supportRegistryDescriptor96(expected,"root") &&
             supportRegistryDescriptor96(current,"id") == supportRegistryDescriptor96(expected,"id") && supportRegistryDescriptor96(current,"version") == supportRegistryDescriptor96(expected,"version") &&
             supportRegistryDescriptor96(current,"content_digest") == supportRegistryDescriptor96(expected,"content_digest") && supportRegistryField96(current,"content_digest") == supportRegistryField96(expected,"content_digest") &&

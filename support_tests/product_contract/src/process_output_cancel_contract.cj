@@ -229,7 +229,7 @@ func runEvalStartupFailureContract(directory: String): Unit {
         nativeEvalStartChecked(recovered, thread)
         let actual = completedFrom(nativeEvalObservedCellSnapshot(recovered.call(thread,
             evalCall("silent-eval-recovered", "py", "40 + 2", timeout: 3))))
-        expect(!actual.isError && actual.receiptId.isSome() &&
+        expect(!actual.isError && actual.receiptId != "" &&
             actual.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
             actual.output.field("stdout").getOrThrow().text.trimAscii() == "42" && recovered.childReceipts() == 1 &&
             recovered.count("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')") == 0,

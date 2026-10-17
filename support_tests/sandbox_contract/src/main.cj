@@ -10,6 +10,8 @@ import sandbox4cj.*
 import std.env.*
 import std.fs.*
 import std.process.*
+import yjson.*
+import yjson_support.*
 
 main(): Int64 {
     let root = prepareWorkspace()
@@ -893,7 +895,7 @@ func nativeSandboxEvalCall(id: String, code: String): ToolCall {
 func nativeSandboxCell(result: Result<ToolInvocationResult>): ToolResult {
     match (nativeEvalObservedCellSnapshot(result)) {
         case Result.Ok(ToolInvocationResult.Completed(value)) =>
-            if (value.receiptId.isNone()) { throw IllegalStateException("actual canonical cell Receipt missing") }
+            if (value.receiptId == "") { throw IllegalStateException("actual canonical cell Receipt missing") }
             value
         case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
         case _ => throw IllegalStateException("actual cell was not completed")
