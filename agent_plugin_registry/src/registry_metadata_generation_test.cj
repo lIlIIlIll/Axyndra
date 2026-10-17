@@ -42,6 +42,37 @@ class RegistryGenerationFixture {
     func close(): Unit { for (record in records) { record.close() }; records.clear(); try { registry.close() } finally { remove(root, recursive: true) } }
 }
 
+
+// Fill the process-wide bank until exactly ONE more 16 MiB-floor owner still
+// fits, so a test can assert that the next reservation is refused regardless
+// of the configured aggregate. Returned reservations must be closed.
+
+
+// Fill the process-wide bank until it refuses one more 16 MiB-floor owner, so a
+// test can assert refusal regardless of the configured aggregate. Every
+// returned reservation is a real owner and must be closed by the test.
+// Same fill, but stop while exactly one more 16 MiB-floor owner still fits, so
+// a caller can still reserve its own floor and then fail later on real work
+// rather than on admission.
+private func fillRegistryBankLeavingOneFloor(): ArrayList<LogicalJsonOwnerReservation> {
+    let held = ArrayList<LogicalJsonOwnerReservation>()
+    while (true) {
+        let (count, charged) = nativeControlMetadataUsage113()
+        if (charged + 33554432 > nativeControlMetadataCapacity113() || count >= 31) { break }
+        held.add(reserveNativeControlMetadata(1))
+    }
+    return held
+}
+
+private func fillRegistryBankToCapacity(): ArrayList<LogicalJsonOwnerReservation> {
+    let held = ArrayList<LogicalJsonOwnerReservation>()
+    while (true) {
+        try { held.add(reserveNativeControlMetadata(1)) }
+        catch (_: LogicalJsonPayloadError) { break }
+    }
+    return held
+}
+
 @Test
 class RegistryMetadataGenerationTests {
     @TestCase
@@ -65,13 +96,50 @@ class RegistryMetadataGenerationTests {
     }
 
     @TestCase
+    func returnedTreeInspectionWorkDoesNotBecomeEachSelectedPinGraph(): Unit {
+        // The runner's source cwd is the disk-backed isolated checkout; do
+        // not put this deliberately wider package tree in a tmpfs fixture.
+        let root = canonicalize(Directory.createTemp(".")).toString()
+        var registry: ?PluginRegistry = None
+        let records = ArrayList<ProductPluginRecord>()
+        let pins = ArrayList<PluginRegistryExecutionPin>()
+        let owners = ArrayList<LogicalJsonOwnerReservation>()
+        try {
+            let actual = PluginRegistry(root + "/settings", root); registry = Some(actual)
+            let path = registryFixturePackage(root, "1.0.0")
+            Directory.create(path + "/tree")
+            // All paths coexist inside each original digest producer and
+            // must remain fully paid until that whole helper returns.
+            for (index in 0..2000) {
+                File.writeTo(path + "/tree/record-private-work-" + index.toString(), "".toArray())
+            }
+            records.add(generationRequire(actual.importLocal(path)))
+            let enabled = generationRequire(actual.setEnabled("pi:minimal-fixture", true)); records.add(enabled)
+            for (_ in 0..17) { pins.add(generationRequire(actual.captureExecutionPin(enabled))) }
+            // Reuse the existing original near-8MiB plus two session-owner
+            // acceptance pressure. No substituted bank, floor or limit.
+            owners.add(reserveNativeControlMetadata(1))
+            owners.add(reserveNativeDocumentPayload(8387584))
+            owners.add(reserveNativeControlMetadata(1))
+            @Expect(pins.size, 17)
+            for (pin in pins) { @Expect(pin.current().isOk()) }
+        } finally {
+            for (owner in owners) { owner.close() }
+            for (pin in pins) { pin.close() }
+            for (record in records) { record.close() }
+            try { match (registry) { case Some(actual) => actual.close(); case None => () } }
+            finally { remove(root, recursive: true) }
+        }
+    }
+
+    @TestCase
     func lastClosedPinRetainsGenerationUntilActualSharedAdmissionLeaseCloses(): Unit {
         let fixture = RegistryGenerationFixture(9)
-        let pressure = ArrayList<LogicalJsonOwnerReservation>()
+        var pressure = ArrayList<LogicalJsonOwnerReservation>()
         let pins = ArrayList<PluginRegistryExecutionPin>()
         var lease: ?PluginRegistryExecutionFence = None
         try {
-            for (_ in 0..7) { pressure.add(reserveNativeControlMetadata(1)) }
+            pressure=fillRegistryBankToCapacity()
             pins.add(all: fixture.capture())
             let held = generationRequire(pins[0].enter()); lease = Some(held)
             for (pin in pins) { pin.close(); pin.close() }
@@ -138,7 +206,7 @@ class RegistryMetadataGenerationTests {
     @TestCase
     func denseActualManifestCannotDecodeBeyondSharedPoolAndFailedCaptureReleasesOwner(): Unit {
         let root = Directory.createTemp("/tmp").toString()
-        let pressure = ArrayList<LogicalJsonOwnerReservation>()
+        var pressure = ArrayList<LogicalJsonOwnerReservation>()
         var retainedRegistry: ?PluginRegistry = None
         try {
             let path = registryFixturePackage(root, "1.0.0")
@@ -152,7 +220,7 @@ class RegistryMetadataGenerationTests {
             // Actual owned callers end before the original reservation retires.
             // No raw descriptor/String/Array survives this explicit close.
             imported.close(); enabled.close(); seed.close(); retainedRegistry = None
-            for (_ in 0..7) { pressure.add(reserveNativeControlMetadata(1)) }
+            pressure=fillRegistryBankLeavingOneFloor()
             // Unlike the old unpaid constructor, this actual reopen charges
             // before parsing the same50k-node manifest. An early load error
             // is legitimate, and capture still must not arm a pin from data.
