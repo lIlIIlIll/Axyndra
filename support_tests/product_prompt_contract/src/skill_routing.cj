@@ -31,6 +31,7 @@ func verifyAutomaticSkillDiscovery(temporary: String): Unit {
     let header = "---\nname: local-review\ndescription: Review code changes\n---\n"
     File.writeTo(directory + "/SKILL.md", (header + "FROZEN-INSTRUCTIONS").toArray())
     File.writeTo(directory + "/references/checklist.md", "LAZY-REFERENCE".toArray())
+    promptConfigureReadScopes(settings)
     let product = openProduct(config: ProductConfig(settingsRoot: settings, stateRoot: temporary + "/state", workspaceRoot: workspace,
         fixture: true, approvalMode: ApprovalMode.Yolo, distributionRoot: promptDistributionRoot())).value().getOrThrow()
     try {

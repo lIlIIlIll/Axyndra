@@ -13,6 +13,11 @@ import yjson_support.*
 func promptDistributionRoot(): String {
     getVariable("AXYNDRA_CODING_DISTRIBUTION").getOrThrow()
 }
+func promptConfigureReadScopes(settings: String): Unit {
+    Directory.create(settings + "/plugins", recursive: true)
+    File.writeTo(settings + "/plugins/read-scopes.json",
+        ("{\"version\":1,\"roots\":[\"$" + "{settings_root}/managed-skills\",\"$" + "{settings_root}/skills\"]}").toArray())
+}
 func promptStoredContext(product: ProductRuntime, run: RunId): InvocationContextProjection {
     let database = SqliteDatabase(product.stateRoot + "/state.db")
     try {
@@ -32,7 +37,7 @@ func promptContribution(snapshot: InvocationContextProjection, id: String): ?Inv
     None
 }
 func promptHasSelected(snapshot: InvocationContextProjection): Bool {
-    for (value in snapshot.contributions() where value.id != "catalog") { return true }
+    for (value in snapshot.contributions() where value.owner.endsWith("/context/skills") && value.id != "catalog") { return true }
     false
 }
 func promptReference(product: ProductRuntime, snapshot: InvocationContextProjection,
@@ -88,21 +93,40 @@ func promptRegistryText(result: PluginRegistryResult<OwnedRegistryUtf8>): String
     } finally { source.close() }
 }
 
-func promptCreateGoal(product: ProductRuntime, session: SessionId, temporary: String, objective: String): Unit {
+// Configuration-only copies stop being live after their JSON has been
+// published and the command has returned. Keep returned namespace copies
+// outside this scope paid for the contract's remaining lifetime.
+func promptWithRegistryCopies(action: () -> Unit): Unit {
+    let boundary = promptRegistryCopyDebt
+    try { action() } finally {
+        while (true) {
+            let debt = match (promptRegistryCopyDebt) {
+                case Some(value) => value
+                case None => break
+            }
+            if (boundary.isSome() && refEq(debt, boundary.getOrThrow())) { break }
+            promptRegistryCopyDebt = debt.previous
+            debt.payment.close()
+        }
+    }
+}
+
+func promptCreateGoal(product: ProductRuntime, session: SessionId, objective: String): Unit {
+    promptWithRegistryCopies({ =>
     let record = match (product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace)) {
         case PluginRegistryResult.Ok(value) => value
         case PluginRegistryResult.Err(_) => throw IllegalStateException("workflow goal component import failed") }
     let namespace = promptRegistryText(record.descriptor.copyText(PluginDescriptorText.Namespace))
     let digest = promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest))
+    record.close()
     let directory = product.settingsRoot + "/plugins"
     if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
     let goalRight = objectValue([ValueField("key", textValue("goal")), ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])
-    File.writeTo(directory + "/documents.json", stringifyUnifiedJson(objectValue([
-        ValueField("version", integerValue(1)), ValueField("plugins", listValue([objectValue([
-            ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(digest)),
-            ValueField("tools", listValue([objectValue([ValueField("name", textValue("goal")),
-                ValueField("preparation_provider", textValue("prepare_document")),
-                ValueField("documents", listValue([goalRight]))])]))])]))])).toArray())
+    promptAppendPluginDocuments(product, objectValue([
+        ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(digest)),
+        ValueField("tools", listValue([objectValue([ValueField("name", textValue("goal")),
+            ValueField("preparation_provider", textValue("prepare_document")),
+            ValueField("documents", listValue([goalRight]))])]))]))
     File.writeTo(directory + "/goal-tools.json", stringifyUnifiedJson(objectValue([
         ValueField("schema", textValue("axyndra.goal-tools/v1")), ValueField("namespace", textValue(namespace)),
         ValueField("package_digest", textValue(digest)), ValueField("tool", textValue("goal")),
@@ -116,6 +140,7 @@ func promptCreateGoal(product: ProductRuntime, session: SessionId, temporary: St
     match (application.invokeJavaScriptPluginCommand(routes[0].routeName, "set \"" + objective + "\"", { _, _ => () })) {
         case Result.Ok(_) => ()
         case Result.Err(error) => throw IllegalStateException("canonical goal creation failed: " + error.code) }
+    })
 }
 
 // Install and enable one real component through the public operator path. The
@@ -127,9 +152,118 @@ func promptInstallComponent(product: ProductRuntime, packageVariable: String): S
         case PluginRegistryResult.Ok(value) => value
         case PluginRegistryResult.Err(_) => throw IllegalStateException("contract component import failed for " + packageVariable) }
     let namespace = promptRegistryText(record.descriptor.copyText(PluginDescriptorText.Namespace))
+    record.close()
     let enabled = match (product.setPluginEnabled(namespace, true)) {
         case PluginRegistryResult.Ok(value) => value
         case PluginRegistryResult.Err(_) => throw IllegalStateException("contract component enable failed for " + packageVariable) }
     enabled.close()
     namespace
+}
+
+func promptAppendPluginDocuments(product: ProductRuntime, entry: AgentValue): Unit {
+    let path = product.settingsRoot + "/plugins/documents.json"
+    let entries = ArrayList<AgentValue>()
+    if (exists(Path(path))) {
+        for (existing in parseUnifiedJson(String.fromUtf8(File.readFrom(path))).field("plugins").getOrThrow().items
+            where httpIntentText(existing, "namespace") != httpIntentText(entry, "namespace")) { entries.add(existing) }
+    }
+    entries.add(entry)
+    File.writeTo(path, stringifyUnifiedJson(objectValue([ValueField("version", integerValue(1)),
+        ValueField("plugins", listValue(entries.toArray()))])).toArray())
+}
+
+func promptInstalledDigest(product: ProductRuntime, namespace: String): String {
+    let records = product.pluginSnapshots()
+    try {
+        for (index in 0..records.size) {
+            let record = records.at(index)
+            if (record.descriptor.textEquals(PluginDescriptorText.Namespace, namespace)) {
+                return promptRegistryText(record.descriptor.copyText(PluginDescriptorText.ContentDigest))
+            }
+        }
+        throw IllegalStateException("installed context package is unavailable: " + namespace)
+    } finally { records.close() }
+}
+
+func promptConfigureMemory(product: ProductRuntime, namespace: String): Unit {
+    promptWithRegistryCopies({ =>
+    let directory = product.settingsRoot + "/plugins"
+    if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
+    promptAppendPluginDocuments(product, objectValue([
+        ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(promptInstalledDigest(product, namespace))),
+        ValueField("tools", listValue([objectValue([ValueField("name", textValue("retain")),
+            ValueField("preparation_provider", textValue("prepare_document")),
+            ValueField("payload_references", boolValue(true)), ValueField("effect_from_intents", boolValue(true)),
+            ValueField("tool_payload_limits", OrdinaryToolPayloadLimits("retain").value()),
+            ValueField("documents", listValue([objectValue([ValueField("key", textValue("journal")),
+                ValueField("read", boolValue(true)), ValueField("write", boolValue(true))])]))])])),
+        ValueField("backends", listValue([objectValue([ValueField("key", textValue("journal")),
+            ValueField("layout", textValue("opaque-fact-events-v3"))])]))]))
+    })
+}
+
+func promptSeedMemory(product: ProductRuntime, session: SessionId, namespace: String, arguments: AgentValue): Unit {
+    // Native Memory deliberately has no user command contribution. Its tool
+    // needs a real Run's completed ContextRead, not the rejecting Direct path.
+    let application = product.applicationSession(sessionId: Some(session))
+    expect(application.javascriptPluginCommands().filter { value =>
+        value.extensionId == namespace && value.name == "retain" }.isEmpty(),
+        "Native Memory exposes retain as a prepared tool rather than a user command")
+    let call = "prompt-seed-memory"
+    product.fixtureProbe.getOrThrow().enqueueToolCallReply(call, "plugin." + namespace + ".retain", arguments)
+    let request = product.request("Seed the contract memory", sessionId: Some(session))
+    match (product.client.start(request, { _ => () })) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException("canonical memory seeding failed: " + error.code + ": " + error.message)
+    }
+    let database = SqliteDatabase(product.stateRoot + "/state.db")
+    try {
+        for (item in SqliteThreadCommitSink(database).loadThread(ThreadId(session.value)).items) {
+            match (item.content) {
+                case ThreadItemContent.ToolResult(id, _, _, output, isError) => if (id.value == call) {
+                    expect(!isError, "canonical retain commits all scoped memory seeds: " + stringifyUnifiedJson(output))
+                    return
+                }
+                case _ => ()
+            }
+        }
+        throw IllegalStateException("canonical retain ToolResult is missing")
+    } finally { database.close() }
+}
+
+func promptDocumentContextSelection(product: ProductRuntime, namespace: String, provider: String,
+    key: String, query: AgentValue): AgentValue {
+    objectValue([ValueField("version", integerValue(5)), ValueField("namespace", textValue(namespace)),
+        ValueField("package_digest", textValue(promptInstalledDigest(product, namespace))),
+        ValueField("provider", textValue(provider)), ValueField("resources", listValue([textValue(key)])),
+        ValueField("query", query), ValueField("prompt_field", textValue(""))])
+}
+
+func promptConfigureBusinessContext(product: ProductRuntime, memoryNamespace: String): Unit {
+    promptWithRegistryCopies({ =>
+    let directory = product.settingsRoot + "/plugins"
+    let goal = parseUnifiedJson(String.fromUtf8(File.readFrom(directory + "/goal-tools.json")))
+    let goalNamespace = httpIntentText(goal, "namespace")
+    let selections = ArrayList<AgentValue>()
+    // Retain the installed distribution's real Skill discovery provider.
+    let original = parseUnifiedJson(String.fromUtf8(File.readFrom(directory + "/context.json")))
+    if (original.field("version").getOrThrow().asNumberText() == "6") {
+        for (selection in original.field("selections").getOrThrow().items) { selections.add(selection) }
+    } else { selections.add(original) }
+    selections.add(promptDocumentContextSelection(product, goalNamespace, "goal_context", "goal",
+        objectValue([ValueField("schema", textValue("axyndra.goal-context-query/v1"))])))
+    selections.add(promptDocumentContextSelection(product, memoryNamespace, "memory_context", "journal",
+        objectValue([ValueField("schema", textValue("axyndra.memory-context-query/v1")),
+            ValueField("query", textValue("PROMPT-MEMORY-QUERY")), ValueField("max_bytes", integerValue(16384))])))
+    let providers = [objectValue([ValueField("namespace", textValue(memoryNamespace)),
+        ValueField("package_digest", textValue(promptInstalledDigest(product, memoryNamespace))),
+        ValueField("provider", textValue("memory_context")), ValueField("keys", listValue([textValue("journal")]))]),
+        objectValue([ValueField("namespace", textValue(goalNamespace)),
+        ValueField("package_digest", textValue(promptInstalledDigest(product, goalNamespace))),
+        ValueField("provider", textValue("goal_context")), ValueField("keys", listValue([textValue("goal")]))])]
+    File.writeTo(directory + "/document-context.json", stringifyUnifiedJson(objectValue([
+        ValueField("version", integerValue(1)), ValueField("providers", listValue(providers))])).toArray())
+    File.writeTo(directory + "/context.json", stringifyUnifiedJson(objectValue([
+        ValueField("version", integerValue(6)), ValueField("selections", listValue(selections.toArray()))])).toArray())
+    })
 }
