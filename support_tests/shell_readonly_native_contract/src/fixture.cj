@@ -7,6 +7,7 @@ import agent_product.*
 import agent_store.*
 import tool_runtime.*
 import std.collection.*
+import std.convert.*
 import std.env.*
 import std.fs.*
 import yjson.*
@@ -105,8 +106,8 @@ public class NativeReadonlyShellContractBinding {
         let ceiling=CapabilitySet(values:rootPlan.requiredCapabilities)
         for(cap in parent.requiredCapabilities where !ceiling.allows(cap.kind,resource:cap.resource)){
             throw IllegalStateException("actual readonly child exceeds original parent frozen ceiling")}
-        if(database.scalarInt("SELECT COUNT(*) FROM operations WHERE run_id=?",[SqlParameter.Text(run.value)])!=3 ||
-            database.scalarInt("SELECT COUNT(*) FROM operation_receipts r JOIN operations o ON o.id=r.operation_id WHERE o.run_id=?",[SqlParameter.Text(run.value)])!=3){
+        if(Int64.parse(database.query("SELECT COUNT(*) FROM operations WHERE run_id=?",[SqlParameter.Text(run.value)])[0].required(0))!=3 ||
+            Int64.parse(database.query("SELECT COUNT(*) FROM operation_receipts r JOIN operations o ON o.id=r.operation_id WHERE o.run_id=?",[SqlParameter.Text(run.value)])[0].required(0))!=3){
             throw IllegalStateException("three actual canonical operations and reserved Receipts, without fabricated business alias")}
     }
 }
@@ -184,7 +185,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}
