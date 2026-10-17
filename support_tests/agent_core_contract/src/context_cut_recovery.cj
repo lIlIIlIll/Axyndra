@@ -238,12 +238,12 @@ class CutRecoveryBudgetRoundTripManifest107 <: ModelContextManifestRuntimePort {
                 for (event in decoded.events) {
                     match (event.payload) { case AgentEventPayload.BudgetUpdated(usage) =>
                         typedBudgetCount += 1
-                        matchingBudget = canonicalAgentValue(executionUsageValue(usage)) == canonicalAgentValue(executionUsageValue(expected))
+                        matchingBudget = canonicalAgentValue(contextBoundaryUsageValue(usage)) == canonicalAgentValue(contextBoundaryUsageValue(expected))
                         case _ => () }
                 }
                 expect(typedBudgetCount > 0 && matchingBudget,
                     "original app event decoder reads the exact genuine current BudgetUpdated after cut/reopen")
-                reopened.transaction { tx => requireContextBoundaryBudget(tx, request.runId, executionUsageValue(expected)) }
+                reopened.transaction { tx => requireContextBoundaryBudget(tx, request.runId, contextBoundaryUsageValue(expected)) }
                 expect(boundary.continuation.runId.value == request.runId.value &&
                     contextBoundaryText(boundary.data(), "point") == "turn_reserved" &&
                     repository.pendingRecoveryContinuation(request.sessionId).value().getOrThrow().isNone(),

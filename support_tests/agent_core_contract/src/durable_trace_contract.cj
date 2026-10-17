@@ -720,7 +720,7 @@ func durableUnknownEffectTraceContract(root: String): Unit {
         let boundaryCore = AgentCore(boundaryModel, boundaryRuns, pipeline, catalog,
             threadRuntimes: Some(registry), operationRuntime: Some(operations),
             modelDecisionRuntime: Some(SqliteModelDecisionStore(database)))
-        expect(boundaryCore.resumeContextBoundary(durableToolRequest()).isError() &&
+        expect(boundaryCore.resumeContextBoundary(durableToolRequest(), { _ => () }).isError() &&
             boundaryModel.calls == 0 && durableEffectCount(effectPath) == 1 &&
             database.scalarInt("SELECT COUNT(*) FROM operation_receipts") == 0,
             "context-boundary recovery never replays actual unknown effect or fabricates Receipt107")
@@ -743,10 +743,96 @@ func durableUnknownEffectTraceContract(root: String): Unit {
     }
 }
 
+// ModelPort supplies deterministic failure/reply DATA; Core, Thread, Attempts,
+// continuation commits and reopened consumer below are actual SQLite paths.
+class DurableTerminalConsumerModel <: ModelPort {
+    private let runs: SqliteRunRepository
+    private let expected: AgentRunRequest
+    private let failed: Bool
+    var calls: Int64 = 0
+    init(runs: SqliteRunRepository, expected: AgentRunRequest, failed!: Bool = true) {
+        this.runs = runs; this.expected = expected; this.failed = failed
+    }
+    public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
+        let _ = request; let _ = events
+        calls++
+        let pending = runs.pendingRecoveryContinuation(expected.sessionId).value().getOrThrow()
+        expect(pending.isSome() && pending.getOrThrow().runId.value == expected.runId.value &&
+            pending.getOrThrow().kind == RunContinuationKind.RunningModel,
+            "actual nonterminal Model owner remains an eligible recovery continuation")
+        if (failed) {
+            return Result.Err(AgentError(AgentErrorKind.Transport, "fixture.terminal_model_failure",
+                "deterministic provider failure data", retryable: false))
+        }
+        Result.Ok(contractModelReply([ModelBlock(ModelBlockKind.Text, text: "durable recovery complete")],
+            stopReason: "end_turn", providerId: "durable-recovery", responseId: "durable-recovery-response"))
+    }
+}
+
+func durableTerminalFailedModelHistory(root: String): (String, String) {
+    Directory.create(root, recursive: true)
+    let database = SqliteDatabase(durableDatabasePath(root))
+    let runs = SqliteRunRepository(database)
+    let operations = DurableOperationStore(database)
+    let catalog = ToolCatalog()
+    let request = durableModelRequest(RunId("terminal-model-run"), SessionId("terminal-model-session"),
+        "durable-model", "preserve the actual failed request", autoRetry: false)
+    let model = DurableTerminalConsumerModel(runs, request)
+    let core = AgentCore(model, runs, ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()), catalog,
+        threadRuntimes: Some(SqliteThreadRuntimeRegistry(database,
+            ContextProjector("durable-e0-02", ConservativeThreadTokenEstimator()), { => agentUtcMillis() })),
+        operationRuntime: Some(operations), modelDecisionRuntime: Some(SqliteModelDecisionStore(database)))
+    try {
+        let outcome = core.start(request)
+        expect(outcome.isError() && outcome.error().getOrThrow().code == "fixture.terminal_model_failure" &&
+            model.calls == 1, "the real Core settles one failed Model Attempt without retry")
+        expect(database.query("SELECT state FROM runs WHERE id='terminal-model-run'")[0].required(0) == "failed" &&
+            database.query("SELECT active_turn_id FROM threads WHERE id='terminal-model-session'")[0][0].isNone(),
+            "actual canonical terminal Run has no live Thread owner")
+        let history = database.query("SELECT payload,digest FROM run_continuations WHERE run_id='terminal-model-run'")
+        expect(history.size == 1 && database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE run_id='terminal-model-run' AND lifecycle='failed'") == 1,
+            "failure keeps its original continuation and actual failed Attempt")
+        (history[0].required(0), history[0].required(1))
+    } finally { database.close() }
+}
+
+func durableTerminalModelContinuationContract(root: String): Unit {
+    let (payload, digest) = durableTerminalFailedModelHistory(root)
+    let database = SqliteDatabase(durableDatabasePath(root))
+    let runs = SqliteRunRepository(database)
+    let operations = DurableOperationStore(database)
+    let catalog = ToolCatalog()
+    let request = durableModelRequest(RunId("new-model-run"), SessionId("terminal-model-session"),
+        "durable-model", "a new legitimate user intent", autoRetry: false)
+    let model = DurableTerminalConsumerModel(runs, request, failed: false)
+    let core = AgentCore(model, runs, ToolPipeline(catalog, operations, MemoryAudit(), FixtureIds()), catalog,
+        threadRuntimes: Some(SqliteThreadRuntimeRegistry(database,
+            ContextProjector("durable-e0-02", ConservativeThreadTokenEstimator()), { => agentUtcMillis() })),
+        operationRuntime: Some(operations), modelDecisionRuntime: Some(SqliteModelDecisionStore(database)))
+    try {
+        let pending = runs.pendingRecoveryContinuation(SessionId("terminal-model-session"))
+        expect(pending.isOk() && pending.value().getOrThrow().isNone() && model.calls == 0,
+            "reopened SQLite consumer skips a terminal failed continuation without replay")
+        let preserved = database.query("SELECT payload,digest FROM run_continuations WHERE run_id='terminal-model-run'")
+        expect(preserved.size == 1 && preserved[0].required(0) == payload && preserved[0].required(1) == digest,
+            "selection preserves byte-exact historical continuation data")
+        let outcome = core.start(request).value().getOrThrow()
+        expect(match (outcome) { case AgentRunOutcome.Completed(snapshot) => snapshot.runId.value == "new-model-run"
+            case _ => false }, "the same canonical Thread admits and completes a distinct new Run")
+        expect(model.calls == 1 && database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE run_id='terminal-model-run'") == 1 &&
+            database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE run_id='new-model-run' AND lifecycle='completed'") == 1,
+            "new intent dispatches once; the original failed Attempt is never retried or replaced")
+        let after = database.query("SELECT payload,digest FROM run_continuations WHERE run_id='terminal-model-run'")
+        expect(after.size == 1 && after[0].required(0) == payload && after[0].required(1) == digest,
+            "the new Run leaves original continuation bytes and version binding unchanged")
+    } finally { database.close() }
+}
+
 func durableCoreTrajectoriesContract(): Unit {
     if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
     let root = Directory.createTemp("target").toString()
     try {
+        durableTerminalModelContinuationContract(root + "/terminal-model")
         durableModelRestartTraceContract(root + "/model")
         durableCommittedReceiptReplayTraceContract(root + "/receipt")
         durableUnknownEffectTraceContract(root + "/effect")
