@@ -23,8 +23,13 @@ public func nativeWorkspaceContractToolName(product: ProductRuntime, contributio
     nativeContractContributionName(product,"axyndra:workspace",contribution)
 }
 func nativeContractContributionName(product: ProductRuntime, namespace: String, contribution: String): String {
-    for(record in product.pluginSnapshots() where supportRegistryDescriptor96(record,"namespace")==namespace && supportRegistryData96(record).enabled &&
-        !supportRegistryData96(record).explicitlyDisabled && record.descriptor.entryKind==PluginEntryKind.NativeExecutable){
+    // The public snapshot list is index-addressed, not an iterator; walk it
+    // explicitly and keep the same namespace/enabled/kind filter.
+    let snapshots = product.pluginSnapshots()
+    for (snapshotIndex in 0..snapshots.size) {
+        let record = snapshots.at(snapshotIndex)
+        if (!(supportRegistryDescriptor96(record,"namespace")==namespace && supportRegistryData96(record).enabled &&
+            !supportRegistryData96(record).explicitlyDisabled && record.descriptor.entryKind==PluginEntryKind.NativeExecutable)) { continue }
         if(product.vnext.javascriptPlugins.instanceGeneration(namespace)!=0u64 &&
             product.vnext.javascriptPlugins.toolNames(namespace).contains(contribution)){
             return "plugin."+supportRegistryDescriptor96(record,"namespace")+"."+contribution}}
@@ -330,7 +335,7 @@ public class NativeProgramPlanArtifactFault {
     }
     public func wasApplied(): Bool {lock.lock();try{applied}finally{lock.unlock()}}
     public func restore(): Unit {
-        if(exists(Path(path)) && FileInfo(Path(path)).isRegularFile()){remove(path);Directory.create(path,recursive:true)}
+        if(exists(Path(path)) && FileInfo(Path(path)).isRegular()){remove(path);Directory.create(path,recursive:true)}
     }
 }
 
@@ -407,7 +412,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}
