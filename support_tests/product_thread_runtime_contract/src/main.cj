@@ -1983,6 +1983,7 @@ func runPluginServiceBrokerContract(root: String, workspace: String, native: Boo
     }
 }
 main(): Int64 {
+    let workerArguments = getCommandLine()
     let tempRoot = match (getVariable("TMPDIR")) {
         case Some(value) => value
         case None => "/tmp"
@@ -2700,9 +2701,13 @@ main(): Int64 {
                 "standalone native executable runs once and leaves one completed canonical Receipt")
         } finally { nativeDatabase.close() }
         let disabledPlugin = product.setPluginEnabled(pluginId, false)
-        expect(disabledPlugin.isOk() && product.pluginSnapshots().any({ snapshot =>
-            supportRegistryDescriptor96(snapshot,"id") == pluginId && !supportRegistryData96(snapshot).enabled
-        }) && !product.tools().any({ definition => definition.name == pluginToolName }),
+        let disabledSnapshots = product.pluginSnapshots()
+        var foundDisabled = false
+        for (snapshotIndex in 0..disabledSnapshots.size) {
+            let snapshot = disabledSnapshots.at(snapshotIndex)
+            if (supportRegistryDescriptor96(snapshot,"id") == pluginId && !supportRegistryData96(snapshot).enabled) { foundDisabled = true }
+        }
+        expect(disabledPlugin.isOk() && foundDisabled && !product.tools().any({ definition => definition.name == pluginToolName }),
             "Product disables the native plugin and removes its declared tool")
         product.close().value().getOrThrow()
 
@@ -3175,7 +3180,7 @@ main(): Int64 {
                     if(callId.value=="fixture-admission-persistence-root" && name==faultBinding.name){realFaultCalls+=1}
                 case _=>()}}
             expect(realFaultCalls==1,"actual canonical model ToolCall exists before its SQLite admission trigger refuses the Root")
-            }finally{faultProduct.close().getOrThrow()}
+            }finally{faultProduct.close().value().getOrThrow()}
 
         } finally {
             database.close()
@@ -4497,7 +4502,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}
