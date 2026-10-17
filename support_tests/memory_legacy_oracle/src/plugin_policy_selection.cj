@@ -40,9 +40,12 @@ class ProductPolicySelection {
             return productPolicySelectionError("policy.provider_changed") }
         let mounted = match (host.servicePackage(namespace, binding.generation)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (mounted.namespace != namespace || mounted.contentDigest != digest) {
-            return productPolicySelectionError("policy.provider_changed") }
-        Result.Ok(())
+        try {
+            if (!mounted.textEquals(PluginDescriptorText.Namespace, namespace) ||
+                !mounted.textEquals(PluginDescriptorText.ContentDigest, digest)) {
+                return productPolicySelectionError("policy.provider_changed") }
+            Result.Ok(())
+        } finally { mounted.close() }
     }
     func validateBinding(host: ProductJavaScriptPluginHost, binding: ProductPluginPolicyBinding): Result<Unit> {
         match (validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -112,7 +115,7 @@ func loadProductPolicySelection(settingsRoot: String, key: String): Result<Produ
                 return productPolicySelectionError("policy.configuration_invalid") }
             if (workflowPlan) {
                 let name = entry.field("plan_tool").getOrThrow()
-                if (name.unifiedKind != ValueKind.Text || !productDocumentLogicalName(name.text)) {
+                if (name.unifiedKind != ValueKind.Text || !memoryOracleDocumentLogicalName(name.text)) {
                     return productPolicySelectionError("policy.configuration_invalid") }
             }
             for (name in ["namespace", "provider", "package_digest"]) {

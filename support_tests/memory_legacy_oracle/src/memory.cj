@@ -296,7 +296,7 @@ public class DiskMemoryRepository {
     private func load(): Result<Array<MemoryRecord>> {
         if (!exists(Path(path))) { return Result.Ok([]) }
         let records = ArrayList<MemoryRecord>()
-        for (line in readText(path).split("\n")
+        for (line in memoryOracleReadText(path).split("\n")
              where line.trimAscii() != "") {
             let value = match (decodeAgentValue(
                 line,

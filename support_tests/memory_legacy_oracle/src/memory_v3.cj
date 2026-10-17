@@ -747,7 +747,7 @@ public class MemoryV3Repository {
             case None => ()
         }
         if (!exists(Path(path))) { return Result.Ok([]) }
-        let source = match (readTextResult(path, "memory_v3.read")) {
+        let source = match (memoryOracleReadTextResult(path, "memory_v3.read")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result<Array<MemoryV3Record>>.Err(error)
         }

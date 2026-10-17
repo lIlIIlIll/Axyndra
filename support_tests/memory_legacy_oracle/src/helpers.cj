@@ -1,6 +1,8 @@
 package memory_legacy_oracle
 import agent_domain.*
 import agent_product.*
+import agent_host_runtime
+import agent_host_runtime.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
@@ -105,3 +107,33 @@ func schemaEnumProperty(
         )
     )
 }
+
+// Local copies of the retired product/persistence helpers this historical
+// oracle still needs. The originals are package-private in agent_product and
+// persistence_runtime, and this package intentionally reimplements the retired
+// algorithms rather than depending on production internals.
+func memoryOracleReadText(path: String): String { String.fromUtf8(File.readFrom(path)) }
+
+func memoryOracleReadTextResult(path: String, code: String): Result<String> {
+    try {
+        Result.Ok(memoryOracleReadText(path))
+    } catch (error: Exception) {
+        Result.Err(AgentError(AgentErrorKind.Internal, code, error.message))
+    }
+}
+
+func memoryOracleInvalidArgument<T>(call: ToolCall, name: String, message: String): Result<T> {
+    Result.Err(AgentError(AgentErrorKind.InvalidInput, "tool.invalid_argument", message,
+        fields: [ErrorField("argument", name)]))
+}
+
+func memoryOracleRequiredString(call: ToolCall, name: String): Result<String> {
+    match (call.arguments.field(name)) {
+        case Some(value) =>
+            if (value.unifiedKind == ValueKind.Text) { Result.Ok(value.text) }
+            else { memoryOracleInvalidArgument(call, name, "argument must be a string") }
+        case None => memoryOracleInvalidArgument(call, name, "required argument is missing")
+    }
+}
+
+func memoryOracleDocumentLogicalName(value: String): Bool { hostDocumentLogicalName(value) }

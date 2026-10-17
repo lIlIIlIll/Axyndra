@@ -8,10 +8,12 @@ import std.fs.*
 import std.env.*
 import std.collection.*
 import agent_product.*
+import tool_runtime.*
 import memory_legacy_oracle.*
 import yjson.*
 import yjson_support.*
 
+let memoryPolicyHosts = ArrayList<ProductRuntime>()
 main(): Int64 {
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
@@ -345,7 +347,6 @@ func expect(condition: Bool, message: String): Unit {
 
 // Actual independent installed package, same public registry/config path as an
 // embedding application. No production fixture flag supplies a policy.
-let memoryPolicyHosts = ArrayList<ProductRuntime>()
 func installedMemoryContractHost(root: String, settingsRoot: String, workspaceRoot: String): ProductRuntime {
     let host = openProduct(config: ProductConfig(settingsRoot: settingsRoot,
         stateRoot: root + "/policy-host-" + memoryPolicyHosts.size.toString(), workspaceRoot: workspaceRoot,
@@ -435,7 +436,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}

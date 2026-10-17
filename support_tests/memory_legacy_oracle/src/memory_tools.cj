@@ -1605,7 +1605,7 @@ func requiredNonemptyMemoryString(
     call: ToolCall,
     name: String
 ): Result<String> {
-    match (requiredString(call, name)) {
+    match (memoryOracleRequiredString(call, name)) {
         case Result.Ok(value) =>
             if (value.trimAscii() == "") {
                 memoryToolError<String>(
