@@ -15,7 +15,11 @@ let NATIVE_PAYLOAD_CHUNK_BYTES: Int64 = 16384
 // allocation accounting, not an invocation, execution or artifact registry.
 // Eight times the declared wire bytes covers bounded input/UTF8/JSON/hex
 // copies; the 16 MiB floor and lexical node ceiling cover dense small JSON.
-let nativePayloadOwnerBudget = LogicalJsonOwnerBudget()
+// The App's own process-wide pool states its capacity explicitly rather than
+// inheriting the library default: a full session retains context, ledger,
+// checkpoint and maintenance-failure consumers simultaneously, so it declares
+// the same concurrency headroom the transfer bound implies (32 x 16 MiB).
+let nativePayloadOwnerBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
 
 // A bounded host observation writer may reserve its fixed streaming workspace
 // from the SAME process-wide pool. This is allocation accounting only; it
