@@ -467,7 +467,7 @@ applicability; they do not establish the entire row as passed.
 | DoD-2 | Completion definition 2 | R | Native/JS/first-party one boundary, plugins own algorithms | A1/A3/A4 / E2/E5/E47/E53/E54 | Partial | Final changed-source authority, Host and actual Product coverage |
 | DoD-3 | Completion definition 3 | R | Entire §7/A0–A7 migrated; no silent reduction | All thirty rows; no approved exclusions | Partial | Every remaining applicable required row |
 | DoD-4 | Completion definition 4 | R | One model/Store/authority, budgets/receipts/versions/recovery | A1/A5/A6 / E3/E6/E8/E45/E46/E49 | Partial | Final failure, concurrency, ownership and recovery matrix |
-| DoD-5 | Completion definition 5 | R | Bootstrap/dynamic/fault/data/Product/distribution proof | A1/A7 / E1/E7/E9/E42/E49/E57/E58/E59 | Partial | Final clean Product gates, portable distributions and actual failures |
+| DoD-5 | Completion definition 5 | R | Bootstrap/dynamic/fault/data/Product/distribution proof | A1/A7 / E1/E7/E9/E42/E49/E57/E58/E59; **this session: E169/E178 frozen App+DSO pair (DSO matches the pinned identity), E177 real-PTY entry point runs, E171 Minimal gate PASS** | Partial | Final clean Product gates and portable Coding/Full distributions; the issue's original ten-case PTY harness is absent from this tree |
 | DoD-6 | Completion definition 6 | R | Retired SDK/dispatcher/dependency exits production | Existing retirement/dependency gates; E69/E73 strict source graph; E72 publication inventory; E77 complete working-source architecture gate | Implemented, unverified | Final frozen source/artifact gate, fresh RPC compile/runtime and no test bypass review |
 
 ## Current failure boundaries and next verification
