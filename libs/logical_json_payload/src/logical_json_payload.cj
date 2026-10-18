@@ -24,12 +24,12 @@ public class LogicalJsonOwnerBudget {
     private var charged: Int64 = 0
     private var count: Int64 = 0
     private var fixedBufferCount: Int64 = 0
-    // The aggregate must be able to hold the pool's own concurrency bound:
-    // maximumTransfers reservations each cost at least the 16 MiB floor, so a
-    // 128 MiB aggregate could not admit even a quarter of the declared 32
-    // transfers and exhausted on ordinary multi-owner requests. Keep the 16 MiB
-    // floor and the 32-transfer bound and size the aggregate to their product.
-    public init(maximumCharged!: Int64 = 536870912,
+    // Every consumer owns its capacity requirement explicitly: a process-wide
+    // pool that must admit its declared 32 concurrent transfers raises
+    // maximumCharged itself (see nativePayloadOwnerBudget). The default stays
+    // conservative so that a pool which does not state a need also keeps the
+    // documented saturation behaviour its callers assert.
+    public init(maximumCharged!: Int64 = 134217728,
         maximumMessage!: Int64 = 16777216, maximumTransfers!: Int64 = 32) {
         if (maximumCharged < 16777216 || maximumCharged > 1073741824 ||
             maximumMessage < 1 || maximumMessage > LOGICAL_JSON_HARD_BYTES ||

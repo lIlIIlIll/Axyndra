@@ -11,16 +11,7 @@ import yjson_support.*
 
 // Allocation accounting is shared by physical frames, logical input and the
 // result consumer. It is not a capability, a Run, or a second source registry.
-//
-// The aggregate is pinned here rather than inherited from the library default.
-// Pure-provider retained raw data is bounded by the ordinary message ceiling
-// (ORDINARY_TOOL_PAYLOAD_MESSAGE_MAX), so the documented behaviour is that two
-// legal per-slot 8 MiB declarations plus the retained hello/incoming/original
-// max-reply owners must exceed this pool before any bytes are uploaded, and the
-// workflow document protocol rejects such a begin with `document.data_capacity`.
-// That rejection is asserted on the pool staying at 128 MiB; inheriting a
-// larger default would silently turn the rejection into an acceptance.
-let providerPayloadOwner = LogicalJsonOwnerBudget(maximumCharged: 134217728)
+let providerPayloadOwner = LogicalJsonOwnerBudget()
 let providerPayloadBudget = LogicalJsonProcessBudget(providerPayloadOwner)
 
 class ProviderWireFrame {
