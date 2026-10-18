@@ -128,7 +128,9 @@ class OwnedCanonicalToolStartTests {
     }
     @TestCase
     func OriginalPressureStopsBeforeWholeInputAllocationAndCannotReplayTheStart(): Unit {
-        let pool = LogicalJsonOwnerBudget()
+        // Seven floor owners only saturate the pool at the aggregate these
+        // assertions encode, so pin it rather than inherit the global default.
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let seen = OwnedToolStartObserved(); let delivery = ownedToolStartDelivery(pool, seen)
         @Expect(delivery.run().isOk(), false)

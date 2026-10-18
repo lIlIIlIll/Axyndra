@@ -163,7 +163,9 @@ class OwnedCanonicalDeliveryTests {
     }
     @TestCase
     func OriginalSevenOwnerPressureRejectsBeforeCompleteResultAllocationOrStaging(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let seen = OwnedDeliveryObservation()
+        // Same reason as the sibling case: seven owners must reach the
+        // saturation point this case asserts, so pin the aggregate.
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728); let seen = OwnedDeliveryObservation()
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1),
             pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let value = ownedDeliveryCarrier(pool, seen)
