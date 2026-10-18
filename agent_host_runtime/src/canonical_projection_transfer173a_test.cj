@@ -62,8 +62,8 @@ private func actualGlobalPressureFrame173a(selected: HostCanonicalProjectionSele
     let pressure = reserveNativeControlMetadata(4096)
     try {
         let usage = nativeControlMetadataUsage113()
-        pressure.ensureRetainedPeak(134217728 - usage[1] + 16777216)
-        @Expect(nativeControlMetadataUsage113()[1], 134217728)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113() - usage[1] + 16777216)
+        @Expect(nativeControlMetadataUsage113()[1], nativeControlMetadataCapacity113())
         var refused = false
         try { let impossible = selected.reserveExecutionFailure173() }
         catch (_: LogicalJsonPayloadError) { refused = true }
@@ -79,7 +79,7 @@ private func actualGlobalPressureFrame173a(selected: HostCanonicalProjectionSele
         @Expect(throwing.calls, if (throwSink) { 1 } else { 0 })
         @Expect(held.hasConsumer173())
         expectOriginalEightFieldLoan173a(held)
-        @Expect(nativeControlMetadataUsage113()[1], 134217728)
+        @Expect(nativeControlMetadataUsage113()[1], nativeControlMetadataCapacity113())
         @Expect(held.consumer.getOrThrow().acknowledgeAfterConsumption().isOk())
         @Expect(held.consumer.getOrThrow().isAcknowledged())
     } finally {
