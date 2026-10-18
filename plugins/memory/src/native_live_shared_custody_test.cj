@@ -37,7 +37,7 @@ func sharedCustodyTestWireUpload(data:NativeMemoryLiveToolData,pool:LogicalJsonO
 class NativeMemorySharedCustodyTests {
     @TestCase
     func streamedSnapshotsPreserveAllOriginalCanonicalBytesHashesAndOrder():Unit {
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1)
         try {
             owner.ensureRetainedPeak(4194304)
             let records=[MemoryV3Record("z",MemoryKind.Preference,MemoryScope(MemoryScopeKind.Global),
@@ -68,7 +68,7 @@ class NativeMemorySharedCustodyTests {
 
     @TestCase
     func realIndependentSixtySevenMillionByteCurrentCompletesOriginalReflectAndRetiresAfterJoin():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try {
             fixture.ensureRetainedPeak(4194304)
@@ -116,7 +116,7 @@ class NativeMemorySharedCustodyTests {
 
     @TestCase
     func independentLiveOwnerPressureRejectsTheActualUniqueSumWithoutLeakingAnyPhase():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1);let pressure=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1);let pressure=pool.acquire(1)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try {
             fixture.ensureRetainedPeak(4194304)
@@ -138,7 +138,7 @@ class NativeMemorySharedCustodyTests {
 
     @TestCase
     func sharedInputHistoryReplayAndWriterKeepTheOriginalTwoDraftWholePrefixBytes():Unit {
-        let pool=LogicalJsonOwnerBudget();let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         let input="{\"items\":[{\"content\":\"first\"},{\"content\":\"second\"}]}"
         try {
             liveDataTestStart(data,input)

@@ -51,7 +51,7 @@ private func error321Original():AgentError{
         observation:Some(OperationObservation("{\"original\":[null,true,false,-0.125,\"\\u0000\\ud83d\\ude00\"]}")))
 }
 private func error321Visit(raw:String,width:Int64,consume:(AgentError)->Unit):Unit{
-    let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let temporary=owner.deriveRetainedLease()
+    let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1);let temporary=owner.deriveRetainedLease()
     let decoder=MemoryLiveErrorStream321(raw.size,modelPolicySha256Text(raw),temporary,{bytes=>owner.ensureRetainedPeak(bytes)})
     try{
         // Convert the COMPLETE valid String once, then split actual Bytes.
@@ -158,7 +158,7 @@ class NativeMemoryIncrementalErrorCustodyTests321 {
     }
     @TestCase
     func nearOriginalEightMiBNulReplaysAndStreamsCompleteOutputInActual128MiBBank():Unit{
-        let pool=LogicalJsonOwnerBudget();let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try{
             liveDataTestStart(data,"{\"items\":[{\"content\":\"first\"}]}")
             let proposal=liveDataTestDrain(data,data.handle(liveDataTestRequest("compute")))
@@ -184,7 +184,7 @@ class NativeMemoryIncrementalErrorCustodyTests321 {
     func wholeHashMissingEofAndGapNeverProduceTypedError():Unit{
         let raw=stringifyUnifiedJson(memoryLiveErrorValue(error321Original()))
         for(mode in ["hash","eof","gap"]){
-            let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
+            let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
             let decoder=MemoryLiveErrorStream321(raw.size,modelPolicySha256Text(if(mode=="hash"){raw+"x"}else{raw}),child,{bytes=>owner.ensureRetainedPeak(bytes)})
             var rejected=false
             try{decoder.append(if(mode=="gap"){1}else{0},raw[..if(mode=="eof"){raw.size-1}else{raw.size}].toArray());let _=decoder.finish()}
@@ -206,7 +206,7 @@ class NativeMemoryIncrementalErrorCustodyTests321 {
     @TestCase
     func depthAndRawUtf8RemainFullyValidatedWithoutEscapedWireStorage():Unit{
         let raw=stringifyUnifiedJson(memoryLiveErrorValue(error321Original()))
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
         let bytes=raw.toArray();for(index in 0..bytes.size where bytes[index]>=0x80){bytes[index]=0xFF;break}
         let decoder=MemoryLiveErrorStream321(bytes.size,modelPolicySha256(bytes),child,{size=>owner.ensureRetainedPeak(size)})
         var rejected=false
@@ -220,7 +220,7 @@ class NativeMemoryIncrementalErrorCustodyTests321 {
     }
     @TestCase
     func realCompetingReservationRefusesUnpaidScalarAndRetainsItsOwnOwner():Unit{
-        let pool=LogicalJsonOwnerBudget();let competing=pool.acquire(1);competing.ensureRetainedPeak(112*1048576)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let competing=pool.acquire(1);competing.ensureRetainedPeak(112*1048576)
         // The same competing reservation also prepays every fixture raw,
         // escaped and conversion backing; it is not an unbilled large input.
         let fixture=Error321WireCell();fixture.value=Some(error321PressureWire())
@@ -235,7 +235,7 @@ class NativeMemoryIncrementalErrorCustodyTests321 {
     }
     @TestCase
     func closingUnfinishedDecoderDoesNotRefundItsLiveOriginalAncestor():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1);let child=owner.deriveRetainedLease()
         let raw=stringifyUnifiedJson(memoryLiveErrorValue(error321Original()))
         let decoder=MemoryLiveErrorStream321(raw.size,modelPolicySha256Text(raw),child,{bytes=>owner.ensureRetainedPeak(bytes)})
         decoder.append(0,raw[..19].toArray());let before=pool.usage()[1]

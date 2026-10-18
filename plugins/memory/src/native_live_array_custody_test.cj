@@ -46,7 +46,7 @@ func memoryArrayCorpusUpload(data:NativeMemoryLiveToolData,pool:LogicalJsonOwner
 class NativeMemoryArrayCustodyTests {
     @TestCase
     func smallRepeatedEmptyAndUnicodeConflictCorpusPreservesWholeOriginalReflectBytesAndJoinRetirement():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try{
             fixture.ensureRetainedPeak(4194304)
@@ -90,7 +90,7 @@ class NativeMemoryArrayCustodyTests {
 
     @TestCase
     func manyOriginalValidSmallEmptyIdArraysRejectDuringUploadBeforeReplayClonesAndReleaseEveryOwner():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try{
             fixture.ensureRetainedPeak(4194304)

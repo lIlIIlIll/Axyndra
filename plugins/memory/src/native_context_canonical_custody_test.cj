@@ -30,7 +30,7 @@ func memoryContextCustodyWire(record:MemoryV3Record,consume:(Array<Byte>)->Unit)
 class NativeMemoryContextCanonicalCustodyTests {
     @TestCase
     func actualSmallContextKeepsWholeOriginalNulUnicodeBytesAndComparatorAndRetiresAfterProducerJoin():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},sharedCustody:true)
         try {
             fixture.ensureRetainedPeak(4194304)
@@ -73,7 +73,7 @@ class NativeMemoryContextCanonicalCustodyTests {
 
     @TestCase
     func originalFullPoolPressureRejectsDomAndCanonicalPhasesBeforeTheirAllocationsAndReleasesEachChild():Unit {
-        let pool=LogicalJsonOwnerBudget();let fixture=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let fixture=pool.acquire(1)
         fixture.ensureRetainedPeak(4194304)
         let arrayRecord=memoryContextCustodyRecord("small",Array<String>(4096,{_=>""}))
         let stringRecord=MemoryV3Record("canonical-string",MemoryKind.Preference,MemoryScope(MemoryScopeKind.Workspace,key:"/workspace"),

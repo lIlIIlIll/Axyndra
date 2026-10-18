@@ -10,7 +10,7 @@ import yjson_support.*
 class NativeMemoryRecordComparisonCustodyTests {
     @TestCase
     func paidValidationAndExpectedCorrectionKeepEveryOriginalEventAndFullError():Unit {
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1)
         owner.ensureRetainedPeak(4194304)
         try {
             let record=memoryContextCustodyRecord("original 雪\u{0}🙂",["same","same","other 雪\u{0}"])
@@ -36,7 +36,7 @@ class NativeMemoryRecordComparisonCustodyTests {
 
     @TestCase
     func fullOriginalPoolRejectsBothValidationAndExpectedAppendBeforeAnyEventOrGroup():Unit {
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: 134217728);let owner=pool.acquire(1)
         owner.ensureRetainedPeak(4194304)
         let record=memoryContextCustodyRecord("small",Array<String>(4096,{_=>""}))
         let paid=NativeMemoryJournal([],1000,captureTransactions:true,authoritativeCurrent:Some([record]),snapshotOwner:Some(owner))
