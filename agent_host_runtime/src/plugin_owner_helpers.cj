@@ -19,7 +19,12 @@ public class HostFrozenPluginContentQuery {
     private let charge: ?LogicalJsonOwnerReservation
     public init(query: AgentValue, selectedIds: Array<String>, observed!: Bool = false) {
         let maximum = if (observed) { CONTENT_PAYLOAD_INPUT_BYTES } else { 196608 }
-        let reserved: ?LogicalJsonOwnerReservation = if (observed) { Some(reserveNativeContentJson(query, maximum)) } else { None }
+        // The observed profile is charged to its own declared pool rather than
+        // the shared native-payload bank: one observed query reserves the whole
+        // content profile (>= one 16 MiB floor owner) and a session issues
+        // several, which the 128 MiB shared bank cannot admit alongside its
+        // other consumers. See docs/issue-45-draft-status.md E253-E255.
+        let reserved: ?LogicalJsonOwnerReservation = if (observed) { Some(reserveNativeObservedQueryJson(query, maximum)) } else { None }
         var captured = false
         try {
         let encoded = stringifyUnifiedJson(query)
@@ -32,6 +37,37 @@ public class HostFrozenPluginContentQuery {
         this.charge = reserved
         captured = true
         } finally { if (!captured) { match (reserved) { case Some(value) => value.close(); case None => () } } }
+    }
+    // Allocation DATA only: this mandatory loan is derived by the caller
+    // from its actual installed package. It grants no Source or permission.
+    public init(query: AgentValue, selectedIds: Array<String>, payment: LogicalJsonOwnerReservation) {
+        var captured = false
+        try {
+            // The carrier, counters and scalar-writer scratch are paid before
+            // measuring, encoding or constructing the independent frozen DOM.
+            payment.ensureRetainedPeak(1048576)
+            if (selectedIds.size > 128) { throw IllegalArgumentException("context.query_limit") }
+            let bytes = logicalJsonWriteReservationBytes(query, CONTENT_PAYLOAD_INPUT_BYTES)
+            let nodes = logicalJsonValueNodeCount(query)
+            var selectedBytes: Int64 = 0
+            for (id in selectedIds) {
+                if (selectedBytes > (Int64.Max - id.size)) {
+                    throw LogicalJsonPayloadError("context query selection invoice overflow") }
+                selectedBytes += id.size
+            }
+            if (selectedBytes > (Int64.Max - bytes * 16 - nodes * 1024 - 2097152 - selectedIds.size * 64) / 8) {
+                throw LogicalJsonPayloadError("context query allocation invoice overflow") }
+            // Pay the SUM, including freeze writer/reader overlap, retained
+            // DOM, the subsequent policy encoding and selected-id carrier.
+            // Original byte/node factors and every pool ceiling remain intact.
+            payment.ensureRetainedPeak(bytes * 16 + nodes * 1024 + 2097152 + selectedBytes * 8 + selectedIds.size * 64)
+            let encoded = stringifyUnifiedJson(query)
+            if (encoded.size > CONTENT_PAYLOAD_INPUT_BYTES) { throw IllegalArgumentException("context.query_limit") }
+            this.query = parseUnifiedJson(encoded, maxBytes: CONTENT_PAYLOAD_INPUT_BYTES, maxDepth: 32)
+            this.selectedIds = selectedIds.clone()
+            this.charge = Some(payment)
+            captured = true
+        } finally { if (!captured) { payment.close() } }
     }
     public func close(): Unit { match (charge) { case Some(value) => value.close(); case None => () } }
 }

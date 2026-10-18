@@ -36,6 +36,20 @@ public func reserveNativeControlMetadata(bytes: Int64): LogicalJsonOwnerReservat
     nativePayloadOwnerBudget.acquire(max(4096, bytes))
 }
 
+// The observed content-query profile is a distinct consumer with its own
+// declared capacity, following the same per-consumer pattern as
+// `model_provider_runtime` (256 MiB) and the plugin payload owners. It is
+// sized to the pool's own concurrency bound: `maximumTransfers` is 32 and each
+// reservation costs at least the 16 MiB floor, so 32 x 16 MiB. Keeping it
+// separate is required because one observed query reserves the whole 4.25 MiB
+// content profile, i.e. at least one 16 MiB floor owner, and a full session
+// issues several - more than the eight live owners a 128 MiB bank admits.
+let nativeObservedQueryBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
+
+public func reserveNativeObservedQueryJson(value: AgentValue, maximum: Int64): LogicalJsonOwnerReservation {
+    nativeObservedQueryBudget.acquire(logicalJsonWriteReservationBytes(value, maximum))
+}
+
 // Exact numeric observation of the original process-wide bank; no owner escapes.
 public func nativeControlMetadataUsage113(): (Int64, Int64) {
     nativePayloadOwnerBudget.usage()
