@@ -46,10 +46,6 @@ public func reserveNativeControlMetadata(bytes: Int64): LogicalJsonOwnerReservat
 // issues several - more than the eight live owners a 128 MiB bank admits.
 let nativeObservedQueryBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
 
-// The plugin invocation frame/result profile: sized to the pool's own
-// concurrency bound (32 transfers x the 16 MiB floor).
-let nativePayloadInvocationBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
-
 public func reserveNativeObservedQueryJson(value: AgentValue, maximum: Int64): LogicalJsonOwnerReservation {
     nativeObservedQueryBudget.acquire(logicalJsonWriteReservationBytes(value, maximum))
 }
@@ -66,13 +62,12 @@ public func nativeControlMetadataCapacity113(): Int64 {
 
 type NativePayloadProcessReservation = LogicalJsonReservation
 class NativePayloadProcessBudget {
-    // A plugin invocation's own frame/result budget is a distinct consumer with
-    // its own declared capacity, on the same per-consumer pattern as
-    // `nativeObservedQueryBudget` and `model_provider_runtime`. Sharing the
-    // 128 MiB bank with the metadata snapshots and observed queries starves it:
-    // a full goal session reserves the whole content profile several times over,
-    // and the invocation then fails with an aggregate-capacity frame error.
-    let inner = LogicalJsonProcessBudget(nativePayloadInvocationBudget)
+    // The invocation frame/result budget MUST stay on the shared bank: eight
+    // `agent_extension_runtime` cases assert that frames keep their global
+    // charge until the consumer releases them (`retainedResultExhaustsAggregate...`,
+    // `actualLargeInputAndServiceResponsesRetainGlobalBytes...`), so giving it a
+    // private pool is contract-breaking (measured: 96 -> 88 pass, 8 failures).
+    let inner = LogicalJsonProcessBudget(nativePayloadOwnerBudget)
     func acquire(bytes: Int64): NativePayloadProcessReservation {
         try { inner.acquire(bytes) }
         catch (error: LogicalJsonPayloadError) { payloadFailure(error.message) }
