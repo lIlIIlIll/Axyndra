@@ -13,12 +13,6 @@ Rebuild the machine-checkable form with `python3 scripts/plugin_capability_ledge
 - `host` — the capability lives in the host (`agent_product` and friends).
 - A row is **externalized** only when a plugin package exists; existing host
   code is not evidence that migration happened.
-- `bounded` — whether a package references the host's bounded-payload
-  channel (`OrdinaryToolPayloadLimits` / `tool_payload_limits` /
-  `maxInputBytes`). This measures the **declaration**, not enforcement, and
-  is report-only: issue #48 requires a bounded protocol as a target, and the
-  current tree is non-conforming (14 of 17 packages undeclared), so it is
-  recorded rather than enforced until the remedy is authorised.
 - Coverage is counted from **both** suites a plugin may own: Cangjie unit tests
   (`src/*_test.cj`) and/or the black-box Python harness (`check.py`). Several
   plugins carry only the harness, so counting one form alone reports false gaps.
@@ -92,3 +86,13 @@ Shared general-purpose libraries remain host dependencies by design
 4. This ledger records **ownership and packaging state only**. It is not
    evidence for the enforcement, lifecycle, recovery or fault-matrix rows of
    issue #48 §9, none of which are claimed here.
+5. **Declared input bounds are reported per package, not per row.**
+   `plugin_packages_without_declared_input_bound` lists packages whose sources
+   never reference the host's bounded-payload channel
+   (`ordinaryToolPayloadLimitsFromValue` / `OrdinaryToolPayloadLimits` /
+   `tool_payload_limits` / `maxInputBytes`); on the current tree it is 14 of 17,
+   with `program`, `shell_readonly` and `workspace` the only three that declare
+   one. This measures the **declaration**, not enforcement, and it is
+   deliberately REPORT-ONLY and not enforced by `--check`: issue #48 requires a
+   bounded protocol as a target and the tree is non-conforming, so enforcing it
+   today would fail the gate on a known, decision-pending gap.
