@@ -54,10 +54,17 @@ ALLOWED_HOST_LIBRARIES = {
 
 
 def package_tests(directory):
+    """Contract cases are counted from BOTH suites a package may own.
+
+    A plugin either carries Cangjie unit tests (`src/*_test.cj`) or a
+    black-box Python harness (`check.py`), and several carry the latter
+    exclusively. Counting only the Cangjie form reports false gaps, so both
+    are reported and neither is treated as absence of coverage.
+    """
     source = ROOT / directory / 'src'
-    if not source.is_dir():
-        return 0
-    return len(list(source.glob('*_test.cj')))
+    cangjie = len(list(source.glob('*_test.cj'))) if source.is_dir() else 0
+    harness = 1 if (ROOT / directory / 'check.py').is_file() else 0
+    return cangjie, harness
 
 
 def plugin_directories():
@@ -100,7 +107,8 @@ def build_report():
             'id': capability,
             'packages': list(packages),
             'externalized': bool(present) and len(present) == len(packages),
-            'tests': sum(package_tests(p) for p in present),
+            'cj_tests': sum(package_tests(p)[0] for p in present),
+            'py_harness': sum(package_tests(p)[1] for p in present),
         })
     return {
         'schema': 'axyndra.plugin-capability-ledger/v1',
@@ -110,8 +118,8 @@ def build_report():
         'allowed_host_libraries': sorted(ALLOWED_HOST_LIBRARIES),
         'distribution_profiles': distribution_profiles(),
         'host_only': [e['id'] for e in entries if not e['externalized']],
-        'externalized_without_tests': [e['id'] for e in entries
-                                       if e['externalized'] and e['tests'] == 0],
+        'externalized_without_tests': [e['id'] for e in entries if e['externalized']
+                                       and e['cj_tests'] == 0 and e['py_harness'] == 0],
     }
 
 
@@ -126,7 +134,8 @@ def main():
         return 0
     for entry in report['capabilities']:
         mark = 'plugin' if entry['externalized'] else 'HOST  '
-        print(f"{mark} {entry['id']}  tests={entry['tests']:<3} "
+        print(f"{mark} {entry['id']}  cj={entry['cj_tests']:<3} "
+              f"harness={entry['py_harness']}  "
               f"{', '.join(entry['packages']) or '-'}")
     linked = report['host_business_dependencies']
     print(f"\nhost business plugin dependencies: {linked or 'none'}")

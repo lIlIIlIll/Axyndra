@@ -13,35 +13,36 @@ Rebuild the machine-checkable form with `python3 scripts/plugin_capability_ledge
 - `host` — the capability lives in the host (`agent_product` and friends).
 - A row is **externalized** only when a plugin package exists; existing host
   code is not evidence that migration happened.
-- `tests` counts `plugins/<name>/src/*_test.cj`. Zero is a real gap, not a
-  neutral value: the capability has no in-package contract suite.
+- Coverage is counted from **both** suites a plugin may own: Cangjie unit tests
+  (`src/*_test.cj`) and/or the black-box Python harness (`check.py`). Several
+  plugins carry only the harness, so counting one form alone reports false gaps.
 
 ## Capability rows
 
-| ID | Capability | Target plugin package | State | Tests |
-| --- | --- | --- | --- | --- |
-| F01 | MCP client/server | `plugins/mcp`, `plugins/mcp_server` | externalized | 1 + 1 |
-| F02 | Workspace read/search/glob/edit | `plugins/workspace` | externalized | 0 |
-| F03 | Shell / PTY | `plugins/shell`, `plugins/shell_readonly` | externalized | 2 + 2 |
-| F04 | AST | `plugins/ast` | externalized | 0 |
-| F05 | Web search / content | `plugins/web_search` | externalized | 1 |
-| F06 | GitHub | `plugins/github` | externalized | 0 |
-| F07 | LSP | `plugins/lsp` | externalized | 2 |
-| F08 | DAP | `plugins/dap` | externalized | 5 |
-| F09 | Eval runners | `plugins/eval`, `plugins/program` | externalized | 0 + 0 |
-| F10 | PTC / file-plan | `plugins/program` | externalized (shared with F09) | 0 |
-| F11 | Skills / project rules | `plugins/skills` | externalized | 2 |
-| F12 | Memory / retrieval | `plugins/memory` | externalized | 33 |
-| F13 | Compaction / selection | `plugins/compaction` | externalized | 5 |
-| F14 | Planning / Todo / Goal | `plugins/workflow` | externalized | 8 |
-| F15 | Subagent / review policy | — | **host only** | — |
-| F16 | Model providers | `plugins/model_providers` | externalized | 0 |
-| F17 | Model selection policy | — | **host only** | — |
-| F18 | Ask / forms | — | **host only** | — |
-| F19 | Result / diff / workflow views | — | **host only** | — |
-| F20 | Run insights / status | — | **host only** | — |
-| F21 | Checkpoint / undo entry | — | **host only** | — |
-| F22 | Extra guard / transform / observer | — | **host only** | — |
+| ID | Capability | Target plugin package | State | Cangjie tests | Python harness |
+| --- | --- | --- | --- | --- | --- |
+| F01 | MCP client/server | `plugins/mcp`, `plugins/mcp_server` | externalized | 1 + 1 | 2 |
+| F02 | Workspace read/search/glob/edit | `plugins/workspace` | externalized | 0 | 1 |
+| F03 | Shell / PTY | `plugins/shell`, `plugins/shell_readonly` | externalized | 2 + 2 | 2 |
+| F04 | AST | `plugins/ast` | externalized | 0 | 1 |
+| F05 | Web search / content | `plugins/web_search` | externalized | 1 | 1 |
+| F06 | GitHub | `plugins/github` | externalized | 0 | 1 |
+| F07 | LSP | `plugins/lsp` | externalized | 2 | 1 |
+| F08 | DAP | `plugins/dap` | externalized | 5 | 1 |
+| F09 | Eval runners | `plugins/eval`, `plugins/program` | externalized | 0 + 0 | 2 |
+| F10 | PTC / file-plan | `plugins/program` | externalized (shared with F09) | 0 | 1 |
+| F11 | Skills / project rules | `plugins/skills` | externalized | 2 | 1 |
+| F12 | Memory / retrieval | `plugins/memory` | externalized | 33 | 0 |
+| F13 | Compaction / selection | `plugins/compaction` | externalized | 5 | 1 |
+| F14 | Planning / Todo / Goal | `plugins/workflow` | externalized | 8 | 1 |
+| F15 | Subagent / review policy | — | **host only** | — | — |
+| F16 | Model providers | `plugins/model_providers` | externalized | 0 | 1 |
+| F17 | Model selection policy | — | **host only** | — | — |
+| F18 | Ask / forms | — | **host only** | — | — |
+| F19 | Result / diff / workflow views | — | **host only** | — | — |
+| F20 | Run insights / status | — | **host only** | — | — |
+| F21 | Checkpoint / undo entry | — | **host only** | — | — |
+| F22 | Extra guard / transform / observer | — | **host only** | — | — |
 
 ## Dependency externalization (F01 exit condition)
 
@@ -74,9 +75,11 @@ Shared general-purpose libraries remain host dependencies by design
    (`approval_reviewer.cj`, `config.cj`, `application.cj`). Issue #48's
    completion definition requires all of F01–F22 to have an owner and target
    component, so these rows are the outstanding work.
-2. **Eight externalized capabilities have no in-package contract suite:**
-   workspace, ast, github, eval, program, model_providers, web_search, mcp
-   (one case). Externalization without a suite is not accepted coverage.
+2. Every externalized capability carries at least one suite: eight have a
+   Cangjie unit suite, twelve have a Python black-box harness (F12 memory is the
+   one with a unit suite and no harness). This counter reports *presence*, not
+   adequacy - a harness existing is not evidence that its cases cover the
+   capability's exit conditions, and no row here is claimed as accepted.
 3. **No plugin provides a Tool-free contribution.** Issue #48 §3.1 requires at
    least one UI/command plugin with no Tool to prove the host protocol is not
    simply "an MCP wrapper" (T1-03).
