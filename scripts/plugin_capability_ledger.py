@@ -123,12 +123,45 @@ def build_report():
     }
 
 
+REQUIRED_EXTERNALIZED = (
+    'F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08', 'F09', 'F10',
+    'F11', 'F12', 'F13', 'F14', 'F16',
+)
+
+
+def check(report):
+    """Gate: no capability may regress and the host may not link a business plugin."""
+    failures = []
+    by_id = {e['id']: e for e in report['capabilities']}
+    for capability in REQUIRED_EXTERNALIZED:
+        entry = by_id.get(capability)
+        if entry is None or not entry['externalized']:
+            failures.append(f"{capability} is no longer externalized")
+    for name in report['host_business_dependencies']:
+        failures.append(
+            f"host links business plugin dependency '{name}'")
+    for capability in report['externalized_without_tests']:
+        failures.append(f"{capability} is externalized without any suite")
+    for failure in failures:
+        print(f"capability ledger: {failure}", file=sys.stderr)
+    if failures:
+        return 1
+    print(f"capability ledger passed ({len(REQUIRED_EXTERNALIZED)} "
+          f"externalized, 0 host business dependencies)")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true',
                         help='emit the ledger as JSON')
+    parser.add_argument('--check', action='store_true',
+                        help='fail if a capability regresses or the host gains a '
+                             'business plugin dependency')
     arguments = parser.parse_args()
     report = build_report()
+    if arguments.check:
+        return check(report)
     if arguments.json:
         print(json.dumps(report, indent=2))
         return 0

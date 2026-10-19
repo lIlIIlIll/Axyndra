@@ -490,4 +490,12 @@ if [[ "$legacy_continuation_payload_users" != "$allowed_legacy_continuation_payl
   fail "opaque legacy continuation payloads must remain isolated to the migration bridge"
 fi
 
+# Issue #48 T6-01: the capability ledger is enforced, not merely documented.
+# A capability that stops being externalized, or a host that acquires a
+# business plugin dependency, fails this gate.
+if ! python3 "$ROOT/scripts/plugin_capability_ledger.py" --check >/dev/null; then
+  python3 "$ROOT/scripts/plugin_capability_ledger.py" --check >&2 || true
+  fail "plugin capability ledger regressed"
+fi
+
 printf 'architecture gate passed\n'
