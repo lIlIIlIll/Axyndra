@@ -30,7 +30,8 @@ This ADR defines a **follow-up semantic architecture**. It does not claim #39 or
 5. **Use dual-path memory proposals with unified governance.** An Agent can request a memory write; Runtime extractors can generate proposals. Neither writes authoritative knowledge without Memory governance and host-controlled storage/authorization.
 6. **Support event-driven activation as hints.** Memory events may nominate knowledge for the next Context Plan; they cannot interrupt execution, grant permission, manufacture a tool call or create an independent Agent loop.
 7. **Separate invalidation from erasure.** Versioned replacement, expiry and tombstones preserve audit semantics. True forgetting is a host-controlled deletion workflow with a visibility barrier and propagation to controllable source/payload/index/checkpoint/cache derivatives.
-8. **Evaluate independently.** Deterministic invariants are CI gates; semantic fidelity, cross-model task continuity and token/latency trade-offs use reproducible fixtures and separate evaluation, not self-scoring by the compactor.
+8. **Fence external dispatch after context sealing.** A frozen manifest/Attempt records the permission and erasure generation and the provenance of outbound content, but sealing is **not** continuing authority to transmit it. The trusted host must recheck the live barrier at each external dispatch, including requests that waited in a queue, and stop stale sends before egress.
+9. **Evaluate independently.** Deterministic invariants are CI gates; semantic fidelity, cross-model task continuity and token/latency trade-offs use reproducible fixtures and separate evaluation, not self-scoring by the compactor.
 
 ## Ownership and dependency boundaries
 
@@ -48,7 +49,7 @@ The proposed four conceptual responsibilities are **not four mandatory processes
 
 | Responsibility | Trusted host owns | Plugin/policy owns |
 | --- | --- | --- |
-| Runtime Context Coordinator | Canonical history/revision; authorization/trust, legal cut, snapshots, immutable Attempt binding, final validation/commit | None of these authorities |
+| Runtime Context Coordinator | Canonical history/revision; authorization/trust, legal cut, snapshots, immutable Attempt binding, final validation/commit and host-mediated dispatch-time revocation/erasure fencing | None of these authorities |
 | Context Planner | Planning entry point, effective access scope, required constraints, snapshot coherence, budget ceiling, selection validation and manifest handoff | Context sources, retrieval/ranking/allocation/compaction proposals and optional semantic planning algorithms |
 | Memory Manager | Generic versioned namespaced persistence, CAS/visibility, access and retention/deletion authority, transaction/audit boundary | Knowledge schema/interpretation, extraction, deduplication/semantic conflict and memory activation proposals |
 | Evaluation | Stable canonical evidence/metrics APIs and test fixtures with privacy limits | Replaceable evaluators and algorithms; no authority to mutate production state or certify their own output |
@@ -58,7 +59,7 @@ A business plugin may own multiple policies or use host-controlled generic docum
 ## Canonical events, projections and checkpoints
 
 - Preserve the original user/assistant/tool events and durable operation/receipt facts using existing canonical ownership. Event payloads and provider-native blocks can be referenced through separately governed artifacts; store stable IDs, provenance and controlled references rather than forcing everything into a text-only role/message model.
-- A **context projection** is replaceable, model-specific input; it is not the fact source. The manifest continues to bind input content, source revisions, exact visible tool definitions, selected contributions, model capability profile, output reserve and budget.
+- A **context projection** is replaceable, model-specific input; it is not the fact source. The manifest continues to bind input content, source revisions, exact visible tool definitions, selected contributions, model capability profile, output reserve and budget. Its committed provenance must also bind the permission/erasure visibility generation used at materialization so a delayed dispatch can detect revocation without editing frozen input.
 - A **context checkpoint** is a compact semantic projection bound to a canonical source range/digest and an explicit projection format. It is not the recovery journal of pending external effects. Execution restoration stays with existing durable Run/Operation/Receipt mechanisms.
 - Distinguish (a) portable semantic summary and verified task state, (b) optional provider-native opaque continuation/cached items and (c) model-specific rendered request layout. A change of provider must be able to rebuild (c) from (a) if target capabilities permit; (b) is neither required nor assumed transferable.
 - Do not remove source-digest/legal-cut/tool-pair verification. Split compatibility by **semantic representation version** and **wire/protocol layout**, rather than weakening the current source binding. Provider-incompatible native state stays preserved for history but is omitted from portable input.
@@ -78,7 +79,7 @@ The host-owned coordinator invokes the planner at a legal pre-Attempt boundary; 
 4. Respect an **index watermark** per authorized source/scope. Include or directly process the unindexed delta up to the frozen cursor. Missing/updating indexes cannot cause the latest mandatory facts to disappear.
 5. Deduplicate by stable identity and source revision; rank by task relevance, information gain, credibility, recency, applicability, diversity and token/latency cost. Avoid treating semantic similarity as permission or factual verification.
 6. Select/compact under a separately bounded planning budget (retrieval rounds, candidate count, auxiliary-model tokens, time and final prompt tokens). Compaction returns a source-linked transform proposal, not an overwrite of original events.
-7. Recheck source revisions, policy scope, revocation/erasure barriers, provider compatibility and final token accounting before the existing ContextCompiler seals the ModelContextManifest. If Required content cannot fit in any valid supported representation, fail explicitly; never silently drop it.
+7. Recheck source revisions, policy scope, revocation/erasure barriers, provider compatibility and final token accounting before the existing ContextCompiler seals the ModelContextManifest. Bind the checked permission/erasure generation and outbound source lineage to its immutable provenance/Attempt binding; sealing alone does **not** authorize a later outbound dispatch. If Required content cannot fit in any valid supported representation, fail explicitly; never silently drop it.
 
 Optional failures can be diagnosed and omitted only when the configured policy and Required invariants permit. A configured mandatory policy's absence is an explicit error; no hidden Host algorithm replaces a selected plugin. Auxiliary LLM calls go through a real counted host Attempt and cancellation path, not direct plugin HTTP.
 
@@ -100,6 +101,18 @@ ContextPlan {
 ~~~
 
 The final input is still the **existing canonical ModelContextManifest**, never a new ContextPlan authority. A plan's selection trace is a bounded diagnostic projection; it cannot by itself approve access or prove provider cache hits.
+
+### Dispatch-time visibility fence (host-owned)
+
+A manifest can be valid when sealed but stale when the outbound model or plugin request is **actually dispatched**. This is a separate time-of-check/time-of-use boundary, not another context revision authority:
+
+1. Freeze the permission/erasure visibility generation and the references or lineage required to identify outbound content in the sealed manifest and the canonical Attempt/dispatch binding. Do not accept plugin-provided generations as authority; a model retry keeps its frozen semantic input, but must still pass the **current** access/erasure check before any new dispatch.
+2. Route each egress of content derived from a planned context through the **existing trusted host-controlled dispatch/transport admission**: model-provider HTTP body/upload (including auxiliary compaction/embedding requests), plugin IPC or resource delivery, and retries/resumes. A queued request does not inherit perpetual authorization from a previously valid manifest or claimed Attempt.
+3. Immediately before the first externally visible byte or frame, compare the pinned generation and affected source lineage against the current permissions and erasure barrier. Synchronize egress admission with barrier publication so a revocation committed first cannot race with a later transport enqueue/write. Any transport queue must discard still-unsent frames that become stale; do not treat a one-time check at planning, materialization, Attempt claim or queue insertion as sufficient.
+4. For chunked or streaming outbound content, validate at each subsequently issued frame/transport write or use a host-controlled, equivalently fenced channel. Revocation closes/cancels subsequent egress, including queued chunks. This must not hold a database transaction or an unbounded lock across network I/O, and must reuse #45 broker, cancellation, IPC and #44 Attempt accounting rather than introducing a second dispatch mechanism.
+5. On stale generation or withdrawn resource access, **send nothing further**, release untransmitted buffers/leases, record the real Attempt/operation cancellation or blocked state, and replan only at a legal new Attempt boundary. Do not mutate the original immutable request, silently continue via a different provider, or retry a potentially effective operation. The host must not assume revocation can retract bytes already admitted to the transport/remote peer **before** the barrier took effect; those external-copy limits remain explicitly observable and documented.
+
+P1 (#53) adds the binding and universal pre-dispatch validation seam using existing permission/revocation state. P4 (#56) adds the full erasure barrier, lineage-wide invalidation and race/recovery tests. This contract applies even while P4 storage deletion remains unimplemented: queued data must not leak after ordinary permission revocation.
 
 ## Versioned knowledge, ingestion and activation
 
@@ -140,7 +153,7 @@ Three operations must have different externally documented semantics:
 
 A host-owned erasure coordinator implements: authorize and scope target → install a visibility/deletion barrier **before** new reads and derivations → compute lineage reachability → purge or conservatively invalidate affected blobs, knowledge units, embeddings, summaries, checkpoints, caches, indexes, forks and activation queues → rebuild permitted derivatives → verify and retain only non-reconstructive receipts.
 
-Lineage refers to source IDs, revision, transformation version and downstream artifact references. When exact selective subtraction is impossible, invalidate the entire derivative and rebuild from surviving sources. Queued and in-flight consumers must check the barrier before output/commit; restores and reindexing must reapply it (**no resurrection**). If a minimum redacted event marker is retained, it must not leak deleted content through metadata, hashes, human-readable reason or references.
+Lineage refers to source IDs, revision, transformation version and downstream artifact references. When exact selective subtraction is impossible, invalidate the entire derivative and rebuild from surviving sources. **An output/commit-time check alone is insufficient:** queued model/plugin requests may already contain materialized sensitive bytes. Apply the dispatch-time visibility fence above before any newly issued external frame and recheck in-flight streams at subsequent egress boundaries, in addition to checking derivation/output/commit. Restores and reindexing must reapply the barrier (**no resurrection**). If a minimum redacted event marker is retained, it must not leak deleted content through metadata, hashes, human-readable reason or references.
 
 Backups, exports, remote providers and physical erasure have separate retention/feasibility guarantees. Never promise instant deletion of immutable backups or previously transmitted remote-provider material; state the enforceable boundary and available provider-specific deletion procedure. The feature is incomplete until those limits are documented and tested.
 
@@ -150,22 +163,22 @@ Before the true-erasure feature ships, the existing Memory tool's forget alias m
 
 Evaluation is a test/diagnostic consumer, not a production mutation authority or another Agent loop.
 
-- **Hard CI assertions:** no missing Required constraints, no fabricated/duplicated pending Operation, canonical call/result validity, permission and lane isolation, legal-cut/source digest, no deleted-data resurrection, frozen Attempt/tool version and explicit incompatible-model rejection.
+- **Hard CI assertions:** no missing Required constraints, no fabricated/duplicated pending Operation, canonical call/result validity, permission and lane isolation, legal-cut/source digest, pre-dispatch erasure/revocation generation validation with zero newly issued bytes after barrier publication, no deleted-data resurrection, frozen Attempt/tool version and explicit incompatible-model rejection.
 - **Ground-truth semantic fixtures:** fact/evidence recall and precision, decisions-vs-hypotheses classification, model-switch task continuity, summary drift across repeated compaction and key resource applicability.
 - **Comparative task metrics:** task completion and recovery quality versus baseline, input/output/auxiliary token use, cache observations only when provider reports them, P50/P95 planner latency, activation usefulness, index lag and storage costs.
 - Deterministic fixtures/recorded provider events run in normal CI; real-provider evaluations are sampled separately with disclosed model/version/date/budget and statistical tolerance. No self-evaluation by the same summarizer as the only quality proof.
 - A ContextDecisionTrace records included/omitted references, reasons, transform provenance, model capability/selection, budgets and version/watermark diagnostics. Logs must honor scope, secret redaction and erasure rules; a trace is not a raw unbounded prompt archive.
 
-At minimum exercise: Claude→GPT→Claude after compaction; legal resume with unknown external side effect; cross-thread project retrieval without privilege leak; index watermark lag; simultaneous fork activation and knowledge correction; plugin deactivation during planning; permission revocation before materialization; erase→restore/reindex/fork without resurrection; incompatible modality; and Required content over the target window. Stubbed model tests cannot substitute for the real process/SQLite/plugin boundaries when those are part of the claim.
+At minimum exercise: Claude→GPT→Claude after compaction; legal resume with unknown external side effect; cross-thread project retrieval without privilege leak; index watermark lag; simultaneous fork activation and knowledge correction; plugin deactivation during planning; permission revocation before materialization **and after manifest seal but before queued external dispatch**; erasure during a chunked plugin/model outbound stream; erase→restore/reindex/fork without resurrection; incompatible modality; and Required content over the target window. Stubbed model tests cannot substitute for the real process/SQLite/plugin boundaries when those are part of the claim.
 
 ## Phased follow-up work (outside #45 migration scope)
 
 | Phase | Deliverable | Prerequisites / overlap rule |
 | --- | --- | --- |
-| **[P1 #53](https://github.com/lIlIIlIll/Axyndra/issues/53) — Portable Context Planner and model handoff** | Unified selection/constraint/retrieval contract, decision trace, provider-neutral semantic checkpoint projection and model-switch acceptance | Reuse #39 revisions + existing ContextCompiler/Manifest; integrate #45 A5/A6 contribution contracts after their necessary interfaces stabilize. No new context authority or migration of existing Compaction business code |
+| **[P1 #53](https://github.com/lIlIIlIll/Axyndra/issues/53) — Portable Context Planner and model handoff** | Unified selection/constraint/retrieval contract, permission/revocation-generation binding and pre-dispatch fence, decision trace, provider-neutral semantic checkpoint projection and model-switch acceptance | Reuse #39 revisions + existing ContextCompiler/Manifest; integrate #45 A5/A6 contribution contracts after their necessary interfaces stabilize. No new context authority or migration of existing Compaction business code |
 | **[P2 #54](https://github.com/lIlIIlIll/Axyndra/issues/54) — Knowledge units and governed memory** | Evidence-linked versioned Knowledge Unit, Agent + Runtime proposals, CAS/validity/conflict, cross-thread sharing with host authorization; document/graph projections optional | P1 source/reference contract, #45 Memory plugin and storage boundary. No second canonical Thread store, vector DB requirement or duplicate plugin manager |
 | **[P3 #55](https://github.com/lIlIIlIll/Axyndra/issues/55) — Hybrid indexing and event activation** | Per-scope watermarks, incremental-delta reconciliation, bounded active retrieval and activation hints, cooldown/deduplication | P1 planner + P2 knowledge; reuse #46 typed event observer and #39 legal context update. No autonomous listener that reruns the Agent |
-| **[P4 #56](https://github.com/lIlIIlIll/Axyndra/issues/56) — Erasure and independent evaluation** | Host-controlled deletion propagation/barriers + no-resurrection matrix; deterministic/semantic/cross-model evaluation suite | Needs P1 selection/provenance and P2 lineage; P3 integration cases may land after P3. Keep deletion metadata/refs in P1/P2 from the start. No expectation of deleting remote model state or reproducing nondeterministic LLM internals |
+| **[P4 #56](https://github.com/lIlIIlIll/Axyndra/issues/56) — Erasure and independent evaluation** | Host-controlled deletion propagation/barriers, pre-dispatch erasure fencing + no-resurrection/race matrix; deterministic/semantic/cross-model evaluation suite | Needs P1 selection/provenance and P2 lineage; P3 integration cases may land after P3. Keep deletion metadata/refs in P1/P2 from the start. No expectation of deleting remote model state or reproducing nondeterministic LLM internals |
 
 Each phase has a separate issue with detailed acceptance criteria and evidence requirements. P1/P2/P3/P4 are **new behavior**, not a redefinition of the already tracked #45 A5 plugin relocation, #46 contribution ABI or #48 product-level plugin ownership. Where a dependency is not yet merged, implement against a stable reviewed contract or defer integration without marking acceptance complete.
 
@@ -175,7 +188,7 @@ Each phase has a separate issue with detailed acceptance criteria and evidence r
 - Start with interfaces and deterministic tests, then use the installed Memory/Compaction policies from the completed migration. Keep one source of canonical execution facts and one legal context update path.
 - New plugin/SDK/persistence contracts may break old incompatible formats as allowed by #46/#48. Preserve user data by explicit rejection before destructive writes; never silently reinitialize a store.
 - Optional projection/index loss must be recoverable from still-authorized sources. If a required plugin, required source, permission or valid model capability is unavailable, report a typed block/failure rather than fabricating context.
-- Security/permissions, disposal, cancellation and unknown side-effect reconciliation are host-owned at all phases.
+- Security/permissions, dispatch-time generation fencing, disposal, cancellation and unknown side-effect reconciliation are host-owned at all phases. No sealed manifest, frozen Attempt or plugin buffer bypasses later revocation.
 
 ## Rejected alternatives
 
