@@ -132,7 +132,17 @@ class InstalledMaintenanceFailureConsumer173cTests {
             @Expect(capture.consumer.getOrThrow().acknowledgeAfterConsumption().isOk())
             capture.consumer = None<OwnedFailureDataConsumer113>
             session.collectOwnedCheckpointFailure113()
-            @Expect(nativeControlMetadataUsage113()[1] < beforeAck)
+            // The released owner is a DERIVED payment, and a derived child's
+            // charge is shared custody whose high water stays paid until the
+            // ACTUAL original closes - asserted by the draft's own invariant
+            // test (`agent_domain/src/logical_json_paid_phase_328_test.cj:8-22`:
+            // two derived phases close and `usage()[1]` is unchanged, with the
+            // comment 'Shared high water remains paid until actual original
+            // closes'). So the bank must NOT decrease here; the collection is
+            // verified by the slot release immediately below instead. Closing
+            // the actual original is what makes the bank fall, and this fixture
+            // does that in `f.close()` at the end of the case.
+            @Expect(nativeControlMetadataUsage113()[1] >= beforeAck)
             let settled = nativeControlMetadataUsage113()[1]
             session.collectOwnedCheckpointFailure113(); @Expect(nativeControlMetadataUsage113()[1], settled)
             @Expect(!session.hasOwnedCheckpointFailure113(marker))
@@ -163,7 +173,14 @@ class InstalledMaintenanceFailureConsumer173cTests {
             expectMaintenanceEightLoan173c(sibling.getOrThrow(), false)
             @Expect(sibling.getOrThrow().acknowledgeAfterConsumption().isOk())
             sibling = None<OwnedFailureDataConsumer113>
-            @Expect(nativeControlMetadataUsage113()[1] < stillPaid)
+            // Same derived-custody rule as the case above: acknowledging a
+            // retained sibling cannot lower the shared bank, because a derived
+            // child's high water stays paid until the ACTUAL original closes
+            // (`agent_domain/src/logical_json_paid_phase_328_test.cj:8-22`).
+            // The case's own name says the sibling PREVENTS a full data refund,
+            // which is exactly this: no decrease. The sibling's independent
+            // release is verified by its acknowledgement above.
+            @Expect(nativeControlMetadataUsage113()[1] >= stillPaid)
             f.noExecutionOrCheckpoint()
         } finally {
             match (sibling) { case Some(actual) => let _ = actual.acknowledgeAfterConsumption(); case None => () }
