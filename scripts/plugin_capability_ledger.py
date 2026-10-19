@@ -72,6 +72,30 @@ def plugin_directories():
                   if p.is_dir() and (p / 'cjpm.toml').is_file())
 
 
+def declared_input_bound(directory):
+    """Whether a plugin package consumes the host's bounded-payload channel.
+
+    Issue #48 requires a typed, negotiable and BOUNDED contribution and
+    invocation protocol, so a package that can receive a caller-sized argument
+    should declare or enforce a limit. This reports the DECLARATION only: a
+    package may declare limits and still have none enforced on a particular
+    route, so this is not an enforcement proof.
+    """
+    source = ROOT / 'plugins' / directory / 'src'
+    if not source.is_dir():
+        return False
+    needles = ('ordinaryToolPayloadLimitsFromValue', 'OrdinaryToolPayloadLimits',
+               'tool_payload_limits', 'maxInputBytes')
+    for path in source.glob('*.cj'):
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue
+        if any(needle in text for needle in needles):
+            return True
+    return False
+
+
 def product_business_dependencies():
     """Business plugin packages statically linked into the host, if any."""
     manifest = ROOT / 'agent_product' / 'cjpm.toml'
@@ -118,6 +142,8 @@ def build_report():
         'allowed_host_libraries': sorted(ALLOWED_HOST_LIBRARIES),
         'distribution_profiles': distribution_profiles(),
         'host_only': [e['id'] for e in entries if not e['externalized']],
+        'plugin_packages_without_declared_input_bound': [
+            d for d in plugin_directories() if not declared_input_bound(d)],
         'externalized_without_tests': [e['id'] for e in entries if e['externalized']
                                        and e['cj_tests'] == 0 and e['py_harness'] == 0],
     }
@@ -174,6 +200,10 @@ def main():
     print(f"\nhost business plugin dependencies: {linked or 'none'}")
     print(f"externalized without tests: "
           f"{report['externalized_without_tests'] or 'none'}")
+    unbounded = report['plugin_packages_without_declared_input_bound']
+    print(f"plugin packages without a declared input bound: "
+          f"{len(unbounded)} of {len(report['plugin_packages'])}"
+          f" ({', '.join(unbounded) or 'none'})")
     print(f"host only: {report['host_only'] or 'none'}")
     return 0
 

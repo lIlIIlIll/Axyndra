@@ -13,6 +13,12 @@ Rebuild the machine-checkable form with `python3 scripts/plugin_capability_ledge
 - `host` — the capability lives in the host (`agent_product` and friends).
 - A row is **externalized** only when a plugin package exists; existing host
   code is not evidence that migration happened.
+- `bounded` — whether a package references the host's bounded-payload
+  channel (`OrdinaryToolPayloadLimits` / `tool_payload_limits` /
+  `maxInputBytes`). This measures the **declaration**, not enforcement, and
+  is report-only: issue #48 requires a bounded protocol as a target, and the
+  current tree is non-conforming (14 of 17 packages undeclared), so it is
+  recorded rather than enforced until the remedy is authorised.
 - Coverage is counted from **both** suites a plugin may own: Cangjie unit tests
   (`src/*_test.cj`) and/or the black-box Python harness (`check.py`). Several
   plugins carry only the harness, so counting one form alone reports false gaps.
