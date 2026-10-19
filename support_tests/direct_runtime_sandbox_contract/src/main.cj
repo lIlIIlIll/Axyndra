@@ -11,6 +11,8 @@ import tool_runtime.*
 import std.env.*
 import std.fs.*
 
+var directRegistryDebt196: ?DirectRegistryCopyDebt196 = None<DirectRegistryCopyDebt196>
+
 main(): Int64 {
     if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
     let root = Directory.createTemp("target").toString()
@@ -27,8 +29,9 @@ main(): Int64 {
         )).value().getOrThrow()
         runLsp(product, root + "/workspace")
         runDebug(product, root + "/workspace")
+        installNativeProcessFamily196(product)
         runHub(product, root + "/workspace")
-        expect(product.closeMcp().isOk(), "product closes outbound MCP runtime")
+        expect(product.close().isOk(), "product closes owned runtime resources")
         println("direct runtime sandbox contract passed")
         0
     } finally {
@@ -65,7 +68,7 @@ func runFixtureSandboxEnforced(root: String): Unit {
             !exists(Path(root + "/workspace/lsp-illegal-write")),
         "fixture direct-process runtimes use the same enforced sandbox as production"
     )
-    expect(product.closeMcp().isOk(), "fixture product closes")
+    expect(product.close().isOk(), "fixture product closes")
 }
 
 func runLsp(product: ProductRuntime, workspace: String): Unit {
@@ -139,7 +142,7 @@ func runHub(product: ProductRuntime, workspace: String): Unit {
     let secret = "direct-runtime-secret-9381"
     let started = requireTool(product.invokeLocalTool(
         SessionId("direct-hub"),
-        "hub",
+        "plugin.axyndra:workflow.hub_process",
         objectValue([
             ValueField("op", textValue("start")),
             ValueField("name", textValue("sandbox-contract")),
@@ -174,7 +177,7 @@ func runHub(product: ProductRuntime, workspace: String): Unit {
     sleep(Duration.millisecond * 300)
     let logs = requireTool(product.invokeLocalTool(
         SessionId("direct-hub"),
-        "hub",
+        "plugin.axyndra:workflow.hub_process_read",
         objectValue([
             ValueField("op", textValue("logs")),
             ValueField("name", textValue("sandbox-contract"))
@@ -191,7 +194,7 @@ func runHub(product: ProductRuntime, workspace: String): Unit {
     )
     let described = requireTool(product.invokeLocalTool(
         SessionId("direct-hub"),
-        "hub",
+        "plugin.axyndra:workflow.hub_process_read",
         objectValue([
             ValueField("op", textValue("describe")),
             ValueField("name", textValue("sandbox-contract"))
@@ -273,4 +276,47 @@ func requireTool(result: Result<ToolResult>, operation: String): ToolResult {
             operation + " failed: " + error.describe()
         )
     }
+}
+
+
+class DirectRegistryCopyDebt196 {
+    let payment: LogicalJsonOwnerReservation
+    let previous: ?DirectRegistryCopyDebt196
+    init(payment: LogicalJsonOwnerReservation, previous: ?DirectRegistryCopyDebt196) {
+        this.payment=payment; this.previous=previous
+    }
+}
+func directRegistryText196(result: PluginRegistryResult<OwnedRegistryUtf8>): String {
+    let source=match(result){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>error.close();throw IllegalStateException("actual Workflow fixture maintenance failed")}
+    try {
+        let size=source.byteCount
+        if(size<0 || size>(134217728-8192)/64){throw LogicalJsonPayloadError("fixture registry copy exceeds the original shared capacity")}
+        let payment=source.deriveCopiedDataPayment(size*64+8192)
+        directRegistryDebt196=Some(DirectRegistryCopyDebt196(payment,directRegistryDebt196))
+        String.fromUtf8(Array<UInt8>(size,{index=>source.byteAt(index)}))
+    } finally {source.close()}
+}
+func installNativeProcessFamily196(product: ProductRuntime): Unit {
+    let record=match(product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow())){
+        case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>error.close();throw IllegalStateException("actual Workflow fixture maintenance failed")}
+    try {
+        let namespace=directRegistryText196(record.descriptor.copyText(PluginDescriptorText.Namespace))
+        let digest=directRegistryText196(record.descriptor.copyText(PluginDescriptorText.ContentDigest))
+        let directory=product.settingsRoot+"/plugins"
+        if(!exists(Path(directory))){Directory.create(directory,recursive:true)}
+        File.writeTo(directory+"/primitives.json",encodeAgentValue(objectValue([
+            ValueField("version",integerValue(1)),ValueField("plugins",listValue([objectValue([
+                ValueField("namespace",textValue(namespace)),ValueField("package_digest",textValue(digest)),
+                ValueField("tools",listValue([objectValue([ValueField("name",textValue("hub_process_read")),
+                    ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("process.observe")])),
+                    ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("workspace.read"))]),
+                    objectValue([ValueField("name",textValue("hub_process")),
+                    ValueField("profile",textValue("frozen-primitives-v1")),ValueField("services",listValue([textValue("process.service")])),
+                    ValueField("preparation_provider",textValue("prepare_child")),ValueField("invocation_capability",textValue("process.spawn"))])]))])]))])).toArray())
+        match(product.setPluginEnabled(namespace,true)){
+            case PluginRegistryResult.Ok(value)=>value.close()
+            case PluginRegistryResult.Err(error)=>error.close();throw IllegalStateException("actual Workflow fixture maintenance failed")}
+    }finally{record.close()}
 }

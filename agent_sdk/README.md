@@ -1,22 +1,31 @@
 # agent_sdk
 
-可嵌入式 Agent SDK。`AgentBuilder` 显式要求 Provider、ModelCapabilities、
-ToolCatalog、Conversation/Run/Operation repositories、policy、budget、prompt、
-audit 和 ID generator，然后只组合仓库中的唯一 `AgentCore`。
+The supported source-authoring package is version **3.0.0**. It contains
+Native contribution declarations, `NativePluginDefinition`,
+`NativePluginInvocation`, `NativePluginHandler`, typed errors, cancellation,
+and deadline observations. It depends only on yjson and the JSON seam.
 
-`AgentSdk.run` 与 `continueApproval` 返回类型化结果；`CancellationToken` 会传播到
-活动 model/tool。`HeadlessRunner` 提供稳定状态、exit code 和 UTF-8 JSONL 事件。
-配置值携带 `Default < File < Environment < Cli < Programmatic` 来源，secret 标记
-只能保持或增强，诊断描述不会打印 prompt 或凭据。
+A handler runs inside its Native executable and returns complete data. These
+types cannot grant Host services, policy, approval, Source, receipts, or I/O.
+The executable connects to the current bounded Native protocol; package
+inspection, enabled Registry records, current-source checks and normal policy
+remain mandatory in the Host.
 
-`AgentBuilder.structuredOutput` 绑定 provider-neutral JSON Schema，Runtime 会在返回
-调用方前再次验证实际 JSON；`cachePolicy(StablePrefix)` 使用确定性 Prompt 前缀哈希，
-不会把 Provider 缓存参数泄漏进 Core。`AgentSdk.runWithImages` 接受受限的 HTTP(S) URL
-或最多 20 MiB 的 typed Base64 图像，并在请求前校验模型的 Vision capability。
-`AgentBuilder.toolContext` 显式提供 workspace/cwd、过滤后的环境、服务描述；活动
-CancellationToken 仍由唯一 `AgentCore` 在每次 run/approval resume 时绑定。
+`AGENT_SDK_VERSION` remains **2.1.0** for the existing Native handshake and
+manifest range. The source package release and wire compatibility range are
+separate; this change does not alter existing executable wire versions.
 
-测试可直接配合 `agent_testkit` 的 scripted provider、内存仓储和确定性 ID。
+The actual independent sample is `support_tests/sdk_fixture_extension` with
+the executable wrapper and current `axyndra.plugin.json` in
+`support_tests/native_sdk_fixture`. Its provider is pure, requests no Host
+capabilities, and retains full NUL/Unicode result data. A fresh build must place
+its executable at the manifest's `bin/native-sdk-fixture` path before import.
 
-当前 SDK 版本是 `2.0.0`。这是迁移到 yjson 后的破坏性版本；扩展 manifest 必须声明
-`[2.0.0, 3.0.0)`。SDK 1 范围不会被运行时自动兼容或隐式升级。
+The old `Extension`, `ExtensionTool`, workspace intents, Host-operation intent,
+and compiled Installer/executor are removed from the production surface. Their
+complete historical assertions run only through explicit `support_tests/legacy_*`
+oracle packages; production and Minimal cannot import those packages.
+
+The checked source baseline is `compat/agent-sdk-native-v3.api.json`.
+The original v2 baseline is retained as historical evidence, not a promise that
+v2 author source still compiles. See [compatibility](../docs/compatibility.md).

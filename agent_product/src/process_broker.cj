@@ -5,7 +5,11 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
-import model_adapters.*
+import agent_host_runtime.*
+import agent_runtime.*
+import agent_store.*
+import persistence_runtime.*
+import logical_json_payload.LogicalJsonOwnerReservation as ProcessBrokerOwner180
 import std.collection.*
 import process4cj.*
 import std.convert.*
@@ -57,19 +61,100 @@ class ProductProcessBroker {
     private let shellNetworkMode: ShellNetworkMode
     private let sandboxCaBundle: String
     private let paths: ProductProcessBrokerPaths
+    private let supportLegacy180:Bool
 
     init(
         stateRoot: String,
         workspace: String,
         shellNetworkMode!: ShellNetworkMode = ShellNetworkMode.Restricted,
-        sandboxCaBundle!: String = ""
+        sandboxCaBundle!: String = "",
+        supportLegacy180!: Bool = false
     ) {
+        this.supportLegacy180=supportLegacy180
         this.stateRoot = Path(stateRoot).normalize().toString()
         this.workspace = workspace
         this.shellNetworkMode = shellNetworkMode
         this.sandboxCaBundle = sandboxCaBundle.trimAscii()
         this.executable = currentBrokerExecutable()
         this.paths = ProductProcessBrokerPaths(this.stateRoot, workspace)
+    }
+
+    // The shipping Native route never sends a Source object/history grant.
+    // Actual Root identity and a one-use, durably issued DATA ticket are bound
+    // independently; the Root must claim it against the live canonical Store.
+    func captureDerivedTarget180(request:AgentValue,meter:HostPaidValueProjection151):Result<AgentValue>{
+        meter.fundAdditional151(65536+stateRoot.size*2+workspace.size*2,32)
+        let token=match(ensureBroker()){case Result.Ok(value)=>value;case Result.Err(error)=>return Result.Err(error)}
+        let shape=meter.measureBorrowedValue151(request)
+        meter.fundAdditional151(shape.storageBytes*2,shape.nodes*2+16)
+        let requestId=brokerRequestId()
+        let packet=objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+            ValueField("requestId",textValue(requestId)),ValueField("token",textValue(token)),
+            ValueField("workspace",textValue(workspace)),ValueField("kind",textValue("observe-process180")),
+            ValueField("request",request)])
+        let response=match(brokerPaidRoundTrip180(paths.socketPath,packet,requestId,meter)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(response.field("actual_target")){case Some(value)=>Result.Ok(value)
+            case None=>brokerError<AgentValue>(AgentErrorKind.Protocol,"hub.process_target_missing","actual broker target is missing")}
+    }
+    func executeDerived180(request:AgentValue,owner:String,lease:HostHubDerivedProcessLease180):Result<ToolResult>{
+        let result=executeDerivedTransportHelper180(request,owner,lease)
+        lease.retireRootWireAfterTransportHelper180()
+        let _=lease.completeNonPersistentCurrentBridge180()
+        result
+    }
+    private func executeDerivedTransportHelper180(request:AgentValue,owner:String,lease:HostHubDerivedProcessLease180):Result<ToolResult>{
+        match(lease.validateActualRequest180(request)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lease.retainData180(65536+stateRoot.size*2+workspace.size*2+owner.size*2,32)
+        let token=match(ensureBroker()){case Result.Ok(value)=>value;case Result.Err(error)=>return Result.Err(error)}
+        let identity=match(probeWithToken(token)){case Result.Ok(value)=>value;case Result.Err(error)=>return Result.Err(error)}
+        let pid=brokerInteger(identity,"pid",0);let start=brokerText(identity,"startIdentity")
+        if(!brokerLeaseOwnedByIdentity(paths,workspace,identity)){
+            return brokerError<ToolResult>(AgentErrorKind.PermissionDenied,"hub.process_root_identity_changed","actual broker ownership changed")}
+        let nonce=match(secureBrokerToken()){case Result.Ok(value)=>value;case Result.Err(error)=>return Result.Err(error)}
+        let currentPath="/tmp/axyndra-current-"+nonce+".sock"
+        lease.prepareActualHostCurrentBridge180(currentPath,nonce,pid,start)
+        match(chmodBrokerPath(currentPath,"600")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lease.startActualHostCurrentBridge180()
+        let ticket=match(lease.issueActualRootHandoff180(pid,start,nonce)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        lease.retainData180(65536+token.size*2+nonce.size*2+paths.socketPath.size*2+workspace.size*2,32)
+        lease.prepareRootRestrictionBeforeClosure180()
+        match(lease.installActualRootRestriction180({=>revokeActualRootTransportHelper180(token,nonce,lease)})){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        lease.fundBorrowedDataBeforeCopy180(request)
+        lease.reserveRootWireBeforeCodec180(ticket)
+        let wire=hubProcessRootWireValue180(ticket)
+        lease.fundBorrowedDataBeforeCopy180(wire)
+        let requestId=brokerRequestId()
+        let packet=objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+            ValueField("requestId",textValue(requestId)),ValueField("token",textValue(token)),
+            ValueField("workspace",textValue(workspace)),ValueField("kind",textValue("derived-process180")),
+            ValueField("owner",textValue(owner)),ValueField("request",request),ValueField("handoff",wire)])
+        let response=match(brokerPaidRoundTrip180(paths.socketPath,packet,requestId,lease)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let retained=match(response.field("service_retained")){
+            case Some(value)=>if(value.unifiedKind==ValueKind.Boolean){value.asBool()}
+                else{throw IllegalStateException("actual Root disposition is invalid")}
+            case None=>throw IllegalStateException("actual Root disposition is missing")}
+        lease.noteActualRootDisposition180(retained)
+        decodeBrokerToolResult(response)
+    }
+    private func revokeActualRootTransportHelper180(token:String,nonce:String,
+        lease:HostHubDerivedProcessLease180):Result<Unit>{
+        let id=brokerRequestId()
+        let packet=objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+            ValueField("requestId",textValue(id)),ValueField("token",textValue(token)),
+            ValueField("workspace",textValue(workspace)),ValueField("kind",textValue("revoke-process180")),
+            ValueField("nonce",textValue(nonce))])
+        match(brokerPaidRoundTrip180(paths.socketPath,packet,id,lease)){
+            case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>Result<Unit>.Ok(())}
+    }
+    func executeDerivedIfConfigured180(request:AgentValue,owner:String,
+        lease:HostHubDerivedProcessLease180):?Result<ToolResult>{
+        if(!exists(Path(paths.tokenPath))){return None<Result<ToolResult>>}
+        Some(executeDerived180(request,owner,lease))
     }
 
     func execute(
@@ -286,7 +371,9 @@ class ProductProcessBroker {
                     "--sandbox-ca-bundle",
                     sandboxCaBundle,
                     "--lease-token",
-                    leaseToken
+                    leaseToken,
+                    "--support-unsafe-process-broker180",
+                    if(supportLegacy180){"true"}else{"false"}
                 ],
                 workingDirectory: Path(workspace),
                 stdIn: ProcessRedirect.Discard,
@@ -357,7 +444,7 @@ public func isProductProcessBrokerClient(
     arguments.size > 1 && arguments[1] == "__process-broker-client"
 }
 
-public func runProductProcessBrokerWorker(
+public func runProductProcessBrokerWorkerLegacySupport180(
     arguments: Array<String>
 ): Int64 {
     let stateRoot = brokerCliArgument(arguments, "--state-root")
@@ -486,7 +573,8 @@ public func runProductProcessBrokerClient(
         ))))
         return 2
     }
-    let broker = ProductProcessBroker(stateRoot, workspace)
+    let broker = ProductProcessBroker(stateRoot, workspace,
+        supportLegacy180:brokerCliArgument(arguments,"--support-unsafe-process-broker180")=="true")
     if (brokerCliHasArgument(arguments, "--paths")) {
         println(encodeAgentValue(broker.pathsValue()))
         return 0
@@ -1302,7 +1390,7 @@ func tryAcquireBrokerLease(
             Result.Ok(Some(token))
         } catch (_: Exception) {
             let _ = removeIfExists(candidate, recursive: true)
-            Result.Ok(None)
+            Result.Ok(Option<String>.None)
         }
     } catch (error: Exception) {
         let _ = removeIfExists(candidate, recursive: true)
@@ -1689,4 +1777,897 @@ func brokerError<T>(
     message: String
 ): Result<T> {
     Result.Err(AgentError(kind, code, message))
+}
+
+
+// All original transport limits and operation timeout policy remain unchanged.
+// The meter/lease already belongs to the original canonical Native bank. Its
+// escaping response/error stays paid there; there is no raw-output refund.
+func brokerPaidRoundTrip180(path:String,request:AgentValue,id:String,meter:HostPaidValueProjection151):Result<AgentValue>{
+    let shape=meter.measureBorrowedValue151(request)
+    if(shape.bytes>Int64.Max/4 || shape.nodes>(Int64.Max-32)/2){throw LogicalJsonPayloadError("process wire invoice overflow")}
+    meter.fundAdditional151(shape.bytes*4,shape.nodes*2+32)
+    brokerPaidRoundTripHelper180(path,request,id,{bytes,nodes=>meter.fundAdditional151(bytes,nodes)})
+}
+func brokerPaidRoundTrip180(path:String,request:AgentValue,id:String,lease:HostHubDerivedProcessLease180):Result<AgentValue>{
+    lease.fundBorrowedDataBeforeCopy180(request)
+    let cell=lease.reserveControlBeforeClosure180()
+    cell.fundProducerFrameBeforeEffect180(65536)
+    let result=ActualProcessBrokerClientResult180()
+    cell.invokeSynchronousHelper180({=>
+        match(brokerPaidRoundTripHelper180(path,request,id,{bytes,nodes=>lease.retainData180(bytes,nodes)},failureCell:Some(cell))){
+            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error)
+            case Result.Ok(value)=>result.response=Some(value)}})
+    cell.noteSynchronousHelperReturned180()
+    // Whole socket/read/decode/close helper has returned. A complete Root
+    // failure or close secondary stays in the same registered original pool.
+    if(cell.hasOriginalFailure180()){throw HostHubProcessHeldProducerFailure180(cell)}
+    let answer=result.response.getOrThrow();result.response=None<AgentValue>
+    if(!cell.retireObservedReturn()){throw HostHubProcessHeldProducerFailure180(cell)}
+    Result<AgentValue>.Ok(answer)
+}
+func brokerNativeReadTimeout180(request:AgentValue):Int64{
+    // The original timeout helper consumes the original argument grammar;
+    // Native has frozen the same defaults into *_ms DATA, not larger caps.
+    let input=request.field("request") ?? objectValue([])
+    let op=brokerText(input,"op");var deadline:Int64=0
+    match(op){
+        case "start"=>match(input.field("spec")){case Some(spec)=>match(spec.field("ready")){
+            case Some(ready)=>deadline=brokerInteger(ready,"timeoutMs",30000);case None=>()};case None=>()}
+        case "restart"=>deadline=3607000
+        case "wait"=>deadline=brokerInteger(input,"timeout_ms",30000)
+        case "logs"=>if(brokerBoolean(input,"follow",false)){deadline=brokerInteger(input,"timeout_ms",30000)}
+        case "stop"=>deadline=brokerInteger(input,"timeout_ms",5000)+2000
+        case _=>()}
+    max(10000,deadline+10000)
+}
+class ActualProcessBrokerClientResult180 {var response:?AgentValue=None<AgentValue>;init(){}}
+func brokerPaidRoundTripHelper180(path:String,request:AgentValue,id:String,
+    fund:(Int64,Int64)->Unit,failureCell!:?HostHubProcessProducerCell=None<HostHubProcessProducerCell>):Result<AgentValue>{
+    fund(65536+path.size*2+id.size*2,32)
+    let payload=encodeAgentValue(request)+"\n"
+    if(payload.size>PROCESS_BROKER_MAX_REQUEST_BYTES){return brokerError<AgentValue>(AgentErrorKind.InvalidInput,
+        "hub.process_broker_frame_too_large","process broker request exceeds the frame limit")}
+    fund(payload.size*2,4)
+    let socket=UnixSocket(path)
+    try{
+        socket.readTimeout=Some(Duration.millisecond*brokerNativeReadTimeout180(request))
+        socket.writeTimeout=Some(Duration.second*10);socket.connect(timeout:Some(Duration.millisecond*500))
+        socket.write(payload.toArray())
+        let source=match(readPaidBrokerFrame180(socket,PROCESS_BROKER_MAX_RESPONSE_BYTES,fund)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        fund(source.size*6,brokerBorrowedLexicalNodes180(source)+32)
+        let response=match(decodeAgentValue(source,maxBytes:PROCESS_BROKER_MAX_RESPONSE_BYTES)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(brokerInteger(response,"version",0)!=PROCESS_BROKER_PROTOCOL || brokerText(response,"requestId")!=id){
+            return brokerError<AgentValue>(AgentErrorKind.Protocol,"hub.process_broker_response_mismatch","process broker response identity does not match the request")}
+        if(!brokerBoolean(response,"ok",false)){
+            let value=match(response.field("error")){case Some(item)=>item;case None=>return brokerError<AgentValue>(
+                AgentErrorKind.Protocol,"hub.process_broker_error_missing","process broker returned an error without details")}
+            let primary=match(decodeCompleteProcessBrokerError180(value)){
+                case Result.Ok(error)=>error;case Result.Err(error)=>return Result.Err(error)}
+            match(failureCell){case Some(cell)=>
+                // The original eight-field primary is installed BEFORE any
+                // secondary decode/holder operation can fail under pressure.
+                cell.retainFailureBeforeCleanup180(OwnedCanonicalDataFailure113(primary))
+                match(response.field("secondary_errors")){case Some(value)=>
+                    match(value as JsonArray){case Some(values)=>
+                        for(index in 0..values.size()){
+                            let secondary=match(decodeCompleteProcessBrokerError180(values.get(index).getOrThrow())){
+                                case Result.Ok(error)=>error
+                                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error)}
+                            cell.retainActualCleanupFailure180(OwnedCanonicalDataFailure113(secondary))
+                            if(cell.hasUnregisteredSecondary180()){throw HostHubProcessHeldProducerFailure180(cell)}}
+                        case None=>throw OwnedCanonicalDataFailure113(AgentError(AgentErrorKind.Protocol,
+                            "hub.process_broker_secondary_invalid","complete process secondary error array is invalid"))}
+                    case None=>()}
+                throw HostHubProcessHeldProducerFailure180(cell)
+                case None=>return Result.Err(primary)}}
+        Result.Ok(response)
+    }catch(error:Exception){
+        match(failureCell){case Some(cell)=>
+            // This cell's own opaque carrier is not another failure. It only
+            // transports the exact already installed primary/secondary set.
+            match(error as HostHubProcessHeldProducerFailure180){case Some(held)=>
+                if(!refEq(held.producer,cell)){cell.retainActualCleanupFailure180(error)}
+                case None=>if(cell.hasOriginalFailure180()){cell.retainActualCleanupFailure180(error)}
+                    else{cell.retainFailureBeforeCleanup180(error)}}
+            case None=>()}
+        throw error
+    }finally{
+        try{socket.close()}
+        catch(error:Exception){match(failureCell){case Some(cell)=>
+            if(cell.hasOriginalFailure180()){cell.retainActualCleanupFailure180(error)}
+            else{cell.retainFailureBeforeCleanup180(error)}
+            case None=>throw error}}}
+}
+// No source.toArray/DOM is needed to prepay the actual complete lexer nodes.
+// It supplies only an invoice; the original decoder still validates grammar.
+func brokerBorrowedLexicalNodes180(source:String):Int64{
+    var quoted=false;var escaped=false;var scalar=false;var count:Int64=0
+    unsafe{let data=source.rawData();for(index in 0..data.size){let byte=data[index]
+        if(quoted){if(escaped){escaped=false}else if(byte==b'\\'){escaped=true}else if(byte==b'"'){quoted=false}}
+        else if(byte==b'"'){quoted=true;scalar=false;count+=1}
+        else if(byte==b'{' || byte==b'['){scalar=false;count+=1}
+        else if(byte==b',' || byte==b':' || byte==b'}' || byte==b']' || byte==b' ' || byte==b'\n' || byte==b'\r' || byte==b'\t'){scalar=false}
+        else if(!scalar){scalar=true;count+=1}}}
+    count
+}
+func readPaidBrokerFrame180(stream:InputStream,limit:Int64,fund:(Int64,Int64)->Unit):Result<String>{
+    fund(16384,8)
+    let bytes=ArrayList<Byte>();let buffer=Array<Byte>(4096,repeat:0)
+    while(true){
+        let count=stream.read(buffer)
+        if(count<=0){return brokerError<String>(AgentErrorKind.Protocol,"hub.process_broker_frame_incomplete",
+            "process broker connection ended before the NDJSON frame")}
+        fund(count*2,0)
+        for(index in 0..count){let byte=buffer[index]
+            if(byte==b'\n'){fund(bytes.size*2,2);return Result.Ok(String.fromUtf8(bytes.toArray()))}
+            if(bytes.size>=limit){return brokerError<String>(AgentErrorKind.Protocol,"hub.process_broker_frame_too_large",
+                "process broker NDJSON frame exceeds the configured limit")}
+            // Pay each actual backing occurrence BEFORE growing the list.
+            bytes.add(byte)}}
+    brokerError<String>(AgentErrorKind.Internal,"hub.process_broker_read_unreachable","process broker frame reader stopped unexpectedly")
+}
+
+
+// Root and all child shares use the original process-wide Native bank. The
+// fixed registry is allocated only in the real external broker process.
+// Keeping an unknown action/error reachable is intentional paid custody.
+var retainedActualProcessBrokerRoot180:?ActualProcessBrokerRoot180=None<ActualProcessBrokerRoot180>
+
+class ActualProcessBrokerData180{
+    private let lock=Mutex()
+    private let owner:ProcessBrokerOwner180
+    private var peak:Int64=65536
+    private var scalarPeak:Int64=0
+    private var retired=false
+    init(owner:ProcessBrokerOwner180){this.owner=owner}
+    func fund(bytes:Int64,nodes:Int64):Unit{
+        lock.lock();try{
+            if(retired || bytes<0 || nodes<0 || bytes>(Int64.Max-4096)/8 ||
+                nodes>(Int64.Max-4096-bytes*8)/512){throw IllegalStateException("actual broker invoice is invalid")}
+            let invoice=bytes*8+nodes*512+4096
+            if(peak>Int64.Max-invoice-scalarPeak){throw IllegalStateException("actual broker invoice SUM overflow")}
+            owner.ensureRetainedPeak(peak+invoice+scalarPeak);peak+=invoice
+        }finally{lock.unlock()}
+    }
+    func fundScalar(bytes:Int64):Unit{
+        lock.lock();try{if(retired || bytes<0 || peak>Int64.Max-bytes){throw IllegalStateException("broker scalar invoice overflow")}
+            owner.ensureRetainedPeak(peak+max(scalarPeak,bytes));scalarPeak=max(scalarPeak,bytes)
+        }finally{lock.unlock()}
+    }
+    func fundValue(value:AgentValue):Unit{
+        fund(4096,8)
+        let shape=hostProjectionMeasure151(value,{bytes=>fundScalar(bytes)})
+        if(shape.bytes>Int64.Max/4 || shape.storageBytes>Int64.Max/4 || shape.nodes>Int64.Max/2){
+            throw IllegalStateException("broker complete value invoice overflow")}
+        fund(shape.bytes*4+shape.storageBytes*2,shape.nodes*2+16)
+    }
+    func derive(invoice:Int64):ProcessBrokerOwner180{
+        lock.lock();try{if(retired){throw IllegalStateException("broker data owner is retired")}
+            let child=owner.deriveRetainedLease()
+            try{child.ensureRetainedPeak(invoice);child}catch(error:Exception){child.close();throw error}
+        }finally{lock.unlock()}
+    }
+    // The actual outer registry invokes this only after its entire handler
+    // and Future-observation helper returned and every dynamic member cleared.
+    func retireAfterWholeHandler180():Unit{lock.lock();try{owner.close();retired=true}finally{lock.unlock()}}
+}
+
+class ActualProcessBrokerSlot180{
+    private let lock=Mutex()
+    private let root:ActualProcessBrokerRoot180
+    private var paid:?ActualProcessBrokerData180=None<ActualProcessBrokerData180>
+    private var socket:?UnixSocket=None<UnixSocket>
+    private var action:?()->Unit=None<()->Unit>
+    private var worker:?Future<Unit>=None<Future<Unit>>
+    private var original:?Exception=None<Exception>
+    // Registered fixed slots cover this actual handler, renderer and socket
+    // close's distinct returned exceptions. No late error overwrites another.
+    private let secondary=Array<?Exception>(4,repeat:None<Exception>)
+    private var secondaryCount:Int64=0
+    private var secondaryOverflow:?Exception=None<Exception>
+    private var renderedFailure180:?ActualProcessBrokerFailureFrame180=None<ActualProcessBrokerFailureFrame180>
+    private var failure:?OwnedFailureDataConsumer113=None<OwnedFailureDataConsumer113>
+    private var storeFailure:?HubProcessStoreFailure180=None<HubProcessStoreFailure180>
+    private var producerFailure180:?HostHubProcessProducerCell=None<HostHubProcessProducerCell>
+    private var joining=false
+    private var socketReturned=false
+    private var outputReturned=false
+    private var unknownSpawn=false
+    private var futureReturned=false
+    private var service:?ActualProcessBrokerService180=None<ActualProcessBrokerService180>
+    private var observerPayment:?ProcessBrokerOwner180=None<ProcessBrokerOwner180>
+    init(root:ActualProcessBrokerRoot180){this.root=root}
+    func reserveBeforeAccept180():Bool{
+        lock.lock();try{
+            if(paid.isSome() || joining){return false}
+            // A failure to allocate/construct retains the derived share in the
+            // Root pending slot. No accepted socket/action is inferred absent.
+            let value=root.newRegisteredData180();paid=Some(value)
+            socketReturned=false;outputReturned=false;unknownSpawn=false;futureReturned=false;true
+        }finally{lock.unlock()}
+    }
+    func retainActualSupervisorOwner180(value:HostHubDerivedProcessLease180):Unit{
+        lock.lock();try{service.getOrThrow().retainActualSupervisorOwner180(value)}finally{lock.unlock()}
+    }
+    func currentData180():ActualProcessBrokerData180{lock.lock();try{paid.getOrThrow()}finally{lock.unlock()}}
+    func installServiceBeforeClaim180(value:ActualProcessBrokerService180):Unit{
+        lock.lock();try{if(service.isSome()){throw IllegalStateException("actual request service is already retained")};service=Some(value)}
+        finally{lock.unlock()}
+    }
+    func retainObserverBeforeConstruction180():ProcessBrokerOwner180{
+        lock.lock();try{if(observerPayment.isSome()){throw IllegalStateException("observer is already retained")}
+            let value=root.derive180(65536);observerPayment=Some(value);value
+        }finally{lock.unlock()}}
+    func installAndSpawn180(client:UnixSocket):Unit{
+        lock.lock();try{
+            socket=Some(client)
+            // Fixed slot/data/control metadata was prepaid before this closure.
+            action=Some({=>invokeActual180()});unknownSpawn=true
+            worker=Some(spawn{invokeRegisteredAction180()});unknownSpawn=false
+        }finally{lock.unlock()}
+    }
+    private func invokeRegisteredAction180():Unit{let actual=borrowAction180();actual()}
+    private func borrowAction180():()->Unit{lock.lock();try{action.getOrThrow()}finally{lock.unlock()}}
+    private func invokeActual180():Unit{
+        let client=borrowSocket180()
+        try{handleActualProcessBroker180(client,root,this)}
+        catch(error:Exception){retainOriginal180(error)}
+        finally{
+            try{client.close();noteSocketReturned180()}
+            catch(error:Exception){retainOriginal180(error)}}
+    }
+    private func borrowSocket180():UnixSocket{lock.lock();try{socket.getOrThrow()}finally{lock.unlock()}}
+    private func noteSocketReturned180():Unit{lock.lock();try{socketReturned=true}finally{lock.unlock()}}
+    func noteOutputHelperReturned180():Unit{lock.lock();try{outputReturned=true}finally{lock.unlock()}}
+    func retainOriginal180(error:Exception):Unit{
+        lock.lock();try{
+            if(original.isNone()){original=Some(error)}
+            else if(!refEq(original.getOrThrow(),error)){
+                for(index in 0..secondaryCount){if(refEq(secondary[index].getOrThrow(),error)){return}}
+                if(secondaryCount<4){secondary[secondaryCount]=Some(error);secondaryCount+=1}
+                else if(secondaryOverflow.isNone()){secondaryOverflow=Some(error)}
+                else if(!refEq(secondaryOverflow.getOrThrow(),error)){
+                    throw IllegalStateException("actual broker secondary registration remains held")}}
+
+            // The exact raw Exception stays here if full capture runs out of
+            // capacity. The output path is recognized/held, never short fallback.
+            match(error as HubProcessStoreFailure180){case Some(cell)=>storeFailure=Some(cell);case None=>()}
+        }finally{lock.unlock()}
+    }
+    func renderFailure180(client:UnixSocket,id:String,error:AgentError):Bool{
+        let data=currentData180()
+        let consumer=match(captureOwnedFailureData113<Unit>(error,{bytes=>data.derive(bytes)})){
+            case OwnedFailureDataOutcome113.Failure(value)=>value
+            case OwnedFailureDataOutcome113.Value(_)=>throw IllegalStateException("broker error capture lost failure")}
+        lock.lock();try{failure=Some(consumer)}finally{lock.unlock()}
+        if(!writeActualProcessBrokerFailure180(client,id,consumer,data)){return false}
+        // The writer, complete encoder, exact fd.write and loan returned.
+        match(consumer.acknowledgeAfterConsumption()){case Result.Err(_)=>return false;case Result.Ok(_)=>()}
+        lock.lock();try{failure=None<OwnedFailureDataConsumer113>
+            if(secondaryCount==0 && secondaryOverflow.isNone()){original=None<Exception>};outputReturned=true}
+        finally{lock.unlock()};true
+    }
+    func renderProducerFailure180(client:UnixSocket,id:String,cell:HostHubProcessProducerCell):Bool{
+        lock.lock();try{
+            if(producerFailure180.isSome() && !refEq(producerFailure180.getOrThrow(),cell)){
+                throw IllegalStateException("another actual process failure is still retained")}
+            producerFailure180=Some(cell)
+        }finally{lock.unlock()}
+        // An opaque recognized source never falls back to its carrier message.
+        // No consumer on pressure means no output and the same paid debt.
+        if(!cell.collectReturned()){return false}
+        let data=currentData180()
+        let count=cell.secondaryFailureCount180()
+        if(count<0 || count>(Int64.Max-65536)/4096 || cell.hasUnregisteredSecondary180()){return false}
+        data.fund(65536+count*4096+id.size*8,count+32)
+        let frame=ActualProcessBrokerFailureFrame180(data)
+        // The paid slot is installed before any fallible source admission,
+        // encoder/list/String allocation. Pressure leaves this exact frame.
+        lock.lock();try{
+            if(renderedFailure180.isSome()){return false};renderedFailure180=Some(frame)
+        }finally{lock.unlock()}
+        if(!frame.prepareProducerWholeHelper180(cell,count,id)){return false}
+        if(!frame.writeWholeFrameHelper180(client)){return false}
+        // Encoded aliases belong to Root DATA and are dropped after the actual
+        // writer helper returned, before ACK of only this rendered set.
+        if(!frame.retireWrittenSources180()){return false}
+        noteOutputHelperReturned180();true
+    }
+    func renderStoreFailure180(client:UnixSocket,id:String,cell:HubProcessStoreFailure180):Bool{
+        retainOriginal180(cell)
+        let data=currentData180()
+        let accepted=cell.admitFailure180({consumer=>
+            if(!writeActualProcessBrokerFailure180(client,id,consumer,data)){return false}
+            match(consumer.acknowledgeAfterConsumption()){case Result.Ok(_)=>true;case Result.Err(_)=>false}})
+        if(accepted){noteOutputHelperReturned180()};accepted
+    }
+    private func observeWholeFutureReturn180():Bool{
+        let value=borrowFuture180();match(value){case Some(actual)=>actual.tryGet().isSome();case None=>false}}
+    private func borrowFuture180():?Future<Unit>{lock.lock();try{worker}finally{lock.unlock()}}
+    func collectActualReturn180():Bool{
+        lock.lock();try{if(paid.isNone()){return true};if(joining || unknownSpawn || (!futureReturned && worker.isNone())){return false};joining=true}
+        finally{lock.unlock()}
+        try{
+            lock.lock();let observed=try{futureReturned}finally{lock.unlock()}
+            if(!observed && !observeWholeFutureReturn180()){return false}
+            lock.lock();try{
+                // Joining is actual Future return, not an active--/finally flag.
+                futureReturned=true;action=None<()->Unit>;worker=None<Future<Unit>>
+                if(!socketReturned){return false};socket=None<UnixSocket>
+                match(producerFailure180){case Some(cell)=>
+                    if(!cell.retireObservedReturn()){return false}
+                    producerFailure180=None<HostHubProcessProducerCell>;original=None<Exception>
+                    case None=>()}
+                match(storeFailure){case Some(cell)=>
+                    if(!cell.retireReturnedPayment180()){return false}
+                    storeFailure=None<HubProcessStoreFailure180>;original=None<Exception>
+                    case None=>()}
+                match(renderedFailure180){case Some(frame)=>
+                    if(!frame.sourcesRetired180()){return false};renderedFailure180=None<ActualProcessBrokerFailureFrame180>
+                    case None=>()}
+                if(original.isSome() || secondaryCount!=0 || secondaryOverflow.isSome() || failure.isSome() || !outputReturned){return false}
+                // Service DATA may be retired only now, after the entire
+                // actual handler/Future observation returned. A persistent
+                // start remains in its private physical incarnation owner.
+                match(service){case Some(entry)=>
+                    if(entry.retireReturnedRequest180()){service=None<ActualProcessBrokerService180>}
+                    else if(entry.isPersistentIncarnation180()){service=None<ActualProcessBrokerService180>}
+                    else{return false}
+                    case None=>()}
+                match(observerPayment){case Some(value)=>value.close();observerPayment=None<ProcessBrokerOwner180>;case None=>()}
+                let data=paid.getOrThrow();data.retireAfterWholeHandler180()
+                paid=None<ActualProcessBrokerData180>;true
+            }finally{lock.unlock()}
+        }finally{lock.lock();try{joining=false}finally{lock.unlock()}}
+    }
+    // A failed accept has no action/Future/socket. Only the outer accept helper
+    // can establish this exact synchronous return; it is never used for spawn.
+    func retireReturnedAccept180():Unit{
+        lock.lock();try{if(socket.isSome() || action.isSome() || worker.isSome() || unknownSpawn){return}
+            let value=paid.getOrThrow();value.retireAfterWholeHandler180();paid=None<ActualProcessBrokerData180>
+        }finally{lock.unlock()}}
+}
+
+class ActualProcessBrokerService180{
+    private let lock=Mutex()
+    var pending:?ProcessBrokerOwner180=None<ProcessBrokerOwner180>
+    var meter:?HostPaidValueProjection151=None<HostPaidValueProjection151>
+    var lease:?HostHubDerivedProcessLease180=None<HostHubDerivedProcessLease180>
+    private var busy=false
+    private var persistent=false
+    private var borrowed180:Int64=0
+    private var retiringRequest180=false
+    init(){}
+    func reserve180(paid:ProcessBrokerOwner180):Unit{
+        lock.lock();try{if(busy || pending.isSome() || meter.isSome() || lease.isSome()){
+            throw IllegalStateException("actual process service slot remains retained")}
+            pending=Some(paid);busy=true;persistent=false
+        }finally{lock.unlock()}
+    }
+    func isVacant180():Bool{lock.lock();try{!retiringRequest180 && !busy && pending.isNone() && meter.isNone() && lease.isNone()}finally{lock.unlock()}}
+    func installLease180(value:HostHubDerivedProcessLease180,start:Bool):Unit{
+        lock.lock();try{lease=Some(value);persistent=start}finally{lock.unlock()}
+    }
+    func matchesActualNonce180(nonce:String):Bool{
+        lock.lock();try{match(lease){case Some(value)=>value.matchesActualRootNonce180(nonce);case None=>false}}
+        finally{lock.unlock()}
+    }
+    private func beginRestrictionLeaseLoan180():Bool{
+        lock.lock();try{
+            if(!busy || lease.isNone() || borrowed180==Int64.Max){return false}
+            borrowed180+=1;true
+        }finally{lock.unlock()}
+    }
+    private func borrowRestrictionLeaseHelper180():HostHubDerivedProcessLease180{
+        lock.lock();try{lease.getOrThrow()}finally{lock.unlock()}
+    }
+    private func invokeRestrictionLeaseHelper180():Result<Unit>{
+        let actual=borrowRestrictionLeaseHelper180()
+        actual.revoke()
+    }
+    func revokeActualRestriction180():Result<Unit>{
+        // The whole helper and its actual lease alias return/unwind before
+        // the entry drops this loan. A borrow count is not a consumption ACK.
+        if(!beginRestrictionLeaseLoan180()){
+            return brokerError<Unit>(AgentErrorKind.PermissionDenied,
+                "hub.process_root_restriction_unobserved","actual private Root lease is not retained")}
+        try{return invokeRestrictionLeaseHelper180()}
+        finally{lock.lock();try{borrowed180-=1}finally{lock.unlock()}}
+    }
+    func retainActualSupervisorOwner180(value:HostHubDerivedProcessLease180):Unit{
+        lock.lock();try{
+            if(lease.isNone() || !refEq(lease.getOrThrow(),value)){throw IllegalStateException("actual service owner differs from claimed Root lease")}
+            persistent=true
+        }finally{lock.unlock()}
+    }
+    func isPersistentIncarnation180():Bool{lock.lock();try{persistent}finally{lock.unlock()}}
+    private func prepareReturnedRequestLeaseHelper180():Bool{
+        lock.lock();try{
+            if(persistent || borrowed180!=0){return false}
+            // The actual handler and Future-observation helper already
+            // returned. This entry stays busy and keeps its exact original
+            // payment while the remaining private lease control is retired.
+            match(lease){case Some(value)=>
+                if(!value.hasNoProcessProducers180() || !value.retireReturnedRootRequestControl180()){return false}
+                case None=>()}
+            lease=None<HostHubDerivedProcessLease180>;true
+        }finally{lock.unlock()}
+    }
+    private func retireReturnedRequestPaymentHelper180():Unit{
+        lock.lock();try{
+            if(persistent || borrowed180!=0 || lease.isSome()){
+                throw IllegalStateException("actual service lease still owns request DATA")}
+            // The WHOLE lease helper returned before entry payment can close:
+            // no immutable plan/ticket/current/effect alias survives there.
+            // A close error keeps these exact meter/payment fields reachable.
+            match(meter){case Some(value)=>value.closeUnpublished151()
+                case None=>match(pending){case Some(value)=>value.close();case None=>()}}
+        }finally{lock.unlock()}
+    }
+    func retireReturnedRequest180():Bool{
+        lock.lock();try{
+            if(retiringRequest180 || persistent || borrowed180!=0){return false}
+            retiringRequest180=true
+        }finally{lock.unlock()}
+        try{
+            if(!prepareReturnedRequestLeaseHelper180()){return false}
+            retireReturnedRequestPaymentHelper180()
+            // Both private helper frames really returned. Only fixed paid
+            // Root registry metadata remains; no request Source is reissued.
+            lock.lock();try{
+                meter=None<HostPaidValueProjection151>;pending=None<ProcessBrokerOwner180>
+                busy=false;true
+            }finally{lock.unlock()}
+        }finally{lock.lock();try{retiringRequest180=false}finally{lock.unlock()}}
+    }
+}
+class ActualProcessBrokerRoot180{
+    private let lock=Mutex()
+    private let owner:ProcessBrokerOwner180
+    private var pending:?ProcessBrokerOwner180=None<ProcessBrokerOwner180>
+    private let slots=ArrayList<ActualProcessBrokerSlot180>()
+    private let services=ArrayList<ActualProcessBrokerService180>()
+    private let inputs180=ArrayList<ActualProcessBrokerInput180>()
+    private var rootPeak:Int64=524288
+    var supervisor:?ProductProcessSupervisor=None<ProductProcessSupervisor>
+    var operations:?DurableOperationStore=None<DurableOperationStore>
+    var database:?SqliteDatabase=None<SqliteDatabase>
+    var token=""
+    var workspace=""
+    var identity:?AgentValue=None<AgentValue>
+    var server:?UnixServerSocket=None<UnixServerSocket>
+    var startupFailure:?Exception=None<Exception>
+    var supportLegacy180=false
+    init(owner:ProcessBrokerOwner180){this.owner=owner;for(_ in 0..32){slots.add(ActualProcessBrokerSlot180(this))}}
+    func retainRootData180(bytes:Int64):Unit{
+        lock.lock();try{if(bytes<0 || rootPeak>Int64.Max-bytes){throw IllegalStateException("process Root retained SUM overflow")}
+            owner.ensureRetainedPeak(rootPeak+bytes);rootPeak+=bytes
+        }finally{lock.unlock()}}
+    func derive180(invoice:Int64):ProcessBrokerOwner180{
+        lock.lock();try{
+            if(pending.isSome()){throw IllegalStateException("unknown Root allocation remains paid")}
+            let paid=owner.deriveRetainedLease();pending=Some(paid);paid.ensureRetainedPeak(invoice)
+            pending=None<ProcessBrokerOwner180>;paid
+        }finally{lock.unlock()}}
+    func newRegisteredData180():ActualProcessBrokerData180{
+        lock.lock();try{
+            if(pending.isSome()){throw IllegalStateException("unknown Root data construction remains paid")}
+            let paid=owner.deriveRetainedLease();pending=Some(paid);paid.ensureRetainedPeak(65536)
+            let result=ActualProcessBrokerData180(paid);pending=None<ProcessBrokerOwner180>;result
+        }finally{lock.unlock()}}
+    func claimService180(value:AgentValue,slot:ActualProcessBrokerSlot180):HostHubDerivedProcessLease180{
+        let entry:ActualProcessBrokerService180
+        lock.lock();try{
+            if(pending.isSome()){throw IllegalStateException("unregistered process service share remains paid")}
+            var vacant:?ActualProcessBrokerService180=None<ActualProcessBrokerService180>
+            for(actual in services){if(actual.isVacant180()){vacant=Some(actual);break}}
+            if(vacant.isNone()){
+                if(rootPeak>Int64.Max-4096){throw IllegalStateException("process service metadata overflow")}
+                owner.ensureRetainedPeak(rootPeak+4096);rootPeak+=4096
+                let actual=ActualProcessBrokerService180();services.add(actual);vacant=Some(actual)}
+            let paid=owner.deriveRetainedLease();pending=Some(paid);paid.ensureRetainedPeak(65536)
+            entry=vacant.getOrThrow();entry.reserve180(paid);pending=None<ProcessBrokerOwner180>
+        }finally{lock.unlock()}
+        slot.installServiceBeforeClaim180(entry)
+        let meter=HostPaidValueProjection151(entry.pending.getOrThrow());entry.meter=Some(meter)
+        let shape=meter.measureBorrowedValue151(value)
+        meter.fundAdditional151(shape.bytes*4+shape.storageBytes*2,shape.nodes*2+128)
+        let ticket=decodeHubProcessRootWireData180(value)
+        let lease=match(HostHubDerivedProcessLease180.claimActualRootHandoff180(operations.getOrThrow(),ticket,meter,decodeCompleteProcessBrokerError180)){
+            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(actual)=>actual}
+        let request=ticket.plan.canonicalArguments.field("intent").getOrThrow().field("input").getOrThrow().field("request").getOrThrow()
+        entry.installLease180(lease,brokerText(request,"op")=="start");lease
+    }
+    private func borrowActualServiceByNonceHelper180(nonce:String):?ActualProcessBrokerService180{
+        lock.lock();try{
+            var selected:?ActualProcessBrokerService180=None<ActualProcessBrokerService180>
+            for(entry in services){if(entry.matchesActualNonce180(nonce)){
+                if(selected.isSome()){throw IllegalStateException("actual Root nonce has duplicate private owners")}
+                selected=Some(entry)}}
+            selected
+        }finally{lock.unlock()}
+    }
+    func revokeActualService180(nonce:String):Result<Unit>{
+        // This real private-lease lookup returns before SQL allocates through
+        // the Root owner. No Root registry lock is held across the database.
+        let actual=match(borrowActualServiceByNonceHelper180(nonce)){case Some(value)=>value
+            case None=>return brokerError<Unit>(AgentErrorKind.PermissionDenied,
+                "hub.process_root_restriction_unobserved","actual Root lease is not registered")}
+        actual.revokeActualRestriction180()
+    }
+    func registerActualInputBeforeConstruction180():ActualProcessBrokerInput180 {
+        lock.lock();try {
+            if(pending.isSome()){throw IllegalStateException("unknown Root input payment remains held")}
+            var vacant:?ActualProcessBrokerInput180=None<ActualProcessBrokerInput180>
+            for(value in inputs180){if(value.isVacant180()){vacant=Some(value);break}}
+            if(vacant.isNone()){
+                if(rootPeak>Int64.Max-4096){throw IllegalStateException("actual input registry SUM overflow")}
+                owner.ensureRetainedPeak(rootPeak+4096);rootPeak+=4096
+                let value=ActualProcessBrokerInput180();inputs180.add(value);vacant=Some(value)}
+            let payment=owner.deriveRetainedLease();pending=Some(payment);payment.ensureRetainedPeak(131072)
+            let data=ActualProcessBrokerData180(payment)
+            let value=vacant.getOrThrow();value.reserveBeforeConstruction180(data)
+            pending=None<ProcessBrokerOwner180>;value
+        }finally{lock.unlock()}
+    }
+
+    func serve180():Unit{
+        while(true){
+            for(slot in slots){let _=slot.collectActualReturn180()}
+            var selected:?ActualProcessBrokerSlot180=None<ActualProcessBrokerSlot180>
+            for(slot in slots){if(slot.reserveBeforeAccept180()){selected=Some(slot);break}}
+            if(selected.isNone()){sleep(Duration.millisecond*20);continue}
+            let slot=selected.getOrThrow()
+            let client=try{acceptWholeHelper180()}catch(error:Exception){
+                // An accept exception is not proof of absent fd/source data.
+                // The original prepaid slot/error remains reachable at Root.
+                slot.retainOriginal180(error);startupFailure=Some(error);return}
+            // The concrete slot owns the accepted fd before closure/spawn.
+            // Unknown spawn never decrements capacity or loses this socket.
+            slot.installAndSpawn180(client)
+        }
+    }
+    private func acceptWholeHelper180():UnixSocket{server.getOrThrow().accept()}
+}
+
+func writeActualProcessBrokerValue180(client:UnixSocket,response:AgentValue,data:ActualProcessBrokerData180):Unit{
+    data.fundValue(response)
+    let encoded=encodeAgentValue(response)
+    if(encoded.size>PROCESS_BROKER_MAX_RESPONSE_BYTES){throw OwnedCanonicalDataFailure113(AgentError(
+        AgentErrorKind.Protocol,"hub.process_broker_response_too_large","process broker response exceeds the configured limit"))}
+    data.fund(encoded.size*2+2,2)
+    client.write((encoded+"\n").toArray())
+}
+class ActualProcessBrokerWriteState180{var returned=false;init(){}}
+func writeActualProcessBrokerFailure180(client:UnixSocket,id:String,consumer:OwnedFailureDataConsumer113,
+    data:ActualProcessBrokerData180):Bool{
+    data.fund(4096+id.size*2,32)
+    let state=ActualProcessBrokerWriteState180()
+    let loan=consumer.withError({error,fund=>
+        let prefix=[ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+            ValueField("requestId",textValue(id)),ValueField("ok",boolValue(false))]
+        let encoded=match(encodeOwnedFailureError113(error,prefix,"error",fund)){
+            case Result.Err(failure)=>throw OwnedCanonicalDataFailure113(failure);case Result.Ok(value)=>value}
+        if(encoded.size>PROCESS_BROKER_MAX_RESPONSE_BYTES){throw IllegalStateException("complete process failure exceeds original frame limit")}
+        match(fund(encoded.size*2+2)){case Result.Err(failure)=>throw OwnedCanonicalDataFailure113(failure);case Result.Ok(_)=>()}
+        client.write((encoded+"\n").toArray());state.returned=true})
+    loan.isOk() && state.returned
+}
+func handleActualProcessBroker180(client:UnixSocket,root:ActualProcessBrokerRoot180,slot:ActualProcessBrokerSlot180):Unit{
+    let data=slot.currentData180();client.readTimeout=Some(Duration.second*5);client.writeTimeout=Some(Duration.second*5)
+    var id=""
+    try{
+        let source=match(readPaidBrokerFrame180(client,PROCESS_BROKER_MAX_REQUEST_BYTES,{bytes,nodes=>data.fund(bytes,nodes)})){
+            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value}
+        data.fund(source.size*6,brokerBorrowedLexicalNodes180(source)+32)
+        let request=match(decodeAgentValue(source,maxBytes:PROCESS_BROKER_MAX_REQUEST_BYTES)){
+            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value}
+        id=brokerText(request,"requestId")
+        match(validateBrokerRequest(request,root.token,root.workspace)){
+            case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+        let kind=brokerText(request,"kind")
+        data.fund(65536+id.size*2,64)
+        if(kind=="ping"){
+            writeActualProcessBrokerValue180(client,objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+                ValueField("requestId",textValue(id)),ValueField("ok",boolValue(true)),
+                ValueField("identity",root.identity.getOrThrow())]),data)
+        }else if(kind=="revoke-process180"){
+            // Authenticated restriction only: exact nonce selects an already
+            // real Store-claimed private lease. It never claims another ticket
+            // or grants a process effect; local revocation precedes SQL.
+            match(root.revokeActualService180(brokerText(request,"nonce"))){
+                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+            writeActualProcessBrokerValue180(client,objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+                ValueField("requestId",textValue(id)),ValueField("ok",boolValue(true))]),data)
+        }else if(kind=="observe-process180"){
+            let observer=slot.retainObserverBeforeConstruction180()
+            let meter=HostPaidValueProjection151(observer)
+            // The resulting immutable target is separately paid in this actual
+            // response before the observer helper's metadata can be retired.
+            let target=root.supervisor.getOrThrow().captureNativeProcessTarget180(request.field("request").getOrThrow(),meter)
+            writeActualProcessBrokerValue180(client,objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+                ValueField("requestId",textValue(id)),ValueField("ok",boolValue(true)),ValueField("actual_target",target)]),data)
+            // This meter/target frame remains covered until the entire handler
+            // returns; no early close on the synchronous callback is asserted.
+        }else if(kind=="derived-process180"){
+            let lease=root.claimService180(request.field("handoff").getOrThrow(),slot)
+            let input=request.field("request").getOrThrow()
+            match(lease.validateActualRequest180(input)){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+            let result=match(root.supervisor.getOrThrow().observeNativeProcess180(input,brokerText(request,"owner"),lease)){
+                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value}
+            let retained=root.supervisor.getOrThrow().retainsActualNativeService180(lease)
+            if(retained){slot.retainActualSupervisorOwner180(lease)}
+            try{writeActualProcessBrokerValue180(client,objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+                ValueField("requestId",textValue(id)),ValueField("ok",boolValue(true)),ValueField("service_retained",boolValue(retained)),
+                ValueField("result",brokerToolResultValue(result))]),data)}
+            finally{result.releasePayload()}
+        }else if(kind=="execute" && root.supportLegacy180){
+            // Existing bare-string client is an explicit legacy/Support route.
+            // It cannot create a Native service lease or acquire Root credit.
+            let call=ToolCall(brokerText(request,"callId"),brokerText(request,"tool"),request.field("arguments").getOrThrow())
+            let result=match(root.supervisor.getOrThrow().execute(call,brokerText(request,"op"),brokerText(request,"owner"))){
+                case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value}
+            try{writeActualProcessBrokerValue180(client,objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+                ValueField("requestId",textValue(id)),ValueField("ok",boolValue(true)),ValueField("result",brokerToolResultValue(result))]),data)}
+            finally{result.releasePayload()}
+        }else{throw OwnedCanonicalDataFailure113(AgentError(AgentErrorKind.Protocol,"hub.process_broker_kind_invalid","unsupported broker request kind"))}
+        slot.noteOutputHelperReturned180()
+    }catch(error:Exception){
+        slot.retainOriginal180(error)
+        match(error as HostHubProcessHeldProducerFailure180){
+            case Some(actual)=>let _=slot.renderProducerFailure180(client,id,actual.producer)
+            case None=>match(error as HubProcessStoreFailure180){case Some(cell)=>let _=slot.renderStoreFailure180(client,id,cell)
+            case None=>match(error as OwnedCanonicalDataFailure113){case Some(failure)=>let _=slot.renderFailure180(client,id,failure.error)
+                case None=>let _=slot.renderFailure180(client,id,AgentError(AgentErrorKind.Transport,
+                    "hub.process_broker_transport_failed",error.message))}}}
+    }
+}
+
+
+// The public worker branch remains the same CLI contract. Its real Root now
+// owns a prepaid registry, canonical database and every accepted task before
+// any closure/Future can escape. Legacy execute is explicit unsafe Support.
+public func runProductProcessBrokerWorker(arguments:Array<String>):Int64{
+    let paid=reserveProductControlMetadata113(65536)
+    paid.ensureRetainedPeak(524288)
+    let root=ActualProcessBrokerRoot180(paid)
+    retainedActualProcessBrokerRoot180=Some(root)
+    try{return initializeAndServeActualProcessBroker180(arguments,root)}
+    catch(error:Exception){root.startupFailure=Some(error);return 1}
+}
+func initializeAndServeActualProcessBroker180(arguments:Array<String>,root:ActualProcessBrokerRoot180):Int64{
+    // Borrowing sizes creates no argument copies. The real Root prepays the
+    // complete path/configuration/lease arguments before their old projections.
+    var bytes:Int64=65536
+    for(value in arguments){if(value.size>(Int64.Max-bytes)/8){throw IllegalStateException("process Root argument SUM overflow")};bytes+=value.size*8}
+    root.retainRootData180(bytes)
+    let stateRoot=brokerCliArgument(arguments,"--state-root")
+    let authoredWorkspace=brokerCliArgument(arguments,"--workspace")
+    let leaseToken=brokerCliArgument(arguments,"--lease-token")
+    let authoredMode=brokerCliArgument(arguments,"--shell-network-mode")
+    let ca=brokerCliArgument(arguments,"--sandbox-ca-bundle")
+    let mode=if(authoredMode==""){ShellNetworkMode.Restricted}else{
+        match(parseShellNetworkMode(authoredMode)){case Result.Ok(value)=>value;case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error)}}
+    if(stateRoot=="" || authoredWorkspace=="" || leaseToken==""){return 2}
+    let workspace=LocalWorkspace(authoredWorkspace)
+    let canonical=workspace.rootPath()
+    root.retainRootData180(canonical.size*8+65536)
+    let paths=ProductProcessBrokerPaths(stateRoot,canonical)
+    match(prepareBrokerRuntime(paths)){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+    if(!brokerLeaseOwnedBy(paths,leaseToken,canonical)){return 1}
+    let token=match(readBrokerToken(paths.tokenPath)){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(value)=>value}
+    if(token==""){return 1}
+    let identity=brokerIdentity(canonical)
+    root.identity=Some(identity);root.token=token;root.workspace=canonical
+    root.supportLegacy180=brokerCliArgument(arguments,"--support-unsafe-process-broker180")=="true"
+    match(assignBrokerLeaseOwner(paths,leaseToken,canonical,identity)){
+        case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+    root.retainRootData180(65536)
+    let database=SqliteDatabase(stateRoot+"/state.db");root.database=Some(database)
+    root.operations=Some(DurableOperationStore(database,
+        documentPayloadAllocation:Some({invoice=>root.derive180(invoice)})))
+    // Root data restoration uses only paid, descriptor-bounded original reads.
+    root.supervisor=Some(ProductProcessSupervisor(workspace,brokerRoot:paths.runtimeRoot,sandboxEnabled:true,
+        shellNetworkMode:mode,sandboxCaBundle:ca,brokerRootData180:Some(root)))
+    let server=UnixServerSocket(bindAt:paths.socketPath);root.server=Some(server)
+    server.backlogSize=32;server.bind()
+    match(chmodBrokerPath(paths.socketPath,"600")){case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+    match(atomicBrokerWrite(paths.identityPath,encodeAgentValue(identity),"600")){
+        case Result.Err(error)=>throw OwnedCanonicalDataFailure113(error);case Result.Ok(_)=>()}
+    root.serve180()
+    // Returning accept is not a worker/data/resource ACK. This Root remains
+    // globally reachable; shutdown with retained debt is a nonzero outcome.
+    1
+}
+
+// The actual open descriptor is read incrementally. A FileInfo race cannot
+// materialize an arbitrarily enlarged file before invoice/limit checks.
+func readActualProcessBrokerFile180(path:String,limit:Int64,root:ActualProcessBrokerRoot180):String {
+    let cell=root.registerActualInputBeforeConstruction180()
+    try {
+        let text=readActualProcessBrokerFileHelper180(path,limit,root,cell)
+        // The whole decoder/read helper returned; escaping DATA is separately
+        // Root-paid. Physical cursor and child share retirement are independent.
+        if(!cell.retireAfterReturnedInputHelper180()){
+            throw IllegalStateException("actual input close/payment remains retained")}
+        text
+    }catch(error:Exception){cell.retainOriginal180(error);throw error}
+}
+func brokerBorrowedLexicalNodesFromBytes180(bytes:ArrayList<Byte>):Int64{
+    var quoted=false;var escaped=false;var scalar=false;var count:Int64=0
+    for(index in 0..bytes.size){let byte=bytes[index]
+        if(quoted){if(escaped){escaped=false}else if(byte==b'\\'){escaped=true}else if(byte==b'"'){quoted=false}}
+        else if(byte==b'"'){quoted=true;scalar=false;count+=1}
+        else if(byte==b'{' || byte==b'['){scalar=false;count+=1}
+        else if(byte==b',' || byte==b':' || byte==b'}' || byte==b']' || byte==b' ' || byte==b'\n' || byte==b'\r' || byte==b'\t'){scalar=false}
+        else if(!scalar){scalar=true;count+=1}}
+    count
+}
+
+
+// The Root registers this cell before constructing/opening the actual input.
+// Successful cells can be reused only after the whole input/close helpers
+// returned and the exact private cursor/owner fields cleared. Failed cells
+// retain both producer and close exceptions, and never count as retired.
+class ActualProcessBrokerInput180 {
+    private let lock = Mutex()
+    private var paid: ?ActualProcessBrokerData180 = None<ActualProcessBrokerData180>
+    private var cursor: ?OwnedProcessInputCursor180 = None<OwnedProcessInputCursor180>
+    private var original: ?Exception = None<Exception>
+    private var closeError: ?Exception = None<Exception>
+    private var ending = false
+    init() {}
+    func isVacant180(): Bool { lock.lock(); try { paid.isNone() && cursor.isNone() && original.isNone() && closeError.isNone() && !ending } finally { lock.unlock() } }
+    func reserveBeforeConstruction180(value: ActualProcessBrokerData180): Unit {
+        lock.lock(); try {
+            if (paid.isSome() || cursor.isSome() || original.isSome() || closeError.isSome() || ending) {
+                throw IllegalStateException("actual input cell remains retained") }
+            paid = Some(value)
+        } finally { lock.unlock() }
+    }
+    private func currentData180(): ActualProcessBrokerData180 { lock.lock(); try { paid.getOrThrow() } finally { lock.unlock() } }
+    private func borrowCursor180(): OwnedProcessInputCursor180 { lock.lock(); try { cursor.getOrThrow() } finally { lock.unlock() } }
+    func fundTemporaryBeforeCopy180(bytes: Int64): Unit { currentData180().fundScalar(bytes) }
+    func open180(path: String, directory!: Bool = false, maximum!: Int64 = 0): Unit {
+        let data = currentData180()
+        data.fundScalar(65536 + max(0, OwnedProcessInputCursor180.nativeContextBytes180()) + processInvoice180(path.size, 4, 4096))
+        lock.lock(); try {
+            if (cursor.isSome()) { throw IllegalStateException("input cursor is already registered") }
+            cursor = Some(OwnedProcessInputCursor180({ bytes => fundTemporaryBeforeCopy180(bytes) }))
+        } finally { lock.unlock() }
+        // Registration, not construction completion, precedes the native open.
+        borrowCursor180().openRegistered180(path, directory: directory, maximum: maximum)
+    }
+    func withNextName180(consume: (String) -> Unit): Bool {
+        // Do not keep this cell lock across the callback: restoration may
+        // register another input in the same Root registry. The lower cursor
+        // holds its own actual borrowed dirent lock until consume returns.
+        let value = borrowCursor180(); value.withNextName180(consume)
+    }
+    func read180(buffer: Array<Byte>): Int64 { let value = borrowCursor180(); value.readOwned180(buffer) }
+    func retainOriginal180(error: Exception): Unit {
+        lock.lock(); try {
+            if (original.isNone()) { original = Some(error) }
+            else if (!refEq(original.getOrThrow(), error) && closeError.isNone()) { closeError = Some(error) }
+            else if (closeError.isSome() && !refEq(closeError.getOrThrow(), error) && !refEq(original.getOrThrow(), error)) {
+                // There are exactly two fallible physical producer stages in
+                // this cell (input and close). A third is a retained debt;
+                // never silently overwrite either original producer error.
+                throw IllegalStateException("actual input error cell has two retained producers") }
+        } finally { lock.unlock() }
+    }
+    private func closeWholeInputHelper180(): Unit { let value = borrowCursor180(); value.closeAfterReturnedInputHelper180() }
+    private func closeWholePaymentHelper180(): Unit { let value = currentData180(); value.retireAfterWholeHandler180() }
+    func retireAfterReturnedInputHelper180(): Bool {
+        lock.lock(); try { if (ending || original.isSome() || closeError.isSome()) { return false }; ending = true } finally { lock.unlock() }
+        try {
+            closeWholeInputHelper180()
+            lock.lock(); try { cursor = None<OwnedProcessInputCursor180> } finally { lock.unlock() }
+            closeWholePaymentHelper180()
+            lock.lock(); try { paid = None<ActualProcessBrokerData180>; true } finally { lock.unlock() }
+        } catch (error: Exception) { retainOriginal180(error); false }
+        finally { lock.lock(); try { ending = false } finally { lock.unlock() } }
+    }
+}
+
+func readActualProcessBrokerFileHelper180(path: String, limit: Int64, root: ActualProcessBrokerRoot180,
+    cell: ActualProcessBrokerInput180): String {
+    cell.open180(path, maximum: limit)
+    cell.fundTemporaryBeforeCopy180(131072)
+    let bytes = ArrayList<Byte>(); let buffer = Array<Byte>(4096, repeat: 0)
+    while (true) {
+        let count = cell.read180(buffer)
+        if (count <= 0) { break }
+        if (count > limit || bytes.size > limit - count) { throw IllegalStateException("original process restore file exceeds its bound") }
+        cell.fundTemporaryBeforeCopy180(processInvoice180(bytes.size + count, 16, 131072))
+        for (index in 0..count) { bytes.add(buffer[index]) }
+    }
+    let nodes = brokerBorrowedLexicalNodesFromBytes180(bytes)
+    if (nodes > (Int64.Max - 65536) / 512 || bytes.size > (Int64.Max - 65536 - nodes * 512) / 12) {
+        throw IllegalStateException("actual restored DATA extent overflow") }
+    // The String/decoded state may escape this transient read helper. The
+    // original Root, not the temporary input share, pays those exact aliases
+    // before their Array/String/DOM construction. Root lifetime stays held.
+    root.retainRootData180(bytes.size * 12 + nodes * 512 + 65536)
+    String.fromUtf8(bytes.toArray())
+}
+
+// Private actual rendered-set receipt. It cannot ACK any source not admitted
+// to this exact frame, and cannot make a pending/running producer quiet.
+class ActualProcessBrokerFailureFrame180 {
+    private let data:ActualProcessBrokerData180
+    private var sources:?ArrayList<OwnedFailureDataConsumer113>=Some(ArrayList<OwnedFailureDataConsumer113>())
+    private var encoded:?ArrayList<String>=Some(ArrayList<String>())
+    private var pendingSource:?OwnedFailureDataConsumer113=None<OwnedFailureDataConsumer113>
+    private var pendingText:?String=None<String>
+    private var output:?String=None<String>
+    private var offered=false
+    private var written=false
+    private var retired=false
+    init(data:ActualProcessBrokerData180){this.data=data}
+    private func encodeConsumerWholeHelper180(source:OwnedFailureDataConsumer113):Bool{
+        pendingSource=Some(source)
+        data.fund(4096,8)
+        sources.getOrThrow().add(source);pendingSource=None<OwnedFailureDataConsumer113>
+        let loan=source.withError({error,fund=>
+            let value=match(encodeOwnedFailureError113(error,{bytes=>
+                // The immutable encoded copy remains in Root until whole
+                // output return. Both actual owners are independently paid.
+                data.fund(bytes,4);fund(bytes)})){
+                case Result.Err(failure)=>throw OwnedCanonicalDataFailure113(failure)
+                case Result.Ok(value)=>value}
+            pendingText=Some(value)
+            data.fund(4096,4);encoded.getOrThrow().add(value);pendingText=None<String>})
+        loan.isOk()
+    }
+    func prepareProducerWholeHelper180(cell:HostHubProcessProducerCell,count:Int64,id:String):Bool{
+        if(!cell.admitOriginalFailure180({source=>encodeConsumerWholeHelper180(source)})){return false}
+        for(index in 0..count){
+            if(!cell.admitSecondaryFailure180(index,{source=>encodeConsumerWholeHelper180(source)})){return false}}
+        if(cell.hasUnregisteredSecondary180() || cell.secondaryFailureCount180()!=count ||
+            sources.getOrThrow().size!=count+1 || encoded.getOrThrow().size!=count+1){return false}
+        var bytes:Int64=65536+id.size*8
+        for(value in encoded.getOrThrow()){
+            if(value.size>Int64.Max-bytes-2){throw IllegalStateException("complete Root error frame invoice overflow")}
+            bytes+=value.size+2}
+        if(bytes>(Int64.Max-65536)/4){throw IllegalStateException("complete Root error frame invoice overflow")}
+        data.fund(bytes*4,count+32)
+        let prefix=encodeAgentValue(objectValue([ValueField("version",integerValue(PROCESS_BROKER_PROTOCOL)),
+            ValueField("requestId",textValue(id)),ValueField("ok",boolValue(false))]))
+        let text=StringBuilder()
+        text.append(prefix[..prefix.size-1]);text.append(",\"error\":")
+        text.append(encoded.getOrThrow()[0]);text.append(",\"secondary_errors\":[")
+        for(index in 1..encoded.getOrThrow().size){if(index>1){text.append(",")};text.append(encoded.getOrThrow()[index])}
+        text.append("]}")
+        let answer=text.toString()
+        if(answer.size>PROCESS_BROKER_MAX_RESPONSE_BYTES){throw IllegalStateException("complete Root error set exceeds original frame limit")}
+        output=Some(answer);true
+    }
+    func writeWholeFrameHelper180(client:UnixSocket):Bool{
+        if(offered || output.isNone()){return false}
+        offered=true
+        let text=output.getOrThrow()
+        data.fund(text.size*2+2,4)
+        client.write((text+"\n").toArray())
+        written=true;true
+    }
+    private func acknowledgeRenderedSetWholeHelper180():Bool{
+        for(source in sources.getOrThrow()){
+            match(source.acknowledgeAfterConsumption()){case Result.Err(_)=>return false;case Result.Ok(_)=>()}}
+        true
+    }
+    func retireWrittenSources180():Bool{
+        if(retired){return true}
+        if(!written || pendingSource.isSome() || pendingText.isSome()){return false}
+        // No encoded String, builder, writer frame or borrowed error survives
+        // this point. ACK exceptions preserve the original registered sources.
+        output=None<String>;encoded=None<ArrayList<String>>
+        if(!acknowledgeRenderedSetWholeHelper180()){return false}
+        sources=None<ArrayList<OwnedFailureDataConsumer113>>;retired=true;true
+    }
+    func sourcesRetired180():Bool{retired && sources.isNone() && output.isNone() && encoded.isNone() &&
+        pendingSource.isNone() && pendingText.isNone()}
 }

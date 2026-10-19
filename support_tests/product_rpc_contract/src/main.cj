@@ -8,6 +8,7 @@ import agent_cli.*
 import agent_core.*
 import agent_domain.*
 import agent_product.*
+import agent_store.*
 import agent_rpc.*
 import model_adapters.*
 import std.collection.*
@@ -48,6 +49,11 @@ main(): Int64 {
             println("RPC one-request bash contract passed")
             return 0
         }
+        installWorkflowContractPolicy(product)
+        let selectedWorkspace=installWorkspaceContractSelection(product)
+        let selectedRead="plugin."+supportRegistryDescriptor96(selectedWorkspace,"namespace")+".read"
+        expect(hasTool(product.tools(threadId:Some(ThreadId(application.id().value))),selectedRead),
+            "RPC read catalog surface comes from its actual installed selected native package")
         expect(
             server.ready().contains("\"type\":\"ready\"") &&
                 server.ready().contains("\"maxFrameBytes\":1048576") &&
@@ -153,8 +159,8 @@ main(): Int64 {
         let discoveryItems = discovery.items.toArray()
         expect(
             discovery.unifiedKind == ValueKind.List &&
-                discoveryItems.size == slashCommandDefinitions().size &&
-                allSlashDescriptorsPresent(discoveryItems) &&
+                discoveryItems.size == presentedSlashCommandDefinitions(application.frontendSlashDefinitions()).size &&
+                allSlashDescriptorsPresent(discoveryItems,application.frontendSlashDefinitions()) &&
                 !hasSlashDescriptor(discoveryItems, "negotiate_protocol"),
             "RPC discovers typed slash descriptors independently from its protocol inventory"
         )
@@ -179,7 +185,8 @@ main(): Int64 {
             state.contains("\"command\":\"get_state\"") && state.contains("\"success\":true") && state.contains(
                 "\"sessionRef\":") && state.contains("\"workMode\":\"none\"") && state.contains(
                 "\"loopModeEnabled\":false") && state.contains("\"systemPrompt\":[]") && state.contains(
-                "\"dumpTools\":[{\"name\":\"ast_grep\"") && state.contains(
+                "\"dumpTools\":[") && state.contains("\"name\":\""+selectedRead+"\"") && !state.contains("\"name\":\"read\"") &&
+                !state.contains("\"name\":\"ast_grep\"") && state.contains(
                 "\"contextUsage\":{\"tokens\":null," + "\"contextWindow\":null,\"percent\":null}"),
             "RPC returns correlated state with its real session and tool " + "catalog surfaces"
         )
@@ -382,15 +389,18 @@ main(): Int64 {
             output.awaitContains("\"type\":\"prompt_result\",\"id\":\"h1\"," + "\"agentInvoked\":false"),
             "local RPC command reports agentInvoked false"
         )
+        let taskDeadline = agentUtcMillis() + 30000
         let taskAccepted = server
             .handle("{\"id\":\"task-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
             .contains("\"success\":true")
-        let lifecycleVisible = output.awaitContains(
-            "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"")
-        let progressVisible = output.awaitContains("\"type\":\"subagent_progress\"")
-        let childEventVisible = output.awaitContains("\"type\":\"subagent_event\"")
-        let taskResultVisible = output.awaitContains(
-            "\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true")
+        let taskTerminal = "\"type\":\"prompt_result\",\"id\":\"task-prompt\"," + "\"agentInvoked\":true"
+        let taskResultVisible = output.awaitContainsUntil(taskTerminal, taskDeadline)
+        // One deadline covers the asynchronous task. Intermediate frames must
+        // actually precede its terminal frame, not arrive within separate 1s windows.
+        let lifecycleVisible = output.containsBefore(
+            "\"type\":\"subagent_lifecycle\",\"payload\":{" + "\"id\":\"fixture-child\"", taskTerminal)
+        let progressVisible = output.containsBefore("\"type\":\"subagent_progress\"", taskTerminal)
+        let childEventVisible = output.containsBefore("\"type\":\"subagent_event\"", taskTerminal)
         expect(
             taskAccepted && lifecycleVisible && progressVisible && childEventVisible && taskResultVisible,
             "RPC streams real task lifecycle, progress, and child events: accepted=" +
@@ -437,20 +447,23 @@ main(): Int64 {
                 "host_echo"),
             "RPC host tool definitions refresh the active model catalog"
         )
+        let hostToolDeadline = agentUtcMillis() + 30000
+        let hostToolRequest = "\"type\":\"host_tool_call\",\"id\":\"host-1\"," +
+            "\"toolCallId\":\"fixture-host-call\",\"toolName\":\"host_echo\""
+        let hostToolTerminal = "\"type\":\"prompt_result\",\"id\":\"host-prompt\"," + "\"agentInvoked\":true"
         expect(
             server
                 .handle("{\"id\":\"host-prompt\",\"type\":\"prompt\"," + "\"message\":\"fixture host tool\"}")
-                .contains("\"success\":true") && output.awaitContains(
-                "\"type\":\"host_tool_call\",\"id\":\"host-1\"," + "\"toolCallId\":\"fixture-host-call\"," +
-                    "\"toolName\":\"host_echo\""),
-            "model host-tool calls are forwarded to the RPC host"
+                .contains("\"success\":true") && output.awaitContainsUntil(hostToolRequest, hostToolDeadline),
+            "model host-tool calls are forwarded to the RPC host; frames=" + output.snapshot()
         )
         expect(
             server.handle(
                 "{\"type\":\"host_tool_result\",\"id\":\"host-1\"," + "\"result\":{\"content\":[{\"type\":\"text\"," +
-                    "\"text\":\"host result\"}]}}") == "" && output.awaitContains(
-                "\"type\":\"prompt_result\",\"id\":\"host-prompt\"," + "\"agentInvoked\":true"),
-            "RPC host results resume the same agent tool loop"
+                    "\"text\":\"host result\"}]}}") == "" &&
+                output.awaitContainsUntil(hostToolTerminal, hostToolDeadline) &&
+                output.containsBefore(hostToolRequest, hostToolTerminal),
+            "RPC host results resume the same agent tool loop; frames=" + output.snapshot()
         )
         expect(
             server
@@ -478,49 +491,59 @@ main(): Int64 {
                 .contains("\"success\":false"),
             "RPC validates and installs normalized host URI schemes"
         )
+        let uriReadDeadline = agentUtcMillis() + 30000
+        let uriReadRequest = "\"type\":\"host_uri_request\",\"id\":\"uri-1\"," +
+            "\"operation\":\"read\",\"url\":\"hostdoc://guide\""
+        let uriReadTerminal = "\"type\":\"prompt_result\",\"id\":\"host-uri-read\"," + "\"agentInvoked\":true"
         expect(
             server
                 .handle("{\"id\":\"host-uri-read\",\"type\":\"prompt\"," + "\"message\":\"fixture host uri read\"}")
-                .contains("\"success\":true") && output.awaitContains(
-                "\"type\":\"host_uri_request\",\"id\":\"uri-1\"," + "\"operation\":\"read\",\"url\":\"hostdoc://guide\""),
-            "read dispatches registered URI schemes to the RPC host"
+                .contains("\"success\":true") && output.awaitContainsUntil(uriReadRequest, uriReadDeadline),
+            "read dispatches registered URI schemes to the RPC host; frames=" + output.snapshot()
         )
         expect(
             server.handle(
                 "{\"type\":\"host_uri_result\",\"id\":\"uri-1\"," + "\"content\":\"host document\",\"contentType\":" +
-                    "\"text/markdown\",\"notes\":[\"from host\"]}") == "" && output.awaitContains(
-                "\"type\":\"prompt_result\",\"id\":\"host-uri-read\"," + "\"agentInvoked\":true"),
-            "host URI read results resume the same agent tool loop"
+                    "\"text/markdown\",\"notes\":[\"from host\"]}") == "" &&
+                output.awaitContainsUntil(uriReadTerminal, uriReadDeadline) &&
+                output.containsBefore(uriReadRequest, uriReadTerminal),
+            "host URI read results resume the same agent tool loop; frames=" + output.snapshot()
         )
+        let uriWriteDeadline = agentUtcMillis() + 30000
+        let uriWriteRequest = "\"type\":\"host_uri_request\",\"id\":\"uri-2\"," +
+            "\"operation\":\"write\",\"url\":\"hostdoc://guide\",\"content\":\"updated by fixture\""
+        let uriWriteTerminal = "\"type\":\"prompt_result\",\"id\":\"host-uri-write\"," + "\"agentInvoked\":true"
         expect(
             server
                 .handle("{\"id\":\"host-uri-write\",\"type\":\"prompt\"," + "\"message\":\"fixture host uri write\"}")
-                .contains("\"success\":true") && output.awaitContains(
-                "\"type\":\"host_uri_request\",\"id\":\"uri-2\"," +
-                    "\"operation\":\"write\",\"url\":\"hostdoc://guide\"," + "\"content\":\"updated by fixture\""),
-            "write dispatches writable URI schemes to the RPC host"
+                .contains("\"success\":true") && output.awaitContainsUntil(uriWriteRequest, uriWriteDeadline),
+            "write dispatches writable URI schemes to the RPC host; frames=" + output.snapshot()
         )
         expect(
-            server.handle("{\"type\":\"host_uri_result\",\"id\":\"uri-2\"}") == "" && output.awaitContains(
-                "\"type\":\"prompt_result\",\"id\":\"host-uri-write\"," + "\"agentInvoked\":true"),
-            "host URI writes complete through the same agent loop"
+            server.handle("{\"type\":\"host_uri_result\",\"id\":\"uri-2\"}") == "" &&
+                output.awaitContainsUntil(uriWriteTerminal, uriWriteDeadline) &&
+                output.containsBefore(uriWriteRequest, uriWriteTerminal),
+            "host URI writes complete through the same agent loop; frames=" + output.snapshot()
         )
+        let uriCancelDeadline = agentUtcMillis() + 30000
         let cancelPromptAccepted = server
                 .handle("{\"id\":\"host-uri-cancel\",\"type\":\"prompt\"," + "\"message\":\"fixture host uri read\"}")
                 .contains("\"success\":true")
-        let cancelRequestVisible = output.awaitContains(
-            "\"type\":\"host_uri_request\",\"id\":\"uri-3\"," +
-                "\"operation\":\"read\",\"url\":\"hostdoc://guide\"")
+        let cancelRequest = "\"type\":\"host_uri_request\",\"id\":\"uri-3\"," +
+            "\"operation\":\"read\",\"url\":\"hostdoc://guide\""
+        let cancelRequestVisible = output.awaitContainsUntil(cancelRequest, uriCancelDeadline)
+        expect(cancelPromptAccepted && cancelRequestVisible,
+            "URI cancellation waits for the pending host request; frames=" + output.snapshot())
         let abortResponse = server.handle(
             "{\"id\":\"abort-host-uri\",\"type\":\"abort\"}"
         )
         let abortAccepted = abortResponse.contains("\"success\":true")
-        let cancelFrameVisible = output.awaitContains(
-            "\"type\":\"host_uri_cancel\",\"id\":\"uri-4\"," +
-                "\"targetId\":\"uri-3\"")
-        let cancelResponseVisible = output.awaitContains(
-                "\"type\":\"response\",\"id\":\"host-uri-cancel\"," + "\"command\":\"prompt\",\"success\":false," +
-                    "\"error\":\"host URI request was cancelled\"")
+        let cancelFrame = "\"type\":\"host_uri_cancel\",\"id\":\"uri-4\",\"targetId\":\"uri-3\""
+        let cancelTerminal = "\"type\":\"response\",\"id\":\"host-uri-cancel\"," +
+            "\"command\":\"prompt\",\"success\":false,\"error\":\"host URI request was cancelled\""
+        let cancelResponseVisible = output.awaitContainsUntil(cancelTerminal, uriCancelDeadline)
+        let cancelFrameVisible = output.containsBefore(cancelFrame, cancelTerminal) &&
+            output.containsBefore(cancelRequest, cancelFrame)
         expect(
             cancelPromptAccepted && cancelRequestVisible && abortAccepted &&
                 cancelFrameVisible && cancelResponseVisible,
@@ -528,7 +551,7 @@ main(): Int64 {
                 cancelPromptAccepted.toString() + ", request=" + cancelRequestVisible.toString() +
                 ", abort=" + abortAccepted.toString() + ", cancelFrame=" +
                 cancelFrameVisible.toString() + ", response=" + cancelResponseVisible.toString() +
-                ", abortResponse=" + abortResponse
+                ", abortResponse=" + abortResponse + ", frames=" + output.snapshot()
         )
         expect(
             server
@@ -540,16 +563,18 @@ main(): Int64 {
             server.handle("{\"id\":\"stats-session\",\"type\":\"new_session\"}").contains("\"success\":true"),
             "RPC statistics contract starts from a clean public session"
         )
+        let promptDeadline = agentUtcMillis() + 30000
+        let promptTerminal = "\"type\":\"prompt_result\",\"id\":\"p1\",\"agentInvoked\":true"
         let prompt = server.handle("{\"id\":\"p1\",\"type\":\"prompt\"," + "\"message\":\"hello rpc\"}")
         expect(
             prompt.contains("\"success\":true"),
             "RPC accepts an agent prompt"
         )
         expect(
-            output.awaitContains("\"type\":\"prompt_result\",\"id\":\"p1\"," + "\"agentInvoked\":true") &&
-                output.contains("\"event\":{\"code\":\"model.text_delta\"," +
-                    "\"text\":\"fixture response for hello rpc\"}"),
-            "RPC streams events and reports agent invocation"
+            output.awaitContainsUntil(promptTerminal, promptDeadline) &&
+                output.containsBefore("\"event\":{\"code\":\"model.text_delta\"," +
+                    "\"text\":\"fixture response for hello rpc\"}", promptTerminal),
+            "RPC streams events and reports agent invocation; frames=" + output.snapshot()
         )
         let stats = server.handle("{\"id\":\"stats-real\",\"type\":\"get_session_stats\"}")
         expect(
@@ -564,10 +589,11 @@ main(): Int64 {
             if (command == "prompt" || command == "steer" || command == "follow_up" || command == "abort_and_prompt") {
                 continue
             }
+            let commandDeadline = agentUtcMillis() + 30000
             let response = server.handle(requestFor(command, root))
             if (command == "bash") {
-                expect(response == "" && output.awaitContains("\"id\":\"inventory-bash\""),
-                    "RPC bash response is delivered asynchronously")
+                expect(response == "" && output.awaitContainsUntil("\"id\":\"inventory-bash\"", commandDeadline),
+                    "RPC bash response is delivered asynchronously; frames=" + output.snapshot())
                 continue
             }
             expect(
@@ -629,22 +655,32 @@ main(): Int64 {
             asyncApplication,
             {frame => asyncOutput.add(frame)}
         )
+        installWorkflowContractPolicy(asyncProduct)
+        let asyncTaskDeadline = agentUtcMillis() + 30000
+        let jobStartedFrame = "\"type\":\"async_job\",\"kind\":\"started\""
+        let jobSettledFrame = "\"type\":\"async_job\",\"kind\":\"settled\""
         expect(
             asyncServer
                 .handle("{\"id\":\"async-task\",\"type\":\"prompt\"," + "\"message\":\"fixture task\"}")
                 .contains("\"success\":true"),
             "RPC accepts an asynchronous task prompt"
         )
-        let asyncJobStarted = asyncOutput.awaitContains("\"type\":\"async_job\",\"kind\":\"started\"")
+        // waitForAsyncJobs selects existing jobs once. Wait for admission
+        // before taking that snapshot, and share one deadline with settlement.
+        let asyncJobStarted = asyncOutput.awaitContainsUntil(jobStartedFrame, asyncTaskDeadline)
+        expect(asyncJobStarted,
+            "RPC announces an admitted asynchronous task; frames=" + asyncOutput.snapshot())
         let settledJobs = asyncApplication.waitForAsyncJobs(
             [],
-            timeoutMillis: 5000
+            timeoutMillis: max(1, asyncTaskDeadline - agentUtcMillis())
         )
+        let asyncJobSettled = asyncOutput.awaitContainsUntil(jobSettledFrame, asyncTaskDeadline)
         expect(
             asyncJobStarted && settledJobs.size == 1 && settledJobs[0].status == "completed" &&
-                asyncOutput.awaitContains("\"type\":\"async_job\",\"kind\":\"settled\"") && asyncOutput.awaitContains(
-                "\"id\":\"fixture-child\",\"agentId\":" + "\"fixture-child\""),
-            "RPC streams managed job start and settled result frames"
+                asyncJobSettled && asyncOutput.containsBefore(jobStartedFrame, jobSettledFrame) &&
+                asyncOutput.contains("\"id\":\"fixture-child\",\"agentId\":\"fixture-child\""),
+            "RPC streams managed job start and settled result frames; jobs=" + describeAsyncJobs(settledJobs) +
+                "; settled=" + asyncJobSettled.toString() + "; frames=" + asyncOutput.snapshot()
         )
         let asyncBashApplication = asyncProduct.applicationSession()
         let asyncBashOutput = FrameCollector()
@@ -652,22 +688,27 @@ main(): Int64 {
             asyncBashApplication,
             {frame => asyncBashOutput.add(frame)}
         )
+        let asyncBashDeadline = agentUtcMillis() + 30000
+        let bashCompletedFrame = "\"type\":\"bash\",\"status\":\"completed\""
         expect(
             asyncBashServer
                 .handle("{\"id\":\"async-bash\",\"type\":\"prompt\"," + "\"message\":\"fixture async bash\"}")
-                .contains("\"success\":true") && asyncBashOutput.awaitContains(
-                "\"type\":\"async_job\",\"kind\":\"started\""),
-            "RPC accepts and announces an asynchronous bash job"
+                .contains("\"success\":true") && asyncBashOutput.awaitContainsUntil(jobStartedFrame, asyncBashDeadline),
+            "RPC accepts and announces an asynchronous bash job; frames=" + asyncBashOutput.snapshot()
         )
         let settledBashJobs = asyncBashApplication.waitForAsyncJobs(
             [],
-            timeoutMillis: 5000
+            timeoutMillis: max(1, asyncBashDeadline - agentUtcMillis())
         )
+        let asyncBashSettled = asyncBashOutput.awaitContainsUntil(jobSettledFrame, asyncBashDeadline)
+        let bashCompleted = asyncBashOutput.awaitContainsUntil(bashCompletedFrame, asyncBashDeadline)
         expect(
             settledBashJobs.size == 1 && settledBashJobs[0].jobType == "bash" && settledBashJobs[0].status == "completed" &&
-                asyncBashOutput.awaitContains("\"type\":\"bash\",\"status\":\"completed\""),
-            "RPC streams the captured asynchronous bash result: " +
-                asyncBashOutput.snapshot()
+                asyncBashSettled && bashCompleted && asyncBashOutput.containsBefore(jobStartedFrame, jobSettledFrame) &&
+                asyncBashOutput.containsBefore(jobStartedFrame, bashCompletedFrame),
+            "RPC streams the captured asynchronous bash result; jobs=" + describeAsyncJobs(settledBashJobs) +
+                "; settled=" + asyncBashSettled.toString() + "; completed=" + bashCompleted.toString() +
+                "; frames=" + asyncBashOutput.snapshot()
         )
 
         let providerRoot = root + "/rpc-provider"
@@ -760,6 +801,7 @@ main(): Int64 {
             "RPC login validates and authenticates the requested provider"
         )
         removeVariable("RPC_LOCAL_B_KEY")
+        runTodoRpcPendingReviewContract(root)
         println("product_rpc contract passed")
         0
     } finally {
@@ -782,8 +824,8 @@ func allCommandsPresent(expected: Array<String>): Bool {
     true
 }
 
-func allSlashDescriptorsPresent(actual: Array<AgentValue>): Bool {
-    for (definition in slashCommandDefinitions()) {
+func allSlashDescriptorsPresent(actual: Array<AgentValue>,extraDefinitions:Array<SlashCommandDefinition>): Bool {
+    for (definition in presentedSlashCommandDefinitions(extraDefinitions)) {
         var matched = false
         for (command in actual where
              command.field("name").getOrThrow().text == definition.name) {
@@ -957,11 +999,39 @@ class FrameCollector {
         false
     }
 
+    func awaitContainsUntil(fragment: String, deadlineMillis: Int64): Bool {
+        while (agentUtcMillis() < deadlineMillis) {
+            if (contains(fragment)) { return true }
+            sleep(Duration.millisecond * 10)
+        }
+        contains(fragment)
+    }
+
+    func containsBefore(fragment: String, terminal: String): Bool {
+        lock.lock()
+        try {
+            var seen = false
+            for (value in values) {
+                if (value.contains(terminal)) { return seen }
+                if (value.contains(fragment)) { seen = true }
+            }
+            false
+        } finally { lock.unlock() }
+    }
+
     func snapshot(): String {
         lock.lock()
         try { values.toArray().toString() } finally { lock.unlock() }
     }
 
+}
+
+func describeAsyncJobs(jobs: Array<ProductAsyncJobSnapshot>): String {
+    let descriptions = ArrayList<String>()
+    for (job in jobs) {
+        descriptions.add(job.id + ":" + job.jobType + ":" + job.status + ":" + job.error)
+    }
+    descriptions.toArray().toString()
 }
 
 func hasTool(
@@ -978,4 +1048,73 @@ func expect(condition: Bool, message: String): Unit {
     if (!condition) {
         throw IllegalStateException(message)
     }
+}
+
+// Actual Native selection and the same Application-owned document Root. This
+// contract cannot synthesize a User decision, Model source, CAS or Receipt.
+func runTodoRpcPendingReviewContract(root:String):Unit {
+    let directory=root+"/todo-rpc-pending"
+    Directory.create(directory,recursive:true)
+    let product=openProduct(config:ProductConfig(settingsRoot:directory,
+        stateRoot:directory+"/sessions",workspaceRoot:directory,fixture:true,
+        approvalMode:ApprovalMode.AlwaysAsk,asyncEnabled:false)).value().getOrThrow()
+    let output=FrameCollector();let application=product.applicationSession()
+    let server=ProductJsonlRpcServer(application,{frame=>output.add(frame)})
+    let database=SqliteDatabase(directory+"/sessions/state.db")
+    try{
+        installWorkflowContractPolicy(product)
+        let accepted=parseUnifiedJson(server.handle("{\"id\":\"todo-review\",\"type\":\"set_todos\",\"phases\":[{\"name\":\"Await actual review\",\"tasks\":[{\"content\":\"never echo as committed\",\"status\":\"pending\"}]}]}"))
+        expect(accepted.field("success").getOrThrow().asBool(),"RPC accepts the pending actual Todo document operation")
+        let data=accepted.field("data").getOrThrow()
+        expect(data.field("awaitingApproval").getOrThrow().asBool() && data.field("todoPhases").getOrThrow().unifiedKind==ValueKind.Null,
+            "RPC does not present pending input as committed Todo state")
+        let approval=application.approval().getOrThrow()
+        expect(approval.operationId.value!="" && output.contains("\"operationId\":\""+approval.operationId.value+"\""),
+            "RPC emits the same actual Application operation approval")
+        expect(database.scalarInt("SELECT COUNT(*) FROM plugin_documents" )==0 && application.todoPhases().value().getOrThrow().isEmpty(),
+            "actual pending Todo CAS has not created a document")
+        let rejected=application.handle("/reject "+approval.operationId.value)
+        expect(rejected.isError() && rejected.error().getOrThrow().code=="context.read_rejected",
+            "the real user rejects the original retained Todo Root")
+        expect(database.scalarInt("SELECT COUNT(*) FROM plugin_documents")==0 &&
+            database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='rejected'")==2 && application.approval().isNone() &&
+            database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_execution_handoff'")==0,
+            "Todo rejection settles the actual parent without a document write")
+        let state=parseUnifiedJson(server.handle("{\"id\":\"todo-after-reject\",\"type\":\"get_state\"}"))
+        expect(state.field("data").getOrThrow().field("todoPhases").getOrThrow().items.isEmpty(),
+            "RPC reads the actual empty document projection after rejection")
+        let retry=parseUnifiedJson(server.handle("{\"id\":\"todo-commit\",\"type\":\"set_todos\",\"phases\":[{\"name\":\"Approved\",\"tasks\":[{\"content\":\"actual commit\",\"status\":\"pending\"}]}]}"))
+        expect(retry.field("data").getOrThrow().field("awaitingApproval").getOrThrow().asBool(),
+            "RPC replacement still exposes its real pending read")
+        let read=application.approval().getOrThrow()
+        let run=database.query("SELECT run_id FROM operations WHERE id=?",[SqlParameter.Text(read.operationId.value)])[0].required(0)
+        expect(server.handle("{\"id\":\"todo-approve-read\",\"type\":\"approve\",\"operationId\":\""+read.operationId.value+"\"}").contains("\"success\":true"),
+            "RPC starts the exact real read decision")
+        waitTodoRpcIdle(server)
+        let mutation=application.approval().getOrThrow()
+        expect(mutation.operationId.value!=read.operationId.value &&
+            database.query("SELECT run_id FROM operations WHERE id=?",[SqlParameter.Text(mutation.operationId.value)])[0].required(0)==run &&
+            database.scalarInt("SELECT COUNT(*) FROM plugin_documents")==0,
+            "RPC read and frozen mutation reviews retain one real Run before CAS")
+        expect(output.contains("\"operationId\":\""+mutation.operationId.value+"\""),"RPC publishes the second real approval")
+        expect(server.handle("{\"id\":\"todo-approve-write\",\"type\":\"approve\",\"operationId\":\""+mutation.operationId.value+"\"}").contains("\"success\":true"),
+            "RPC starts the exact real mutation decision")
+        waitTodoRpcIdle(server)
+        expect(application.approval().isNone() && database.scalarInt("SELECT COUNT(*) FROM plugin_documents")==1 &&
+            database.scalarInt("SELECT COUNT(*) FROM runs")==2 &&
+            server.handle("{\"id\":\"todo-after-commit\",\"type\":\"get_state\"}").contains("actual commit"),
+            "RPC reads the committed canonical document only after both decisions and cleanup")
+        expect(database.scalarInt("SELECT COUNT(*) FROM model_attempts")==0,
+            "Todo RPC review creates no Model attempt")
+    }finally{server.close();database.close();product.close().value().getOrThrow()}
+}
+
+func waitTodoRpcIdle(server:ProductJsonlRpcServer):Unit {
+    let deadline=agentUtcMillis()+30000
+    while(agentUtcMillis()<deadline){
+        let state=parseUnifiedJson(server.handle("{\"id\":\"todo-await-decision\",\"type\":\"get_state\"}"))
+        if(!state.field("data").getOrThrow().field("isStreaming").getOrThrow().asBool()){return}
+        sleep(Duration.millisecond*10)
+    }
+    throw IllegalStateException("actual Todo RPC decision did not retire")
 }

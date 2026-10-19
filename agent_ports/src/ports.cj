@@ -7,6 +7,14 @@ import yjson.*
 import agent_domain.*
 
 public interface ModelPort {
+    // Pure configuration/policy diagnostics before Core resolves thinking or
+    // creates an Attempt. This grants no dispatch authority or provider I/O.
+    // None supports internal calls whose selected model differs from the parent.
+    func validatePolicySnapshot(model: String, snapshot: ?ModelExecutionCapabilitiesSnapshot): Result<Unit> {
+        let _ = model; let _ = snapshot
+        Result.Ok(())
+    }
+
     func execute(
         request: ModelRequest,
         events: ModelEventSink
@@ -33,6 +41,13 @@ public interface ModelPort {
 }
 
 public interface RunRepository {
+    // Read-only canonical input of one already consumed continuation claim.
+    // This cannot mint an owner, start a Run or authorize another Thread.
+    func continuationModelInput(item: ThreadItem): Result<ModelMessage> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "continuation.input_unavailable",
+            "repository cannot verify the actual consumed continuation input"))
+    }
+
     func save(snapshot: RunSnapshot): Result<Unit>
     func find(runId: RunId): Result<RunSnapshot>
     func events(runId: RunId, after: Int64): Result<EventPage>
@@ -48,6 +63,14 @@ public interface RunRepository {
     ): Result<Unit> {
         let _ = attempt
         append(event)
+    }
+
+    // Data-only Accepted-phase seed. This does not fabricate a model Attempt,
+    // approval, or permission to replay a pending host preparation after restart.
+    func bindAcceptedContextRequest(run: RunId, thread: SessionId, epoch: Int64,
+        initiator: ThreadItemContent, request: AgentValue, observedAtMillis: Int64): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "context.initial_persistence_unavailable",
+            "repository cannot bind initial context data to an Accepted Run"))
     }
 
     func saveContinuation(value: RunContinuation): Result<Unit> {
@@ -90,6 +113,21 @@ public interface RunRepository {
         ))
     }
 
+    // Independent data projection for a new-format, settled context cut.
+    func contextBoundary(runId: RunId): Result<?RunContextBoundary> { Result.Ok(None) }
+    func contextBoundaryPressureItem(runId: RunId): Result<Bool> { Result.Ok(false) }
+    func pendingContextBoundary(sessionId: SessionId): Result<?RunContextBoundary> { Result.Ok(None) }
+    func reserveContextBoundaryTurn(expected: RunContextBoundary, event: AgentEvent,
+        replacement: AgentValue): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "context.boundary_atomic_reservation_unavailable",
+            "repository cannot atomically preserve a charged turn"))
+    }
+    func prepareContextBoundaryModelAttempt(expected: RunContextBoundary, attempt: DurableModelAttempt,
+        event: AgentEvent, continuation: RunContinuation): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "context.boundary_attempt_prepare_unavailable",
+            "repository cannot atomically claim this new context boundary"))
+    }
+
     func pendingRecoveryContinuation(sessionId: SessionId): Result<?RunContinuation> {
         let _ = sessionId
         Result.Err(AgentError(
@@ -97,6 +135,17 @@ public interface RunRepository {
             "run.recovery_scan_unavailable",
             "run repository cannot discover running model continuations"
         ))
+    }
+
+    func prepareInternalModelAttempt(attempt: DurableModelAttempt, event: AgentEvent,
+        input: InternalModelAttemptInput): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "model.internal_attempt_unavailable",
+            "repository cannot atomically prepare an internal model Attempt"))
+    }
+    func settleInternalModelAttempt(attempt: ModelAttemptId, input: InternalModelAttemptInput,
+        outcome: Result<ModelReply>, completedAtMillis: Int64): Result<Unit> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "model.internal_settlement_unavailable",
+            "repository cannot atomically settle an internal model Attempt"))
     }
 
     func prepareModelAttempt(
@@ -249,11 +298,60 @@ public interface ProcessPort {
     func reserveOperation(operationId: OperationId): Unit { let _ = operationId }
     func releaseOperation(operationId: OperationId): Unit { let _ = operationId }
     func execute(request: ProcessRequest): Result<ProcessResult>
+    // Fixed package worker backend for an already admitted canonical child.
+    // No source or approval authority is minted here. Implementations must
+    // retain the package-only, denied-network legacy worker projection;
+    // ordinary execute and channel policy are not interchangeable with it.
+    func executePackageReadOnly(request: ProcessRequest, workspaceRoot: String): Result<ProcessResult> {
+        let _ = request
+        let _ = workspaceRoot
+        Result.Err(AgentError(AgentErrorKind.Configuration,
+            "process.package_readonly_unsupported", "this process port does not support the fixed package readonly worker profile",
+            retryable: false, fallbackAllowed: false))
+    }
+    // Bounded raw I/O for a caller that already owns a process operation.
+    // Default ports fail closed; this does not authorize a service lifecycle.
+    func openChannel(request: ProcessRequest, cancellation: CancellationToken): Result<ProcessChannel> {
+        openChannel(request, cancellation, 1048576)
+    }
+    func openChannel(request: ProcessRequest, cancellation: CancellationToken,
+        maxInputBytes: Int64): Result<ProcessChannel> {
+        let _ = request
+        let _ = cancellation
+        let _ = maxInputBytes
+        Result.Err(AgentError(AgentErrorKind.Configuration,
+            "process.channel_unsupported", "this process port does not support raw channels",
+            retryable: false, fallbackAllowed: false))
+    }
+    // A cancellation request is not a cleanup acknowledgement. This succeeds
+    // only when this operation retains no raw-channel resources, including a
+    // failed/pending open that never returned a ProcessChannel handle.
+    func closeChannelOperation(operationId: OperationId): Result<Unit> {
+        let _ = operationId
+        Result.Err(AgentError(AgentErrorKind.Configuration,
+            "process.channel_unsupported", "this process port does not support raw channel cleanup",
+            retryable: false, fallbackAllowed: false))
+    }
+    func closeChannelResource(owner: ProcessResourceOwner): Result<Unit> {
+        match (owner) {
+            case ProcessResourceOwner.Operation(id) => closeChannelOperation(id)
+            case ProcessResourceOwner.ModelAttempt(_, _) => Result.Err(AgentError(AgentErrorKind.Configuration,
+                "process.resource_unsupported", "this process port cannot close ModelAttempt resources"))
+        }
+    }
+    func cancelResource(owner: ProcessResourceOwner): Result<Unit> {
+        match (owner) {
+            case ProcessResourceOwner.Operation(id) => cancel(id)
+            case ProcessResourceOwner.ModelAttempt(_, _) => Result.Err(AgentError(AgentErrorKind.Configuration,
+                "process.resource_unsupported", "this process port cannot cancel ModelAttempt resources"))
+        }
+    }
     func cancel(operationId: OperationId): Result<Unit>
 }
 
 public class NetworkGatewayLease {
-    public let operationId: OperationId
+    public let resourceOwner: ProcessResourceOwner
+    public prop operationId: OperationId { get() { resourceOwner.requireOperation() } }
     public let proxyHost: String
     public let proxyPort: UInt16
     public let proxyCredential: String
@@ -281,7 +379,34 @@ public class NetworkGatewayLease {
         if ((bridgeSocket.trimAscii() == "") != (bridgeExecutable.trimAscii() == "")) {
             throw IllegalArgumentException("network gateway bridge values must be provided together")
         }
-        this.operationId = operationId
+        this.resourceOwner = ProcessResourceOwner.Operation(operationId)
+        this.proxyHost = proxyHost.trimAscii()
+        this.proxyPort = proxyPort
+        this.proxyCredential = proxyCredential
+        this.caBundle = caBundle.trimAscii()
+        this.bridgeSocket = bridgeSocket.trimAscii()
+        this.bridgeExecutable = bridgeExecutable.trimAscii()
+    }
+    public init(
+        resourceOwner: ProcessResourceOwner,
+        proxyHost: String,
+        proxyPort: UInt16,
+        proxyCredential: String,
+        caBundle!: String = "",
+        bridgeSocket!: String = "",
+        bridgeExecutable!: String = ""
+    ) {
+        if (proxyHost.trimAscii() == "" || proxyPort == 0u16) {
+            throw IllegalArgumentException("network gateway endpoint is invalid")
+        }
+        if (!validNetworkGatewayCredential(proxyCredential)) {
+            throw IllegalArgumentException("network gateway credential is invalid")
+        }
+        if ((bridgeSocket.trimAscii() == "") != (bridgeExecutable.trimAscii() == "")) {
+            throw IllegalArgumentException("network gateway bridge values must be provided together")
+        }
+        resourceOwner.validate()
+        this.resourceOwner = resourceOwner
         this.proxyHost = proxyHost.trimAscii()
         this.proxyPort = proxyPort
         this.proxyCredential = proxyCredential
@@ -307,6 +432,13 @@ public interface NetworkGatewayPort {
         operationId: OperationId,
         policy: NetworkPolicy
     ): Result<NetworkGatewayLease>
+    func acquireResource(owner: ProcessResourceOwner, policy: NetworkPolicy): Result<NetworkGatewayLease> {
+        match (owner) {
+            case ProcessResourceOwner.Operation(id) => acquire(id, policy)
+            case ProcessResourceOwner.ModelAttempt(_, _) => Result.Err(AgentError(AgentErrorKind.Configuration,
+                "network.gateway_resource_unsupported", "gateway does not support ModelAttempt resources"))
+        }
+    }
     func release(lease: NetworkGatewayLease): Result<Unit>
 }
 

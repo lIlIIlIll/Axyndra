@@ -18,8 +18,10 @@ import agent_domain.*
 import agent_extension_runtime.*
 import agent_ports.*
 import agent_product.*
+import workspace_legacy_oracle.*
+import program_native_contract.*
+import shell_readonly_native_contract.*
 import agent_runtime.*
-import agent_skills.*
 import agent_store.*
 import tool_runtime.*
 import agent_testkit.*
@@ -120,35 +122,32 @@ class ProgramCancellationReadExecutor <: ToolExecutor {
 func runProgramCancellationRecoveryContract(root: String, workspace: String): Unit {
     let sessionId = SessionId("product-program-cancel-recovery")
     let stateRoot = root + "/program-cancel-recovery-state"
+    let gate = NativeProgramAdmissionCancellationGate(sessionId.value)
     let product = openProduct(config: ProductConfig(
         settingsRoot: root + "/program-cancel-recovery-settings",
         stateRoot: stateRoot,
         workspaceRoot: workspace,
         fixture: true,
-        asyncEnabled: false
+        asyncEnabled: false,
+        fixtureTransactionCommitMonitor: Some({transaction=>gate.observe(transaction)})
     )).value().getOrThrow()
     try {
-        expect(product.unregisterTool("read"), "retire the built-in read tool for the cancellation fixture")
-        let gate = ProgramCancellationGate()
-        let registered = product.registerTool(
-            ToolDescriptor(
-                ModelToolDefinition("read", "blocking read-only cancellation fixture", objectValue([])),
-                Capability(CapabilityKind.WorkspaceRead),
-                implementationVersion: "program-cancel-fixture-v1",
-                implementationFingerprint: "program-cancel-fixture-read-v1",
-                networkPolicyResolver: Some({_ =>
-                    Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
-                })
-            ),
-            ProgramCancellationReadExecutor(gate)
-        )
-        expect(registered.isOk(), "install deterministic read-only child cancellation fixture")
+        let registered=product.registerTool(ToolDescriptor(
+            ModelToolDefinition("fixture.observe_program_cancellation","passive cancellation observation",objectValue([])),
+            Capability(CapabilityKind.WorkspaceRead),controlOnly:true,hostServiceOnly:true,
+            implementationVersion:"passive-program-cancellation-v1",
+            implementationFingerprint:"passive-program-cancellation-v1",
+            networkPolicyResolver:Some({_=>Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))})),
+            NativeProgramCancellationObserver(gate))
+        expect(registered.isOk(),"install passive observer of the original catalog cancellation broadcast")
+        let binding=NativeProgramContractBinding(product)
+        gate.selectActualRead(binding.workspaceName("read"))
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-cancel-root-call",
-            "run_program",
+            binding.name,
             objectValue([ValueField(
-                "source",
-                textValue("const first = await tools.read({}); const second = await tools.read({}); return first;")
+                "code",
+                textValue("const first = await tools.read({\"path\":\"src/alpha.cj\"}); const second = await tools.read({\"path\":\"src/beta.cj\"}); return first;")
             )])
         )
         let session = product.applicationSession(sessionId: Some(sessionId))
@@ -173,7 +172,7 @@ func runProgramCancellationRecoveryContract(root: String, workspace: String): Un
                     "JOIN runs ON runs.id=child.run_id " +
                     "JOIN operation_receipts receipt ON receipt.operation_id=child.id " +
                     "WHERE runs.thread_id='" + sessionId.value + "' " +
-                    "AND admission.call_sequence=1 AND child.state='committed' " +
+                    "AND admission.depth=1 AND admission.call_sequence=1 AND child.state='committed' " +
                     "AND receipt.outcome='completed'"
             )
             let cancel = spawn { session.cancel() }
@@ -210,7 +209,7 @@ func runProgramCancellationRecoveryContract(root: String, workspace: String): Un
                     "JOIN runs ON runs.id=child.run_id " +
                     "JOIN operation_receipts receipt ON receipt.operation_id=child.id " +
                     "WHERE runs.thread_id='" + sessionId.value + "' " +
-                    "AND child.state='committed' AND receipt.outcome='completed'"
+                    "AND admission.depth=1 AND child.state='committed' AND receipt.outcome='completed'"
             )
             let completedRootReceipts = database.scalarInt(
                 "SELECT COUNT(*) FROM operations root_operation " +
@@ -222,27 +221,29 @@ func runProgramCancellationRecoveryContract(root: String, workspace: String): Un
                     "WHERE admission.operation_id=root_operation.id)"
             )
             let runDirectoryEntries = ArrayList<Unit>()
-            Directory.walk(Path(stateRoot + "/runtime/tool-programs"), { _ =>
-                runDirectoryEntries.add(())
-                true
-            })
+            if(exists(Path(stateRoot+"/runtime/tool-programs"))){
+                Directory.walk(Path(stateRoot+"/runtime/tool-programs"),{_=>runDirectoryEntries.add(());true})}
+            let businessAdmissions=database.scalarInt(
+                "SELECT COUNT(*) FROM derived_operation_admissions a JOIN operations o ON o.id=a.operation_id "+
+                "JOIN runs r ON r.id=o.run_id WHERE r.thread_id="+sqliteText(sessionId.value)+" AND a.depth=1")
             let remainingRunDirectories = runDirectoryEntries.size
-            expect(secondChildEntered && completedBeforeCancel == 1,
+            expect(secondChildEntered && gate.firstCompletedAtBoundary() && completedBeforeCancel == 1,
                 "cancellation starts only after child one has a completed durable Receipt")
             expect(gate.cancellationWasReceived() && cancelSucceeded &&
                 submissionSettled && cancellationSettled && runState == "cancelled",
                 "parent cancellation reaches the active Program and settles the Run")
-            expect(completedChildReceipts >= 1 && gate.calls() == 2,
+            expect(completedChildReceipts >= 1 && businessAdmissions == 2 && gate.unexpectedExecutions() == 0,
                 "cancellation preserves completed child evidence without replaying the child call")
             expect(completedRootReceipts == 0,
                 "cancelled worker output is not committed as a successful root ToolResult")
             expect(remainingRunDirectories == 0,
-                "cancelled Program worker releases its private per-run directory")
+                "cancelled Native Program retains no retired per-run worker directory; actual owner ACK completes before Product close")
         } finally {
             database.close()
         }
     } finally {
-        product.close()
+        gate.releaseForTest()
+        product.close().value().getOrThrow()
     }
 }
 
@@ -301,7 +302,7 @@ func requestWithBudget(
         cacheKey: base.cacheKey,
         parallelToolCalls: base.parallelToolCalls,
         toolContext: base.toolContext,
-        skillStack: base.skillStack,
+        contextSnapshot: base.contextSnapshot,
         contextWindow: base.contextWindow,
         providerSafetyMargin: base.providerSafetyMargin,
         executionLaneId: base.executionLaneId
@@ -317,12 +318,12 @@ func readOnlyWorkflowCatalogAvailable(product: ProductRuntime): Bool {
     var hasEdit = false
     var hasBash = false
     for (tool in request.tools) {
-        if (tool.name == "read") { hasRead = true }
-        if (tool.name == "grep") { hasGrep = true }
-        if (tool.name == "run_program") { hasProgram = true }
-        if (tool.name == "write") { hasWrite = true }
-        if (tool.name == "edit") { hasEdit = true }
-        if (tool.name == "bash") { hasBash = true }
+        if (tool.name == nativeWorkspaceContractToolName(product,"read")) { hasRead = true }
+        if (tool.name == nativeWorkspaceContractToolName(product,"grep")) { hasGrep = true }
+        if (tool.name == nativeProgramContractToolName(product)) { hasProgram = true }
+        if (tool.name == "write" || tool.name == "plugin.axyndra:workspace.write") { hasWrite = true }
+        if (tool.name == "edit" || tool.name == "plugin.axyndra:workspace.edit") { hasEdit = true }
+        if (tool.name == "bash" || tool.name == "plugin.axyndra:shell.bash") { hasBash = true }
     }
     hasRead && hasGrep && hasProgram && !hasWrite && !hasEdit && !hasBash
 }
@@ -368,13 +369,13 @@ func pluginAcquisitionRunFixtureCommand(
 }
 
 func pluginAcquisitionRequireRecord(
-    result: PluginImportResult<ProductPluginRecord>,
+    result: PluginRegistryResult<ProductPluginRecord>,
     context: String
 ): ProductPluginRecord {
     match (result) {
-        case PluginImportResult.Ok(value) => value
-        case PluginImportResult.Err(error) => throw IllegalStateException(
-            context + ": " + error.code + ": " + error.message
+        case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(
+            context + ": " + error.code + ": " + supportRegistryExclusiveErrorText96(error)
         )
     }
 }
@@ -420,13 +421,57 @@ func pluginAcquisitionStageCount(settingsRoot: String): Int64 {
     count
 }
 
-func pluginAcquisitionToolAvailable(product: ProductRuntime, namespace: String): Bool {
-    let expected = "plugin." + namespace + ".invoke"
-    for (tool in product.tools()) {
-        if (tool.name == expected) { return true }
+func pluginAcquisitionCommandAvailable(product: ProductRuntime, namespace: String): Bool {
+    for (command in product.javascriptPluginCommands()) {
+        if (command.extensionId == namespace && command.name == "hello") { return true }
     }
     false
 }
+
+func pluginAcquisitionInvokeNativeCommand(product: ProductRuntime, namespace: String, invocation: String): Unit {
+    let cancellation = CancellationSource()
+    try {
+        match (product.invokeJavaScriptPluginCommand(
+            "plugin." + namespace + ".hello", "", SessionId("plugin-acquisition-native-commands"),
+            invocation, cancellation.token, {_, _ => ()}
+        )) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => throw IllegalStateException(
+                "acquired native command failed: " + error.code + ": " + error.message
+            )
+        }
+    } finally { cancellation.close() }
+}
+
+func pluginAcquisitionNativeFixture(root: String): String {
+    match (getVariable("AXYNDRA_NATIVE_PLUGIN_FIXTURE")) {
+        case Some(value) => if (exists(Path(value))) { return canonicalize(Path(value)).toString() }
+        case None => ()
+    }
+    let script = if (exists(Path("../native_plugin_fixture/build.sh"))) {
+        "../native_plugin_fixture/build.sh"
+    } else { "support_tests/native_plugin_fixture/build.sh" }
+    expect(exists(Path(script)), "native acquisition fixture builder exists")
+    let output = root + "/native-acquisition-fixture/native-plugin"
+    let _ = pluginAcquisitionRunFixtureCommand(
+        "/bin/bash", [canonicalize(Path(script)).toString(), output], root
+    )
+    output
+}
+
+func pluginAcquisitionWriteNativePackage(packageRoot: String, source: String, id: String): Unit {
+    let entrypoint = "plugins/reviewer/native-plugin"
+    File.writeTo(packageRoot + "/" + entrypoint, File.readFrom(Path(source)))
+    let _ = pluginAcquisitionRunFixtureCommand("/bin/chmod", ["755", entrypoint], packageRoot)
+    File.writeTo(packageRoot + "/axyndra.plugin.json", (
+        "{\"id\":\"" + id + "\",\"version\":\"1.0.0\"," +
+        "\"entrypoint\":\"" + entrypoint + "\",\"entry_kind\":\"native-executable\"," +
+        "\"sdk_range\":\"[2.0.0,3.0.0)\",\"protocol_range\":\"axyndra-js-host-v2\"," +
+        "\"signature\":\"fixture-native-signature\"," +
+        "\"capabilities\":[],\"contributions\":[{\"kind\":\"command\",\"name\":\"hello\"}]}"
+    ).toArray())
+}
+
 func productToolAvailable(product: ProductRuntime, expected: String): Bool {
     for (tool in product.tools()) {
         if (tool.name == expected) { return true }
@@ -436,15 +481,11 @@ func productToolAvailable(product: ProductRuntime, expected: String): Bool {
 
 
 func runPluginAcquisitionControlContract(root: String, workspace: String): Unit {
+    let nativeFixture = pluginAcquisitionNativeFixture(root)
     let gitRoot = workspace + "/plugin-acquisition-git"
     Directory.create(gitRoot + "/plugins/reviewer", recursive: true)
     File.writeTo(gitRoot + "/LICENSE", "git fixture license\n".toArray())
-    File.writeTo(gitRoot + "/plugins/reviewer/README.txt", "git fixture entrypoint\n".toArray())
-    File.writeTo(gitRoot + "/axyndra.plugin.json", (
-        "{\"id\":\"acquisition-git\",\"version\":\"1.0.0\"," +
-        "\"entrypoint\":\"plugins/reviewer\",\"capabilities\":[]," +
-        "\"content_digest\":\"sha256:git-fixture\",\"signature\":\"signature-git\"}"
-    ).toArray())
+    pluginAcquisitionWriteNativePackage(gitRoot, nativeFixture, "acquisition-git")
     File.writeTo(gitRoot + "/package.json", (
         "{\"name\":\"plugin-acquisition-git\",\"version\":\"1.0.0\"," +
         "\"license\":\"MIT\",\"dependencies\":{" +
@@ -482,12 +523,7 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
     Directory.create(npmPackageRoot + "/node_modules/plugin-bundled-dependency", recursive: true)
     Directory.create(npmDependencyRoot, recursive: true)
     File.writeTo(npmPackageRoot + "/LICENSE", "npm fixture license\n".toArray())
-    File.writeTo(npmPackageRoot + "/plugins/reviewer/README.txt", "npm fixture entrypoint\n".toArray())
-    File.writeTo(npmPackageRoot + "/axyndra.plugin.json", (
-        "{\"id\":\"acquisition-npm\",\"version\":\"1.0.0\"," +
-        "\"entrypoint\":\"plugins/reviewer\",\"capabilities\":[]," +
-        "\"content_digest\":\"sha256:npm-fixture\",\"signature\":\"signature-npm\"}"
-    ).toArray())
+    pluginAcquisitionWriteNativePackage(npmPackageRoot, nativeFixture, "acquisition-npm")
     File.writeTo(npmPackageRoot + "/package.json", (
         "{\"name\":\"plugin-acquisition-fixture\",\"version\":\"1.0.0\"," +
         "\"license\":\"MIT\",\"dependencies\":{" +
@@ -528,6 +564,10 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
     )).value().getOrThrow()
     expect(!productToolAvailable(product, "plugin_acquisition"),
         "the host-only acquisition tool is absent from model-visible tools")
+    expect(!productToolAvailable(product,"bash") && !productToolAvailable(product,"bash_readonly"),
+        "the acquisition contract removes both Shell registrations before source acquisition")
+    expect(!productToolAvailable(product, "bash") && !productToolAvailable(product, "bash_readonly"),
+        "Git and npm maintenance starts with no registered Shell tool")
     expect(!exists(Path(workspace + "/.axyndra/plugin-acquisition")),
         "plugin acquisition never creates writable-workspace staging")
     let database = SqliteDatabase(stateRoot + "/state.db")
@@ -569,10 +609,10 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             expect(match (invalidGit) {
-                case PluginImportResult.Err(error) => error.code == "plugin.source_revision_invalid"
+                case PluginRegistryResult.Err(error) => error.code == "plugin.source_revision_invalid"
                 case _ => false
             } && match (invalidNpm) {
-                case PluginImportResult.Err(error) => error.code == "plugin.source_version_invalid"
+                case PluginRegistryResult.Err(error) => error.code == "plugin.source_version_invalid"
                 case _ => false
             } && pluginAcquisitionRunCount(database, invalidGitSession) == 0 &&
                 pluginAcquisitionRunCount(database, invalidNpmSession) == 0,
@@ -589,21 +629,21 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             let gitRecord = match (gitImport) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(
-                    "exact Git source import failed: " + error.code + ":" + error.message
+                case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(
+                    "exact Git source import failed: " + error.code + ":" + supportRegistryExclusiveErrorText96(error)
                 )
             }
-            expect(!gitRecord.enabled && gitRecord.revisionLock == gitRevision &&
-                gitRecord.descriptor.root.startsWith(
+            expect(!supportRegistryData96(gitRecord).enabled && supportRegistryField96(gitRecord,"revision") == gitRevision &&
+                supportRegistryDescriptor96(gitRecord,"root").startsWith(
                     settingsRoot + "/plugins/packages/workspaces/") &&
-                gitRecord.contentLock != "" && gitRecord.contentLock == gitRecord.descriptor.contentDigest &&
-                String.fromUtf8(File.readFrom(Path(gitRecord.descriptor.root + "/LICENSE"))) ==
+                supportRegistryField96(gitRecord,"content_digest") != "" && supportRegistryField96(gitRecord,"content_digest") == supportRegistryDescriptor96(gitRecord,"content_digest") &&
+                String.fromUtf8(File.readFrom(Path(supportRegistryDescriptor96(gitRecord,"root") + "/LICENSE"))) ==
                     "git fixture license\n" &&
-                exists(Path(gitRecord.descriptor.root +
+                exists(Path(supportRegistryDescriptor96(gitRecord,"root") +
                     "/node_modules/plugin-acquisition-dependency/package.json")) &&
-                exists(Path(gitRecord.descriptor.root + "/.axyndra-dependencies.lock.json")) &&
-                !exists(Path(gitRecord.descriptor.root + "/.git")),
+                exists(Path(supportRegistryDescriptor96(gitRecord,"root") + "/.axyndra-dependencies.lock.json")) &&
+                !exists(Path(supportRegistryDescriptor96(gitRecord,"root") + "/.git")),
                 "Git import installs registry dependencies and stores a disabled immutable licensed snapshot")
             expect(pluginAcquisitionHasCompletedOperation(
                 database, gitSession, NetworkPolicyMode.Mediated
@@ -616,7 +656,7 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             expect(match (cachedGit) {
-                case PluginImportResult.Ok(value) => value.contentLock == gitRecord.contentLock
+                case PluginRegistryResult.Ok(value) => supportRegistryField96(value,"content_digest") == supportRegistryField96(gitRecord,"content_digest")
                 case _ => false
             } && pluginAcquisitionRunCount(database, gitSession) == gitRunCount,
                 "an identical exact Git source reuses the verified offline snapshot without a Run")
@@ -634,13 +674,13 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             let npmRecord = match (npmImport) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) =>
+                case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+                case PluginRegistryResult.Err(error) =>
                     throw IllegalStateException(
-                        "exact npm source import failed: " + error.code + ":" + error.message
+                        "exact npm source import failed: " + error.code + ":" + supportRegistryExclusiveErrorText96(error)
                     )
             }
-            let npmRoot = npmRecord.descriptor.root
+            let npmRoot = supportRegistryDescriptor96(npmRecord,"root")
             let npmLock = parseUnifiedJson(String.fromUtf8(File.readFrom(
                 Path(npmRoot + "/.axyndra-dependencies.lock.json")
             )))
@@ -651,12 +691,12 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
             ).getOrThrow()
             let npmIntegrity = npmRootEntry.field("integrity").getOrThrow().text
             let dependencyIntegrity = npmDependencyEntry.field("integrity").getOrThrow().text
-            expect(!npmRecord.enabled && npmRecord.versionLock == "1.0.0" &&
-                npmRecord.descriptor.root.startsWith(
+            expect(!supportRegistryData96(npmRecord).enabled && supportRegistryField96(npmRecord,"version_lock") == "1.0.0" &&
+                supportRegistryDescriptor96(npmRecord,"root").startsWith(
                     settingsRoot + "/plugins/packages/workspaces/") &&
-                npmRecord.integrityLock == npmIntegrity && npmIntegrity.startsWith("sha512-") &&
+                supportRegistryField96(npmRecord,"integrity") == npmIntegrity && npmIntegrity.startsWith("sha512-") &&
                 dependencyIntegrity.startsWith("sha512-") &&
-                npmRecord.contentLock == npmRecord.descriptor.contentDigest &&
+                supportRegistryField96(npmRecord,"content_digest") == supportRegistryDescriptor96(npmRecord,"content_digest") &&
                 exists(Path(npmRoot + "/node_modules/plugin-acquisition-dependency/package.json")) &&
                 exists(Path(npmRoot + "/node_modules/plugin-bundled-dependency/package.json")) &&
                 !exists(Path(npmRoot + "/node_modules/node_modules")) &&
@@ -671,31 +711,33 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 "fresh Git and npm snapshots pass plugin integrity and dependency diagnostics")
 
             let enabledGitResult = product.setPluginEnabled(
-                gitRecord.descriptor.id, true, PluginInstallScope.Workspace
+                supportRegistryDescriptor96(gitRecord,"id"), true, PluginInstallScope.Workspace
             )
             let enabledGitRecord = match (enabledGitResult) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(
-                    "Git fixture could not be enabled: " + error.code + ":" + error.message
+                case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(
+                    "Git fixture could not be enabled: " + error.code + ":" + supportRegistryExclusiveErrorText96(error)
                 )
             }
             let enabledNpmResult = product.setPluginEnabled(
-                npmRecord.descriptor.id, true, PluginInstallScope.Workspace
+                supportRegistryDescriptor96(npmRecord,"id"), true, PluginInstallScope.Workspace
             )
             let enabledNpmRecord = match (enabledNpmResult) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(
-                    "npm fixture could not be enabled: " + error.code + ":" + error.message
+                case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(
+                    "npm fixture could not be enabled: " + error.code + ":" + supportRegistryExclusiveErrorText96(error)
                 )
             }
             expect(enabledGitRecord.enabled && enabledNpmRecord.enabled &&
-                pluginAcquisitionToolAvailable(product, gitRecord.descriptor.namespace) &&
-                pluginAcquisitionToolAvailable(product, npmRecord.descriptor.namespace),
-                "both source snapshots activate before update failure checks")
+                pluginAcquisitionCommandAvailable(product, supportRegistryDescriptor96(gitRecord,"namespace")) &&
+                pluginAcquisitionCommandAvailable(product, supportRegistryDescriptor96(npmRecord,"namespace")),
+                "both acquired native command snapshots activate with Shell tools absent")
+            pluginAcquisitionInvokeNativeCommand(product, supportRegistryDescriptor96(gitRecord,"namespace"), "git-before-update")
+            pluginAcquisitionInvokeNativeCommand(product, supportRegistryDescriptor96(npmRecord,"namespace"), "npm-before-update")
 
             let failedNpmUpdateSession = SessionId("plugin-acquisition-npm-update-failure")
             let failedNpmUpdate = product.updatePluginSource(
-                npmRecord.descriptor.id,
+                supportRegistryDescriptor96(npmRecord,"id"),
                 PluginInstallScope.Workspace,
                 failedNpmUpdateSession,
                 ProductPluginSourceRequest(
@@ -707,21 +749,21 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             let npmAfterFailure = pluginAcquisitionRequireRecord(product.setPluginEnabled(
-                npmRecord.descriptor.id, true, PluginInstallScope.Workspace
+                supportRegistryDescriptor96(npmRecord,"id"), true, PluginInstallScope.Workspace
             ), "npm prior source record")
             expect(match (failedNpmUpdate) {
-                case PluginImportResult.Err(error) => error.code == "plugin.acquisition_command_failed"
+                case PluginRegistryResult.Err(error) => error.code == "plugin.acquisition_command_failed"
                 case _ => false
-            } && pluginAcquisitionStageCount(settingsRoot) == 0 && npmAfterFailure.enabled &&
-                npmAfterFailure.versionLock == npmRecord.versionLock &&
-                npmAfterFailure.integrityLock == npmRecord.integrityLock &&
-                npmAfterFailure.contentLock == npmRecord.contentLock &&
-                pluginAcquisitionToolAvailable(product, npmRecord.descriptor.namespace),
+            } && pluginAcquisitionStageCount(settingsRoot) == 0 && supportRegistryData96(npmAfterFailure).enabled &&
+                supportRegistryField96(npmAfterFailure,"version_lock") == supportRegistryField96(npmRecord,"version_lock") &&
+                supportRegistryField96(npmAfterFailure,"integrity") == supportRegistryField96(npmRecord,"integrity") &&
+                supportRegistryField96(npmAfterFailure,"content_digest") == supportRegistryField96(npmRecord,"content_digest") &&
+                pluginAcquisitionCommandAvailable(product, supportRegistryDescriptor96(npmRecord,"namespace")),
                 "missing npm version cleans staging and preserves the enabled prior snapshot")
 
             let failedGitUpdateSession = SessionId("plugin-acquisition-git-update-failure")
             let failedGitUpdate = product.updatePluginSource(
-                gitRecord.descriptor.id,
+                supportRegistryDescriptor96(gitRecord,"id"),
                 PluginInstallScope.Workspace,
                 failedGitUpdateSession,
                 ProductPluginSourceRequest(
@@ -732,25 +774,29 @@ func runPluginAcquisitionControlContract(root: String, workspace: String): Unit 
                 approvalDecision: ApprovalDecision.Approve
             )
             let gitAfterFailure = pluginAcquisitionRequireRecord(product.setPluginEnabled(
-                gitRecord.descriptor.id, true, PluginInstallScope.Workspace
+                supportRegistryDescriptor96(gitRecord,"id"), true, PluginInstallScope.Workspace
             ), "Git prior source record")
             let workspaceLock = String.fromUtf8(File.readFrom(Path(
                 workspace + "/.axyndra/plugins/lock.jsonl"
             )))
             expect(match (failedGitUpdate) {
-                case PluginImportResult.Err(error) => error.code == "plugin.acquisition_command_failed"
+                case PluginRegistryResult.Err(error) => error.code == "plugin.acquisition_command_failed"
                 case _ => false
-            } && pluginAcquisitionStageCount(settingsRoot) == 0 && gitAfterFailure.enabled &&
-                gitAfterFailure.revisionLock == gitRecord.revisionLock &&
-                gitAfterFailure.contentLock == gitRecord.contentLock &&
-                pluginAcquisitionToolAvailable(product, gitRecord.descriptor.namespace) &&
+            } && pluginAcquisitionStageCount(settingsRoot) == 0 && supportRegistryData96(gitAfterFailure).enabled &&
+                supportRegistryField96(gitAfterFailure,"revision") == supportRegistryField96(gitRecord,"revision") &&
+                supportRegistryField96(gitAfterFailure,"content_digest") == supportRegistryField96(gitRecord,"content_digest") &&
+                pluginAcquisitionCommandAvailable(product, supportRegistryDescriptor96(gitRecord,"namespace")) &&
                 workspaceLock.contains("\"enabled\":true") &&
                 workspaceLock.contains("\"version_lock\":\"1.0.0\"") &&
-                workspaceLock.contains(gitRecord.revisionLock) &&
-                workspaceLock.contains(npmRecord.integrityLock),
+                workspaceLock.contains(supportRegistryField96(gitRecord,"revision")) &&
+                workspaceLock.contains(supportRegistryField96(npmRecord,"integrity")),
                 "missing Git commit cleans staging and preserves both enabled source lock records")
             expect(product.pluginDoctor().isEmpty(),
                 "failed source updates leave both installed snapshots diagnostically clean")
+            pluginAcquisitionInvokeNativeCommand(product, supportRegistryDescriptor96(gitRecord,"namespace"), "git-after-update")
+            pluginAcquisitionInvokeNativeCommand(product, supportRegistryDescriptor96(npmRecord,"namespace"), "npm-after-update")
+            expect(!productToolAvailable(product, "bash") && !productToolAvailable(product, "bash_readonly"),
+                "maintenance and native activation never restore removed Shell tools")
         } finally {
             try {
                 registryServer.terminate(force: true)
@@ -799,7 +845,8 @@ func fixtureWorkflowUsageLine(
 func runMatchedProductWorkflowContract(
     product: ProductRuntime,
     stateRoot: String,
-    programSource: String
+    programSource: String,
+    binding: NativeProgramContractBinding
 ): Unit {
     let prompt = "Find SymbolAnchor definitions, read both files, and summarize matching paths."
     let database = SqliteDatabase(stateRoot + "/state.db")
@@ -813,8 +860,8 @@ func runMatchedProductWorkflowContract(
             let ptcSession = SessionId("e3-08-ptc-" + sampleNumber.toString())
             product.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 "e3-08-ptc-call-" + sampleNumber.toString(),
-                "run_program",
-                objectValue([ValueField("source", textValue(programSource))])
+                nativeProgramContractToolName(product),
+                objectValue([ValueField("code", textValue(programSource))])
             )
             let ptcRequest = product.request(
                 prompt,
@@ -843,7 +890,7 @@ func runMatchedProductWorkflowContract(
             for (item in ptcHistory.items) {
                 match (item.content) {
                     case ThreadItemContent.ToolCall(callId, name, _) =>
-                        if (name == "run_program") {
+                        if (name == nativeProgramContractToolName(product)) {
                             ptcRootCallId = callId.value
                             ptcRootCallCount += 1
                         }
@@ -889,6 +936,8 @@ func runMatchedProductWorkflowContract(
             for (required in ptcRootPlan.requiredCapabilities) {
                 if (required.kind == CapabilityKind.WorkspaceRead) {
                     ptcRootHasRead = true
+                } else if (required.kind==CapabilityKind.ExtensionInvoke && binding.readonlyCapabilityAllowed(ptcRootPlan,required)) {
+                    // Only this actual frozen contribution or an independently granted actual child QName.
                 } else {
                     ptcRootOnlyRead = false
                 }
@@ -903,6 +952,8 @@ func runMatchedProductWorkflowContract(
                 for (required in plan.requiredCapabilities) {
                     if (required.kind == CapabilityKind.WorkspaceRead) {
                         childHasRead = true
+                    } else if (required.kind==CapabilityKind.ExtensionInvoke && binding.readonlyCapabilityAllowed(plan,required)) {
+                        // Only this actual frozen contribution or an independently granted actual child QName.
                     } else {
                         childOnlyRead = false
                     }
@@ -956,24 +1007,25 @@ func runMatchedProductWorkflowContract(
                     "ON op.id=receipt.operation_id WHERE op.run_id='" +
                     ptcSnapshot.runId.value + "'"
             )
+            binding.requireCompletedBranches(database,ptcSnapshot.runId,ptcRootOperationId,["grep","read","read"])
             expect(ptcRootCallCount == 1 && ptcRootResultCount == 1 &&
                 !ptcRootResultIsError && ptcRootOutput.field("status").getOrThrow().text == "completed" &&
                 ptcRootHasRead && ptcRootOnlyRead &&
                 ptcRootPlan.effectClass == OperationEffectClass.ReadOnly &&
                 ptcRootPlan.networkPolicy.mode == NetworkPolicyMode.Denied &&
-                ptcChildRows.size == 3 && ptcChildRows[0].required(4) == "grep" &&
-                ptcChildRows[1].required(4) == "read" && ptcChildRows[2].required(4) == "read" &&
+                ptcChildRows.size == 3 && ptcChildRows[0].required(4) == binding.workspaceName("grep") &&
+                ptcChildRows[1].required(4) == binding.workspaceName("read") && ptcChildRows[2].required(4) == binding.workspaceName("read") &&
                 ptcChildRows[0].required(3) == "completed" &&
                 ptcChildRows[1].required(3) == "completed" &&
                 ptcChildRows[2].required(3) == "completed" && ptcChildPlansReadOnly &&
-                ptcOperationCount == 4 && ptcReceiptCount == 4 && ptcEvidence != "",
+                ptcOperationCount == 7 && ptcReceiptCount == 7 && ptcEvidence != "",
                 "PTC completes the search-read workflow with only denied-network WorkspaceRead plans")
 
             let nativeSession = SessionId("e3-08-native-" + sampleNumber.toString())
             let nativeProbe = product.fixtureProbe.getOrThrow()
             nativeProbe.enqueueToolCallReply(
                 "e3-08-native-grep-" + sampleNumber.toString(),
-                "grep",
+                binding.workspaceName("grep"),
                 objectValue([
                     ValueField("pattern", textValue("SymbolAnchor")),
                     ValueField("path", textValue("src")),
@@ -982,7 +1034,7 @@ func runMatchedProductWorkflowContract(
             )
             nativeProbe.enqueueToolCallReply(
                 "e3-08-native-alpha-" + sampleNumber.toString(),
-                "read",
+                binding.workspaceName("read"),
                 objectValue([
                     ValueField("path", textValue("src/alpha.cj")),
                     ValueField("offset", integerValue(1)),
@@ -991,7 +1043,7 @@ func runMatchedProductWorkflowContract(
             )
             nativeProbe.enqueueToolCallReply(
                 "e3-08-native-beta-" + sampleNumber.toString(),
-                "read",
+                binding.workspaceName("read"),
                 objectValue([
                     ValueField("path", textValue("src/beta.cj")),
                     ValueField("offset", integerValue(1)),
@@ -1052,7 +1104,7 @@ func runMatchedProductWorkflowContract(
                 "SELECT op.id FROM operations op WHERE op.run_id='" +
                     nativeSnapshot.runId.value + "'"
             )
-            var nativePlansReadOnly = nativeOperationRows.size == 3
+            var nativePlansReadOnly = nativeOperationRows.size == 6
             for (row in nativeOperationRows) {
                 let plan = operationStore.loadPlan(
                     OperationId(row.required(0)), nativeSnapshot.runId
@@ -1062,6 +1114,8 @@ func runMatchedProductWorkflowContract(
                 for (required in plan.requiredCapabilities) {
                     if (required.kind == CapabilityKind.WorkspaceRead) {
                         hasRead = true
+                    } else if (required.kind==CapabilityKind.ExtensionInvoke && binding.readonlyCapabilityAllowed(plan,required)) {
+                        // Only this actual frozen contribution or an independently granted actual child QName.
                     } else {
                         onlyRead = false
                     }
@@ -1080,8 +1134,13 @@ func runMatchedProductWorkflowContract(
                     "ON op.id=receipt.operation_id WHERE op.run_id='" +
                     nativeSnapshot.runId.value + "'"
             )
-            expect(nativeCallNames.size == 3 && nativeCallNames[0] == "grep" &&
-                nativeCallNames[1] == "read" && nativeCallNames[2] == "read" &&
+            let nativeRoots=database.query("SELECT o.id,e.tool_id FROM operations o JOIN operation_effect_records e ON e.operation_id=o.id "+
+                "WHERE o.run_id=? AND NOT EXISTS(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=o.id) ORDER BY o.id",
+                [SqlParameter.Text(nativeSnapshot.runId.value)])
+            expect(nativeRoots.size==3,"the native comparison has exactly three actual ordinary roots")
+            for(root in nativeRoots){binding.requireCompletedReadviewRoot(database,nativeSnapshot.runId,root.required(0),root.required(1))}
+            expect(nativeCallNames.size == 3 && nativeCallNames[0] == binding.workspaceName("grep") &&
+                nativeCallNames[1] == binding.workspaceName("read") && nativeCallNames[2] == binding.workspaceName("read") &&
                 nativeOutputs.size == 3 && nativeResultErrors.size == 3 &&
                 !nativeResultErrors[0] && !nativeResultErrors[1] && !nativeResultErrors[2] &&
                 nativeGrepFiles.unifiedKind == ValueKind.List && nativeGrepFiles.items.size == 2 &&
@@ -1090,7 +1149,7 @@ func runMatchedProductWorkflowContract(
                 nativeAlphaContent.text.contains("SymbolAnchor: alpha") &&
                 nativeBetaContent.text.contains("SymbolAnchor: beta") &&
                 nativeEvidence == ptcEvidence && nativePlansReadOnly &&
-                nativeOperationCount == 3 && nativeReceiptCount == 3,
+                nativeOperationCount == 6 && nativeReceiptCount == 6,
                 "native and PTC workflows produce identical paths and file evidence under read-only plans")
             expect(ptcProgramValue.items[0].text == "src/alpha.cj" &&
                 ptcProgramValue.items[1].text == "src/beta.cj" &&
@@ -1115,7 +1174,7 @@ func runMatchedProductWorkflowContract(
         let missingReadSession = SessionId("e3-08-native-missing-read")
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "e3-08-native-missing-read-call",
-            "read",
+            binding.workspaceName("read"),
             objectValue([ValueField("path", textValue("src/missing.cj"))])
         )
         let missingReadRequest = product.request(
@@ -1160,12 +1219,12 @@ func runNativeReadCancellationContract(root: String, workspace: String): Unit {
         asyncEnabled: false
     )).value().getOrThrow()
     try {
-        expect(product.unregisterTool("read"), "replace the built-in read for the native cancellation fixture")
+        expect(!productToolAvailable(product,"read"), "retired built-in read is absent before the isolated foundational cancellation fixture")
         let gate = ProgramCancellationGate()
         let _ = gate.beginCall()
         let registered = product.registerTool(
             ToolDescriptor(
-                ModelToolDefinition("read", "blocking native read cancellation fixture", objectValue([])),
+                ModelToolDefinition("fixture.native_read_cancellation", "blocking native read cancellation fixture", objectValue([])),
                 Capability(CapabilityKind.WorkspaceRead),
                 implementationVersion: "native-cancel-fixture-v1",
                 implementationFingerprint: "native-cancel-read-v1",
@@ -1178,7 +1237,7 @@ func runNativeReadCancellationContract(root: String, workspace: String): Unit {
         expect(registered.isOk(), "install the deterministic native read cancellation fixture")
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "native-cancel-read-call",
-            "read",
+            "fixture.native_read_cancellation",
             objectValue([])
         )
         let request = product.request(
@@ -1248,14 +1307,325 @@ func runNativeReadCancellationContract(root: String, workspace: String): Unit {
     }
 }
 
+func runAstPluginQuery(product: ProductRuntime, tool: String, id: String, input: AgentValue): ToolResult {
+    let budget = ExecutionBudget(maxToolCalls: 2, maxConcurrentTools: 1)
+    let result = product.vnext.executeCanonicalTool(SessionId(id),
+        CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke), Capability(CapabilityKind.WorkspaceRead)]),
+        ToolCall(id, tool, input), budget: budget)
+    let value = match (result) {
+        case Result.Ok(ToolInvocationResult.Completed(output)) => output
+        case Result.Err(error) => throw IllegalStateException("AST invocation failed: " + error.describe())
+        case _ => throw IllegalStateException("AST invocation did not complete")
+    }
+    expect(budget.snapshot().toolCalls == 2 && budget.snapshot().activeTools == 0,
+        "AST root and process worker share a two-call budget and one concurrent slot")
+    value
+}
+
+func runAstPluginContract(root: String, workspace: String): Unit {
+    let packageRoot = getVariable("AXYNDRA_AST_PLUGIN_PACKAGE").getOrThrow()
+    expect(normalizedContentTag("before \t\r\n") == "F27C" && hashlineTag("before\n") == "F27C",
+        "shared content tags retain the existing golden value and trailing-whitespace normalization")
+    let source = "def sample(value):\n    return value\n\ndef constant():\n    return 42\n"
+    Directory.create(workspace + "/ast", recursive: true)
+    File.writeTo(workspace + "/ast/sample.py", source.toArray())
+    let stateRoot = root + "/ast-plugin-state"
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: root + "/ast-plugin-settings", stateRoot: stateRoot,
+        workspaceRoot: workspace, fixture: true, asyncEnabled: false, approvalMode: ApprovalMode.Yolo
+    )).value().getOrThrow()
+    try {
+        expect(!productToolAvailable(product, "ast_grep"), "AST query is absent until its process package is installed")
+        expect(!productToolAvailable(product,"bash") && !productToolAvailable(product,"bash_readonly"),
+            "AST query fixture removes both Shell registrations")
+        expect(!productToolAvailable(product, "ast_edit"),
+            "AST query fixture has no remaining static AST edit registration")
+        let record = pluginAcquisitionRequireRecord(product.importLocalPlugin(packageRoot, PluginInstallScope.Workspace), "import AST package")
+        let tool = "plugin." + supportRegistryDescriptor96(record,"namespace") + ".ast_grep"
+        expect(!supportRegistryData96(record).enabled && !productToolAvailable(product, tool), "AST local import creates a disabled verified snapshot")
+        let _ = pluginAcquisitionRequireRecord(product.setPluginEnabled(supportRegistryDescriptor96(record,"id"), true, PluginInstallScope.Workspace), "enable AST package")
+        expect(productToolAvailable(product, tool), "AST package independently registers its declared query tool")
+        let result = runAstPluginQuery(product, tool, "ast-plugin-query", objectValue([
+            ValueField("pat", textValue("return $VALUE")), ValueField("path", textValue("ast/**/*.py"))
+        ]))
+        expect(!result.isError && result.output.field("match_count").getOrThrow().asNumberText() == "2" &&
+            result.output.field("file_count").getOrThrow().asNumberText() == "1" &&
+            result.output.field("content").getOrThrow().text.contains("[ast/sample.py#" + hashlineTag(source) + "]") &&
+            result.output.field("content").getOrThrow().text.contains("VALUE=value") &&
+            result.output.field("content").getOrThrow().text.contains("VALUE=42"),
+            "installed AST native worker produces real structural matches, captures and shared hashline tags; actual=" + canonicalAgentValue(result.output))
+        let paged = runAstPluginQuery(product, tool, "ast-plugin-page", objectValue([
+            ValueField("pat", textValue("return $VALUE")), ValueField("path", textValue("ast/sample.py")), ValueField("skip", integerValue(1))
+        ]))
+        expect(!paged.isError && paged.output.field("visible_count").getOrThrow().asNumberText() == "1" &&
+            !paged.output.field("content").getOrThrow().text.contains("VALUE=value"), "installed AST plugin preserves stable pagination")
+        let empty = runAstPluginQuery(product, tool, "ast-plugin-empty", objectValue([
+            ValueField("pat", textValue("never_called($$$ARGS)")), ValueField("path", textValue("ast/sample.py"))
+        ]))
+        expect(!empty.isError && empty.output.field("content").getOrThrow().text == "No matches found",
+            "zero AST matches remain successful")
+        let escaped = runAstPluginQuery(product, tool, "ast-plugin-escape", objectValue([
+            ValueField("pat", textValue("return $VALUE")), ValueField("path", textValue("../*.py"))
+        ]))
+        expect(escaped.isError, "independent AST worker rejects a workspace escape")
+        let denied = product.vnext.executeCanonicalTool(SessionId("ast-plugin-no-read"),
+            CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke)]),
+            ToolCall("ast-plugin-no-read", tool, objectValue([ValueField("pat", textValue("return $VALUE"))])))
+        expect(match (denied) { case Result.Ok(ToolInvocationResult.Denied(_)) => true; case Result.Err(_) => true; case _ => false },
+            "manifest read request does not grant missing WorkspaceRead authority")
+        let database = SqliteDatabase(stateRoot + "/state.db")
+        try {
+            let roots = database.query("SELECT op.id,op.run_id,op.tool_call_item_id FROM operations op JOIN runs r ON r.id=op.run_id " +
+                "WHERE r.thread_id='ast-plugin-query' AND NOT EXISTS(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=op.id)")
+            expect(roots.size == 1, "Direct AST invocation has exactly one canonical parent Operation")
+            let children = database.query("SELECT op.id,e.tool_id,receipt.outcome,op.tool_call_item_id FROM derived_operation_admissions a " +
+                "JOIN operations op ON op.id=a.operation_id JOIN operation_effect_records e ON e.operation_id=op.id " +
+                "JOIN operation_receipts receipt ON receipt.operation_id=op.id WHERE a.parent_operation_id='" + roots[0].required(0) + "'")
+            expect(children.size == 1 && children[0].required(1) == "host.process.readonly" && children[0].required(2) == "completed" &&
+                children[0].required(3) == roots[0].required(2), "AST worker owns one admitted generic process child with a completed Receipt")
+            let plan = DurableOperationStore(database).loadPlan(OperationId(children[0].required(0)), RunId(roots[0].required(1))).value().getOrThrow()
+            expect(plan.effectClass == OperationEffectClass.ReadOnly && plan.networkPolicy.mode == NetworkPolicyMode.Denied &&
+                plan.requiredCapabilities.size == 1 && plan.requiredCapabilities[0].kind == CapabilityKind.WorkspaceRead,
+                "generic worker plan freezes read-only workspace authority and denied network")
+            expect(database.scalarInt("SELECT COUNT(*) FROM decision_operations d JOIN operations op ON op.id=d.operation_id " +
+                "WHERE op.run_id='" + roots[0].required(1) + "'") == 0, "Direct AST query does not fabricate a ModelDecision")
+        } finally { database.close() }
+        let _ = pluginAcquisitionRequireRecord(product.setPluginEnabled(supportRegistryDescriptor96(record,"id"), false, PluginInstallScope.Workspace), "disable AST package")
+        expect(!productToolAvailable(product, tool) && !productToolAvailable(product, "ast_grep") &&
+            !productToolAvailable(product, "bash") && !productToolAvailable(product, "bash_readonly"),
+            "disabling the independent AST package removes its query tool without restoring a host fallback")
+    } finally { product.close() }
+}
+
+func astPluginEditArguments(): AgentValue {
+    objectValue([
+        ValueField("ops", listValue([objectValue([
+            ValueField("pat", textValue("return $VALUE")), ValueField("out", textValue("return changed"))
+        ])])),
+        ValueField("paths", listValue([textValue("sample.py")]))
+    ])
+}
+
+func astPluginEditPlan(product: ProductRuntime, tool: String, session: String): AgentValue {
+    let budget = ExecutionBudget(maxToolCalls: 3, maxConcurrentTools: 1)
+    let result = product.vnext.executeCanonicalTool(SessionId(session),
+        CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke), Capability(CapabilityKind.WorkspaceRead)]),
+        ToolCall(session, tool, astPluginEditArguments()), budget: budget)
+    let output = match (result) {
+        case Result.Ok(ToolInvocationResult.Completed(value)) => value
+        case Result.Err(error) => throw IllegalStateException("AST edit failed: " + error.describe())
+        case _ => throw IllegalStateException("AST edit did not complete its read-only proposal")
+    }
+    expect(!output.isError && !output.output.field("applied").getOrThrow().asBool(),
+        "AST plugin only proposes changes; actual=" + canonicalAgentValue(output.output))
+    expect(budget.snapshot().toolCalls == 3 && budget.snapshot().activeTools == 0,
+        "AST edit root and two serial children share three calls and one concurrent slot")
+    output.output.field("application_plan").getOrThrow()
+}
+
+func astPlanArguments(summary: AgentValue): AgentValue {
+    objectValue([
+        ValueField("plan_ref", summary.field("plan_ref").getOrThrow()),
+        ValueField("plan_digest", summary.field("plan_digest").getOrThrow())
+    ])
+}
+
+func astPlanApprovalSession(product: ProductRuntime, sessionId: String, plan: AgentValue): ApplicationSession {
+    let session = product.applicationSession(sessionId: Some(SessionId(sessionId)))
+    product.fixtureProbe.getOrThrow().enqueueToolCallReply(sessionId, "apply_file_plan", astPlanArguments(plan))
+    let submitted = session.submit("Review this exact immutable AST edit plan.").value().getOrThrow()
+    let approval = session.approval().getOrThrow()
+    expect(submitted.approval.isSome() && approval.toolName == "apply_file_plan" &&
+        approval.capability.kind == CapabilityKind.WorkspaceWrite && !approval.sessionApprovalAllowed &&
+        approval.preview.field("plan_ref").getOrThrow().text == plan.field("plan_ref").getOrThrow().text &&
+        approval.preview.field("plan_digest").getOrThrow().text == plan.field("plan_digest").getOrThrow().text,
+        "AST application uses the existing exact, one-time write approval")
+    session
+}
+
+func runAstEditPluginContract(root: String, parentWorkspace: String): Unit {
+    let workspace = parentWorkspace + "/ast-edit-plugin"
+    Directory.create(workspace, recursive: true)
+    let path = workspace + "/sample.py"
+    let original = "def sample():\n    return before\n"
+    let replacement = "def sample():\n    return changed\n"
+    File.writeTo(path, original.toArray())
+    let stateRoot = root + "/ast-edit-plugin-state"
+    var product = openProduct(config: ProductConfig(settingsRoot: root + "/ast-edit-plugin-settings",
+        stateRoot: stateRoot, workspaceRoot: workspace, fixture: true, asyncEnabled: false,
+        approvalMode: ApprovalMode.Yolo)).value().getOrThrow()
+    try {
+        expect(!productToolAvailable(product,"bash") && !productToolAvailable(product,"bash_readonly") &&
+            !productToolAvailable(product, "ast_edit") && !productToolAvailable(product, "ast_grep"),
+            "AST edit has no Shell registration or static AST fallback")
+        let record = pluginAcquisitionRequireRecord(product.importLocalPlugin(
+            getVariable("AXYNDRA_AST_PLUGIN_PACKAGE").getOrThrow(), PluginInstallScope.Workspace), "import AST edit package")
+        let _ = pluginAcquisitionRequireRecord(product.setPluginEnabled(supportRegistryDescriptor96(record,"id"), true,
+            PluginInstallScope.Workspace), "enable AST edit package")
+        let tool = "plugin." + supportRegistryDescriptor96(record,"namespace") + ".ast_edit"
+        let plan = astPluginEditPlan(product, tool, "ast-edit-propose")
+        let freshPlan = astPluginEditPlan(product, tool, "ast-edit-fresh")
+        expect(String.fromUtf8(File.readFrom(path)) == original,
+            "real ast-grep rewrite and plan materialization leave the source file unchanged")
+        let database = SqliteDatabase(stateRoot + "/state.db")
+        try {
+            let reference = plan.field("plan_ref").getOrThrow().text
+            let artifact = ProductArtifactStore(stateRoot, database: Some(database)).read(reference, limit: 1048576).value().getOrThrow()
+            let stored = parseUnifiedJson(artifact.content)
+            let source = stored.field("source").getOrThrow()
+            expect(!artifact.truncated && stored.field("schema").getOrThrow().text == "axyndra.file-application-plan/v2" &&
+                source.field("kind").getOrThrow().text == "plugin" &&
+                source.field("plugin_namespace").getOrThrow().text == supportRegistryDescriptor96(record,"namespace") &&
+                source.field("plugin_version").getOrThrow().text == supportRegistryDescriptor96(record,"version") &&
+                source.field("package_digest").getOrThrow().text == supportRegistryDescriptor96(record,"content_digest") &&
+                source.field("contribution").getOrThrow().text == tool && source.field("program_id").isNone(),
+                "immutable plan records the installed plugin origin without pretending to be a Program")
+            let roots = database.query("SELECT op.id,op.run_id FROM operations op JOIN runs r ON r.id=op.run_id " +
+                "WHERE r.thread_id='ast-edit-propose' AND NOT EXISTS(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=op.id)")
+            let children = database.query("SELECT op.id,e.tool_id,receipt.outcome FROM derived_operation_admissions a " +
+                "JOIN operations op ON op.id=a.operation_id JOIN operation_effect_records e ON e.operation_id=op.id " +
+                "JOIN operation_receipts receipt ON receipt.operation_id=op.id WHERE a.parent_operation_id='" + roots[0].required(0) + "'")
+            expect(roots.size == 1 && children.size == 2 && source.field("root_operation_id").getOrThrow().text == roots[0].required(0),
+                "AST edit has one actual Direct root and exactly two durable children")
+            var sawProcess = false
+            var sawPlan = false
+            for (child in children) {
+                let childPlan = DurableOperationStore(database).loadPlan(OperationId(child.required(0)), RunId(roots[0].required(1))).value().getOrThrow()
+                expect(child.required(2) == "completed" && childPlan.effectClass == OperationEffectClass.ReadOnly &&
+                    childPlan.networkPolicy.mode == NetworkPolicyMode.Denied && childPlan.requiredCapabilities.size == 1 &&
+                    childPlan.requiredCapabilities[0].kind == CapabilityKind.WorkspaceRead,
+                    "proposal children retain read-only authority, denied network and completed receipts")
+                if (child.required(1) == "host.process.readonly") { sawProcess = true }
+                if (child.required(1) == "host.file.plan.propose") {
+                    sawPlan = true
+                    expect(source.field("generation_operation_id").getOrThrow().text == child.required(0),
+                        "plan source binds its actual generating Operation")
+                }
+            }
+            expect(sawProcess && sawPlan && database.scalarInt("SELECT COUNT(*) FROM decision_operations d JOIN operations op ON op.id=d.operation_id " +
+                "WHERE op.run_id='" + roots[0].required(1) + "'") == 0,
+                "Direct plugin proposal does not fabricate a ModelDecision")
+
+            let forgedArtifact = ProductArtifactStore(stateRoot, database: Some(database)).persistText(
+                artifact.content.replace(supportRegistryDescriptor96(record,"namespace"), "axyndra:forged-origin")
+            ).value().getOrThrow()
+            let forged = product.vnext.executeCanonicalTool(SessionId("ast-edit-forged-origin"),
+                CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite)]),
+                ToolCall("ast-edit-forged-origin", "apply_file_plan", objectValue([
+                    ValueField("plan_ref", textValue(forgedArtifact.reference)),
+                    ValueField("plan_digest", textValue(forgedArtifact.sha256))
+                ])))
+            let forgedCode = match (forged) {
+                case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                    if (!value.isError) {
+                        throw IllegalStateException("forged plan returned success: " + canonicalAgentValue(value.output))
+                    }
+                    match (value.output.field("error")) {
+                        case Some(code) => code.text
+                        case None => throw IllegalStateException("forged plan has no typed error: " + canonicalAgentValue(value.output))
+                    }
+                case Result.Err(error) => throw IllegalStateException("forged plan failed outside canonical preparation: " + error.describe())
+                case _ => throw IllegalStateException("forged plan did not return its canonical preparation error")
+            }
+            expect(forgedCode == "application_plan.origin_uncommitted",
+                "a content-addressed artifact cannot forge the plan's completed plugin origin: " + forgedCode)
+            expect(database.scalarInt("SELECT COUNT(*) FROM operations op JOIN runs r ON r.id=op.run_id " +
+                "WHERE r.thread_id='ast-edit-forged-origin'") == 0 &&
+                database.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
+                "JOIN runs r ON r.id=op.run_id WHERE r.thread_id='ast-edit-forged-origin'") == 0,
+                "forged origin is rejected before an Operation, handoff or execution Receipt exists")
+            expect(String.fromUtf8(File.readFrom(path)) == original, "forged plan rejection is filesystem-free")
+
+            // Native root invocation currently requests explicit invocation
+            // approval as a side effect. Preview under a granted test policy,
+            // then reopen the same durable artifacts under the actual write
+            // approval policy; do not relax either production registration.
+            product.close()
+            product = openProduct(config: ProductConfig(settingsRoot: root + "/ast-edit-plugin-settings",
+                stateRoot: stateRoot, workspaceRoot: workspace, fixture: true, asyncEnabled: false,
+                approvalMode: ApprovalMode.AlwaysAsk)).value().getOrThrow()
+
+            let denied = product.vnext.executeCanonicalTool(SessionId("ast-edit-apply-denied"),
+                CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall("ast-edit-apply-denied", "apply_file_plan", astPlanArguments(plan)))
+            expect(match (denied) { case Result.Ok(ToolInvocationResult.Denied(_)) => true; case Result.Err(_) => true; case _ => false },
+                "the plugin's read grant cannot apply its proposed plan")
+            let rejected = astPlanApprovalSession(product, "ast-edit-reject", plan)
+            expect(rejected.decide(rejected.approval().getOrThrow().operationId.value, ApprovalDecision.Reject).isOk() &&
+                String.fromUtf8(File.readFrom(path)) == original, "rejected AST plan has no file effects")
+            let cancelled = astPlanApprovalSession(product, "ast-edit-cancel", plan)
+            expect(cancelled.cancel().isOk() && String.fromUtf8(File.readFrom(path)) == original,
+                "cancelling pending AST plan approval does not write")
+            let stale = astPlanApprovalSession(product, "ast-edit-stale", plan)
+            File.writeTo(path, (original + "# concurrent edit\n").toArray())
+            let staleResult = stale.decide(stale.approval().getOrThrow().operationId.value, ApprovalDecision.Approve)
+            expect(staleResult.isError() && String.fromUtf8(File.readFrom(path)) == original + "# concurrent edit\n",
+                "exact AST plan application rejects a changed file without overwriting it")
+            File.writeTo(path, original.toArray())
+            let recovered = product.vnext.executeCanonicalTool(SessionId("ast-edit-recover"),
+                CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall("ast-edit-recover", "recover_file_plan", astPlanArguments(freshPlan)))
+            let continuation = match (recovered) {
+                case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                    expect(!value.isError, "AST plan recovery succeeds before any writes")
+                    value.output.field("continuation_plan").getOrThrow()
+                case Result.Err(error) => throw IllegalStateException("AST plan recovery failed: " + error.describe())
+                case _ => throw IllegalStateException("AST plan recovery did not complete")
+            }
+            let continuationArtifact = ProductArtifactStore(stateRoot, database: Some(database)).read(
+                continuation.field("plan_ref").getOrThrow().text, limit: 1048576).value().getOrThrow()
+            let continuationSource = parseUnifiedJson(continuationArtifact.content).field("source").getOrThrow()
+            let freshSource = freshPlan.field("source").getOrThrow()
+            expect(continuationSource.field("kind").getOrThrow().text == "plugin" &&
+                continuationSource.field("root_operation_id").getOrThrow().text == freshSource.field("root_operation_id").getOrThrow().text &&
+                continuationSource.field("generation_operation_id").getOrThrow().text == freshSource.field("generation_operation_id").getOrThrow().text &&
+                continuationSource.field("recovery_operation_id").getOrThrow().text != "" &&
+                continuationSource.field("recovery_run_id").getOrThrow().text != "" &&
+                String.fromUtf8(File.readFrom(path)) == original,
+                "recovery preserves the plugin source and binds a new recovery operation without writes")
+            let approved = astPlanApprovalSession(product, "ast-edit-approve", continuation)
+            expect(approved.decide(approved.approval().getOrThrow().operationId.value, ApprovalDecision.Approve).isOk() &&
+                String.fromUtf8(File.readFrom(path)) == replacement, "one-time approval publishes the exact AST replacement")
+            let (applied, applyError) = productThreadToolResult(database, "ast-edit-approve", "ast-edit-approve")
+            expect(!applyError && applied.field("applied").getOrThrow().asBool() &&
+                applied.field("applied_count").getOrThrow().asNumberText() == "1", "AST application retains the normal per-file result and Receipt")
+        } finally { database.close() }
+        let _ = pluginAcquisitionRequireRecord(product.setPluginEnabled(supportRegistryDescriptor96(record,"id"), false,
+            PluginInstallScope.Workspace), "disable AST edit package")
+        expect(!productToolAvailable(product, tool) && !productToolAvailable(product, "ast_edit"),
+            "disabling the package does not restore the deleted static AST editor")
+    } finally { product.close() }
+}
+
 func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): Unit {
-    let caseRoot = root + "/javascript-service-broker"
+    runPluginServiceBrokerContract(root, workspace, false)
+    runPluginServiceBrokerContract(root, workspace, true)
+    runPluginServiceBrokerContract(root, workspace, true, directNative: true)
+    runPluginServiceBrokerContract(root, workspace, false, directPi: true)
+}
+
+func runPluginServiceBrokerContract(root: String, workspace: String, native: Bool, directNative!: Bool = false, directPi!: Bool = false): Unit {
+    let directRoot = directNative || directPi
+    let caseName = if (directPi) { "direct-pi-service-broker" } else if (directNative) { "direct-native-service-broker" } else if (native) { "native-service-broker" } else { "javascript-service-broker" }
+    let caseRoot = root + "/" + caseName
     let pluginRoot = caseRoot + "/plugin"
     let stateRoot = caseRoot + "/state"
     Directory.create(pluginRoot, recursive: true)
     File.writeTo(workspace + "/service-input.txt", "SERVICE_FIXTURE_SENTINEL\n".toArray())
-    File.writeTo(pluginRoot + "/package.json",
-        "{\"name\":\"javascript-service-contract\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"service.js\"],\"axyndra\":{\"capabilities\":[\"workspace.read\"]}}}".toArray())
+    if (native) {
+        let executable = getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE").getOrThrow()
+        File.writeTo(pluginRoot + "/native-plugin-tool", File.readFrom(Path(executable)))
+        let _ = pluginAcquisitionRunFixtureCommand("/bin/chmod", ["755", "native-plugin-tool"], pluginRoot)
+        File.writeTo(pluginRoot + "/axyndra.plugin.json", (
+            "{\"id\":\"" + caseName + "-contract\",\"version\":\"1.0.0\",\"entrypoint\":\"native-plugin-tool\"," +
+            "\"entry_kind\":\"native-executable\",\"sdk_range\":\"[2.0.0,3.0.0)\"," +
+            "\"protocol_range\":\"axyndra-js-host-v2\",\"capabilities\":[\"workspace.read\"]," +
+            "\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
+        ).toArray())
+    } else {
+        File.writeTo(pluginRoot + "/package.json",
+            "{\"name\":\"javascript-service-contract\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"service.js\"],\"axyndra\":{\"capabilities\":[\"workspace.read\"]}}}".toArray())
+    }
     let javascript = "import { Type } from 'typebox';\n" +
         "export default function (pi) {\n" +
         "  pi.registerTool({\n" +
@@ -1269,7 +1639,7 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
         "    },\n" +
         "  });\n" +
         "}\n"
-    File.writeTo(pluginRoot + "/service.js", javascript.toArray())
+    if (!native) { File.writeTo(pluginRoot + "/service.js", javascript.toArray()) }
     let product = openProduct(config: ProductConfig(
         settingsRoot: caseRoot + "/settings",
         stateRoot: stateRoot,
@@ -1277,44 +1647,62 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
         fixture: true,
         approvalMode: ApprovalMode.Yolo,
         asyncEnabled: false,
-        extensionSignatureVerifier: Some(FixedPluginSignatureVerifier(true))
+        extensionSignatureVerifier: if (native) { None } else { Some(FixedPluginSignatureVerifier(true)) }
     )).value().getOrThrow()
     try {
+        let readonlyShell = NativeReadonlyShellContractBinding(product)
         let imported = product.importLocalPlugin(
             pluginRoot, PluginInstallScope.Workspace
         )
         let record = match (imported) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) =>
-                throw IllegalStateException(error.code + ": " + error.message)
+            case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+            case PluginRegistryResult.Err(error) =>
+                throw IllegalStateException(error.code + ": " + supportRegistryExclusiveErrorText96(error))
         }
         let activated = product.setPluginEnabled(
-            record.descriptor.id, true, PluginInstallScope.Workspace
+            supportRegistryDescriptor96(record,"id"), true, PluginInstallScope.Workspace
         )
         match (activated) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(
-                "activate imported JavaScript service plugin: " + error.code + ": " + error.message
+            case PluginRegistryResult.Ok(discard96) => supportRegistryDiscard96(discard96)
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(
+                "activate imported JavaScript service plugin: " + error.code + ": " + supportRegistryExclusiveErrorText96(error)
             )
         }
-        let toolName = "plugin." + record.descriptor.namespace + ".service"
-        product.fixtureProbe.getOrThrow().enqueueToolCallReply(
-            "javascript-service-root-call", toolName, objectValue([])
-        )
-        let sessionId = SessionId("javascript-service-broker-contract")
+        let toolName = "plugin." + supportRegistryDescriptor96(record,"namespace") + if (native) { ".echo" } else { ".service" }
+        let rootArguments = if (native) {
+            objectValue([ValueField("mode", textValue("service_read"))])
+        } else { objectValue([]) }
+        let sessionId = SessionId(caseName + "-contract")
         let progress = ArrayList<String>()
-        let session = product.applicationSession(sessionId: Some(sessionId))
-        session.subscribe({ event =>
-            match (event.payload) {
-                case AgentEventPayload.ToolOutput(_, ToolOutputChannel.Progress, delta) =>
-                    progress.add(delta)
-                case _ => ()
-            }
-        })
-        let submitted = session.submit("Read the fixture through the plugin host service.")
-        expect(submitted.isOk() && submitted.value().getOrThrow().snapshot.isSome() &&
-            submitted.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
-            "Product completes the JavaScript plugin service Tool trajectory")
+        if (directRoot) {
+            let budget = ExecutionBudget(maxToolCalls: 3, maxConcurrentTools: 1)
+            let result = product.vnext.executeCanonicalTool(sessionId,
+                CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke),
+                    Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall(caseName + "-root-call", toolName, rootArguments), budget: budget)
+            expect(match (result) {
+                case Result.Ok(ToolInvocationResult.Completed(value)) => !value.isError &&
+                    canonicalAgentValue(value.output).contains("SERVICE_FIXTURE_SENTINEL")
+                case Result.Err(error) => throw IllegalStateException(error.describe())
+                case _ => false
+            }, "real Direct " + (if (directPi) { "Pi" } else { "native" }) + " root executes its read-only child through the broker")
+            expect(budget.snapshot().toolCalls == 3 && budget.snapshot().activeTools == 0,
+                "Direct root and child charge the same explicit three-call budget and settle the single slot")
+        } else {
+            product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+                caseName + "-root-call", toolName, rootArguments)
+            let session = product.applicationSession(sessionId: Some(sessionId))
+            session.subscribe({ event =>
+                match (event.payload) {
+                    case AgentEventPayload.ToolOutput(_, ToolOutputChannel.Progress, delta) => progress.add(delta)
+                    case _ => ()
+                }
+            })
+            let submitted = session.submit("Read the fixture through the plugin host service.")
+            expect(submitted.isOk() && submitted.value().getOrThrow().snapshot.isSome() &&
+                submitted.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
+                "Product completes the " + caseName + " Tool trajectory")
+        }
         var progressPublished = false
         for (delta in progress) {
             if (delta.contains("calling-service")) { progressPublished = true }
@@ -1322,18 +1710,57 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
 
         let database = SqliteDatabase(stateRoot + "/state.db")
         try {
+            let sourceJoins = if (directRoot) {
+                "JOIN items canonical ON canonical.id=op.tool_call_item_id "
+            } else {
+                "JOIN decision_operations source ON source.operation_id=op.id " +
+                "JOIN canonical_decision_items canonical ON canonical.item_id=op.tool_call_item_id " +
+                "AND canonical.decision_id=source.decision_id "
+            }
             let rootRows = database.query(
-                "SELECT run.id,op.id FROM operations op " +
+                "SELECT run.id,op.id,op.tool_call_item_id FROM operations op " +
                     "JOIN runs run ON run.id=op.run_id " +
                     "JOIN operation_effect_records effect ON effect.operation_id=op.id " +
-                    "WHERE run.thread_id='" + sessionId.value + "' " +
+                    sourceJoins + "WHERE run.thread_id='" + sessionId.value + "' " +
                     "AND effect.tool_id='" + toolName + "' " +
-                    "AND NOT EXISTS (SELECT 1 FROM derived_operation_admissions a " +
-                    "WHERE a.operation_id=op.id)"
+                    "AND NOT EXISTS (SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=op.id)"
             )
             expect(rootRows.size == 1, "plugin service parent has one canonical Operation")
+            if (directRoot) {
+                let directRows = database.query("SELECT items.provenance FROM items " +
+                    "WHERE items.id='" + rootRows[0].required(2) + "' " +
+                    "AND NOT EXISTS (SELECT 1 FROM canonical_decision_items c WHERE c.item_id=items.id) " +
+                    "AND NOT EXISTS (SELECT 1 FROM decision_operations d WHERE d.operation_id='" +
+                    rootRows[0].required(1) + "')")
+                expect(directRows.size == 1, "Direct root is durably distinct from ModelDecision and CommittedToolCall")
+                let provenance = decodeStoredProvenance(directRows[0].required(0))
+                expect(provenance.source == "direct_tool" &&
+                    provenance.runId.getOrThrow().value == rootRows[0].required(0) &&
+                    provenance.operationId.getOrThrow().value == rootRows[0].required(1),
+                    "Direct Item provenance freezes its owning Run and Operation")
+            }
             let runId = RunId(rootRows[0].required(0))
             let rootOperationId = rootRows[0].required(1)
+            if (directPi) {
+                let laneRows = database.query("SELECT lane_snapshot FROM runs WHERE id=?",
+                    [SqlParameter.Text(runId.value)])
+                expect(laneRows.size == 1, "actual Direct Pi Run persists one owned lane snapshot")
+                let lane = modelLaneFromSnapshotValue(decodeStoredValue(laneRows[0].required(0)))
+                expect(lane.toolSet.threadId.isSome() && lane.toolSet.threadId.getOrThrow().value == sessionId.value &&
+                    lane.capabilities.tools, "Direct Pi lane freezes the actual same-thread published tool set")
+                var hasRoot = false
+                var hasExecTarget = false
+                for (entry in lane.toolSet.entries) {
+                    if (entry.name == toolName && entry.availableAtSnapshot && entry.executorVersion.contains(":instance:")) {
+                        hasRoot = true
+                    }
+                    if (entry.name == readonlyShell.name && entry.availableAtSnapshot) { hasExecTarget = true }
+                }
+                expect(hasRoot && hasExecTarget, "actual Pi root instance and shell route are pinned in the same Run snapshot")
+                expect(database.scalarInt("SELECT COUNT(*) FROM model_decisions") == 0 &&
+                    database.scalarInt("SELECT COUNT(*) FROM model_attempts") == 0,
+                    "Direct Pi root and derived OS child do not fabricate model authority")
+            }
             let operationStore = DurableOperationStore(database)
             let rootPlan = operationStore.loadPlan(
                 OperationId(rootOperationId), runId
@@ -1350,7 +1777,8 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
             }
             let childRows = database.query(
                 "SELECT admission.operation_id,admission.call_sequence,child.state," +
-                    "receipt.outcome,effect.tool_id,effect.reserved_result_item_id " +
+                    "receipt.outcome,effect.tool_id,effect.reserved_result_item_id," +
+                    "admission.request_key,child.tool_call_item_id " +
                     "FROM derived_operation_admissions admission " +
                     "JOIN operations child ON child.id=admission.operation_id " +
                     "JOIN operation_receipts receipt ON receipt.operation_id=child.id " +
@@ -1391,9 +1819,11 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
             expect(childRows.size == 1 && childRows[0].required(1) == "1" &&
                 childRows[0].required(2) == "committed" &&
                 childRows[0].required(3) == "completed" &&
-                childRows[0].required(4) == "bash_readonly" &&
-                childRows[0].required(5) != "",
-                "exec service persists one completed child Operation, admission, Receipt, and result Item; actual=" +
+                childRows[0].required(4) == readonlyShell.name &&
+                childRows[0].required(5) != "" &&
+                childRows[0].required(6).startsWith("javascript-service:" + caseName + "-root-call:") &&
+                childRows[0].required(7) == rootRows[0].required(2),
+                "exec service persists one completed ordinary Native child Operation, admission, Receipt, and result Item; actual=" +
                     childEvidence + "; " + rootReceiptEvidence + "; " + admissionEvidence)
             let childOperationId = OperationId(childRows[0].required(0))
             let childPlan = operationStore.loadPlan(childOperationId, runId)
@@ -1403,10 +1833,11 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
             for (required in childPlan.requiredCapabilities) {
                 if (required.kind == CapabilityKind.WorkspaceRead) {
                     childWorkspaceReadCount += 1
-                } else {
+                } else if (required.kind != CapabilityKind.ExtensionInvoke || required.resource != readonlyShell.name) {
                     childHasUnexpectedCapability = true
                 }
             }
+            readonlyShell.requireCompletedBrokerTree(database, runId, rootOperationId)
             let receipt = operationStore.loadDerivedOperationReceipt(
                 childOperationId, runId
             ).value().getOrThrow()
@@ -1419,25 +1850,139 @@ func runJavaScriptPluginServiceBrokerContract(root: String, workspace: String): 
                 "plugin parent plan freezes ExtensionInvoke and explicit WorkspaceRead authority")
             expect(childPlan.effectClass == OperationEffectClass.ReadOnly &&
                 childPlan.networkPolicy.mode == NetworkPolicyMode.Denied &&
-                childWorkspaceReadCount == 1 && !childHasUnexpectedCapability,
-                "exec service child retains read-only effect, denied network, and bounded WorkspaceRead")
-            expect(progressPublished && observedFixtureOutput,
-                "plugin progress is visible and child Receipt records the workspace result; progress_count=" +
+                childWorkspaceReadCount >= 1 && !childHasUnexpectedCapability,
+                "exec service child retains read-only effect, denied network, and each exact frozen resource and its own QName")
+            expect((native || directPi || progressPublished) && observedFixtureOutput,
+                caseName + " child Receipt records the workspace result and Pi progress remains visible; progress_count=" +
                     progress.size.toString() + "; progress_published=" +
                     progressPublished.toString() + "; receipt_contains_fixture=" +
                     observedFixtureOutput.toString())
         } finally {
             database.close()
         }
+        if (directNative) {
+            // The old two-call successful shortcut is physically retired. The
+            // actual Native child and worker remain separately charged. This
+            // exact budget refuses before any worker execution handoff.
+            let twoCallBudget = ExecutionBudget(maxToolCalls: 2, maxConcurrentTools: 1)
+            let twoCallSession = SessionId(caseName + "-two-call-budget-denied")
+            let twoCallResult = product.vnext.executeCanonicalTool(twoCallSession,
+                CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke), Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall("direct-two-call-root", toolName, rootArguments), budget: twoCallBudget)
+            expect(match (twoCallResult) { case Result.Ok(ToolInvocationResult.Completed(value)) => value.isError
+                case Result.Err(_) => true; case _ => false }, "original two-call ceiling cannot execute a third actual worker")
+            expect(twoCallBudget.snapshot().toolCalls == 2 && twoCallBudget.snapshot().activeTools == 0,
+                "no implicit tool-call budget expansion and the actual owner slot settles")
+            let boundedDb = SqliteDatabase(stateRoot + "/state.db")
+            try {
+                expect(boundedDb.query("SELECT id FROM runs WHERE thread_id=? AND state='completed'",[SqlParameter.Text(twoCallSession.value)]).isEmpty(),
+                    "exhausted readonly subtree cannot become a successful Run")
+                expect(boundedDb.query("SELECT audit.id FROM audit_events audit JOIN operations op ON op.id=audit.operation_id "+
+                    "JOIN runs run ON run.id=op.run_id JOIN operation_effect_records e ON e.operation_id=op.id "+
+                    "WHERE run.thread_id=? AND e.tool_id=? AND audit.kind='operation_execution_handoff'",
+                    [SqlParameter.Text(twoCallSession.value), SqlParameter.Text(HOST_READ_VIEW_TOOL)]).isEmpty(),
+                    "the unbudgeted worker has no canonical execution handoff")
+            } finally { boundedDb.close() }
+            let exhausted = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)
+            let limitedSession = SessionId(caseName + "-budget-denied")
+            let limited = product.vnext.executeCanonicalTool(limitedSession,
+                CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke),
+                    Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall("direct-budget-child", toolName, rootArguments), budget: exhausted)
+            expect(match (limited) {
+                case Result.Ok(ToolInvocationResult.Completed(value)) => value.isError
+                case Result.Err(_) => true
+                case _ => false
+            }, "Direct broker cannot exceed the parent tool-call ceiling")
+            expect(exhausted.snapshot().toolCalls == 1 && exhausted.snapshot().activeTools == 0,
+                "budget rejection restores the direct slot without spending a child call")
+            let check = SqliteDatabase(stateRoot + "/state.db")
+            try {
+                expect(check.query("SELECT a.operation_id FROM derived_operation_admissions a " +
+                    "JOIN operations o ON o.id=a.operation_id JOIN runs r ON r.id=o.run_id " +
+                    "WHERE r.thread_id='" + limitedSession.value + "'").isEmpty(),
+                    "budget rejection occurs before any child Operation admission")
+            } finally { check.close() }
+            // A broker result can carry is_error while the native root
+            // successfully returns that structured response to its caller.
+            remove(workspace + "/service-input.txt")
+            let failedChildSession = SessionId(caseName + "-failed-child")
+            try {
+                let failedChild = product.vnext.executeCanonicalTool(failedChildSession,
+                    CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke),
+                        Capability(CapabilityKind.WorkspaceRead)]),
+                    ToolCall("direct-failed-child", toolName, rootArguments))
+                expect(match (failedChild) {
+                    case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                        canonicalAgentValue(value.output).contains("is_error")
+                    case Result.Err(error) => throw IllegalStateException(error.describe())
+                    case _ => false
+                }, "Direct caller receives the structured failing child result")
+                let failedDb = SqliteDatabase(stateRoot + "/state.db")
+                try {
+                    let failedRuns = failedDb.query("SELECT state FROM runs WHERE thread_id='" +
+                        failedChildSession.value + "'")
+                    expect(failedRuns.size == 1 && failedRuns[0].required(0) == "failed",
+                        "a failed child prevents a successfully returning Direct parent from completing the Run")
+                    expect(failedDb.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt " +
+                        "JOIN operations op ON op.id=receipt.operation_id JOIN runs run ON run.id=op.run_id " +
+                        "WHERE run.thread_id='" + failedChildSession.value + "'") == 3,
+                        "the Direct parent, failed Native child and completed resource worker all retain their actual durable receipts")
+                } finally { failedDb.close() }
+            } finally {
+                File.writeTo(workspace + "/service-input.txt", "SERVICE_FIXTURE_SENTINEL\n".toArray())
+            }
+            let spent = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)
+            spent.reserve(BudgetCharge(toolCalls: 1)).value().getOrThrow()
+            let spentSession = SessionId(caseName + "-root-budget-denied")
+            let spentResult = product.vnext.executeCanonicalTool(spentSession,
+                CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke),
+                    Capability(CapabilityKind.WorkspaceRead)]),
+                ToolCall("direct-spent-root", toolName, rootArguments), budget: spent)
+            let spentDescription = match (spentResult) {
+                case Result.Err(error) => error.describe()
+                case Result.Ok(ToolInvocationResult.Completed(value)) =>
+                    "completed is_error=" + value.isError.toString() + ";output=" + canonicalAgentValue(value.output)
+                case _ => "non-terminal invocation result"
+            }
+            let spentDb = SqliteDatabase(stateRoot + "/state.db")
+            try {
+                let settled = spentDb.query("SELECT o.state,r.outcome,r.verification,r.detail,run.state FROM operations o " +
+                    "JOIN operation_receipts r ON r.operation_id=o.id JOIN runs run ON run.id=o.run_id " +
+                    "WHERE run.thread_id='" + spentSession.value + "'")
+                let evidence = if (settled.isEmpty()) { "no receipt" } else {
+                    "operation=" + settled[0].required(0) + ";outcome=" + settled[0].required(1) +
+                        ";verification=" + settled[0].required(2) + ";detail=" + settled[0].required(3) +
+                        ";run=" + settled[0].required(4)
+                }
+                expect(match (spentResult) {
+                    case Result.Err(error) => error.code == "budget.tool_calls_exceeded"
+                    case _ => false
+                }, "already exhausted Direct budget rejects before executor handoff; actual=" +
+                    spentDescription + "; durable=" + evidence)
+                // Canonical result commit uses committed for every known
+                // outcome; the Receipt and Run retain the actual failure.
+                expect(settled.size == 1 && settled[0].required(0) == "committed" &&
+                    settled[0].required(1) == "failed" && settled[0].required(4) == "failed" &&
+                    decodeStoredValue(settled[0].required(2)).field("stage").getOrThrow().text == "prepared" &&
+                    decodeStoredValue(settled[0].required(3)).field("code").getOrThrow().text == "budget.tool_calls_exceeded",
+                    "pre-handoff budget failure commits a known failed receipt without unknown effects; actual=" + evidence)
+                expect(spentDb.query("SELECT id FROM audit_events WHERE thread_id='" + spentSession.value +
+                    "' AND kind='operation_execution_handoff'").isEmpty() &&
+                    spentDb.query("SELECT a.operation_id FROM derived_operation_admissions a " +
+                        "JOIN operations o ON o.id=a.operation_id JOIN runs run ON run.id=o.run_id " +
+                        "WHERE run.thread_id='" + spentSession.value + "'").isEmpty(),
+                    "root budget rejection creates neither an execution handoff nor a child admission")
+                expect(spentDb.query("SELECT id FROM threads WHERE id='" + spentSession.value +
+                    "' AND active_turn_id IS NOT NULL").isEmpty(),
+                    "pre-handoff rejection leaves no active Thread or unresolved canonical ToolCall")
+            } finally { spentDb.close() }
+        }
     } finally {
         product.close()
     }
 }
 main(): Int64 {
-    let workerArguments = getCommandLine()
-    if (isProductToolProgramWorker(workerArguments)) {
-        return runProductToolProgramWorker(workerArguments)
-    }
     let tempRoot = match (getVariable("TMPDIR")) {
         case Some(value) => value
         case None => "/tmp"
@@ -1446,8 +1991,29 @@ main(): Int64 {
     try {
         let workspace = root + "/workspace"
         Directory.create(workspace, recursive: true)
+        if (workerArguments.contains("--ast-plugin-contract")) {
+            runAstPluginContract(root, workspace)
+            println("independent AST plugin contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--ast-edit-plugin-contract")) {
+            runAstEditPluginContract(root, workspace)
+            println("independent AST edit plugin contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--direct-pi-service-snapshot-contract")) {
+            runPluginServiceBrokerContract(root, workspace, false, directPi: true)
+            println("actual Direct Pi service snapshot contract passed")
+            return 0
+        }
         if (workerArguments.contains("--javascript-service-broker-contract")) {
             runJavaScriptPluginServiceBrokerContract(root, workspace)
+            println("plugin service broker contract passed")
+            return 0
+        }
+        if (workerArguments.contains("--plugin-acquisition-contract")) {
+            runPluginAcquisitionControlContract(root, workspace)
+            println("plugin acquisition contract passed")
             return 0
         }
         File.writeTo(workspace + "/input.txt", "durable tool input\n".toArray())
@@ -1457,6 +2023,8 @@ main(): Int64 {
         File.writeTo(workspace + "/src/beta.cj", "fn beta() {}\n\n// SymbolAnchor: beta\n".toArray())
         runJavaScriptPluginServiceBrokerContract(root, workspace)
         runPluginAcquisitionControlContract(root, workspace)
+        runAstPluginContract(root, workspace)
+        runAstEditPluginContract(root, workspace)
         let stateRoot = root + "/state"
         let product = openProduct(config: ProductConfig(
             settingsRoot: root + "/settings",
@@ -1469,6 +2037,7 @@ main(): Int64 {
                 keepRecentMessages: 2
             ))
         )).value().getOrThrow()
+        let programBinding = NativeProgramContractBinding(product)
         let sessionId = SessionId("durable-product-thread")
         let result = product.applicationSession(sessionId: Some(sessionId))
             .submit("persist the canonical owner")
@@ -1483,6 +2052,8 @@ main(): Int64 {
             result.value().getOrThrow().snapshot.getOrThrow().status == RunState.Completed,
             "fixture product completes its Run; actual=" + firstRunState)
         let toolSessionId = SessionId("durable-product-tool-thread")
+        product.fixtureProbe.getOrThrow().enqueueToolCallReply("fixture-vnext-native-read",
+            programBinding.workspaceName("read"),objectValue([ValueField("path",textValue("input.txt"))]))
         let toolResult = product.applicationSession(sessionId: Some(toolSessionId))
             .submit("fixture vnext read")
         expect(toolResult.isOk() && toolResult.value().getOrThrow().snapshot.isSome() &&
@@ -1499,26 +2070,22 @@ main(): Int64 {
                 )
             case None => false
         }, "next Turn projects checkpoint plus high-fidelity suffix")
-        let productSkill = SkillActivation(
-            SkillDescriptor(
-                "product-review", "product-review", "Product review skill", ["review"],
-                "skill://product-review"
-            ),
-            "Use the Product SkillStack contract."
-        )
+        let productContext = InvocationContextProjection(contributions: [InvocationContextContribution(
+            "contract.context", "product-review", "context://product-review",
+            "Use the Product immutable context contract.", ContextContentTrust.UserSelected)])
         let skillResult = product.client.start(
             product.request(
                 "run active skill",
                 sessionId: Some(SessionId("durable-product-skill-thread")),
-                skillStack: SkillStackSnapshot([productSkill], [])
+                contextSnapshot: Some(productContext)
             ),
             {_ => ()}
         )
         expect(skillResult.isOk() && match (product.fixtureProbe.getOrThrow().lastRequest) {
-            case Some(request) => request.system.contains("<active_skills ") &&
-                request.system.contains("Use the Product SkillStack contract.")
+            case Some(request) => request.system.contains("<run_context ") &&
+                request.system.contains("Use the Product immutable context contract.")
             case None => false
-        }, "Product freezes an explicit active SkillStack into the Run")
+        }, "Product freezes explicit generic context into the Run")
         let pageEvent = product.appCommand(AppCommand(
             AppCommandMeta(AppCommandId("contract-page"), 1),
             AppCommandPayload.LoadItemsPage(ThreadId(sessionId.value), 0, 16)
@@ -1789,14 +2356,14 @@ main(): Int64 {
             "const selected = files.filter(x => x.count);\n" +
             "const paths = selected.map(x => x.path);\n" +
             "return paths;"
-        runMatchedProductWorkflowContract(product, stateRoot, programSource)
+        runMatchedProductWorkflowContract(product, stateRoot, programSource,programBinding)
         runProductFileApplicationPlanContracts(
             root, workspace, stateRoot, product
         )
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-root-call",
-            "run_program",
-            objectValue([ValueField("source", textValue(programSource))])
+            programBinding.name,
+            objectValue([ValueField("code", textValue(programSource))])
         )
         let programResult = product.applicationSession(
             sessionId: Some(programSessionId)
@@ -1817,15 +2384,15 @@ main(): Int64 {
             ThreadId(programSessionId.value), RunId(firstProgramRunId), beforeCursor: 0, limit: 25
         )
         expect(programInspection.isOk() && programInspection.value().getOrThrow().operations.any({ operation =>
-            operation.toolName == "run_program" &&
-                operation.programSdk == "tool-program-sdk-v1/worker-protocol-v1" &&
+            operation.toolName == programBinding.name &&
+                operation.programSdk == "program-language-v1/native-readonly-v1" &&
                 operation.programArtifactHash.size == 64 &&
                 operation.effectiveArgumentsDigest.size == 64
         }), "Run inspection explains Program SDK, content identity and canonical arguments without source text")
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-rerun-root-call",
-            "run_program",
-            objectValue([ValueField("source", textValue(programSource))])
+            programBinding.name,
+            objectValue([ValueField("code", textValue(programSource))])
         )
         let rerunSessionId = SessionId("durable-product-program-rerun-thread")
         let firstProgramRerun = product.applicationSession(
@@ -1849,8 +2416,8 @@ main(): Int64 {
         )
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-rerun-root-call-second",
-            "run_program",
-            objectValue([ValueField("source", textValue(programSource))])
+            programBinding.name,
+            objectValue([ValueField("code", textValue(programSource))])
         )
         let programRerun = product.applicationSession(
             sessionId: Some(rerunSessionId)
@@ -1880,12 +2447,12 @@ main(): Int64 {
             CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)]),
             ToolCall(
                 "direct-program-bypass",
-                "run_program",
-                objectValue([ValueField("source", textValue("return 1;"))])
+                programBinding.name,
+                objectValue([ValueField("code", textValue("return 1;"))])
             )
         )
         expect(match (directProgramBypass) {
-            case Result.Err(error) => error.code == "program.committed_root_required"
+            case Result.Err(error) => error.code == "tool.capability_denied"
             case _ => false
         }, "run_program cannot bypass the committed AgentCore root through direct control calls")
         let partialProgramSessionId = SessionId("durable-product-program-partial")
@@ -1895,8 +2462,8 @@ main(): Int64 {
             "return first;"
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-partial-root-call",
-            "run_program",
-            objectValue([ValueField("source", textValue(partialProgramSource))])
+            programBinding.name,
+            objectValue([ValueField("code", textValue(partialProgramSource))])
         )
         let partialProgramResponse = product.applicationSession(
             sessionId: Some(partialProgramSessionId)
@@ -1922,8 +2489,8 @@ main(): Int64 {
         )
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-one-slot-root-call",
-            "run_program",
-            objectValue([ValueField("source", textValue(programSource))])
+            programBinding.name,
+            objectValue([ValueField("code", textValue(programSource))])
         )
         let oneSlotBudgetEvents = ArrayList<ExecutionUsage>()
         let oneSlotResult = product.client.start(oneSlotRequest, { event =>
@@ -1942,7 +2509,7 @@ main(): Int64 {
             } else if (slotHandoffStage == 2 && usage.toolCalls == 2 && usage.activeTools == 1) {
                 slotHandoffStage = 3
             }
-            if (usage.toolCalls == 4 && usage.activeTools == 1) {
+            if (usage.toolCalls == 7 && usage.activeTools == 1) {
                 allChildCallsCharged = true
             }
         }
@@ -1964,9 +2531,9 @@ main(): Int64 {
         )
         product.fixtureProbe.getOrThrow().enqueueToolCallReply(
             "fixture-program-budget-root-call",
-            "run_program",
+            programBinding.name,
             objectValue([ValueField(
-                "source",
+                "code",
                 textValue("return await tools.read({\"path\":\"src/alpha.cj\",\"offset\":1,\"limit\":1});")
             )])
         )
@@ -2011,7 +2578,7 @@ main(): Int64 {
             ),
             ProductProgramDenialCase(
                 "network",
-                "return await tools.web_search({\"query\":\"fixture network probe\"});"
+                "return await tools[\"host.network.http\"]({\"intent_id\":\"fixture-network-probe\"});"
             ),
             ProductProgramDenialCase(
                 "nested-program",
@@ -2031,8 +2598,8 @@ main(): Int64 {
             )
             product.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 "fixture-program-denied-" + scenario.name,
-                "run_program",
-                objectValue([ValueField("source", textValue(scenario.source))])
+                programBinding.name,
+                objectValue([ValueField("code", textValue(scenario.source))])
             )
             let rejectedResult = product.applicationSession(
                 sessionId: Some(rejectedSessionId)
@@ -2071,39 +2638,72 @@ main(): Int64 {
         runNativeReadCancellationContract(root, workspace)
         runProgramCancellationRecoveryContract(root, workspace)
         let pluginRoot = workspace + "/plugin-package"
-        Directory.create(pluginRoot + "/plugins", recursive: true)
-        File.writeTo(pluginRoot + "/axyndra.plugin.json", ("{\"id\":\"fixture-plugin\",\"version\":\"1.0.0\",\"entrypoint\":\"plugins/reviewer\",\"capabilities\":[],\"content_digest\":\"sha256:fixture\",\"signature\":\"signature-process\"}").toArray())
+        Directory.create(pluginRoot, recursive: true)
+        let nativeExecutable = getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE").getOrThrow()
+        File.writeTo(pluginRoot + "/native-plugin-tool", File.readFrom(Path(nativeExecutable)))
+        let _ = pluginAcquisitionRunFixtureCommand("/bin/chmod", ["755", "native-plugin-tool"], pluginRoot)
+        File.writeTo(pluginRoot + "/axyndra.plugin.json", (
+            "{\"id\":\"fixture-plugin\",\"version\":\"1.0.0\",\"entrypoint\":\"native-plugin-tool\"," +
+            "\"entry_kind\":\"native-executable\",\"sdk_range\":\"[2.0.0,3.0.0)\"," +
+            "\"protocol_range\":\"axyndra-js-host-v2\",\"signature\":\"signature-process\"," +
+            "\"capabilities\":[],\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
+        ).toArray())
         let importedPlugin = product.importLocalPlugin(pluginRoot, PluginInstallScope.Workspace)
         expect(importedPlugin.isOk(), "Product imports an executable plugin package into the durable lock")
         let pluginId = match (importedPlugin) {
-            case PluginImportResult.Ok(record) => record.descriptor.id
-            case PluginImportResult.Err(_) => ""
+            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"id")
+            case PluginRegistryResult.Err(_) => ""
         }
         let enabledPlugin = product.setPluginEnabled(pluginId, true)
         let enabledPluginState = match (enabledPlugin) {
-            case PluginImportResult.Ok(record) => if (record.enabled) { "enabled" } else { "disabled" }
-            case PluginImportResult.Err(error) => error.code + ":" + error.message
+            case PluginRegistryResult.Ok(record) => if (supportRegistryData96(record).enabled) { "enabled" } else { "disabled" }
+            case PluginRegistryResult.Err(error) => error.code + ":" + supportRegistryErrorText96(error)
         }
         expect(enabledPlugin.isOk() && match (enabledPlugin) {
-            case PluginImportResult.Ok(record) => record.enabled
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(record) => supportRegistryData96(record).enabled
+            case PluginRegistryResult.Err(_) => false
         }, "Product enables a verified plugin and mounts its isolated generation; actual=" +
             enabledPluginState)
         let pluginNamespace = match (importedPlugin) {
-            case PluginImportResult.Ok(record) => record.descriptor.namespace
-            case PluginImportResult.Err(_) => ""
+            case PluginRegistryResult.Ok(record) => supportRegistryDescriptor96(record,"namespace")
+            case PluginRegistryResult.Err(_) => ""
         }
-        let pluginToolName = "plugin." + pluginNamespace + ".invoke"
+        let pluginToolName = "plugin." + pluginNamespace + ".echo"
         var pluginToolSeen = false
         for (definition in product.tools()) {
             if (definition.name == pluginToolName) { pluginToolSeen = true }
         }
-        expect(pluginToolSeen, "enabled plugin publishes its isolated invocation tool")
+        expect(pluginToolSeen, "enabled native plugin publishes only its declared isolated tool")
+        let nativeSessionName = "durable-product-native-plugin"
+        let nativeCallId = "fixture-native-plugin-call"
+        let nativeSession = product.applicationSession(sessionId: Some(SessionId(nativeSessionName)))
+        product.fixtureProbe.getOrThrow().enqueueToolCallReply(nativeCallId, pluginToolName, objectValue([]))
+        let nativeWaiting = nativeSession.submit("Execute the declared native plugin tool.").value().getOrThrow()
+        let nativeApproval = nativeSession.approval().getOrThrow()
+        expect(nativeWaiting.approval.isSome() && nativeApproval.toolName == pluginToolName,
+            "native plugin execution retains the normal one-time approval barrier")
+        let nativeCompleted = nativeSession.decide(nativeApproval.operationId.value, ApprovalDecision.Approve)
+            .value().getOrThrow()
+        expect(nativeCompleted.snapshot.isSome() &&
+            nativeCompleted.snapshot.getOrThrow().status == RunState.Completed,
+            "approved native plugin runs through the real Product process host")
+        let nativeDatabase = SqliteDatabase(stateRoot + "/state.db")
+        try {
+            let (nativeOutput, nativeIsError) = productThreadToolResult(nativeDatabase, nativeSessionName, nativeCallId)
+            expect(!nativeIsError && nativeOutput.field("runtime").getOrThrow().text == "native" &&
+                nativeOutput.field("calls").getOrThrow().asNumberText() == "1" &&
+                nativeDatabase.scalarInt(
+                    "SELECT COUNT(*) FROM operation_receipts receipt JOIN operations op ON op.id=receipt.operation_id " +
+                    "JOIN runs ON runs.id=op.run_id WHERE runs.thread_id='" + nativeSessionName +
+                    "' AND receipt.outcome='completed'"
+                ) == 1,
+                "standalone native executable runs once and leaves one completed canonical Receipt")
+        } finally { nativeDatabase.close() }
         let disabledPlugin = product.setPluginEnabled(pluginId, false)
         expect(disabledPlugin.isOk() && product.pluginSnapshots().any({ snapshot =>
-            snapshot.descriptor.id == pluginId && !snapshot.enabled
+            supportRegistryDescriptor96(snapshot,"id") == pluginId && !supportRegistryData96(snapshot).enabled
         }) && !product.tools().any({ definition => definition.name == pluginToolName }),
-            "Product disables the plugin and removes its invocation tool")
+            "Product disables the native plugin and removes its declared tool")
         product.close().value().getOrThrow()
 
         let database = SqliteDatabase(stateRoot + "/state.db")
@@ -2188,13 +2788,20 @@ main(): Int64 {
             ) == 6 && database.scalarInt(
                 "SELECT COUNT(*) FROM operations JOIN runs ON runs.id=operations.run_id " +
                     "WHERE runs.thread_id='" + toolSessionId.value + "' AND operations.state='committed'"
-            ) == 1 && database.scalarInt(
+            ) == 2 && database.scalarInt(
                 "SELECT COUNT(*) FROM operation_receipts JOIN operations " +
                     "ON operations.id=operation_receipts.operation_id JOIN runs " +
                     "ON runs.id=operations.run_id WHERE runs.thread_id='" + toolSessionId.value +
                     "' AND operation_receipts.outcome='completed'"
-            ) == 1,
-                "Product ToolCall commits one Operation, Receipt and paired ToolResult")
+            ) == 2,
+                "one actual Native model ToolCall commits its own Root and Host readview child, with one paired model ToolResult")
+            let firstReadRoots=database.query("SELECT o.id,o.run_id,e.tool_id FROM operations o JOIN runs r ON r.id=o.run_id "+
+                "JOIN operation_effect_records e ON e.operation_id=o.id WHERE r.thread_id=? "+
+                "AND NOT EXISTS(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=o.id)",
+                [SqlParameter.Text(toolSessionId.value)])
+            expect(firstReadRoots.size==1,"the original model Tool trajectory has one actual ordinary Native Root")
+            programBinding.requireCompletedReadviewRoot(database,RunId(firstReadRoots[0].required(1)),
+                firstReadRoots[0].required(0),firstReadRoots[0].required(2))
             expect(database.scalarInt(
                 "SELECT COUNT(*) FROM context_checkpoints WHERE thread_id='" +
                     toolSessionId.value + "'"
@@ -2210,7 +2817,7 @@ main(): Int64 {
             for (item in programHistory.items) {
                 match (item.content) {
                     case ThreadItemContent.ToolCall(_, name, _) =>
-                        if (name == "run_program") {
+                        if (name == programBinding.name) {
                             rootToolCallCount += 1
                             rootCallItemId = item.id.value
                         }
@@ -2268,6 +2875,8 @@ main(): Int64 {
                 for (required in plan.requiredCapabilities) {
                     if (required.kind == CapabilityKind.WorkspaceRead) {
                         childHasWorkspaceRead = true
+                    } else if (required.kind==CapabilityKind.ExtensionInvoke && programBinding.readonlyCapabilityAllowed(plan,required)) {
+                        // Only this actual frozen contribution or an independently granted actual child QName.
                     } else {
                         childCapabilitiesReadOnly = false
                     }
@@ -2368,10 +2977,10 @@ main(): Int64 {
                 !rootOutput.field("output_truncated").getOrThrow().asBool(),
                 "reconstructed root ToolResult carries a verified source artifact reference and complete output")
             expect(childRows.size == 3 && childRows[0].required(0) == "1" &&
-                childRows[0].required(3) == "completed" && childRows[0].required(4) == "grep" &&
+                childRows[0].required(3) == "completed" && childRows[0].required(4) == programBinding.workspaceName("grep") &&
                 childRows[1].required(0) == "2" && childRows[1].required(3) == "completed" &&
-                childRows[1].required(4) == "read" && childRows[2].required(0) == "3" &&
-                childRows[2].required(3) == "completed" && childRows[2].required(4) == "read" &&
+                childRows[1].required(4) == programBinding.workspaceName("read") && childRows[2].required(0) == "3" &&
+                childRows[2].required(3) == "completed" && childRows[2].required(4) == programBinding.workspaceName("read") &&
                 childPlansReadOnly && reservedChildItems == 0,
                 "search and independent reads have ordered read-only Denied-network Receipts without child Thread Items")
             expect(grepFiles.unifiedKind == ValueKind.List && grepFiles.items.size == 2 &&
@@ -2380,13 +2989,14 @@ main(): Int64 {
                 alphaContent.text.contains("SymbolAnchor: alpha") &&
                 betaContent.text.contains("SymbolAnchor: beta"),
                 "derived Receipts preserve actual search positions and both independent file evidence payloads")
-            expect(rootOperationRows.size == 1 && programOperations == 4 &&
-                programReceipts == 4 && programThreadItems == 4 &&
+            programBinding.requireCompletedBranches(database,RunId(programRunId),rootOperationId,["grep","read","read"])
+            expect(rootOperationRows.size == 1 && programOperations == 7 &&
+                programReceipts == 7 && programThreadItems == 4 &&
                 programToolCalls == 1 && programToolResults == 1 &&
                 database.scalarInt(
                     "SELECT COUNT(*) FROM threads WHERE id='durable-product-direct-program-bypass'"
                 ) == 0,
-                "Product persists one canonical root ToolCall/ToolResult plus three child Operations and Receipts, with no synthetic child items or bypass Run")
+                "Product persists one canonical root ToolCall/ToolResult plus three actual business children and their three readview children, each with real Receipts and no synthetic child items or bypass Run")
             let partialHistory = SqliteThreadCommitSink(database).loadThread(
                 ThreadId(partialProgramSessionId.value)
             )
@@ -2398,7 +3008,7 @@ main(): Int64 {
             for (item in partialHistory.items) {
                 match (item.content) {
                     case ThreadItemContent.ToolCall(_, name, _) =>
-                        if (name == "run_program") {
+                        if (name == programBinding.name) {
                             partialRootToolCallCount += 1
                             partialRootCallItemId = item.id.value
                         }
@@ -2506,13 +3116,19 @@ main(): Int64 {
             ) == 1,
                 "canonical fork preserves non-provider semantic Items exactly")
 
+            let faultProduct=openProduct(config:ProductConfig(settingsRoot:root+"/settings",stateRoot:stateRoot,
+                workspaceRoot:workspace,fixture:true,asyncEnabled:false,
+                extensionSignatureVerifier:Some(FixedPluginSignatureVerifier(true)),
+                compactionOverride:Some(ProductCompactionSettings(keepRecentMessages:2)))).value().getOrThrow()
+            try{
+                let faultBinding=NativeProgramContractBinding(faultProduct)
             let admissionFailureSession = SessionId("fault-matrix-admission-persistence")
-            expect(product.unregisterTool("read"),
-                "fault matrix replaces the read tool with an execution probe")
+            expect(!productToolAvailable(faultProduct,"read"),
+                "retired read alias is absent before the independent root admission persistence fault observer")
             let admissionFailureProbe = ProgramCancellationGate()
-            expect(product.registerTool(
+            expect(faultProduct.registerTool(
                 ToolDescriptor(
-                    ModelToolDefinition("read", "admission failure execution probe", objectValue([])),
+                    ModelToolDefinition("fixture.admission_failure_probe", "independent admission failure execution probe", objectValue([])),
                     Capability(CapabilityKind.WorkspaceRead),
                     implementationVersion: "fault-matrix-admission-v1",
                     implementationFingerprint: "fault-matrix-admission-read-v1",
@@ -2528,15 +3144,15 @@ main(): Int64 {
                     admissionFailureSession.value + "' BEGIN " +
                     "SELECT RAISE(ABORT,'injected operation admission persistence failure'); END"
             )
-            product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+            faultProduct.fixtureProbe.getOrThrow().enqueueToolCallReply(
                 "fixture-admission-persistence-root",
-                "run_program",
+                faultBinding.name,
                 objectValue([ValueField(
-                    "source", textValue("return await tools.read({});")
+                    "code", textValue("return await tools.read({});")
                 )])
             )
             let admissionFailure = try {
-                product.applicationSession(sessionId: Some(admissionFailureSession))
+                faultProduct.applicationSession(sessionId: Some(admissionFailureSession))
                     .submit("Attempt a Program while root admission persistence fails.")
             } finally {
                 database.execute("DROP TRIGGER reject_fault_matrix_operation")
@@ -2552,6 +3168,15 @@ main(): Int64 {
                         admissionFailureSession.value + "'"
                 ) == 0,
                 "root admission persistence failure starts no Program or child executor and creates no bypass admission")
+            let failedThread=SqliteThreadCommitSink(database).loadThread(ThreadId(admissionFailureSession.value))
+            var realFaultCalls:Int64=0
+            for(item in failedThread.items){match(item.content){
+                case ThreadItemContent.ToolCall(callId,name,_)=>
+                    if(callId.value=="fixture-admission-persistence-root" && name==faultBinding.name){realFaultCalls+=1}
+                case _=>()}}
+            expect(realFaultCalls==1,"actual canonical model ToolCall exists before its SQLite admission trigger refuses the Root")
+            }finally{faultProduct.close().getOrThrow()}
+
         } finally {
             database.close()
         }
@@ -3093,8 +3718,8 @@ func runProductProgramToolCall(
     let sessionId = SessionId(sessionName)
     product.fixtureProbe.getOrThrow().enqueueToolCallReply(
         callId,
-        "run_program",
-        objectValue([ValueField("source", textValue(source))])
+        nativeProgramContractToolName(product),
+        objectValue([ValueField("code", textValue(source))])
     )
     let _ = product.applicationSession(sessionId: Some(sessionId)).submit(
         "Exercise the read-only Program application-plan contract."
@@ -3109,7 +3734,7 @@ func runProductProgramToolCall(
     for (item in history.items) {
         match (item.content) {
             case ThreadItemContent.ToolCall(itemCallId, name, _) =>
-                if (itemCallId.value == callId && name == "run_program") {
+                if (itemCallId.value == callId && name == nativeProgramContractToolName(product)) {
                     rootCallCount += 1
                 }
             case ThreadItemContent.ToolResult(itemCallId, _, _, output, isError) =>
@@ -3152,6 +3777,7 @@ func runProductFileApplicationPlanContracts(
     stateRoot: String,
     product: ProductRuntime
 ): Unit {
+    let binding=NativeProgramContractBinding(product,filePlanProposals:true)
     let database = SqliteDatabase(stateRoot + "/state.db")
     try {
         let artifacts = ProductArtifactStore(stateRoot, database: Some(database))
@@ -3185,12 +3811,12 @@ func runProductFileApplicationPlanContracts(
         )
         expect(!validIsError, "valid read-only Program returns a stored plan; output=" +
             encodeAgentValue(validOutput))
-        expect(Int64.parse(validOutput.field("sub_call_count").getOrThrow().asNumberText()) == 1,
-            "the Program executes one raw workspace read before returning its proposal")
+        expect(Int64.parse(validOutput.field("sub_call_count").getOrThrow().asNumberText()) == 2,
+            "the Program executes one raw workspace read and one separately charged actual preview request")
         let programValue = validOutput.field("value").getOrThrow()
         let planSummary = programValue.field("application_plan").getOrThrow()
         expect(programValue.field("answer").getOrThrow().asNumberText() == "42" &&
-            planSummary.field("schema").getOrThrow().text == "axyndra.file-application-plan/v1",
+            planSummary.field("schema").getOrThrow().text == "axyndra.file-application-plan/v2",
             "plan generation preserves the Program value and returns the immutable plan summary")
         expect(String.fromUtf8(File.readFrom(Path(alphaPath))) == originalAlpha &&
             !exists(Path(createdPath)) && !exists(Path(largeCreatedPath)),
@@ -3205,15 +3831,15 @@ func runProductFileApplicationPlanContracts(
             !planRead.truncated,
             "plan artifact is readable in full from the Product artifact store")
         let plan = parseUnifiedJson(planRead.content)
-        expect(plan.field("schema").getOrThrow().text == "axyndra.file-application-plan/v1",
+        expect(plan.field("schema").getOrThrow().text == "axyndra.file-application-plan/v2",
             "stored plan records its versioned schema")
         let sourceIdentity = plan.field("source").getOrThrow()
-        expect(sourceIdentity.field("root_operation_id").getOrThrow().text != "" &&
-            sourceIdentity.field("program_id").getOrThrow().text ==
-                validOutput.field("program_artifact").getOrThrow().text &&
-            sourceIdentity.field("program_digest").getOrThrow().text ==
-                validOutput.field("program_sha256").getOrThrow().text,
-            "stored plan binds its root operation and exact Program artifact")
+        binding.requireGeneratedFilePlan(database,sourceIdentity,planSummary,validValue.field("application_plan").getOrThrow(),validSource)
+        let sourceArtifact=artifacts.read(validOutput.field("program_artifact").getOrThrow().text,limit:262144).value().getOrThrow()
+        expect(!sourceArtifact.truncated && sourceArtifact.content==validSource &&
+            sourceArtifact.reference=="blob:sha256:"+validOutput.field("program_sha256").getOrThrow().text &&
+            sourceIdentity.field("root_operation_id").getOrThrow().text!="",
+            "stored plan binds its actual Native root, actual generation Receipt and complete immutable Program source artifact")
         let workspaceId = plan.field("workspace_id").getOrThrow().text
         expect(workspaceId.startsWith("workspace:sha256:") && !workspaceId.contains(workspace),
             "stored plan identifies the workspace without exposing its local path")
@@ -3341,7 +3967,7 @@ func runProductFileApplicationPlanContracts(
         ])
         expectRejectedFilePlan(product, database, "e5-02-source-mismatch",
             "fixture-e5-02-source-mismatch", filePlanProgramSource(mismatch),
-            "application_plan.source_mismatch", "proposal source mismatch is rejected")
+            "application_plan.plugin_proposal_invalid", "proposal cannot supply the actual Host-owned source identity")
         let tooMany = ArrayList<AgentValue>()
         for (index in 0..33) {
             tooMany.add(filePlanCreateOperation(
@@ -3358,6 +3984,7 @@ func runProductFileApplicationPlanContracts(
             "rejected proposals leave all workspace files unchanged")
     } finally {
         database.close()
+        binding.configure(false)
     }
     runProductPlanArtifactStoreFailureContract(root, workspace)
 }
@@ -3751,34 +4378,19 @@ func runProductFilePlanRecoveryContracts(
 
 func runProductPlanArtifactStoreFailureContract(root: String, workspace: String): Unit {
     let failureStateRoot = root + "/file-plan-artifact-failure-state"
+    let storageFault=NativeProgramPlanArtifactFault("e5-02-artifact-store-failure",failureStateRoot+"/blobs")
     let product = openProduct(config: ProductConfig(
         settingsRoot: root + "/file-plan-artifact-failure-settings",
         stateRoot: failureStateRoot,
         workspaceRoot: workspace,
         fixture: true,
-        asyncEnabled: false
+        asyncEnabled: false,
+        fixtureTransactionCommitMonitor:Some({transaction=>storageFault.observe(transaction)})
     )).value().getOrThrow()
     let database = SqliteDatabase(failureStateRoot + "/state.db")
     try {
-        expect(product.unregisterTool("read"),
-            "replace the built-in read tool for artifact-store failure injection")
-        let registered = product.registerTool(
-            ToolDescriptor(
-                ModelToolDefinition(
-                    "read", "read fixture that makes the artifact store unavailable", objectValue([])
-                ),
-                Capability(CapabilityKind.WorkspaceRead),
-                implementationVersion: "file-plan-artifact-failure-v1",
-                implementationFingerprint: "file-plan-artifact-failure-read-v1",
-                networkPolicyResolver: Some({_ =>
-                    Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
-                })
-            ),
-            ProductPlanArtifactFailureReadExecutor(
-                LocalWorkspace(workspace), failureStateRoot + "/blobs"
-            )
-        )
-        expect(registered.isOk(), "install deterministic artifact-store failure fixture")
+        let binding=NativeProgramContractBinding(product,filePlanProposals:true,inputAttachment:false)
+        storageFault.selectActualRead(binding.workspaceName("read"))
         let originalAlpha = String.fromUtf8(File.readFrom(
             Path(workspace + "/src/alpha.cj")
         ))
@@ -3791,7 +4403,7 @@ func runProductPlanArtifactStoreFailureContract(root: String, workspace: String)
             ]))
         ])
         let failureSource =
-            "const inspected = await tools.read({});\n" +
+            "const inspected = await tools.read({\"path\":\"src/alpha.cj\"});\n" +
             "return " + encodeAgentValue(failureValue) + ";"
         let (output, isError) = runProductProgramToolCall(
             product, database, "e5-02-artifact-store-failure",
@@ -3801,43 +4413,146 @@ func runProductPlanArtifactStoreFailureContract(root: String, workspace: String)
             case Some(value) => value.text
             case None => ""
         }
-        expect(isError && errorCode == "application_plan.artifact_store_unavailable" &&
+        expect(storageFault.wasApplied() && isError && errorCode == "application_plan.artifact_store_unavailable" &&
             String.fromUtf8(File.readFrom(Path(workspace + "/src/alpha.cj"))) == originalAlpha,
             "missing plan artifact storage rejects generation without changing workspace")
     } finally {
         database.close()
+        storageFault.restore()
         product.close().value().getOrThrow()
     }
 }
 
-class ProductPlanArtifactFailureReadExecutor <: ToolExecutor {
-    private let workspace: LocalWorkspace
-    private let blobRoot: String
 
-    init(workspace: LocalWorkspace, blobRoot: String) {
-        this.workspace = workspace
-        this.blobRoot = blobRoot
+// Test consumer DATA only. No copied metadata becomes an installed Source,
+// pin, receipt, grant, operation, or replacement public Registry record.
+// The source Registry byte carrier pays its complete copied graph before
+// allocating an Array/String/DOM. Original configuration/public fixture text
+// has no retirement protocol, so those independent loans remain paid.
+class SupportRegistryCopyDebt96 {
+    let payment:LogicalJsonOwnerReservation
+    let previous:?SupportRegistryCopyDebt96
+    init(payment:LogicalJsonOwnerReservation,previous:?SupportRegistryCopyDebt96){
+        this.payment=payment;this.previous=previous}
+}
+class SupportRegistryRecordData96 {
+    let record:ProductPluginRecord
+    private let graph:AgentValue
+    private let payment:LogicalJsonOwnerReservation
+    private let lock=Mutex()
+    private var pending:?LogicalJsonOwnerReservation=None<LogicalJsonOwnerReservation>
+    let enabled:Bool
+    let explicitlyDisabled:Bool
+    let sourceKind:PluginSourceKind
+    let scope:PluginInstallScope
+    let previous:?SupportRegistryRecordData96
+    init(record:ProductPluginRecord,graph:AgentValue,payment:LogicalJsonOwnerReservation,
+        enabled:Bool,explicitlyDisabled:Bool,sourceKind:PluginSourceKind,scope:PluginInstallScope,
+        previous:?SupportRegistryRecordData96){
+        this.record=record;this.graph=graph;this.payment=payment
+        this.enabled=enabled;this.explicitlyDisabled=explicitlyDisabled;this.sourceKind=sourceKind
+        this.scope=scope;this.previous=previous}
+    func text(key:String,descriptor!:Bool=false):String{
+        lock.lock();try{
+            if(pending.isSome()){throw LogicalJsonPayloadError("same copied metadata keeps its failed occurrence payment")}
+            let value=if(descriptor){graph.field("descriptor").getOrThrow().field(key).getOrThrow().text}
+                else{graph.field(key).getOrThrow().text}
+            let loan=payment.deriveRetainedLease();pending=Some(loan)
+            loan.ensureRetainedPeak(supportRegistryInvoice96(value.size,0))
+            supportRegistryRetain96(loan);pending=None<LogicalJsonOwnerReservation>;value
+        }finally{lock.unlock()}
     }
-
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        let _ = context.runId
-        let read = match (workspace.read(WorkspaceReadRequest("src/alpha.cj"))) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let _ = removeIfExists(blobRoot, recursive: true)
-        File.writeTo(blobRoot, "artifact store unavailable".toArray())
-        Result.Ok(ToolResult(
-            prepared.call.callId,
-            objectValue([ValueField("content", textValue(read.content))])
-        ))
-    }
-
-    public func cancel(runId: RunId): Result<Unit> {
-        let _ = runId
-        Result.Ok(())
-    }
+}
+class SupportRegistryCopies96 {
+    let lock=Mutex()
+    var payments:?SupportRegistryCopyDebt96=None<SupportRegistryCopyDebt96>
+    var records:?SupportRegistryRecordData96=None<SupportRegistryRecordData96>
+}
+let supportRegistryCopies96=SupportRegistryCopies96()
+func supportRegistryInvoice96(bytes:Int64,nodes:Int64):Int64{
+    if(bytes<0 || nodes<0 || nodes>(134217728-8192)/1024 ||
+        bytes>(134217728-8192-nodes*1024)/64){
+        throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity")}
+    bytes*64+nodes*1024+8192
+}
+func supportRegistryRetain96(payment:LogicalJsonOwnerReservation):Unit{
+    supportRegistryCopies96.lock.lock();try{
+        supportRegistryCopies96.payments=Some(SupportRegistryCopyDebt96(payment,supportRegistryCopies96.payments))
+    }finally{supportRegistryCopies96.lock.unlock()}
+}
+func supportRegistryText96(result:PluginRegistryResult<OwnedRegistryUtf8>):String{
+    let source=match(result){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,0))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        String.fromUtf8(bytes)
+    }finally{source.close()}
+}
+func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
+        match(error.staticReason){
+            case PluginRegistryStaticReason.MetadataCapacity=>"registry metadata cannot fit the original shared capacity"
+            case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
+            case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
+            case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
+            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+}
+func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
+    try{supportRegistryErrorText96(error)}finally{error.close()}
+}
+func supportRegistryExclusiveErrorCode96(error:PluginRegistryOwnedError):String{
+    try{error.code}finally{error.close()}
+}
+func supportRegistryDiscard96(record:ProductPluginRecord):Unit{record.close()}
+func supportRegistryOkay96(result:PluginRegistryResult<ProductPluginRecord>):Bool{
+    match(result){case PluginRegistryResult.Ok(record)=>record.close();true
+        case PluginRegistryResult.Err(error)=>error.close();false}
+}
+func supportRegistryData96(record:ProductPluginRecord):SupportRegistryRecordData96{
+    supportRegistryCopies96.lock.lock();try{
+        var current=supportRegistryCopies96.records
+        while(current.isSome()){
+            let row=current.getOrThrow()
+            if(refEq(row.record,record)){return row};current=row.previous}
+    }finally{supportRegistryCopies96.lock.unlock()}
+    // Read real immutable scalar data while the actual view is live. State
+    // replacement may revoke it later; the test's original metadata stays in
+    // this independent same-bank copy instead of resurrecting that view.
+    let enabled=record.enabled;let disabled=record.explicitlyDisabled
+    let kind=record.sourceKind;let scope=record.scope
+    let source=match(record.copyJson()){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        var quoted=false;var escaped=false;var primitive=false;var nodes:Int64=0
+        for(index in 0..size){
+            let byte=source.byteAt(index)
+            if(quoted){if(escaped){escaped=false}else if(byte==92u8){escaped=true}else if(byte==34u8){quoted=false};continue}
+            if(byte==34u8){nodes+=1;quoted=true;primitive=false}
+            else if(byte==123u8 || byte==91u8){nodes+=1;primitive=false}
+            else if(byte==44u8 || byte==58u8 || byte==125u8 || byte==93u8 || byte<=32u8){primitive=false}
+            else if(!primitive){nodes+=1;primitive=true}}
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,nodes))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        let graph=parseUnifiedJson(String.fromUtf8(bytes),maxBytes:size)
+        supportRegistryCopies96.lock.lock();try{
+            let row=SupportRegistryRecordData96(record,graph,payment,enabled,disabled,kind,scope,supportRegistryCopies96.records)
+            supportRegistryCopies96.records=Some(row);row
+        }finally{supportRegistryCopies96.lock.unlock()}
+    }finally{source.close()}
+}
+func supportRegistryRecord96(record:ProductPluginRecord):ProductPluginRecord{
+    let _=supportRegistryData96(record);record
+}
+func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
+    let row=supportRegistryData96(record)
+    // Each returned occurrence is separately paid before it can escape into
+    // configuration, a path, a fixture field, an exception or another frame.
+    row.text(key,descriptor:true)
+}
+func supportRegistryField96(record:ProductPluginRecord,key:String):String{
+    supportRegistryData96(record).text(key)
 }

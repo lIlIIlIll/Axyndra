@@ -1,5 +1,14 @@
 package agent_product
 
+import agent_plugin_registry.*
+
+import agent_host_runtime
+import agent_host_runtime.HostInstalledModelPort
+
+import agent_plugin_registry.pluginScopeEquals
+
+import agent_plugin_registry.{pluginImportError, pluginScopeEquals}
+
 import yjson_support.*
 
 import yjson.*
@@ -9,13 +18,10 @@ import agent_app_protocol.*
 import agent_core.*
 import agent_domain.*
 import agent_domain as domain
-import agent_extensions.*
-import agent_mcp.*
 import agent_ports.*
 import agent_runtime.*
-import agent_skills.*
 import agent_store.*
-import model_adapters.*
+import model_fixture_runtime.FixtureModelPort
 import persistence_runtime.*
 import run_control.*
 import tool_runtime.*
@@ -24,11 +30,14 @@ import std.collection.*
 import std.env.*
 import std.convert.*
 import std.fs.*
+import std.io.*
 import std.sync.*
 import agent_extension_runtime.*
 import std.time.*
 import process4cj.*
 
+
+let MODEL_COMPACTION_OVERVIEW_MARKER = "\nmodel-generated overview (non-authoritative):\n"
 
 public class ProductConfig {
     public let settingsRoot: String
@@ -46,7 +55,10 @@ public class ProductConfig {
     public let modelStreamFaultProfile: ?ModelStreamFaultProfile
     public let compactionOverride: ?ProductCompactionSettings
     public let startupMode: ProductStartupMode
+    public let distributionRoot: String
     public let extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
+    public let fixtureTransactionCommitMonitor: ?(SqliteTransaction)->Unit
+    public let fixtureDerivedSettlementFailureObserver: ?(String, String, String, String) -> Unit
 
     public init(
         settingsRoot!: String = defaultProductHome(),
@@ -64,8 +76,17 @@ public class ProductConfig {
         modelStreamFaultProfile!: ?ModelStreamFaultProfile = None,
         compactionOverride!: ?ProductCompactionSettings = None,
         startupMode!: ProductStartupMode = ProductStartupMode.Full,
-        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None
+        distributionRoot!: String = "",
+        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None,
+        fixtureTransactionCommitMonitor!: ?(SqliteTransaction)->Unit = None,
+        fixtureDerivedSettlementFailureObserver!: ?(String, String, String, String) -> Unit = None
     ) {
+        if (fixtureTransactionCommitMonitor.isSome() && !fixture) {
+            throw IllegalArgumentException("transaction commit instrumentation requires explicit fixture assembly") }
+        this.fixtureTransactionCommitMonitor = fixtureTransactionCommitMonitor
+        if (fixtureDerivedSettlementFailureObserver.isSome() && !fixture) {
+            throw IllegalArgumentException("derived settlement instrumentation requires explicit fixture assembly") }
+        this.fixtureDerivedSettlementFailureObserver = fixtureDerivedSettlementFailureObserver
         if (unsafeDirectLaunchForTests && !fixture) {
             throw IllegalArgumentException(
                 "unsafe direct launch bypass is restricted to explicit fixture configuration"
@@ -88,87 +109,26 @@ public class ProductConfig {
         this.modelStreamFaultProfile = modelStreamFaultProfile
         this.compactionOverride = compactionOverride
         this.startupMode = startupMode
+        this.distributionRoot = distributionRoot
         this.extensionSignatureVerifier = extensionSignatureVerifier
     }
 }
 
 // Local maintenance commands need the product's durable repositories and
 // filesystem tools, but must not parse provider catalogs or start configured
-// MCP children.  Full remains the only mode that can execute an agent turn.
+// managed plugin children. Full remains the only mode that can execute an agent turn.
 public enum ProductStartupMode {
     | Full
     | LocalMaintenance
 }
 
-public class ProductIds <: IdGenerator {
-    private let lock = Mutex()
-    private let randomBytes = Array<Byte>(16, repeat: 0)
+public type ProductIds = agent_host_runtime.HostIds
 
-    public init() {}
 
-    public func nextRunId(): RunId {
-        RunId(next("run"))
-    }
-    public func nextSessionId(): SessionId {
-        SessionId(next("session"))
-    }
-    public func nextOperationId(): OperationId {
-        OperationId(next("operation"))
-    }
-
-    private func next(prefix: String): String {
-        lock.lock()
-        try {
-            fillSecureRandom(randomBytes)
-            prefix + "-" +
-                DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString() + "-" +
-                productIdHex(randomBytes)
-        } finally {
-            lock.unlock()
-        }
-    }
-}
-
-private func productIdHex(bytes: Array<Byte>): String {
-    let digits = "0123456789abcdef".toArray()
-    let encoded = ArrayList<Byte>()
-    for (byte in bytes) {
-        let value = UInt64(UInt8(byte))
-        encoded.add(digits[Int64((value >> 4) & 0x0f)])
-        encoded.add(digits[Int64(value & 0x0f)])
-    }
-    String.fromUtf8(encoded.toArray())
-}
 
 /** Encode bytes as unwrapped RFC 4648 Base64 for product-owned clipboard/RPC payloads. */
 public func productBase64Bytes(bytes: Array<UInt8>): String {
-    let alphabet = unsafe { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".rawData() }
-    let output = Array<UInt8>(((bytes.size + 2) / 3) * 4, repeat: 0)
-    var inputIndex: Int64 = 0
-    var outputIndex: Int64 = 0
-    while (inputIndex < bytes.size) {
-        let first = UInt32(bytes[inputIndex])
-        let hasSecond = inputIndex + 1 < bytes.size
-        let hasThird = inputIndex + 2 < bytes.size
-        let second = if (hasSecond) { UInt32(bytes[inputIndex + 1]) } else { UInt32(0) }
-        let third = if (hasThird) { UInt32(bytes[inputIndex + 2]) } else { UInt32(0) }
-        let packed = (first << 16) | (second << 8) | third
-        output[outputIndex] = alphabet[Int64((packed >> 18) & 63)]
-        output[outputIndex + 1] = alphabet[Int64((packed >> 12) & 63)]
-        output[outputIndex + 2] = if (hasSecond) {
-            alphabet[Int64((packed >> 6) & 63)]
-        } else {
-            b'='
-        }
-        output[outputIndex + 3] = if (hasThird) {
-            alphabet[Int64(packed & 63)]
-        } else {
-            b'='
-        }
-        inputIndex += 3
-        outputIndex += 4
-    }
-    String.fromUtf8(output)
+    agent_host_runtime.hostBase64Bytes(bytes)
 }
 
 public class ProductClipboardCopy {
@@ -241,6 +201,7 @@ public class ProductCompactionReport {
 
 public class ProductRuntime {
     public let client: AgentClient
+    private let contextReadCore: AgentCore
     public let ids: ProductIds
     public let workspace: LocalWorkspace
     public let model: String
@@ -253,6 +214,7 @@ public class ProductRuntime {
     public let approvalSettings: ProductApprovalSettings
     public let compactionSettings: ProductCompactionSettings
     public var theme: String
+    private let unsafeDirectLaunchForTests: Bool
     private let persistSettings: Bool
     private let sessionMetadata: SessionMetadataRepository
     private let runs: SqliteRunRepository
@@ -263,29 +225,32 @@ public class ProductRuntime {
     private let modelCatalog: Array<ModelCatalogEntry>
     private let processes: LocalProcessPort
     private let codexHookRuntime: ProductCodexHookRuntime
-    private let retryControl: RetryControl
+    private let retryControl: ModelRetrySettings
     private let uriRouter: InternalUriRouter
+    private let presentationArtifacts: ProductArtifactStore
     private let taskRuntime: ProductTaskRuntime
     private let askRuntime: AskRuntime
-    private let goalRuntime: ProductGoalRuntime
-    private let memoryRuntime: ProductMemoryRuntime
-    private let skillRuntime: ProductSkillRuntime
     private let pluginRuntime: ProductPluginRuntime
-    private let webSearchRuntime: ProductWebSearchRuntime
+    private let nativeFrontendLock=Mutex()
+    private let nativeFrontendInvocations=ArrayList<ProductNativeToolInvocation>()
+    private var nativeFrontendsClosing=false
+    private let managedPluginServiceLock = Mutex()
+    private var managedPluginServices: ?ProductPluginLifecycleManager = None
+    private var managedPluginServicesStopping = false
+    private var fixtureManagedCleanupObserver:?agent_host_runtime.HostManagedChannelCleanupObserver=None
     private let compactionSummarizer: CompactionSummarizer
     private let approvalReviewer: ApprovalReviewer
     // Fixture-mode model probe: contracts observe the actual request
     // parameters (e.g. plan mode forces High thinking).
     public let fixtureProbe: ?FixtureModelPort
     public let vnext: ProductVnextControl
-    private let extensions: ExtensionInstaller
-    private let extensionRuntime: ExtensionRuntime
-    private let mcpRuntime: ProductMcpRuntime
     private let vnextDatabase: SqliteDatabase
     private let threadRuntimes: ThreadRuntimeRegistry
+    private let installedModelInputOwner159: ?HostInstalledModelPort
 
     init(
         client: AgentClient,
+        contextReadCore: AgentCore,
         ids: ProductIds,
         workspace: LocalWorkspace,
         model: String,
@@ -308,26 +273,23 @@ public class ProductRuntime {
         modelCatalog: Array<ModelCatalogEntry>,
         processes: LocalProcessPort,
         codexHookRuntime: ProductCodexHookRuntime,
-        retryControl: RetryControl,
+        retryControl: ModelRetrySettings,
         uriRouter: InternalUriRouter,
+        presentationArtifacts: ProductArtifactStore,
         taskRuntime: ProductTaskRuntime,
         askRuntime: AskRuntime,
-        goalRuntime: ProductGoalRuntime,
-        memoryRuntime: ProductMemoryRuntime,
-        skillRuntime: ProductSkillRuntime,
         pluginRuntime: ProductPluginRuntime,
-        webSearchRuntime: ProductWebSearchRuntime,
         compactionSummarizer: CompactionSummarizer,
         approvalReviewer: ApprovalReviewer,
-        extensions: ExtensionInstaller,
-        extensionRuntime: ExtensionRuntime,
-        mcpRuntime: ProductMcpRuntime,
         vnextDatabase: SqliteDatabase,
         threadRuntimes: ThreadRuntimeRegistry,
         vnext: ProductVnextControl,
-        fixtureProbe!: ?FixtureModelPort = None
+        fixtureProbe!: ?FixtureModelPort = None,
+        unsafeDirectLaunchForTests!: Bool = false,
+        installedModelInputOwner159!: ?HostInstalledModelPort = None
     ) {
         this.client = client
+        this.contextReadCore = contextReadCore
         this.ids = ids
         this.workspace = workspace
         this.model = model
@@ -340,6 +302,7 @@ public class ProductRuntime {
         this.approvalSettings = approvalSettings
         this.compactionSettings = compactionSettings
         this.theme = theme
+        this.unsafeDirectLaunchForTests = unsafeDirectLaunchForTests
         this.persistSettings = persistSettings
         this.sessionMetadata = sessionMetadata
         this.runs = runs
@@ -352,42 +315,37 @@ public class ProductRuntime {
         this.codexHookRuntime = codexHookRuntime
         this.retryControl = retryControl
         this.uriRouter = uriRouter
+        this.presentationArtifacts = presentationArtifacts
         this.taskRuntime = taskRuntime
         this.askRuntime = askRuntime
-        this.goalRuntime = goalRuntime
-        this.memoryRuntime = memoryRuntime
-        this.skillRuntime = skillRuntime
         this.pluginRuntime = pluginRuntime
-        this.webSearchRuntime = webSearchRuntime
         this.compactionSummarizer = compactionSummarizer
         this.approvalReviewer = approvalReviewer
-        this.extensions = extensions
-        this.extensionRuntime = extensionRuntime
-        this.mcpRuntime = mcpRuntime
         this.vnextDatabase = vnextDatabase
         this.threadRuntimes = threadRuntimes
+        this.installedModelInputOwner159 = installedModelInputOwner159
         this.vnext = vnext
         this.fixtureProbe = fixtureProbe
     }
 
     func activateStartupPlugins(): Result<Unit> {
-        for (record in pluginRuntime.enabledEffectiveRecords()) {
+        for (record in productRegistryRecords83(pluginRuntime.startupEffectiveRecords())) {
             match (activateProductPlugin(record)) {
                 case Result.Ok(_) => ()
                 case Result.Err(activationError) =>
                     match (pluginRuntime.setEnabled(
-                        record.descriptor.namespace, false, record.scope
+                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
                     )) {
-                        case PluginImportResult.Ok(_) => ()
-                        case PluginImportResult.Err(persistenceError) =>
+                        case PluginRegistryResult.Ok(_) => ()
+                        case PluginRegistryResult.Err(persistenceError) =>
                             return Result.Err(AgentError(
                                 AgentErrorKind.Configuration,
                                 "plugin.startup_disable_failed",
                                 "failed to persist startup quarantine for " +
-                                    record.descriptor.namespace + ": " +
+                                    productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ": " +
                                     persistenceError.code,
                                 fields: [
-                                    ErrorField("plugin", record.descriptor.namespace),
+                                    ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
                                     ErrorField("activation_error", activationError.code),
                                     ErrorField("persistence_error", persistenceError.code)
                                 ]
@@ -409,22 +367,54 @@ public class ProductRuntime {
         modeSystem!: String = "",
         guide!: String = "",
         readOnly!: Bool = false,
-        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], []),
+        contextSnapshot!: ?InvocationContextProjection = None,
         executionLaneId!: LaneId = LaneId("main")
     ): AgentRunRequest {
+        match (prepareRequest(prompt, sessionId: sessionId, modelOverride: modelOverride, thinking: thinking, userRequestedThinking: userRequestedThinking, thinkingSource: thinkingSource, interactions: interactions, modeSystem: modeSystem, guide: guide, readOnly: readOnly, contextSnapshot: contextSnapshot, executionLaneId: executionLaneId)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw ProductRequestPreparationError(error)
+        }
+    }
+
+    public func prepareRequest(
+        prompt: String,
+        sessionId!: ?SessionId = None,
+        modelOverride!: String = "",
+        thinking!: ThinkingLevel = ThinkingLevel.Medium,
+        userRequestedThinking!: ?ThinkingLevel = None,
+        thinkingSource!: ThinkingPreferenceSource = ThinkingPreferenceSource.ModelDefault,
+        interactions!: ?AgentInteractionSource = None,
+        modeSystem!: String = "",
+        guide!: String = "",
+        readOnly!: Bool = false,
+        contextSnapshot!: ?InvocationContextProjection = None,
+        executionLaneId!: LaneId = LaneId("main"),
+        queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
+        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    ): Result<AgentRunRequest> {
         let targetSession = match (sessionId) {
             case Some(value) => value
             case None => ids.nextSessionId()
         }
-        let promptBuild = requestPromptBuild(
+        let initializeContext = contextSnapshot.isNone() && hasInitialContextConfiguration(settingsRoot)
+        if (initializeContext) {
+            let selections = match (loadInitialContextSelections(settingsRoot, runtime: Some(pluginRuntime))) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (preflightInitialContextSelections(vnext.javascriptPlugins, selections, prompt)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        }
+        let promptBuild = match (requestPromptBuildResult(
             targetSession,
             guide,
             modeSystem,
             memoryQuery: prompt
-        )
-        let resolvedSkillStack = skillRuntime.resolve(prompt, skillStack)
+        )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let resolvedContext = match (contextSnapshot) {
+            case Some(value) => validatedContextSnapshot(value)
+            case None => InvocationContextProjection()
+        }
         let system = promptBuild.text
-        let capabilities = requestCapabilities(readOnly)
+        let capabilities = requestCapabilities(readOnly, sessionId: Some(targetSession))
         let selectedModel = if (modelOverride == "") {
             model
         } else {
@@ -432,11 +422,9 @@ public class ProductRuntime {
         }
         let requestCompaction = compactionSettings.resolvedForModel(selectedModel)
         let metadata = modelMetadata(selectedModel)
-        let selectedCapabilities = match (metadata) {
-            case Some(value) => configuredProductModelCapabilities(
-                value,
-                providerProfiles
-            )
+        let neutral = productRequestModelPolicy(settingsRoot, selectedModel, fixtureProbe.isSome())
+        let selectedCapabilities = if (fixtureProbe.isSome()) { match (metadata) {
+            case Some(value) => productModelCapabilities(value)
             case None => productModelCapabilities(ModelCatalogEntry(
                 "unknown",
                 thinking: if (fixtureProbe.isSome()) {
@@ -444,19 +432,19 @@ public class ProductRuntime {
                         ThinkingControlMode.Effort,
                         supportedLevels: canonicalNonOffThinkingLevels()
                     ))
-                } else { None },
+                } else { Option<ThinkingCapabilities>.None },
                 // The fixture transport exposes the final ModelRequest to
                 // contracts, including Product's stable-prefix cache key.
                 promptCache: if (selectedModel == "fixture" && fixtureProbe.isSome()) {
                     Some(true)
                 } else {
-                    None
+                    Option<Bool>.None
                 }
             ))
-        }
+        } } else { neutral.capabilities }
         let providerSafetyMargin: Int64 = 1024
         let providerContextWindow = selectedCapabilities.contextWindowTokens
-        let contextLimit = match (metadata) {
+        let contextLimit = if (fixtureProbe.isSome()) { match (metadata) {
             case Some(value) => match (value.contextWindow) {
                 case Some(window) => min(
                     requestCompaction.maxInputTokens,
@@ -465,24 +453,25 @@ public class ProductRuntime {
                 case None => requestCompaction.maxInputTokens
             }
             case None => requestCompaction.maxInputTokens
-        }
-        let outputLimit = match (metadata) {
+        } } else { min(requestCompaction.maxInputTokens,
+            max(1, providerContextWindow - selectedCapabilities.maxOutputTokens - providerSafetyMargin)) }
+        let outputLimit = if (fixtureProbe.isSome()) { match (metadata) {
             case Some(_) => selectedCapabilities.maxOutputTokens
             case None => 100000
-        }
-        let endpointOutputLimit: ?Int64 = match (metadata) {
+        } } else { selectedCapabilities.maxOutputTokens }
+        let endpointOutputLimit: ?Int64 = if (fixtureProbe.isSome()) { match (metadata) {
             case Some(value) => match (profileById(value.providerProfile)) {
                 case Some(profile) => profile.endpointMaxOutputTokens
                 case None => None
             }
             case None => None
-        }
+        } } else { neutral.endpointMaxOutput }
         let serviceTier = if (fastModeEnabled(targetSession)) {
             fastTierForModel(selectedModel)
         } else {
             ""
         }
-        AgentRunRequest(
+        Result.Ok(AgentRunRequest(
             ids.nextRunId(),
             targetSession,
             selectedModel,
@@ -495,7 +484,8 @@ public class ProductRuntime {
                 selectedModel,
                 selectedCapabilities.thinking,
                 selectedCapabilities.maxOutputTokens,
-                endpointMaxOutputTokens: endpointOutputLimit
+                endpointMaxOutputTokens: endpointOutputLimit,
+                configurationDigest: neutral.configurationDigest
             )),
             capabilities: capabilities,
             interactions: interactions,
@@ -503,7 +493,7 @@ public class ProductRuntime {
             serviceTier: serviceTier,
             pricing: match (metadata) {
                 case Some(value) => value.pricing()
-                case None => None
+                case None => Option<ModelPricing>.None
             },
             cachePolicy: if (selectedCapabilities.promptCache) {
                 ModelCachePolicy.StablePrefix
@@ -517,56 +507,43 @@ public class ProductRuntime {
             },
             parallelToolCalls: selectedCapabilities.parallelToolCalling,
             toolContext: productToolContext(workspace.rootPath()),
-            skillStack: resolvedSkillStack,
+            contextSnapshot: resolvedContext,
+            initializeContext: initializeContext,
             contextWindow: providerContextWindow,
             providerSafetyMargin: providerSafetyMargin,
-            executionLaneId: executionLaneId,
+            executionLaneId: executionLaneId, queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113,
             budget: ResourceBudget(
                 maxInputTokens: contextLimit,
                 maxOutputTokens: outputLimit,
                 maxWallMillis: wallTimeoutMillis,
                 maxContextMessages: requestCompaction.requestMaxMessages
             )
-        )
+        ))
     }
+
 
     func directProcessSandboxEnabled(): Bool {
         processes.sandboxEnabled()
     }
 
-    private func requestPromptBuild(
+    private func requestPromptBuildResult(
         sessionId: SessionId,
         guide: String,
         modeSystem: String,
         memoryQuery!: String = ""
-    ): PromptBuild {
-        let activeGoal = match (goalRuntime.activePrompt(sessionId)) {
-            case Result.Ok(value) => value
-            case Result.Err(_) => ""
-        }
-        let memoryContext = if (memoryQuery.trimAscii() == "") {
-            ""
-        } else {
-            match (memoryRuntime.contextFor(
-                memoryQuery,
-                sessionId,
-                workspace.rootPath(),
-                16384
-            )) {
-                case Result.Ok(value) => value
-                // Automatic recall is optional context. A corrupt or
-                // unavailable memory store must not block the user turn.
-                case Result.Err(_) => ""
-            }
-        }
-        buildProductPrompt(
+    ): Result<PromptBuild> {
+        // Request-time business context is contributed by the configured
+        // Native ContextProvider through canonical InitialContextPreparation.
+        // The initial ContextRead integration delta supplies its typed data.
+        let _=memoryQuery
+        let memoryContext=""
+        Result.Ok(buildProductPrompt(
             workspace.rootPath(),
-            activeGoal,
+            "",
             guide,
             modeSystem,
-            memoryContext: memoryContext,
-            skillMetadata: skillRuntime.metadata()
-        )
+            memoryContext: memoryContext
+        ))
     }
 
     private func requestSystem(
@@ -574,12 +551,22 @@ public class ProductRuntime {
         guide: String,
         modeSystem: String
     ): String {
-        requestPromptBuild(sessionId, guide, modeSystem).text
+        match (requestPromptBuildResult(sessionId, guide, modeSystem)) {
+            case Result.Ok(value) => value.text
+            case Result.Err(error) => throw ProductRequestPreparationError(error)
+        }
     }
 
-    private func requestCapabilities(readOnly: Bool): CapabilitySet {
+    func readonlyToolCapabilities(sessionId: SessionId): CapabilitySet {
+        requestCapabilities(true, sessionId: Some(sessionId))
+    }
+
+    private func requestCapabilities(readOnly: Bool, sessionId!: ?SessionId=None): CapabilitySet {
         if (readOnly) {
-            CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead)])
+            let values=ArrayList<Capability>([Capability(CapabilityKind.WorkspaceRead)])
+            match(sessionId){case Some(thread)=>values.add(all:agent_host_runtime.hostReadonlyPluginCapabilities(
+                vnext.javascriptPlugins,pluginRuntime.list(),catalog,settingsRoot,ThreadId(thread.value)));case None=>()}
+            CapabilitySet(values: values.toArray())
         } else {
             CapabilitySet(
                 values: [
@@ -595,41 +582,38 @@ public class ProductRuntime {
         }
     }
 
-    public func finalizeGoalRun(sessionId: SessionId): Result<Unit> {
-        goalRuntime.finalizeRun(sessionId)
-    }
-
-    public func pauseGoal(sessionId: SessionId): Result<Unit> {
-        goalRuntime.pause(sessionId)
-    }
-
-    public func pauseRestoredGoal(sessionId: SessionId): Result<Unit> {
-        goalRuntime.pauseRestoredActive(sessionId)
+    // Read-only selected Native goal data, independent of legacy metadata.
+    // This projection never installs continuation permission or writes either
+    // fact store; mutations use the actual independently approved document Root.
+    public func selectedGoalPresentation(sessionId: SessionId): Result<?ProductGoalState> {
+        let selection=match(selectProductGoal(this,sessionId)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let documents=SqlitePluginDocumentRepository(vnextDatabase)
+        let snapshot=match(documents.read(ThreadId(sessionId.value),LaneId("main"),selection.namespace,"goal")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        try{
+            let raw=snapshot.encoded
+            // Preserve the canonical document's existing eight MiB contract.
+            let node=parseUnifiedJson(raw,maxBytes:8388608,maxDepth:32)
+            let presentation: ?ProductGoalState=if(node.unifiedKind==ValueKind.Null){None}
+                else{Some(ProductGoalState(node,modelPolicySha256Text(raw),selection))}
+            match(selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            let current=match(documents.read(ThreadId(sessionId.value),LaneId("main"),selection.namespace,"goal")){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            let currentRaw=current.encoded
+            if(currentRaw!=raw){return productGoalPresentationError("goal.presentation_changed")}
+            Result.Ok(presentation)
+        }catch(_:Exception){productGoalPresentationError("goal.presentation_invalid")}
     }
 
     public func goalState(sessionId: SessionId): Result<?ProductGoalState> {
-        goalRuntime.state(sessionId)
+        selectedGoalPresentation(sessionId)
     }
 
-    public func createGoal(
-        sessionId: SessionId,
-        objective: String
-    ): Result<ProductGoalState> {
-        goalRuntime.createGoal(sessionId, objective)
-    }
-
-    public func replaceGoal(
-        sessionId: SessionId,
-        objective: String
-    ): Result<ProductGoalState> {
-        goalRuntime.replaceGoal(sessionId, objective)
-    }
-
-    public func setGoalBudget(
-        sessionId: SessionId,
-        tokenBudget: ?Int64
-    ): Result<ProductGoalState> {
-        goalRuntime.setBudget(sessionId, tokenBudget)
+    // Cold legacy history is exposed only for explicit migration. No active
+    // policy or continuation owner reads this metadata as current goal facts.
+    func legacyGoalForMigration(sessionId: SessionId): Result<String> {
+        sessionMetadata.legacyGoalBytes(sessionId)
     }
 
     public func applicationSession(sessionId!: ?SessionId = None): ApplicationSession {
@@ -660,16 +644,40 @@ public class ProductRuntime {
         approvalReviewer.cancel(runId)
     }
 
+    // Package DATA linkage for the same installed registry. The caller must
+    // already hold the actual paid query cell; this cannot grant a Source,
+    // install an executor, fabricate a Run or admit any operation.
+    func retainOwnedMaintenanceProducer173(value: NativeCheckpointRetentionHeld173): Unit {
+        match (compactionSummarizer as InstalledCompactionSummarizer) {
+            case Some(actual) => actual.retainCheckpointFailure173(value)
+            case None => throw IllegalStateException("no installed maintenance DATA registry") }
+    }
+
+    // Installed-policy maintenance DATA shares, not a Core Run or cut.
+    public func hasOwnedMaintenanceFailure173(session: SessionId, marker: AgentError): Bool {
+        match (compactionSummarizer as OwnedCompactionMaintenanceFailureReader173) {
+            case Some(actual) => actual.hasMaintenanceFailure173(session, marker); case None => false }
+    }
+    public func admitOwnedMaintenanceFailure173(session: SessionId, marker: AgentError,
+        accept: (OwnedAgentRunResult113) -> Bool): Bool {
+        match (compactionSummarizer as OwnedCompactionMaintenanceFailureReader173) {
+            case Some(actual) => actual.admitMaintenanceFailure173(session, marker, accept); case None => false }
+    }
+    public func takeOwnedMaintenanceFailure173(session: SessionId, marker: AgentError): ?OwnedAgentRunResult113 {
+        match (compactionSummarizer as OwnedCompactionMaintenanceFailureReader173) {
+            case Some(actual) => actual.takeMaintenanceFailure173(session, marker); case None => None<OwnedAgentRunResult113> }
+    }
+    public func collectOwnedMaintenanceFailures173(): Unit {
+        match (compactionSummarizer as OwnedCompactionMaintenanceFailureReader173) {
+            case Some(actual) => actual.collectMaintenanceFailures173(); case None => () }
+    }
+
     public func cancelCompaction(sessionId: SessionId): Result<Unit> {
         compactionSummarizer.cancel(sessionId)
     }
 
-    public func tools(): Array<ModelToolDefinition> {
-        catalog.definitions()
-    }
-
-    public func extensionSnapshots(): Array<ExtensionSnapshot> {
-        extensions.snapshots()
+    public func tools(threadId!: ?ThreadId = None): Array<ModelToolDefinition> {
+        catalog.definitions(threadId: threadId)
     }
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
@@ -689,25 +697,343 @@ public class ProductRuntime {
         )
     }
 
-    public func pluginSnapshots(): Array<ProductPluginRecord> {
+    func invokeScopedPluginCommand(routeName: String, arguments: String, scope: ProductPluginCommandScope,
+        noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
+        vnext.invokeScopedPluginCommand(routeName, arguments, scope, noticeSink)
+    }
+
+    func pluginCommandParticipant(scope: ProductPluginCommandScope, proposal: ProductCommandProposal): Result<?PluginDocumentCommitParticipant> {
+        if (proposal.control().isNone() && !proposal.binding.allowsControl()) { return Result.Ok(Option<PluginDocumentCommitParticipant>.None) }
+        // An explicit early proposal is still validated before creating a Run.
+        // A deferred proposal is selected only after the canonical document read.
+        if (proposal.control().isSome()) {
+            match (createPluginCommandParticipant(scope, proposal)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        }
+        let participant = ProductCommandPreparationParticipant(scope, proposal,
+            { resolved => createPluginCommandParticipant(scope, resolved) })
+        match (scope.retainParticipant(participant)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        Result.Ok(Some(participant))
+    }
+    private func createPluginCommandParticipant(scope: ProductPluginCommandScope,
+        proposal: ProductCommandProposal): Result<ProductCommandCommitParticipant> {
+        let control = proposal.control().getOrThrow()
+        match (scope.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let restriction = match (commandContinuationRestriction(proposal)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let previousPrompt = match (scope.prepareUserControl(proposal)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let address = ContinuationAllowanceAddress(ThreadId(scope.sessionId.value), LaneId("main"), proposal.binding.namespace,
+            httpIntentText(control, "document_key"))
+        let facts = ContinuationAllowanceRepository(runs)
+        let expected = try { vnextDatabase.readTransaction<Result<?ContinuationAllowanceFacts>>({ tx => facts.readFacts(tx, address) }) }
+            catch (_: Exception) { return commandControlError("continuation.accounting_unavailable") }
+        let snapshot = match (expected) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let prompt = match (control.field("next_prompt")) { case Some(value) => value.text; case None => previousPrompt }
+        if (httpIntentText(control, "action") == "set_budget" && prompt.trimAscii() == "") {
+            // Updating persisted accounting cannot recover an absent live user
+            // owner. An explicit resume supplies its own reviewed prompt.
+            return commandControlError("continuation.live_prompt_missing") }
+        let participant = ProductCommandCommitParticipant(facts, address, snapshot, proposal, scope.cancellation, prompt, restriction)
+        Result.Ok(participant)
+    }
+    func acceptPluginCommandControl(scope: ProductPluginCommandScope, proposal: ProductCommandProposal): Result<?ProductContinuationOwner> {
+        if (proposal.control().isNone()) { return Result.Ok(Option<ProductContinuationOwner>.None) }
+        match (scope.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let retained = match (scope.committedParticipant()) { case Some(value) => value
+            case None => return commandControlError("continuation.participant_missing") }
+        let participant = match (retained.controlParticipant()) { case Result.Ok(Some(value)) => value
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(None) => return commandControlError("continuation.participant_missing") }
+        let accepted = match (participant.accepted(vnextDatabase)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (!accepted.enabled || accepted.closed) { return Result.Ok(Option<ProductContinuationOwner>.None) }
+        if (participant.nextPrompt.trimAscii() == "") { return commandControlError("continuation.live_prompt_missing") }
+        let original = match (participant.completedDocument(vnextDatabase)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        Result.Ok(Some(ProductContinuationOwner(participant, original[0], original[1], accepted, participant.nextPrompt, vnextDatabase,
+            ContinuationAllowanceRepository(runs), { => scope.continuationApplicationCurrent() })))
+    }
+    func preparePluginContinuation(owner: ProductContinuationOwner, request: AgentRunRequest): Result<AgentContinuationStart> {
+        match (owner.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let prepared = match (contextReadCore.prepareContinuation(request)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        owner.prepare(prepared)
+    }
+
+    func executePluginCommandProposal(scope: ProductPluginCommandScope, proposal: ProductCommandProposal,
+        owner: ProductDirectPreparationOwner, participant!: ?PluginDocumentCommitParticipant = None): Result<ToolInvocationResult> {
+        match (scope.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        vnext.executeDeferredCanonicalTool(scope.sessionId, requestCapabilities(false), proposal.call(), owner,
+            scope.cancellation, participant: participant)
+    }
+
+    // Explicit frontend maintenance entry. Installed/enabled plugin metadata
+    // is only discovery data; canonical startup, approval and finite resources
+    // are still enforced by the same lifecycle manager and ToolPipeline.
+    public func startPluginService(targetThread: SessionId, namespace: String, serviceId: String, route: String,
+        approvalDecision!: ApprovalDecision,
+        budget!: ExecutionBudget = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1),
+        cancellation!: domain.CancellationToken = domain.CancellationSource().token
+    ): Result<ToolInvocationResult> {
+        match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let record = match (pluginRuntime.get(namespace)) {
+            case Some(value) => value
+            case None => return pluginProcessError("plugin.not_found", "plugin is not installed")
+        }
+        if (!record.enabled || record.descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+            return pluginProcessError("plugin.service_unavailable", "an enabled native service plugin is required")
+        }
+        // Transport selection comes from the exact installed package's operator
+        // configuration. A package may request both capabilities; neither one
+        // selects a backend or substitutes for a current configuration grant.
+        let httpConfiguration: ?ProductPluginHttpConfiguration = match (loadPluginHttpConfiguration(settingsRoot,
+            productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)))) {
+            case Result.Ok(value) => Some(value)
+            case Result.Err(error) =>
+                if (error.code == "plugin.http_configuration_missing") { None }
+                else { return Result.Err(error) }
+        }
+        if (httpConfiguration.isSome()) {
+            let transport = httpConfiguration.getOrThrow().configuration.field("transport")
+            if (transport.isNone() || transport.getOrThrow().unifiedKind != ValueKind.Text || transport.getOrThrow().text != "http") {
+                return pluginProcessError("plugin.service_transport_unsupported", "HTTP service configuration must explicitly select transport http")
+            }
+            if (!record.descriptor.hasCapability("network.http")) {
+                return pluginProcessError("plugin.service_unavailable", "HTTP service requires its declared network.http capability")
+            }
+        }
+        let channelConfiguration: ?ProductPluginLifecycleConfiguration = if (httpConfiguration.isNone()) {
+            let selected = match (loadPluginLifecycleConfiguration(settingsRoot,
+                productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)), productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)))) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(value) => value
+            }
+            let transport = selected.configuration.field("transport")
+            // Legacy generic channel configurations predate the selector but
+            // already carry an exact operator executable and finite service grant.
+            // An explicit selector must match that transport; never fall through
+            // from an unsupported or malformed HTTP configuration.
+            if (transport.isSome() && (transport.getOrThrow().unifiedKind != ValueKind.Text || !["stdio","managed_channel_owned"].contains(transport.getOrThrow().text))) {
+                return pluginProcessError("plugin.service_transport_unsupported", "channel service configuration must select stdio or managed_channel_owned")
+            }
+            if (!record.descriptor.hasCapability("process.channel")) {
+                return pluginProcessError("plugin.service_unavailable", "stdio service requires its declared process.channel capability")
+            }
+            Some(selected)
+        } else { None }
+        let generation = vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
+        let manager = match (managedPluginServiceManager()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
+            epoch: 1, cancellation: cancellation, toolContext: productToolContext(workspace.rootPath()), budget: budget)
+        let maintenance = ThreadId(ids.nextSessionId().value)
+        let started = if (httpConfiguration.isSome()) {
+            manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
+                serviceId, route, generation, approvalDecision, budget: budget)
+        } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
+            channelConfiguration.getOrThrow().configuration.field("transport").getOrThrow().text=="managed_channel_owned"){
+            manager.startOwnedChannelProtocol(vnext,context,maintenance,channelConfiguration.getOrThrow(),
+                serviceId,route,generation,approvalDecision,budget:budget)
+        } else {
+            manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
+                serviceId, route, generation, approvalDecision, budget: budget)
+        }
+        match (started) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(value) => Result.Ok(value.outcome)
+        }
+    }
+
+    public func refreshPluginService(targetThread: SessionId, namespace: String, serviceId: String,
+        approvalDecision!: ApprovalDecision,
+        budget!: ExecutionBudget = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)): Result<ToolInvocationResult> {
+        managedPluginServiceLock.lock()
+        let selected = try { managedPluginServices } finally { managedPluginServiceLock.unlock() }
+        let manager = match (selected) { case Some(value) => value; case None => return lifecycleLeaseError("plugin.service_not_active") }
+        let context = ToolInvocationContext(RunId("service-refresh-scope"), targetThread, productCapabilities(),
+            epoch: 1, toolContext: productToolContext(workspace.rootPath()), budget: budget)
+        manager.refresh(vnext, context, namespace, serviceId, approvalDecision, budget)
+    }
+
+    public func stopPluginService(targetThread: SessionId, namespace: String, serviceId: String): Result<Unit> {
+        managedPluginServiceLock.lock()
+        let manager = try { managedPluginServices } finally { managedPluginServiceLock.unlock() }
+        match (manager) {
+            case Some(value) =>
+                let deadline = MonoTime.now() + Duration.second * 2
+                var result = value.stop(ThreadId(targetThread.value), namespace, serviceId)
+                while (result.isError() && result.error().getOrThrow().code == "plugin.lifecycle_manager_cleanup_pending" && MonoTime.now() < deadline) {
+                    sleep(Duration.millisecond * 25)
+                    result = value.stop(ThreadId(targetThread.value), namespace, serviceId)
+                }
+                result
+            case None => pluginProcessError("plugin.service_not_active", "service has no retained runtime instance")
+        }
+    }
+
+    // Stops only the selected Thread. Cleanup remains owned after the bounded
+    // wait; repeated calls can obtain the later acknowledgement.
+    public func stopPluginServices(targetThread: SessionId): Result<Unit> {
+        managedPluginServiceLock.lock()
+        let manager = try { managedPluginServices } finally { managedPluginServiceLock.unlock() }
+        match (manager) {
+            case Some(value) =>
+                let deadline = MonoTime.now() + Duration.second * 2
+                var result = value.stopThread(ThreadId(targetThread.value))
+                while (result.isError() && result.error().getOrThrow().code == "plugin.lifecycle_manager_cleanup_pending" && MonoTime.now() < deadline) {
+                    sleep(Duration.millisecond * 25)
+                    result = value.stopThread(ThreadId(targetThread.value))
+                }
+                result
+            case None => Result.Ok(())
+        }
+    }
+
+    public func pluginServiceStatuses(): Array<AgentValue> {
+        managedPluginServiceLock.lock()
+        let manager = try { managedPluginServices } finally { managedPluginServiceLock.unlock() }
+        match (manager) { case Some(value) => value.statuses(); case None => [] }
+    }
+
+    func observeManagedCleanupForFixture(observer:agent_host_runtime.HostManagedChannelCleanupObserver):Result<Unit>{
+        if(fixtureProbe.isNone()){return pluginProcessError("plugin.cleanup_observer_fixture_required","cleanup diagnostics require the actual fixture assembly")}
+        managedPluginServiceLock.lock();try{
+            if(managedPluginServices.isSome() || managedPluginServicesStopping || fixtureManagedCleanupObserver.isSome()){
+                return pluginProcessError("plugin.cleanup_observer_already_started","cleanup diagnostics must be bound before the original manager starts")}
+            fixtureManagedCleanupObserver=Some(observer);Result.Ok(())
+        }finally{managedPluginServiceLock.unlock()}
+    }
+    private func managedPluginServiceManager(): Result<ProductPluginLifecycleManager> {
+        managedPluginServiceLock.lock()
+        try {
+            if (managedPluginServicesStopping) {
+                return pluginProcessError("plugin.service_runtime_closing", "plugin service runtime is closing")
+            }
+            match (managedPluginServices) {
+                case Some(value) => Result.Ok(value)
+                case None =>
+                    match (vnext.createPluginLifecycleManager(processes, caBundle: sandboxCaBundle,
+                        managedJobLauncher: Some({ context, prepared, acknowledged => taskRuntime.startManagedJob(vnext, context, prepared, acknowledged) }),
+                        cleanupObserver:fixtureManagedCleanupObserver)) {
+                        case Result.Err(error) => Result.Err(error)
+                        case Result.Ok(value) => managedPluginServices = Some(value); Result.Ok(value)
+                    }
+            }
+        } finally { managedPluginServiceLock.unlock() }
+    }
+
+    private func closeManagedPluginServices(): Result<Unit> {
+        managedPluginServiceLock.lock()
+        let manager = try { managedPluginServicesStopping = true; managedPluginServices }
+            finally { managedPluginServiceLock.unlock() }
+        match (manager) {
+            case None => Result.Ok(())
+            case Some(value) =>
+                let deadline = MonoTime.now() + Duration.second * 2
+                var result = value.close()
+                while (result.isError() && result.error().getOrThrow().code == "plugin.lifecycle_manager_cleanup_pending" && MonoTime.now() < deadline) {
+                    sleep(Duration.millisecond * 25)
+                    result = value.close()
+                }
+                result
+        }
+    }
+
+    public func resolvePluginContext(namespace: String, provider: String, query: AgentValue,
+        threadId: ThreadId, cancellation!: domain.CancellationToken, selectedIds!: Array<String> = []): Result<InvocationContextProjection> {
+        resolveProductPluginContext(vnext.javascriptPlugins, namespace, provider, query, threadId,
+            selectedIds, cancellation, ids.nextInvocationId())
+    }
+
+    // Resolves only a typed installed content contribution. This host API is
+    // deliberately separate from plugin service payloads and does not grant
+    // capabilities or replace any currently executing PreparedInvocation.
+    public func queuePluginContextUpdate(threadId: ThreadId, runId: RunId, epoch: Int64,
+        expectedDigest: String, namespace: String, provider: String, query: AgentValue,
+        cancellation!: domain.CancellationToken, selectedIds!: Array<String> = []): Result<RunContextUpdate> {
+        let runtime = match (threadRuntimes.acquire(threadId, workspace.rootPath())) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let before = match (runtime.activeRun()) { case Some(value) => value
+            case None => return pluginProcessError("context.update_stale", "target Thread has no active Run") }
+        if (before.runId.value != runId.value || before.epoch != epoch ||
+            contextReadProjectionDigest(before.contextSnapshot) != expectedDigest || cancellation.isCancelled()) {
+            return pluginProcessError("context.update_stale", "context update does not match the active Run") }
+        let binding = match (vnext.javascriptPlugins.contentProviderBinding(namespace, provider, false)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let replacement = match (resolvePluginContext(namespace, provider, query, threadId,
+            cancellation: cancellation, selectedIds: selectedIds)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let owner = namespace + "/context/" + provider
+        let contributions = ArrayList<InvocationContextContribution>()
+        for (item in before.contextSnapshot.contributions() where item.owner != owner) { contributions.add(item) }
+        for (item in replacement.contributions()) {
+            if (item.owner != owner) { return pluginProcessError("context.update_owner_invalid", "content contribution has a foreign owner") }
+            contributions.add(item)
+        }
+        let data = InvocationContextProjection(contributions: contributions.toArray())
+        let next = InvocationContextProjection(contributions: contributions.toArray(), sourceDigest:
+            modelPolicySha256Text(canonicalAgentValue(contextSnapshotValue(data))))
+        let host = vnext.javascriptPlugins
+        runtime.queueContextSnapshot(runId, epoch, expectedDigest, next, validity: { =>
+            if (cancellation.isCancelled()) { return pluginProcessError("context.update_source_stale", "context update caller withdrew") }
+            match (host.servicePackage(namespace, binding.generation)) {
+                case Result.Err(_) => pluginProcessError("context.update_source_stale", "content provider was revoked or replaced")
+                case Result.Ok(value) => if (value.textEquals(PluginDescriptorText.ContentDigest, binding.digest)) { Result.Ok(()) }
+                    else { pluginProcessError("context.update_source_stale", "content provider identity changed") }
+            }
+        })
+    }
+
+    public func queuePluginContextReadUpdate(threadId: ThreadId, runId: RunId, epoch: Int64,
+        expectedDigest: String, namespace: String, provider: String, resources: AgentValue, query: AgentValue,
+        cancellation!: domain.CancellationToken, selectedIds!: Array<String> = []): Result<ContextReadUpdate> {
+        let runtime = match (threadRuntimes.acquire(threadId, workspace.rootPath())) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let before = match (runtime.activeRun()) { case Some(value) => value
+            case None => return pluginProcessError("context.update_stale", "target Thread has no active Run") }
+        if (before.runId.value != runId.value || before.epoch != epoch ||
+            contextReadProjectionDigest(before.contextSnapshot) != expectedDigest || cancellation.isCancelled()) {
+            return pluginProcessError("context.update_stale", "context resource request lost its active Run") }
+        let prepared = match (productContextProviderRead(vnext.javascriptPlugins, namespace, provider,
+            before, resources, query, cancellation, selectedIds, ids.nextInvocationId())) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        contextReadCore.queueContextReadUpdate(runId, epoch, expectedDigest, prepared.read, validity: prepared.validity)
+    }
+
+    public func readPluginContextResource(snapshot: InvocationContextProjection, owner: String,
+        contribution: String, reference: String, threadId: ThreadId,
+        cancellation!: domain.CancellationToken): Result<String> {
+        readProductPluginContextResource(vnext.javascriptPlugins, snapshot, owner, contribution, reference,
+            threadId, cancellation, ids.nextInvocationId())
+    }
+
+    func validateDistributionContext(encoded: String): Result<Unit> {
+        match (parseInitialContextSelections(settingsRoot, encoded, Some(pluginRuntime))) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    public func pluginSnapshots(): OwnedPluginRecordList {
         pluginRuntime.list()
     }
 
-    public func inspectPlugin(root: String): PluginPackageResult<PluginPackageDescriptor> {
+    public func inspectPlugin(root: String): PluginRegistryResult<OwnedPluginPackageDescriptor> {
         pluginRuntime.inspect(root)
     }
 
-    public func importLocalPlugin(root: String): PluginImportResult<ProductPluginRecord> {
+    public func importLocalPlugin(root: String): PluginRegistryResult<ProductPluginRecord> {
         importLocalPlugin(root, PluginInstallScope.User)
     }
 
-    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+    public func importLocalPlugin(root: String, scope: PluginInstallScope): PluginRegistryResult<ProductPluginRecord> {
         let descriptor = match (pluginRuntime.inspect(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         importProductPlugin(
-            descriptor.namespace,
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
             { => pluginRuntime.importLocal(root, scope) }
         )
     }
@@ -717,7 +1043,7 @@ public class ProductRuntime {
         sessionId: SessionId,
         source: ProductPluginSourceRequest,
         approvalDecision!: ApprovalDecision
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         importPluginSource(
             sessionId,
             source,
@@ -731,31 +1057,31 @@ public class ProductRuntime {
         source: ProductPluginSourceRequest,
         scope: PluginInstallScope,
         approvalDecision!: ApprovalDecision
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let spec = match (productPluginSourceSpec(source, shellNetworkMode)) {
             case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+            case PluginImportResult.Err(error) => return PluginRegistryResult.Err(pluginRuntime.ownedError(error.code, error.message))
         }
         if (pluginScopeEquals(scope, PluginInstallScope.Workspace) && workspace.rootPath().trimAscii() == "") {
-            return pluginImportError("plugin.workspace_scope_missing", "workspace scope requires an identified workspace root")
+            return productRegistryFailure83(pluginRuntime, "plugin.workspace_scope_missing", "workspace scope requires an identified workspace root")
         }
         match (pluginRuntime.cachedSource(spec, scope)) {
-            case Some(record) => return PluginImportResult.Ok(record)
+            case Some(record) => return PluginRegistryResult.Ok(record)
             case None => ()
         }
         let acquirer = ProductPluginSourceAcquirer(
             vnext, ids, workspace.rootPath(), settingsRoot
         )
         match (acquirer.acquire(sessionId, spec, approvalDecision)) {
-            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
+            case PluginImportResult.Err(error) => PluginRegistryResult.Err(pluginRuntime.ownedError(error.code, error.message))
             case PluginImportResult.Ok(acquired) =>
                 try {
                     let descriptor = match (pluginRuntime.inspect(acquired.packageRoot)) {
-                        case PluginPackageResult.Ok(value) => value
-                        case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+                        case PluginRegistryResult.Ok(value) => value
+                        case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
                     }
                     importProductPlugin(
-                        descriptor.namespace,
+                        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
                         { => pluginRuntime.importAcquiredSource(acquired, scope) }
                     )
                 } finally {
@@ -764,8 +1090,28 @@ public class ProductRuntime {
         }
     }
 
-    public func pluginDoctor(): Array<PluginImportError> {
-        pluginRuntime.doctor()
+    public func pluginDoctor(custody!: ?OwnedApplicationRegistryResponse161 = None): Array<PluginRegistryOwnedError> {
+        let original = pluginRuntime.doctor()
+        productRegistryKeepErrorList161(original, custody)
+        let records = productRegistryRecords83(pluginRuntime.enabledEffectiveRecords(), custody: custody)
+        let count = original.size + records.size
+        if (count < 0 || count > (134217728 - 8192) / 256) { throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity") }
+        let payment = original.deriveCopiedDataPayment(count * 256 + 8192)
+        productRegistryAdoptCopied161(payment, custody: custody, errors: Some(original))
+        try {
+            let errors = ArrayList<PluginRegistryOwnedError>()
+            for (index in 0..original.size) { errors.add(productRegistryKeepOwnedError161(original.at(index), custody)) }
+            for (record in records where record.descriptor.componentDependencyCount != 0) {
+                let namespace = productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace), custody: custody)
+                if (vnext.javascriptPlugins.instanceGeneration(namespace) == 0u64) {
+                    errors.add(productRegistryKeepOwnedError161(record.ownedError("plugin.component_dependency_blocked",
+                        namespace + " has no active dependency-bound instance; explicitly enable it after repairing dependencies"), custody))
+                }
+            }
+            // original remains paid: these returned owned error handles still
+            // share its backing. No list.close falsely retires those handles.
+            errors.toArray()
+        } finally { /* Returned error views still own this captured list. */ }
     }
     public func pluginPromptTemplates(): Array<String> {
         pluginRuntime.promptTemplateNames()
@@ -778,12 +1124,6 @@ public class ProductRuntime {
         pluginRuntime.renderPromptTemplate(identity, arguments)
     }
 
-    private func pluginHasMcp(record: ProductPluginRecord): Bool {
-        for (component in record.descriptor.components where component.kind == PluginComponentKind.Mcp) {
-            return true
-        }
-        false
-    }
 
     private func pluginDeactivationRestoreError(
         record: ProductPluginRecord,
@@ -795,7 +1135,7 @@ public class ProductRuntime {
             "plugin.deactivation_restore_failed",
             "plugin deactivation failed and its active components could not be restored",
             fields: [
-                ErrorField("plugin", record.descriptor.namespace),
+                ErrorField("plugin", productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))),
                 ErrorField("deactivation_error", deactivationError.code),
                 ErrorField("restore_error", restoreError.code)
             ]
@@ -813,21 +1153,6 @@ public class ProductRuntime {
                 case Result.Err(error) => restoreError = Some(error)
             }
         }
-        if (pluginHasMcp(record)) {
-            match (mcpRuntime.activatePlugin(
-                record,
-                workspace.rootPath(),
-                catalog,
-                extensions,
-                sandboxCaBundle: sandboxCaBundle,
-                restoreExisting: true
-            )) {
-                case Result.Ok(_) => ()
-                case Result.Err(error) => if (restoreError.isNone()) {
-                    restoreError = Some(error)
-                }
-            }
-        }
         codexHookRuntime.activatePlugin(record)
         match (restoreError) {
             case Some(error) => Result.Err(error)
@@ -837,18 +1162,6 @@ public class ProductRuntime {
 
     private func deactivateProductPlugin(record: ProductPluginRecord): Result<Unit> {
         codexHookRuntime.revokePlugin(record)
-        if (pluginHasMcp(record)) {
-            match (mcpRuntime.deactivatePlugin(record, catalog, extensions)) {
-                case Result.Err(error) =>
-                    match (restoreProductPlugin(record, restoreVnext: false)) {
-                        case Result.Ok(_) => return Result.Err(error)
-                        case Result.Err(restoreError) => return Result.Err(
-                            pluginDeactivationRestoreError(record, error, restoreError)
-                        )
-                    }
-                case Result.Ok(_) => ()
-            }
-        }
         match (vnext.deactivateImportedPlugin(record)) {
             case Result.Ok(_) => Result.Ok(())
             case Result.Err(error) =>
@@ -862,60 +1175,48 @@ public class ProductRuntime {
     }
 
     private func activateProductPlugin(record: ProductPluginRecord): Result<Unit> {
+        match (pluginRuntime.checkComponentDependencies(record)) {
+            case PluginRegistryResult.Err(error) => return Result.Err(AgentError(AgentErrorKind.Configuration, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message)))
+            case PluginRegistryResult.Ok(_) => ()
+        }
         match (vnext.activateImportedPlugin(record)) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(_) =>
-                if (!pluginHasMcp(record)) {
-                    codexHookRuntime.activatePlugin(record)
-                    return Result.Ok(())
-                }
-                match (mcpRuntime.activatePlugin(
-                    record,
-                    workspace.rootPath(),
-                    catalog,
-                    extensions,
-                    sandboxCaBundle: sandboxCaBundle
-                )) {
-                    case Result.Ok(_) =>
-                        codexHookRuntime.activatePlugin(record)
-                        Result.Ok(())
-                    case Result.Err(error) =>
-                        let _ = vnext.deactivateImportedPlugin(record)
-                        Result.Err(error)
-                }
+                codexHookRuntime.activatePlugin(record)
+                Result.Ok(())
         }
     }
 
     private func importProductPlugin(
         namespace: String,
-        operation: () -> PluginImportResult<ProductPluginRecord>
-    ): PluginImportResult<ProductPluginRecord> {
+        operation: () -> PluginRegistryResult<ProductPluginRecord>
+    ): PluginRegistryResult<ProductPluginRecord> {
         let effectiveBefore = pluginRuntime.get(namespace)
         match (operation()) {
-            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
-            case PluginImportResult.Ok(record) =>
+            case PluginRegistryResult.Err(error) => PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(record) =>
                 let effectiveAfter = pluginRuntime.get(namespace)
                 let effectiveChanged = match ((effectiveBefore, effectiveAfter)) {
                     case (Some(previous), Some(current)) =>
                         !pluginScopeEquals(previous.scope, current.scope) ||
-                            previous.contentLock != current.contentLock
+                            productRegistryCopyText83(previous.copyText(PluginRecordText.ContentLock)) != productRegistryCopyText83(current.copyText(PluginRecordText.ContentLock))
                     case (None, Some(_)) => true
                     case (Some(_), None) => true
                     case (None, None) => false
                 }
-                if (!effectiveChanged) { return PluginImportResult.Ok(record) }
+                if (!effectiveChanged) { return PluginRegistryResult.Ok(record) }
                 match (effectiveBefore) {
                     case Some(previous) =>
                         if (previous.enabled) {
                             match (deactivateProductPlugin(previous)) {
                                 case Result.Ok(_) => ()
                                 case Result.Err(error) =>
-                                    match (pluginRuntime.uninstall(record.descriptor.id, record.scope)) {
-                                        case PluginImportResult.Ok(_) => let _ = activateProductPlugin(previous)
-                                        case PluginImportResult.Err(rollbackError) =>
-                                            return pluginImportError(rollbackError.code, rollbackError.message)
+                                    match (pluginRuntime.uninstall(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id)), record.scope)) {
+                                        case PluginRegistryResult.Ok(_) => let _ = activateProductPlugin(previous)
+                                        case PluginRegistryResult.Err(rollbackError) =>
+                                            return PluginRegistryResult.Err(rollbackError)
                                     }
-                                    return pluginImportError(error.code, error.message)
+                                    return productRegistryFailure83(pluginRuntime, error.code, error.message)
                             }
                         }
                     case None => ()
@@ -926,124 +1227,124 @@ public class ProductRuntime {
                             match (activateProductPlugin(current)) {
                                 case Result.Ok(_) => ()
                                 case Result.Err(error) =>
-                                    match (pluginRuntime.uninstall(record.descriptor.id, record.scope)) {
-                                        case PluginImportResult.Ok(_) =>
+                                    match (pluginRuntime.uninstall(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id)), record.scope)) {
+                                        case PluginRegistryResult.Ok(_) =>
                                             match (effectiveBefore) {
                                                 case Some(previous) => if (previous.enabled) {
                                                     let _ = activateProductPlugin(previous)
                                                 }
                                                 case None => ()
                                             }
-                                        case PluginImportResult.Err(rollbackError) =>
-                                            return pluginImportError(rollbackError.code, rollbackError.message)
+                                        case PluginRegistryResult.Err(rollbackError) =>
+                                            return PluginRegistryResult.Err(rollbackError)
                                     }
-                                    return pluginImportError(error.code, error.message)
+                                    return productRegistryFailure83(pluginRuntime, error.code, error.message)
                             }
                         }
                     case None => ()
                 }
-                PluginImportResult.Ok(record)
+                PluginRegistryResult.Ok(record)
         }
     }
     private func replaceActiveProductPlugin(
         id: String,
-        operation: () -> PluginImportResult<ProductPluginRecord>,
+        operation: () -> PluginRegistryResult<ProductPluginRecord>,
         restoreOnActivationFailure!: Bool = false
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let current = match (pluginRuntime.get(id)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
         }
         let wasEnabled = current.enabled
         if (wasEnabled) {
             match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
                 case Result.Ok(_) => ()
             }
         }
         match (operation()) {
-            case PluginImportResult.Err(error) =>
+            case PluginRegistryResult.Err(error) =>
                 if (wasEnabled) { let _ = activateProductPlugin(current) }
-                PluginImportResult.Err(error)
-            case PluginImportResult.Ok(record) =>
-                if (!record.enabled) { return PluginImportResult.Ok(record) }
+                PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(record) =>
+                if (!record.enabled) { return PluginRegistryResult.Ok(record) }
                 match (activateProductPlugin(record)) {
-                    case Result.Ok(_) => PluginImportResult.Ok(record)
+                    case Result.Ok(_) => PluginRegistryResult.Ok(record)
                     case Result.Err(error) =>
                         if (restoreOnActivationFailure) {
                             match (pluginRuntime.rollback(id)) {
-                                case PluginImportResult.Ok(restored) =>
+                                case PluginRegistryResult.Ok(restored) =>
                                     if (wasEnabled) { let _ = activateProductPlugin(restored) }
-                                case PluginImportResult.Err(_) =>
+                                case PluginRegistryResult.Err(_) =>
                                     let _ = pluginRuntime.setEnabled(id, false)
                             }
                         } else {
                             let _ = pluginRuntime.setEnabled(id, false)
                         }
-                        pluginImportError(error.code, error.message)
+                        productRegistryFailure83(pluginRuntime, error.code, error.message)
                 }
         }
     }
 
-    public func updateLocalPlugin(id: String, root: String): PluginImportResult<ProductPluginRecord> {
+    public func updateLocalPlugin(id: String, root: String): PluginRegistryResult<ProductPluginRecord> {
         replaceActiveProductPlugin(id, { => pluginRuntime.updateLocal(id, root) }, restoreOnActivationFailure: true)
     }
 
     private func replaceActiveProductPluginInScope(
         id: String,
         scope: PluginInstallScope,
-        operation: () -> PluginImportResult<ProductPluginRecord>,
+        operation: () -> PluginRegistryResult<ProductPluginRecord>,
         restoreOnActivationFailure!: Bool = false
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let current = match (pluginRuntime.get(id, scope)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
         }
         let effectiveBefore = pluginRuntime.get(id)
         let wasActive = match (effectiveBefore) {
-            case Some(previous) => previous.enabled && previous.descriptor.namespace == current.descriptor.namespace &&
+            case Some(previous) => previous.enabled && productRegistryCopyText83(previous.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(current.descriptor.copyText(PluginDescriptorText.Namespace)) &&
                 pluginScopeEquals(previous.scope, current.scope)
             case None => false
         }
         if (wasActive) {
             match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
                 case Result.Ok(_) => ()
             }
         }
         match (operation()) {
-            case PluginImportResult.Err(error) =>
+            case PluginRegistryResult.Err(error) =>
                 if (wasActive) { let _ = activateProductPlugin(current) }
-                PluginImportResult.Err(error)
-            case PluginImportResult.Ok(record) =>
+                PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(record) =>
                 let effectiveAfter = pluginRuntime.get(id)
                 let shouldActivate = match (effectiveAfter) {
-                    case Some(active) => active.enabled && active.descriptor.namespace == record.descriptor.namespace &&
+                    case Some(active) => active.enabled && productRegistryCopyText83(active.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) &&
                         pluginScopeEquals(active.scope, record.scope)
                     case None => false
                 }
-                if (!shouldActivate) { return PluginImportResult.Ok(record) }
+                if (!shouldActivate) { return PluginRegistryResult.Ok(record) }
                 let active = match (effectiveAfter) {
                     case Some(value) => value
-                    case None => return PluginImportResult.Ok(record)
+                    case None => return PluginRegistryResult.Ok(record)
                 }
                 match (activateProductPlugin(active)) {
-                    case Result.Ok(_) => PluginImportResult.Ok(record)
+                    case Result.Ok(_) => PluginRegistryResult.Ok(record)
                     case Result.Err(error) =>
                         if (restoreOnActivationFailure) {
                             match (pluginRuntime.rollback(id, scope)) {
-                                case PluginImportResult.Ok(_) =>
+                                case PluginRegistryResult.Ok(_) =>
                                     match (effectiveBefore) {
                                         case Some(previous) => if (wasActive) { let _ = activateProductPlugin(previous) }
                                         case None => ()
                                     }
-                                case PluginImportResult.Err(_) =>
+                                case PluginRegistryResult.Err(_) =>
                                     let _ = pluginRuntime.setEnabled(id, false, scope)
                             }
                         } else {
                             let _ = pluginRuntime.setEnabled(id, false, scope)
                         }
-                        pluginImportError(error.code, error.message)
+                        productRegistryFailure83(pluginRuntime, error.code, error.message)
                 }
         }
     }
@@ -1052,7 +1353,7 @@ public class ProductRuntime {
         id: String,
         root: String,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         replaceActiveProductPluginInScope(
             id,
             scope,
@@ -1061,7 +1362,7 @@ public class ProductRuntime {
         )
     }
 
-    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginImportResult<ProductPluginRecord> {
+    public func rollbackPlugin(id: String, scope: PluginInstallScope): PluginRegistryResult<ProductPluginRecord> {
         replaceActiveProductPluginInScope(
             id,
             scope,
@@ -1075,10 +1376,10 @@ public class ProductRuntime {
         sessionId: SessionId,
         source: ProductPluginSourceRequest,
         approvalDecision!: ApprovalDecision
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let current = match (pluginRuntime.get(id)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
         }
         updatePluginSourceInScope(id, current.scope, sessionId, source, approvalDecision)
     }
@@ -1089,7 +1390,7 @@ public class ProductRuntime {
         sessionId: SessionId,
         source: ProductPluginSourceRequest,
         approvalDecision!: ApprovalDecision
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         updatePluginSourceInScope(id, scope, sessionId, source, approvalDecision)
     }
 
@@ -1099,32 +1400,32 @@ public class ProductRuntime {
         sessionId: SessionId,
         source: ProductPluginSourceRequest,
         approvalDecision: ApprovalDecision
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let current = match (pluginRuntime.get(id, scope)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
         }
         let spec = match (productPluginSourceSpec(source, shellNetworkMode)) {
             case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
+            case PluginImportResult.Err(error) => return PluginRegistryResult.Err(pluginRuntime.ownedError(error.code, error.message))
         }
         match (pluginRuntime.cachedSource(spec, scope, id: id)) {
-            case Some(record) => return PluginImportResult.Ok(record)
+            case Some(record) => return PluginRegistryResult.Ok(record)
             case None => ()
         }
         let acquirer = ProductPluginSourceAcquirer(
             vnext, ids, workspace.rootPath(), settingsRoot
         )
         match (acquirer.acquire(sessionId, spec, approvalDecision)) {
-            case PluginImportResult.Err(error) => PluginImportResult.Err(error)
+            case PluginImportResult.Err(error) => PluginRegistryResult.Err(pluginRuntime.ownedError(error.code, error.message))
             case PluginImportResult.Ok(acquired) =>
                 try {
                     let descriptor = match (pluginRuntime.inspect(acquired.packageRoot)) {
-                        case PluginPackageResult.Ok(value) => value
-                        case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
+                        case PluginRegistryResult.Ok(value) => value
+                        case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
                     }
-                    if (descriptor.namespace != current.descriptor.namespace) {
-                        return pluginImportError(
+                    if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) != productRegistryCopyText83(current.descriptor.copyText(PluginDescriptorText.Namespace))) {
+                        return productRegistryFailure83(pluginRuntime, 
                             "plugin.update_id_mismatch",
                             "updated source package namespace does not match the imported plugin"
                         )
@@ -1141,73 +1442,73 @@ public class ProductRuntime {
         }
     }
 
-    public func rollbackPlugin(id: String): PluginImportResult<ProductPluginRecord> {
+    public func rollbackPlugin(id: String): PluginRegistryResult<ProductPluginRecord> {
         replaceActiveProductPlugin(
             id,
             { => pluginRuntime.rollback(id) },
             restoreOnActivationFailure: true
         )
     }
-    public func uninstallPlugin(id: String): PluginImportResult<Unit> {
+    public func uninstallPlugin(id: String): PluginRegistryResult<Unit> {
         let current = match (pluginRuntime.get(id)) {
             case Some(record) => record
-            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
         }
         uninstallPlugin(id, current.scope)
     }
 
 
-    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginImportResult<Unit> {
+    public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginRegistryResult<Unit> {
         let current = match (pluginRuntime.get(id, scope)) {
             case Some(record) => record
-            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
         }
         let effectiveBefore = pluginRuntime.get(id)
         let wasEffective = match (effectiveBefore) {
-            case Some(previous) => previous.descriptor.namespace == current.descriptor.namespace &&
+            case Some(previous) => productRegistryCopyText83(previous.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(current.descriptor.copyText(PluginDescriptorText.Namespace)) &&
                 pluginScopeEquals(previous.scope, current.scope)
             case None => false
         }
         let wasActive = wasEffective && current.enabled
         if (wasActive) {
             match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return pluginImportError(error.code, error.message)
+                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
                 case Result.Ok(_) => ()
             }
         }
         match (pluginRuntime.uninstall(id, scope)) {
-            case PluginImportResult.Err(error) =>
+            case PluginRegistryResult.Err(error) =>
                 if (wasActive) { let _ = activateProductPlugin(current) }
-                PluginImportResult.Err(error)
-            case PluginImportResult.Ok(_) =>
+                PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(_) =>
                 let effectiveAfter = pluginRuntime.get(id)
                 match (effectiveAfter) {
                     case Some(active) =>
-                        if (!wasEffective || !active.enabled) { return PluginImportResult.Ok(()) }
+                        if (!wasEffective || !active.enabled) { return PluginRegistryResult.Ok(()) }
                         match (activateProductPlugin(active)) {
-                            case Result.Ok(_) => PluginImportResult.Ok(())
+                            case Result.Ok(_) => PluginRegistryResult.Ok(())
                             case Result.Err(error) =>
                                 match (pluginRuntime.restoreRecord(current)) {
-                                    case PluginImportResult.Err(restoreError) =>
-                                        return pluginImportError(restoreError.code, restoreError.message)
-                                    case PluginImportResult.Ok(_) => ()
+                                    case PluginRegistryResult.Err(restoreError) =>
+                                        return PluginRegistryResult.Err(restoreError)
+                                    case PluginRegistryResult.Ok(_) => ()
                                 }
                                 if (wasActive) { let _ = activateProductPlugin(current) }
-                                pluginImportError(error.code, error.message)
+                                productRegistryFailure83(pluginRuntime, error.code, error.message)
                         }
-                    case None => PluginImportResult.Ok(())
+                    case None => PluginRegistryResult.Ok(())
                 }
         }
     }
 
-    public func garbageCollectPlugins(): PluginImportResult<Array<String>> {
+    public func garbageCollectPlugins(): PluginRegistryResult<OwnedRegistryTextList> {
         pluginRuntime.garbageCollect()
     }
 
-    public func setPluginEnabled(id: String, enabled: Bool): PluginImportResult<ProductPluginRecord> {
+    public func setPluginEnabled(id: String, enabled: Bool): PluginRegistryResult<ProductPluginRecord> {
         let current = match (pluginRuntime.get(id)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found", "plugin id is not imported")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
         }
         setPluginEnabled(id, enabled, current.scope)
     }
@@ -1216,58 +1517,58 @@ public class ProductRuntime {
         id: String,
         enabled: Bool,
         scope: PluginInstallScope
-    ): PluginImportResult<ProductPluginRecord> {
+    ): PluginRegistryResult<ProductPluginRecord> {
         let target = match (pluginRuntime.get(id, scope)) {
             case Some(value) => value
-            case None => return pluginImportError("plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
         }
         let explicitDisableChange = pluginScopeEquals(scope, PluginInstallScope.User) &&
             !enabled && !target.explicitlyDisabled
-        if (target.enabled == enabled && !explicitDisableChange) { return PluginImportResult.Ok(target) }
+        if (target.enabled == enabled && !explicitDisableChange &&
+            (!enabled || target.descriptor.entryKind != PluginEntryKind.NativeExecutable ||
+                vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(target.descriptor.copyText(PluginDescriptorText.Namespace))) != 0u64)) {
+            return PluginRegistryResult.Ok(target)
+        }
         let effectiveBefore = pluginRuntime.get(id)
         match (effectiveBefore) {
             case Some(previous) =>
                 if (previous.enabled) {
                     match (deactivateProductPlugin(previous)) {
-                        case Result.Err(error) => return pluginImportError(error.code, error.message)
+                        case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
                         case Result.Ok(_) => ()
                     }
                 }
             case None => ()
         }
         match (pluginRuntime.setEnabled(id, enabled, scope)) {
-            case PluginImportResult.Err(error) =>
+            case PluginRegistryResult.Err(error) =>
                 match (effectiveBefore) {
                     case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
                     case None => ()
                 }
-                PluginImportResult.Err(error)
-            case PluginImportResult.Ok(record) =>
+                PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(record) =>
                 let effectiveAfter = pluginRuntime.get(id)
                 match (effectiveAfter) {
                     case Some(active) =>
-                        if (!active.enabled) { return PluginImportResult.Ok(record) }
+                        if (!active.enabled) { return PluginRegistryResult.Ok(record) }
                         match (activateProductPlugin(active)) {
-                            case Result.Ok(_) => PluginImportResult.Ok(record)
+                            case Result.Ok(_) => PluginRegistryResult.Ok(record)
                             case Result.Err(error) =>
                                 match (pluginRuntime.restoreRecord(target)) {
-                                    case PluginImportResult.Err(restoreError) =>
-                                        return pluginImportError(restoreError.code, restoreError.message)
-                                    case PluginImportResult.Ok(_) => ()
+                                    case PluginRegistryResult.Err(restoreError) =>
+                                        return PluginRegistryResult.Err(restoreError)
+                                    case PluginRegistryResult.Ok(_) => ()
                                 }
                                 match (effectiveBefore) {
                                     case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
                                     case None => ()
                                 }
-                                pluginImportError(error.code, error.message)
+                                productRegistryFailure83(pluginRuntime, error.code, error.message)
                         }
-                    case None => PluginImportResult.Ok(record)
+                    case None => PluginRegistryResult.Ok(record)
                 }
         }
-    }
-
-    public func extensionDiagnostics(): Array<ExtensionDiagnostic> {
-        extensionRuntime.diagnostics()
     }
 
     public func codexHookDiagnostics(): Array<String> {
@@ -1275,28 +1576,41 @@ public class ProductRuntime {
     }
 
 
-    public func mcpSnapshots(): Array<ProductMcpServerSnapshot> {
-        mcpRuntime.snapshots()
-    }
 
-    public func mcpStatus(serverId: String): ?ProductMcpServerSnapshot {
-        mcpRuntime.status(serverId)
-    }
 
-    public func cancelMcp(runId: RunId): Result<Unit> {
-        mcpRuntime.cancel(runId)
-    }
 
-    public func closeMcp(): Result<Unit> {
-        mcpRuntime.close()
-    }
 
     public func close(): Result<Unit> {
+        if (taskRuntime.hasPluginChildDebt111()) {
+            // This exact live continuation still needs the mounted Native
+            // artifact and its original Registry custody to finish. Do not
+            // enter the old unconditional Registry-close finally until the
+            // actual child owners have settled; an error remains retryable.
+            match(closeNativeFrontendInvocations()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            match(closeManagedPluginServices()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            match(taskRuntime.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        }
+        try {
+        match(closeNativeFrontendInvocations()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        // Do not tear down Store or native infrastructure while a managed
+        // startup/invocation still owns cleanup. A later close can retry.
+        match (closeManagedPluginServices()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let vnextResult = vnext.close()
-        let extensionResult = extensionRuntime.shutdown()
+        match (vnextResult) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let taskResult = taskRuntime.close()
+        match (taskResult) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let processResult = processes.close()
-        let mcpResult = mcpRuntime.close()
+        match (processResult) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (codexHookRuntime.closeHookGenerationData159g()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        // Closing OS resources alone is not consumer retirement. The concrete
+        // input owner additionally requires all real API/Future/helper frames
+        // to have returned and clears its own private caches before payment.
+        match (installedModelInputOwner159) { case None => (); case Some(owner) =>
+            match (owner.closeModelInputData159()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () } }
+        contextReadCore.collectReturnedModelInputs159()
         try {
             vnextDatabase.close()
         } catch (error: Exception) {
@@ -1310,53 +1624,92 @@ public class ProductRuntime {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
-        match (extensionResult) {
-            case ExtensionRuntimeResult.Err(error) => return Result.Err(extensionRuntimeAgentError(error))
-            case ExtensionRuntimeResult.Ok(_) => ()
-        }
         match (taskResult) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(_) => match (processResult) {
                 case Result.Err(error) => Result.Err(error)
-                case Result.Ok(_) => mcpResult
+                case Result.Ok(_) => Result.Ok(())
             }
         }
+        } finally { pluginRuntime.close() }
     }
 
-    public func mcpServer(options: ProductMcpServerOptions): McpServer {
-        buildProductMcpServer(
-            catalog,
-            pipeline,
-            ids,
-            vnext,
-            options
-        )
+
+    public func toolsFor(capabilities: CapabilitySet, threadId!: ?ThreadId = None): Array<ModelToolDefinition> {
+        catalog.definitionsFor(capabilities, threadId: threadId)
     }
 
-    public func setExtensionEnabled(
-        extensionId: String,
-        enabled: Bool
-    ): Result<Unit> {
-        let result = if (enabled) {
-            extensionRuntime.activate(extensionId)
-        } else {
-            extensionRuntime.deactivate(extensionId)
-        }
-        match (result) {
-            case ExtensionRuntimeResult.Ok(_) => Result.Ok(())
-            case ExtensionRuntimeResult.Err(error) => Result.Err(extensionRuntimeAgentError(error))
-        }
+    func acquireNativeFrontendInvocation(selection: ProductSelectedNativeTool): Result<ProductNativeToolInvocation> {
+        nativeFrontendLock.lock()
+        try{
+            if(nativeFrontendsClosing || nativeFrontendInvocations.size>=64){
+                return selectedNativeToolError("plugin.frontend_cleanup_capacity")}
+            let actual=ProductNativeToolInvocation(selection)
+            nativeFrontendInvocations.add(actual)
+            Result.Ok(actual)
+        }finally{nativeFrontendLock.unlock()}
+    }
+    func releaseNativeFrontendInvocation(actual: ProductNativeToolInvocation): Unit {
+        nativeFrontendLock.lock()
+        try{
+            for(index in 0..nativeFrontendInvocations.size where refEq(nativeFrontendInvocations[index],actual)){
+                nativeFrontendInvocations.remove(at:index);return}
+        }finally{nativeFrontendLock.unlock()}
+    }
+    private func closeNativeFrontendInvocations(): Result<Unit> {
+        nativeFrontendLock.lock()
+        let actual=try{nativeFrontendsClosing=true;nativeFrontendInvocations.toArray()}finally{nativeFrontendLock.unlock()}
+        for(invocation in actual){match(invocation.close()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}}
+        Result.Ok(())
+    }
+    func acquireShellToolInvocation(sessionId: SessionId, readOnly!: Bool=false,
+        networkPolicy!: ?NetworkPolicy=None): Result<ProductNativeToolInvocation> {
+        let selection=match(selectProductNativeFrontendTool(this,sessionId,if(readOnly){"shell-readonly"}else{"shell"},if(readOnly){"exec"}else{"bash"},networkPolicy:networkPolicy)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        acquireNativeFrontendInvocation(selection)
     }
 
-    public func toolsFor(capabilities: CapabilitySet): Array<ModelToolDefinition> {
-        catalog.definitionsFor(capabilities)
+    public func invokeShellTool(sessionId: SessionId, arguments: AgentValue,
+        readOnly!: Bool=false, budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:2,maxConcurrentTools:1)
+    ): Result<ProductNativeToolInvocation> {
+        let selection=match(selectProductNativeFrontendTool(this,sessionId,if(readOnly){"shell-readonly"}else{"shell"},if(readOnly){"exec"}else{"bash"})){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let canonicalArguments=match(selection.shellArguments(arguments)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let invocation=match(acquireNativeFrontendInvocation(selection)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(invocation.start(canonicalArguments,budget)){
+            case Result.Err(error)=>invocation.recordFailure(error);case Result.Ok(_)=>()}
+        Result.Ok(invocation)
     }
+
+    public func invokeProgramTool(sessionId: SessionId, code: String,
+        budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:3,maxConcurrentTools:1)
+    ): Result<ProductNativeToolInvocation> {
+        let selection=match(selectProductNativeFrontendTool(this,sessionId,"program","run")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let invocation=match(acquireNativeFrontendInvocation(selection)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(invocation.start(objectValue([ValueField("code",textValue(code))]),budget)){
+            case Result.Err(error)=>invocation.recordFailure(error);case Result.Ok(_)=>()}
+        Result.Ok(invocation)
+    }
+
+    public func invokeWorkspaceTool(sessionId: SessionId, contribution: String, arguments: AgentValue): Result<ProductWorkspaceInvocation> {
+        let selection=match(selectProductWorkspaceTool(this,sessionId,contribution)){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let invocation=ProductWorkspaceInvocation(this,selection)
+        match(invocation.start(arguments)){
+            case Result.Err(error)=>let _=invocation.close();Result.Err(error)
+            case Result.Ok(_)=>Result.Ok(invocation)}
+    }
+    func nextWorkspaceCallId(): String { ids.nextOperationId().value }
 
     public func invokeLocalTool(
         sessionId: SessionId,
         name: String,
         arguments: AgentValue,
-        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], [])
+        contextSnapshot!: InvocationContextProjection = InvocationContextProjection()
     ): Result<ToolResult> {
         let callId = "cli-" + name + "-" + ids.nextOperationId().value
         let capabilities = CapabilitySet(
@@ -1374,11 +1727,11 @@ public class ProductRuntime {
             sessionId,
             capabilities,
             ToolCall(callId, name, arguments),
-            skillStack: skillStack
+            contextSnapshot: contextSnapshot
         )) {
             case Result.Ok(ToolInvocationResult.Completed(result)) =>
                 if (result.isError) {
-                    Result.Err(productToolResultError(result))
+                    try { Result.Err(productToolResultError(result)) } finally { result.releasePayload() }
                 } else {
                     Result.Ok(result)
                 }
@@ -1398,76 +1751,6 @@ public class ProductRuntime {
             )
             case Result.Ok(ToolInvocationResult.Denied(denial)) => Result.Err(denial.reason)
             case Result.Err(error) => Result.Err(error)
-        }
-    }
-
-    public func executePersistentShell(
-        sessionId: SessionId,
-        command: String,
-        timeoutMillis!: Int64 = 30000,
-        networkPolicy!: ?NetworkPolicy = None
-    ): Result<ProcessResult> {
-        if (command.trimAscii() == "") {
-            return Result.Err(
-                AgentError(
-                    AgentErrorKind.InvalidInput,
-                    "shell.empty_command",
-                    "shell command must not be empty"
-                )
-            )
-        }
-        let policy = match (resolveShellNetworkPolicy(networkPolicy)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let request = ProcessRequest(
-            "/bin/bash",
-            operationId: ids.nextOperationId(),
-            arguments: ["--noprofile", "--norc", "-lc", command],
-            workingDirectory: workspace.rootPath(),
-            timeoutMillis: max(1, timeoutMillis),
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-            networkPolicy: Some(policy)
-        )
-        if (!networkPolicyModeIsDenied(policy.mode)) {
-            // HostNetwork and mediated Bash commands are one-shot process
-            // trees. They must never inherit a cached shell's cwd/export state.
-            return processes.execute(request)
-        }
-        processes.executeShell(sessionId, request)
-    }
-
-    private func resolveShellNetworkPolicy(
-        requested: ?NetworkPolicy
-    ): Result<NetworkPolicy> {
-        match (requested) {
-            case Some(policy) =>
-                if (shellNetworkMode == ShellNetworkMode.Proxy &&
-                    networkPolicyModeIsHost(policy.mode)) {
-                    return Result.Err(AgentError(
-                        AgentErrorKind.PermissionDenied,
-                        "network.mode_denied",
-                        "proxy shell mode forbids HostNetwork",
-                        retryable: false,
-                        fallbackAllowed: false
-                    ))
-                }
-                if (networkPolicyModeIsMediated(policy.mode) && !policy.publish.isEmpty()) {
-                    return Result.Err(AgentError(
-                        AgentErrorKind.InvalidInput,
-                        "network.publish_not_supported",
-                        "Bash does not accept publish rules",
-                        retryable: false,
-                        fallbackAllowed: false
-                    ))
-                }
-                Result.Ok(policy)
-            case None =>
-                Result.Ok(match (shellNetworkMode) {
-                    case ShellNetworkMode.Restricted => NetworkPolicy(NetworkPolicyMode.Denied)
-                    case ShellNetworkMode.Proxy => NetworkPolicy(NetworkPolicyMode.Mediated)
-                    case ShellNetworkMode.TrustedHost => NetworkPolicy(NetworkPolicyMode.HostNetwork)
-                })
         }
     }
 
@@ -1493,8 +1776,8 @@ public class ProductRuntime {
         uriRouter.unregister(scheme)
     }
 
-    public func uriSchemes(): Array<String> {
-        uriRouter.schemes()
+    public func uriSchemes(custody!: ?OwnedApplicationRegistryResponse161 = None): Array<String> {
+        uriRouter.schemes(custody: custody)
     }
 
     public func setAskInteractive(
@@ -1781,11 +2064,11 @@ public class ProductRuntime {
     ): ProductContextUsage {
         let metadata = match (modelMetadata(modelId)) {
             case Some(value) => value
-            case None => return ProductContextUsage(None, None, None)
+            case None => return ProductContextUsage(Option<Int64>.None, Option<Int64>.None, Option<Float64>.None)
         }
         let window = match (metadata.contextWindow) {
             case Some(value) => value
-            case None => return ProductContextUsage(None, None, None)
+            case None => return ProductContextUsage(Option<Int64>.None, Option<Int64>.None, Option<Float64>.None)
         }
         let tokens = match (runs.stats(sessionId)) {
             // Provider usage is authoritative when at least one model request
@@ -1796,7 +2079,7 @@ public class ProductRuntime {
             } else {
                 match (modelContext(sessionId)) {
                     case Result.Ok(messages) => estimateMessagesTokens(messages)
-                    case Result.Err(_) => return ProductContextUsage(None, Some(window), None)
+                    case Result.Err(_) => return ProductContextUsage(Option<Int64>.None, Some(window), Option<Float64>.None)
                 }
             }
             // Stats are an optimization for authoritative usage; if no usable
@@ -1804,7 +2087,7 @@ public class ProductRuntime {
             // estimate instead of turning a healthy session into an error.
             case Result.Err(_) => match (modelContext(sessionId)) {
                 case Result.Ok(messages) => estimateMessagesTokens(messages)
-                case Result.Err(_) => return ProductContextUsage(None, Some(window), None)
+                case Result.Err(_) => return ProductContextUsage(Option<Int64>.None, Some(window), Option<Float64>.None)
             }
         }
         ProductContextUsage(
@@ -1836,6 +2119,15 @@ public class ProductRuntime {
             return entry.fastServiceTier
         }
         ""
+    }
+
+    // Package-only paid DATA reader. The caller supplies its actual existing
+    // allocation, and independently copies selected text before this Unit
+    // loan returns. No Host/Registry lock is taken while SQLite holds its TX.
+    func withTaskFinalText151(sessionId: SessionId,
+        allocate: (Int64) -> LogicalJsonOwnerReservation, local: () -> Result<Unit>,
+        consume: (String) -> Unit): Result<Unit> {
+        productVisitTaskLastText151(vnextDatabase, sessionId, allocate, local, consume)
     }
 
     public func messages(sessionId: SessionId): Result<Array<ModelMessage>> {
@@ -2040,11 +2332,22 @@ public class ProductRuntime {
         runs.pendingRecoveryContinuation(sessionId)
     }
 
+    public func pendingContextBoundary(sessionId: SessionId): Result<?RunContextBoundary> {
+        runs.pendingContextBoundary(sessionId)
+    }
+    public func contextBoundaryRequest(value: RunContextBoundary, interactions: ?AgentInteractionSource, ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>): Result<AgentRunRequest> {
+        try { Result.Ok(coreContextBoundaryRequestFromValue(contextBoundaryField(value.data(), "request"), interactions: interactions, ownedEvents: ownedEvents)) }
+            catch (error: Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "context.boundary_request_invalid", error.message)) }
+    }
+
     public func continuationRequest(
         value: RunContinuation,
-        interactions: ?AgentInteractionSource
-    ): AgentRunRequest {
-        AgentRunRequest(
+        interactions: ?AgentInteractionSource,
+        toolContext!: ?ToolContextDescriptor = None,
+        ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>
+    ): Result<AgentRunRequest> {
+        try { Result.Ok(AgentRunRequest(
             value.runId,
             value.sessionId,
             value.model,
@@ -2053,7 +2356,7 @@ public class ProductRuntime {
             thinking: value.thinking,
             userRequestedThinking: match (value.requestedPolicy) {
                 case Some(policy) => policy.userRequestedThinking
-                case None => None
+                case None => Option<ThinkingLevel>.None
             },
             thinkingSource: match (value.requestedPolicy) {
                 case Some(policy) => policy.thinkingSource
@@ -2073,14 +2376,77 @@ public class ProductRuntime {
             cachePolicy: value.cachePolicy,
             cacheKey: value.cacheKey,
             parallelToolCalls: value.parallelToolCalls,
-            toolContext: productToolContext(workspace.rootPath()),
-            skillStack: if (value.skillStackPayload.fields.isEmpty()) {
-                SkillStackSnapshot([], [])
-            } else { skillStackFromSnapshotValue(value.skillStackPayload) },
+            toolContext: match (toolContext) { case Some(value) => value
+                case None => productToolContext(workspace.rootPath()) },
+            contextSnapshot: if (value.contextSnapshotPayload.unifiedKind == ValueKind.Object && value.contextSnapshotPayload.fields.isEmpty()) {
+                InvocationContextProjection()
+            } else { contextSnapshotFromValue(value.contextSnapshotPayload) },
             contextWindow: value.contextWindow,
             providerSafetyMargin: value.providerSafetyMargin,
-            executionLaneId: value.executionLaneId
-        )
+            executionLaneId: value.executionLaneId,
+            ownedEvents: ownedEvents
+        )) } catch (_: Exception) {
+            Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "context.snapshot_unsupported_or_invalid",
+                "durable recovery request contains an unsupported or invalid context snapshot"))
+        }
+    }
+
+    // The Core may replace context at a canonical safe cut while the UI is
+    // waiting on an earlier approval. Adopt its current request as data only;
+    // never rewrite that continuation from the UI's pre-cut request.
+    func currentApprovalRequest(previous: AgentRunRequest, snapshot: RunSnapshot,
+        approval: ApprovalRequest): Result<AgentRunRequest> {
+        if (snapshot.status != RunState.WaitingApproval || snapshot.runId.value != previous.runId.value ||
+            snapshot.sessionId.value != previous.sessionId.value || approval.sessionId != previous.sessionId.value) {
+            return pluginProcessError("application.approval_request_stale", "approval no longer belongs to this request") }
+        let runtime = match (threadRuntimes.acquire(ThreadId(previous.sessionId.value), workspace.rootPath())) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let active = match (runtime.activeRun()) { case Some(value) => value
+            case None => return pluginProcessError("application.approval_request_stale", "approval Run is no longer active") }
+        if (active.runId.value != previous.runId.value || active.threadId.value != previous.sessionId.value ||
+            active.state != RunState.WaitingApproval) {
+            return pluginProcessError("application.approval_request_stale", "approval Run is not waiting") }
+        let token = match (runtime.currentRunCancellationToken(previous.runId, active.epoch)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let continuation = match (runs.continuation(previous.runId)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        if (continuation.kind != RunContinuationKind.WaitingApproval ||
+            continuation.runId.value != previous.runId.value || continuation.sessionId.value != previous.sessionId.value ||
+            continuation.approval.operationId.value != approval.operationId.value ||
+            continuation.approval.sessionId != approval.sessionId || continuation.approval.callId != approval.callId ||
+            continuation.approval.argumentHash != approval.argumentHash || continuation.approval.toolName != approval.toolName ||
+            canonicalAgentValue(continuation.toolContextPayload) != canonicalAgentValue(productToolContextValue(previous.toolContext))) {
+            return pluginProcessError("application.approval_request_stale", "approval differs from its canonical request") }
+        try {
+            let rows = vnextDatabase.query("SELECT c.payload,r.skill_snapshot FROM runs r " +
+                "JOIN threads t ON t.id=r.thread_id JOIN turns turn ON turn.id=r.turn_id " +
+                "JOIN run_continuations c ON c.run_id=r.id JOIN operations o ON o.run_id=r.id " +
+                "WHERE r.id=? AND r.thread_id=? AND r.epoch=? AND r.state='waiting_approval' " +
+                "AND r.finished_at_millis IS NULL AND t.active_turn_id=turn.id AND turn.active_run_id=r.id " +
+                "AND turn.state='active' AND o.id=? AND o.state='waiting_approval' AND c.phase='waiting_approval'",
+                [SqlParameter.Text(previous.runId.value), SqlParameter.Text(previous.sessionId.value),
+                    SqlParameter.Int64Value(active.epoch), SqlParameter.Text(approval.operationId.value)])
+            if (rows.size != 1) { return pluginProcessError("application.approval_request_stale", "approval lost its durable owner") }
+            let durable = decodeDurableRunContinuation(rows[0].required(0))
+            let frozen = match (optionalRunRequestSnapshotFromDurableContinuation(durable)) { case Some(value) => value
+                case None => return pluginProcessError("application.approval_request_stale", "approval request projection is missing") }
+            if (durable.runId.value != previous.runId.value || durable.turnId.value != active.turnId.value ||
+                durable.pendingOperationId.isNone() || durable.pendingOperationId.getOrThrow().value != approval.operationId.value ||
+                durable.pendingApprovalId.isNone() || durable.pendingApprovalId.getOrThrow().value != "legacy-approval-" + approval.operationId.value ||
+                canonicalAgentValue(frozen.field("skill_stack").getOrThrow()) != canonicalAgentValue(continuation.contextSnapshotPayload) ||
+                canonicalAgentValue(decodeStoredValue(rows[0].required(1))) != canonicalAgentValue(continuation.contextSnapshotPayload) ||
+                canonicalAgentValue(contextSnapshotValue(active.contextSnapshot)) != canonicalAgentValue(continuation.contextSnapshotPayload)) {
+                return pluginProcessError("application.approval_request_stale", "approval context or epoch changed") }
+        } catch (_: Exception) {
+            return pluginProcessError("application.approval_request_stale", "approval durable binding is unavailable") }
+        match (runtime.currentRunCancellationToken(previous.runId, active.epoch)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(current) => match (current.check()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        }
+        continuationRequest(continuation, previous.interactions, toolContext: Some(previous.toolContext))
     }
 
     public func persistPendingApproval(
@@ -2109,7 +2475,7 @@ public class ProductRuntime {
             requestedPolicy: Some(request.requestedPolicy),
             modelCapabilitiesSnapshot: Some(request.modelCapabilitiesSnapshot),
             resolverVersion: request.resolverVersion,
-            skillStackPayload: skillStackSnapshotValue(request.skillStack),
+            contextSnapshotPayload: contextSnapshotValue(request.contextSnapshot),
             contextWindow: request.contextWindow,
             providerSafetyMargin: request.providerSafetyMargin,
             toolContextPayload: productToolContextValue(request.toolContext),
@@ -2152,43 +2518,6 @@ public class ProductRuntime {
             case Result.Err(error) => return Result.Err(error)
         }
         Result.Ok(canonical)
-    }
-
-    func reserveBash(operationId: OperationId): Unit { processes.reserveOperation(operationId) }
-    func releaseBash(operationId: OperationId): Unit { processes.releaseOperation(operationId) }
-
-    public func executeBash(
-        command: String,
-        operationId: OperationId,
-        networkPolicy!: ?NetworkPolicy = None
-    ): Result<ProcessResult> {
-        if (processes.reservedOperationCancelled(operationId)) {
-            return Result.Err(AgentError(AgentErrorKind.Cancelled,
-                "application.bash_cancelled", "bash command was cancelled"))
-        }
-        let policy = match (resolveShellNetworkPolicy(networkPolicy)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        // This is an explicitly user-authored application/RPC control command,
-        // not a model tool invocation, so it does not mint an approval grant or
-        // a ToolPipeline receipt. It still crosses the process boundary and
-        // therefore must use the enforced product workspace sandbox.
-        processes.execute(
-            ProcessRequest(
-                "/bin/bash",
-                operationId: operationId,
-                arguments: ["--noprofile", "--norc", "-lc", command],
-                workingDirectory: workspace.rootPath(),
-                timeoutMillis: 120000,
-                sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-                networkPolicy: Some(policy)
-            )
-        )
-    }
-
-    public func abortBash(operationId: OperationId): Result<Unit> {
-        processes.cancel(operationId)
     }
 
     public func exportSessionHtml(
@@ -2291,8 +2620,8 @@ public class ProductRuntime {
             messageValues.add(dumpMessageValue(message))
         }
         let toolValues = ArrayList<AgentValue>()
-        let capabilities = requestCapabilities(readOnly)
-        for (definition in catalog.definitionsFor(capabilities)) {
+        let capabilities = requestCapabilities(readOnly, sessionId: Some(sessionId))
+        for (definition in catalog.definitionsFor(capabilities, threadId: Some(ThreadId(sessionId.value)))) {
             toolValues.add(
                 objectValue(
                     [
@@ -2589,6 +2918,22 @@ public class ProductRuntime {
         source: SessionId,
         target: SessionId
     ): Result<Unit> {
+        match (compactionSummarizer as OwnedCompletedThreadForkData173d) {
+            case Some(installed) =>
+                let scope = compactionSummarizer.openScope(source)
+                try {
+                    match (installed.forkCompletedThreadData173d(source, target, workspace.rootPath(), vnextDatabase, scope.token)) {
+                        case Result.Err(error) => return Result<Unit>.Err(error)
+                        case Result.Ok(_) => return sessionMetadata.copy(source, target)
+                    }
+                } finally { scope.close() }
+            case None =>
+                // Only the explicitly unsafe isolated oracle keeps the old
+                // full-snapshot implementation. A normal missing/disabled
+                // installed contribution must never silently take that path.
+                if (!unsafeDirectLaunchForTests) {
+                    return productPolicySelectionError<Unit>("compaction.structure_invalid") }
+        }
         let snapshot = match (canonicalThreadSnapshot(source)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2665,6 +3010,11 @@ public class ProductRuntime {
         sessionId: SessionId,
         force!: Bool = true
     ): Result<Int64> {
+        let scope = compactionSummarizer.openScope(sessionId)
+        try { compactSessionWithScope(sessionId, force, scope.token) } finally { scope.close() }
+    }
+    private func compactSessionWithScope(sessionId: SessionId, force: Bool, cancellation: domain.CancellationToken): Result<Int64> {
+        match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let messages = match (modelContext(sessionId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2700,15 +3050,16 @@ public class ProductRuntime {
             maxInputTokens: settings.maxInputTokens,
             maxContextMessages: settings.requestMaxMessages
         )
-        let tools = catalog.definitionsFor(productCapabilities())
+        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
         let estimated = estimateContextTokens(messages, tools: tools)
         let tokenTriggered = estimated >= compactionTriggerTokens(budget, policy)
         let messageTriggered = messages.size >= policy.emergencyMessageLimit
-        let checkpointRetainIndex = activeCheckpointRetainIndex(messages)
         if ((!force && !tokenTriggered && !messageTriggered) ||
             (force && messages.size <= policy.keepRecentMessages)) {
             return Result.Ok(0)
         }
+        let checkpointRetainIndex = match (compactionSummarizer.checkpointRetainIndex173(sessionId, messages, cancellation)) {
+            case Result.Err(error) => return Result<Int64>.Err(error); case Result.Ok(value) => value }
 
         let target = compactionTargetTokens(budget, policy)
         let fixed = estimateContextTokens([], tools: tools)
@@ -2734,26 +3085,30 @@ public class ProductRuntime {
         }
         if (removed <= 0) {
             if (checkpointRetainIndex == 0 && estimated > target) {
-                return activeCheckpointCompactionError<Int64>()
+                return canonicalCheckpointRetentionFailure173<Int64>(compactionSummarizer.checkpointRetentionFailure173(sessionId, cancellation))
             }
             return Result.Ok(0)
         }
 
-        var compacted = compactedMessages(messages, removed, sessionId)
-        while (removed < messages.size && estimateContextTokens(compacted, tools: tools) > target) {
+        var compacted = match (compactedMessages(messages, removed, sessionId, cancellation)) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        try {
+        while (removed < messages.size && estimateContextTokens(compacted.messages, tools: tools) > target) {
             let next = findSafeCutPoint(messages, removed + 1)
             if (next <= removed ||
                 (checkpointRetainIndex >= 0 && next > checkpointRetainIndex)) {
                 break
             }
             removed = next
-            compacted = compactedMessages(messages, removed, sessionId)
+            let nextValue = match (compactedMessages(messages, removed, sessionId, cancellation)) {
+                case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+            compacted.close(); compacted = nextValue
         }
         if (checkpointRetainIndex >= 0 &&
-            estimateContextTokens(compacted, tools: tools) > target) {
-            return activeCheckpointCompactionError<Int64>()
+            estimateContextTokens(compacted.messages, tools: tools) > target) {
+            return canonicalCheckpointRetentionFailure173<Int64>(compactionSummarizer.checkpointRetentionFailure173(sessionId, cancellation))
         }
-        if (!isToolProtocolComplete(compacted)) {
+        if (!isToolProtocolComplete(compacted.messages)) {
             return Result.Err(
                 AgentError(
                     AgentErrorKind.Protocol,
@@ -2762,17 +3117,22 @@ public class ProductRuntime {
                 )
             )
         }
+        // The projection's consumers are finished. Do not retain a redundant
+        // full summary while the separately checked canonical cut is built.
+        compacted.close()
         match (saveCanonicalCheckpoint(
             sessionId,
             policy.keepRecentMessages,
             target,
             tools,
             settings,
-            sessionModel
+            sessionModel,
+            cancellation
         )) {
             case Result.Ok(_) => Result.Ok(removed)
             case Result.Err(error) => Result.Err(error)
         }
+        } finally { compacted.close() }
     }
     public func latestCompactionSummary(sessionId: SessionId): String {
         let snapshot = match (canonicalThreadSnapshot(sessionId)) {
@@ -2819,7 +3179,7 @@ public class ProductRuntime {
             case Result.Ok(value) => value
             case Result.Err(_) => return 0
         }
-        let tools = catalog.definitionsFor(productCapabilities())
+        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
         let checkpoint = SqliteContextCheckpointStore(vnextDatabase).loadLatest(
             snapshot, "agent-product-v1", "agent-core"
         )
@@ -2853,7 +3213,8 @@ public class ProductRuntime {
         targetTokens: Int64,
         tools: Array<ModelToolDefinition>,
         settings: ProductCompactionSettings,
-        sessionModel: String
+        sessionModel: String,
+        cancellation: domain.CancellationToken
     ): Result<Unit> {
         if (vnextDatabase.scalarInt(
             "SELECT COUNT(*) FROM threads WHERE id=" + sqliteText(sessionId.value)
@@ -2877,7 +3238,8 @@ public class ProductRuntime {
             thread.items.size <= max(1, keepRecentItems)) {
             return Result.Ok(())
         }
-        let checkpointRetainOrdinal = activeCheckpointRetainOrdinal(thread)
+        let checkpointRetainOrdinal = match (compactionSummarizer.checkpointRetainOrdinal173(sessionId, thread.thread, vnextDatabase, cancellation)) {
+            case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(value) => value }
         var cover = thread.items.size - max(1, keepRecentItems)
         if (checkpointRetainOrdinal >= 0 && cover > checkpointRetainOrdinal) {
             cover = checkpointRetainOrdinal
@@ -2889,7 +3251,7 @@ public class ProductRuntime {
         }
         if (cover < 1) {
             if (checkpointRetainOrdinal == 0) {
-                return activeCheckpointCompactionError<Unit>()
+                return canonicalCheckpointRetentionFailure173<Unit>(compactionSummarizer.checkpointRetentionFailure173(sessionId, cancellation))
             }
             return Result.Ok(())
         }
@@ -2897,7 +3259,7 @@ public class ProductRuntime {
             case Result.Ok(value) => value
             case Result.Err(_) => None
         }
-        let todos: Array<TodoPhase> = match (todoPhases(sessionId)) {
+        let todos: Array<ProductTodoPhase> = match (todoPhases(sessionId)) {
             case Result.Ok(value) => value
             case Result.Err(_) => []
         }
@@ -2907,6 +3269,11 @@ public class ProductRuntime {
         }
         var selected: ?ContextCheckpoint = None
         var inputLimitFallback: ?ContextCheckpoint = None
+        var selectedPolicy: ?ProductCompactionStructure = None
+        var fallbackPolicy: ?ProductCompactionStructure = None
+        var combinedOwner: ?ProductPolicyValueLease = None
+        var overviewOwner: ?ProductCompactionOverview = None
+        try {
         while (cover < thread.items.size &&
             (checkpointRetainOrdinal < 0 || cover <= checkpointRetainOrdinal)) {
             if (validateContextCheckpointBoundary(thread, cover).isError()) {
@@ -2924,17 +3291,18 @@ public class ProductRuntime {
             }
             let prefixMessages = modelMessagesFromProjection(ModelContextProjection(
                 thread.thread.revision,
-                None,
+                Option<ContextCheckpoint>.None,
                 prefix.toArray(),
                 objectValue([]),
                 0,
                 false
             ))
-            let deterministicSummary = compactionSummary(
-                prefixMessages,
-                goal: goal,
-                todos: todos
-            )
+            let structure = match (compactionSummarizer.structure(sessionId, prefixMessages,
+                productCompactionGoalFacts(goal), encodeTodoPhases(todos), settings.summaryTimeoutMillis, Some(cancellation))) {
+                case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+            var keepStructure = false
+            try {
+            let deterministicSummary = structure.text
             let candidate = ContextCheckpoint(
                 "checkpoint-" + sessionId.value + "-" + cover.toString() + "-" +
                     thread.thread.revision.toString(),
@@ -2942,13 +3310,15 @@ public class ProductRuntime {
                 cover,
                 objectValue([
                     ValueField("deterministic_summary", textValue(deterministicSummary)),
-                    ValueField("covered_items", integerValue(cover))
+                    ValueField("covered_items", integerValue(cover)),
+                    ValueField("structured_policy", structure.provenance)
                 ]),
                 contextSourceDigest(thread, cover),
                 "agent-product-v1",
                 "agent-core",
                 activeGoal: activeGoal
             )
+            match (validateStoredContextCheckpoint(candidate)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let projected = modelMessagesFromProjection(ModelContextProjection(
                 thread.thread.revision,
                 Some(candidate),
@@ -2959,21 +3329,26 @@ public class ProductRuntime {
             ))
             let projectedTokens = estimateContextTokens(projected, tools: tools)
             if (projectedTokens <= settings.maxInputTokens) {
+                match (fallbackPolicy) { case Some(old) => old.close(); case None => () }
                 inputLimitFallback = Some(candidate)
+                fallbackPolicy = Some(structure); keepStructure = true
             }
             if (projectedTokens <= targetTokens) {
                 selected = Some(candidate)
+                selectedPolicy = Some(structure); keepStructure = true
                 break
             }
             cover += 1
+            } finally { if (!keepStructure) { structure.close() } }
         }
         let deterministicCheckpoint = match (selected) {
             case Some(value) => value
             case None => match (inputLimitFallback) {
                 case Some(value) => value
-                case None => return activeCheckpointCompactionError<Unit>()
+                case None => return canonicalCheckpointRetentionFailure173<Unit>(compactionSummarizer.checkpointRetentionFailure173(sessionId, cancellation))
             }
         }
+        let policyWitness = (if (selected.isSome()) { selectedPolicy } else { fallbackPolicy }).getOrThrow()
         let deterministicRecent = ArrayList<ThreadItem>()
         for (item in thread.items where item.ordinal >
             deterministicCheckpoint.coversThroughItemOrdinal) {
@@ -3013,9 +3388,14 @@ public class ProductRuntime {
                 ),
                 deterministicSummary,
                 settings.summaryTimeoutMillis,
-                settings.summaryMaxOutputTokens
+                settings.summaryMaxOutputTokens,
+                Some(cancellation)
             )) {
-                case Some(overview) =>
+                case Result.Ok(Some(overview)) =>
+                    overviewOwner = Some(overview)
+                    let combined = retainProductPolicyText([deterministicSummary, MODEL_COMPACTION_OVERVIEW_MARKER, overview.text])
+                    var keepCombined = false
+                    try {
                     let candidate = ContextCheckpoint(
                         deterministicCheckpoint.id,
                         deterministicCheckpoint.threadId,
@@ -3023,20 +3403,21 @@ public class ProductRuntime {
                         objectValue([
                             ValueField(
                                 "deterministic_summary",
-                                textValue(compactionSummaryWithOverview(
-                                    deterministicSummary, overview
-                                ))
+                                combined.value
                             ),
                             ValueField(
                                 "covered_items",
                                 integerValue(deterministicCheckpoint.coversThroughItemOrdinal)
-                            )
+                            ),
+                            ValueField("overview_policy", overview.provenance),
+                            ValueField("structured_policy", policyWitness.provenance)
                         ]),
                         deterministicCheckpoint.sourceDigest,
                         deterministicCheckpoint.projectorVersion,
                         deterministicCheckpoint.laneCompatibility,
                         activeGoal: deterministicCheckpoint.activeGoal
                     )
+                    match (validateStoredContextCheckpoint(candidate)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
                     let recent = ArrayList<ThreadItem>()
                     for (item in thread.items where item.ordinal >
                         candidate.coversThroughItemOrdinal) {
@@ -3051,14 +3432,25 @@ public class ProductRuntime {
                         false
                     ))
                     if (estimateContextTokens(projected, tools: tools) <= checkpointLimit) {
-                        checkpoint = candidate
+                        checkpoint = candidate; combinedOwner = Some(combined); keepCombined = true
                     }
-                case None => ()
+                    } finally { if (!keepCombined) { combined.close(); overview.close(); overviewOwner = None } }
+                case Result.Ok(None) => ()
+                case Result.Err(error) => return Result.Err(error)
             }
         }
+        match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (policyWitness.validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         SqliteContextCheckpointStore(vnextDatabase).save(
             checkpoint, thread, agentUtcMillis()
         )
+        } catch (_: Exception) { productPolicySelectionError("compaction.checkpoint_capacity") }
+        finally {
+            match (combinedOwner) { case Some(value) => value.close(); case None => () }
+            match (overviewOwner) { case Some(value) => value.close(); case None => () }
+            match (selectedPolicy) { case Some(value) => value.close(); case None => () }
+            match (fallbackPolicy) { case Some(value) => value.close(); case None => () }
+        }
     }
 
     private func compactionAccountingRequest(
@@ -3068,38 +3460,37 @@ public class ProductRuntime {
         maxOutputTokens: Int64
     ): AgentRunRequest {
         let metadata = modelMetadata(summaryModel)
-        let capabilities = match (metadata) {
-            case Some(value) => configuredProductModelCapabilities(
-                value,
-                providerProfiles
-            )
+        let neutral = productRequestModelPolicy(settingsRoot, summaryModel, fixtureProbe.isSome())
+        let capabilities = if (fixtureProbe.isSome()) { match (metadata) {
+            case Some(value) => productModelCapabilities(value)
             case None => productModelCapabilities(ModelCatalogEntry(
                 "unknown",
                 promptCache: if (summaryModel == "fixture" && fixtureProbe.isSome()) {
                     Some(true)
                 } else {
-                    None
+                    Option<Bool>.None
                 }
             ))
-        }
+        } } else { neutral.capabilities }
         AgentRunRequest(
             ids.nextRunId(),
             sessionId,
             summaryModel,
             "Generate the internal context compaction summary.",
-            system: COMPACTION_SEMANTIC_SYSTEM_PROMPT,
+            system: "",
             thinking: ThinkingLevel.Low,
             modelCapabilitiesSnapshot: Some(ModelExecutionCapabilitiesSnapshot(
                 summaryModel,
                 capabilities.thinking,
                 capabilities.maxOutputTokens,
-                endpointMaxOutputTokens: match (metadata) {
+                endpointMaxOutputTokens: if (fixtureProbe.isSome()) { match (metadata) {
                     case Some(value) => match (profileById(value.providerProfile)) {
                         case Some(profile) => profile.endpointMaxOutputTokens
-                        case None => None
+                        case None => Option<Int64>.None
                     }
-                    case None => None
-                }
+                    case None => Option<Int64>.None
+                } } else { neutral.endpointMaxOutput },
+                configurationDigest: neutral.configurationDigest
             )),
             capabilities: CapabilitySet(),
             autoRetry: retryControl.isEnabled(),
@@ -3110,7 +3501,7 @@ public class ProductRuntime {
             },
             pricing: match (metadata) {
                 case Some(value) => value.pricing()
-                case None => None
+                case None => Option<ModelPricing>.None
             },
             cachePolicy: if (capabilities.promptCache) {
                 ModelCachePolicy.StablePrefix
@@ -3125,7 +3516,7 @@ public class ProductRuntime {
             parallelToolCalls: false,
             toolContext: productToolContext(workspace.rootPath()),
             budget: ResourceBudget(
-                maxInputTokens: match (metadata) {
+                maxInputTokens: if (fixtureProbe.isSome()) { match (metadata) {
                     case Some(value) => match (value.contextWindow) {
                         case Some(limit) => limit
                         case None => compactionSettings.resolvedForModel(
@@ -3135,7 +3526,8 @@ public class ProductRuntime {
                     case None => compactionSettings.resolvedForModel(
                         summaryModel
                     ).maxInputTokens
-                },
+                } } else { min(capabilities.contextWindowTokens,
+                    compactionSettings.resolvedForModel(summaryModel).maxInputTokens) },
                 maxOutputTokens: max(1, maxOutputTokens),
                 maxModelRequests: if (retryControl.isEnabled()) { 2 } else { 1 },
                 maxWallMillis: max(1, timeoutMillis)
@@ -3143,45 +3535,40 @@ public class ProductRuntime {
         )
     }
 
+    // Host embedders can use the installed pure policy for supplied history
+    // facts. This creates no Run, model call, permission or checkpoint.
+    // The caller must close the returned proposal after its final consumer.
+    // Installed-policy DATA entry used by canonical tool fixtures and the
+    // existing kernel executor. It grants no operation or cut authority.
+    public func proposeCheckpointExecution(context: ToolInvocationContext, call: ToolCall,
+        loadThread: () -> Result<AgentThreadSnapshot>, timestamp: () -> String): Result<ToolResult> {
+        compactionSummarizer.checkpoint(context, call, loadThread, timestamp)
+    }
+
+    public func proposeContextSummary(sessionId: SessionId, messages: Array<ModelMessage>,
+        cancellation!: ?domain.CancellationToken = None): Result<ProductCompactionStructure> {
+        compactionSummarizer.structure(sessionId, messages, nullValue(), listValue([]), compactionSettings.summaryTimeoutMillis, cancellation)
+    }
+
     private func compactedMessages(
-        messages: Array<ModelMessage>,
-        removed: Int64,
-        sessionId: SessionId,
-        summary!: ?String = None
-    ): Array<ModelMessage> {
-        let summaryText = match (summary) {
-            case Some(value) => value
-            case None =>
-                let goal: ?ProductGoalState = match (goalState(sessionId)) {
-                    case Result.Ok(value) => value
-                    case Result.Err(_) => None
-                }
-                let todos: Array<TodoPhase> = match (todoPhases(sessionId)) {
-                    case Result.Ok(value) => value
-                    case Result.Err(_) => []
-                }
-                compactionSummary(
-                    messages[0..removed],
-                    goal: goal,
-                    todos: todos
-                )
-        }
-        let compacted = ArrayList<ModelMessage>()
-        compacted.add(
-            ModelMessage(
-                ModelRole.User,
-                [
-                    ModelBlock(
-                        ModelBlockKind.Text,
-                        text: summaryText
-                    )
-                ]
-            )
-        )
-        for (message in messages[removed..messages.size]) {
-            compacted.add(message)
-        }
-        compacted.toArray()
+        messages: Array<ModelMessage>, removed: Int64, sessionId: SessionId,
+        cancellation: domain.CancellationToken
+    ): Result<ProductCompactedMessages> {
+        let goal: ?ProductGoalState = match (goalState(sessionId)) {
+            case Result.Ok(value) => value; case Result.Err(_) => None }
+        let todos: Array<ProductTodoPhase> = match (todoPhases(sessionId)) {
+            case Result.Ok(value) => value; case Result.Err(_) => [] }
+        let structure = match (compactionSummarizer.structure(sessionId, messages[0..removed],
+            productCompactionGoalFacts(goal), encodeTodoPhases(todos), compactionSettings.summaryTimeoutMillis, Some(cancellation))) {
+            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        var retained = false
+        try {
+            match (structure.validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            let compacted = ArrayList<ModelMessage>([ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: structure.text)])])
+            for (message in messages[removed..messages.size]) { compacted.add(message) }
+            let result = ProductCompactedMessages(compacted.toArray(), structure)
+            retained = true; Result.Ok(result)
+        } finally { if (!retained) { structure.close() } }
     }
 
     public func sessionName(sessionId: SessionId): Result<String> {
@@ -3258,21 +3645,48 @@ public class ProductRuntime {
         sessionMetadata.setDraft(sessionId, value)
     }
 
-    public func todoPhases(sessionId: SessionId): Result<Array<TodoPhase>> {
-        match (sessionMetadata.todoPhases(sessionId)) {
-            case Result.Ok(value) => decodeTodoPhases(value)
-            case Result.Err(error) => Result.Err(error)
-        }
+    // This fixed internal adapter borrows the already composed artifact
+    // store. It accepts the actual retained native-result owner, not a DTO,
+    // Receipt string, database callback or plugin-provided text permission.
+    func persistCompletedTodoExport(invocation: ProductTodoInvocation): Result<ProductArtifact> {
+        let content=match(invocation.exportText()){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(invocation.selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let stored=presentationArtifacts.persistText(content)
+        match(invocation.selection.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        stored
     }
 
-    public func setTodoPhases(
-        sessionId: SessionId,
-        phases: Array<TodoPhase>
-    ): Result<Unit> {
-        sessionMetadata.setTodoPhases(
-            sessionId,
-            encodeTodoPhases(phases)
-        )
+    public func todoPhases(sessionId: SessionId): Result<Array<ProductTodoPhase>> {
+        let selected=match(selectProductTodo(this,sessionId)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let snapshot=match(SqlitePluginDocumentRepository(vnextDatabase).read(ThreadId(sessionId.value),LaneId("main"),selected.namespace,"todo")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let decoded=match(snapshot.decode()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let result=decodeTodoPhases(if(decoded.unifiedKind==ValueKind.Null){listValue([])}else{decoded})
+        match(selected.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        result
+    }
+    // Explicit migration data only. Current projections never fall back to
+    // this preserved cold payload or write it alongside plugin_documents.
+    func legacyTodoPayload(sessionId: SessionId): Result<String> {
+        // Explicit cold migration data, never a fallback state or grant. Do
+        // not silently decode/re-encode or write the preserved original row.
+        try{
+            let rows=vnextDatabase.query("SELECT todo_payload FROM thread_metadata WHERE thread_id=?",
+                [SqlParameter.Text(sessionId.value)])
+            if(rows.isEmpty()){return Result.Ok("[]")}
+            if(rows.size!=1){return productTodoFrontendError("todo.migration_input_invalid")}
+            let raw=rows[0].required(0)
+            Result.Ok(if(raw==""){ "[]" }else{raw})
+        }catch(_:Exception){productTodoFrontendError("todo.migration_input_unavailable")}
+    }
+    func todoDocumentDigest(sessionId: SessionId, selected: ProductTodoSelection): Result<String> {
+        if(selected.session.value!=sessionId.value){return productTodoFrontendError("todo.session_changed")}
+        match(selected.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        let snapshot=match(SqlitePluginDocumentRepository(vnextDatabase).read(ThreadId(sessionId.value),LaneId("main"),selected.namespace,"todo")){
+            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        match(selected.current()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        Result.Ok(modelPolicySha256Text(snapshot.encoded))
     }
 
     public func sessionRunStats(sessionId: SessionId): Result<SessionRunStats> {
@@ -3348,63 +3762,6 @@ public class ProductRuntime {
         ).remove(scope, name)
     }
 
-    public func searchWeb(
-        sessionId: SessionId,
-        query: String,
-        provider: String,
-        recency: String,
-        limit: ?Int64
-    ): Result<ToolResult> {
-        let fields = ArrayList<ValueField>()
-        fields.add(ValueField("query", textValue(query)))
-        if (provider != "") {
-            fields.add(ValueField("provider", textValue(provider)))
-        }
-        if (recency != "") {
-            fields.add(ValueField("recency", textValue(recency)))
-        }
-        match (limit) {
-            case Some(value) => fields.add(ValueField("limit", integerValue(value)))
-            case None => ()
-        }
-        let call = ToolCall(
-            "cli-search-" + ids.nextOperationId().value,
-            "web_search",
-            objectValue(fields.toArray())
-        )
-        let capabilities = CapabilitySet(values: [
-            Capability(CapabilityKind.WorkspaceRead),
-            Capability(CapabilityKind.ProcessSpawn),
-            Capability(CapabilityKind.NetworkAccess),
-            Capability(CapabilityKind.ExtensionInvoke)
-        ])
-        match (vnext.executeCanonicalTool(
-            sessionId,
-            capabilities,
-            call
-        )) {
-            case Result.Ok(ToolInvocationResult.Completed(result)) =>
-                if (result.isError) {
-                    Result.Err(productToolResultError(result))
-                } else {
-                    Result.Ok(result)
-                }
-            case Result.Ok(ToolInvocationResult.NeedsApproval(approval)) => Result.Err(
-                AgentError(
-                    AgentErrorKind.PermissionDenied,
-                    "cli.tool_approval_required",
-                    "CLI tool invocation requires approval",
-                    fields: [
-                        ErrorField("operation_id", approval.operationId.value),
-                        ErrorField("tool", "web_search")
-                    ]
-                )
-            )
-            case Result.Ok(ToolInvocationResult.Denied(denial)) => Result.Err(denial.reason)
-            case Result.Err(error) => Result.Err(error)
-        }
-    }
-
     public func setAutoRetry(enabled: Bool): Unit {
         retryControl.setEnabled(enabled)
     }
@@ -3417,7 +3774,6 @@ public class ProductRuntime {
         // AgentCore is the single retry authority. Cancelling the run also
         // interrupts an active provider request and prevents a later attempt.
         let _ = client.cancel(RunId(requestId))
-        retryControl.abort(requestId)
     }
 
     public func archiveAndReset(label: String): Result<Unit> {
@@ -3446,6 +3802,10 @@ public class ProductRuntime {
             vnextDatabase.transaction<Unit>({ transaction =>
                 transaction.execute("DELETE FROM session_permission_grants")
                 transaction.execute("DELETE FROM thread_metadata")
+                // Metadata-backed plugin documents deliberately have no
+                // Thread FK. Archive them first, then clear them atomically
+                // with the rest of live state; reset must not revive old data.
+                transaction.execute("DELETE FROM plugin_documents")
                 transaction.execute("DELETE FROM audit_events")
                 transaction.execute("DELETE FROM capability_grants")
                 transaction.execute("DELETE FROM memories")
@@ -3723,7 +4083,7 @@ func sessionSummary(messages: Array<ModelMessage>): String {
     "Empty session"
 }
 
-public func encodeTodoPhases(phases: Array<TodoPhase>): AgentValue {
+public func encodeTodoPhases(phases: Array<ProductTodoPhase>): AgentValue {
     let encoded = ArrayList<AgentValue>()
     for (phase in phases) {
         let tasks = ArrayList<AgentValue>()
@@ -3753,11 +4113,11 @@ public func encodeTodoPhases(phases: Array<TodoPhase>): AgentValue {
     listValue(encoded.toArray())
 }
 
-public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
+public func decodeTodoPhases(value: AgentValue): Result<Array<ProductTodoPhase>> {
     if (value.unifiedKind != ValueKind.List) {
         return invalidTodoData("todo phases must be a list")
     }
-    let phases = ArrayList<TodoPhase>()
+    let phases = ArrayList<ProductTodoPhase>()
     for (phaseValue in value.items) {
         if (phaseValue.unifiedKind != ValueKind.Object) {
             return invalidTodoData("todo phase must be an object")
@@ -3778,7 +4138,7 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
                 field.items
             case None => return invalidTodoData("todo phase tasks are required")
         }
-        let tasks = ArrayList<TodoItem>()
+        let tasks = ArrayList<ProductTodoItem>()
         for (taskValue in taskValues) {
             if (taskValue.unifiedKind != ValueKind.Object) {
                 return invalidTodoData("todo task must be an object")
@@ -3810,30 +4170,30 @@ public func decodeTodoPhases(value: AgentValue): Result<Array<TodoPhase>> {
                     field.text
                 case None => ""
             }
-            tasks.add(TodoItem(content, status: status, blocker: blocker))
+            tasks.add(ProductTodoItem(content, status: status, blocker: blocker))
         }
-        phases.add(TodoPhase(name, tasks.toArray()))
+        phases.add(ProductTodoPhase(name, tasks.toArray()))
     }
     Result.Ok(phases.toArray())
 }
 
-func todoStatusName(status: TodoStatus): String {
+func todoStatusName(status: ProductTodoStatus): String {
     match (status) {
-        case TodoStatus.Pending => "pending"
-        case TodoStatus.InProgress => "in_progress"
-        case TodoStatus.Completed => "completed"
-        case TodoStatus.Abandoned => "abandoned"
-        case TodoStatus.Blocked => "blocked"
+        case ProductTodoStatus.Pending => "pending"
+        case ProductTodoStatus.InProgress => "in_progress"
+        case ProductTodoStatus.Completed => "completed"
+        case ProductTodoStatus.Abandoned => "abandoned"
+        case ProductTodoStatus.Blocked => "blocked"
     }
 }
 
-func todoStatusValue(value: String): ?TodoStatus {
+func todoStatusValue(value: String): ?ProductTodoStatus {
     match (value) {
-        case "pending" => Some(TodoStatus.Pending)
-        case "in_progress" => Some(TodoStatus.InProgress)
-        case "completed" => Some(TodoStatus.Completed)
-        case "abandoned" => Some(TodoStatus.Abandoned)
-        case "blocked" => Some(TodoStatus.Blocked)
+        case "pending" => Some(ProductTodoStatus.Pending)
+        case "in_progress" => Some(ProductTodoStatus.InProgress)
+        case "completed" => Some(ProductTodoStatus.Completed)
+        case "abandoned" => Some(ProductTodoStatus.Abandoned)
+        case "blocked" => Some(ProductTodoStatus.Blocked)
         case _ => None
     }
 }
@@ -3862,7 +4222,6 @@ func productCapabilities(): CapabilitySet {
     )
 }
 
-let MODEL_COMPACTION_OVERVIEW_MARKER = "\nmodel-generated overview (non-authoritative):\n"
 
 func activeCheckpointCompactionError<T>(): Result<T> {
     Result.Err(AgentError(
@@ -3874,309 +4233,6 @@ func activeCheckpointCompactionError<T>(): Result<T> {
 
 func compactionSummaryWithOverview(structuredSummary: String, overview: String): String {
     structuredSummary + MODEL_COMPACTION_OVERVIEW_MARKER + overview
-}
-
-func authoritativeCompactionSummary(value: String): String {
-    match (value.indexOf(MODEL_COMPACTION_OVERVIEW_MARKER)) {
-        case Some(index) => value[..index]
-        case None => value
-    }
-}
-
-func compactionSummary(
-    messages: Array<ModelMessage>,
-    goal!: ?ProductGoalState = None,
-    todos!: Array<TodoPhase> = []
-): String {
-    var users: Int64 = 0
-    var assistants: Int64 = 0
-    let excerpts = ArrayList<String>()
-    let priorSummaries = ArrayList<String>()
-    let tools = ArrayList<String>()
-    let readFiles = ArrayList<String>()
-    let modifiedFiles = ArrayList<String>()
-    let createdFiles = ArrayList<String>()
-    let commands = ArrayList<String>()
-    let results = ArrayList<String>()
-    let diagnostics = ArrayList<String>()
-    for (message in messages) {
-        if (message.role == ModelRole.User) {
-            users += 1
-        } else {
-            assistants += 1
-        }
-        for (block in message.blocks) {
-            if (block.kind == ModelBlockKind.Text || block.kind == ModelBlockKind.Reasoning) {
-                if (block.text.startsWith("[Compacted session history]")) {
-                    addUniqueLimited(
-                        priorSummaries,
-                        compactText(authoritativeCompactionSummary(block.text), 1600),
-                        2
-                    )
-                } else if (excerpts.size < 6) {
-                    let excerpt = compactText(block.text, 240)
-                    if (excerpt != "") {
-                        excerpts.add(if (message.role == ModelRole.User) { "user: " } else { "assistant: " } + excerpt)
-                    }
-                }
-            }
-            if (block.kind == ModelBlockKind.ToolCall) {
-                addUniqueLimited(tools, block.name, 24)
-                let path = argumentText(block.arguments, "path")
-                if (path != "") {
-                    if (block.name == "write" || block.name == "edit") {
-                        addUniqueLimited(modifiedFiles, path, 24)
-                    } else {
-                        addUniqueLimited(readFiles, path, 24)
-                    }
-                }
-                if (block.name == "edit") {
-                    collectHashlinePaths(
-                        argumentText(block.arguments, "input"),
-                        modifiedFiles
-                    )
-                }
-                let command = argumentText(block.arguments, "command")
-                if (command != "") {
-                    addUniqueLimited(commands, compactText(command, 240), 8)
-                }
-            }
-            if (block.kind == ModelBlockKind.ToolResult) {
-                let action = argumentText(block.arguments, "action")
-                let path = argumentText(block.arguments, "path")
-                if (path != "" && action == "create") {
-                    addUniqueLimited(createdFiles, path, 24)
-                } else if (path != "" && action == "overwrite") {
-                    addUniqueLimited(modifiedFiles, path, 24)
-                }
-                let exitCode = argumentNumber(block.arguments, "exit_code")
-                if (exitCode != "") {
-                    addUniqueLimited(
-                        results,
-                        (if (block.name == "") { "command" } else { block.name }) + " exit " + exitCode,
-                        10
-                    )
-                }
-                let status = argumentText(block.arguments, "status")
-                if (status != "") {
-                    addUniqueLimited(results, block.name + ": " + compactText(status, 160), 10)
-                }
-                if (block.isError || (exitCode != "" && exitCode != "0")) {
-                    let detail = firstNonEmpty([
-                        argumentText(block.arguments, "stderr"),
-                        argumentText(block.arguments, "error"),
-                        block.text
-                    ])
-                    addUniqueLimited(
-                        diagnostics,
-                        (if (block.name == "") { "tool" } else { block.name }) + ": " +
-                            if (detail == "") { "failed" } else { compactText(detail, 280) },
-                        10
-                    )
-                }
-            }
-        }
-    }
-    var summary = "[Compacted session history]\n" + "messages: " + messages.size.toString() + " (user " +
-        users.toString() + ", assistant " + assistants.toString() + ")"
-    match (goal) {
-        case Some(value) =>
-            summary += "\ngoal:\n- objective: " + compactText(value.objective, 500) + "\n- status: " + value.status
-        case None => ()
-    }
-    let unresolved = unresolvedTodos(todos)
-    if (!unresolved.isEmpty()) {
-        summary += "\nunresolved:"
-        for (item in unresolved) {
-            summary += "\n- " + item
-        }
-    }
-    if (!priorSummaries.isEmpty()) {
-        summary += "\nprior structured context:"
-        for (value in priorSummaries) {
-            summary += "\n---\n" + value
-        }
-    }
-    if (!excerpts.isEmpty()) {
-        summary += "\nkey excerpts:"
-        for (excerpt in excerpts) {
-            summary += "\n- " + excerpt
-        }
-    }
-    if (!tools.isEmpty()) {
-        summary += "\ntools: " + joinCompact(tools.toArray())
-    }
-    let files = mergedFileSummary(readFiles, modifiedFiles, createdFiles)
-    if (files != "") {
-        summary += "\nfiles:\n" + files
-    }
-    if (!commands.isEmpty()) {
-        summary += "\nimportant commands:"
-        for (command in commands) {
-            summary += "\n- " + command
-        }
-    }
-    if (!results.isEmpty()) {
-        summary += "\ntool results:"
-        for (result in results) {
-            summary += "\n- " + result
-        }
-    }
-    if (!diagnostics.isEmpty()) {
-        summary += "\ndiagnostics:"
-        for (diagnostic in diagnostics) {
-            summary += "\n- " + diagnostic
-        }
-    }
-    summary
-}
-
-func compactText(value: String, limit: Int64): String {
-    let text = value.replace("\r", "").replace("\n", " ").trimAscii()
-    if (text.size <= limit) {
-        text
-    } else {
-        text[..limit] + "..."
-    }
-}
-
-func argumentText(value: AgentValue, name: String): String {
-    match (value.field(name)) {
-        case Some(item) =>
-            if (item.unifiedKind == ValueKind.Text) {
-                item.text
-            } else {
-                ""
-            }
-        case None => ""
-    }
-}
-
-func argumentNumber(value: AgentValue, name: String): String {
-    match (value.field(name)) {
-        case Some(item) =>
-            if (item.unifiedKind == ValueKind.Number) { item.asNumberText() } else { "" }
-        case None => ""
-    }
-}
-
-func firstNonEmpty(values: Array<String>): String {
-    for (value in values where value.trimAscii() != "") {
-        return value
-    }
-    ""
-}
-
-func unresolvedTodos(phases: Array<TodoPhase>): Array<String> {
-    let values = ArrayList<String>()
-    for (phase in phases) {
-        for (task in phase.tasks) {
-            match (task.status) {
-                case TodoStatus.Pending | TodoStatus.InProgress =>
-                    addUniqueLimited(values, phase.name + ": " + compactText(task.content, 240), 16)
-                case TodoStatus.Blocked =>
-                    addUniqueLimited(
-                        values,
-                        phase.name + ": " + compactText(task.content, 200) + if (task.blocker == "") {
-                            " [blocked]"
-                        } else {
-                            " [blocked: " + compactText(task.blocker, 160) + "]"
-                        },
-                        16
-                    )
-                case _ => ()
-            }
-        }
-    }
-    values.toArray()
-}
-
-func collectHashlinePaths(
-    input: String,
-    output: ArrayList<String>
-): Unit {
-    for (line in input.split("\n")) {
-        if (line.startsWith("[") && line.endsWith("]")) {
-            let separator = line.indexOf("#")
-            match (separator) {
-                case Some(index) =>
-                    if (index > 1) {
-                        addUniqueLimited(output, line[1..index], 24)
-                    }
-                case None => ()
-            }
-        }
-    }
-}
-
-func mergedFileSummary(
-    reads: ArrayList<String>,
-    modifications: ArrayList<String>,
-    creations: ArrayList<String>
-): String {
-    var result = ""
-    for (path in reads) {
-        let mode = if (containsValue(creations, path)) {
-            "Created"
-        } else if (containsValue(modifications, path)) {
-            "RW"
-        } else {
-            "Read"
-        }
-        result += if (result == "") {
-            ""
-        } else {
-            "\n"
-        }
-        result += "- " + path + " (" + mode + ")"
-    }
-    for (path in modifications where !containsValue(reads, path) && !containsValue(creations, path)) {
-        result += if (result == "") {
-            ""
-        } else {
-            "\n"
-        }
-        result += "- " + path + " (Write)"
-    }
-    for (path in creations where !containsValue(reads, path)) {
-        result += if (result == "") { "" } else { "\n" }
-        result += "- " + path + " (Created)"
-    }
-    result
-}
-
-func addUnique(values: ArrayList<String>, value: String): Unit {
-    if (value != "" && !containsValue(values, value)) {
-        values.add(value)
-    }
-}
-
-func addUniqueLimited(
-    values: ArrayList<String>,
-    value: String,
-    limit: Int64
-): Unit {
-    if (values.size < limit) {
-        addUnique(values, value)
-    }
-}
-
-func containsValue(values: ArrayList<String>, value: String): Bool {
-    for (candidate in values where candidate == value) {
-        return true
-    }
-    false
-}
-
-func joinCompact(values: Array<String>): String {
-    var result = ""
-    for (value in values) {
-        if (result != "") {
-            result += ", "
-        }
-        result += value
-    }
-    result
 }
 
 public func openProduct(config!: ProductConfig = ProductConfig()): Result<ProductRuntime> {
@@ -4274,19 +4330,22 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         }
         values.toArray()
     }
-    let vnextDatabase = match (openVnextDatabase(config.stateRoot + "/state.db")) {
+    let vnextDatabase = match (openVnextDatabase(config.stateRoot + "/state.db", monitor:config.fixtureTransactionCommitMonitor)) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
     let sessionMetadata = SqliteSessionMetadataRepository(vnextDatabase)
     let runs = SqliteRunRepository(vnextDatabase)
-    let operations = DurableOperationStore(vnextDatabase)
+    let operations = productOperationStore(vnextDatabase,
+        derivedSettlementFailureObserver: config.fixtureDerivedSettlementFailureObserver)
     let audit = SqliteAuditRepository(vnextDatabase)
     let permissions = SqlitePermissionRepository(vnextDatabase)
     let threadRuntimes = SqliteThreadRuntimeRegistry(
         vnextDatabase,
         ContextProjector("agent-product-v1", ConservativeThreadTokenEstimator()),
-        { => agentUtcMillis() }
+        { => agentUtcMillis() },
+        continuationVerifier: Some(SqliteContinuationRunVerifier(ContinuationAllowanceRepository(runs), requireDocumentPin: true,
+            documentAllocation: Some({ bytes => reserveNativeDocumentPayload(bytes) })))
     )
     let ids = ProductIds()
     let workspace = LocalWorkspace(config.workspaceRoot)
@@ -4309,53 +4368,18 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         allowUnsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests
     )
     let askRuntime = AskRuntime()
-    let goalRuntime = ProductGoalRuntime(sessionMetadata, runs)
-    let memoryRuntime = ProductMemoryRuntime(
-        MemoryV3Repository(vnextDatabase),
-        DiskManagedSkillRepository(config.settingsRoot),
-        config.settingsRoot,
-        workspace.rootPath()
-    )
     let pluginRuntime = ProductPluginRuntime(config.settingsRoot, workspace.rootPath())
-    let skillRuntime = ProductSkillRuntime(
-        config.settingsRoot,
-        workspace.rootPath(),
-        pluginRuntime: Some(pluginRuntime)
-    )
-    let webSearchRuntime = ProductWebSearchRuntime(
-        CurlWebSearchTransport(processes),
-        config.settingsRoot
-    )
-    let astEdits = AstEditRuntime(workspace, processes)
-    let extensions = ExtensionInstaller(
-        ProductExtensionOperationHost(
-            workspace, processes, uriRouter, astEdits,
-            webSearchRuntime: Some(webSearchRuntime)
-        )
-    )
-    let extensionRuntime = ExtensionRuntime(
-        ProductExtensionLifecycleHost(extensions, catalog)
-    )
-    // Validate and atomically activate compiled extensions before installing
-    // product-local tools. ExtensionRuntime sorts providers by id, making the
-    // resulting public tool order deterministic across startup environments.
-    match (startBuiltInExtensionRuntime(extensionRuntime, true)) {
-        case ExtensionRuntimeResult.Ok(_) => ()
-        case ExtensionRuntimeResult.Err(error) => return Result.Err(extensionRuntimeAgentError(error))
-    }
-    match (installLocalToolsWithExtensions(
+    var registryTransferred = false
+    var builtProduct: ?ProductRuntime = None
+    try {
+    match (installProductToolGroups(
         catalog,
         workspace,
         processes,
-        extensions,
         uriRouter: uriRouter,
-        todoRepository: Some(sessionMetadata),
         taskRuntime: Some(taskRuntime),
-        checkpointDatabase: Some(vnextDatabase),
+        checkpointDatabase: Option<SqliteDatabase>.None,
         askRuntime: askRuntime,
-        goalRuntime: Some(goalRuntime),
-        memoryRuntime: Some(memoryRuntime),
-        skillRuntime: Some(skillRuntime),
         artifactStore: Some(artifactStore),
         allowUnsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
         shellNetworkMode: settings.shellNetworkMode,
@@ -4387,38 +4411,6 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         ),
         permissions: permissions
     )
-    let workerExecutable = match (productProgramWorkerExecutable()) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let programProcessRuntime = ProductToolProgramProcessRuntime(
-        config.stateRoot, artifactStore, workerExecutable
-    )
-    match (catalog.register(
-        ToolDescriptor(
-            ModelToolDefinition(
-                "run_program",
-                "Execute a restricted read-only Program using workspace read tools. A completed Program may return value.application_plan with schema axyndra.file-change-proposal/v1 and ordered create(path, content) or replace(path, expected_content, content) operations. For replace, use tools.read with a :raw path suffix and set expected_content to the complete exact UTF-8 file text. The host validates and stores an immutable plan and patch artifact, returns their references and a bounded diff, and never applies the plan.",
-                objectSchema([schemaProperty("source", "string")], ["source"])
-            ),
-            Capability(CapabilityKind.WorkspaceRead),
-            implementationVersion: "product-tool-program-v2",
-            implementationFingerprint: "product-tool-program-application-plan-v1",
-            networkPolicyResolver: Some({_ =>
-                Result.Ok(NetworkPolicy(NetworkPolicyMode.Denied))
-            })
-        ),
-        ProductPlanGeneratingRunProgramExecutor(
-            ProductRunProgramExecutor(
-                programProcessRuntime, catalog, pipeline, operations, ids
-            ),
-            workspace,
-            artifactStore
-        )
-    )) {
-        case Result.Ok(_) => ()
-        case Result.Err(error) => return Result.Err(error)
-    }
     match (catalog.register(
         ToolDescriptor(
             ModelToolDefinition(
@@ -4431,8 +4423,8 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             ),
             Capability(CapabilityKind.WorkspaceWrite),
             sideEffecting: true,
-            implementationVersion: "product-file-plan-application-v1",
-            implementationFingerprint: "product-file-plan-application-v1",
+            implementationVersion: PRODUCT_FILE_APPLICATION_IMPLEMENTATION,
+            implementationFingerprint: PRODUCT_FILE_APPLICATION_IMPLEMENTATION,
             capabilityResolver: Some({ call =>
                 productFileApplicationPrimaryCapability(call, workspace)
             }),
@@ -4447,11 +4439,11 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             }),
             canonicalArgumentsResolver: Some({ context, call =>
                 canonicalizeProductFileApplicationPlan(
-                    context, call, workspace, artifactStore
+                    context, call, workspace, artifactStore, operationRuntime: Some(operations)
                 )
             })
         ),
-        ProductFilePlanApplicationExecutor(workspace, artifactStore)
+        ProductFilePlanApplicationExecutor(workspace, artifactStore, operationRuntime: Some(operations))
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -4467,8 +4459,8 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
                 ], ["plan_ref", "plan_digest"])
             ),
             Capability(CapabilityKind.WorkspaceRead),
-            implementationVersion: "product-file-plan-recovery-v1",
-            implementationFingerprint: "product-file-plan-recovery-v1",
+            implementationVersion: PRODUCT_FILE_RECOVERY_IMPLEMENTATION,
+            implementationFingerprint: PRODUCT_FILE_RECOVERY_IMPLEMENTATION,
             capabilityResolver: Some({ call =>
                 productFileRecoveryPrimaryCapability(call, workspace)
             }),
@@ -4480,36 +4472,74 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             }),
             canonicalArgumentsResolver: Some({ context, call =>
                 canonicalizeProductFileRecoveryPlan(
-                    context, call, workspace, artifactStore
+                    context, call, workspace, artifactStore, operationRuntime: Some(operations)
                 )
             })
         ),
-        ProductFilePlanRecoveryExecutor(workspace, artifactStore)
+        ProductFilePlanRecoveryExecutor(workspace, artifactStore, operationRuntime: Some(operations))
     )) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
     }
-    let retryControl = RetryControl()
+    let retryControl = ModelRetrySettings()
     var fixtureProbe: ?FixtureModelPort = None
+    let javascriptPlugins = ProductJavaScriptPluginHost(settingsRoot: config.settingsRoot, readViewStateRoot: config.stateRoot,
+        documentBackends:{selected=>bindProductDocumentStorage(vnextDatabase,selected,workspace.rootPath(),config.settingsRoot,config.stateRoot)})
+    match (javascriptPlugins.ownRegistry(pluginRuntime)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    match (javascriptPlugins.ownContextReadComponents({ => pluginRuntime.contextComponentSnapshot(
+        ["skill", "mcp", "prompt", "extension", "hook", "command", "theme", "hosted"]) })) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     let configuredPort: ModelPort = if (config.fixture) {
         let probe = FixtureModelPort()
         fixtureProbe = Some(probe)
         probe
-    } else if (loadedProfiles.size > 0 && loadedCatalog.size > 0) {
-        configuredProfileModelPort(
-            loadedProfiles,
-            loadedCatalog,
-            config.settingsRoot
-        )
     } else {
-        UnconfiguredModelPort()
+        ProductInstalledModelPort(javascriptPlugins, config.settingsRoot, vnextDatabase, threadRuntimes,
+            processes, loadedCatalog, loadedProfiles, artifactStore)
     }
     let effectiveModelPort: ModelPort = match (config.modelStreamFaultProfile) {
         case Some(profile) => FaultInjectingModelPort(configuredPort, profile)
         case None => configuredPort
     }
     let modelControl = ControlledModelPort(effectiveModelPort, runs: Some(runs))
-    let javascriptPlugins = ProductJavaScriptPluginHost()
+    match (registerPluginHttpService(catalog, javascriptPlugins, operations, config.settingsRoot, sandboxCaBundle)) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
+    match (registerPluginDocumentService(catalog)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    match (agent_host_runtime.hostRegisterPluginChildService111(catalog, javascriptPlugins, operations,
+        ProductPluginChildBackend111(taskRuntime))) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    match (registerPluginReadViewService(catalog, javascriptPlugins, operations, config.settingsRoot, processes)) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
+    match (registerProductContextRead(catalog, javascriptPlugins, operations,
+        documentObserver: Some(ProductDocumentReadObserver(runs)), payloadArtifacts: Some(artifactStore))) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
+    }
+    match (registerProductContextResourceTool(catalog, javascriptPlugins, operations)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+    }
+
+    // Actual typed live-family executor preserves the original Catalog object.
+    // Parent effect/resume loop activation is a separate dependent migration.
+    match (agent_host_runtime.hostRegisterPluginLiveEffect(javascriptPlugins, operations, catalog,
+        agent_host_runtime.HostLiveMemoryJournalNativeAbortEffectExecutor328(javascriptPlugins, operations))) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+    }
+
+    match (registerPluginReadOnlyProcessService(catalog, javascriptPlugins, operations, processes)) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
+    match (registerPluginFilePlanService(catalog, javascriptPlugins, operations, workspace, artifactStore)) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => return Result.Err(error)
+    }
     let codexHookRuntime = ProductCodexHookRuntime(processes, javascriptPlugins)
     let core = AgentCore(
         modelControl,
@@ -4521,32 +4551,40 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         modelDecisionRuntime: Some(SqliteModelDecisionStore(vnextDatabase)),
         contextManifestRuntime: Some(ProductContextManifestRuntime(vnextDatabase)),
         toolHooks: codexHookRuntime,
+        initialContext: Some(ProductInitialContextPreparation(config.settingsRoot, javascriptPlugins, ids, pluginRuntime, operations)),
         modelAttemptRecovery: config.modelAttemptRecovery
     )
     let service = CoreRunService(core, runs)
-    let compactionSummarizer = ModelCompactionSummarizer(modelControl)
+    let compactionSummarizer = InstalledCompactionSummarizer(modelControl, javascriptPlugins, config.settingsRoot)
+    if (config.fixture && config.unsafeDirectLaunchForTests) {
+    match (installCheckpointTools(catalog, Some(vnextDatabase), summary: Some({ sessionId, messages, cancellation =>
+        compactionSummarizer.structure(sessionId, messages, nullValue(), listValue([]), settings.compaction.summaryTimeoutMillis, Some(cancellation))
+    }), policy: Some({ context: ToolInvocationContext, call: ToolCall,
+        loadThread: () -> Result<AgentThreadSnapshot>, timestamp: () -> String =>
+        compactionSummarizer.checkpoint(context, call, loadThread, timestamp)
+    }), savePolicy: Some({ context: ToolInvocationContext, result: ToolResult,
+        loadThread: () -> Result<AgentThreadSnapshot>,
+        summary: (SessionId, Array<ModelMessage>, domain.CancellationToken) -> Result<ProductCompactionStructure>,
+        consume: (AgentThreadSnapshot, Int64, String, AgentValue, () -> Result<Unit>) -> Result<Unit> =>
+        compactionSummarizer.checkpointSave113(context, result, loadThread, summary, consume)
+    }), ownedSavePolicy113: Some({ context: ToolInvocationContext, result: ToolResult,
+        cursor: SqlitePaidCanonicalThreadCursor113, allocate: (Int64) -> LogicalJsonOwnerReservation,
+        consume: ProductOwnedCheckpointProjectionConsumer113 =>
+        compactionSummarizer.checkpointSaveOwned113(context, result, cursor, allocate,
+            settings.compaction.summaryTimeoutMillis, consume)
+    }))) {
+        case Result.Ok(_) => (); case Result.Err(error) => return Result.Err(error)
+    }
+    }
     let approvalReviewer = ApprovalReviewer(
         modelControl,
         approvalSettings,
         model,
         workspace.rootPath()
     )
-    let mcpRuntime = if (config.fixture || localMaintenance) {
-        emptyProductMcpRuntime()
-    } else {
-        match (startProductMcp(
-            config.settingsRoot,
-            workspace.rootPath(),
-            catalog,
-            extensions,
-            sandboxCaBundle: sandboxCaBundle
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-    }
     let product = ProductRuntime(
         InProcessAgentClient(service),
+        core,
         ids,
         workspace,
         model,
@@ -4571,18 +4609,12 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         codexHookRuntime,
         retryControl,
         uriRouter,
+        artifactStore,
         taskRuntime,
         askRuntime,
-        goalRuntime,
-        memoryRuntime,
-        skillRuntime,
         pluginRuntime,
-        webSearchRuntime,
         compactionSummarizer,
         approvalReviewer,
-        extensions,
-        extensionRuntime,
-        mcpRuntime,
         vnextDatabase,
         threadRuntimes,
         ProductVnextControl(
@@ -4590,18 +4622,41 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             operations,
             askRuntime,
             workspace.rootPath(), config.settingsRoot, processes, javascriptPlugins,
-            extensionSignatureVerifier: config.extensionSignatureVerifier
+            extensionSignatureVerifier: config.extensionSignatureVerifier, payloadArtifacts: Some(artifactStore),
+            canonicalSummaryTimeout173: settings.compaction.summaryTimeoutMillis
         ),
-        fixtureProbe: fixtureProbe
+        fixtureProbe: fixtureProbe,
+        unsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
+            installedModelInputOwner159: match (configuredPort) {
+                case actual: HostInstalledModelPort => Some(actual)
+                case _ => None<HostInstalledModelPort>
+            }
     )
+    builtProduct = Some(product)
     match (product.activateStartupPlugins()) {
         case Result.Ok(_) => ()
         case Result.Err(error) =>
             let _ = product.close()
             return Result.Err(error)
     }
+    if (!localMaintenance && config.distributionRoot != "") {
+        match (applyProductDistributionDefaults(product, config.distributionRoot)) {
+            case Result.Ok(_) => ()
+            case Result.Err(error) => let _ = product.close(); return Result.Err(error)
+        }
+    }
     taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase))
+    registryTransferred = true
     Result.Ok(product)
+    } finally {
+        if (!registryTransferred) {
+            // The actual Product attempts physical cleanup first. Registry's
+            // root state closes even when worker ACK remains pending; those
+            // real pins/fences still retain their own custody tokens.
+            match (builtProduct) { case Some(value) => let _ = value.close(); case None => () }
+            pluginRuntime.close()
+        }
+    }
 }
 
 func validResetArchiveLabel(value: String): Bool {
@@ -4672,9 +4727,9 @@ func snapshotArchiveBlobs(
     }
 }
 
-func openVnextDatabase(path: String): Result<SqliteDatabase> {
+func openVnextDatabase(path: String, monitor!: ?(SqliteTransaction)->Unit = None): Result<SqliteDatabase> {
     try {
-        Result.Ok(SqliteDatabase(path))
+        Result.Ok(SqliteDatabase(path,transactionCommitMonitor:monitor))
     } catch (error: Exception) {
         Result.Err(AgentError(
             AgentErrorKind.RecoveryRequired,
@@ -4795,122 +4850,6 @@ func chooseOverride(value: String, fallback: String): String {
     }
 }
 
-public func configuredProfileModelPort(
-    profiles: Array<ProviderProfile>,
-    catalog: Array<ModelCatalogEntry>,
-    settingsRoot: String
-): ModelPort {
-    let runtimeProfiles = ArrayList<RuntimeProviderProfile>()
-    for (profile in profiles) {
-        runtimeProfiles.add(RuntimeProviderProfile(
-            profile.id,
-            profile.provider,
-            profile.baseUrl,
-            profile.apiKeyEnv,
-            allowInsecureHttp: profile.allowInsecureHttp,
-            authentication: profile.authentication,
-            credentialFile: credentialPath(settingsRoot, profile.id),
-            timeoutMillis: profile.timeoutMillis,
-            defaultHeaders: runtimeProviderHeaders(profile.defaultHeaders),
-            endpointMaxOutputTokens: profile.endpointMaxOutputTokens
-        ))
-    }
-    let runtimeModels = ArrayList<RuntimeModelDescriptor>()
-    for (entry in catalog where entry.providerProfile != "") {
-        match (findProviderProfile(profiles, entry.providerProfile)) {
-            case Some(profile) => runtimeModels.add(RuntimeModelDescriptor(
-                entry.displayId(), entry.providerProfile, entry.id,
-                runtimeApiBinding(entry, profile),
-                productModelCapabilities(
-                    entry,
-                    protocol: profile.protocol,
-                    provider: profile.provider,
-                    baseUrl: profile.baseUrl,
-                    dialect: if (entry.dialect != "") {
-                        entry.dialect
-                    } else {
-                        profile.dialect
-                    }
-                ),
-                defaultHeaders: runtimeProviderHeaders(entry.defaultHeaders)
-            ))
-            case None => ()
-        }
-    }
-    UnifiedModelRuntime(
-        runtimeProfiles.toArray(), runtimeModels.toArray(), defaultLlmApiRegistry()
-    )
-}
-
-func runtimeProviderHeaders(values: Array<ProviderDefaultHeader>): Array<ProviderHeader> {
-    let headers = ArrayList<ProviderHeader>()
-    for (value in values) { headers.add(ProviderHeader(value.name, value.value)) }
-    headers.toArray()
-}
-
-func runtimeApiBinding(
-    entry: ModelCatalogEntry,
-    profile: ProviderProfile
-): ModelApiBinding {
-    let selectedDialect = if (entry.dialect != "") { entry.dialect } else { profile.dialect }
-    let selectedApi = if (entry.apiId != "") { entry.apiId } else { match (profile.protocol) {
-        case "messages" => "anthropic_messages"
-        case "responses" => "openai_responses"
-        case _ => "openai_chat_completions"
-    } }
-    match (selectedDialect) {
-        case "anthropic_messages" => ModelApiBinding(
-            LlmApiId.AnthropicMessages,
-            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Anthropic)
-        )
-        case "deepseek_messages" => ModelApiBinding(
-            LlmApiId.AnthropicMessages,
-            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.DeepSeek)
-        )
-        case "generic_messages" => ModelApiBinding(
-            LlmApiId.AnthropicMessages,
-            TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Generic)
-        )
-        case "openai_responses" => ModelApiBinding(
-            LlmApiId.OpenAiResponses,
-            TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
-        )
-        case "deepseek_responses" => ModelApiBinding(
-            LlmApiId.OpenAiResponses,
-            TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.DeepSeek)
-        )
-        case "deepseek_chat" => ModelApiBinding(
-            LlmApiId.OpenAiChatCompletions,
-            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.DeepSeek)
-        )
-        case "openai_chat" => ModelApiBinding(
-            LlmApiId.OpenAiChatCompletions,
-            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.OpenAi)
-        )
-        case "generic_chat" => ModelApiBinding(
-            LlmApiId.OpenAiChatCompletions,
-            TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.Generic)
-        )
-        case _ => match (selectedApi) {
-            // Legacy configs already carry an explicit protocol. The migration
-            // selects only the generic dialect for that protocol and never
-            // inspects provider names, model names, or endpoint URLs.
-            case "anthropic_messages" => ModelApiBinding(
-                LlmApiId.AnthropicMessages,
-                TypedProviderDialect.AnthropicMessages(AnthropicMessagesDialect.Generic)
-            )
-            case "openai_responses" => ModelApiBinding(
-                LlmApiId.OpenAiResponses,
-                TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.OpenAi)
-            )
-            case _ => ModelApiBinding(
-                LlmApiId.OpenAiChatCompletions,
-                TypedProviderDialect.OpenAiCompletions(OpenAiCompletionsDialect.Generic)
-            )
-        }
-    }
-}
-
 func productModelCapabilities(
     entry: ModelCatalogEntry,
     protocol!: String = "",
@@ -4921,6 +4860,7 @@ func productModelCapabilities(
     let _ = protocol
     let _ = provider
     let _ = baseUrl
+    let _ = dialect
     let contextWindow = match (entry.contextWindow) {
         case Some(value) => value
         case None => 128000
@@ -4939,12 +4879,9 @@ func productModelCapabilities(
     }
     ModelCapabilities(
         toolCalling: true,
-        // This is an explicit dialect contract, not provider/model-name
-        // inference. DeepSeek Responses and Messages do not expose the
-        // OpenAI parallel_tool_calls field.
-        parallelToolCalling: dialect != "deepseek_messages" &&
-            dialect != "deepseek_chat" &&
-            dialect != "deepseek_responses",
+        // Fixture/UI metadata only. Production policy comes from the explicit
+        // versioned neutral operator mapping, never a provider or dialect name.
+        parallelToolCalling: true,
         reasoning: match (productThinkingCapabilities(entry).mode) {
             case ThinkingControlMode.NoThinking => false
             case _ => true
@@ -4972,26 +4909,6 @@ func productThinkingCapabilities(entry: ModelCatalogEntry): ThinkingCapabilities
         case None => ()
     }
     ThinkingCapabilities(ThinkingControlMode.NoThinking)
-}
-
-func configuredProductModelCapabilities(
-    entry: ModelCatalogEntry,
-    profiles: Array<ProviderProfile>
-): ModelCapabilities {
-    for (profile in profiles where profile.id == entry.providerProfile) {
-        return productModelCapabilities(
-            entry,
-            protocol: profile.protocol,
-            provider: profile.provider,
-            baseUrl: profile.baseUrl,
-            dialect: if (entry.dialect != "") {
-                entry.dialect
-            } else {
-                profile.dialect
-            }
-        )
-    }
-    productModelCapabilities(entry)
 }
 
 func productToolResultError(result: ToolResult): AgentError {
@@ -5040,28 +4957,6 @@ func productToolResultText(
                 fallback
             }
         case None => fallback
-    }
-}
-
-class UnsupportedOAuthModelPort <: ModelPort {
-    private let providerId: String
-
-    init(providerId: String) {
-        this.providerId = providerId
-    }
-
-    public func execute(
-        _request: ModelRequest,
-        _events: ModelEventSink
-    ): Result<ModelReply> {
-        let _ = _request
-        let _ = _events
-        oauthNotSupported(providerId)
-    }
-
-    public func cancel(_requestId: String): Result<Unit> {
-        let _ = _requestId
-        Result.Ok(())
     }
 }
 
@@ -5353,23 +5248,6 @@ public func defaultStateRoot(): String {
     defaultProductHome() + "/sessions"
 }
 
-class UnconfiguredModelPort <: ModelPort {
-    public func execute(
-        request: ModelRequest,
-        events: ModelEventSink
-    ): Result<ModelReply> {
-        let _ = request
-        let _ = events
-        Result.Err(
-            AgentError(
-                AgentErrorKind.Configuration,
-                "provider.not_configured",
-                "no model provider is configured"
-            )
-        )
-    }
-}
-
 func homeDirectory(): String {
     match (getVariable("HOME")) {
         case Some(value) =>
@@ -5427,40 +5305,9 @@ func productToolEnvironment(): ToolEnvironmentView {
     ToolEnvironmentView(entries: values.toArray())
 }
 
-func productProgramWorkerExecutable(): Result<String> {
-    let arguments = getCommandLine()
-    if (arguments.isEmpty()) {
-        return programProcessError<String>(
-            AgentErrorKind.Configuration,
-            "tool_program.worker_unavailable",
-            "the running Product executable could not be resolved"
-        )
+func productCompactionGoalFacts(goal: ?ProductGoalState): AgentValue {
+    match (goal) {
+        case Some(value) => objectValue([ValueField("objective", textValue(value.objective)), ValueField("status", textValue(value.status))])
+        case None => nullValue()
     }
-    let invoked = arguments[0]
-    let candidates = ArrayList<String>()
-    if (invoked.contains("/")) {
-        candidates.add(invoked)
-    } else {
-        let path = getVariable("PATH")
-        if (path.isSome()) {
-            for (directory in path.getOrThrow().split(":")) {
-                candidates.add(Path(directory).join(invoked).toString())
-            }
-        }
-    }
-    for (candidate in candidates) {
-        if (!exists(Path(candidate))) { continue }
-        let resolved = try { canonicalize(Path(candidate)).toString() } catch (_: Exception) {
-            continue
-        }
-        match (canonicalProgramWorkerExecutable(resolved)) {
-            case Result.Ok(value) => return Result.Ok(value)
-            case Result.Err(_) => ()
-        }
-    }
-    programProcessError<String>(
-        AgentErrorKind.Configuration,
-        "tool_program.worker_unavailable",
-        "the running Product executable is not a usable Program worker"
-    )
 }

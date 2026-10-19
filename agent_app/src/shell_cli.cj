@@ -7,75 +7,69 @@ import yjson.*
 import agent_domain.*
 import std.collection.*
 import agent_product.*
-import model_adapters.*
 import std.convert.*
 import std.env.*
 import std.fs.*
 
-func runShellCli(
-    product: ProductRuntime,
-    arguments: Array<String>
-): Int64 {
-    if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println(
-            "axyndra shell [--timeout <milliseconds>] [--network <denied|host|proxy>] " +
-                "[--network-policy <json-file>] [--snapshot] [--command <shell-command>]\n" +
-                "Interactive commands: .help, .exit"
-        )
+func runShellCli(product: ProductRuntime, arguments: Array<String>): Int64 {
+    if(hasArgument(arguments,"--help") || hasArgument(arguments,"-h")){
+        println("axyndra shell [--timeout <milliseconds>] [--network <denied|host|proxy>] " +
+            "[--network-policy <json-file>] [--snapshot] [--command <shell-command>]\n" +
+            "Select an installed native Shell in settings/plugins/shell-tools.json.\n" +
+            "Interactive commands: .plugins <arguments>, .approve <operation-id>, .reject <operation-id>, .cancel, .help, .exit\n" +
+            "Start the selected service separately with .plugins service start <namespace> <service-id> <route> --approve.\n" +
+            "A service startup decision never approves a command. Network options only match the operator's frozen service policy.")
         return 0
     }
-    match (shellArgumentError(arguments)) {
-        case Some(message) => println("shell.invalid_arguments: " + message); return 2
-        case None => ()
-    }
-    let timeout = match (shellTimeout(argumentValue(arguments, "--timeout"))) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => printError(error); return 2
-    }
-    let networkPolicy = match (shellNetworkPolicy(arguments)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => printError(error); return 2
-    }
-    let sessionId = product.ids.nextSessionId()
-    let command = argumentValue(arguments, "--command")
-    if (command != "") {
-        let code = executeShellLine(product, sessionId, command, timeout, networkPolicy)
-        if (hasArgument(arguments, "--snapshot")) {
-            let _ = executeShellLine(
-                product,
-                sessionId,
-                "printf 'cwd=%s\\n' \"$PWD\"; env | sort",
-                timeout,
-                networkPolicy
-            )
-        }
-        return code
-    }
-    while (true) {
-        match (getStdIn().readln()) {
-            case None => return 0
-            case Some(line) =>
-                let authored = line.trimAscii()
-                if (authored == "") { continue }
-                if (authored == ".exit") { return 0 }
-                if (authored == ".help") {
-                    println(
-                        ".help  show commands\n" +
-                        ".exit  close the persistent shell"
-                    )
-                    continue
+    match(shellArgumentError(arguments)){case Some(message)=>println("shell.invalid_arguments: "+message);return 2;case None=>()}
+    let timeout=match(shellTimeout(argumentValue(arguments,"--timeout"))){
+        case Result.Err(error)=>printError(error);return 2;case Result.Ok(value)=>value}
+    let network=match(shellNetworkPolicy(arguments)){
+        case Result.Err(error)=>printError(error);return 2;case Result.Ok(value)=>value}
+    let session=product.applicationSession()
+    var code: Int64=0
+    try{
+        let command=argumentValue(arguments,"--command")
+        if(command!=""){
+            code=executeShellLine(session,command,timeout,network)
+            // Never run a second command while the first has retained approval.
+            if(hasArgument(arguments,"--snapshot") && session.approval().isNone()){
+                let _=executeShellLine(session,"printf 'cwd=%s\\n' \"$PWD\"; env | sort",timeout,network)}
+        }else{
+            var active=true
+            while(active){
+                match(getStdIn().readln()){
+                    case None=>active=false
+                    case Some(line)=>
+                        let authored=line.trimAscii()
+                        if(authored==""){continue}
+                        if(authored==".exit"){active=false;continue}
+                        if(authored==".help"){
+                            println(".plugins <arguments>  manage the installed service with independent startup approval\n" +
+                                ".approve <operation-id>  decide the actual retained command\n" +
+                                ".reject <operation-id>  reject that actual command\n.cancel  cancel the retained command\n.exit  close")
+                            continue}
+                        if(authored==".cancel"){
+                            match(session.abortBash()){case Result.Err(error)=>printError(error);case Result.Ok(_)=>()}
+                            continue}
+                        if(authored.startsWith(".plugins ") || authored.startsWith(".approve ") || authored.startsWith(".reject ")){
+                            let actual=match(session.handle("/"+authored[1..])){
+                                case Result.Err(error)=>printError(error);continue;case Result.Ok(value)=>value}
+                            if(actual.text!=""){println(actual.text)}
+                            match(actual.approval){case Some(value)=>printShellApproval(value);case None=>()}
+                            continue}
+                        let _=executeShellLine(session,authored,timeout,network)
                 }
-                let _ = executeShellLine(
-                    product,
-                    sessionId,
-                    authored,
-                    timeout,
-                    networkPolicy
-                )
+            }
         }
+    }finally{
+        // Product retains this exact acquired invocation until its fixed ACK.
+        // A failed close never abandons charged output or authorizes a retry.
+        match(session.abortBash()){case Result.Err(error)=>printError(error);code=1;case Result.Ok(_)=>()}
     }
-    0
+    code
 }
+
 func shellArgumentError(arguments: Array<String>): ?String {
     var expects = ""
     for (argument in arguments) {
@@ -102,29 +96,20 @@ func shellArgumentError(arguments: Array<String>): ?String {
     if (expects != "") { Some(expects + " requires a value") } else { None }
 }
 
-func executeShellLine(
-    product: ProductRuntime,
-    sessionId: SessionId,
-    command: String,
-    timeout: Int64,
-    networkPolicy: ?NetworkPolicy
-): Int64 {
-    match (product.executePersistentShell(
-        sessionId,
-        command,
-        timeoutMillis: timeout,
-        networkPolicy: networkPolicy
-    )) {
-        case Result.Ok(result) =>
-            if (result.stdout != "") { print(result.stdout) }
-            if (result.stderr != "") { eprintln(result.stderr.trimAscii()) }
-            if (result.timedOut) {
-                println("shell.timeout: command exceeded " + timeout.toString() + "ms")
-                return 124
-            }
+func printShellApproval(actual: ApprovalRequest): Unit {
+    println("shell.approval_required: "+actual.operationId.value+" "+actual.toolName)
+}
+
+func executeShellLine(session: ApplicationSession, command: String,
+    timeout: Int64, networkPolicy: ?NetworkPolicy): Int64 {
+    match(session.executeBash(command,timeoutMillis:timeout,networkPolicy:networkPolicy)){
+        case Result.Ok(result)=>
+            if(result.stdout!=""){print(result.stdout)}
+            if(result.stderr!=""){eprintln(result.stderr.trimAscii())}
+            if(result.timedOut){println("shell.timeout: command exceeded "+timeout.toString()+"ms");return 124}
             result.exitCode
-        case Result.Err(error) =>
-            printError(error)
+        case Result.Err(error)=>
+            match(session.approval()){case Some(value)=>printShellApproval(value);case None=>printError(error)}
             1
     }
 }
@@ -208,11 +193,11 @@ func shellTimeout(authored: String): Result<Int64> {
             "--timeout must be an integer"
         ))
     }
-    if (value <= 0) {
+    if (value <= 0 || value > 600000) {
         Result.Err(AgentError(
             AgentErrorKind.InvalidInput,
             "shell.invalid_timeout",
-            "--timeout must be positive"
+            "--timeout must be 1..600000ms within the selected operator service ceilings"
         ))
     } else {
         Result.Ok(value)

@@ -48,6 +48,8 @@ done
 
 python3 "$ROOT/scripts/tracked_artifact_gate.py"
 python3 "$ROOT/scripts/docs_gate.py"
+python3 "$ROOT/scripts/plugin_boundary_gate_test.py"
+python3 "$ROOT/scripts/plugin_boundary_gate.py"
 
 if rg_matches -n 'ConversationRepository|Disk(SessionMetadata|Permission|Run|Conversation|Operation|Approval|Audit)Repository|DiskSessionStore|SessionConversationRepository' \
   "$ROOT"/agent_*/src "$ROOT"/persistence_runtime/src \

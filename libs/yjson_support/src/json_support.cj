@@ -209,7 +209,12 @@ public func jsonNull(): JsonNode { JsonNode.nullValue }
 public func jsonBool(value: Bool): JsonNode { JsonNode.boolean(value) }
 public func jsonNumber(value: String): JsonNode { JsonNode.number(value) }
 public func jsonString(value: String): JsonNode { JsonNode.string(value) }
-public func jsonArray(values: Array<JsonNode>): JsonNode { JsonNode.array(values) }
+public func jsonArray(values: Array<JsonNode>): JsonNode {
+    // Preserve the original shallow array copy without the SDK Collection bridge.
+    let copied = ArrayList<JsonNode>(values.size)
+    for (index in 0..values.size) { copied.add(values[index]) }
+    JsonArray(copied)
+}
 
 public func jsonObject(fields: Array<JsonObjectEntry>): JsonNode {
     let value = JsonObject()

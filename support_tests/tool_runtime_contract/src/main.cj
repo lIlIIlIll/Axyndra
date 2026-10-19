@@ -11,8 +11,15 @@ import agent_testkit.*
 import std.collection.*
 import std.sync.*
 import tool_runtime.*
+import program_language.*
 
 main(): Int64 {
+    runContextReadPolicyContract()
+    genericInvocationContextContract()
+    runPreparedSourceContract()
+    runManagedJobToolContract()
+    runHttpParentIntentPreparationContract()
+    runChannelParentIntentPreparationContract()
     testToolCatalogBatchRegistration()
     let catalog = ToolCatalog()
     register(catalog, "read", CapabilityKind.WorkspaceRead, false)
@@ -292,10 +299,48 @@ main(): Int64 {
     runPreparedPipelineContracts()
     runToolOutputSinkContract()
     runToolSnapshotContracts()
+    ownedCatalogContracts()
+    toolExecutionCancellationEvidenceContract()
+    threadScopedCatalogContracts()
     runToolProgramContracts()
     runNestedSlotDrainingContract()
     println("tool_runtime contract passed")
     0
+}
+
+func genericInvocationContextContract(): Unit {
+    let resource = ContextResourceReference("record", "artifact://original", content: Some("frozen data"))
+    let resources = [resource]
+    let contribution = InvocationContextContribution(
+        "memory.provider", "retrieval", "artifact://query", "candidate context",
+        ContextContentTrust.UntrustedData, references: resources
+    )
+    let contributions = [contribution]
+    let projection = InvocationContextProjection(contributions: contributions)
+    let context = ToolInvocationContext(
+        RunId("context-run"), SessionId("context-session"), CapabilitySet(),
+        contextProjection: projection
+    )
+    resources[0] = ContextResourceReference("record", "artifact://replacement")
+    let returnedReferences = contribution.references()
+    returnedReferences[0] = resources[0]
+    contributions[0] = InvocationContextContribution(
+        "other.provider", "retrieval", "artifact://other", "other", ContextContentTrust.UserSelected
+    )
+    let returnedContributions = projection.contributions()
+    returnedContributions[0] = contributions[0]
+    let retained = context.contextProjection.contribution("memory.provider", "retrieval").getOrThrow()
+    expect(retained.reference("record").getOrThrow().locator == "artifact://original" &&
+        retained.reference("record").getOrThrow().content.getOrThrow() == "frozen data",
+        "generic tool context is immutable against input and accessor array replacement")
+    expect(context.contextProjection.contribution("other.provider", "retrieval").isNone() &&
+        context.capabilities.values.isEmpty(),
+        "context metadata cannot substitute another provider or grant execution capabilities")
+    var rejected = false
+    try {
+        let _ = InvocationContextProjection(contributions: [contribution, contribution])
+    } catch (_: IllegalArgumentException) { rejected = true }
+    expect(rejected, "duplicate context contribution identities are rejected")
 }
 
 func runNestedSlotDrainingContract(): Unit {
@@ -351,12 +396,14 @@ func runToolProgramContracts(): Unit {
     register(catalog, "write", CapabilityKind.WorkspaceWrite, true)
     let operations = MemoryOperations()
     let pipeline = ToolPipeline(catalog, operations, MemoryAudit(), FixedIds())
-    let runtime = ToolProgramRuntime(
-        TestProgramSubOperationExecutor(catalog, pipeline, operations)
-    )
     let context = ToolInvocationContext(
         RunId("program-run"), SessionId("program-session"),
         CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite)])
+    )
+    // The trusted test port retains its real pipeline context. The language
+    // interpreter receives only values and never fabricates a Run identity.
+    let runtime = ToolProgramRuntime(
+        TestProgramSubOperationExecutor(catalog, pipeline, operations, context)
     )
     let literalArguments = ToolProgramExpression.Literal(objectValue([]))
     let program = ToolProgramIR(
@@ -383,7 +430,7 @@ func runToolProgramContracts(): Unit {
             ToolProgramStatement.Return(ToolProgramExpression.Variable("names"))
         ]
     )
-    let completed = runtime.execute(program, context)
+    let completed = runtime.execute(program)
     expect(completed.status == ToolProgramStatus.Completed && completed.value.unifiedKind == ValueKind.List &&
         completed.value.items.size == 2 && completed.value.items[0].text == "read" &&
         completed.subOperations.size == 3 && operations.executions == 3,
@@ -399,7 +446,7 @@ func runToolProgramContracts(): Unit {
     let compiled = mustProgram(compileRestrictedToolProgram(
         "program-compiled", "const item = await tools.read({}); return item;"
     ))
-    let compiledResult = runtime.execute(compiled, context)
+    let compiledResult = runtime.execute(compiled)
     expect(compiledResult.status == ToolProgramStatus.Completed &&
         compiledResult.subOperations.size == 1 &&
         compiledResult.value.field("tool").isSome(),
@@ -407,7 +454,7 @@ func runToolProgramContracts(): Unit {
     let literalReturn = mustProgram(compileRestrictedToolProgram(
         "program-literal", "return {\"answer\":42,\"items\":[\"alpha\"]};"
     ))
-    let literalResult = runtime.execute(literalReturn, context)
+    let literalResult = runtime.execute(literalReturn)
     let literalAnswer = literalResult.value.field("answer").getOrThrow()
     let literalItems = literalResult.value.field("items").getOrThrow()
     expect(
@@ -419,7 +466,7 @@ func runToolProgramContracts(): Unit {
     )
     let semicolonReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
         "program-semicolon-literal", "return {\"query\":\"alpha;beta\"};"
-    )), context)
+    )))
     expect(
         semicolonReturn.status == ToolProgramStatus.Completed &&
             semicolonReturn.value.field("query").getOrThrow().text == "alpha;beta",
@@ -428,7 +475,7 @@ func runToolProgramContracts(): Unit {
     let multilineReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
         "program-multiline-literal",
         "return {\n  \"answer\": 42,\n  \"items\": [1, 2]\n};"
-    )), context)
+    )))
     expect(
         multilineReturn.status == ToolProgramStatus.Completed &&
             multilineReturn.value.field("answer").getOrThrow().text == "42" &&
@@ -437,13 +484,13 @@ func runToolProgramContracts(): Unit {
     )
     let trueReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
         "program-true", "return true;"
-    )), context)
+    )))
     let falseReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
         "program-false", "return false;"
-    )), context)
+    )))
     let nullReturn = runtime.execute(mustProgram(compileRestrictedToolProgram(
         "program-null", "return null;"
-    )), context)
+    )))
     expect(
         trueReturn.status == ToolProgramStatus.Completed &&
             falseReturn.status == ToolProgramStatus.Completed &&
@@ -468,7 +515,7 @@ func runToolProgramContracts(): Unit {
                 ProgramToolInvocation("write", ToolProgramExpression.Literal(objectValue([])))
             ))
         ]
-    ), context)
+    ))
     expect(deniedMutation.status == ToolProgramStatus.Failed &&
         deniedMutation.errorCode == "tool_program.side_effect_denied" &&
         deniedMutation.subOperations.isEmpty(),
@@ -480,7 +527,7 @@ func runToolProgramContracts(): Unit {
                 ProgramToolInvocation("read", literalArguments), ProgramToolInvocation("read", literalArguments)
             ]))
         ]
-    ), context, limits: ToolProgramLimits(maxParallelCalls: 1u64))
+    ), limits: ToolProgramLimits(maxParallelCalls: 1u64))
     expect(bounded.status == ToolProgramStatus.Failed && bounded.errorCode == "tool_program.parallel_limit",
         "bounded scheduler rejects parallel groups over the declared limit")
 
@@ -490,7 +537,7 @@ func runToolProgramContracts(): Unit {
                 textValue("12345678901234567890")
             ])))
         ]
-    ), context, limits: ToolProgramLimits(maxResultBytes: 40u64))
+    ), limits: ToolProgramLimits(maxResultBytes: 40u64))
     expect(nestedResult.status == ToolProgramStatus.Completed,
         "result accounting visits nested containers once without serializing each container")
     let partialAfterSubcall = runtime.execute(ToolProgramIR(
@@ -503,7 +550,7 @@ func runToolProgramContracts(): Unit {
                 textValue("12345678901234567890")
             ))
         ]
-    ), context, limits: ToolProgramLimits(maxResultBytes: 16u64))
+    ), limits: ToolProgramLimits(maxResultBytes: 16u64))
     expect(partialAfterSubcall.status == ToolProgramStatus.Partial &&
         partialAfterSubcall.errorCode == "tool_program.result_limit" &&
         partialAfterSubcall.value.unifiedKind == ValueKind.Null &&
@@ -517,7 +564,7 @@ func runToolProgramContracts(): Unit {
         "program-forbidden", "import fs from 'fs'; return fs;", [
             ToolProgramStatement.Return(ToolProgramExpression.Literal(nullValue()))
         ]
-    ), context)
+    ))
     expect(forbidden.status == ToolProgramStatus.Failed &&
         forbidden.errorCode == "tool_program.forbidden_syntax",
         "TS-like source validation rejects ambient imports before interpretation")
@@ -526,15 +573,18 @@ class TestProgramSubOperationExecutor <: ProgramSubOperationExecutor {
     private let catalog: ToolCatalog
     private let pipeline: ToolPipeline
     private let operations: OperationRuntimePort
+    private let context: ToolInvocationContext
 
     init(
         catalog: ToolCatalog,
         pipeline: ToolPipeline,
-        operations: OperationRuntimePort
+        operations: OperationRuntimePort,
+        context: ToolInvocationContext
     ) {
         this.catalog = catalog
         this.pipeline = pipeline
         this.operations = operations
+        this.context = context
     }
 
     public func isReadOnly(call: ToolCall): Bool {
@@ -542,7 +592,6 @@ class TestProgramSubOperationExecutor <: ProgramSubOperationExecutor {
     }
 
     public func invoke(
-        context: ToolInvocationContext,
         call: ToolCall
     ): Result<ToolInvocationResult> {
         let prepared = match (pipeline.prepare(context, call)) {
@@ -1275,6 +1324,11 @@ func runPreparedPipelineContracts(): Unit {
         case Result.Ok(ToolAuthorization.Ready(value)) => value
         case _ => throw IllegalStateException("second prepared call was not authorized")
     }
+    expect(firstAuthorized.source.kind == PreparedInvocationSourceKind.Direct &&
+        firstAuthorized.source.runId.value == first.source.runId.value &&
+        firstAuthorized.source.epoch == first.source.epoch &&
+        firstAuthorized.committedToolCall.isNone(),
+        "approval preserves direct source and does not invent a model Decision")
     expect(
         operations.executions == 0 && executions.executions == 0,
         "authorizing every call still preserves the all-batch execution barrier"

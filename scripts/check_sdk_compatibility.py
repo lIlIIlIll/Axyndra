@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline compatibility gate for stable agent_sdk and axyndra_agent_testkit APIs."""
+"""Offline compatibility gate for the Native v3 source-authoring APIs."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINES = {
-    "agent_sdk": ROOT / "compat" / "agent-sdk-v2.api.json",
-    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-v2.api.json",
+    "agent_sdk": ROOT / "compat" / "agent-sdk-native-v3.api.json",
+    "axyndra_agent_testkit": ROOT / "compat" / "axyndra-agent-testkit-native-v3.api.json",
 }
 SOURCES = {
     "agent_sdk": sorted(
@@ -27,14 +27,12 @@ SOURCES = {
     ),
 }
 FROZEN_STABLE_CONSUMERS = {
-    "support_tests/sdk_fixture_extension": {"HostOperationIntent"},
-    "support_tests/testkit_consumer": {"HostOperationIntent", "FaultPlan", "FaultRule"},
+    "support_tests/sdk_fixture_extension": {"ExtensionTool", "Extension", "WorkspaceSearchIntent", "WorkspaceWriteIntent", "HostOperationIntent", "OperationIntent"},
+    "support_tests/testkit_consumer": {"ExtensionTool", "ExtensionContractHarness", "PreparedExtensionCase", "OperationIntent", "HostOperationIntent", "FaultPlan", "FaultRule"},
 }
 EXPERIMENTAL_PREFIXES = {
     "agent_sdk": {
-        "class:HostOperationIntent",
-        "class:HostOperationIntent.",
-        "enum:OperationIntent.variant:HostOperation",
+        
     },
     "axyndra_agent_testkit": {
         "class:FaultRule", "class:FaultRule.",
@@ -292,8 +290,6 @@ def sdk_version() -> str:
 
 
 def package_version(package: str) -> str:
-    if package == "agent_sdk":
-        return sdk_version()
     text = (ROOT / package / "cjpm.toml").read_text(encoding="utf-8")
     match = re.search(r'^\s*version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     if match is None:
@@ -306,6 +302,7 @@ def baseline_document(package: str, version: str) -> dict[str, object]:
     return {
         "format": 1,
         "package": package,
+        "contract": "native-authoring-v3",
         "api_version": version,
         "symbols": [
             {"key": item.key, "stability": item.stability, "signature": item.signature}
@@ -330,6 +327,8 @@ def main() -> int:
     errors: list[str] = []
     for package, baseline_path in BASELINES.items():
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        if baseline.get("contract") != "native-authoring-v3":
+            errors.append(f"{package}: wrong source authoring contract baseline")
         current_version = package_version(package)
         errors.extend(f"{package}: {error}" for error in compare_surface(
             baseline, current_surface(package), current_version

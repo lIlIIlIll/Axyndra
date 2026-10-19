@@ -7,8 +7,6 @@ import yjson.*
 import agent_core.*
 import agent_domain.*
 import agent_product.*
-import agent_skills.*
-import model_adapters.*
 import std.fs.*
 import tool_runtime.*
 
@@ -31,46 +29,44 @@ main(): Int64 {
 func verifySkillDiscovery(temporary: String): Unit {
     let settings = temporary + "/settings"
     let workspace = temporary + "/workspace"
+    Directory.create(workspace, recursive: true)
     writeSkill(settings + "/managed-skills/a", "first", "managed-a")
     writeSkill(settings + "/managed-skills/b", "second", "managed-b")
     writeSkill(settings + "/skills/a", "second", "user-winner")
-    let runtime = ProductSkillRuntime(settings, workspace)
-    expect(runtime.metadata().size == 1 && runtime.metadata()[0].id == "a" &&
-        runtime.metadata()[0].name == "second", "user Skill removes all crossed managed id/name conflicts")
-    writeSkill(workspace + "/.omp/skills/c", "second", "workspace-winner")
-    let selected = runtime.resolve("$second", SkillStackSnapshot([], []))
-    expect(runtime.metadata().size == 1 && selected.active.size == 1 &&
-        selected.active[0].instructions.contains("workspace-winner"),
-        "workspace Skill wins over user and managed definitions")
-    writeSkill(workspace + "/.omp/skills/d", "second", "lexical-winner")
-    expect(runtime.metadata().size == 1 && runtime.metadata()[0].id == "d",
-        "same-layer conflicts have a stable sorted-directory winner")
-    writeSkill(workspace + "/.omp/skills/review", "Review Changes", "short")
-    writeSkill(workspace + "/.omp/skills/review-extra", "审查", "long")
-    writeSkill(workspace + "/.omp/skills/review.extra", "Extended.Review", "dotted")
-    for (prompt in ["$review_var", "$review-extra-more", "x$review", "中$review",
-        "$review中", "$review\u{0301}"]) {
-        expect(runtime.resolve(prompt, SkillStackSnapshot([], [])).active.isEmpty(),
-            "partial or embedded Skill marker does not activate: " + prompt)
-    }
-    for (prompt in ["$review", "($review)", "$review。", "请用：$review！", "\u{3000}$review\u{00a0}",
-        "$Review Changes"]) {
-        let active = runtime.resolve(prompt, SkillStackSnapshot([], [])).active
-        expect(active.size == 1 && active[0].descriptor.id == "review",
-            "complete Skill marker respects text boundaries: " + prompt)
-    }
-    for (prompt in ["$review-extra", "《$审查》"]) {
-        let active = runtime.resolve(prompt, SkillStackSnapshot([], [])).active
-        expect(active.size == 1 && active[0].descriptor.id == "review-extra",
-            "full hyphenated or Unicode Skill name activates without its prefix")
-    }
-    let dotted = runtime.resolve("$review.extra!", SkillStackSnapshot([], [])).active
-    expect(dotted.size == 1 && dotted[0].descriptor.id == "review.extra",
-        "longest declared marker wins when a legal name contains punctuation")
+    let product = openProduct(config: ProductConfig(settingsRoot: settings, stateRoot: temporary + "/state",
+        workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.Yolo,
+        distributionRoot: promptDistributionRoot())).value().getOrThrow()
+    try {
+        let first = promptSelectedContext(product, "$second")
+        expect(promptContribution(first, "a").getOrThrow().content.contains("user-winner") &&
+            !product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("managed-a") &&
+            !product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system.contains("managed-b"),
+            "installed algorithm removes crossed managed id/name conflicts")
+        writeSkill(workspace + "/.omp/skills/c", "second", "workspace-winner")
+        let selected = promptSelectedContext(product, "$second")
+        expect(promptContribution(selected, "c").getOrThrow().content.contains("workspace-winner"),
+            "workspace Skill wins over user and managed definitions")
+        writeSkill(workspace + "/.omp/skills/d", "second", "lexical-winner")
+        expect(promptContribution(promptSelectedContext(product, "$second"), "d").getOrThrow().content.contains("lexical-winner"),
+            "same-layer conflicts have a stable sorted-directory winner")
+        writeSkill(workspace + "/.omp/skills/review", "Review Changes", "short")
+        writeSkill(workspace + "/.omp/skills/review-extra", "审查", "long")
+        writeSkill(workspace + "/.omp/skills/review.extra", "Extended.Review", "dotted")
+        for (prompt in ["$review_var", "$review-extra-more", "x$review", "中$review", "$review中", "$review\u{0301}"]) {
+            expect(!promptHasSelected(promptSelectedContext(product, prompt)), "partial or embedded marker does not activate: " + prompt)
+        }
+        for (prompt in ["$review", "($review)", "$review。", "请用：$review！", "\u{3000}$review\u{00a0}", "$Review Changes"]) {
+            expect(promptContribution(promptSelectedContext(product, prompt), "review").isSome(), "complete marker respects boundaries: " + prompt)
+        }
+        for (prompt in ["$review-extra", "《$审查》"]) {
+            expect(promptContribution(promptSelectedContext(product, prompt), "review-extra").isSome(), "Unicode and hyphen names select without prefix")
+        }
+        expect(promptContribution(promptSelectedContext(product, "$review.extra!"), "review.extra").isSome(), "longest declared punctuation name wins")
+    } finally { product.close() }
 }
 
 func writeSkill(directory: String, name: String, body: String): Unit {
-    Directory.create(directory, recursive: true)
+    if (!exists(Path(directory))) { Directory.create(directory, recursive: true) }
     File.writeTo(directory + "/SKILL.md", ("---\nname: " + name +
         "\ndescription: discovery fixture\n---\n" + body).toArray())
 }
@@ -124,7 +120,8 @@ func verifyProductPrompt(temporary: String): Unit {
         workspaceRoot: workspace,
         fixture: true,
         approvalMode: ApprovalMode.Yolo,
-        asyncEnabled: false
+        asyncEnabled: false,
+        distributionRoot: promptDistributionRoot()
     )).value().getOrThrow()
     let probe = match (product.fixtureProbe) {
         case Some(value) => value
@@ -252,62 +249,32 @@ func verifyProductPrompt(temporary: String): Unit {
         first.system.contains("checklist.md:checklist.md") &&
         !first.system.contains("REVIEWER-INSTRUCTIONS") &&
         !first.system.contains("REFERENCE-MUST-STAY-LAZY") &&
-        firstRun.skillStack.active.isEmpty(),
+        firstRun.contextSnapshot.contributions().isEmpty(),
         "Product advertises bounded Skill metadata without eagerly loading instructions or references"
     )
-    expect(
-        product.request("please-review without an explicit marker").skillStack.active.size == 1,
-        "metadata trigger phrases can select Skill instructions before Run start"
-    )
-    let skillRun = product.request(
-        "$reviewer inspect this change",
-        sessionId: Some(firstSession)
-    )
-    expect(
-        skillRun.skillStack.active.size == 1 &&
-        skillRun.skillStack.active[0].instructions.contains("REVIEWER-INSTRUCTIONS") &&
-        skillRun.skillStack.loadedReferences.isEmpty(),
-        "an explicit Skill mention freezes instructions but not references into the Run snapshot"
-    )
+    let automatic = promptSelectedContext(product, "please-review without an explicit marker")
+    expect(promptContribution(automatic, "reviewer").isSome(), "metadata trigger phrases select via the same real Run read stages")
+    let skillRun = product.request("$reviewer inspect this change", sessionId: Some(firstSession))
+    expect(skillRun.initializeContext && skillRun.contextSnapshot.contributions().isEmpty(),
+        "request construction does not perform hidden host resource reads")
     expect(product.client.start(skillRun, { _ => () }).isOk(), "activated Skill request completes")
+    let selected = promptStoredContext(product, skillRun.runId)
+    let contribution = promptContribution(selected, "reviewer").getOrThrow()
+    expect(contribution.content.contains("REVIEWER-INSTRUCTIONS") && contribution.references()[0].content.isNone(),
+        "canonical context freezes selected instructions but defers references")
     let skillRequest = probe.lastRequest.getOrThrow()
-    expect(
-        skillRequest.system.contains("REVIEWER-INSTRUCTIONS") &&
-        !skillRequest.system.contains("REFERENCE-MUST-STAY-LAZY"),
-        "Core projects the active Skill stack while reference bodies remain lazy"
-    )
-    let referenceArguments = objectValue([
-        ValueField("skill_id", textValue("reviewer")),
-        ValueField("reference_id", textValue("checklist.md"))
-    ])
-    expect(
-        product.invokeLocalTool(
-            firstSession,
-            "read_skill_reference",
-            referenceArguments,
-            skillStack: skillRun.skillStack
-        ).value().getOrThrow().output.field("content").getOrThrow().text.contains(
-            "REFERENCE-MUST-STAY-LAZY"
-        ),
-        "an active Run can load one declared Skill reference on demand"
-    )
-    expect(
-        product.invokeLocalTool(
-            firstSession,
-            "read_skill_reference",
-            referenceArguments
-        ).isError(),
-        "Skill references cannot be read through the Skill tool before activation"
-    )
+    expect(skillRequest.system.contains("REVIEWER-INSTRUCTIONS") && !skillRequest.system.contains("REFERENCE-MUST-STAY-LAZY"),
+        "Core projects the active contribution while reference bodies remain lazy")
+    expect(promptReference(product, selected, "reviewer", "checklist.md", "prompt-reference-success").contains("REFERENCE-MUST-STAY-LAZY"),
+        "the canonical generic reference tool loads one declared resource on demand")
+    expect(product.invokeLocalTool(firstSession, "read_context_resource", objectValue([
+        ValueField("owner", textValue(contribution.owner)), ValueField("contribution", textValue("reviewer")),
+        ValueField("reference", textValue("checklist.md"))])).isError(), "references require a current declared contribution")
     Directory.create(temporary + "/settings/managed-skills/late", recursive: true)
-    File.writeTo(
-        temporary + "/settings/managed-skills/late/SKILL.md",
-        "---\nname: late\ndescription: Added after startup\n---\n\nLATE-SKILL\n".toArray()
-    )
-    expect(
-        product.request("$late use the managed Skill").skillStack.active.size == 1,
-        "Product refreshes bounded Skill discovery after managed Skill changes"
-    )
+    File.writeTo(temporary + "/settings/managed-skills/late/SKILL.md",
+        "---\nname: late\ndescription: Added after startup\n---\n\nLATE-SKILL\n".toArray())
+    expect(promptContribution(promptSelectedContext(product, "$late use the managed Skill"), "late").isSome(),
+        "a subsequent actual Run observes newly managed Skill metadata")
     let independentlyBuilt = buildProductPrompt(
         workspace,
         "a different dynamic goal",
@@ -324,7 +291,7 @@ func verifyProductPrompt(temporary: String): Unit {
         "the final ModelRequest cache key is the stable-prefix hash and excludes session dynamics"
     )
     verifyAutomaticSkillRuns(product, probe, firstSession, first.cacheKey)
-    let _ = product.closeMcp()
+    let _ = product.close()
 }
 
 func verifySectionOrder(system: String): Unit {
@@ -336,7 +303,7 @@ func verifySectionOrder(system: String): Unit {
     let dynamic = sectionIndex(system, "dynamic_context")
     expect(
         base < tools && tools < environment && environment < project &&
-        project < dynamic && dynamic < user,
+        project < user && user < dynamic,
         "final Product system prompt keeps stable then session then turn sections: " +
             base.toString() + "," + tools.toString() + "," + environment.toString() + "," +
             project.toString() + "," + user.toString() + "," + dynamic.toString()

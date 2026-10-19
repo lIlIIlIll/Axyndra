@@ -25,6 +25,16 @@ main(): Int64 {
 }
 
 func runDurableBindingAndOwnership(root: String): Unit {
+    let carrier = reserveProductObservationBuffer113()
+    // This whole helper returns no String/server/task/controller. The two
+    // detached allocator receipts alone remain in this independently paid
+    // caller frame; no artificial outer scheduler task is introduced.
+    let original = runAcpOriginalSynchronousScope113(root, false)
+    original.close()
+    carrier.close()
+}
+
+func runDurableBindingAndOwnershipUnsafeBody113(root: String, control: AcpOwnedWorkerControl113): Unit {
     let state = root + "/state"
     let settings = root + "/settings"
     let hostWorkspace = root + "/host"
@@ -44,6 +54,7 @@ func runDurableBindingAndOwnership(root: String): Unit {
             Result.Ok(fixtureProduct(settings, state, cwd))
         },
         {_ => ()},
+        control113: control,
         closer: {product =>
             if (product.workspace.rootPath() == hostWorkspace) {
                 hostCloseCount.fetchAdd(1)
@@ -129,6 +140,16 @@ func runDurableBindingAndOwnership(root: String): Unit {
 }
 
 func runCloseFailureContract(root: String): Unit {
+    let carrier = reserveProductObservationBuffer113()
+    // This whole helper returns no String/server/task/controller. The two
+    // detached allocator receipts alone remain in this independently paid
+    // caller frame; no artificial outer scheduler task is introduced.
+    let original = runAcpOriginalSynchronousScope113(root, true)
+    original.close()
+    carrier.close()
+}
+
+func runCloseFailureContractUnsafeBody113(root: String, control: AcpOwnedWorkerControl113): Unit {
     let state = root + "/failure-state"
     let settings = root + "/failure-settings"
     let hostWorkspace = root + "/failure-host"
@@ -140,6 +161,7 @@ func runCloseFailureContract(root: String): Unit {
         fixtureProduct(settings, state, hostWorkspace),
         {cwd => Result.Ok(fixtureProduct(settings, state, cwd))},
         {_ => ()},
+        control113: control,
         closer: {_ =>
             closeCount.fetchAdd(1)
             Result.Err(AgentError(

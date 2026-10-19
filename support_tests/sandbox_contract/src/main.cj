@@ -2,6 +2,10 @@ package sandbox_contract
 
 import agent_domain.*
 import agent_product.*
+import tool_runtime.*
+import eval_native_contract.*
+import shell_native_contract.*
+import std.convert.*
 import sandbox4cj.*
 import std.env.*
 import std.fs.*
@@ -19,6 +23,7 @@ main(): Int64 {
     if (!processPortRequiresSandbox(root)) { return 1 }
     if (!gatewayProxyAuthenticationSmoke(root)) { return 1 }
     if (!realProcessPortSmokeWhenSupported(root)) { return 1 }
+    if (!actualNativeShellCapture32Contract(root)) { return 1 }
     if (!packageOnlyProcessPortSmokeWhenSupported(root)) { return 1 }
     if (!mediatedNetworkGatewaySmoke(root)) { return 1 }
     println("sandbox_contract: all contracts passed")
@@ -213,8 +218,7 @@ func processPortRequiresSandbox(root: String): Bool {
         operationId: OperationId("required-direct"),
         sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
     ))
-    let shell = processes.executeShell(
-        SessionId("required-shell-session"),
+    let shell = processes.execute(
         ProcessRequest(
             "/bin/bash",
             operationId: OperationId("required-shell"),
@@ -300,8 +304,7 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
             maxOutputBytes: 4096, openFiles: 128
         )
     ))
-    let persistentLimit = limitedProcesses.executeShell(
-        SessionId("resource-persistent-shell"),
+    let persistentLimit = limitedProcesses.execute(
         ProcessRequest(
             "/bin/bash",
             operationId: OperationId("resource-persistent"),
@@ -384,37 +387,22 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
     if (!expect(
         persistentValue.exitCode == 0 && persistentValue.stdout.startsWith("16\n") &&
             persistentValue.truncated && persistentValue.stdout.toArray().size <= 32,
-        "persistent shell applies request output/open-file limits: " + persistentValue.stdout.replace("\n", "/")
+        "foundational ProcessRequest retains exact output/open-file limits: " + persistentValue.stdout.replace("\n", "/")
     )) { return false }
 
     let readOnlyProof = root + "/process-read-only-proof"
     let writeProof = root + "/process-write-proof"
     let _ = removeIfExists(readOnlyProof)
     let _ = removeIfExists(writeProof)
-    let readOnly = processes.executeShell(
-        SessionId("sandbox-shell"),
-        ProcessRequest(
-            "/bin/bash",
-            operationId: OperationId("process-read-only"),
-            arguments: [
-                "--noprofile", "--norc", "-lc",
-                "touch " + shellQuote(readOnlyProof)
-            ],
-            sandboxMode: ProcessSandboxMode.WorkspaceReadOnly
-        )
-    )
-    let writable = processes.executeShell(
-        SessionId("sandbox-shell"),
-        ProcessRequest(
-            "/bin/bash",
-            operationId: OperationId("process-write"),
-            arguments: [
-                "--noprofile", "--norc", "-lc",
-                "touch " + shellQuote(writeProof)
-            ],
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-        )
-    )
+    let actualReadonly=NativeShellContractScope(root,mountReadOnly:true)
+    let actualWritable=NativeShellContractScope(root)
+    let (readOnly,writable)=try{
+        let denied=nativeSandboxShellProcess(actualReadonly.binding(),SessionId("sandbox-native-readonly"),
+            "touch "+shellQuote(readOnlyProof))
+        let allowed=nativeSandboxShellProcess(actualWritable.binding(),SessionId("sandbox-native-writable"),
+            "touch "+shellQuote(writeProof))
+        (denied,allowed)
+    }finally{actualReadonly.close();actualWritable.close()}
     setVariable("OMP_PROCESS_CONTRACT_SECRET", "process-contract-secret")
     let environment = processes.execute(ProcessRequest(
         "/usr/bin/env",
@@ -448,110 +436,70 @@ func realProcessPortSmokeWhenSupported(root: String): Bool {
     let child = root + "/profile-child"
     if (!exists(Path(child))) { Directory.create(child, recursive: true) }
     let session = SessionId("eval-profile-session")
-    let baseRequest = ProcessRequest(
-        "/usr/bin/python3",
-        operationId: OperationId("eval-base-first"),
-        workingDirectory: root,
-        timeoutMillis: 3000,
-        sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-    )
-    let initialized = processes.executeEval(
-        session,
-        "py",
-        "value = 41\nvalue",
-        false,
-        baseRequest
-    )
-    let isolated = processes.executeEval(
-        session,
-        "py",
-        "globals().get('value', 'missing')",
-        false,
-        ProcessRequest(
-            "/usr/bin/python3",
-            operationId: OperationId("eval-child"),
-            workingDirectory: child,
-            timeoutMillis: 3000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-        )
-    )
-    let resumed = processes.executeEval(
-        session,
-        "py",
-        "value + 1",
-        false,
-        ProcessRequest(
-            "/usr/bin/python3",
-            operationId: OperationId("eval-base-second"),
-            workingDirectory: root,
-            timeoutMillis: 3000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-        )
-    )
-    let initializedValue = match (initialized) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return expect(false, "sandbox eval initialization failed: " + error.message)
-    }
-    let isolatedValue = match (isolated) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return expect(false, "sandbox eval profile split failed: " + error.message)
-    }
-    let resumedValue = match (resumed) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return expect(false, "sandbox eval resume failed: " + error.message)
-    }
-    let outputLimited = processes.executeEval(
-        session,
-        "py",
-        "print('x' * 4096)",
-        false,
-        ProcessRequest(
-            "/usr/bin/python3",
-            operationId: OperationId("eval-output-limit"),
-            workingDirectory: root,
-            timeoutMillis: 3000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite,
-            processLimits: ExecutionResourceLimits(maxOutputBytes: 32)
-        )
-    )
-    let outputLimitedValue = match (outputLimited) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return expect(false, "eval output limit failed: " + error.message)
-    }
-    let recoveredAfterOutputLimit = processes.executeEval(
-        session,
-        "py",
-        "40 + 2",
-        false,
-        ProcessRequest(
-            "/usr/bin/python3",
-            operationId: OperationId("eval-after-output-limit"),
-            workingDirectory: root,
-            timeoutMillis: 3000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-        )
-    )
-    let recoveredAfterOutputLimitValue = match (recoveredAfterOutputLimit) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return expect(false, "eval kernel did not recover after output limit: " + error.message)
-    }
-    if (!expect(
-        outputLimitedValue.exitCode == -1 && outputLimitedValue.truncated &&
-            outputLimitedValue.transportClosed && outputLimitedValue.stdout == "" &&
-            outputLimitedValue.stderr.contains("output exceeded") &&
-            recoveredAfterOutputLimitValue.exitCode == 0 &&
-            recoveredAfterOutputLimitValue.stdout.trimAscii() == "42",
-        "eval output is bounded, reported truncated, and a later cell still executes"
-    )) { return false }
-    expect(
-        initializedValue.exitCode == 0 &&
-            initializedValue.stdout.trimAscii() == "41" &&
-            isolatedValue.exitCode == 0 &&
-            isolatedValue.stdout.trimAscii() == "missing" &&
-            resumedValue.exitCode == 0 &&
-            resumedValue.stdout.trimAscii() == "42",
-        "persistent eval runs under bwrap and caches kernels by exact sandbox profile"
-    )
+    let nativeScope = NativeEvalContractScope(root)
+    try {
+        let base = nativeScope.binding("py", workingDirectory: root, executable: "/usr/bin/python3")
+        nativeEvalStartChecked(base, session)
+        let initializedValue = nativeSandboxCell(base.call(session,
+            nativeSandboxEvalCall("eval-base-first", "value = 41\nvalue")))
+        let isolated = nativeScope.binding("py", workingDirectory: child, executable: "/usr/bin/python3")
+        nativeEvalStartChecked(isolated, session)
+        let isolatedValue = nativeSandboxCell(isolated.call(session,
+            nativeSandboxEvalCall("eval-child", "globals().get('value', 'missing')")))
+        let resumedValue = nativeSandboxCell(base.call(session,
+            nativeSandboxEvalCall("eval-base-second", "value + 1")))
+        let limited = nativeScope.binding("py", workingDirectory: root, executable: "/usr/bin/python3", maxOutputBytes: 32)
+        nativeEvalStartChecked(limited, session)
+        let outputLimited = limited.call(session, nativeSandboxEvalCall("eval-output-limit", "print('x' * 4096)"))
+        if (!expect(outputLimited.isError() && outputLimited.error().getOrThrow().kind == AgentErrorKind.RecoveryRequired,
+            "accepted output beyond the exact 32-byte service cap has an honest unknown outcome")) { return false }
+        limited.waitReleased()
+        if (!expect(!limited.visible(session) && limited.childReceipts() == 1 &&
+            limited.count("SELECT COUNT(*) FROM operation_receipts WHERE outcome='unknown'") == 1 &&
+            nativeEvalFailed(limited.call(session, nativeSandboxEvalCall("eval-no-replay", "40 + 2"))) &&
+            limited.childReceipts() == 1,
+            "output is bounded, the unknown service is withdrawn, and no cell automatically replays")) { return false }
+        // The original base service is a different actual owner/profile. It
+        // survives the revoked 32-byte profile; no lost state is manufactured.
+        let recoveredAfterOutputLimitValue = nativeSandboxCell(base.call(session,
+            nativeSandboxEvalCall("eval-after-output-limit", "40 + 2")))
+        if (!expect(recoveredAfterOutputLimitValue.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
+            recoveredAfterOutputLimitValue.output.field("stdout").getOrThrow().text.trimAscii() == "42",
+            "a separately approved live service still executes after the capped owner is revoked")) { return false }
+        expect(!initializedValue.isError && initializedValue.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
+            initializedValue.output.field("stdout").getOrThrow().text.trimAscii() == "41" &&
+            !isolatedValue.isError && isolatedValue.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
+            isolatedValue.output.field("stdout").getOrThrow().text.trimAscii() == "missing" &&
+            !resumedValue.isError && resumedValue.output.field("exit_code").getOrThrow().asNumberText() == "0" &&
+            resumedValue.output.field("stdout").getOrThrow().text.trimAscii() == "42",
+            "persistent eval runs under bwrap in actual independently granted workspace profiles")
+    } finally { nativeScope.close() }
+}
+
+// Read-only projection of the actual held Native result, never a Source,
+// grant or fabricated Receipt. The owner ACK completes before it escapes.
+func nativeSandboxShellProcess(binding: NativeShellContractBinding,thread: SessionId,command: String): Result<ProcessResult> {
+    let actual=binding.invoke(thread,objectValue([ValueField("command",textValue(command))]))
+    let observed=actual.observedOutput()
+    if(observed.isError()){
+        let error=observed.error().getOrThrow();actual.close().value().getOrThrow();return Result.Err(error)}
+    let view=binding.observe(thread,actual)
+    let value=view.output
+    if(view.receiptId==""){throw IllegalStateException("actual Native Shell result requires its original Receipt")}
+    Result.Ok(ProcessResult(Int64.parse(value.field("exit_code").getOrThrow().asNumberText()),
+        stdout:value.field("stdout").getOrThrow().text,stderr:value.field("stderr").getOrThrow().text,
+        timedOut:value.field("timed_out").getOrThrow().asBool(),workingDirectory:value.field("cwd").getOrThrow().text,
+        truncated:value.field("truncated").getOrThrow().asBool()))
+}
+
+func actualNativeShellCapture32Contract(root: String): Bool {
+    let scope=NativeShellContractScope(root,capturedOutputBytes:32,openFiles:16)
+    try{
+        let value=nativeSandboxShellProcess(scope.binding(),SessionId("sandbox-native-capture32"),
+            "ulimit -n; head -c 4096 /dev/zero | tr '\\000' y; printf marker-after-truncation").value().getOrThrow()
+        expect(value.exitCode==0 && value.stdout.startsWith("16\n") && value.truncated && value.stdout.toArray().size<=32,
+            "actual Native Shell Root separately preserves capture32/FD16 with bounded charged control transport")
+    }finally{scope.close()}
 }
 
 func sandboxUnavailable(error: AgentError): Bool {
@@ -935,5 +883,19 @@ func expect(condition: Bool, message: String): Bool {
     } else {
         println("FAIL " + message)
         false
+    }
+}
+
+func nativeSandboxEvalCall(id: String, code: String): ToolCall {
+    ToolCall(id, "eval", objectValue([ValueField("language", textValue("py")),
+        ValueField("code", textValue(code)), ValueField("timeout", integerValue(3))]))
+}
+func nativeSandboxCell(result: Result<ToolInvocationResult>): ToolResult {
+    match (nativeEvalObservedCellSnapshot(result)) {
+        case Result.Ok(ToolInvocationResult.Completed(value)) =>
+            if (value.receiptId.isNone()) { throw IllegalStateException("actual canonical cell Receipt missing") }
+            value
+        case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        case _ => throw IllegalStateException("actual cell was not completed")
     }
 }

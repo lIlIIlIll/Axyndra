@@ -444,11 +444,6 @@ public func summarizeToolCall(name: String, arguments: String): String {
             if (op != "") {
                 return "Hub " + redactSensitiveText(op)
             }
-        case "web_search" =>
-            let query = parseStringField(arguments, "query")
-            if (query != "") {
-                return "Search web \"" + redactSensitiveText(query) + "\""
-            }
         case "http" | "request" | "fetch" | "web_fetch" =>
             let method = parseStringField(arguments, "method")
             let url = fieldOr(parseStringField(arguments, "url"), parseStringField(arguments, "uri"))

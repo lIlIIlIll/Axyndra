@@ -8,7 +8,6 @@ import agent_core.*
 import agent_domain.*
 import agent_ports.*
 import agent_runtime.*
-import agent_skills.*
 import std.collection.*
 import std.deriving.*
 import std.sync.*
@@ -125,9 +124,9 @@ public class AgentBuilder {
         ToolContextDescriptor(),
         Origin.Default
     )
-    private var skillStackValue = OriginValue<SkillStackSnapshot>(
-        "skill_stack",
-        SkillStackSnapshot([], []),
+    private var contextSnapshotValue = OriginValue<InvocationContextProjection>(
+        "context_snapshot",
+        InvocationContextProjection(),
         Origin.Default
     )
 
@@ -357,12 +356,12 @@ public class AgentBuilder {
         this
     }
 
-    public func skillStack(
-        value: SkillStackSnapshot,
+    public func contextSnapshot(
+        value: InvocationContextProjection,
         origin!: Origin = Origin.Programmatic
     ): AgentBuilder {
-        skillStackValue = skillStackValue.merged(
-            OriginValue<SkillStackSnapshot>("skill_stack", value, origin)
+        contextSnapshotValue = contextSnapshotValue.merged(
+            OriginValue<InvocationContextProjection>("context_snapshot", value, origin)
         )
         this
     }
@@ -454,7 +453,7 @@ public class AgentBuilder {
             cachePolicyValue,
             parallelToolCallsValue,
             toolContextValue,
-            skillStackValue
+            contextSnapshotValue
         )
         Result.Ok(AgentSdk(
             core,
@@ -608,7 +607,7 @@ public class AgentSdk {
             },
             parallelToolCalls: configuration.parallelToolCalls.value,
             toolContext: configuration.toolContext.value,
-            skillStack: configuration.skillStack.value
+            contextSnapshot: configuration.contextSnapshot.value
         )
         execute(
             request.runId,
@@ -994,21 +993,14 @@ func validateModelConfiguration(
             ]
         )
     }
-    model.capabilities.validate(ModelRequest(
-        model.name,
-        [],
-        system: system,
-        tools: catalog.definitionsFor(grantedCapabilities),
-        thinking: thinking,
-        maxOutputTokens: budget.maxOutputTokens,
-        parallelToolCalls: parallelToolCalls,
-        structuredOutput: structuredOutput,
-        cachePolicy: cachePolicy,
-        cacheKey: match (cachePolicy) {
+    model.capabilities.validateInputShape159(
+        false, structuredOutput.isSome(), catalog.hasDefinitionsFor159(grantedCapabilities),
+        parallelToolCalls, thinking, cachePolicy,
+        match (cachePolicy) {
             case ModelCachePolicy.StablePrefix => cacheKey
             case ModelCachePolicy.Default => ""
-        }
-    ))
+        }, budget.maxOutputTokens
+    )
 }
 
 func selectOrigin<T>(current: ?OriginValue<T>, candidate: OriginValue<T>): OriginValue<T> {

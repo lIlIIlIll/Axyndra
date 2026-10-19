@@ -174,7 +174,60 @@ public func validateThreadItemProvenance(
     content: ThreadItemContent,
     provenance: ItemProvenance
 ): Unit {
+    if (provenance.completedInitiatorHistory173e.isSome() || provenance.source == "completed_initiator_history") {
+        if (provenance.source != "completed_initiator_history" || provenance.completedInitiatorHistory173e.isNone() ||
+            provenance.runId.isNone() || provenance.operationId.isSome() || provenance.directOrigin.isSome() ||
+            provenance.continuationOrigin.isSome() || provenance.continuationHistory.isSome() ||
+            match(content){case ThreadItemContent.SystemNote(_) => false;case _ => true}) {
+            throw IllegalArgumentException("completed initiator history is data-only on a typed SystemNote") }
+    }
+    if (provenance.continuationOrigin.isSome() || provenance.source == "continuation") {
+        if (provenance.source != "continuation" || provenance.continuationOrigin.isNone() ||
+            provenance.runId.isNone() || provenance.operationId.isSome() || provenance.directOrigin.isSome() || provenance.continuationHistory.isSome() ||
+            provenance.runId.getOrThrow().value != provenance.continuationOrigin.getOrThrow().runId ||
+            match (content) { case ThreadItemContent.SystemNote(text) => text != "Host continuation"; case _ => true }) {
+            throw IllegalArgumentException("continuation provenance is valid only on its exact typed initiator")
+        }
+    }
+    if (provenance.continuationHistory.isSome() || provenance.source == "continuation_history") {
+        if (provenance.source != "continuation_history" || provenance.continuationHistory.isNone() ||
+            provenance.continuationOrigin.isSome() || provenance.runId.isNone() || provenance.operationId.isSome() ||
+            provenance.directOrigin.isSome() ||
+            match (content) { case ThreadItemContent.SystemNote(text) => text != "Host continuation"; case _ => true }) {
+            throw IllegalArgumentException("continuation history is a data-only typed note") }
+    }
+    if (provenance.source == "model_maintenance" &&
+        (provenance.runId.isNone() || provenance.operationId.isSome() || provenance.directOrigin.isSome() ||
+        match (content) { case ThreadItemContent.SystemNote(text) => text != "Model maintenance: context_compaction"
+            case _ => true })) {
+        throw IllegalArgumentException("model maintenance origin is valid only on its exact Run initiator")
+    }
+    match (provenance.directOrigin) {
+        case Some(_) => match (content) {
+            case ThreadItemContent.ToolCall(_, _, _) =>
+                if (provenance.source != "direct_tool" || provenance.runId.isNone() || provenance.operationId.isNone()) {
+                    throw IllegalArgumentException("typed Direct origin requires its canonical Run and Operation")
+                }
+            case ThreadItemContent.SystemNote(_) =>
+                if ((provenance.source != "host_service" && provenance.source != "external" && provenance.source != "managed_job") || provenance.runId.isNone() || provenance.operationId.isSome() ||
+                    match (provenance.directOrigin) { case Some(DirectCallOrigin.HostService(_)) => provenance.source != "host_service";
+                        case Some(DirectCallOrigin.External(_)) => provenance.source != "external";
+                        case Some(DirectCallOrigin.ManagedJob(_)) => provenance.source != "managed_job"; case _ => true }) {
+                    throw IllegalArgumentException("service initiator requires typed host service origin")
+                }
+            case _ => throw IllegalArgumentException("typed Direct origin is only valid on an initiator or Direct ToolCall")
+        }
+        case None => if ((provenance.source == "host_service" || provenance.source == "external" || provenance.source == "managed_job")) {
+            throw IllegalArgumentException("host service initiator cannot omit its typed origin")
+        }
+    }
     match (content) {
+        case ThreadItemContent.ToolCall(_, _, _) =>
+            if (provenance.operationId.isSome() && provenance.source != "direct_tool") {
+                throw IllegalArgumentException(
+                    "only a direct ToolCall may bind its originating Operation"
+                )
+            }
         case ThreadItemContent.ToolResult(_, operationId, _, _, _) =>
             match (provenance.operationId) {
                 case Some(value) =>
@@ -236,6 +289,9 @@ public class TurnRecord {
     public let ordinal: Int64
     public let state: TurnState
     public let userItemId: ItemId
+    // Storage retains the historical user_item_id name. Maintenance Turns use
+    // a host SystemNote initiator; ordinary/model Turns still require UserMessage.
+    public prop initiatorItemId: ItemId { get() { userItemId } }
     public let activeRunId: ?RunId
 
     public init(
@@ -262,11 +318,19 @@ public class ItemProvenance {
     public let source: String
     public let runId: ?RunId
     public let operationId: ?OperationId
+    public let directOrigin: ?DirectCallOrigin
+    public let continuationOrigin: ?ContinuationRunOrigin
+    public let continuationHistory: ?ContinuationHistorySource
+    public let completedInitiatorHistory173e: ?CompletedInitiatorHistory173e
 
     public init(
         source: String,
         runId!: ?RunId = None,
-        operationId!: ?OperationId = None
+        operationId!: ?OperationId = None,
+        directOrigin!: ?DirectCallOrigin = None,
+        continuationOrigin!: ?ContinuationRunOrigin = None,
+        continuationHistory!: ?ContinuationHistorySource = None,
+        completedInitiatorHistory173e!: ?CompletedInitiatorHistory173e = None
     ) {
         if (source.trimAscii() == "") {
             throw IllegalArgumentException("item provenance source must not be empty")
@@ -274,6 +338,10 @@ public class ItemProvenance {
         this.source = source.trimAscii()
         this.runId = runId
         this.operationId = operationId
+        this.directOrigin = directOrigin
+        this.continuationOrigin = continuationOrigin
+        this.continuationHistory = continuationHistory
+        this.completedInitiatorHistory173e = completedInitiatorHistory173e
     }
 }
 

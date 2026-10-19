@@ -4,6 +4,7 @@ import std.collection.*
 import std.env.*
 import std.io.*
 import std.time.*
+import std.sync.*
 
 const STDIN_FILENO: Int32 = 0
 const STDOUT_FILENO: Int32 = 1
@@ -283,6 +284,9 @@ public class Terminal {
     private var back: ?Buffer = None
     private var previousMedia: Array<MediaPlacement> = []
     private var cursorVisible: Bool = false
+    private let frameReferencesLock = Mutex()
+    private var frameReferenceBorrows: Int64 = 0
+    private var internalFrameReferencesClosed = false
 
     public init(
         backend: Backend,
@@ -300,6 +304,16 @@ public class Terminal {
     }
 
     public func draw(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects): RenderMetrics {
+        frameReferencesLock.lock()
+        if (internalFrameReferencesClosed) { frameReferencesLock.unlock(); throw Exception("display.frame_references_retired") }
+        frameReferenceBorrows++; frameReferencesLock.unlock()
+        try { drawBorrowedFrame(render, dirtyRects: dirtyRects) }
+        finally { frameReferencesLock.lock(); try { frameReferenceBorrows-- } finally { frameReferencesLock.unlock() } }
+    }
+    private func drawBorrowedFrame(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects): RenderMetrics {
+        // Actual Frame, Buffer, DirtyCellSnapshot, StringBuilder/rawPrefix,
+        // diff plans, output callbacks and media locals live only in this
+        // helper. The outer borrow drops after this helper frame has ended.
         let area = backend.size()
         if (!frontMatches(area)) {
             front = None
@@ -494,6 +508,23 @@ public class Terminal {
         // this bit so the next draw can emit a required hide/show sequence.
     }
 
+    public func retainedFrameCopiesInvoice(): Int64 {
+        var total: Int64 = 0
+        match (front) { case Some(value) => total = retainedDisplayAdd(total, retainedBufferCellInvoice(value)); case None => () }
+        match (back) { case Some(value) => total = retainedDisplayAdd(total, retainedBufferCellInvoice(value)); case None => () }
+        total
+    }
+    func tryRetireInternalFrameReferences(): Bool {
+        frameReferencesLock.lock()
+        try {
+            if (frameReferenceBorrows != 0) { return false }
+            internalFrameReferencesClosed = true
+            // No old Buffer/media local is introduced during the clear. All
+            // actual draw helper frames already ended before this branch.
+            front = None; back = None; previousMedia = []
+            true
+        } finally { frameReferencesLock.unlock() }
+    }
     private func frontMatches(area: Rect): Bool {
         match (front) {
             case Some(buffer) => buffer.area == area

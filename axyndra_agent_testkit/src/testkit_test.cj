@@ -44,49 +44,21 @@ class PublicAgentTestkitTests {
 
     @TestCase
     func exercisesExtensionContractWithoutExecutionAuthority() {
-        let harness = ExtensionContractHarness(FixtureExtension())
-        @Expect(harness.toolNames().size, 1)
-        let prepared = requireSdkOk(harness.prepare(
-            "fixture",
-            jsonObject([JsonObjectEntry("value", jsonString("ok"))]),
-            callId: "fixture-call"
-        ))
-        assertCapabilityRequested(prepared.definition, "workspace.read")
-        let output = requireSdkOk(harness.decode(
-            prepared,
-            ExecutionResult(jsonObject([
-                JsonObjectEntry("value", jsonString("done"))
-            ]))
-        ))
-        @Expect(output.structured.field("value").getOrThrow().text, "done")
+        let harness = NativePluginContractHarness(FixtureNativePlugin())
+        @Expect(harness.contributionNames().size, 1)
+        let prepared = requireSdkOk(harness.prepare("fixture",
+            jsonObject([JsonObjectEntry("value", jsonString("done"))]), callId: "fixture-call"))
+        assertCapabilityNotRequested(prepared.definition, "workspace.read")
+        let output = requireSdkOk(harness.invoke(prepared))
+        @Expect(output.field("value").getOrThrow().text, "done")
     }
 }
 
-class FixtureExtension <: Extension {
-    public func metadata(): ExtensionMetadata {
-        ExtensionMetadata("fixture.testkit", "Fixture", "1.0.0", "testkit fixture")
+class FixtureNativePlugin <: NativePluginHandler {
+    public func definition(): NativePluginDefinition {
+        NativePluginDefinition("fixture.testkit", "1.0.0",
+            [PluginContributionDefinition("fixture", PluginContributionKind.Provider)])
     }
-    public func tools(): Array<ExtensionTool> { [FixtureTool()] }
-}
-
-class FixtureTool <: ExtensionTool {
-    public func definition(): ExtensionToolDefinition {
-        ExtensionToolDefinition(
-            "fixture",
-            "fixture tool",
-            jsonObject([JsonObjectEntry("type", jsonString("object"))]),
-            [workspaceRead()]
-        )
-    }
-    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
-    public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
-        SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("fixture", invocation.input)))
-    }
-    public func decode(
-        _invocation: ToolInvocation,
-        result: ExecutionResult
-    ): SdkResult<ToolOutput> {
-        let _ = _invocation
-        SdkResult.Ok(ToolOutput(structured: result.value))
-    }
+    public func validate(_kind: PluginContributionKind, _name: String, input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
+    public func invoke(invocation: NativePluginInvocation): SdkResult<JsonNode> { SdkResult.Ok(invocation.input) }
 }

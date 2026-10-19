@@ -183,6 +183,14 @@ public class ContextCompiler {
     }
 
     public func compile(input: ContextCompileInput): Result<ModelContextManifest> {
+        compileCatalogFrame159(input, None<OwnedToolCatalogValue159>)
+    }
+    public func compileOwnedCatalog159(input: ContextCompileInput, catalog: OwnedToolCatalogValue159): Result<ModelContextManifest> {
+        // The caller retains the opaque DATA loan for the entire returned
+        // manifest's lifetime. Ordinary compile remains the historical API.
+        compileCatalogFrame159(input, Some(catalog))
+    }
+    private func compileCatalogFrame159(input: ContextCompileInput, catalog: ?OwnedToolCatalogValue159): Result<ModelContextManifest> {
         if (input.projection.overBudget ||
             input.projection.estimatedInputTokens + input.lane.outputReserve +
                 input.lane.providerSafetyMargin > input.lane.contextWindow) {
@@ -209,7 +217,8 @@ public class ContextCompiler {
             input.manifestId, input.threadId, input.laneId, input.turnId, input.stepId,
             input.projection.threadRevision, itemIds.toArray(), input.currentIntentItemId,
             input.namedFactVersions, input.activeSkillIds, input.memoryReferences,
-            input.promptContributions, toolCatalogValue(input.lane.toolSet),
+            input.promptContributions, match (catalog) { case Some(value) => value.materialize159()
+                case None => toolCatalogSnapshotValue(input.lane.toolSet) },
             input.lane.contextWindow - input.lane.outputReserve - input.lane.providerSafetyMargin,
             input.projection.estimatedInputTokens, input.renderedRequest, version,
             checkpointId: match (input.projection.checkpoint) {
@@ -263,7 +272,7 @@ func copyContextManifest(value: ModelContextManifest, digest: String): ModelCont
     )
 }
 
-func toolCatalogValue(value: ToolSetSnapshot): AgentValue {
+public func toolCatalogSnapshotValue(value: ToolSetSnapshot): AgentValue {
     let entries = ArrayList<AgentValue>()
     for (entry in value.entries) {
         let capabilities = ArrayList<AgentValue>()
@@ -286,6 +295,9 @@ func toolCatalogValue(value: ToolSetSnapshot): AgentValue {
     }
     objectValue([
         ValueField("snapshot_id", textValue(value.id)),
+        // Scope and hook identities also belong to this one context version,
+        // even though only model-visible Tool definitions enter the request.
+        ValueField("identity_digest", textValue(toolSetSnapshotContentDigest(value))),
         ValueField("entries", listValue(entries.toArray()))
     ])
 }

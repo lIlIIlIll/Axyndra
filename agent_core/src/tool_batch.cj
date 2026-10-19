@@ -29,6 +29,7 @@ class CoreToolOutcome {
     var operationPlan: ?NormalizedOperationPlan
     var attemptStage: OperationAttemptStage
     let committed: CommittedToolCallRef
+    let knownParentPrepared: ?PreparedToolInvocation
 
     init(
         index: Int64,
@@ -36,7 +37,8 @@ class CoreToolOutcome {
         result: Result<ToolInvocationResult>,
         operationId!: ?OperationId = None,
         operationPlan!: ?NormalizedOperationPlan = None,
-        attemptStage!: OperationAttemptStage = OperationAttemptStage.Prepared
+        attemptStage!: OperationAttemptStage = OperationAttemptStage.Prepared,
+        knownParentPrepared!: ?PreparedToolInvocation = None
     ) {
         this.index = index
         this.block = committed.block
@@ -45,6 +47,7 @@ class CoreToolOutcome {
         this.operationId = operationId
         this.operationPlan = operationPlan
         this.attemptStage = attemptStage
+        this.knownParentPrepared = knownParentPrepared
     }
 
     func bindOperation(
@@ -90,10 +93,16 @@ class CoreToolBatchPreparation {
 class CoreToolBatchExecution {
     let outcomes: Array<CoreToolOutcome>
     let fatal: ?AgentError
+    let waiting: ?CorePendingOwnedExecution
+    let retained: ?CoreRetainedToolCompletion
+    let failedRetained:?CoreRetainedFailureCompletion
 
-    init(outcomes: Array<CoreToolOutcome>, fatal!: ?AgentError = None) {
+    init(outcomes: Array<CoreToolOutcome>, fatal!: ?AgentError = None, waiting!: ?CorePendingOwnedExecution = None,
+        retained!:?CoreRetainedToolCompletion=None<CoreRetainedToolCompletion>,
+        failedRetained!:?CoreRetainedFailureCompletion=None<CoreRetainedFailureCompletion>) {
         this.outcomes = outcomes
         this.fatal = fatal
+        this.waiting = waiting;this.retained=retained;this.failedRetained=failedRetained
     }
 }
 
@@ -118,7 +127,8 @@ class CoreToolBatchCoordinator {
         context: ToolInvocationContext,
         calls: Array<CommittedToolCallRef>,
         maxConcurrent: Int64,
-        reserve: CoreToolReservation
+        reserve: CoreToolReservation,
+        preparationInput!: (ItemId) -> ?CorePreparationReadInput = { _ => None }
     ): Result<CoreToolBatchPreparation> {
         let ready = ArrayList<CorePreparedTool>()
         let immediate = ArrayList<CoreToolOutcome>()
@@ -154,10 +164,11 @@ class CoreToolBatchCoordinator {
                     ))
             }
             var effectiveArguments = block.arguments
-            let hookDecision = try {
-                toolHooks.beforeTool(context, committed, block.arguments)
-            } catch (_: Exception) {
-                CoreToolHookDecision.Deny("PreToolUse handler failed; tool call denied")
+            let cachedInput = preparationInput(committed.canonicalItemId)
+            let hookDecision = match (cachedInput) {
+                case Some(value) => value.hookDecision()
+                case None => try { toolHooks.beforeTool(context, committed, block.arguments) }
+                    catch (_: Exception) { CoreToolHookDecision.Deny("PreToolUse handler failed; tool call denied") }
             }
             match (hookDecision) {
                 case CoreToolHookDecision.Continue => ()
@@ -186,7 +197,8 @@ class CoreToolBatchCoordinator {
             match (tools.prepareCommitted(
                 context,
                 committed,
-                effectiveArguments: Some(effectiveArguments)
+                effectiveArguments: Some(effectiveArguments),
+                contextReadFacts: match (cachedInput) { case Some(value) => value.factLinks(); case None => [] }
             )) {
                 case Result.Err(error) => return Result.Err(error)
                 case Result.Ok(ToolPreparation.Ready(value)) =>
@@ -231,7 +243,8 @@ class CoreToolBatchCoordinator {
     ): Result<CoreToolBatchExecution> {
         let outcomes = ArrayList<CoreToolOutcome>()
         outcomes.add(all: preparation.immediate)
-        for (wave in preparation.waves) {
+        for (waveIndex in 0..preparation.waves.size) {
+            let wave = preparation.waves[waveIndex]
             if (token.isCancelled()) {
                 return Result.Ok(CoreToolBatchExecution(
                     coreSortToolOutcomes(outcomes.toArray()),
@@ -245,6 +258,119 @@ class CoreToolBatchCoordinator {
                     fatal: Some(error)
                 ))
             }
+            if (wave.calls.size==1 && (isPluginLivePolicyParentPlan(wave.calls[0].prepared.operationPlan) || isManagedChannelOwnedParentPlan(wave.calls[0].prepared.operationPlan))) {
+                let work=wave.calls[0]
+                match (beforeExecute(work)) {
+                    case Result.Err(error) =>
+                        match (afterWave(1)) {
+                            case Result.Err(releaseError) => return Result.Ok(CoreToolBatchExecution(
+                                coreSortToolOutcomes(outcomes.toArray()),fatal:Some(releaseError)))
+                            case Result.Ok(_) => ()
+                        }
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),fatal:Some(error)))
+                    case Result.Ok(_) => ()
+                }
+                // An outer Err has no verified terminal outcome. It must not
+                // become a fabricated parent ToolResult or a retry authorizer.
+                let handoff=CoreExecutionHandoffState()
+                let progress:Result<OwnedToolPipelineProgress> = try {
+                    match (token.check()) {
+                        case Result.Err(error) => Result.Err(error)
+                        case Result.Ok(_) => tools.executeOwnedPrepared(context,work.prepared,
+                            afterHandoff:{_=>handoff.started=true;Result.Ok(())})
+                    }
+                } catch (_:Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                    "tool.live_executor_unsettled","owned executor returned without its verified terminal or pending state")) }
+                let released=try { afterExecute(work) } catch (_:Exception) {
+                    Result<Unit>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                        "tool.live_slot_unsettled","owned execution slot still needs settlement")) }
+                match (progress) {
+                    case Result.Err(error) => return Result.Ok(CoreToolBatchExecution(
+                        coreSortToolOutcomes(outcomes.toArray()),fatal:Some(match (released) {
+                            case Result.Err(failure) => failure; case Result.Ok(_) => error })))
+                    case Result.Ok(OwnedToolPipelineProgress.FailedRetained(result,error)) =>
+                        if(result.outerErrorData333().isSome()){
+                            var paidSettlement:?AgentError=None<AgentError>
+                            var paymentBlocked=false
+                            match(released){case Result.Err(value)=>
+                                match(coreOwnedOuterErrorSource333(result)){
+                                    case None=>paymentBlocked=true
+                                    case Some(source)=>match(coreOwnedOuterErrorPayAlias333(source,value)){
+                                        case Result.Ok(_)=>paidSettlement=Some(value);case Result.Err(_)=>paymentBlocked=true}}
+                                case Result.Ok(_)=>()}
+                            // Never describe the full original failure here.
+                            // Its full typed data and cleanup resource reach Core.
+                            return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                                failedRetained:Some(CoreRetainedFailureCompletion(result,error,
+                                    outerSettlement333:paidSettlement,outerSettlementBlocked333:paymentBlocked))))
+                        }
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                            failedRetained:Some(CoreRetainedFailureCompletion(result,coreOwnedMergeSettlementError(error,
+                                match(released){case Result.Err(value)=>Some(value);case Result.Ok(_)=>None})))))
+                    case Result.Ok(OwnedToolPipelineProgress.Retained(result)) =>
+                        let suffix=ArrayList<CoreToolWave>()
+                        for(next in (waveIndex+1)..preparation.waves.size){suffix.add(preparation.waves[next])}
+                        let remaining=CoreToolBatchPreparation(suffix.toArray(),[],preparation.approval,
+                            preparation.approvalPrepared,preparation.approvalCall,preparation.deferred)
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                            retained:Some(CoreRetainedToolCompletion(work,result,remaining,handoff.started,
+                                match(released){case Result.Err(error)=>Some(error);case Result.Ok(_)=>None}))))
+                    case Result.Ok(OwnedToolPipelineProgress.RetainedWithDebt(result,error)) =>
+                        let suffix=ArrayList<CoreToolWave>()
+                        for(next in (waveIndex+1)..preparation.waves.size){suffix.add(preparation.waves[next])}
+                        let remaining=CoreToolBatchPreparation(suffix.toArray(),[],preparation.approval,
+                            preparation.approvalPrepared,preparation.approvalCall,preparation.deferred)
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                            retained:Some(CoreRetainedToolCompletion(work,result,remaining,handoff.started,
+                                Some(coreOwnedMergeSettlementError(error,match(released){
+                                    case Result.Err(failure)=>Some(failure);case Result.Ok(_)=>None}))))))
+                    case Result.Ok(OwnedToolPipelineProgress.Completed(result)) =>
+                        outcomes.add(CoreToolOutcome(work.index,work.committed,result,
+                            operationId:Some(work.prepared.operationId),operationPlan:Some(work.prepared.operationPlan),
+                            attemptStage:if(handoff.started){OperationAttemptStage.Executing}else{OperationAttemptStage.Prepared},
+                            knownParentPrepared:if(isPluginLivePolicyParentPlan(work.prepared.operationPlan) || isManagedChannelOwnedParentPlan(work.prepared.operationPlan)){Some(work.prepared)}else{None}))
+                        match (released) {
+                            case Result.Err(error) => return Result.Ok(CoreToolBatchExecution(
+                                coreSortToolOutcomes(outcomes.toArray()),fatal:Some(error)))
+                            case Result.Ok(_) => continue
+                        }
+                    case Result.Ok(OwnedToolPipelineProgress.CompletedWithDebt(result,error)) =>
+                        let known=CoreOwnedSlotProgress(Result.Ok(OwnedToolPipelineProgress.CompletedWithDebt(result,error)),
+                            settlementError:match(released){case Result.Err(failure)=>Some(failure);case Result.Ok(_)=>None})
+                        match (known.progress) {
+                            case Result.Ok(OwnedToolPipelineProgress.Completed(value)) =>
+                                outcomes.add(CoreToolOutcome(work.index,work.committed,value,
+                                    operationId:Some(work.prepared.operationId),operationPlan:Some(work.prepared.operationPlan),
+                                    attemptStage:if(handoff.started){OperationAttemptStage.Executing}else{OperationAttemptStage.Prepared},
+                            knownParentPrepared:if(isPluginLivePolicyParentPlan(work.prepared.operationPlan) || isManagedChannelOwnedParentPlan(work.prepared.operationPlan)){Some(work.prepared)}else{None}))
+                            case Result.Err(failure) => return Result.Ok(CoreToolBatchExecution(
+                                coreSortToolOutcomes(outcomes.toArray()),fatal:Some(failure)))
+                            case _ => return Result.Ok(CoreToolBatchExecution(
+                                coreSortToolOutcomes(outcomes.toArray()),fatal:Some(coreOwnedLiveOwnerMissing())))
+                        }
+                        // Caller consumes each returned outcome through the
+                        // original Parent Receipt/PostHook/output/payload ACK
+                        // path before it reports this fatal physical debt.
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                            fatal:known.settlementError))
+                    case Result.Ok(OwnedToolPipelineProgress.Waiting(publication)) =>
+                        if (!handoff.started) { return Result.Ok(CoreToolBatchExecution(
+                            coreSortToolOutcomes(outcomes.toArray()),fatal:Some(coreOwnedLiveOwnerMissing()))) }
+                        match (released) {
+                            case Result.Err(error) => return Result.Ok(CoreToolBatchExecution(
+                                coreSortToolOutcomes(outcomes.toArray()),fatal:Some(error)))
+                            case Result.Ok(_) => ()
+                        }
+                        let suffix=ArrayList<CoreToolWave>()
+                        for (next in (waveIndex+1)..preparation.waves.size) { suffix.add(preparation.waves[next]) }
+                        let remaining=CoreToolBatchPreparation(suffix.toArray(),[],preparation.approval,
+                            preparation.approvalPrepared,preparation.approvalCall,preparation.deferred)
+                        return Result.Ok(CoreToolBatchExecution(coreSortToolOutcomes(outcomes.toArray()),
+                            waiting:Some(CorePendingOwnedExecution(CorePreparedTool(work.index,work.committed,
+                                (if(publication.isPreparedPhase()){publication.preparedParent().value().getOrThrow()}else{publication.continuation.parent})),publication,remaining))))
+                }
+            }
+
             let futures = ArrayList<Future<Result<ToolInvocationResult>>>()
             var launchFailure: ?AgentError = None
             for (work in wave.calls) {
@@ -271,11 +397,16 @@ class CoreToolBatchCoordinator {
                             ]
                         ))
                     }
-                    let settled: Result<ToolInvocationResult> = match (afterExecute(work)) {
-                        case Result.Ok(_) => result
-                        case Result.Err(error) => Result.Err(error)
-                    }
-                    settled
+                    var transferred = false
+                    try {
+                        match (afterExecute(work)) {
+                            case Result.Ok(_) => transferred = true; result
+                            case Result.Err(error) => Result.Err(error)
+                        }
+                    } catch (_: Exception) {
+                        Result.Err(AgentError(AgentErrorKind.Internal, "tool.settlement_panicked",
+                            "tool slot settlement escaped its Result boundary"))
+                    } finally { if (!transferred) { releaseToolInvocationPayload(result) } }
                 })
             }
             for (index in 0..futures.size) {
@@ -321,13 +452,20 @@ func corePlanToolWaves(
 ): Array<CoreToolWave> {
     let waves = ArrayList<CoreToolWave>()
     let width = max(1, maxConcurrent)
+    var ownedBarrier: Int64 = 0
     for (call in calls) {
+        // Only the new owned family is a serial barrier. It cannot share
+        // a wave or let later calls overtake its possible suspension.
+        if ((isPluginLivePolicyParentPlan(call.prepared.operationPlan) || isManagedChannelOwnedParentPlan(call.prepared.operationPlan))) {
+            let wave = CoreToolWave(); wave.calls.add(call); waves.add(wave)
+            ownedBarrier = waves.size; continue
+        }
         // A call must follow every earlier conflicting call, even when an
         // earlier free wave has room. Independent calls can still fill holes.
-        var earliest: Int64 = 0
+        var earliest: Int64 = ownedBarrier
         for (index in 0..waves.size) {
             if (coreWaveConflicts(waves[index], call)) {
-                earliest = index + 1
+                earliest = max(earliest,index + 1)
             }
         }
         var placed = false

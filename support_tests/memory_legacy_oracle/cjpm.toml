@@ -1,0 +1,18 @@
+[package]
+cjc-version = "1.1.0"
+name = "memory_legacy_oracle"
+version = "1.0.0"
+description = "Test-only full original SQLite/JSONL Memory and managed-skill behavior oracle"
+output-type = "static"
+link-option = "-lsqlite3"
+
+[dependencies]
+"agent_product" = { path = "../../agent_product", output-type = "static" }
+"agent_domain" = { path = "../../agent_domain", output-type = "static" }
+"agent_host_runtime" = { path = "../../agent_host_runtime", output-type = "static" }
+"agent_extension_runtime" = { path = "../../agent_extension_runtime", output-type = "static" }
+"agent_store" = { path = "../../agent_store", output-type = "static" }
+"persistence_runtime" = { path = "../../persistence_runtime", output-type = "static" }
+"tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+"yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+"yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }

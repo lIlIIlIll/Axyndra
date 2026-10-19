@@ -1,0 +1,89 @@
+{
+  "id": "workflow",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/workflow-plugin",
+  "sdk_range": "[2.1.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "document.store"
+  ],
+  "contributions": [
+    {
+      "kind": "provider",
+      "name": "propose"
+    },
+    {
+      "kind": "provider",
+      "name": "prepare_document"
+    },
+    {
+      "kind": "provider",
+      "name": "prepare_child"
+    },
+    {
+      "kind": "tool",
+      "name": "task"
+    },
+    {
+      "kind": "tool",
+      "name": "hub"
+    },
+    {
+      "kind": "tool",
+      "name": "todo"
+    },
+    {
+      "kind": "command",
+      "name": "todo"
+    },
+    {
+      "kind": "tool",
+      "name": "goal"
+    },
+    {
+      "kind": "command",
+      "name": "goal",
+      "allowed_user_controls": [
+        "continuation"
+      ]
+    },
+    {
+      "kind": "tool",
+      "name": "plan_write",
+      "execution_profile": "data_only"
+    },
+    {
+      "kind": "context_provider",
+      "name": "goal_context"
+    },
+    {
+      "kind": "tool",
+      "name": "yield"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_peers"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_messages"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_jobs"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_cancel"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_process"
+    },
+    {
+      "kind": "tool",
+      "name": "hub_process_read"
+    }
+  ]
+}

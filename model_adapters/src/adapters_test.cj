@@ -29,7 +29,8 @@ class UsageProjectionTests {
                 )
             ))),
             ProviderProtocol.Messages,
-            { event => projected.add(event) }
+            { event => projected.add(event) },
+            ProviderStreamBlocks()
         )
         var completedInput: Int64 = -1
         var completed = false
@@ -57,7 +58,8 @@ class UsageProjectionTests {
                 inputTokens: Some(3), outputTokens: Some(4), cacheReadTokens: Some(2)
             )),
             ProviderProtocol.Messages,
-            { event => projected.add(event) }
+            { event => projected.add(event) },
+            ProviderStreamBlocks()
         )
         var durable = false
         var deltaInput: Int64 = -1
@@ -332,7 +334,7 @@ class NativeReplayRegressionTests {
             rawStopReason: "tool_use"
         ), "fixture", ProviderProtocol.Messages, false)
         @Expect(reply.blocks.size, 1)
-        @Expect(encodeAgentValue(reply.blocks[0].arguments), "[1,2]")
+        @Expect(domain.encodeAgentValue(reply.blocks[0].arguments), "[1,2]")
     }
 
 }
@@ -763,5 +765,83 @@ class DeepSeekMessagesToolErrorCompatibilityTests {
         ))
         @Expect(encoded.contains("\"is_error\":true"), true)
         @Expect(encoded.contains("[tool_error]"), false)
+    }
+}
+
+
+func terminalUsageProjection(
+    protocol: ProviderProtocol,
+    streaming: Bool,
+    usage: LlmWireUsage
+): domain.ModelReply {
+    fromLlmWireReply(LlmWireReply(
+        responseId: "usage-projection-reply",
+        blocks: [LlmWireOutputBlock.Text(LlmWireTextBlock("answer 雪"))],
+        rawStopReason: match (protocol) {
+            case ProviderProtocol.Messages => "end_turn"
+            case ProviderProtocol.Responses => "completed"
+            case ProviderProtocol.Completions => "stop"
+        },
+        usage: usage
+    ), "usage-projection", protocol, streaming)
+}
+
+@Test
+class TerminalUsagePresenceTests {
+    @TestCase
+    func completeReplyWithoutTokenCountersPreservesUnknownAccounting(): Unit {
+        for (protocol in [ProviderProtocol.Messages, ProviderProtocol.Responses, ProviderProtocol.Completions]) {
+            for (streaming in [false, true]) {
+                let reply = terminalUsageProjection(protocol, streaming, LlmWireUsage())
+                @Expect(reply.acceptedOutput, true)
+                @Expect(reply.blocks[0].text, "answer 雪")
+                @Expect(reply.usage.source, domain.ModelUsageSource.Unknown)
+                @Expect(reply.usage.evidence.isNone(), true)
+                @Expect(reply.usage.costMicros.isNone(), true)
+                @Expect(reply.inputTokens, 0)
+                @Expect(reply.outputTokens, 0)
+            }
+        }
+    }
+
+    @TestCase
+    func explicitZeroCountersRetainActualProviderEvidence(): Unit {
+        for (protocol in [ProviderProtocol.Messages, ProviderProtocol.Responses, ProviderProtocol.Completions]) {
+            for (streaming in [false, true]) {
+                let reply = terminalUsageProjection(protocol, streaming, LlmWireUsage(
+                    inputTokens: Some(0), outputTokens: Some(0), reasoningTokens: Some(0),
+                    cacheReadTokens: Some(0), cacheWriteTokens: Some(0)
+                ))
+                @Expect(reply.acceptedOutput, true)
+                @Expect(reply.usage.source, if (streaming) {
+                    domain.ModelUsageSource.ProviderStreamFinal
+                } else { domain.ModelUsageSource.ProviderFinal })
+                @Expect(reply.usage.evidence.isSome(), true)
+                @Expect(reply.usage.evidence.getOrThrow().providerResponseId, "usage-projection-reply")
+                @Expect(reply.inputTokens, 0)
+                @Expect(reply.outputTokens, 0)
+            }
+        }
+    }
+
+    @TestCase
+    func partialObservedCountersKeepExistingNormalization(): Unit {
+        for (streaming in [false, true]) {
+            let outputOnly = terminalUsageProjection(ProviderProtocol.Completions, streaming,
+                LlmWireUsage(outputTokens: Some(7), reasoningTokens: Some(2)))
+            @Expect(outputOnly.inputTokens, 0)
+            @Expect(outputOnly.outputTokens, 7)
+            @Expect(outputOnly.reasoningTokens, 2)
+            @Expect(outputOnly.usage.source, if (streaming) {
+                domain.ModelUsageSource.ProviderStreamFinal
+            } else { domain.ModelUsageSource.ProviderFinal })
+            let cacheOnly = terminalUsageProjection(ProviderProtocol.Messages, streaming,
+                LlmWireUsage(cacheReadTokens: Some(3), cacheWriteTokens: Some(2)))
+            @Expect(cacheOnly.inputTokens, 5)
+            @Expect(cacheOnly.outputTokens, 0)
+            @Expect(cacheOnly.cacheReadTokens, 3)
+            @Expect(cacheOnly.cacheWriteTokens, 2)
+            @Expect(cacheOnly.usage.evidence.isSome(), true)
+        }
     }
 }

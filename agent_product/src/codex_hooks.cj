@@ -1,5 +1,7 @@
 package agent_product
 
+import agent_plugin_registry.*
+
 import yjson_support.*
 import yjson.*
 import agent_core.*
@@ -16,18 +18,21 @@ class ActiveCodexHookExecution {
     let pluginId: String
     let generation: String
     let source: CancellationSource
+    let custody159j: ?ProductHookProcessCustody159f
 
-    init(id: Int64, pluginId: String, generation: String, source: CancellationSource) {
+    init(id: Int64, pluginId: String, generation: String, source: CancellationSource,
+        custody159j!: ?ProductHookProcessCustody159f = None<ProductHookProcessCustody159f>) {
         this.id = id
         this.pluginId = pluginId
         this.generation = generation
         this.source = source
+        this.custody159j = custody159j
     }
 }
 
 func codexHookGeneration(record: ProductPluginRecord): String {
-    record.descriptor.version + "#" + record.descriptor.contentDigest + "#" +
-        record.descriptor.root
+    productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) + "#" + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)) + "#" +
+        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root))
 }
 
 func codexHookGeneration(handler: ToolHookHandlerSnapshot): String {
@@ -38,11 +43,16 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
     private let processes: LocalProcessPort
     private let javascriptPlugins: ProductJavaScriptPluginHost
     private let stateLock = Mutex()
-    private let enabledGenerations = HashMap<String, String>()
+    private var enabledGeneration159g: ?ProductHookGeneration159g = None<ProductHookGeneration159g>
+    private var hookGenerationsClosing159g = false
     private let activeExecutions = ArrayList<ActiveCodexHookExecution>()
     private var nextExecutionId: Int64 = 1
+    private var nextCallerId159j: Int64 = 1
+    private var activeCallerFrames159m: Int64 = 0
+    private var callerInputs159j: ?ProductHookProcessCustody159f = None<ProductHookProcessCustody159f>
     private let diagnosticsLock = Mutex()
-    private let diagnosticMessages = ArrayList<String>()
+    private var diagnosticMessages: ?ArrayList<String> = Some(ArrayList<String>())
+    private var diagnosticBuffer159m: ?OwnedHookDiagnosticBuffer159m = None<OwnedHookDiagnosticBuffer159m>
 
     public init(processes: LocalProcessPort, javascriptPlugins: ProductJavaScriptPluginHost) {
         this.processes = processes
@@ -50,63 +60,200 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
     }
 
     func activatePlugin(record: ProductPluginRecord): Unit {
-        let cancelled = ArrayList<CancellationSource>()
-        let pluginId = record.descriptor.namespace
-        let generation = codexHookGeneration(record)
-        stateLock.lock()
-        try {
-            enabledGenerations[pluginId] = generation
-            for (active in activeExecutions where active.pluginId == pluginId &&
-                active.generation != generation) {
-                cancelled.add(active.source)
-            }
-        } finally {
-            stateLock.unlock()
+        let candidate = createHookGeneration159g(record)
+        let batch = match (changeGenerationFrame159g(candidate, true)) {
+            case Some(value) => value
+            case None => candidate.returnUnlinkedData159g(); return
         }
-        cancelRevokedHooks(cancelled)
+        batch.cancelSources159g()
+        returnHookCancellationFrame159l(batch)
     }
 
     func revokePlugin(record: ProductPluginRecord): Unit {
-        let cancelled = ArrayList<CancellationSource>()
-        let pluginId = record.descriptor.namespace
-        let generation = codexHookGeneration(record)
-        stateLock.lock()
-        try {
-            match (enabledGenerations.get(pluginId)) {
-                case Some(current) => if (current == generation) {
-                    enabledGenerations[pluginId] = ""
-                }
-                case None => ()
-            }
-            for (active in activeExecutions where active.pluginId == pluginId &&
-                active.generation == generation) {
-                cancelled.add(active.source)
-            }
-        } finally {
-            stateLock.unlock()
+        let candidate = createHookGeneration159g(record)
+        let batch = match (changeGenerationFrame159g(candidate, false)) {
+            case Some(value) => value
+            case None => candidate.returnUnlinkedData159g(); return
         }
-        cancelRevokedHooks(cancelled)
+        // Complete private comparison frame returned; the descriptor's lookup
+        // copies are independent of both enabled data and active hook input.
+        candidate.returnUnlinkedData159g()
+        batch.cancelSources159g()
+        returnHookCancellationFrame159l(batch)
     }
 
+    private func changeGenerationFrame159g(candidate: ProductHookGeneration159g,
+        activate: Bool): ?ProductHookCancellationBatch159g {
+        stateLock.lock()
+        try {
+            if (hookGenerationsClosing159g) { return None<ProductHookCancellationBatch159g> }
+            let paid = candidate.reserveCancellationFrame159g(activeExecutions.size)
+            let batch = ProductHookCancellationBatch159g(paid)
+            var prior: ?ProductHookGeneration159g = None<ProductHookGeneration159g>
+            var cursor = enabledGeneration159g
+            while (cursor.isSome()) {
+                let current = cursor.getOrThrow()
+                if (candidate.sameNamespace159g(current)) {
+                    if (activate || candidate.sameGeneration159g(current)) {
+                        match (prior) {
+                            case Some(value) => value.nextEnabled159g = current.nextEnabled159g
+                            case None => enabledGeneration159g = current.nextEnabled159g
+                        }
+                        current.nextEnabled159g = None<ProductHookGeneration159g>
+                        batch.retired159g = Some(current)
+                    }
+                    break
+                }
+                prior = cursor; cursor = current.nextEnabled159g
+            }
+            if (activate) {
+                candidate.nextEnabled159g = enabledGeneration159g
+                enabledGeneration159g = Some(candidate)
+            }
+            for (active in activeExecutions where candidate.matchesNamespace159g(active.pluginId)) {
+                let same = candidate.matchesGeneration159g(active.generation)
+                if ((activate && !same) || (!activate && same)) {
+                    batch.addOwnedSource159l(active.source, active.custody159j)
+                }
+            }
+            Some(batch)
+        } finally { stateLock.unlock() }
+    }
+
+    private func enabledHookGeneration159g(pluginId: String, generation: String): Bool {
+        var cursor = enabledGeneration159g
+        while (cursor.isSome()) {
+            let current = cursor.getOrThrow()
+            if (current.matchesNamespace159g(pluginId)) { return current.matchesGeneration159g(generation) }
+            cursor = current.nextEnabled159g
+        }
+        false
+    }
+
+    func closeHookGenerationData159g(): Result<Unit> {
+        let retired = detachHookGenerationData159g()
+        match (retired) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(first) =>
+                var cursor = first
+                while (cursor.isSome()) {
+                    let current = cursor.getOrThrow()
+                    cursor = current.nextEnabled159g
+                    current.nextEnabled159g = None<ProductHookGeneration159g>
+                    current.returnUnlinkedData159g()
+                }
+                returnPrivateHookDiagnostics159m()
+                Result.Ok(())
+        }
+    }
+    private func returnHookCancellationFrame159l(batch: ProductHookCancellationBatch159g): Unit {
+        // All actual collection/claim paths use this same state lock. Keep
+        // them out until the batch's entire Source/header-array helper has
+        // returned, including its last counter publication. No callback runs
+        // in this section; cancelSources159g completed before entering it.
+        stateLock.lock()
+        try {
+            batch.returnComparisonFrame159g()
+            collectCallerInputs159j()
+        } finally { stateLock.unlock() }
+    }
+    private func detachHookGenerationData159g(): Result<?ProductHookGeneration159g> {
+        stateLock.lock()
+        try {
+            collectCallerInputs159j()
+            if (!activeExecutions.isEmpty() || callerInputs159j.isSome() || activeCallerFrames159m != 0) {
+                return Result.Err(AgentError(AgentErrorKind.Conflict, "plugin.hook_cleanup_pending",
+                    "actual hook consumers have not returned"))
+            }
+            hookGenerationsClosing159g = true
+            let result = enabledGeneration159g
+            enabledGeneration159g = None<ProductHookGeneration159g>
+            Result.Ok(result)
+        } finally { stateLock.unlock() }
+    }
+
+    private func beginCallerFrame159j(): Int64 {
+        stateLock.lock()
+        try {
+            if (hookGenerationsClosing159g) { throw IllegalStateException("Hook runtime is already closed") }
+            collectCallerInputs159j()
+            if (nextCallerId159j == Int64.Max || activeCallerFrames159m == Int64.Max) { throw IllegalStateException("hook caller identities are exhausted") }
+            let result = nextCallerId159j; nextCallerId159j++; activeCallerFrames159m++; result
+        } finally { stateLock.unlock() }
+    }
+    private func returnWholeCallerFrame159j(id: Int64): Unit {
+        stateLock.lock()
+        try {
+            var cursor = callerInputs159j
+            while (cursor.isSome()) {
+                let current = cursor.getOrThrow()
+                if (current.callerId159j == id) { current.wholeCallerReturned159j() }
+                cursor = current.nextCaller159j
+            }
+            collectCallerInputs159j()
+            if (activeCallerFrames159m < 1) { throw IllegalStateException("Hook caller frame was not entered") }
+            activeCallerFrames159m--
+        } finally { stateLock.unlock() }
+    }
+    // All calls hold stateLock. A still-running parent callback or a copied
+    // generation-cancellation Source keeps this actual phase registered.
+    private func collectCallerInputs159j(): Unit {
+        var previous: ?ProductHookProcessCustody159f = None<ProductHookProcessCustody159f>
+        var cursor = callerInputs159j
+        while (cursor.isSome()) {
+            let current = cursor.getOrThrow()
+            let next = current.nextCaller159j
+            if (current.privateInputsReturned159f()) {
+                match (previous) { case Some(value) => value.nextCaller159j = next; case None => callerInputs159j = next }
+                current.nextCaller159j = None<ProductHookProcessCustody159f>
+                let _ = current.returnPrivateHookProcessFrame159f()
+            } else { previous = cursor }
+            cursor = next
+        }
+    }
+    private func acquireCallerInput159j(handler: ToolHookHandlerSnapshot, callerId: Int64): ?ProductHookProcessCustody159f {
+        if (callerId == 0 || handler.command.startsWith("pi.event:")) { return None<ProductHookProcessCustody159f> }
+        var cursor = enabledGeneration159g
+        while (cursor.isSome()) {
+            let current = cursor.getOrThrow()
+            if (current.matchesNamespace159g(handler.pluginId)) {
+                let input = current.acquireHookProcessResident159j()
+                input.callerId159j = callerId
+                input.nextCaller159j = callerInputs159j; callerInputs159j = Some(input)
+                input.prepareCaller159j(handler.pluginId, handler.pluginVersion, handler.contentDigest, handler.packageRoot)
+                return Some(input)
+            }
+            cursor = current.nextEnabled159g
+        }
+        None<ProductHookProcessCustody159f>
+    }
     func beginHook(
         handler: ToolHookHandlerSnapshot,
-        parent: CancellationToken
+        parent: CancellationToken,
+        callerId159j!: Int64 = 0
     ): ?ActiveCodexHookExecution {
         stateLock.lock()
         try {
+            let custody = if (hookGenerationsClosing159g) { None<ProductHookProcessCustody159f> }
+                else { acquireCallerInput159j(handler, callerId159j) }
+            // A typed shell caller without an actual enabled generation has
+            // no payer for a new generation String. Reject before constructing it.
+            if (callerId159j != 0 && !handler.command.startsWith("pi.event:") && custody.isNone()) {
+                return None<ActiveCodexHookExecution>
+            }
             let generation = codexHookGeneration(handler)
-            match (enabledGenerations.get(handler.pluginId)) {
-                case Some(current) => if (current == generation) {
-                    let source = CancellationSource(parent: Some(parent))
+            if (!hookGenerationsClosing159g && enabledHookGeneration159g(handler.pluginId, generation)) {
+                    let source = match (custody) {
+                        case Some(value) => value.installParent159j(parent)
+                        case None => CancellationSource(parent: Some(parent))
+                    }
                     let active = ActiveCodexHookExecution(
-                        nextExecutionId, handler.pluginId, generation, source
+                        nextExecutionId, handler.pluginId, generation, source, custody159j: custody
                     )
                     nextExecutionId++
                     activeExecutions.add(active)
                     Some(active)
-                } else { None }
-                case None => None
-            }
+            } else { None }
         } finally {
             stateLock.unlock()
         }
@@ -124,6 +271,7 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
         } finally {
             stateLock.unlock()
             active.source.close()
+            match (active.custody159j) { case Some(value) => value.disposeParent159j(); case None => () }
         }
     }
 
@@ -139,7 +287,12 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
 
     public func diagnostics(): Array<String> {
         diagnosticsLock.lock()
-        try { diagnosticMessages.toArray() }
+        try {
+            match (diagnosticBuffer159m) {
+                case Some(value) => value.exportHistorical159m()
+                case None => match (diagnosticMessages) { case Some(value) => value.toArray(); case None => [] }
+            }
+        }
         finally { diagnosticsLock.unlock() }
     }
 
@@ -148,28 +301,45 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
         committed: CommittedToolCallRef,
         arguments: AgentValue
     ): CoreToolHookDecision {
-        let handlers = matchingCodexHooks(
-            context, "PreToolUse", committed.block.name
-        )
+        let owned = context.hasOwnedToolSetSnapshot159()
+        let selection = if (owned) { context.copyOwnedMatchingHooks159f("PreToolUse", committed.block.name) }
+            else { None<OwnedToolHookSelection159f> }
+        let callerId = beginCallerFrame159j()
+        beginHookSelection159k(selection)
+        let result = beforeToolCallerFrame159j(context, committed, arguments, callerId, owned, selection)
+        // Every original handler/ProcessResult/DOM local is now outside its
+        // complete private consuming helper. Throwing paths stay paid.
+        returnWholeCallerFrame159j(callerId)
+        returnHookSelection159k(callerId, selection)
+        result
+    }
+    private func beforeToolCallerFrame159j(context: ToolInvocationContext,
+        committed: CommittedToolCallRef, arguments: AgentValue, callerId159j: Int64,
+        owned: Bool, selection: ?OwnedToolHookSelection159f): CoreToolHookDecision {
+        let handlers = if (owned) { match (selection) {
+            case Some(value) => value.handlersForPrivateHookFrame159f()
+            case None => Array<ToolHookHandlerSnapshot>()
+        } } else { matchingCodexHooks(context, "PreToolUse", committed.block.name) }
         var currentArguments = arguments
         var modified = false
         for (index in 0..handlers.size) {
             let handler = handlers[index]
-            let active = match (beginHook(handler, context.cancellation)) {
+            let active = match (beginHook(handler, context.cancellation, callerId159j: callerId159j)) {
                 case Some(value) => value
                 case None =>
-                    recordCodexHookDiagnostic(handler, "PreToolUse", "snapshot_revoked")
+                    recordOwnedHookDiagnostic159k(selection, handler, "PreToolUse", "snapshot_revoked")
                     continue
             }
             try {
                 if (handler.command.startsWith("pi.event:")) {
+                    holdHookSelection159k(selection)
                     let decision = match (runPiToolCallHook(
                         javascriptPlugins, context, committed, handler,
                         currentArguments, active.source.token
                     )) {
                         case Result.Ok(value) => value
                         case Result.Err(error) =>
-                            recordCodexHookDiagnostic(handler, "PreToolUse", error.code)
+                            recordOwnedHookDiagnostic159k(selection, handler, "PreToolUse", error.code)
                             return CoreToolHookDecision.Deny(
                                 "Pi tool_call hook failed or exceeded its execution limit"
                             )
@@ -198,17 +368,18 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
                     "PreToolUse",
                     index,
                     payload,
-                    active.source.token
+                    active.source.token,
+                    custody159j: active.custody159j
                 )) {
                     case Result.Ok(value) => value
                     case Result.Err(_) =>
-                        recordCodexHookDiagnostic(handler, "PreToolUse", "execution_failed")
+                        recordOwnedHookDiagnostic159k(selection, handler, "PreToolUse", "execution_failed")
                         return CoreToolHookDecision.Deny(
                             "Codex PreToolUse hook failed or exceeded its execution limit"
                         )
                 }
                 if (process.timedOut || process.truncated || process.exitCode != 0) {
-                    recordCodexHookDiagnostic(handler, "PreToolUse", "execution_failed")
+                    recordOwnedHookDiagnostic159k(selection, handler, "PreToolUse", "execution_failed")
                     return CoreToolHookDecision.Deny(
                         "Codex PreToolUse hook failed or exceeded its execution limit"
                     )
@@ -216,7 +387,7 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
                 let decision = match (parseCodexPreHookDecision(process.stdout)) {
                     case Some(value) => value
                     case None =>
-                        recordCodexHookDiagnostic(handler, "PreToolUse", "response_invalid")
+                        recordOwnedHookDiagnostic159k(selection, handler, "PreToolUse", "response_invalid")
                         return CoreToolHookDecision.Deny(
                             "Codex PreToolUse hook returned an invalid response"
                         )
@@ -245,33 +416,57 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
         committed: CommittedToolCallRef,
         event: CoreToolHookPostEvent
     ): Unit {
-        let handlers = matchingCodexHooks(
-            context, "PostToolUse", event.toolName
-        )
+        let owned = context.hasOwnedToolSetSnapshot159()
+        let selection = if (owned) { context.copyOwnedMatchingHooks159f("PostToolUse", event.toolName) }
+            else { None<OwnedToolHookSelection159f> }
+        let callerId = beginCallerFrame159j()
+        beginHookSelection159k(selection)
+        let result = afterToolCallerFrame159j(context, committed, event, callerId, owned, selection)
+        // Every original handler/ProcessResult/DOM local is now outside its
+        // complete private consuming helper. Throwing paths stay paid.
+        returnWholeCallerFrame159j(callerId)
+        returnHookSelection159k(callerId, selection)
+        result
+    }
+    private func afterToolCallerFrame159j(context: ToolInvocationContext,
+        committed: CommittedToolCallRef, event: CoreToolHookPostEvent, callerId159j: Int64,
+        owned: Bool, selection: ?OwnedToolHookSelection159f): Unit {
+        let handlers = if (owned) { match (selection) {
+            case Some(value) => value.handlersForPrivateHookFrame159f()
+            case None => Array<ToolHookHandlerSnapshot>()
+        } } else { matchingCodexHooks(context, "PostToolUse", event.toolName) }
         for (index in 0..handlers.size) {
             let handler = handlers[index]
             if (handler.command.startsWith("pi.event:") &&
                 !piHookMayObserveOperation(context, handler, event)) {
-                recordCodexHookDiagnostic(handler, "PostToolUse", "operation_scope_denied")
+                recordOwnedHookDiagnostic159k(selection, handler, "PostToolUse", "operation_scope_denied")
                 continue
             }
-            let active = match (beginHook(handler, context.cancellation)) {
+            let active = match (beginHook(handler, context.cancellation, callerId159j: callerId159j)) {
                 case Some(value) => value
                 case None =>
-                    recordCodexHookDiagnostic(handler, "PostToolUse", "snapshot_revoked")
+                    recordOwnedHookDiagnostic159k(selection, handler, "PostToolUse", "snapshot_revoked")
                     continue
             }
             try {
                 if (handler.command.startsWith("pi.event:")) {
+                    holdHookSelection159k(selection)
                     match (runPiToolResultObserver(
                         javascriptPlugins, context, committed, handler, event,
                         active.source.token
                     )) {
                         case Result.Err(error) =>
-                            recordCodexHookDiagnostic(handler, "PostToolUse", error.code)
+                            recordOwnedHookDiagnostic159k(selection, handler, "PostToolUse", error.code)
                         case Result.Ok(_) => ()
                     }
                     continue
+                }
+                match (active.custody159j) {
+                    case Some(custody) => match (event.result) {
+                        case Some(value) => custody.fundEventEncoding159j(value)
+                        case None => ()
+                    }
+                    case None => ()
                 }
                 let payload = codexPostHookEvent(context, committed, handler, event)
                 match (runCodexHook(
@@ -282,14 +477,15 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
                     "PostToolUse",
                     index,
                     payload,
-                    active.source.token
+                    active.source.token,
+                    custody159j: active.custody159j
                 )) {
                     case Result.Err(_) =>
-                        recordCodexHookDiagnostic(handler, "PostToolUse", "execution_failed")
+                        recordOwnedHookDiagnostic159k(selection, handler, "PostToolUse", "execution_failed")
                     case Result.Ok(process) =>
                         if (process.timedOut || process.truncated || process.exitCode != 0) {
-                            recordCodexHookDiagnostic(
-                                handler, "PostToolUse", "execution_failed"
+                            recordOwnedHookDiagnostic159k(
+                                selection, handler, "PostToolUse", "execution_failed"
                             )
                         }
                 }
@@ -299,6 +495,65 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
         }
     }
 
+    private func beginHookSelection159k(selection: ?OwnedToolHookSelection159f): Unit {
+        match (selection) { case Some(value) => value.beginPrivateHookFrame159k(); case None => () }
+    }
+    private func holdHookSelection159k(selection: ?OwnedToolHookSelection159f): Unit {
+        match (selection) { case Some(value) => value.holdUnknownHookConsumers159f(); case None => () }
+    }
+    private func recordOwnedHookDiagnostic159k(selection: ?OwnedToolHookSelection159f,
+        handler: ToolHookHandlerSnapshot, event: String, code: String): Unit {
+        match (selection) {
+            case None => recordCodexHookDiagnostic(handler, event, code)
+            case Some(owner) =>
+                diagnosticsLock.lock()
+                try {
+                    let buffer = match (diagnosticBuffer159m) {
+                        case Some(value) => value
+                        case None =>
+                            let created = owner.createPrivateDiagnosticBuffer159m(diagnosticMessages.getOrThrow())
+                            diagnosticBuffer159m = Some(created)
+                            diagnosticMessages = None<ArrayList<String>>
+                            created
+                    }
+                    buffer.appendDiagnostic159m(event, handler.pluginId, code)
+                } finally { diagnosticsLock.unlock() }
+        }
+    }
+    private func returnHookSelection159k(callerId: Int64, selection: ?OwnedToolHookSelection159f): Unit {
+        match (selection) {
+            case None => ()
+            case Some(value) =>
+                if (!callerInputFramesReturned159k(callerId)) { value.holdUnknownHookConsumers159f() }
+                value.endReturnedPrivateHookFrame159k()
+                let _ = value.returnPrivateHookFrame159f()
+        }
+    }
+    private func callerInputFramesReturned159k(callerId: Int64): Bool {
+        stateLock.lock()
+        try {
+            var cursor = callerInputs159j
+            while (cursor.isSome()) {
+                let current = cursor.getOrThrow()
+                if (current.callerId159j == callerId) { return false }
+                cursor = current.nextCaller159j
+            }
+            true
+        } finally { stateLock.unlock() }
+    }
+    private func returnPrivateHookDiagnostics159m(): Unit {
+        diagnosticsLock.lock()
+        try {
+            match (diagnosticBuffer159m) {
+                case Some(value) =>
+                    // A public raw snapshot keeps the globally registered
+                    // independent DATA buffer paid; it is not a fake ACK.
+                    let _ = value.returnPrivateBuffer159m()
+                    diagnosticBuffer159m = None<OwnedHookDiagnosticBuffer159m>
+                case None => ()
+            }
+        } finally { diagnosticsLock.unlock() }
+    }
     private func recordCodexHookDiagnostic(
         handler: ToolHookHandlerSnapshot,
         event: String,
@@ -306,12 +561,13 @@ public class ProductCodexHookRuntime <: CoreToolHookRuntime {
     ): Unit {
         diagnosticsLock.lock()
         try {
-            if (diagnosticMessages.size >= 128) {
-                diagnosticMessages.remove(at: 0)
+            match (diagnosticBuffer159m) {
+                case Some(value) => value.appendDiagnostic159m(event, handler.pluginId, code)
+                case None =>
+                    let actual = diagnosticMessages.getOrThrow()
+                    if (actual.size >= 128) { actual.remove(at: 0) }
+                    actual.add("${event} plugin ${handler.pluginId}: ${code}")
             }
-            diagnosticMessages.add(
-                "${event} plugin ${handler.pluginId}: ${code}"
-            )
         } finally {
             diagnosticsLock.unlock()
         }
@@ -569,6 +825,10 @@ func matchingCodexHooks(
     event: String,
     toolName: String
 ): Array<ToolHookHandlerSnapshot> {
+    // Closed absence check returns no historical graph, even for a nonempty
+    // catalog whose installed hooks do not match this event/tool.
+    if (context.hasOwnedToolSetSnapshot159() &&
+        !context.hasMatchingToolHook159f(event, toolName)) { return [] }
     let snapshot = match (context.toolSetSnapshot) {
         case Some(value) => value
         case None => return []
@@ -648,7 +908,8 @@ func runCodexHook(
     event: String,
     handlerIndex: Int64,
     payload: AgentValue,
-    cancellation: CancellationToken
+    cancellation: CancellationToken,
+    custody159j!: ?ProductHookProcessCustody159f = None<ProductHookProcessCustody159f>
 ): Result<ProcessResult> {
     let inspected = match (inspectPluginPackage(handler.packageRoot)) {
         case PluginPackageResult.Ok(value) => value
@@ -668,6 +929,7 @@ func runCodexHook(
             "Codex hook package no longer matches its registered snapshot"
         ))
     }
+    match (custody159j) { case Some(value) => value.fundEventEncoding159j(payload); case None => () }
     let frame = try {
         stringifyUnifiedJson(payload)
     } catch (_: Exception) {
@@ -714,7 +976,8 @@ func runCodexHook(
         handler.command,
         frame + "\n",
         timeoutMillis,
-        cancellation
+        cancellation,
+        custody159f: custody159j
     )
 }
 

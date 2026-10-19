@@ -10,6 +10,10 @@
   target-dir = "target"
 
 [dependencies]
+  "memory_legacy_oracle" = { path = "../memory_legacy_oracle", output-type = "static" }
+  "agent_product" = { path = "../../agent_product", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "agent_core" = { path = "../../agent_core", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "persistence_runtime" = { path = "../../persistence_runtime", output-type = "static" }

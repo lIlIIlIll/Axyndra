@@ -1,5 +1,7 @@
 package agent_domain
 
+import std.collection.*
+
 import yjson.*
 import yjson_support.*
 import std.deriving.*
@@ -148,6 +150,10 @@ public class NormalizedOperationPlan {
     public let bindingDigest: String
     public let replayDisposition: ReplayDisposition
     public let implementation: ToolImplementationIdentity
+    private let readFacts: Array<ContextReadFactLink>
+    public prop contextReadFacts: Array<ContextReadFactLink> { get() { readFacts.clone() } }
+    // A DATA count lets the payer fund the original clone BEFORE allocation.
+    public func contextReadFactCount180(): Int64 { readFacts.size }
 
     public init(
         toolName: String,
@@ -168,7 +174,8 @@ public class NormalizedOperationPlan {
         implementationFingerprint!: String = "",
         schemaDigest!: String = "",
         effectiveArgumentsDigest!: String = "",
-        replayContractVersion!: UInt32 = 1u32
+        replayContractVersion!: UInt32 = 1u32,
+        contextReadFacts!: Array<ContextReadFactLink> = []
     ) {
         if (toolName.trimAscii() == "" || bindingDigest.trimAscii() == "" ||
             canonicalArguments.unifiedKind != ValueKind.Object ||
@@ -183,6 +190,7 @@ public class NormalizedOperationPlan {
                 "idempotency-key retry requires a stable idempotency key"
             )
         }
+        this.readFacts = validatedContextReadFactLinks(contextReadFacts)
         this.toolName = toolName.trimAscii()
         this.canonicalArguments = canonicalArguments
         this.resolvedPaths = resolvedPaths
@@ -388,7 +396,8 @@ public func resolveOperationAttempt(
                     fields: [
                         ErrorField("operation_id", operationId.value),
                         ErrorField("cause", error.code)
-                    ]
+                    ],
+                    observation: error.observation
                 )
             } else {
                 error
@@ -474,11 +483,16 @@ func operationFailureOutcome(
 }
 
 func operationErrorValue(error: AgentError): AgentValue {
-    objectValue([
+    let fields = ArrayList<ValueField>([
         ValueField("code", textValue(error.code)),
         ValueField("message", textValue(error.message)),
         ValueField("retryable", boolValue(error.retryable))
     ])
+    match (error.observation) {
+        case Some(value) => fields.add(ValueField("observation", value.toValue()))
+        case None => ()
+    }
+    objectValue(fields.toArray())
 }
 
 func operationEffectName(effect: OperationEffectClass): String {

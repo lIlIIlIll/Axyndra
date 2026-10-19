@@ -36,6 +36,7 @@ main(): Int64 {
            "RPC client preserves typed domain replies")
     expect(transport.calls == 1, "client uses transport boundary")
     recoveryDelegationContracts()
+    contextBoundaryRpcContracts()
     println("client contract passed")
     0
 }
