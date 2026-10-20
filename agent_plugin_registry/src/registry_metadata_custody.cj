@@ -18,13 +18,14 @@ class PluginRegistryMetadataCustody {
     private var rootClosed = false
     private var released = false
 
-    // Installed-registry metadata is charged to its own declared pool rather
-    // than the shared native-payload bank: this root is taken once per mounted
-    // plugin and each acquisition pays the 16 MiB floor, so installed plugins
-    // would otherwise hold tens of MiB of the shared bank for the whole session
-    // and starve the ordinary tool-call audit frame. See
-    // `agent_extension_runtime/src/native_payload.cj` and E412.
-    init() { allocation = reserveNativeRegistryMetadata(4096) }
+    // The registry metadata root stays on the SHARED bank. Moving it to its own
+    // pool was attempted under E412 and reverted under E421: several pressure
+    // contracts deliberately saturate that bank to within its 16 MiB floor and
+    // then assert that the next logical-message reservation is refused
+    // (`policy.query_limit`), so removing a long-lived 16 MiB charge from the
+    // bank silently makes those refusals stop happening. See
+    // `docs/issue-45-draft-status.md` E386/E412/E421.
+    init() { allocation = reserveNativeControlMetadata(4096) }
 
     func openPayment(): PluginRegistryMetadataPayment {
         lock.lock()
