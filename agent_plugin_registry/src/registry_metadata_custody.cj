@@ -18,7 +18,13 @@ class PluginRegistryMetadataCustody {
     private var rootClosed = false
     private var released = false
 
-    init() { allocation = reserveNativeControlMetadata(4096) }
+    // Installed-registry metadata is charged to its own declared pool rather
+    // than the shared native-payload bank: this root is taken once per mounted
+    // plugin and each acquisition pays the 16 MiB floor, so installed plugins
+    // would otherwise hold tens of MiB of the shared bank for the whole session
+    // and starve the ordinary tool-call audit frame. See
+    // `agent_extension_runtime/src/native_payload.cj` and E412.
+    init() { allocation = reserveNativeRegistryMetadata(4096) }
 
     func openPayment(): PluginRegistryMetadataPayment {
         lock.lock()
@@ -49,6 +55,17 @@ class PluginRegistryMetadataCustody {
             catch (error: Exception) { actual.close(); throw error }
             serial++; costs[serial] = 1024; payments[serial] = actual; total += 1024
             PluginRegistryMetadataPayment(this, serial)
+        } finally { lock.unlock() }
+    }
+    func deriveRetainedData113(minimum: Int64): LogicalJsonOwnerReservation {
+        lock.lock()
+        try {
+            if (rootClosed || released || minimum < 0 || minimum > 134217728) {
+                throw LogicalJsonPayloadError("registry data bank cannot admit another live loan")
+            }
+            let actual = allocation.deriveRetainedLease()
+            try { actual.ensureRetainedPeak(minimum); actual }
+            catch (error: Exception) { actual.close(); throw error }
         } finally { lock.unlock() }
     }
     func deriveLogicalData(parent: Int64, minimum: Int64): LogicalJsonOwnerReservation {

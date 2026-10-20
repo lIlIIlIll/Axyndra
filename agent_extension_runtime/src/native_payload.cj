@@ -50,6 +50,31 @@ public func reserveNativeObservedQueryJson(value: AgentValue, maximum: Int64): L
     nativeObservedQueryBudget.acquire(logicalJsonWriteReservationBytes(value, maximum))
 }
 
+// Installed-registry metadata has its own declared capacity, because its root
+// owner is long-lived: `PluginRegistryMetadataCustody` takes it once per
+// mounted plugin and each such acquisition pays the pool's 16 MiB floor, so two
+// installed plugins hold 32 MiB of the shared bank for the whole session. That
+// reservation collided with the ordinary tool-call audit frame, which is
+// invoiced at ~384x its argument graph and therefore needs tens of MiB on a
+// large-but-legal call. Keeping registry metadata on the shared bank either
+// starves the audit path or forces the bank itself to grow - and the bank's
+// 128 MiB is asserted by many pressure cases, so it must not grow. This pool is
+// sized to the registry's own bound: the custody constructor already refuses a
+// negative payment header aggregate at 128 MiB, and `maximumTransfers` 32 x the
+// 16 MiB floor bounds the live owners.
+let nativeRegistryMetadataBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
+
+// Long-lived installed-registry metadata reservation. Allocation accounting
+// only: it creates no invocation, Source, path or permission.
+public func reserveNativeRegistryMetadata(bytes: Int64): LogicalJsonOwnerReservation {
+    nativeRegistryMetadataBudget.acquire(max(4096, bytes))
+}
+
+// Exact numeric observation of the registry-metadata bank; no owner escapes.
+public func nativeRegistryMetadataUsage113(): (Int64, Int64) {
+    nativeRegistryMetadataBudget.usage()
+}
+
 // Exact numeric observation of the original process-wide bank; no owner escapes.
 public func nativeControlMetadataUsage113(): (Int64, Int64) {
     nativePayloadOwnerBudget.usage()
