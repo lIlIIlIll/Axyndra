@@ -136,7 +136,7 @@ private func hostRegistryOwnedMessage81(error: PluginRegistryOwnedError): String
         case PluginRegistryStaticReason.ExecutionNotCurrent => return "installed execution pin is not current"
         case PluginRegistryStaticReason.InstalledRecordAbsent => return "installed record is absent"
         case PluginRegistryStaticReason.ComponentAliasInvalid => return "initial context configuration or its exact installed binding is unavailable"
-        case PluginRegistryStaticReason.None => ()
+        case PluginRegistryStaticReason.NoStaticReason => ()
     }
     let raw = match (error.copyText(PluginRegistryErrorText.Message)) {
         case PluginRegistryResult.Err(_) => throw LogicalJsonPayloadError("Host registry error copy cannot fit the original capacity")
@@ -527,6 +527,7 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
     private var primitive191: ?HostOwnedPrimitiveConfiguration191 = None<HostOwnedPrimitiveConfiguration191>
     private var tools159: ?HostRegistryCatalogToolData159 = None
     private var temporary159: ?HostRegistryCatalogTemporary159 = Option<HostRegistryCatalogTemporary159>.None
+    private var schemaConstructionPeak159: Int64 = 0
     var nextRetained159: ?HostRegistryCatalogIdentity159 = None
     prop namespace: String { get() { namespaceValue } }
     prop contentDigest: String { get() { contentDigestValue } }
@@ -654,7 +655,7 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
         paymentLock159.lock()
         try {
             let next = hostRegistryAdd81(retainedInvoice159, bytes)
-            payment.getOrThrow().ensureRetainedPeak(next)
+            payment.getOrThrow().ensureRetainedPeak(hostRegistryAdd81(next, schemaConstructionPeak159))
             retainedInvoice159 = next
         } finally { paymentLock159.unlock() }
     }
@@ -664,12 +665,20 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
             if ((!catalogAliases159 && catalogShares159 == 0) || payment.isNone()) {
                 throw LogicalJsonPayloadError("catalog snapshot requires its actual retained Registry data")
             }
+            snapshotInvoice159 = bytes
             let child = payment.getOrThrow().deriveRetainedLease()
             try { child.ensureRetainedPeak(bytes) }
             catch (error: Exception) { child.close(); throw error }
             child
         } finally { paymentLock159.unlock() }
     }
+    // The exact amount `reserveSnapshotCatalogData159` would charge the shared
+    // bank, so a caller owning a declared pool can serve the same invoice there.
+    public func snapshotCatalogDataInvoice159(): Int64 {
+        paymentLock159.lock()
+        try { snapshotInvoice159 } finally { paymentLock159.unlock() }
+    }
+    private var snapshotInvoice159: Int64 = 65536
     public func reserveTemporaryCatalogData159(bytes: Int64): ToolCatalogTemporaryData159 {
         paymentLock159.lock()
         try {
@@ -841,7 +850,8 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
         invoice = hostRegistryCatalogTextInvoice159(invoice, tool.name)
         invoice = hostRegistryCatalogTextInvoice159(invoice, tool.description)
         invoice = hostRegistryCatalogTextInvoice159(invoice, tool.inputAttachmentField)
-        invoice = hostRegistryAdd81(invoice, hostRegistryCatalogSchemaInvoice159(tool.inputSchemaJson))
+        let schemaInvoice = hostRegistryCatalogSchemaInvoice159(tool.inputSchemaJson)
+        invoice = hostRegistryAdd81(invoice, schemaInvoice[0])
         paymentLock159.lock()
         try {
             if (constructionFrames159 != 1 || constructionReturned159 || payment.isNone()) {
@@ -850,8 +860,14 @@ class HostRegistryCatalogIdentity159 <: ToolCatalogDataPayment159 & ToolCatalogS
             // Parent owns the linked carrier metadata; the independent child
             // owns this declaration's schema/text/callback graph only.
             let metadata = hostRegistryAdd81(retainedInvoice159, 4096)
-            payment.getOrThrow().ensureRetainedPeak(metadata)
-            retainedInvoice159 = metadata
+            // Schema scanners/decoders run serially in this exact mount
+            // construction frame. Their DATA does not escape that helper;
+            // published schemas have the separate tool child paid below.
+            // Keep the largest working extent in the original mount owner,
+            // not a child that can be stranded by a still-live old backing.
+            let schemaPeak = max(schemaConstructionPeak159, hostRegistryAdd81(schemaInvoice[1], 4096))
+            payment.getOrThrow().ensureRetainedPeak(hostRegistryAdd81(metadata, schemaPeak))
+            retainedInvoice159 = metadata; schemaConstructionPeak159 = schemaPeak
             let child = payment.getOrThrow().deriveRetainedLease()
             try { child.ensureRetainedPeak(invoice) }
             catch (error: Exception) { child.close(); throw error }
@@ -899,39 +915,48 @@ private func hostRegistryCatalogTextInvoice159(current: Int64, text: String): In
     for (_ in 0..text.size) { invoice = hostRegistryAdd81(invoice, 64) }
     invoice
 }
-private func hostRegistryCatalogSchemaInvoice159(text: String): Int64 {
+private func hostRegistryCatalogSchemaInvoice159(text: String): (Int64, Int64) {
     var invoice: Int64 = 8192
+    var retained: Int64 = 8192
     var quoted = false; var escaped = false
     var depth: Int64 = 0
-    // Measure the original immutable String without Array/DOM construction.
-    // Each nesting level pays the overlapping recursive canonical framing;
-    // structural/string occurrences pay JSON nodes, list snapshots/sorting,
-    // scalar formatting and the caller's two independent digest operations.
-    // This is a retained-memory upper invoice, never an exact encoded size.
+    // Flat nodes/scalars remain in independent decoded Tool schemas. The
+    // original depth-weighted recursive framing and digest intermediates are
+    // serial construction scratch, not seven permanently retained graphs.
     unsafe {
         let raw = text.rawData()
         for (index in 0..raw.size) {
             let byte = raw[index]
-            for (_ in 0..(depth + 1)) { invoice = hostRegistryAdd81(invoice, 64) }
+            retained = hostRegistryAdd81(retained, 64)
+            invoice = hostRegistryCatalogWeightedInvoice159(invoice, depth + 1, 64)
             if (quoted) {
                 if (escaped) { escaped = false }
                 else if (byte == b'\\') { escaped = true }
                 else if (byte == b'"') { quoted = false }
             } else if (byte == b'"') {
                 quoted = true
-                for (_ in 0..(depth + 1)) { invoice = hostRegistryAdd81(invoice, 2048) }
+                retained = hostRegistryAdd81(retained, 2048)
+                invoice = hostRegistryCatalogWeightedInvoice159(invoice, depth + 1, 2048)
             } else if (byte == b'{' || byte == b'[') {
-                for (_ in 0..(depth + 1)) { invoice = hostRegistryAdd81(invoice, 2048) }
+                retained = hostRegistryAdd81(retained, 2048)
+                invoice = hostRegistryCatalogWeightedInvoice159(invoice, depth + 1, 2048)
                 depth++
             } else if (byte == b'}' || byte == b']') {
                 if (depth > 0) { depth-- }
             } else if (byte == b':' || byte == b',') {
-                for (_ in 0..(depth + 1)) { invoice = hostRegistryAdd81(invoice, 2048) }
+                retained = hostRegistryAdd81(retained, 2048)
+                invoice = hostRegistryCatalogWeightedInvoice159(invoice, depth + 1, 2048)
             }
         }
     }
-    // Original decoder alone validates malformed framing and its old limits.
-    invoice
+    // The original decoder still validates framing and its unchanged limits.
+    (retained, invoice - retained)
+}
+private func hostRegistryCatalogWeightedInvoice159(current: Int64, count: Int64, unit: Int64): Int64 {
+    if (count < 0 || count > 134217728 / unit) {
+        throw LogicalJsonPayloadError("Host registry copied data exceeds its original aggregate")
+    }
+    hostRegistryAdd81(current, count * unit)
 }
 private class HostRegistryCatalogIdentityDebt159 {
     private let lock = Mutex()

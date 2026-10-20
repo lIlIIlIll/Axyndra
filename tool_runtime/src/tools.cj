@@ -551,6 +551,9 @@ public interface ToolCatalogDataPayment159 {
 // DATA-only snapshot child from the already retained actual Registry bank.
 public interface ToolCatalogSnapshotPayment159 {
     func reserveSnapshotCatalogData159(bytes: Int64): LogicalJsonOwnerReservation
+    // The exact child invoice for `reserveSnapshotCatalogData159`, so a caller
+    // that owns a declared pool of its own can serve the same amount from it.
+    func snapshotCatalogDataInvoice159(): Int64
 }
 
 public interface ToolCatalogTemporaryData159 {
@@ -723,7 +726,11 @@ public class ToolCatalog {
             match (snapshotPayment159) {
                 case None => None<ToolCatalogHostConsumer204>
                 case Some(original) =>
-                    let paid = original.reserveSnapshotCatalogData159(65536)
+                    // Drawn from the audit-frame pool rather than the shared
+                    // host bank; the invoice is the amount the shared bank
+                    // would have charged, so this call's own accounting is
+                    // unchanged while the bank keeps its exact totals.
+                    let paid = acquireAuditFramePayment204(original.snapshotCatalogDataInvoice159())
                     pendingConsumerPayment204 = Some(paid)
                     let consumer = ToolCatalogHostConsumer204(this, pipeline, context, paid)
                     hostConsumerFrames204++
@@ -1455,7 +1462,8 @@ public class ToolCatalog {
         }
     }
 
-    public func reserveModelInputData159(request: ModelRequest): ?LogicalJsonOwnerReservation {
+    public func reserveModelInputData159(request: ModelRequest,
+        settings180!: ?ToolContextDescriptor = None<ToolContextDescriptor>): ?LogicalJsonOwnerReservation {
         // The actual mounted Registry supplies the original bank. Fixture-only
         // catalogs without that owner neither create nor borrow a new bank.
         let original = try { lock.lock(); snapshotPayment159 } finally { lock.unlock() }
@@ -1466,11 +1474,19 @@ public class ToolCatalog {
                 try {
                     let meter = ToolSnapshotMeasure159(payment)
                     meter.addModelRequest159(request)
+                    match (settings180) { case Some(value) => value.measureExecutionSettings180(meter); case None => () }
                     meter.fund159()
                     Some(payment)
                 } catch (error: Exception) { payment.close(); throw error }
         }
     }
+    public func reserveRegistryData180(invoice: Int64): ?LogicalJsonOwnerReservation {
+        if (invoice < 1) { throw IllegalArgumentException("Registry DATA invoice must be positive") }
+        let original = try { lock.lock(); snapshotPayment159 } finally { lock.unlock() }
+        match (original) { case Some(owner) => Some(owner.reserveSnapshotCatalogData159(invoice))
+            case None => None<LogicalJsonOwnerReservation> }
+    }
+
 
     public func changedSharedToolSetSnapshot159(expected: SharedToolSetSnapshot159,
         run: RunId, capabilities: CapabilitySet, threadId!: ?ThreadId = None): ?SharedToolSetSnapshot159 {
@@ -2159,6 +2175,14 @@ public class ToolPipeline {
             return match(source.operationRoot){case Some(root)=>root.toolName().startsWith("plugin.") && root.callId()==source.parentCallId &&
                 source.requestKey.startsWith("managed-channel:"+source.parentCallId+":");case None=>false}}
 
+        if (name == HOST_PLUGIN_CHILD_TOOL111) {
+            if (source.kind != PreparedInvocationSourceKind.Derived || source.parentOperationId.isNone() || source.parentCallId == "") { return false }
+            return match (source.operationRoot) {
+                case Some(root) => root.toolName().startsWith("plugin.") && root.callId() == source.parentCallId &&
+                    source.requestKey.startsWith("child-service:" + source.parentCallId + ":")
+                case None => false
+            }
+        }
         if(name==HOST_PLUGIN_LIVE_EFFECT_TOOL){
             if(source.kind!=PreparedInvocationSourceKind.Derived || source.parentOperationId.isNone() || source.parentCallId==""){return false}
             return match(source.operationRoot){case Some(root)=>root.toolName().startsWith("plugin.") &&
@@ -2187,6 +2211,7 @@ public class ToolPipeline {
     private func hostServiceNameAllowed(name: String): Bool {
         if([HOST_MANAGED_CHANNEL_WRITE_TOOL,HOST_MANAGED_CHANNEL_SPAWN_TOOL,HOST_MANAGED_CHANNEL_CLOSE_TOOL].contains(name)){return true}
         if(name==HOST_PLUGIN_LIVE_EFFECT_TOOL){return true}
+        if (name == HOST_PLUGIN_CHILD_TOOL111) { return true }
         name == HOST_CONTEXT_READ_TOOL || name == "host.process.readonly" || name == "host.file.plan.propose" || name == HOST_HTTP_SERVICE_TOOL ||
             name == HOST_CHANNEL_WRITE_TOOL || name == HOST_HTTP_STREAM_TOOL || name == HOST_READ_VIEW_TOOL || name == HOST_PLUGIN_DOCUMENT_TOOL
     }
@@ -2255,7 +2280,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Bool = registrationConsumerBody204({ =>
+            let result204: Bool = registrationConsumerBody204<Bool>({ =>
 
         match (registrationForRun(context, call.name, newPreparation: true)) {
             case Some(value) => !value.descriptor.hostServiceOnly && !value.descriptor.controlOnly && value.descriptor.hasPreparationRead
@@ -2278,7 +2303,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Bool = registrationConsumerBody204({ =>
+            let result204: Bool = registrationConsumerBody204<Bool>({ =>
 
         match (registrationForRun(context, call.name, newPreparation: true)) {
             case Some(value) => !value.descriptor.hostServiceOnly && !value.descriptor.controlOnly &&
@@ -2310,7 +2335,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match(validateToolSnapshotThread(context)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         let selected=match(registrationForRun(context,call.name,newPreparation:true)){
@@ -2351,7 +2376,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<?ToolPreparationRead> = registrationConsumerBody204({ =>
+            let result204: Result<?ToolPreparationRead> = registrationConsumerBody204<Result<?ToolPreparationRead>>({ =>
 
         match (validateToolSnapshotThread(context)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let registration = match (registrationForRun(context, call.name, newPreparation: true)) {
@@ -2576,7 +2601,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<PreparedToolInvocation> = registrationConsumerBody204({ =>
+            let result204: Result<PreparedToolInvocation> = registrationConsumerBody204<Result<PreparedToolInvocation>>({ =>
 
         if(context.runId.value!=source.runId.value || context.epoch!=source.epoch ||
             context.sessionId.value!=source.threadId.value){
@@ -2792,7 +2817,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match(validateToolSnapshotThread(context)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         match(livePolicyPendingGuard(context)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -2898,7 +2923,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         let leases = ArrayList<ToolExecutionHandoffLease>()
         try {
@@ -2948,7 +2973,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204({ =>
+            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204<Result<OwnedToolPipelineProgress>>({ =>
 
         if(parent.authorization==PreparedAuthorization.ApprovalRequired ||
             parent.authorization==PreparedAuthorization.ParentIntent ||
@@ -3016,7 +3041,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204({ =>
+            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204<Result<OwnedToolPipelineProgress>>({ =>
 
         if(parent.approval.isNone()){return livePolicyPreparationError<OwnedToolPipelineProgress>("tool.live_parent_approval_missing")}
         match(validateRetainedOwnedParentDecision(context,parent,parent.approval.getOrThrow(),decision)){
@@ -3085,7 +3110,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204({ =>
+            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204<Result<OwnedToolPipelineProgress>>({ =>
 
         if(publication.isPreparedPhase()){
             return resumePreparedPhasePublication(context,publication,decision,decisionSource)}
@@ -3209,7 +3234,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204({ =>
+            let result204: Result<OwnedToolPipelineProgress> = registrationConsumerBody204<Result<OwnedToolPipelineProgress>>({ =>
 
         // Read-only rejection is retryable: no Captured -> Acting, claim,
         // durable decision, execution registration or resource action yet.
@@ -3441,7 +3466,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<ToolInvocationResult> = registrationConsumerBody204({ =>
+            let result204: Result<ToolInvocationResult> = registrationConsumerBody204<Result<ToolInvocationResult>>({ =>
 
         if(child.authorization==PreparedAuthorization.ApprovalRequired || child.authorization==PreparedAuthorization.ParentIntent ||
             child.source.kind!=PreparedInvocationSourceKind.Derived || child.source.parentOperationId.isNone() ||
@@ -3584,7 +3609,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         if(isManagedChannelOwnedParentPlan(prepared.borrowOperationPlanFrame204()) || isManagedChannelOwnedChildPlan(prepared.borrowOperationPlanFrame204())){
             return validateManagedChannelOwnedCurrent(context,prepared)}
@@ -3780,7 +3805,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<OperationId> = registrationConsumerBody204({ =>
+            let result204: Result<OperationId> = registrationConsumerBody204<Result<OperationId>>({ =>
 
         let source = prepared.source
         if (source.kind != PreparedInvocationSourceKind.Derived ||
@@ -3853,7 +3878,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         let parent=value.parent;let child=value.child;let approval=value.approval
         if(context.trustedControl || context.cancellation.isCancelled() ||
@@ -3987,7 +4012,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<ToolPreparation> = registrationConsumerBody204({ =>
+            let result204: Result<ToolPreparation> = registrationConsumerBody204<Result<ToolPreparation>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error)
@@ -4229,7 +4254,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -4268,7 +4293,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<?DirectPostCanonicalObserverCapture> = registrationConsumerBody204({ =>
+            let result204: Result<?DirectPostCanonicalObserverCapture> = registrationConsumerBody204<Result<?DirectPostCanonicalObserverCapture>>({ =>
 
         let registration = match (registrationForRun(context, prepared.call.name)) {
             case Some(value) => value; case None => return Result.Ok(None<DirectPostCanonicalObserverCapture>) }
@@ -4316,7 +4341,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         captured.consume({ =>
             if (!refEq(context, captured.context) || !refEq(prepared, captured.prepared) ||
@@ -4370,7 +4395,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: OwnedPostCanonicalObserverDispatch113 = registrationConsumerBody204({ =>
+            let result204: OwnedPostCanonicalObserverDispatch113 = registrationConsumerBody204<OwnedPostCanonicalObserverDispatch113>({ =>
 
         let registration = match (registrationForRun(context, toolName)) {
             case Some(value) => value
@@ -4417,7 +4442,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: OwnedPostCanonicalObserverDispatch113 = registrationConsumerBody204({ =>
+            let result204: OwnedPostCanonicalObserverDispatch113 = registrationConsumerBody204<OwnedPostCanonicalObserverDispatch113>({ =>
 
         let observer = match (captured.observer as PaidDirectPostCanonicalToolObserver113) {
             case Some(value) => value
@@ -4513,7 +4538,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -4560,7 +4585,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error)
@@ -4612,7 +4637,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<ToolAuthorization> = registrationConsumerBody204({ =>
+            let result204: Result<ToolAuthorization> = registrationConsumerBody204<Result<ToolAuthorization>>({ =>
 
         match (validatePreparedSourceContext(context, prepared.source)) {
             case Result.Err(error) => return Result.Err(error)
@@ -4839,7 +4864,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         if (prepared.authorization != PreparedAuthorization.ApprovalRequired || prepared.borrowApprovalFrame204().isNone()) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "approval.review_missing", "retained review is missing")) }
@@ -4865,7 +4890,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         let prepared = match (loadPreparedForApproval(context, operationId)) {
             case Result.Ok(value) => value
@@ -4916,7 +4941,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -4980,7 +5005,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         let root = match (prepared.source.operationRoot) {
             case Some(OperationRootSource.Direct(value)) => value
@@ -5025,7 +5050,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<Unit> = registrationConsumerBody204({ =>
+            let result204: Result<Unit> = registrationConsumerBody204<Result<Unit>>({ =>
 
         let plan = prepared.borrowOperationPlanFrame204()
         // Retain the original host closure: it binds configuration, prior
@@ -5110,7 +5135,7 @@ public class ToolPipeline {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<PreparedToolInvocation> = registrationConsumerBody204({ =>
+            let result204: Result<PreparedToolInvocation> = registrationConsumerBody204<Result<PreparedToolInvocation>>({ =>
 
         match (validateToolSnapshotThread(context)) {
             case Result.Err(error) => return Result.Err(error)
@@ -5375,11 +5400,12 @@ public class ToolPipeline {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
         afterHandoff: (PreparedToolInvocation) -> Result<Unit>,
-        afterExecutionAdmission!: () -> Unit = { => () }
+        afterExecutionAdmission!: () -> Unit = { => () },
+        executionObservation!: ?(ReturnedToolExecutionObservation) -> Unit = None
     ): Result<ToolInvocationResult> {
         let view = context.beginInvocationView159()
         try { executePreparedScope159(view, prepared, afterHandoff,
-            afterExecutionAdmission: afterExecutionAdmission) }
+            afterExecutionAdmission: afterExecutionAdmission, executionObservation: executionObservation) }
         finally { view.endInvocationView159() }
     }
 
@@ -5387,12 +5413,13 @@ public class ToolPipeline {
         context: ToolInvocationContext,
         prepared: PreparedToolInvocation,
         afterHandoff: (PreparedToolInvocation) -> Result<Unit>,
-        afterExecutionAdmission!: () -> Unit = { => () }
+        afterExecutionAdmission!: () -> Unit = { => () },
+        executionObservation!: ?(ReturnedToolExecutionObservation) -> Unit = None
     ): Result<ToolInvocationResult> {
         let consumerFrame204 = beginRegistrationConsumer204(context)
         var returnedConsumer204 = false
         try {
-            let result204: Result<ToolInvocationResult> = registrationConsumerBody204({ =>
+            let result204: Result<ToolInvocationResult> = registrationConsumerBody204<Result<ToolInvocationResult>>({ =>
 
         if(isPluginLivePolicyParentPlan(prepared.borrowOperationPlanFrame204()) || isPluginLivePolicyStreamingChildPlan(prepared.borrowOperationPlanFrame204()) ||
             isManagedChannelOwnedParentPlan(prepared.borrowOperationPlanFrame204()) || isManagedChannelOwnedChildPlan(prepared.borrowOperationPlanFrame204())){
@@ -5569,6 +5596,17 @@ public class ToolPipeline {
                 case Some(actual) => actual.afterToolExecutionFrameReturned173(context, prepared)
                 case None => () }
             observations.add(observed)
+            // A terminal consumer receives only the exact synchronous returned
+            // observation. Validation/scheduler errors cannot manufacture it.
+            match (executionObservation) {
+                case Some(consume) => try { consume(observed.returnedObservation(context, prepared)) }
+                    catch (_: Exception) {
+                        match (observed.result) { case Result.Ok(value) => value.releasePayload(); case Result.Err(_) => () }
+                        return Result<ToolResult>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                            "tool.execution_observation_failed", "the original returned execution observation was not consumed"))
+                    }
+                case None => ()
+            }
             observed.result
         }
         let executionResult = if (prepared.source.kind == PreparedInvocationSourceKind.Derived &&

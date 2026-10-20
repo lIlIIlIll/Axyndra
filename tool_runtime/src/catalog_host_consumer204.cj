@@ -5,6 +5,22 @@ import std.sync.*
 
 private let toolCatalogConsumerDebts204 = ToolCatalogConsumerDebts204()
 
+// The per-call audit/prepared-plan value chain draws on its own declared
+// capacity instead of the shared host bank. Its invoice is sized by the
+// caller's argument graph - a legal 2 MiB tool argument is invoiced at ~384x
+// its bytes (6x lexical expansion times 64x retained extent) - so a single such
+// call can need more than a hundred MiB, which the shared bank cannot admit
+// alongside the long-lived installed-registry roots. Moving these short-lived
+// leases here leaves the shared bank's own accounting untouched, so the
+// bank-saturation contracts that assert its exact charged totals still hold.
+// See docs/issue-45-draft-status.md E421/E422/E428.
+let auditFramePaymentBudget = LogicalJsonOwnerBudget(maximumCharged: 536870912)
+
+// Allocation accounting only: no invocation, Source, path or permission.
+func acquireAuditFramePayment204(bytes: Int64): LogicalJsonOwnerReservation {
+    auditFramePaymentBudget.acquire(max(4096, bytes))
+}
+
 // DATA-reference custody only. There are no Tool/Run/Source/approval operations
 // in this carrier. Only Catalog's prepaid factory creates an instance.
 public class ToolCatalogHostConsumer204 {
