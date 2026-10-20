@@ -1,8 +1,12 @@
 package neutral_payload_consumer126
 
 // Import only the original Domain public surface. This independent consumer
-// requires actual alias/extension resolution, not own-package lookup.
+// requires actual alias/extension resolution, not own-package lookup. The
+// receiver type is named explicitly because an extension is resolved through
+// the class it extends, so a wildcard import alone does not make it visible.
 import agent_domain.*
+import agent_domain.LogicalJsonOwnerReservation
+import agent_domain.LogicalJsonCopiedDisplayAllocation
 
 main(): Int64 {
     let bank = LogicalJsonOwnerBudget()
