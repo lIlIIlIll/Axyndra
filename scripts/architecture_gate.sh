@@ -498,4 +498,11 @@ if ! python3 "$ROOT/scripts/plugin_capability_ledger.py" --check >/dev/null; the
   fail "plugin capability ledger regressed"
 fi
 
+# Issue #48 T0-02: the legacy-path retirement inventory is enumerated and its
+# documented counts must match the tree.
+if ! python3 "$ROOT/scripts/plugin_retirement_inventory.py" --check >/dev/null; then
+  python3 "$ROOT/scripts/plugin_retirement_inventory.py" --check >&2 || true
+  fail "plugin retirement inventory drifted"
+fi
+
 printf 'architecture gate passed\n'
