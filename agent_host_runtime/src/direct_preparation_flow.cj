@@ -257,7 +257,14 @@ class HostDirectPreparationFlow {
             source.operationId, CanonicalToolCallId(call.callId), plan, OperationAttemptStage.Prepared,
             execution, result.receiptId, agentUtcMillis(), expectedRunId: Some(context.runId), expectedEpoch: Some(context.epoch))) {
             case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) => if (cause.kind == AgentErrorKind.Cancelled) { Result.Err(cause) } else { execution } }
+            case Result.Ok(_) =>
+                // The original cause is the only accurate explanation of why the
+                // Direct call was rejected, so it is preserved instead of being
+                // replaced by a synthetic success result. The rejection itself is
+                // still recorded above (prepareDirectRejection + resolveOperation
+                // at Prepared), so no execution fact is lost, and the caller that
+                // branches on `isError` now also learns the real reason.
+                Result.Err(cause) }
     }
 }
 func requireDirectPreparationOwner(runtime: AgentThreadRuntime, context: ToolInvocationContext, expected: RunState): Result<Unit> {
@@ -270,7 +277,7 @@ func requireDirectPreparationOwner(runtime: AgentThreadRuntime, context: ToolInv
 func directPreparationContext(context: ToolInvocationContext): ToolInvocationContext {
     ToolInvocationContext(context.runId, context.sessionId, context.capabilities, epoch: context.epoch,
         cancellation: context.cancellation, toolContext: ToolContextDescriptor(workspaceRoot: context.workspaceRoot,
-            cwd: context.cwd, environment: context.environment, services: context.services),
+            cwd: context.cwd, environment: context.environment, services: context.services, executionSettings180: context.executionSettings180, modelFaultCounters180: context.modelFaultCounters180),
         approvalModeOverride: context.approvalModeOverride, outputSink: context.outputSink,
         budget: context.budget, budgetModeFn: context.budgetModeFn, contextProjection: context.contextProjection,
         toolSetSnapshot: context.legacyToolSetSnapshot159,
