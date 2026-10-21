@@ -5,7 +5,7 @@ import std.deriving.*
 // EXPERIMENTAL: contribution identity is independent of package identity and
 // runtime generation. A declaration requests a host port; it never grants one.
 @Derive[Equatable]
-public enum PluginContributionKind { Tool | Command | Skill | Provider | ModelProvider | ContextProvider | ResourceProvider | Event | Service }
+public enum PluginContributionKind { Tool | Command | View | Skill | Provider | ModelProvider | ContextProvider | ResourceProvider | Event | Service }
 
 // A restriction implemented by the Host, not a package-supplied capability.
 // Brokered preserves the existing default. DataOnly has no Host services.

@@ -226,6 +226,7 @@ public func pluginContributionKindName(kind: PluginContributionKind): String {
     match (kind) {
         case PluginContributionKind.Tool => "tool"
         case PluginContributionKind.Command => "command"
+        case PluginContributionKind.View => "view"
         case PluginContributionKind.Skill => "skill"
         case PluginContributionKind.Provider => "provider"
         case PluginContributionKind.ModelProvider => "model_provider"

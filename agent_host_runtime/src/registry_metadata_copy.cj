@@ -246,6 +246,7 @@ private func hostRegistryStrings81(value: AgentValue): Array<String> {
 private func hostRegistryContributionKind81(value: String): PluginContributionKind {
     match (value) {
         case "tool" => PluginContributionKind.Tool; case "command" => PluginContributionKind.Command
+        case "view" => PluginContributionKind.View
         case "skill" => PluginContributionKind.Skill; case "provider" => PluginContributionKind.Provider
         case "model_provider" => PluginContributionKind.ModelProvider; case "context_provider" => PluginContributionKind.ContextProvider
         case "resource_provider" => PluginContributionKind.ResourceProvider; case "event" => PluginContributionKind.Event

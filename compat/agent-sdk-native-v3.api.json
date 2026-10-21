@@ -2,7 +2,7 @@
   "format": 1,
   "package": "agent_sdk",
   "contract": "native-authoring-v3",
-  "api_version": "3.0.0",
+  "api_version": "4.0.0",
   "symbols": [
     {
       "key": "class:InvocationDeadline",
@@ -238,6 +238,11 @@
       "key": "enum:PluginContributionKind.variant:Tool",
       "stability": "STABLE",
       "signature": "Tool"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:View",
+      "stability": "STABLE",
+      "signature": "View"
     },
     {
       "key": "enum:PluginToolExecutionProfile",

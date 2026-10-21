@@ -3,7 +3,7 @@
   name = "agent_sdk"
   organization = ""
   description = "Native contribution data contract for Axyndra"
-  version = "3.0.0"
+  version = "4.0.0"
   output-type = "static"
 
 [dependencies]
