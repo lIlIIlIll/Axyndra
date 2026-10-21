@@ -11,7 +11,12 @@ import yjson_support.*
 
 // Allocation accounting is shared by physical frames, logical input and the
 // result consumer. It is not a capability, a Run, or a second source registry.
-let providerPayloadOwner = LogicalJsonOwnerBudget()
+// This consumer declares its own aggregate explicitly instead of inheriting the
+// library default: its saturation contracts drive this pool to its refusal point
+// (two legal 8 MiB declarations plus the retained hello/incoming/max-reply
+// owners) and assert `document.data_capacity`, so the capacity it was written
+// against must stay fixed. It is a separate bank from the host's shared pool.
+let providerPayloadOwner = LogicalJsonOwnerBudget(maximumCharged: 134217728)
 let providerPayloadBudget = LogicalJsonProcessBudget(providerPayloadOwner)
 
 class ProviderWireFrame {
