@@ -121,6 +121,32 @@ class NativePluginContractTests {
     }
 
     @TestCase
+    func viewOnlyPackageRetainsItsKindInTheNoToolContract(): Unit {
+        let document = nativeCommandManifest()
+            .replace("[{\"kind\":\"command\",\"name\":\"hello\"}]",
+                "[{\"kind\":\"view\",\"name\":\"plan-review\"}]")
+            .replace("native-command", "native-view")
+        let accepted = match (parsePluginPackageManifest(PluginManifestFamily.Axyndra, document)) {
+            case PluginPackageResult.Ok(value) =>
+                let diagnostic = pluginPackageDiagnosticValue(value)
+                let contributions = match (diagnostic.field("contributions")) {
+                    case Some(items) => items
+                    case None => return @Expect(false)
+                }
+                value.contributions.size == 1 &&
+                value.contributions[0].kind == PluginContributionKind.View &&
+                value.contributions[0].name == "plan-review" &&
+                contributions.items.size == 1 &&
+                textField(contributions.items[0], "kind") == "view" &&
+                textField(contributions.items[0], "identity") == "axyndra:native-view/view/plan-review"
+            case PluginPackageResult.Err(_) => false
+        }
+        @Expect(accepted)
+        @Expect(nativeManifestHasError(document.replace("\"plan-review\"", "\"Bad Name\""),
+            "plugin.contribution_name_invalid", "contributions.name"))
+    }
+
+    @TestCase
     func nativeCompatibilityRejectsUnknownPortsAndVersionsBeforeLaunch(): Unit {
         @Expect(nativeManifestHasError(nativeCommandManifest().replace("axyndra-js-host-v2", "unknown-v3"),
             "plugin.protocol_unsupported", "protocol_range"))

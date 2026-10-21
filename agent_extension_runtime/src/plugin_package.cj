@@ -1745,6 +1745,7 @@ func parseNativePluginContributions(value: JsonNode, source: String): PluginPack
         let name = textField(item, "name")
         let kind = if (kindText == "tool") { PluginContributionKind.Tool }
             else if (kindText == "command") { PluginContributionKind.Command }
+            else if (kindText == "view") { PluginContributionKind.View }
             else if (kindText == "service") { PluginContributionKind.Service }
             else if (kindText == "model_provider") { PluginContributionKind.ModelProvider }
             else if (kindText == "provider") { PluginContributionKind.Provider }
