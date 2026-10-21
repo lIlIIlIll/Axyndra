@@ -12,7 +12,7 @@ func storedPaymentOriginalAccepts(raw:String):Bool{
     try{let _=decodeStoredValue(raw);true}catch(_:Exception){false}
 }
 func storedPaymentMeterAccepts(raw:String):Bool{
-    let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(1)
+    let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=budget.acquire(1)
     try{let meter=StoredValuePaymentMeter(raw,owner);let _=meter.complete();true}catch(_:Exception){false}
     finally{owner.close()}
 }
@@ -28,7 +28,7 @@ func storedPaymentProjectedConsumption(raw:String,owner:LogicalJsonOwnerReservat
     storedPaymentConsumption(encodeStoredValue(meter.consumptionHeader()))
 }
 func storedPaymentOutcome(raw:String,projected:Bool):String{
-    let owner=LogicalJsonOwnerBudget().acquire(1)
+    let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY).acquire(1)
     try{if(projected){storedPaymentProjectedConsumption(raw,owner)}else{storedPaymentConsumption(raw)}}
     catch(_:Exception){"rejected"}finally{owner.close()}
 }
@@ -94,7 +94,7 @@ class ContextReadStoredPaymentTests {
         let ordinary=encodeStoredThreadContent(ThreadItemContent.ToolCall(CanonicalToolCallId("call"),"tool",listValue([textValue("你"),numberValue("-0")])) )
         let largeList="l7:1000000"+String.fromUtf8(Array<Byte>(1000000,{_=>b'n'}))
         let large="o1:44:kinds9:tool_call7:call_ids4:call4:names4:tool9:arguments"+largeList
-        let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=budget.acquire(1)
         try{let meter=StoredValuePaymentMeter(large,owner);@Expect(meter.complete()>1000000,true)
             @Expect(storedPaymentConsumption(encodeStoredValue(meter.consumptionHeader())),storedPaymentConsumption(ordinary))
             @Expect(budget.usage()[1],16777216)
@@ -104,7 +104,7 @@ class ContextReadStoredPaymentTests {
     func provenanceProjectionDropsOnlyIgnoredRootFieldsAfterCompleteOriginalValidation():Unit{
         let original=encodeStoredProvenance(ItemProvenance("direct_tool",runId:Some(RunId("run")),operationId:Some(OperationId("op"))))
         let value=decodeStoredValue(original);value.put("ignored",listValue([textValue("secret"),nullValue()]))
-        let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=budget.acquire(1)
         try{let meter=StoredValuePaymentMeter(encodeStoredValue(value),owner);let _=meter.complete()
             let projected=decodeStoredProvenance(encodeStoredValue(meter.topProjection(["source","run_id","operation_id","direct_origin","continuation_origin","continuation_history"])))
             @Expect(encodeStoredProvenance(projected),original)
@@ -112,7 +112,7 @@ class ContextReadStoredPaymentTests {
     }
     @TestCase
     func actualSqliteVisitsNegativeZeroAndPositiveRowidsWithOneResultOwner():Unit{
-        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget();let count=StoredPaymentCount()
+        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let count=StoredPaymentCount()
         try{fixture.add(-7,"negative",1,storedPaymentResult("negative","first"));fixture.add(0,"zero",2,storedPaymentResult("zero","second"))
             fixture.add(9,"positive",3,storedPaymentResult("positive","third"))
             fixture.database.readTransaction<Unit>({tx=>eachContextReadToolResultPaid(tx,"payment-thread","payment-turn",{bytes=>budget.acquire(bytes)},
@@ -122,7 +122,7 @@ class ContextReadStoredPaymentTests {
     }
     @TestCase
     func threeNearEightMiBOriginalResultsAreNotSummedIntoAnAggregateTurnDom():Unit{
-        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget();let base=budget.acquire(1);let parent=budget.acquire(1)
+        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let base=budget.acquire(1);let parent=budget.acquire(1)
         let body=String.fromUtf8(Array<Byte>(8388096,{_=>b'x'}));let raw=storedPaymentResult("call",body);let count=StoredPaymentCount()
         @Expect(raw.size<8388608,true);@Expect(raw.size>8388000,true)
         try{for(index in 0..3){fixture.add(index,"large-"+index.toString(),index+1,raw)}
@@ -134,7 +134,7 @@ class ContextReadStoredPaymentTests {
     }
     @TestCase
     func cancellationAfterARealPaidSqliteBodyReadDoesNotLeakItsCharge():Unit{
-        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget();let calls=StoredPaymentCount()
+        let fixture=StoredPaymentRowsFixture();let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let calls=StoredPaymentCount()
         try{fixture.add(0,"cancelled",1,storedPaymentResult("call","complete body"));var rejected=false
             try{fixture.database.readTransaction<Unit>({tx=>eachContextReadToolResultPaid(tx,"payment-thread","payment-turn",{bytes=>budget.acquire(bytes)},
                 {=>calls.value++;if(calls.value>=3){Result<Unit>.Err(AgentError(AgentErrorKind.Cancelled,"payment.cancelled","current owner cancelled"))}

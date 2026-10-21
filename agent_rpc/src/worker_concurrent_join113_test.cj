@@ -103,7 +103,7 @@ private func rpcJoinPaidFixture113(): Unit {
         let gate = RpcJoinGate113()
         let futures = RpcJoinFutures113()
         let pressure = ArrayList<RpcJoinPressureBlock113>()
-        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) })
+        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) }, reserveProductControlMetadata113)
         let baseline = productControlMetadataUsage113()
         // Nonblank arguments survive ApplicationSession.enqueue's trimAscii.
         // The existing /dump branch ignores them and returns a local response.
@@ -165,7 +165,7 @@ private func rpcJoinPaidFixture113(): Unit {
             let full = productControlMetadataUsage113()
             @Expect(full[0], bank2[0] + pressure.size)
             @Expect(full[1], bank2[1] + pressure.size * 65536)
-            @Expect(134217728 - full[1] < 65536)
+            @Expect(productControlMetadataCapacity113() - full[1] < 65536)
             futures.third = Some(spawn { rpcJoinRefusedClose113(server) })
             @Expect(rpcJoinWait113({ => futures.third.getOrThrow().tryGet().isSome() }))
             @Expect(futures.third.getOrThrow().get(), 1)

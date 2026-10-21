@@ -2,7 +2,7 @@ package agent_host_runtime
 
 import agent_domain.*
 import agent_plugin_registry.{PluginRegistry, ProductPluginRecord, PluginRegistryResult, PluginDescriptorText, OwnedRegistryUtf8}
-import agent_extension_runtime.{JavaScriptToolDescriptor, reserveNativeControlMetadata, nativeControlMetadataUsage113}
+import agent_extension_runtime.{JavaScriptToolDescriptor, reserveNativeControlMetadata, nativeControlMetadataUsage113, nativeControlMetadataCapacity113}
 import tool_runtime.*
 import std.fs.*
 import std.unittest.*
@@ -30,7 +30,7 @@ private func canonicalConfigurationRecord186(value: PluginRegistryResult<Product
 private func canonicalConfigurationCopyTextFrame199(bytes: OwnedRegistryUtf8,
     payment: LogicalJsonOwnerReservation): String {
     let count = bytes.byteCount
-    if (count < 0 || count > (134217728 - 1048576 - 65536) / 32) {
+    if (count < 0 || count > (agent_extension_runtime.nativeControlMetadataCapacity113() - 1048576 - 65536) / 32) {
         throw IllegalStateException("actual Registry text copy exceeds the original aggregate")
     }
     payment.ensureRetainedPeak(1048576 + count * 32 + 65536)

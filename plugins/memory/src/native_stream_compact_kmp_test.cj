@@ -52,7 +52,7 @@ class NativeMemoryCompactQueryTests {
     func NearOriginalMessageMaximumQueryFitsDefaultPoolAndMatchesWholeBusinessOracle():Unit{
         let query=String.fromUtf8(Array<Byte>(CONTENT_PAYLOAD_MESSAGE_BYTES-4096,repeat:b'a'))
         let event=latestContextTestEvent("max-query",query+" end","session","actual-thread")
-        let raw=latestContextTestStream([event],[event]);let budget=LogicalJsonOwnerBudget()
+        let raw=latestContextTestStream([event],[event]);let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         let incoming=budget.acquire(1);let outgoing=budget.acquire(1);let wire=budget.acquireFixedBuffer(8192)
         let data=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
         try{
@@ -69,7 +69,7 @@ class NativeMemoryCompactQueryTests {
         let raw=streamEventTestRaw(quoteUnifiedJson("alpha beta alpha"))
         let original=memoryV3DecodeEvent(parseUnifiedJson(raw)).value().getOrThrow()
         for(query in ["alpha alpha beta","ALPHA  alpha\tBETA","界 alpha alpha"]){
-            let normalized=query.trimAscii().toAsciiLower();let budget=LogicalJsonOwnerBudget()
+            let normalized=query.trimAscii().toAsciiLower();let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
             let eventOwner=budget.acquire(1)
             let batch=MemoryStreamLexicalBatch(normalized,0,includeWholeQuery:true,compactQuery:true,normalizedInput:true,
                 allocate:{_=>budget.acquire(1)})

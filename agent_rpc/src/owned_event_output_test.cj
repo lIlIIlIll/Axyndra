@@ -89,7 +89,7 @@ private func ownedRpcTestBase64(value: String): Array<Byte> {
 class OwnedProductRpcEventOutputTests {
     @TestCase
     func CompleteSmallRawEventMatchesOriginalVocabularyAndOnlyActualFrameAckRetires(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 8, false)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
         let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
         @Expect(delivery.run(1, { => "rpc-owned-test" }).isOk(), true)
         @Expect(event.isAcknowledged(), false)
@@ -99,7 +99,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func OriginalV2Base64ChunksReassembleCompleteNulAndUnicodeWithoutLogicalAggregateString(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 1048576, true)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, true)
         let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), true)
         let expected = SHA256()
@@ -114,7 +114,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func OriginalV1OversizeFailureStillHasNoEmptyIdAndFullDataAliasRetiresAfterPhysicalFrameAck(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 1048576, false)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, false)
         let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
         @Expect(delivery.run(1, { => "rpc-owned-test" }).isOk(), true)
         @Expect(output.small, failure("", "frame", "RPC output exceeds the v1 frame limit; negotiate protocol v2"))
@@ -123,7 +123,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func TypedCallbackReturningOkWithoutActualAckKeepsOriginalAndFramePaidUntilLaterRetirement(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 8, false)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
         let output = OwnedRpcTestOutput(); output.acknowledge = false
         let delivery = OwnedProductRpcEventDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), false)
@@ -135,7 +135,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func ActualWriteErrorCanBePhysicallyCleanedAfterLaterAckWithoutReplayingOrChangingFailure(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 8, false)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
         let output = OwnedRpcTestOutput(); output.fail = true
         let delivery = OwnedProductRpcEventDelivery(event, output)
         let failed = delivery.run(2, { => "rpc-owned-test" })
@@ -148,7 +148,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func OriginalBankPressureRejectsBeforeFrameConstructionAndErrorCleanupClosesOnlyActualProducerData(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 1048576, false)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, false)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), false)
@@ -159,7 +159,7 @@ class OwnedProductRpcEventOutputTests {
     }
     @TestCase
     func ActualAcpExtensionOmissionAcknowledgesFullToolDataWithoutTouchingTypedToolRules(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = ownedRpcTestFixture(pool, 1048576, true)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, true)
         @Expect(event.withEvent(65536, { actual => @Expect(acpUpdateFromEvent(actual).isNone(), true); Result.Ok(()) }).isOk(), true)
         @Expect(ignoreOwnedAcpToolExtension(event).isOk(), true)
         @Expect(event.isAcknowledged(), true); @Expect(pool.usage()[1], 0)

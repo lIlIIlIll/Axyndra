@@ -71,7 +71,7 @@ private func preparedJsonNested(containers:Int64):AgentValue{
 class OwnedPreparedJsonCompanionTests {
     @TestCase
     func postPreparationRealSelfCycleFailsBeforeWaitingCaptureAndClearsPaidPath():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let context=ToolInvocationContext(RunId("json-cycle-run"),SessionId("json-cycle-thread"),CapabilitySet())
         let parent=jsonReferencePrepared(context,"json-cycle-parent",objectValue([]))
         let array=JsonArray([JsonNode.string("original")])
@@ -100,7 +100,7 @@ class OwnedPreparedJsonCompanionTests {
     @TestCase
     func everyCustomAdvertisedKindIsRejectedWithoutCallingKindOrPublishing():Unit{
         for(kind in [JsonKind.Null,JsonKind.Boolean,JsonKind.Number,JsonKind.String,JsonKind.Array,JsonKind.Object]){
-            let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+            let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
             let context=ToolInvocationContext(RunId("json-custom-run"),SessionId("json-custom-thread"),CapabilitySet())
             let parent=jsonReferencePrepared(context,"json-custom-parent",objectValue([]))
             let custom=PreparedJsonUnsupportedNode(kind)
@@ -123,7 +123,7 @@ class OwnedPreparedJsonCompanionTests {
 
     @TestCase
     func sharedDagRetainsEveryOccurrenceAndAddsNoNewDataTraversalDepthPolicy():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let context=ToolInvocationContext(RunId("json-dag-run"),SessionId("json-dag-thread"),CapabilitySet())
         let shared=JsonArray([JsonNode.string("shared")])
         let dag=objectValue([ValueField("left",shared),ValueField("right",shared)])
@@ -157,7 +157,7 @@ class OwnedPreparedJsonCompanionTests {
 
     @TestCase
     func originalAggregatePaysPathMetadataBeforeAllocationAndPressureClearsFrames():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(33554432)
         // Real original128MiB bank, seven slots. No reduced test pool.
         let p0=bank.acquire(1);let p1=bank.acquire(1);let p2=bank.acquire(1)

@@ -100,7 +100,7 @@ class NativeMemoryLatestContextDataTests {
         let good=latestContextTestEvent("id","alpha","session","actual-thread")
         let bad=good.replace("\"version\":3","\"version\":2")
         for(raw in [latestContextTestStream([bad],[good]),latestContextTestStream([good],[bad])]){
-            let budget=LogicalJsonOwnerBudget();let data=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
+            let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let data=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
             try{let _=latestContextRpcTestBegin(data,raw,"alpha",4096,1)
                 var rejected=false
                 try{let _=latestContextRpcTestFinish(data,raw,65536,1,LatestContextRpcTestProgress())}catch(_:Exception){rejected=true}
@@ -121,7 +121,7 @@ class NativeMemoryLatestContextDataTests {
     }
     @TestCase
     func WrongSequenceCannotDiscardLiveOwnerAndIncompleteUploadCannotBecomeReady():Unit{
-        let raw=latestContextTestStream([],[]);let budget=LogicalJsonOwnerBudget()
+        let raw=latestContextTestStream([],[]);let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         let data=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
         try{
             let _=latestContextRpcTestBegin(data,raw,"",4096,1);@Expect(budget.usage()[0],1)
@@ -167,7 +167,7 @@ class NativeMemoryLatestContextDataTests {
             @Expect(latestContextTestContent(latestContextRpcTestFinish(data,raw,65536,1,progress)),
                 latestContextTestOriginal(rows,query,4096))
         }finally{data.close()}
-        let budget=LogicalJsonOwnerBudget();let bad=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let bad=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
         try{
             let start=latestContextRpcTestRequest("begin",1,[ValueField("input_payload",objectValue([
                 ValueField("bytes",integerValue(parameters.size)),ValueField("sha256",textValue(modelPolicySha256Text("different complete parameters")))])),
@@ -187,7 +187,7 @@ class NativeMemoryLatestContextDataTests {
     func Original3001RowsAndTwoLiveWireOwnersFitDefault128MiBWithoutBootstrapExtraOwner():Unit{
         let rows=ArrayList<String>();for(index in 0..3001){rows.add(latestContextTestEvent("id-"+index.toString(),"alpha","session","actual-thread"))}
         let all=rows.toArray();let raw=latestContextTestStream(all,all)
-        let budget=LogicalJsonOwnerBudget();let incoming=budget.acquire(1);let result=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let incoming=budget.acquire(1);let result=budget.acquire(1)
         let wire=budget.acquireFixedBuffer(8192);let data=MemoryLatestContextData(allocate:{_=>budget.acquire(1)})
         try{
             let _=latestContextRpcTestBegin(data,raw,"alpha",4096,1)

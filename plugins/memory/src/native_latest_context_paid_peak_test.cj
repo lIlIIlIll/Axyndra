@@ -31,7 +31,7 @@ class NativeMemoryLatestContextPaidPeakTests {
         let raw=streamEventTestRaw(quoteUnifiedJson("alpha beta"))
         let original=memoryV3DecodeEvent(parseUnifiedJson(raw)).value().getOrThrow()
         for(query in ["alpha beta","alpha alpha beta","note note context","not-found"]){
-            let budget=LogicalJsonOwnerBudget();let eventOwner=budget.acquire(1)
+            let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let eventOwner=budget.acquire(1)
             let batch=MemoryStreamLexicalBatch(query,0,includeWholeQuery:true,allocate:{_=>budget.acquire(1)})
             try{
                 let decoder=MemoryEventStreamDecoder(raw.size,modelPolicySha256Text(raw),eventOwner,
@@ -59,7 +59,7 @@ class NativeMemoryLatestContextPaidPeakTests {
         let rows=ArrayList<String>()
         for(index in 0..3001){rows.add(latestContextTestEvent("row-"+index.toString(),"alpha beta","session","actual-thread"))}
         let all=rows.toArray();let raw=latestContextTestStream(all,all)
-        let budget=LogicalJsonOwnerBudget();let incoming=budget.acquire(1);let result=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let incoming=budget.acquire(1);let result=budget.acquire(1)
         let wire=budget.acquireFixedBuffer(8192)
         try{
             latestContextPaidTestRun(raw,"alpha beta",budget,latestContextTestOriginal(all,"alpha beta",4096))
@@ -75,7 +75,7 @@ class NativeMemoryLatestContextPaidPeakTests {
         let row="{\"version\":3,\"operation\":\"retain\",\"record\":{\"id\":\"large\",\"kind\":\"project_fact\","+
             "\"scopeKind\":\"session\",\"scopeKey\":\"actual-thread\",\"status\":\"active\",\"revision\":1,"+
             "\"context\":\" note context \",\"source\":\"between fields\",\"content\":"+quoteUnifiedJson(content)+"}}"
-        let raw=latestContextTestStream([row],[row]);let budget=LogicalJsonOwnerBudget()
+        let raw=latestContextTestStream([row],[row]);let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         let incoming=budget.acquire(1);let result=budget.acquire(1);let wire=budget.acquireFixedBuffer(8192)
         try{
             latestContextPaidTestRun(raw,"alpha",budget,latestContextTestOriginal([row],"alpha",4096))

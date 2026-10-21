@@ -80,7 +80,7 @@ private func retainedResourceFailure(owner:RetainedResourceAckOwner,custody:Live
 class OwnedRetainedResourceControls {
     @TestCase
     func physicalAckCannotRefundOriginalBackingHeldForCanonicalValueAliases():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedResourceAckOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedResourceAckOwner(pool)
         let pressure=ArrayList<LogicalJsonOwnerReservation>()
         for(_ in 0..7){pressure.add(pool.acquire(1))}
         let carrier=OwnedToolRetainedParentExecution(retainedResourceResult(owner),owner)
@@ -107,7 +107,7 @@ class OwnedRetainedResourceControls {
     }
     @TestCase
     func failedUnverifiedOutputKeepsActualAllocationAndCustodyWithoutKnownReceipt():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedResourceAckOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedResourceAckOwner(pool)
         let custody=RetainedResourceCustodyClose(pool)
         let state=retainedResourceFailure(owner,custody)
         let failure=OwnedToolRetainedFailureExecution([state])
@@ -125,7 +125,7 @@ class OwnedRetainedResourceControls {
     }
     @TestCase
     func realUnpublishedResourcesRequireCheckedCloseWithoutManufacturedPayloadLease():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedUnpublishedResourceOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedUnpublishedResourceOwner(pool)
         let custody=RetainedResourceCustodyClose(pool)
         let failure=OwnedToolRetainedFailureExecution([OwnedRetainedUnpublishedState(
             None<ToolResult>,Some(owner),None<ToolResultPayloadLease>,custody)])
@@ -139,7 +139,7 @@ class OwnedRetainedResourceControls {
     }
     @TestCase
     func originalFullPoolRemainsPaidAcrossFailedActualAckAndRetryReleasesSameLease():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedResourceAckOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedResourceAckOwner(pool)
         let pressure=ArrayList<LogicalJsonOwnerReservation>()
         for(_ in 0..7){pressure.add(pool.acquire(1))}
         let carrier=OwnedToolRetainedChildExecution(retainedResourceResult(owner),owner)
@@ -163,7 +163,7 @@ class OwnedRetainedResourceControls {
     }
     @TestCase
     func actualBorrowCannotCloseOrRefundAndConsumerFailureKeepsCheckedCleanupAvailable():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedResourceAckOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedResourceAckOwner(pool)
         let carrier=OwnedToolRetainedChildExecution(retainedResourceResult(owner),owner)
         try{
             @Expect(carrier.closeAfterConsumption().error().getOrThrow().code,"tool.retained_output_borrowed")
@@ -180,7 +180,7 @@ class OwnedRetainedResourceControls {
     }
     @TestCase
     func originalOutputAckDoesNotDropSeparateActualCustodyDebtOrRepeatEitherEffect():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=RetainedResourceAckOwner(pool)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=RetainedResourceAckOwner(pool)
         let custody=RetainedResourceCustodyClose(pool)
         let carrier=OwnedToolRetainedParentExecution(retainedResourceResult(owner),owner)
         try{

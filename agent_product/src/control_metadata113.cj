@@ -18,6 +18,12 @@ public func productControlMetadataUsage113(): (Int64, Int64) {
     agent_extension_runtime.nativeControlMetadataUsage113()
 }
 
+// The shared bank's product quota. Tests that drive the bank to its refusal
+// point read this instead of restating the quota, so the quota is one fact.
+public func productControlMetadataCapacity113(): Int64 {
+    agent_extension_runtime.nativeControlMetadataCapacity113()
+}
+
 // Exact numeric observation of the same process-wide bank's fixed aggregate.
 // Numeric only: no reservation, capacity change or authority escapes.
 public func nativeControlMetadataCapacityReader173c(): Int64 {

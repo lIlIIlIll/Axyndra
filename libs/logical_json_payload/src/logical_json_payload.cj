@@ -12,6 +12,13 @@ public let LOGICAL_JSON_PAYLOAD_SCHEMA = "axyndra.logical-json/v1"
 public let LOGICAL_JSON_CHUNK_BYTES: Int64 = 16384
 public let LOGICAL_JSON_HARD_BYTES: Int64 = 67108864
 
+// Fixed aggregate used by tests that assert saturation REFUSAL behaviour.
+// Those tests saturate a pool to its refusal point by taking floor-priced
+// reservations; they are behaviour tests over a known capacity, not assertions
+// about the product quota, so they pin the aggregate they were written against
+// instead of inheriting the product default (which is a separate decision).
+public let LOGICAL_JSON_SATURATION_CAPACITY: Int64 = 134217728
+
 public class LogicalJsonPayloadError <: Exception {
     public init(message: String) { super(message) }
 }
@@ -29,7 +36,12 @@ public class LogicalJsonOwnerBudget {
     // maximumCharged itself (see nativePayloadOwnerBudget). The default stays
     // conservative so that a pool which does not state a need also keeps the
     // documented saturation behaviour its callers assert.
-    public init(maximumCharged!: Int64 = 134217728,
+    // Product quota for the shared host bank. The accounting rules (16 MiB
+    // per-reservation floor, derived-lease high-water SUM, all-or-nothing
+    // refund at ledger close) are unchanged; only the aggregate quota is set.
+    // 144 MiB is the smallest round value that admits the measured peak of a
+    // nested canonical-projection run (E449: 140,234,456 bytes required).
+    public init(maximumCharged!: Int64 = 150994944,
         maximumMessage!: Int64 = 16777216, maximumTransfers!: Int64 = 32) {
         if (maximumCharged < 16777216 || maximumCharged > 1073741824 ||
             maximumMessage < 1 || maximumMessage > LOGICAL_JSON_HARD_BYTES ||

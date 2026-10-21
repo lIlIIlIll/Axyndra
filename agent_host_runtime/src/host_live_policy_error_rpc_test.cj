@@ -39,7 +39,7 @@ private func rpc290OriginalWholeJSON(value:AgentValue):(Int64,String){
 class HostLivePolicyFullErrorRPC290Tests {
     @TestCase
     func everyErrorOffsetAndEOFAreCheckedBeforeNativeExchange():Unit{
-        let calls=AtomicInt64(0);let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let calls=AtomicInt64(0);let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1)
         let loan=HostPluginPureDataLoan({_,_=>let _=calls.fetchAdd(1)
             JavaScriptHostResult<JavaScriptHostInvocationResult>.Ok(JavaScriptHostInvocationResult("rpc290","{\"accepted\":true}"))},
             {bytes=>pool.acquire(bytes)},{=>Result<Unit>.Ok(())},MonoTime.now()+Duration.second*5,64)
@@ -65,7 +65,7 @@ class HostLivePolicyFullErrorRPC290Tests {
     }
     @TestCase
     func dataLargerThanOneFrameKeepsCompleteBytesAndSmallFinalDescriptor():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let actions=ArrayList<String>();let copied=ArrayList<Byte>()
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1);let actions=ArrayList<String>();let copied=ArrayList<Byte>()
         let loan=HostPluginPureDataLoan({raw,_=>
             let value=parseUnifiedJson(raw,maxBytes:196608,maxDepth:32);let action=httpIntentText(value,"action");actions.add(action)
             if(action=="append_receipt_error"){
@@ -96,7 +96,7 @@ class HostLivePolicyFullErrorRPC290Tests {
     }
     @TestCase
     func cancellationNeverAdvancesErrorOffsetAfterMissingActualAcknowledgement():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);let calls=AtomicInt64(0);let cancelled=AtomicBool(false)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1);let calls=AtomicInt64(0);let cancelled=AtomicBool(false)
         let loan=HostPluginPureDataLoan({_,_=>let _=calls.fetchAdd(1)
             JavaScriptHostResult<JavaScriptHostInvocationResult>.Ok(JavaScriptHostInvocationResult("rpc290","{\"accepted\":true}"))},
             {bytes=>pool.acquire(bytes)},{=>Result<Unit>.Ok(())},MonoTime.now()+Duration.second*5,64)
@@ -112,7 +112,7 @@ class HostLivePolicyFullErrorRPC290Tests {
     }
     @TestCase
     func originalEscapedJSONBeyondEightMiBUsesExactScalarPeakAndSharedSum():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);owner.ensureRetainedPeak(4194304)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1);owner.ensureRetainedPeak(4194304)
         var value:?AgentValue=Some(objectValue([
             ValueField("kind",textValue("conflict")),ValueField("code",textValue("fixture.original_large_error")),
             ValueField("message",textValue(String.fromUtf8(Array<Byte>(1572864,repeat:0)))),
@@ -145,7 +145,7 @@ class HostLivePolicyFullErrorRPC290Tests {
     }
     @TestCase
     func invoiceChecksActualCancellationDuringLargeScalarBeforeWriterAllocates():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1);owner.ensureRetainedPeak(4194304)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1);owner.ensureRetainedPeak(4194304)
         var value:?AgentValue=Some(textValue(String.fromUtf8(Array<Byte>(262144,repeat:0))))
         try{
             let payment=owner.deriveRetainedLease()

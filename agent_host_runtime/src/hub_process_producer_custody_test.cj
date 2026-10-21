@@ -3,6 +3,7 @@ package agent_host_runtime
 import agent_domain.*
 import agent_extension_runtime.reserveNativeControlMetadata
 import agent_extension_runtime.nativeControlMetadataUsage113
+import agent_extension_runtime.nativeControlMetadataCapacity113
 import agent_domain.LogicalJsonOwnerReservation as HubProcessTestPaidOwner
 import std.sync.*
 import std.time.*
@@ -76,7 +77,7 @@ class ActualHubProcessProducerCustodyTests {
             // Fill its actual remaining aggregate capacity exactly, including
             // the already installed caller/registry share and 1KiB overhead.
             let before=nativeControlMetadataUsage113()
-            let available=134217728-before[1]
+            let available=agent_extension_runtime.nativeControlMetadataCapacity113()-before[1]
             let own=root.retainedCustodyUsage113()
             pressure.ensureRetainedPeak(available+own[1]-own[0])
             let calls=AtomicInt64(0)

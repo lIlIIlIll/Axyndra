@@ -48,7 +48,7 @@ private class HostWaitingActionProbe336 {let calls=AtomicInt64(0)}
 class OwnedHostWaitingScope336Tests {
     @TestCase
     func sameActualConsumedPhaseRejectsForeignDebtCustodyAndFreshWitnessReplay():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let context=ToolInvocationContext(RunId("host-scope-run"),SessionId("host-scope-thread"),CapabilitySet())
         let parent=hostWaitingPrepared336(context,"host-scope-parent",objectValue([]))
         let request=ApprovalRequest(OperationId("host-scope-child"),"host-scope-child","test.host_scope",Capability(CapabilityKind.WorkspaceRead))
@@ -90,7 +90,7 @@ class OwnedHostWaitingScope336Tests {
 
     @TestCase
     func actualTypedActionClearsPrivateInputOnlyAndKeepsOriginalBankPaid():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let context=ToolInvocationContext(RunId("host-action-run"),SessionId("host-action-thread"),CapabilitySet())
         let payload=String.fromUtf8(Array<Byte>(8192,repeat:b'a'))+"雪\u{0000}"
         let request=ApprovalRequest(OperationId("host-action-child"),"host-action-child","test.host_scope",Capability(CapabilityKind.WorkspaceRead))
@@ -118,7 +118,7 @@ class OwnedHostWaitingScope336Tests {
 
     @TestCase
     func uncertainActualActionRetainsInputAndCannotReplayOrClaimPrivateFields():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let context=ToolInvocationContext(RunId("host-action-fail-run"),SessionId("host-action-fail-thread"),CapabilitySet())
         let request=ApprovalRequest(OperationId("host-action-fail"),"host-action-fail","test.host_scope",Capability(CapabilityKind.WorkspaceRead))
         let child=hostWaitingPrepared336(context,"host-action-fail",objectValue([]),request:Some(request))
@@ -134,7 +134,7 @@ class OwnedHostWaitingScope336Tests {
 
     @TestCase
     func completeMetadataAndBothLedgerOccurrencesSumOnOneOriginalAllocation():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let payload=JsonNode.string(String.fromUtf8(Array<Byte>(65536,repeat:b'a'))+"雪\u{0000}")
         let graph=objectValue([ValueField("payload",payload)])
@@ -153,7 +153,7 @@ class OwnedHostWaitingScope336Tests {
 
     @TestCase
     func originalFull128MiBBankRejectsCompleteActionBeforePublishingHolder():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let backing=ancestor.deriveRetainedLease();backing.ensureRetainedPeak(8192)
         let context=ToolInvocationContext(RunId("host-action-pressure-run"),SessionId("host-action-pressure-thread"),CapabilitySet())
         let payload=JsonNode.string(String.fromUtf8(Array<Byte>(1048576,repeat:b'a')))

@@ -17,7 +17,7 @@ class LiveParentTerminalFlag{var value:Bool=false}
 class PluginLivePolicyParentTerminalTests{
     @TestCase
     func FullOutputRetainsReservedFieldsUnicodeAndOriginalNumberSpelling():Unit{
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1)
         let value=objectValue([ValueField("_axyndra_context",textValue("keep this output field")),
             ValueField("request",textValue("keep this too")),ValueField("unicode",textValue("中文😀\u{0000}\n")),
             ValueField("number",JsonNode.number("1e0"))])
@@ -32,7 +32,7 @@ class PluginLivePolicyParentTerminalTests{
     }
     @TestCase
     func OriginalEightMiBOutputBoundaryDoesNotBecomeAnInputProjection():Unit{
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(4194304)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(4194304)
         try{
             let exact=textValue(String.fromUtf8(Array<Byte>(8388606,repeat:65)))
             let consumed=LiveParentTerminalFlag()
@@ -49,7 +49,7 @@ class PluginLivePolicyParentTerminalTests{
     }
     @TestCase
     func CancellationAndConsumerFailureReleaseOnlyTheEncodingOwner():Unit{
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1)
         let allocations=LiveParentTerminalCounter();let probes=LiveParentTerminalCounter()
         try{
             for(threshold in [Int64(1),Int64(2),Int64(3)]){
@@ -72,7 +72,7 @@ class PluginLivePolicyParentTerminalTests{
     }
     @TestCase
     func NumericWriterFailureKeepsOriginalBehaviorAndReleasesItsOwner():Unit{
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1)
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1)
         try{
             for(literal in ["00","-0.0.0","1e", "9223372036854775808.0.0"]){
                 var originalFailed=false;var wrappedFailed=false;let consumed=LiveParentTerminalFlag()
@@ -88,7 +88,7 @@ class PluginLivePolicyParentTerminalTests{
     @TestCase
     func EmptyRealSqliteRejectsMetadataBeforeTheContentCallback():Unit{
         let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
         let digest=modelPolicySha256Text("null")
         let payload=parsePluginDocumentPayloadReference(objectValue([
             ValueField("schema",textValue(PLUGIN_DOCUMENT_PAYLOAD_SCHEMA)),ValueField("artifact_ref",textValue("blob:sha256:"+digest)),
@@ -107,7 +107,7 @@ class PluginLivePolicyParentTerminalTests{
     @TestCase
     func ActualMetadataMutationDuringVerificationRollsBackWithoutTerminalAudit():Unit{
         let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
         let digest=modelPolicySha256Text("null")
         let payload=parsePluginDocumentPayloadReference(objectValue([
             ValueField("schema",textValue(PLUGIN_DOCUMENT_PAYLOAD_SCHEMA)),ValueField("artifact_ref",textValue("blob:sha256:"+digest)),

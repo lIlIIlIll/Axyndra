@@ -60,7 +60,7 @@ private func preparation340Context():ToolInvocationContext{
 class OwnedPreparationInputData340Tests {
     @TestCase
     func actualPublicPreparePaysWholeInputBeforeCanonicalCallbackAndNeverExecutes():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let actual=Preparation340Executor(ancestor);let pipeline=preparation340Pipeline(actual)
         let args=objectValue([ValueField("payload",textValue("complete\u{0000}雪"))])
@@ -74,7 +74,7 @@ class OwnedPreparationInputData340Tests {
     }
     @TestCase
     func originalFullAggregateRefusesBeforeAnyCanonicalCallbackOrExecution():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let pressure=ArrayList<LogicalJsonOwnerReservation>()
         for(_ in 0..7){let value=bank.acquire(1);value.ensureRetainedPeak(16777216);pressure.add(value)}
@@ -89,7 +89,7 @@ class OwnedPreparationInputData340Tests {
     }
     @TestCase
     func realMutableSelfCycleFailsBeforeDescriptorCallbackWithoutNewShapeLimit():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let actual=Preparation340Executor(ancestor);let pipeline=preparation340Pipeline(actual)
         let array:JsonNode=JsonArray(ArrayList<JsonNode>([JsonNode.string("unchanged")]));array.add(array)
         let args:JsonNode=JsonObject();args.put("array",array)
@@ -99,7 +99,7 @@ class OwnedPreparationInputData340Tests {
     }
     @TestCase
     func repeatedDagOccurrencesAreSummedUnderSameAncestorAndClearingNoCallerIsAcked():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let text=String.fromUtf8(Array<Byte>(65536,repeat:b'a'))+"\u{0000}雪"
         let shared:JsonNode=JsonObject();shared.put("payload",JsonNode.string(text))
         let single=ancestor.deriveRetainedLease()

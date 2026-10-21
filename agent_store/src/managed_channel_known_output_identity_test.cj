@@ -10,7 +10,7 @@ import yjson_support.*
 class ManagedChannelWholeTerminalIdentityTests{
     @TestCase
     func wholeLargeNulUnicodeResponseKeepsOriginalStoredFramingAndTail():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1)
         owner.ensureRetainedPeak(33554432)
         try{
             let text=String.fromUtf8(Array<Byte>(1572864,repeat:0))+"雪🙂actual last byte"
@@ -30,7 +30,7 @@ class ManagedChannelWholeTerminalIdentityTests{
     }
     @TestCase
     func originalFullPoolRejectsWholeTraversalBeforeMetadataAndRestoresSameOwner():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1)
         let value=listValue(Array<AgentValue>(4096,{_=>textValue("雪\u{0}🙂")}))
         let pressure=Array<LogicalJsonOwnerReservation>(7,{_=>pool.acquire(1)})
         try{
@@ -48,7 +48,7 @@ class ManagedChannelWholeTerminalIdentityTests{
     }
     @TestCase
     func ordinaryDeclaredOrPartialIdentityCannotReplaceWholeHeldOutput():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1)
         try{
             let value=objectValue([ValueField("body",textValue("whole 雪\u{0}🙂"))])
             let actual=managedChannelTerminalValueIdentity(value,owner,0,{=>Result<Unit>.Ok(())})
@@ -68,7 +68,7 @@ class ManagedChannelWholeTerminalIdentityTests{
 
     @TestCase
     func aliasedOutputAndResponseAboveSingleValueCodecBoundKeepEveryOriginalFrameByte():Unit{
-        let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let owner=pool.acquire(1)
         owner.ensureRetainedPeak(100663296)
         try{
             let text=String.fromUtf8(Array<Byte>(4194304,repeat:b'x'))+"雪\u{0}🙂"

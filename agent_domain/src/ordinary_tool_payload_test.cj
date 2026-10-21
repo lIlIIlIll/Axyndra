@@ -32,7 +32,7 @@ class OrdinaryToolPayloadTests {
     }
     @TestCase
     func retainedLogicalBaselineUsesTheSameTwoTransferBudget(): Unit {
-        let owner = LogicalJsonOwnerBudget(); let process = LogicalJsonProcessBudget(owner)
+        let owner = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let process = LogicalJsonProcessBudget(owner)
         let charge = process.acquire(262144)
         let baseline = owner.usage()
         let receiver = LogicalJsonReceiver(process, 1048576, "window", 2, "service_response", { => () },
@@ -46,7 +46,7 @@ class OrdinaryToolPayloadTests {
     }
     @TestCase
     func retiringACompletedTransferDoesNotRefundItsAggregateAllocation(): Unit {
-        let owner = LogicalJsonOwnerBudget(); let process = LogicalJsonProcessBudget(owner)
+        let owner = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let process = LogicalJsonProcessBudget(owner)
         let first = process.acquire(1); let second = process.acquire(1)
         let retained = owner.usage(); first.detachTransfer()
         @Expect(owner.usage()[0], retained[0]); @Expect(owner.usage()[1], retained[1])
@@ -73,7 +73,7 @@ class OrdinaryToolPayloadTests {
     @TestCase
     func concurrentCloseAndDetachReturnExactlyOneSlotAndAllocation(): Unit {
         for (_ in 0..64) {
-            let owner = LogicalJsonOwnerBudget(); let process = LogicalJsonProcessBudget(owner)
+            let owner = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let process = LogicalJsonProcessBudget(owner)
             let closing = process.acquire(1); let retained = process.acquire(1)
             let ready = AtomicBool(false)
             let detach = spawn { while (!ready.load()) { sleep(Duration.millisecond) }; closing.detachTransfer() }

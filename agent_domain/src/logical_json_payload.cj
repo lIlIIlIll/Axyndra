@@ -16,6 +16,7 @@ public type LogicalJsonReceiver = payload.LogicalJsonReceiver
 public let LOGICAL_JSON_PAYLOAD_SCHEMA = payload.LOGICAL_JSON_PAYLOAD_SCHEMA
 public let LOGICAL_JSON_CHUNK_BYTES = payload.LOGICAL_JSON_CHUNK_BYTES
 public let LOGICAL_JSON_HARD_BYTES = payload.LOGICAL_JSON_HARD_BYTES
+public let LOGICAL_JSON_SATURATION_CAPACITY = payload.LOGICAL_JSON_SATURATION_CAPACITY
 
 public func writeLogicalJsonPayload(window: String, sequence: Int64, messageType: String,
     source: String, maximum: Int64, check: () -> Unit, emit: (String, AgentValue) -> Unit): Unit {

@@ -12,7 +12,7 @@ import std.unittest.testmacro.*
 class LiveMemoryOuterErrorConsumer333Tests {
     @TestCase
     func independentSnapshotDiagnosticAndDescriptionKeepCompleteMappedErrorPaid():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(20971520)
         let text=String.fromUtf8(Array<Byte>(65536,repeat:b'a'))+"\u{0000}雪🙂"
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException(text),OperationId("consumer-parent"),ancestor)
@@ -48,7 +48,7 @@ class LiveMemoryOuterErrorConsumer333Tests {
 
     @TestCase
     func nestedConsumersSumOriginalBankAndCallbackThrowNeverRefundsEscapedData():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException("complete error"),OperationId("nested"),ancestor)
         let initial=bank.usage()
         @Expect(data.withPaidError333({_,fund=>
@@ -66,7 +66,7 @@ class LiveMemoryOuterErrorConsumer333Tests {
 
     @TestCase
     func originalPoolPressureRejectsBeforeBorrowAndNeverSubstitutesAnotherPool():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException("paid error"),OperationId("pressure"),ancestor)
         let first=bank.usage();let pressure=bank.acquire(1)
@@ -80,7 +80,7 @@ class LiveMemoryOuterErrorConsumer333Tests {
 
     @TestCase
     func mismatchedRunMetadataCannotBecomeFailureSnapshotOrSpendConsumerInvoice():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException("paid error"),OperationId("metadata"),ancestor)
         let before=bank.usage()
         let rejected=try{
@@ -94,7 +94,7 @@ class LiveMemoryOuterErrorConsumer333Tests {
 
     @TestCase
     func supplementalErrorKeepsBothTypedAttachmentsAndFreshFieldArrays():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException("paid error"),OperationId("supplement"),ancestor)
         let run=RunId("supplement-run")
         let value=OwnedOuterErrorFailure333(data,RunSnapshot(run,SessionId("thread"),RunState.RecoveryRequired),
@@ -117,7 +117,7 @@ class LiveMemoryOuterErrorConsumer333Tests {
     }
     @TestCase
     func eachPendingCallerWrapperPrepaysIndependentSameBankCaptureAndCannotRefund():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let data=copyLiveMemoryMappedOuterError331(IllegalStateException("complete error"),OperationId("pending"),ancestor)
         let before=bank.usage();let first=OwnedOuterErrorPending333(data);let one=bank.usage()

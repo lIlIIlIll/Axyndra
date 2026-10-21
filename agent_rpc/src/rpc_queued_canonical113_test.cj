@@ -84,6 +84,9 @@ private class RpcQueuedActualInputs113 {
         try { child.ensureRetainedPeak(bytes);child }
         catch (error:Exception) { child.close();throw error }
     }
+    func allocateStoreWorking(bytes:Int64):RpcQueuedStorePayment113 {
+        RpcQueuedStorePayment113.Owned(allocate(bytes))
+    }
     func capture(error:AgentError):Unit {
         match (captureOwnedFailureData113<Unit>(error,{bytes=>allocate(bytes)})) {
             case OwnedFailureDataOutcome113.Failure(value)=>primary=Some(value)
@@ -101,7 +104,7 @@ private func rpcQueuedOrigin113(session:ApplicationSession,value:QueuedInteracti
 }
 private func rpcQueuedInvoke113(session:ApplicationSession,value:QueuedInteraction,
     origin:QueuedRunInitiatorData113,paid:RpcQueuedActualInputs113):Result<ApplicationResponse> {
-    session.handleRpcQueuedAtReturnedBoundary113(value,origin,{bytes=>paid.allocate(bytes)},
+    session.handleRpcQueuedAtReturnedBoundary113(value,origin,{bytes=>paid.allocateStoreWorking(bytes)},
         {error=>paid.capture(error)},paid.payment,{cell=>paid.retainStore(cell)})
 }
 
@@ -112,7 +115,7 @@ class ActualRpcQueuedCanonical113Tests {
         let root=rpcQueuedRoot113();let product=rpcQueuedProduct113(root)
         let session=product.applicationSession();let thread=ThreadId(session.id().value)
         let gate=RpcQueuedCanonicalGate113()
-        let server=ProductJsonlRpcServer(session,{frame=>gate.emit(frame)})
+        let server=ProductJsonlRpcServer(session,{frame=>gate.emit(frame)},reserveProductControlMetadata113)
         let first=spawn { server.handle("{\"id\":\"durable-first\",\"type\":\"prompt\",\"message\":\"hello actual first turn\"}") }
         try {
             @Expect(rpcQueuedWait113({=>gate.entered.load()}))
@@ -218,7 +221,7 @@ class ActualRpcQueuedCanonical113Tests {
             let value=rpcQueuedTake113(session,paid);let origin=rpcQueuedOrigin113(session,value,paid)
             let calls=product.fixtureProbe.getOrThrow().observedCallCount11318()
             let steps=db.scalarInt("SELECT COUNT(*) FROM step_records")
-            SqliteInboxStepStore(db).prepareActualRpcQueuedInput113(origin,true,{bytes=>paid.allocate(bytes)},{cell=>paid.retainStore(cell)})
+            SqliteInboxStepStore(db).prepareActualRpcQueuedInput113(origin,true,{bytes=>paid.allocateStoreWorking(bytes)},{cell=>paid.retainStore(cell)})
             @Expect(rpcQueuedCount113(db,"SELECT COUNT(*) FROM lane_inbox_entries WHERE id=? AND status='processing' AND claimed_step_id IS NULL",
                 [SqlParameter.Text(origin.entryId.value)]),1)
             let restored=product.applicationSession(sessionId:Some(id))
@@ -231,8 +234,8 @@ class ActualRpcQueuedCanonical113Tests {
             // Only the actual known handler return is eligible to settle the
             // reserved input. Reopen itself cannot manufacture that return.
             @Expect(session.handle("/dump").isOk())
-            SqliteInboxStepStore(db).completeReturnedRpcInput113(origin,true,true,{bytes=>paid.allocate(bytes)},{cell=>paid.retainStore(cell)})
-            @Expect(SqliteInboxStepStore(db).actualRpcQueuedInputTerminal113(origin,{bytes=>paid.allocate(bytes)},{cell=>paid.retainStore(cell)}))
+            SqliteInboxStepStore(db).completeReturnedRpcInput113(origin,true,true,{bytes=>paid.allocateStoreWorking(bytes)},{cell=>paid.retainStore(cell)})
+            @Expect(SqliteInboxStepStore(db).actualRpcQueuedInputTerminal113(origin,{bytes=>paid.allocateStoreWorking(bytes)},{cell=>paid.retainStore(cell)}))
             @Expect(db.scalarInt("SELECT COUNT(*) FROM step_records"),steps)
             @Expect(product.fixtureProbe.getOrThrow().observedCallCount11318(),calls)
         } finally { paid.retireReturnedStores();db.close();product.close().value().getOrThrow();payment.close();remove(root,recursive:true) }
@@ -250,9 +253,9 @@ private class RpcQueuedSqlPressure113 {
         @Expect(inputs.payment.retainedCustodyUsage113()[0]>16777216)
         let used=productControlMetadataUsage113()[1]
         let own=pressure.retainedCustodyUsage113()[1]
-        @Expect(used<=134217728)
-        pressure.ensureRetainedPeak(134217728-used+own)
-        @Expect(productControlMetadataUsage113()[1],134217728)
+        @Expect(used<=productControlMetadataCapacity113())
+        pressure.ensureRetainedPeak(productControlMetadataCapacity113()-used+own)
+        @Expect(productControlMetadataUsage113()[1],productControlMetadataCapacity113())
     }
 }
 
@@ -326,7 +329,7 @@ private func rpcQueuedSqlPressureBody113(): Unit {
             "WHEN NEW.status='processing' BEGIN SELECT RAISE(ABORT,'actual original queued SQL failure'); END")
         try {
             SqliteInboxStepStore(db).prepareActualRpcQueuedInput113(origin,true,
-                {bytes=>paid.allocate(bytes)},{cell=>fill.retainBeforeSql(cell)})
+                {bytes=>paid.allocateStoreWorking(bytes)},{cell=>fill.retainBeforeSql(cell)})
             throw IllegalStateException("actual SQL trigger must produce its original error")
         } catch (failure:RpcQueuedStoreFailure113) {
             @Expect(refEq(failure,paid.store.getOrThrow()))
@@ -442,7 +445,7 @@ private func rpcQueuedRoutingPressureBody113(fixture:RpcQueuedRoutingFixture113)
     let session=product.applicationSession();let gate=fixture.gate
     let db=SqliteDatabase(root+"/state/state.db")
     let writerDb=SqliteDatabase(root+"/state/state.db")
-    let server=ProductJsonlRpcServer(session,{frame=>gate.emit(frame)})
+    let server=ProductJsonlRpcServer(session,{frame=>gate.emit(frame)},reserveProductControlMetadata113)
     fixture.server=Some(server)
     try {
         fixture.first=Some(spawn {server.handle("{\"id\":\"sql-routing-first\",\"type\":\"prompt\",\"message\":\"/dump\"}")})
@@ -480,7 +483,7 @@ private func rpcQueuedRoutingPressureBody113(fixture:RpcQueuedRoutingFixture113)
         let full=productControlMetadataUsage113()
         @Expect(full[0],before[0]+fixture.pressure.size)
         @Expect(full[1],before[1]+fixture.pressure.size*65536)
-        @Expect(134217728-full[1]<65536)
+        @Expect(productControlMetadataCapacity113()-full[1]<65536)
         gate.writerReleased.store(true)
         fixture.writer.getOrThrow().get()
         @Expect(fixture.first.getOrThrow().get().contains("\"success\":true"))

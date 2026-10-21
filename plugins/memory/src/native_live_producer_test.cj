@@ -36,7 +36,7 @@ func liveProducerTestManifest(output:MemoryLiveOutput):AgentValue{
 class NativeMemoryLiveProducerTests {
     @TestCase
     func originalPinnedBytesSurviveShortReadsUtf8EscapesAndSlotBoundary():Unit{
-        let pool=LogicalJsonOwnerBudget();let inputs=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let inputs=pool.acquire(1)
         var output:?MemoryLiveOutput=None
         try{
             inputs.ensureRetainedPeak(33554432)
@@ -71,7 +71,7 @@ class NativeMemoryLiveProducerTests {
 
     @TestCase
     func onePublicationWaitsForRealNextOffsetAndCloseJoinsBlockedWriter():Unit{
-        let pool=LogicalJsonOwnerBudget();let payment=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let payment=pool.acquire(1)
         var producer:?MemoryLiveJsonProducer=None
         try{
             payment.ensureRetainedPeak(4194304)
@@ -93,7 +93,7 @@ class NativeMemoryLiveProducerTests {
 
     @TestCase
     func originalFullDataRpcCancellationAfterFirstChunkJoinsAndReleases():Unit{
-        let pool=LogicalJsonOwnerBudget();let cancelled=AtomicBool(false)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let cancelled=AtomicBool(false)
         let data=NativeMemoryLiveToolData(allocate:{bytes=>pool.acquire(bytes)},current:{=>
             if(cancelled.load()){throw PureProviderError("fixture.cancelled","original consumer revoked")}})
         try{
@@ -117,7 +117,7 @@ class NativeMemoryLiveProducerTests {
 
     @TestCase
     func countPassDoesNotPermitChangedNodeToPublishSuccessfulEof():Unit{
-        let pool=LogicalJsonOwnerBudget();let inputs=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let inputs=pool.acquire(1)
         var output:?MemoryLiveOutput=None
         try{
             let node=objectValue([ValueField("payload",textValue("before"))])
@@ -134,7 +134,7 @@ class NativeMemoryLiveProducerTests {
 
     @TestCase
     func largeEncodedOutputUsesAllEightReferencesWithoutRetainingEncodedSlots():Unit{
-        let pool=LogicalJsonOwnerBudget();let inputs=pool.acquire(1)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let inputs=pool.acquire(1)
         var output:?MemoryLiveOutput=None
         try{
             // The actual immutable scalar is shared. This proves large ENCODED
@@ -168,7 +168,7 @@ class NativeMemoryLiveProducerTests {
     @TestCase
     func skippingWholeReferenceOrRepeatingAcknowledgedOffsetFailsClosed():Unit{
         for(mode in ["skip","repeat"]){
-            let pool=LogicalJsonOwnerBudget();let inputs=pool.acquire(1);var output:?MemoryLiveOutput=None
+            let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let inputs=pool.acquire(1);var output:?MemoryLiveOutput=None
             try{
                 inputs.ensureRetainedPeak(16777216)
                 let node=textValue(String.fromUtf8(Array<Byte>(1400000,repeat:0)))
