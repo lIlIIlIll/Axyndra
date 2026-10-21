@@ -67,7 +67,15 @@ private func rejectUnpaidContentDeclarations209(receiver: NativePayloadReceiver)
 private func contentReceiverPressureFrame209(rejectLarge: Bool): Unit {
     let pressure=reserveNativeControlMetadata(4096)
     try {
-        pressure.ensureRetainedPeak(70395520)
+        // Pressure is expressed against the CURRENT aggregate so the refusal
+        // this test asserts stays reachable whatever the product quota is.
+        // Exactly THREE floor-priced owners of room are left: the `frozen` and
+        // `outgoing` reservations (two floors) must succeed, and the eager
+        // result-profile reservation below must be the one that is refused.
+        // The behaviour under test - refuse before allocating and change no
+        // bank state - is unchanged.
+        let capacity = nativeControlMetadataCapacity113()
+        pressure.ensureRetainedPeak(capacity - 3 * 16777216)
         let frozen=reserveNativeControlMetadata(4096)
         try {
             let budget=NativePayloadProcessBudget()
