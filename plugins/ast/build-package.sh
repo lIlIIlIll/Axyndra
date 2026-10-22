@@ -7,18 +7,20 @@ output=''
 engine=''
 engine_license=''
 skip_build=false
+target_dir=''
 while (($#)); do
   case "$1" in
-    --output|--engine|--engine-license)
+    --output|--engine|--engine-license|--target-dir)
       if (($# < 2)); then printf 'missing value for %s\n' "$1" >&2; exit 2; fi
       case "$1" in
         --output) output=$2 ;;
         --engine) engine=$2 ;;
         --engine-license) engine_license=$2 ;;
+        --target-dir) target_dir=$2 ;;
       esac
       shift 2 ;;
     --skip-build) skip_build=true; shift ;;
-    *) printf 'usage: %s --output NEW_DIRECTORY --engine AST_GREP --engine-license LICENSE [--skip-build]\n' "$0" >&2; exit 2 ;;
+    *) printf 'usage: %s --output NEW_DIRECTORY --engine AST_GREP --engine-license LICENSE [--target-dir DIRECTORY] [--skip-build]\n' "$0" >&2; exit 2 ;;
   esac
 done
 if [[ -z "$output" || -z "$engine" || -z "$engine_license" ]]; then
@@ -33,8 +35,13 @@ command -v python3 >/dev/null
 command -v patchelf >/dev/null
 python3 "$plugin_root/package.py" --validate --output "$output" \
   --engine "$engine" --engine-license "$engine_license"
+if [[ "$skip_build" == true && -z "$target_dir" ]]; then
+  printf '%s\n' '--skip-build requires the exact --target-dir to package' >&2
+  exit 2
+fi
+target_dir=$(realpath -m -- "${target_dir:-${output}-build-target}")
 if [[ "$skip_build" != true ]]; then
-  (cd "$plugin_root" && "$root/scripts/pinned_cangjie" cjpm build >&2)
+  (cd "$plugin_root" && "$root/scripts/pinned_cangjie" cjpm build --target-dir "$target_dir" >&2)
 fi
 sdk_root=$(DISABLE_ZOXIDE=1 "$root/scripts/check_sdk.sh")
 source "$root/scripts/sdk_paths.sh"
@@ -42,4 +49,4 @@ stdx_root=$(resolve_cangjie_stdx_path "$sdk_root")
 export LD_LIBRARY_PATH="$root/libs/process4cj/native:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib:$stdx_root"
 python3 "$plugin_root/package.py" --output "$output" --engine "$engine" \
   --engine-license "$engine_license" --sdk-root "$sdk_root" \
-  --binary "$plugin_root/target/release/bin/main"
+  --binary "$target_dir/release/bin/main"
