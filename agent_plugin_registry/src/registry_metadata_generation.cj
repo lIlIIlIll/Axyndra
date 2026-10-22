@@ -110,15 +110,16 @@ class PluginRegistryMetadataGeneration {
     // Called only while Registry holds its ordinary mutex AND both real SH
     // file locks. Registry's actual current state has its own explicit hold.
     func tryRetain(scratch: PluginRegistryMetadataPayment): Bool {
-        // A reservation refusal here is a BUDGET outcome, not evidence that the
-        // installed metadata changed. It must propagate so the caller can report
-        // the capacity limit it actually hit; folding it into `false` would both
-        // hide the cause and permanently revoke a healthy generation.
+        // A reservation refusal is a BUDGET outcome, not evidence that the
+        // installed metadata changed, so it must NOT revoke a healthy
+        // generation: the caller has to be able to report the capacity limit it
+        // hit and retry once the pressure is gone. Only a real validation
+        // failure makes the retained snapshot unusable.
         scratch.ensureRetainedPeak(4194304)
         lock.lock(); try {
             if (closed || revoked) { return false }
             try { validateLocked() }
-            catch (error: Exception) { revoked = true; throw error }
+            catch (_: Exception) { revoked = true; return false }
             if (references == Int64.Max) { throw LogicalJsonPayloadError("registry metadata reference count exhausted") }
             references++; true
         } finally { lock.unlock() }
