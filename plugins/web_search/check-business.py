@@ -19,7 +19,8 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     package = ROOT / 'plugins/web_search'
-    base = [str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test']
+    target = args.output_dir.resolve() / 'build-target'
+    base = [str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--target-dir', str(target)]
     test_log = args.output_dir / 'test.log'
     dry_log = args.output_dir / 'enumeration.log'
     record = dict(status='FAIL', expected_cases=EXPECTED_CASES)
@@ -39,7 +40,7 @@ def main():
         cases = dry_run_cases(dry_log.read_text(errors='replace'))
         if len(cases) != EXPECTED_CASES:
             raise ValueError('web search pure test enumeration differs from the reviewed case count')
-        binary = package / 'target/release/unittest_bin/web_search_plugin'
+        binary = target / 'release/unittest_bin/web_search_plugin'
         record.update(status='PASS', cases=cases, binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                       sources={p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                                for p in sorted((package / 'src').glob('*.cj'))})
