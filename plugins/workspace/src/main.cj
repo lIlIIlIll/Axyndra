@@ -1,5 +1,6 @@
 package workspace_plugin
 
+import agent_domain.*
 import std.env.*
 import process4cj.*
 import yjson.*
@@ -17,6 +18,7 @@ func workspaceInputLimit(tool: String): Int64 {
 }
 let WORKSPACE_RESULT_BYTES: Int64 = 65536
 func workspaceResultLimit(tool: String): Int64 {
+    if (tool == "read" && workspacePayloadProfile.isSome()) { return workspacePayloadProfile.getOrThrow().maxResultBytes }
     if (tool == "write") { 200704 } else { WORKSPACE_RESULT_BYTES }
 }
 
@@ -47,9 +49,16 @@ func wsEmit(value: JsonNode): Unit {
 
 func wsWorker(arguments: Array<String>): Int64 {
     try {
+        let profiled = arguments.size == 5 && arguments[1] == "--view-worker-profile" && arguments[2] == "read"
         let frozenFile = arguments.size == 3 && arguments[1] == "--view-worker-file"
-        if ((!frozenFile && arguments.size != 4) || arguments.size < 3) {
+        if ((!frozenFile && !profiled && arguments.size != 4) || arguments.size < 3) {
             throw WorkspaceFailure("workspace.input_limit", "Worker requires one bounded frozen JSON object") }
+        if (profiled) {
+            workspacePayloadProfile = ordinaryToolPayloadLimitsFromValue(parseUnifiedJson(arguments[4], maxBytes: 4096))
+            if (workspacePayloadProfile.isNone() || workspacePayloadProfile.getOrThrow().contribution != arguments[2]) {
+                throw WorkspaceFailure("workspace.payload_profile", "Worker profile differs from its prepared contribution") }
+        }
+        if (profiled) { workspaceInvocationPayment = Some(workspacePayloadOwners.acquire(1)) }
         let encoded = if (frozenFile) {
             wsReadText(getWorkingDirectory().toString(), ".axyndra-worker-input.json", maximumBytes: WORKSPACE_WRITE_INPUT_BYTES)
         } else { arguments[3] }
@@ -64,11 +73,12 @@ func wsWorker(arguments: Array<String>): Int64 {
         wsEmit(output); 0
     } catch (error: WorkspaceFailure) { wsEmit(wsError(error.code, error.message)); 2 }
     catch (_: Exception) { wsEmit(wsError("workspace.failed", "Workspace operation failed")); 2 }
+    finally { workspaceReleasePayload() }
 }
 
 main(): Int64 {
     let arguments = getCommandLine()
-    if (arguments.size > 1 && (arguments[1] == "--view-worker" || arguments[1] == "--view-worker-file")) { workspaceHostReadView = true; return wsWorker(arguments) }
+    if (arguments.size > 1 && ["--view-worker", "--view-worker-file", "--view-worker-profile"].contains(arguments[1])) { workspaceHostReadView = true; return wsWorker(arguments) }
     if (arguments.size > 1 && arguments[1] == "--worker") { return wsWorker(arguments) }
     if (arguments.size != 1) { return 2 }
     try { runWorkspaceProtocol() } catch (_: Exception) { 3 }

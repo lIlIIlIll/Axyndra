@@ -108,12 +108,12 @@ private func minimalRegistryStaticMessage86(reason: PluginRegistryStaticReason):
         case PluginRegistryStaticReason.ExecutionNotCurrent => "installed execution pin is not current"
         case PluginRegistryStaticReason.InstalledRecordAbsent => "installed record is absent"
         case PluginRegistryStaticReason.ComponentAliasInvalid => "initial context configuration or its exact installed binding is unavailable"
-        case PluginRegistryStaticReason.None => throw IllegalArgumentException("a dynamic error needs its owned copy")
+        case PluginRegistryStaticReason.NoStaticReason => throw IllegalArgumentException("a dynamic error needs its owned copy")
     }
 }
 
 private func minimalRegistryDynamicError86(error: PluginRegistryOwnedError): Bool {
-    match (error.staticReason) { case PluginRegistryStaticReason.None => true; case _ => false }
+    match (error.staticReason) { case PluginRegistryStaticReason.NoStaticReason => true; case _ => false }
 }
 
 private func minimalRegistryCopy86(result: PluginRegistryResult<OwnedRegistryUtf8>): OwnedRegistryUtf8 {

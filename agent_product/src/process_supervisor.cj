@@ -176,6 +176,9 @@ class ProductProcessSupervisor {
         this.brokerRootData180=brokerRootData180
         this.shellNetworkMode = shellNetworkMode
         this.sandboxCaBundle = sandboxCaBundle.trimAscii()
+    }
+
+    func initializeBrokerStorage180(): Unit {
         if (brokerMode) {
             let daemonsRoot = brokerRoot + "/daemons"
             let logsRoot = brokerRoot + "/logs"
@@ -194,6 +197,23 @@ class ProductProcessSupervisor {
         try { findLocked(name).isSome() } finally { lock.unlock() }
     }
 
+    // Observation of real process/recovery owners only. In particular an
+    // unresolved restored incarnation is not permission to stop that process.
+    func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock(); try {
+            for (state in daemons) {
+                if (state.launching || state.process.isSome() || state.processHandle.isSome() ||
+                    state.recoveryRequired || state.recoveredIncarnation180.isSome() ||
+                    state.recoveredStopProducer180.isSome() || state.recoveredStopBusy180 ||
+                    state.retainedOpened180.isSome() || state.nativeStartCell180.isSome() ||
+                    state.actualOutput180.isSome() || state.actualError180.isSome() || state.actualMonitor180.isSome() ||
+                    state.actualLaunchCaller180.isSome() || state.actualShutdown180.isSome() || state.actualReadiness180.isSome() ||
+                    state.actualClose180.isSome() || state.actualNetworkRelease180.isSome() || state.actualController180.isSome() ||
+                    state.nativeRestartPending180) { return true }
+            }
+            false
+        } finally { lock.unlock() }
+    }
     func close(): Unit {
         // Only the actual Native records use this owned close. Historical
         // Support entries retain the original stop/timeout/error behavior.
@@ -208,26 +228,6 @@ class ProductProcessSupervisor {
         for (state in values) { if(state.service180.isNone()){let _ = stopState(state, 1000)} }
     }
 
-    func execute(
-        call: ToolCall,
-        op: String,
-        owner: String
-    ): Result<ToolResult> {
-        match (op) {
-            case "start" => start(call, owner)
-            case "ps" => list(call)
-            case "logs" => logs(call)
-            case "stop" => stop(call)
-            case "restart" => restart(call)
-            case "describe" => describe(call)
-            case "send" => send(call)
-            case "wait" => wait(call)
-            case _ => supervisorError<ToolResult>(
-                "hub.process_op_invalid",
-                "unsupported process operation: " + op
-            )
-        }
-    }
 
     private func start(
         call: ToolCall,
@@ -1147,8 +1147,13 @@ class ProductProcessSupervisor {
                     return supervisorError<Int64>("hub.process_launch_caller_retained","previous launch helper/error is still owned")}
                 state.actualLaunchCaller180=None<HostHubProcessProducerCell>
                 case None=>()}
-            caller=lease.reserveControlBeforeClosure180();caller.fundProducerFrameBeforeEffect180(65536)
+            caller=lease.reserveControlBeforeClosure180()
             state.actualLaunchCaller180=Some(caller);state.nativeLaunchHelperReturned180=false
+            // Keep the complete original launch scratch invoice in this
+            // actual caller, not forever in the daemon's retained DATA. The
+            // state/spec/handle and asynchronous producers have separate paid
+            // fields; only this whole helper's successful return retires it.
+            caller.fundProducerFrameBeforeEffect180(65536 + 2097152 * 8 + 64 * 512 + 4096)
         }finally{lock.unlock()}
         let result=ProductActualLaunchResult180()
         caller.invokeSynchronousHelper180({=>
@@ -1182,7 +1187,6 @@ class ProductProcessSupervisor {
                 return supervisorError<Int64>("hub.process_launch_superseded","process launch was stopped or superseded")}
             if(state.nativeGeneration180!=0 && state.nativeJoinedGeneration180!=state.nativeGeneration180){
                 return supervisorError<Int64>("hub.process_producers_retained","previous actual incarnation producers have not returned")}
-            lease.retainData180(2097152,64)
             state.launching=true
         }finally{lock.unlock()}
         let generation=match(lease.beginPhysicalLaunch180()){

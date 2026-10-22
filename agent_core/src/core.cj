@@ -130,6 +130,7 @@ public class AgentRunRequest {
     public let budget: ResourceBudget
     public let interactions: ?AgentInteractionSource
     public let approvalModeOverride: ?ApprovalMode
+    public let callerCancellation180: ?CancellationToken
     public let autoRetry: Bool
     public let serviceTier: String
     public let pricing: ?ModelPricing
@@ -165,6 +166,7 @@ public class AgentRunRequest {
         budget!: ResourceBudget = ResourceBudget(),
         interactions!: ?AgentInteractionSource = None,
         approvalModeOverride!: ?ApprovalMode = None,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>,
         autoRetry!: Bool = true,
         serviceTier!: String = "",
         pricing!: ?ModelPricing = None,
@@ -221,6 +223,7 @@ public class AgentRunRequest {
         this.budget = budget
         this.interactions = interactions
         this.approvalModeOverride = approvalModeOverride
+        this.callerCancellation180 = callerCancellation180
         this.autoRetry = autoRetry
         this.serviceTier = serviceTier
         this.pricing = pricing
@@ -258,12 +261,7 @@ public class AgentRunRequest {
         } else {
             budget.maxInputTokens + budget.maxOutputTokens + providerSafetyMargin
         }
-        this.toolContext = ToolContextDescriptor(
-            workspaceRoot: toolContext.workspaceRoot,
-            cwd: toolContext.cwd,
-            environment: toolContext.environment,
-            services: toolContext.services
-        )
+        this.toolContext = ToolContextDescriptor(toolContext)
     }
 }
 
@@ -275,6 +273,7 @@ func requestWithContextSnapshot(request: AgentRunRequest, snapshot: InvocationCo
         modelCapabilitiesSnapshot: Some(request.modelCapabilitiesSnapshot), resolverVersion: request.resolverVersion,
         capabilities: request.capabilities, budget: request.budget, interactions: request.interactions,
         approvalModeOverride: request.approvalModeOverride, autoRetry: request.autoRetry,
+        callerCancellation180: request.callerCancellation180,
         serviceTier: request.serviceTier, pricing: request.pricing, imageInputs: request.imageInputs,
         structuredOutput: request.structuredOutput, cachePolicy: request.cachePolicy, cacheKey: request.cacheKey,
         parallelToolCalls: request.parallelToolCalls, toolContext: request.toolContext,
@@ -874,7 +873,9 @@ public class AgentCore <: AgentRunner {
         // snapshot is visible, so registering afterwards leaves an early
         // cancellation able to misclassify that valid window as corruption.
         let control = CoreRunControl(request.runId, request.budget, runtime,
-            parentCancellation: match (restriction) { case Some(value) => Some(value.cancellation); case None => None })
+            parentCancellation: match (restriction) { case Some(value) => Some(value.cancellation); case None => None },
+            callerCancellation180: request.callerCancellation180,
+            recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery))
         match (controls.add(control)) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
@@ -912,13 +913,14 @@ public class AgentCore <: AgentRunner {
                 finishControl(request.runId)
                 return Result.Err(error)
         }
-        let result = startAcceptedRunFrame159(request, sink, continuation, restriction,
-            contextProjection, user, runtime, control, active, startRevalidationError)
-        // The entire start/continue stack and its local lane references have
-        // returned. Deferred contexts own separate shares; public preparers
-        // receive a separate snapshot below and cannot borrow this invoice.
-        active.returnOwnedLaneView159()
-        result
+        try {
+            startAcceptedRunFrame159(request, sink, continuation, restriction,
+                contextProjection, user, runtime, control, active, startRevalidationError)
+        } finally {
+            // The real enclosing helper returned or threw. Deferred Contexts
+            // keep independent paid shares; a failure cannot skip this view.
+            active.returnOwnedLaneView159()
+        }
     }
     private func startAcceptedRunFrame159(request: AgentRunRequest, sink: AgentEventSink,
         continuation: ?AgentContinuationStart, restriction: ?AgentRunStartRestriction111,
@@ -1037,7 +1039,7 @@ public class AgentCore <: AgentRunner {
             case Result.Ok(None) => return Result.Err(coreContextBoundaryError("no current context boundary"))
             case Result.Err(error) => return Result.Err(error) }
         let data = boundary.data()
-        let durable = try { coreContextBoundaryRequestFromValue(contextBoundaryField(data, "request"), interactions: request.interactions, ownedEvents: request.ownedEvents) }
+        let durable = try { coreContextBoundaryRequestFromValue(contextBoundaryField(data, "request"), interactions: request.interactions, ownedEvents: request.ownedEvents, callerCancellation180: request.callerCancellation180) }
             catch (error: Exception) { return Result.Err(coreContextBoundaryError(error.message)) }
         if (durable.runId.value != request.runId.value || durable.sessionId.value != request.sessionId.value ||
             durable.resolverVersion != MODEL_POLICY_RESOLUTION_VERSION ||
@@ -1356,8 +1358,8 @@ public class AgentCore <: AgentRunner {
             }
         }
         if (storedAttempt.dispatchState == ModelAttemptDispatchState.DispatchClaimed) {
-            if (!durableRequest.autoRetry || !modelAttemptRecovery.enabled() ||
-                modelAttemptRecovery.maxRecoveryRetries == 0 || storedAttempt.attemptNo != 1 ||
+            if (!durableRequest.autoRetry || !control.recoveryPolicy180.enabled() ||
+                control.recoveryPolicy180.maxRecoveryRetries == 0 || storedAttempt.attemptNo != 1 ||
                 (durableRequest.budget.deadlineMillis > 0 &&
                     agentUtcMillis() >= durableRequest.budget.deadlineMillis)) {
                 return Result.Err(AgentError(
@@ -1370,7 +1372,7 @@ public class AgentCore <: AgentRunner {
             attemptId = modelAttemptIdFor(checkpoint.semanticRequestId, attemptNo)
             modelRequest = modelRequestForAttempt(modelRequest, attemptNo)
             let policy = attemptPolicyFor(
-                modelRequest, AttemptPolicyReason.Retry, modelAttemptRecovery
+                modelRequest, AttemptPolicyReason.Retry, control.recoveryPolicy180
             )
             executionPolicyReason = attemptPolicyReasonName(policy.reason)
             match (persistModelAttemptBeforeRequest(
@@ -2537,10 +2539,12 @@ public class AgentCore <: AgentRunner {
         sink: AgentEventSink,
         toolLoopState: CoreToolLoopState
     ): Result<CoreTurnExecution> {
-        let result = executeCanonicalModelTurnFrame159(request, context, control, counter,
-            prepared, turnId, sink, toolLoopState)
-        prepared.returnPreparedFrame159()
-        result
+        try {
+            executeCanonicalModelTurnFrame159(request, context, control, counter,
+                prepared, turnId, sink, toolLoopState)
+        } catch (failure: IllegalStateException) {
+            Result.Err(AgentError(AgentErrorKind.Internal, "run.result_observer_exception", failure.message))
+        } finally { prepared.returnPreparedFrame159() }
     }
 
     private func executeCanonicalModelTurnFrame159(
@@ -4768,7 +4772,7 @@ public class AgentCore <: AgentRunner {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let attemptPlan = match (prepareModelAttemptRequest(
                 request, modelRequest, semanticRequestId, 1,
-                AttemptPolicyReason.Initial, modelAttemptRecovery
+                AttemptPolicyReason.Initial, control.recoveryPolicy180
             )) {
                 case Result.Ok(value) => value
                 case Result.Err(error) => return Result.Err(error)
@@ -4851,7 +4855,7 @@ public class AgentCore <: AgentRunner {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let attemptPlan = match (prepareModelAttemptRequest(
                 request, modelRequest, semanticRequestId, attempt, attemptReason,
-                modelAttemptRecovery, recoveryCeiling: recoveryCeiling,
+                control.recoveryPolicy180, recoveryCeiling: recoveryCeiling,
                 parentAttemptId: if (attempt == 1) { None } else {
                     Some(modelAttemptIdFor(semanticRequestId, attempt - 1))
                 }
@@ -5018,7 +5022,7 @@ public class AgentCore <: AgentRunner {
                         persistedAttempt.replayBarrier != ModelAttemptReplayBarrier.RunDeadline
                     let failurePlan = planModelAttemptFailure(
                         error, durableMayWin, persistedAttempt.replayBarrier,
-                        attempt, maxAttempts, modelAttemptRecovery.maxRecoveryRetries
+                        attempt, maxAttempts, control.recoveryPolicy180.maxRecoveryRetries
                     )
                     let disposition = failurePlan.disposition
                     match (disposition) {
@@ -5407,7 +5411,7 @@ public class AgentCore <: AgentRunner {
         control: CoreRunControl,
         sink: AgentEventSink
     ): ModelAttemptExecution {
-        let inputCustody159 = match (catalog.reserveModelInputData159(modelRequest)) {
+        let inputCustody159 = match (catalog.reserveModelInputData159(modelRequest, settings180: Some(request.toolContext))) {
             case Some(payment) =>
                 let value = CoreModelInput159(payment, modelRequest)
                 control.retainModelInput159(value)
@@ -5440,7 +5444,7 @@ public class AgentCore <: AgentRunner {
         inputCustody159: ?CoreModelInput159
     ): ModelAttemptExecution {
         let activity = AttemptDeadlineContext(
-            modelAttemptRecovery, attemptClock,
+            control.recoveryPolicy180, attemptClock,
             idleLimitMillis: request.budget.maxIdleMillis
         )
         control.setActiveRequest(modelRequest.requestId)
@@ -5479,7 +5483,8 @@ public class AgentCore <: AgentRunner {
                             }
                         }
                     }
-                }, inputCustody159
+                }, inputCustody159, request.toolContext.executionSettings180, request.toolContext.modelFaultCounters180,
+                { => control.source.token.isCancelled() || !activity.acceptsEvents180() }
             )
             } finally { completed.store(true) }
         }
@@ -5712,7 +5717,7 @@ public class AgentCore <: AgentRunner {
                             retryable: true,
                             fallbackAllowed: error.fallbackAllowed,
                             fields: fields.toArray(),
-                            attemptFailure: error.attemptFailure
+                            attemptFailure: error.attemptFailure, observation: error.observation
                         )), provisionalEvents
                     )
                 } else {
@@ -6671,7 +6676,8 @@ public class AgentCore <: AgentRunner {
         if (maintenance) {
             let runtime = match (threadRuntimes.acquire(ThreadId(parent.sessionId.value), coreWorkspaceId(parent))) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-            control = CoreRunControl(parent.runId, parent.budget, runtime)
+            control = CoreRunControl(parent.runId, parent.budget, runtime, callerCancellation180: parent.callerCancellation180,
+                recoveryPolicy180: modelAttemptRecoveryForSettings180(parent.toolContext.executionSettings180, modelAttemptRecovery))
             match (controls.add(control)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             control.bindCancellation(model, tools)
             let admission = runtime.startInternalModelTurn(SemanticTurnId("turn-" + parent.runId.value), parent.runId,
@@ -6695,7 +6701,7 @@ public class AgentCore <: AgentRunner {
         } else {
             control = match (internalModelControl(parent)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         }
-        let canonical = CoreInternalAttemptPort(model, runs, modelDecisionRuntime, control, parent, purpose)
+        let canonical = CoreInternalAttemptPort(model, runs, modelDecisionRuntime, control, parent, purpose, catalog)
         // Register against the durable owner before the bounded loop. An
         // already-cancelled token invokes this callback immediately, closing
         // the old set-active / model-registration race without a second loop.
@@ -6856,7 +6862,8 @@ public class AgentCore <: AgentRunner {
                     runtime,
                     initial: if (modelRecovery) { RunState.Running } else { RunState.WaitingApproval },
                     turns: snapshot.turns,
-                    modelRequests: restoredModelRequests
+                    modelRequests: restoredModelRequests, callerCancellation180: request.callerCancellation180,
+                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery)
                 )
                 // Budget continuity across crash/resume: prefer the exact
                 // durable checkpoint usage over the coarser Run snapshot so a
@@ -7630,7 +7637,8 @@ public class AgentCore <: AgentRunner {
                     request.runId,
                     request.budget,
                     runtime,
-                    initial: RunState.Running
+                    initial: RunState.Running, callerCancellation180: request.callerCancellation180,
+                    recoveryPolicy180: modelAttemptRecoveryForSettings180(request.toolContext.executionSettings180, modelAttemptRecovery)
                 )
                 if (!runtime.hasActiveRun159()) {
                     // An already described continuation cannot be recreated as
@@ -8395,12 +8403,13 @@ func toolContextDescriptorValue(value: ToolContextDescriptor): AgentValue {
             ValueField("version", textValue(service.version))
         ]))
     }
-    objectValue([
+    let fields = ArrayList<ValueField>([
         ValueField("workspace_root", textValue(value.workspaceRoot)),
         ValueField("cwd", textValue(value.cwd)),
         ValueField("environment", listValue(environment.toArray())),
-        ValueField("services", listValue(services.toArray()))
-    ])
+        ValueField("services", listValue(services.toArray()))])
+    if (value.executionSettings180.unifiedKind != ValueKind.Null) { fields.add(ValueField("execution_settings", value.executionSettings180)) }
+    objectValue(fields.toArray())
 }
 
 func toolContextDescriptorFromValue(value: AgentValue): ToolContextDescriptor {
@@ -8423,7 +8432,8 @@ func toolContextDescriptorFromValue(value: AgentValue): ToolContextDescriptor {
         workspaceRoot: requiredCoreTextField(value, "workspace_root"),
         cwd: requiredCoreTextField(value, "cwd"),
         environment: ToolEnvironmentView(entries: environment.toArray()),
-        services: ToolServiceView(descriptors: services.toArray())
+        services: ToolServiceView(descriptors: services.toArray()),
+        executionSettings180: value.field("execution_settings").getOrDefault({ => nullValue() })
     )
 }
 

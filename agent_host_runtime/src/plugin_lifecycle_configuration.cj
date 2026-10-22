@@ -197,6 +197,7 @@ public class HostPluginLifecycleConfiguration {
                 ValueField("arguments", service.field("arguments").getOrThrow()),
                 ValueField("read_only_mounts", listValue(mounts.toArray().map { item => textValue(item) })),
                 ValueField("network", service.field("network").getOrThrow()),
+                ValueField("lifecycle_policy", service.field("lifecycle_policy").getOrThrow()),
                 ValueField("resources", hostLifecycleResourceValue(resources)), ValueField("max_instances", integerValue(maxInstances)),
                 ValueField("lifetime_ms", service.field("lifetime_ms").getOrThrow()),
                 ValueField("max_input_bytes", service.field("max_input_bytes").getOrThrow()),
@@ -418,6 +419,10 @@ func hostLifecycleNormalizeService(value: AgentValue): AgentValue {
     let fields = ArrayList<String>(["id", "executable", "arguments", "read_only_mounts", "workspace_mode", "network",
         "resources", "lifetime_ms", "max_input_bytes", "max_output_bytes", "startup", "environment", "credential_refs"])
     if (value.field("refresh").isSome()) { fields.add("refresh") }
+    if (value.field("lifecycle_policy").isSome()) {
+        fields.add("lifecycle_policy")
+        hostLifecycleRequire(processShutdownPolicyGrace(value.field("lifecycle_policy").getOrThrow()).isOk())
+    }
     if (value.field("cwd").isSome()) {
         fields.add("cwd"); hostLifecyclePathInput(hostLifecycleText(value, "cwd"))
     }
@@ -471,6 +476,7 @@ func hostLifecycleNormalizeService(value: AgentValue): AgentValue {
     }
     let copy = parseUnifiedJson(stringifyUnifiedJson(value), maxBytes: 131072)
     copy.put("network", networkPolicyCanonicalValue(network))
+    if(copy.field("lifecycle_policy").isNone()){copy.put("lifecycle_policy",processShutdownPolicyValue(0))}
     copy
 }
 

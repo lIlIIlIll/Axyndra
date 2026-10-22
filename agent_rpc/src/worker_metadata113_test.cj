@@ -36,7 +36,7 @@ class ActualRpcWorkerMetadata113Tests {
             settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true,
             asyncEnabled: false, approvalMode: ApprovalMode.Yolo)).value().getOrThrow()
         let session = product.applicationSession()
-        let server = ProductJsonlRpcServer(session, { _: String => () })
+        let server = ProductJsonlRpcServer(session, { _: String => () }, reserveProductControlMetadata113)
         let before = product.fixtureProbe.getOrThrow().observedCallCount11318()
         let held = rpcWorkerFillActualBank113()
         try {

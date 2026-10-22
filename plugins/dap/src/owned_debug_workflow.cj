@@ -143,14 +143,14 @@ class DapOwnedDebugWorkflow {
             case None => ()
         }
     }
-    private func propose(operation: JsonNode, purpose: String, request: ?DapOwnedPendingRequest = None): Unit {
+    private func propose(operation: JsonNode, purpose: String, request!: ?DapOwnedPendingRequest = None): Unit {
         require(effect.isNone() && childSequence < Int64.Max, "dap_plugin.proposal_overlap")
         let paid = dapOwnedDebugRetainedCharge(operation, 16777216)
         try { childSequence++; effect = Some(DapOwnedDebugEffect(childSequence, operation, purpose, request, paid)) }
         catch (error: Exception) { paid.close(); throw error }
     }
     private func request(command: String, arguments: JsonNode, purpose: String,
-        projection: ?DapFrozenPolicy = None): DapOwnedPendingRequest {
+        projection!: ?DapFrozenPolicy = None): DapOwnedPendingRequest {
         let sequence = session.sequence()
         let value = DapOwnedPendingRequest(sequence, command, purpose, projection)
         // Keep the whole immutable request. A later Host approval neither
@@ -163,7 +163,7 @@ class DapOwnedDebugWorkflow {
             require(raw.size <= maximum, "dap_plugin.request_limit")
             propose(jsonObject([JsonObjectEntry("kind", jsonString("write")), JsonObjectEntry("lease_id", jsonString(session.leaseId)),
                 JsonObjectEntry("id", jsonString("dap-request-" + sequence.toString())),
-                JsonObjectEntry("bytes_hex", jsonString(hex(raw)))]), purpose, Some(value))
+                JsonObjectEntry("bytes_hex", jsonString(hex(raw)))]), purpose, request: Some(value))
             pending.add(sequence, value); value
         } finally { scratch.close() }
     }
@@ -191,7 +191,7 @@ class DapOwnedDebugWorkflow {
         }
         let projection = prepared[1].getOrThrow()
         let actual = projection.requests()[0]
-        primary = Some(request(text(actual, "command"), field(actual, "arguments"), "primary", Some(projection.frozen)))
+        primary = Some(request(text(actual, "command"), field(actual, "arguments"), "primary", projection: Some(projection.frozen)))
         stage = "primary"
     }
     private func hasPurpose(purpose: String): Bool {
@@ -281,7 +281,7 @@ class DapOwnedDebugWorkflow {
                     let refreshed = session.policy.prepareDebug(jsonObject([JsonObjectEntry("action", jsonString("stack_trace")),
                         JsonObjectEntry("levels", jsonNumber("1"))]), session.locations, field(config, "launch"), field(config, "attach"))[1].getOrThrow()
                     let actual = refreshed.requests()[0]
-                    let _ = request("stackTrace", field(actual, "arguments"), "refresh", Some(refreshed.frozen))
+                    let _ = request("stackTrace", field(actual, "arguments"), "refresh", projection: Some(refreshed.frozen))
                     stage = "refresh"; return next()
                 }
                 stage = "finish"

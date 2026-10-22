@@ -344,12 +344,7 @@ public class AgentBuilder {
         toolContextValue = toolContextValue.merged(
             OriginValue<ToolContextDescriptor>(
                 "tool_context",
-                ToolContextDescriptor(
-                    workspaceRoot: value.workspaceRoot,
-                    cwd: value.cwd,
-                    environment: value.environment,
-                    services: value.services
-                ),
+                ToolContextDescriptor(value),
                 origin
             )
         )

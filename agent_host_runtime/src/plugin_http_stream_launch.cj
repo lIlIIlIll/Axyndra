@@ -41,6 +41,14 @@ public func prepareHostHttpStreamLaunch(raw: AgentValue, credentials: Array<Host
         "--connect-timeout", "10", "--include", "--no-buffer", "--suppress-connect-headers",
         "--max-filesize", request.field("max_response_bytes").getOrThrow().asNumberText(),
         "--request", httpIntentText(request, "method"), "--url", httpIntentText(request, "url")])
+    let timeoutMillis = Int64.parse(request.field("timeout_ms").getOrThrow().asNumberText())
+    if (timeoutMillis > 0) {
+        // The frozen request's whole-stream deadline also bounds curl itself.
+        let fraction = (timeoutMillis % 1000).toString()
+        let seconds = (timeoutMillis / 1000).toString() + "." +
+            (if (fraction.size == 1) { "00" } else if (fraction.size == 2) { "0" } else { "" }) + fraction
+        args.add("--max-time"); args.add(seconds)
+    }
     let headers = request.field("headers").getOrThrow()
     let targets = HashSet<String>()
     for (field in headers.fields) {

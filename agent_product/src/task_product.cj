@@ -159,7 +159,7 @@ class ProductSubagentState {
     var capabilities: CapabilitySet
     let capabilityCeilingKnown: Bool
     // A live delegation authority is not reconstructible from a task snapshot.
-    let budgetAuthority: ?ToolInvocationContext
+    var budgetAuthority: ?ToolInvocationContext
     var budgetParentRunId: RunId
     var workflowPin: ?ProductWorkflowPin = None
     // Original, non-serializable completion custody. Snapshots keep only its
@@ -259,11 +259,32 @@ class ProductSubagentState {
 
 class ProductSubagentListener {
     let id: Int64
-    let sink: ProductSubagentEventSink
-
-    init(id: Int64, sink: ProductSubagentEventSink) {
-        this.id = id
-        this.sink = sink
+    private let frameLock = Mutex()
+    private var sink: ?ProductSubagentEventSink
+    private var activeFrames: Int64 = 0
+    private var closing = false
+    init(id: Int64, sink: ProductSubagentEventSink) { this.id = id; this.sink = Some(sink) }
+    func invoke180(event: ProductSubagentEvent): Unit {
+        frameLock.lock()
+        try {
+            if (closing) { return }
+            if (activeFrames == Int64.Max) { throw IllegalStateException("control dispatch frame overflow") }
+            activeFrames++
+        } finally { frameLock.unlock() }
+        try { invokeSinkHelper180(event) }
+        finally { frameLock.lock(); try { activeFrames-- } finally { frameLock.unlock() } }
+    }
+    private func invokeSinkHelper180(event: ProductSubagentEvent): Unit {
+        frameLock.lock(); let actual = try { sink.getOrThrow() } finally { frameLock.unlock() }
+        actual(event)
+    }
+    func closeReturnedFrames180(): Bool {
+        frameLock.lock()
+        try {
+            closing = true
+            if (activeFrames != 0) { return false }
+            sink = None<ProductSubagentEventSink>; true
+        } finally { frameLock.unlock() }
     }
 }
 
@@ -367,11 +388,32 @@ public type ProductAsyncJobEventSink = (ProductAsyncJobEvent) -> Unit
 
 class ProductAsyncJobListener {
     let id: Int64
-    let sink: ProductAsyncJobEventSink
-
-    init(id: Int64, sink: ProductAsyncJobEventSink) {
-        this.id = id
-        this.sink = sink
+    private let frameLock = Mutex()
+    private var sink: ?ProductAsyncJobEventSink
+    private var activeFrames: Int64 = 0
+    private var closing = false
+    init(id: Int64, sink: ProductAsyncJobEventSink) { this.id = id; this.sink = Some(sink) }
+    func invoke180(event: ProductAsyncJobEvent): Unit {
+        frameLock.lock()
+        try {
+            if (closing) { return }
+            if (activeFrames == Int64.Max) { throw IllegalStateException("control dispatch frame overflow") }
+            activeFrames++
+        } finally { frameLock.unlock() }
+        try { invokeSinkHelper180(event) }
+        finally { frameLock.lock(); try { activeFrames-- } finally { frameLock.unlock() } }
+    }
+    private func invokeSinkHelper180(event: ProductAsyncJobEvent): Unit {
+        frameLock.lock(); let actual = try { sink.getOrThrow() } finally { frameLock.unlock() }
+        actual(event)
+    }
+    func closeReturnedFrames180(): Bool {
+        frameLock.lock()
+        try {
+            closing = true
+            if (activeFrames != 0) { return false }
+            sink = None<ProductAsyncJobEventSink>; true
+        } finally { frameLock.unlock() }
     }
 }
 
@@ -613,7 +655,7 @@ public class ProductTaskRuntime {
     private let allowUnsafeDirectLaunchForTests: Bool
     private var product: ?ProductRuntime = None
     private var processSupervisor: ?ProductProcessSupervisor = None
-    private var processBroker: ?ProductProcessBroker = None
+    private var processOwner180: ?ActualProcessBrokerRoot180 = None<ActualProcessBrokerRoot180>
     private var taskPersistence: ?ProductTaskPersistence = None
     private let stateRevisions = HashMap<String, Int64>()
     private let childBudgetPools = HashMap<String, ChildBudgetPool>()
@@ -644,25 +686,20 @@ public class ProductTaskRuntime {
         this.allowUnsafeDirectLaunchForTests = allowUnsafeDirectLaunchForTests
     }
 
-    func attach(value: ProductRuntime, persistence: ProductTaskPersistence): Unit {
+    func attach(value: ProductRuntime, persistence: ProductTaskPersistence, ownerRoot180!: ?ActualProcessBrokerRoot180 = None<ActualProcessBrokerRoot180>): Unit {
         var restored = false
         lock.lock()
         try {
             product = Some(value)
-            processSupervisor = Some(ProductProcessSupervisor(
-                value.workspace,
-                sandboxEnabled: value.directProcessSandboxEnabled(),
-                allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests,
-                shellNetworkMode: value.shellNetworkMode,
-                sandboxCaBundle: value.sandboxCaBundle
-            ))
-            processBroker = Some(ProductProcessBroker(
-                value.stateRoot,
-                value.workspace.rootPath(),
-                shellNetworkMode: value.shellNetworkMode,
-                sandboxCaBundle: value.sandboxCaBundle,
-                supportLegacy180:allowUnsafeDirectLaunchForTests
-            ))
+            processOwner180 = ownerRoot180
+            processSupervisor = match (ownerRoot180) {
+                case Some(owner) => owner.supervisor
+                case None => Some(ProductProcessSupervisor(value.workspace,
+                    sandboxEnabled: value.directProcessSandboxEnabled(),
+                    allowUnsafeTestBypass: allowUnsafeDirectLaunchForTests,
+                    shellNetworkMode: value.shellNetworkMode, sandboxCaBundle: value.sandboxCaBundle))
+            }
+            if (ownerRoot180.isNone()) { match (processSupervisor) { case Some(owner) => owner.initializeBrokerStorage180(); case None => () } }
             if (taskPersistence.isNone()) {
                 taskPersistence = Some(persistence)
                 let restoredRoots = persistence.loadAll()
@@ -696,7 +733,7 @@ public class ProductTaskRuntime {
         try {
             let actual = findSubagentLocked(state.id)
             if (actual.isNone() || !refEq(actual.getOrThrow(), state) ||
-                state.pluginAdmission111.isNone() || (closing && !cleanup)) {
+                state.pluginAdmission111.isNone() || state.finishing || (closing && !cleanup)) {
                 return taskError("child.worker_owner_changed", "actual child worker custody is unavailable") }
             if (idle && (state.launchInProgress || state.executionInProgress ||
                 !pluginWorkersReturnedLocked111(state))) {
@@ -768,6 +805,34 @@ public class ProductTaskRuntime {
                 if (!state.pluginCompletionDone111 || childBudgetLeases.get(state.id).isSome() ||
                     state.launchInProgress || state.executionInProgress || !pluginWorkersReturnedLocked111(state)) { return true }
             }
+            false
+        } finally { lock.unlock() }
+    }
+    // A non-mutating observation of this exact process-local owner. Terminal
+    // DTOs are not join/receipt witnesses, and this grants no cleanup ACK.
+    func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock()
+        try {
+            if (!managedJobs.isEmpty() || !childBudgetLeases.isEmpty() ||
+                !projectionUnretired151.isEmpty() || !listeners.isEmpty() ||
+                !jobListeners.isEmpty()) { return true }
+            for (state in records) {
+                if (state.launchInProgress || state.executionInProgress || state.finishing ||
+                    state.pendingRequest.isSome() || state.pendingApproval.isSome() ||
+                    state.status == "running" || state.status == "blocked" ||
+                    state.pluginCompletionPending111.isSome() || state.pluginProjectionPayment151.isSome()) { return true }
+                if (state.pluginAdmission111.isSome() && !state.pluginCompletionDone111) { return true }
+            }
+            for (job in jobs) {
+                if (job.executing || job.status == "running" || !job.settlementInjected ||
+                    job.projectionPayment151.isSome()) { return true }
+            }
+            for (message in hubMessages) { if (!message.consumed) { return true } }
+            for (worker in ownedWorkers) {
+                try { if (worker.tryGet().isNone()) { return true } }
+                catch (_: Exception) { return true }
+            }
+            for (worker in ownedPluginWorkers111) { if (!worker.returned()) { return true } }
             false
         } finally { lock.unlock() }
     }
@@ -1020,6 +1085,34 @@ public class ProductTaskRuntime {
             jobListenerCounter
         } finally {
             lock.unlock()
+        }
+    }
+    public func unsubscribeSubagents180(id: Int64): Unit {
+        while (true) {
+            lock.lock()
+            let returned = try {
+                var complete = true
+                for (index in 0..listeners.size where listeners[index].id == id) {
+                    complete = listeners[index].closeReturnedFrames180()
+                    if (complete) { listeners.remove(at: index) }; break
+                }
+                complete
+            } finally { lock.unlock() }
+            if (returned) { return }; sleep(Duration.millisecond)
+        }
+    }
+    public func unsubscribeAsyncJobs180(id: Int64): Unit {
+        while (true) {
+            lock.lock()
+            let returned = try {
+                var complete = true
+                for (index in 0..jobListeners.size where jobListeners[index].id == id) {
+                    complete = jobListeners[index].closeReturnedFrames180()
+                    if (complete) { jobListeners.remove(at: index) }; break
+                }
+                complete
+            } finally { lock.unlock() }
+            if (returned) { return }; sleep(Duration.millisecond)
         }
     }
 
@@ -1990,7 +2083,7 @@ public class ProductTaskRuntime {
         match (admission.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let runtime = match (attachedProduct()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
         let model = if (data.modelAlias == "") { parentModel(runtime, context.sessionId) } else { data.modelAlias }
-        let base = match (runtime.prepareRequest(data.prompt, modelOverride: model, thinking: data.thinking)) {
+        let base = match (runtime.prepareRequest(data.prompt, modelOverride: model, thinking: data.thinking, inheritedModelSettings180: Some(context.modelSettingsDescriptor180()))) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
         let capabilities = effectiveChildCapabilities(context.capabilities, data.ceiling, context.capabilities)
         let child = productPluginChildRequest111(base, data, capabilities, context.budget)
@@ -2874,7 +2967,7 @@ public class ProductTaskRuntime {
         let next=proposal.field("request").getOrThrow()
         // Original revival uses the current Root model and thinking defaults;
         // the Native recipe contributes only prompt/role ceiling/limits.
-        let base=match(runtime.prepareRequest(httpIntentText(next,"prompt"),sessionId:Some(old.sessionId),modelOverride:runtime.model)) {
+        let base=match(runtime.prepareRequest(httpIntentText(next,"prompt"),sessionId:Some(old.sessionId),modelOverride:runtime.model, inheritedModelSettings180: Some(context.modelSettingsDescriptor180()))) {
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value }
         let data=try{ProductPluginChildRequest111(next,base.thinking)}catch(_:Exception) {
             return taskError("peer.resume_request_invalid","frozen resume data is invalid") }
@@ -2934,7 +3027,7 @@ public class ProductTaskRuntime {
         // the new private state. Existing request custody is not refunded.
         let _=admission.retainObservation(bytes,512,{=>nullValue()})
         let state:ProductSubagentState
-        let sinks:Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         old.settlementLock.lock()
         try {
             lock.lock()
@@ -2972,6 +3065,9 @@ public class ProductTaskRuntime {
                         hubMessages.clear();hubMessages.add(all:previousMessages);messageCounter=previousCounter
                         rememberTaskPersistenceFailureLocked(old.parentSessionId,error);return Result.Err(error)
                     case Result.Ok(_)=>() }
+                        let retained = match (admission.retainOriginalContextForChildWorker180(context)) {
+                            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                        state.budgetAuthority = Some(retained); state.pluginCurrentBudgetAuthority111 = Some(retained)
                 sinks=listenerSinksLocked()
             }finally{lock.unlock()}
         }finally{old.settlementLock.unlock()}
@@ -2987,6 +3083,7 @@ public class ProductTaskRuntime {
         while (true) {
             // Recheck the actual waiting operation/source and selected package
             // on each wait interval. No Registry lock spans child execution.
+            collectCompletedPluginChildContexts180()
             match(admission.check()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             lock.lock()
             try {
@@ -3175,6 +3272,7 @@ public class ProductTaskRuntime {
     }
 
     private func retryPluginChildCompletions111(): Unit {
+        collectCompletedPluginChildContexts180()
         let pending = ArrayList<String>()
         lock.lock()
         try {
@@ -3199,6 +3297,39 @@ public class ProductTaskRuntime {
             }
         }
     }
+    private func collectCompletedPluginChildContexts180(): Unit {
+        while (true) {
+            lock.lock()
+            let selected = try {
+                var found: ?ProductSubagentState = None<ProductSubagentState>
+                for (state in records where state.pluginAdmission111.isSome() &&
+                    state.pluginAdmission111.getOrThrow().hasRetainedOriginalContext180() && state.pluginCompletionDone111 &&
+                    !state.launchInProgress && !state.executionInProgress && !state.finishing && childBudgetLeases.get(state.id).isNone() &&
+                    pluginWorkersReturnedLocked111(state)) { state.finishing = true; found = Some(state); break }
+                found
+            } finally { lock.unlock() }
+            if (selected.isNone()) { return }
+            let state = selected.getOrThrow()
+            try {
+                // This is outside every worker action. Each original get helper
+                // must return and detach its Future/callback before Context debt.
+                for (worker in state.pluginWorkers111) { worker.collect() }
+                var detached = true
+                for (worker in state.pluginWorkers111) { if (!worker.originalFutureAliasesReturned180()) { detached = false } }
+                if (!detached) { return }
+                lock.lock()
+                let actual = try {
+                    if (findSubagentLocked(state.id).isNone() || !refEq(findSubagentLocked(state.id).getOrThrow(), state) ||
+                        state.launchInProgress || state.executionInProgress || childBudgetLeases.get(state.id).isSome()) { return }
+                    state.pluginCurrentBudgetAuthority111 = None<ToolInvocationContext>
+                    state.budgetAuthority = None<ToolInvocationContext>
+                    state.pluginAdmission111.getOrThrow()
+                } finally { lock.unlock() }
+                actual.returnContextAfterOriginalChildHelpers180()
+            } finally { lock.lock(); try { state.finishing = false } finally { lock.unlock() } }
+        }
+    }
+
 
     private func publishPluginChildJob111(id: String): Unit {
         let key: ProductAsyncJobKey
@@ -3232,7 +3363,7 @@ public class ProductTaskRuntime {
         admission: HostPluginChildAdmission111): Result<ProductSubagentState> {
         lock.lock()
         let state: ProductSubagentState
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         try {
             if (closing) { return taskError("task.runtime_closing", "child runtime is closing") }
             let previousRecords = records.toArray(); let previousYields = yields.toArray()
@@ -3249,6 +3380,9 @@ public class ProductTaskRuntime {
             records.add(state); yields.add(ProductYieldState(request.runId)); pruneSubagentsLocked()
             match (persistRootLocked(context.sessionId)) {
                 case Result.Ok(_) => ()
+                    let retained = match (admission.retainOriginalContextForChildWorker180(context)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                    state.budgetAuthority = Some(retained); state.pluginCurrentBudgetAuthority111 = Some(retained)
                 case Result.Err(error) =>
                     records.clear(); records.add(all: previousRecords)
                     yields.clear(); yields.add(all: previousYields); subagentCounter = previousCounter
@@ -3431,7 +3565,7 @@ public class ProductTaskRuntime {
         lock.lock()
         let snapshot: ?ProductSubagentSnapshot
         var progressChanged = false
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         try {
             let state = findSubagentLocked(id)
             match (state) {
@@ -3484,7 +3618,7 @@ public class ProductTaskRuntime {
     ): ProductSubagentSnapshot {
         lock.lock()
         let snapshot: ProductSubagentSnapshot
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         try {
             let state = findSubagentLocked(id).getOrThrow()
             state.status = "blocked"
@@ -3559,7 +3693,7 @@ public class ProductTaskRuntime {
         let base = match (runtime.prepareRequest(
             hubMessagePrompt(message),
             sessionId: Some(state.sessionId),
-            modelOverride: runtime.model
+            modelOverride: runtime.model, inheritedModelSettings180: Some(authority.modelSettingsDescriptor180())
         )) { case Result.Err(error) =>
             let _ = finishSubagent(id, "failed", error: error.code + ": " + error.message)
             return
@@ -3618,7 +3752,7 @@ public class ProductTaskRuntime {
         runtime: ProductRuntime, id: String, message: ProductHubMessageSnapshot,
         request: AgentRunRequest, authority: ToolInvocationContext, workflowPin: ProductWorkflowPin
     ): Int64 {
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         let snapshot: ProductSubagentSnapshot
         lock.lock()
         try {
@@ -3845,7 +3979,7 @@ public class ProductTaskRuntime {
         state.settlementLock.lock()
         let snapshot = try { settleAndFinishSubagent(id, status, error: error) }
             finally { state.settlementLock.unlock() }
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         lock.lock()
         try { sinks = listenerSinksLocked() }
         finally { lock.unlock() }
@@ -3875,7 +4009,8 @@ public class ProductTaskRuntime {
                     try {
                         let state = findSubagentLocked(id).getOrThrow()
                         state.status = "recovery_required"
-                        state.error = "recovery_required: frozen child completion did not settle: " + failure.message
+                        state.error = if (error == "") { "recovery_required: frozen child completion did not settle: " + failure.message }
+                            else { error + "; recovery_required: frozen child completion did not settle: " + failure.message }
                         state.lastUpdate = nowMillis()
                         let _ = persistRootLocked(state.parentSessionId)
                         // No budget settlement, owner clear or fake completion.
@@ -3905,7 +4040,7 @@ public class ProductTaskRuntime {
         }
         lock.lock()
         let snapshot: ProductSubagentSnapshot
-        let sinks: Array<ProductSubagentEventSink>
+        let sinks: Array<ProductSubagentListener>
         try {
             let state = findSubagentLocked(id).getOrThrow()
             state.status = effectiveStatus
@@ -4210,13 +4345,7 @@ public class ProductTaskRuntime {
         None
     }
 
-    private func listenerSinksLocked(): Array<ProductSubagentEventSink> {
-        let values = ArrayList<ProductSubagentEventSink>()
-        for (listener in listeners) {
-            values.add(listener.sink)
-        }
-        values.toArray()
-    }
+    private func listenerSinksLocked(): Array<ProductSubagentListener> { listeners.toArray() }
 
     private func pruneSubagentsLocked(): Unit {
         while (records.size > 256) {
@@ -4346,26 +4475,32 @@ public class ProductTaskRuntime {
 
     // Only actual resource facts are supplied here. Native owns all eight
     // grammars, defaults, readiness and output projections.
-    func pluginProcessFacts180(meter:HostPaidValueProjection151):Result<AgentValue>{
+    func pluginProcessFacts180(context:ToolInvocationContext,meter:HostPaidValueProjection151):Result<AgentValue>{
         lock.lock()
         try{
             let actual=match(product){case Some(value)=>value;case None=>return taskError<AgentValue>(
                 "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
             meter.fundAdditional151(65536,16)
-            Result.Ok(objectValue([ValueField("shell_mode",textValue(shellNetworkModeName(actual.shellNetworkMode))),
-                ValueField("broker_available",boolValue(processBroker.isSome()))]))
+            // The frozen typed frontend represents an absent per-request
+            // override as JSON null. Resolve it only for this preparation
+            // fact; execution still consumes the resulting normalized plan.
+            let mode = match (context.executionSettings180.field("shell_network_mode")) {
+                case Some(value) => if (value.unifiedKind == ValueKind.Null) { actual.shellNetworkMode } else {
+                    if (value.unifiedKind != ValueKind.Text) { return taskError<AgentValue>("config.invalid", "frozen shell network mode must be text") }
+                    match (parseShellNetworkMode(value.text)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(selected) => selected } }
+                case None => actual.shellNetworkMode }
+            if (actual.shellNetworkMode == ShellNetworkMode.Proxy && mode != ShellNetworkMode.Proxy) {
+                return taskError<AgentValue>("network.host_denied", "mediated Root networking cannot admit a HostNetwork policy")
+            }
+            Result.Ok(objectValue([ValueField("shell_mode",textValue(shellNetworkModeName(mode))),
+                ValueField("broker_available",boolValue(processOwner180.isSome()))]))
         }finally{lock.unlock()}
     }
     func observePluginProcessPreparation180(context:ToolInvocationContext,request:AgentValue,
         meter:HostPaidValueProjection151):Result<AgentValue>{
         let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<AgentValue>(
             "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
-        let op=httpIntentText(request,"op")
-        if(op=="start" || op=="ps" || supervisor.contains(httpIntentText(request,"name"))){
-            return Result.Ok(supervisor.captureNativeProcessTarget180(request,meter))}
-        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<AgentValue>(
-            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
-        broker.captureDerivedTarget180(request,meter)
+        Result.Ok(supervisor.captureNativeProcessTarget180(request,meter))
     }
     func executePluginProcess180(context:ToolInvocationContext,input:AgentValue,
         admission:HostPluginChildAdmission111):Result<ToolResult>{
@@ -4429,53 +4564,15 @@ public class ProductTaskRuntime {
             return taskError<ToolResult>("hub.process_observation_invalid","observation cannot request a process mutation")}
         let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
             "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
-        let request=input.field("request").getOrThrow();let op=httpIntentText(request,"op")
-        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
-            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
-        if(op=="ps"){
-            let local=match(supervisor.observeNativeProcess180(request,context.sessionId.value,lease)){
-                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-            let remote=match(broker.executeDerivedIfConfigured180(request,context.sessionId.value,lease)){
-                case None=>return Result.Ok(local);case Some(Result.Err(error))=>local.releasePayload();return Result.Err(error)
-                case Some(Result.Ok(value))=>value}
-            // Original list projection is retained; both actual payload loans
-            // survive the whole merge helper, and are released afterwards.
-            try{lease.fundBorrowedDataBeforeCopy180(local.output);lease.fundBorrowedDataBeforeCopy180(remote.output)
-                mergeProcessObservations201(admission.callId,local,remote)}
-            finally{local.releasePayload();remote.releasePayload()}}
-        if(supervisor.contains(httpIntentText(request,"name"))){
-            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
-        broker.executeDerived180(request,context.sessionId.value,lease)
+        supervisor.observeNativeProcess180(input.field("request").getOrThrow(),context.sessionId.value,lease)
     }
 
     private func executePluginProcessActualBody180(context:ToolInvocationContext,input:AgentValue,
         admission:HostPluginChildAdmission111,lease:HostHubDerivedProcessLease180):Result<ToolResult>{
         let supervisor=match(processSupervisorValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
             "hub.process_supervisor_unavailable","actual Product process owner is not attached")}
-        let request=input.field("request").getOrThrow();let op=httpIntentText(request,"op")
-        let broker=match(processBrokerValue()){case Some(value)=>value;case None=>return taskError<ToolResult>(
-            "hub.process_broker_unavailable","actual persistent resource owner is unavailable")}
-        if(op=="start"){
-            let spec=request.field("spec").getOrThrow()
-            if(spec.field("persist").getOrThrow().asBool() || spec.field("detached").getOrThrow().asBool()){
-                if(supervisor.contains(httpIntentText(spec,"name"))){return taskError<ToolResult>(
-                    "hub.process_exists","process already exists in the local supervisor")}
-                return broker.executeDerived180(request,context.sessionId.value,lease)}
-            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
-        if(op=="ps"){
-            let local=match(supervisor.observeNativeProcess180(request,context.sessionId.value,lease)){
-                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-            let remote=match(broker.executeDerivedIfConfigured180(request,context.sessionId.value,lease)){
-                case None=>return Result.Ok(local);case Some(Result.Err(error))=>local.releasePayload();return Result.Err(error)
-                case Some(Result.Ok(value))=>value}
-            // Original list projection is retained; both actual payload loans
-            // survive the whole merge helper, and are released afterwards.
-            try{lease.fundBorrowedDataBeforeCopy180(local.output);lease.fundBorrowedDataBeforeCopy180(remote.output)
-                mergeProcessObservations201(admission.callId,local,remote)}
-            finally{local.releasePayload();remote.releasePayload()}}
-        if(supervisor.contains(httpIntentText(request,"name"))){
-            return supervisor.observeNativeProcess180(request,context.sessionId.value,lease)}
-        broker.executeDerived180(request,context.sessionId.value,lease)
+        supervisor.observeNativeProcess180(input.field("request").getOrThrow(),context.sessionId.value,lease)
+
     }
 
     private func processSupervisorValue(): ?ProductProcessSupervisor {
@@ -4487,14 +4584,7 @@ public class ProductTaskRuntime {
         }
     }
 
-    private func processBrokerValue(): ?ProductProcessBroker {
-        lock.lock()
-        try {
-            processBroker
-        } finally {
-            lock.unlock()
-        }
-    }
+
 
 
 
@@ -4552,20 +4642,14 @@ public class ProductTaskRuntime {
         false
     }
 
-    private func jobListenerSinksLocked(): Array<ProductAsyncJobEventSink> {
-        let values = ArrayList<ProductAsyncJobEventSink>()
-        for (listener in jobListeners) {
-            values.add(listener.sink)
-        }
-        values.toArray()
-    }
+    private func jobListenerSinksLocked(): Array<ProductAsyncJobListener> { jobListeners.toArray() }
 
     private func emitJobEvent(
         kind: String,
         snapshot: ProductAsyncJobSnapshot,
         paidCapture172!: ?ProductJobCancelCapture172 = None<ProductJobCancelCapture172>
     ): Unit {
-        let sinks: Array<ProductAsyncJobEventSink>
+        let sinks: Array<ProductAsyncJobListener>
         lock.lock()
         try {
             match(paidCapture172){case Some(capture)=>capture.fundSinkSnapshot(jobListeners.size);case None=>()}
@@ -4575,7 +4659,7 @@ public class ProductTaskRuntime {
         }
         let event = ProductAsyncJobEvent(kind, snapshot)
         for (sink in sinks) {
-            sink(event)
+            sink.invoke180(event)
         }
     }
 
@@ -5345,11 +5429,11 @@ func messagesContainToolResult(
 
 
 func emitToSinks(
-    sinks: Array<ProductSubagentEventSink>,
+    sinks: Array<ProductSubagentListener>,
     event: ProductSubagentEvent
 ): Unit {
     for (sink in sinks) {
-        sink(event)
+        sink.invoke180(event)
     }
 }
 

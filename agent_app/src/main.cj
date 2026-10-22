@@ -28,7 +28,7 @@ import tool_runtime.*
 main(): Int64 {
     let rawArguments = getCommandLine()
     if (isProductProcessBrokerWorker(rawArguments)) {
-        return runProductProcessBrokerWorker(rawArguments)
+        return runProductProcessBrokerWorker(rawArguments, AppProductOwnerFrontend180())
     }
     if (isProductProcessBrokerClient(rawArguments)) {
         return runProductProcessBrokerClient(rawArguments)
@@ -109,8 +109,6 @@ main(): Int64 {
     }
     var arguments = withoutRuntimeArguments(rawArguments)
     tuiStartupStage("configuration_loading_started")
-    let acpControl113: ?AcpOwnedWorkerControl113 = if (mode == "acp") {
-        Some(newAcpOwnedWorkerControl113()) } else { None<AcpOwnedWorkerControl113> }
     let productConfig = ProductConfig(
         stateRoot: if (fixture) {
             defaultStateRoot() + "/fixture"
@@ -147,6 +145,7 @@ main(): Int64 {
                 settingsRoot: productConfig.settingsRoot,
                 stateRoot: localStateRoot,
                 workspaceRoot: productConfig.workspaceRoot,
+                distributionRoot: productConfig.distributionRoot,
                 fixture: productConfig.fixture,
                 unsafeDirectLaunchForTests: productConfig.unsafeDirectLaunchForTests,
                 approvalMode: productConfig.approvalMode,
@@ -155,101 +154,33 @@ main(): Int64 {
                 modelOverride: productConfig.modelOverride,
                 asyncEnabled: productConfig.asyncEnabled,
                 wallTimeoutMillis: productConfig.wallTimeoutMillis,
+                modelAttemptRecovery: productConfig.modelAttemptRecovery,
+                modelStreamFaultProfile: productConfig.modelStreamFaultProfile,
+                extensionSignatureVerifier: productConfig.extensionSignatureVerifier,
                 compactionOverride: productConfig.compactionOverride,
                 startupMode: ProductStartupMode.LocalMaintenance
-            )
+            ),
+            rawArguments180: rawArguments
         )
     }
     if (cliCommand == "gallery") {
         return runGalleryCli(cliCommandTail(rawArguments, cliCommandIndex))
     }
-    let product = match (openProduct(config: productConfig)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) =>
-            match (acpControl113) {
-                case None => printError(error)
-                case Some(control) => let _ = control.writeProductStartupFailure113(error,
-                    { frame => writeOwnedAcpClose113(frame) }) }
-            return 1
-    }
-    tuiStartupStage("configuration_loading_completed")
-    if ((rawArguments.size > 1 && rawArguments[1] == "models") || cliCommand == "models") {
-        return runModelsCli(
-            product.applicationSession(),
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if (cliCommand == "reviewer-dry-run") {
-        return runReviewerDryRun(product)
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "__complete") || cliCommand == "__complete") {
-        return runDynamicCompletionCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "token") || cliCommand == "token") {
-        return runTokenCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if (cliCommand == "shell") {
-        return runShellCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "launch") || cliCommand == "launch") {
+    if ((rawArguments.size > 1 && rawArguments[1] == "launch") || cliCommand == "launch" ||
+        (rawArguments.size > 1 && rawArguments[1] == "acp") || cliCommand == "acp") {
         arguments = stripCliCommand(arguments)
-    } else if ((rawArguments.size > 1 && rawArguments[1] == "acp") || cliCommand == "acp") {
-        arguments = stripCliCommand(arguments)
-    } else if (cliCommand != "") {
-        printError(
-            unavailableCliCommand(
-                cliCommand,
-                cliCommandTail(rawArguments, cliCommandIndex)
-            )
-        )
+    }
+    let direct = cliCommand == "models" || cliCommand == "reviewer-dry-run" || cliCommand == "__complete" ||
+        cliCommand == "token" || cliCommand == "shell"
+    if (!direct && cliCommand != "" && cliCommand != "launch" && cliCommand != "acp") {
+        printError(unavailableCliCommand(cliCommand, cliCommandTail(rawArguments, cliCommandIndex)))
         return 1
     }
-    if (mode == "rpc" || mode == "rpc-ui") {
-        let rpcMetadata113 = reserveProductControlMetadata113(65536)
-        let rpcFrontend113 = RpcFrontendShutdown113(rpcMetadata113)
-        return rpcFrontend113.finishRootStatus113(serveRpc(product, false, rpcFrontend113))
-    }
-    if (mode == "acp") {
-        let control = acpControl113.getOrThrow()
-        return control.finishRootStatus113(serveAcp(product, productConfig, control))
-    }
-    if (mode == "json") {
-        var prompt = joinArguments(arguments, 1)
-        if (prompt == "") {
-            prompt = readStdinPrompt()
-        }
-        let metadata = reserveProductControlMetadata113(32768)
-        let failures = CliFailureOutput113(metadata, true)
-        let status = runJsonStream(product, prompt, failures)
-        return failures.finishMode(status)
-    }
-    if (hasArgument(rawArguments, "--print") || hasArgument(rawArguments, "-p") || mode == "text") {
-        var prompt = joinArguments(arguments, 1)
-        if (prompt == "") {
-            prompt = readStdinPrompt()
-        }
-        if (prompt == "") {
-            return 0
-        }
-        let metadata = reserveProductControlMetadata113(32768)
-        let failures = CliFailureOutput113(metadata, false)
-        let status = runPrint(product, prompt, failures)
-        return failures.finishMode(status)
-    }
-    runAgentTui(
-        ProductTuiBackend(product),
-        title: "axyndra",
-        initialPrompt: joinArguments(arguments, 1)
-    )
+    let frontendRoot = reserveProductControlMetadata113(65536)
+    let status = runNativeOwnerFrontend180(productConfig, rawArguments, arguments, cliCommand,
+        cliCommandIndex, mode, direct, frontendRoot)
+    frontendRoot.close()
+    status
 }
 
 func localMaintenanceCommand(
@@ -276,37 +207,44 @@ func localMaintenanceCommand(
 func runLocalMaintenanceCommand(
     command: String,
     arguments: Array<String>,
-    config: ProductConfig
+    config: ProductConfig,
+    rawArguments180!: Array<String> = []
 ): Int64 {
-    let product = match (openProduct(config: config)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) =>
-            printError(error)
-            return 1
+    let paid = reserveProductControlMetadata113(65536)
+    let request = ownerFrontendRequest180("cli", rawArguments180, command, arguments)
+    let status = runOwnerFrontendClient180(config, request, paid)
+    paid.close()
+    status
+}
+
+func runNativeOwnerFrontend180(config: ProductConfig, rawArguments: Array<String>, arguments: Array<String>,
+    command: String, commandIndex: Int64, mode: String, direct: Bool,
+    frontendRoot: LogicalJsonOwnerReservation): Int64 {
+    let frontend = if (direct) { "cli" } else if (mode == "rpc" || mode == "rpc-ui") { "rpc" }
+        else if (mode == "acp") { "acp" } else if (mode == "json") { "json" }
+        else if (mode == "text" || hasArgument(rawArguments, "--print") || hasArgument(rawArguments, "-p")) { "text" }
+        else { "tui" }
+    var bytes: Int64 = 65536
+    for (argument in rawArguments) { bytes += argument.size * 16 + 4096 }
+    frontendRoot.ensureRetainedPeak(bytes)
+    let request = ownerFrontendRequest180(frontend, rawArguments, command, cliCommandTail(rawArguments, commandIndex))
+    if (frontend == "tui") {
+        let allocate = { extent: Int64 =>
+            let paid = frontendRoot.deriveRetainedLease()
+            try { paid.ensureRetainedPeak(extent); paid }
+            catch (error: Exception) { paid.close(); throw error }
+        }
+        return runProductOwnerClientFrontend180(config, request,
+            { peer => createOwnerProductTuiClientFrontend180(peer, joinArguments(arguments, 1)) },
+            allocate: allocate)
     }
-    tuiStartupStage("configuration_loading_completed")
-    let session = product.applicationSession()
-    let status = match (command) {
-        case "read" => runReadCli(session, arguments)
-        case "tools" => runToolsCli(session, arguments)
-        case "plugin" => if (!arguments.isEmpty() && arguments[0] == "serve") { runPluginStdioCli(product, arguments) } else { runPluginCli(session, arguments) }
-        case "config" => runConfigCli(session, arguments)
-        case "grep" => runGrepCli(session, arguments)
-        case "agents" => runAgentsCli(session, arguments)
-        case "worktree" => runWorktreeCli(session, arguments)
-        case "gc" => runGcCli(session, arguments)
-        case "usage" => runUsageCli(session, arguments)
-        case "stats" => runStatsCli(session, arguments)
-        case "grievances" => runGrievancesCli(session, arguments)
-        case "ssh" => runSshCli(session, arguments)
-        case _ => 2
+    if (frontend == "text" || frontend == "json") {
+        var prompt = joinArguments(arguments, 1)
+        if (prompt == "") { prompt = readStdinPrompt() }
+        if (frontend == "text" && prompt == "") { return 0 }
+        return runOwnerFrontendClient180(config, request, frontendRoot, prompt: Some(prompt))
     }
-    match (product.close()) {
-        case Result.Ok(_) => status
-        case Result.Err(error) =>
-            printError(error)
-            1
-    }
+    runOwnerFrontendClient180(config, request, frontendRoot)
 }
 
 func unavailableCliCommand(
@@ -409,9 +347,9 @@ func cliCommandTail(
 func runModelsCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra models [ls|find <substring>|refresh|<provider>] " + "[--json]")
+        io.println("axyndra models [ls|find <substring>|refresh|<provider>] " + "[--json]")
         return 0
     }
     let json = hasArgument(arguments, "--json")
@@ -434,11 +372,11 @@ func runModelsCli(
         }
     }
     if (action == "find" && pattern.trimAscii() == "") {
-        println("`axyndra models find` requires a search substring, " + "e.g. `axyndra models find deepseek`")
+        io.println("`axyndra models find` requires a search substring, " + "e.g. `axyndra models find deepseek`")
         return 1
     }
     if (action == "refresh") {
-        println("Error: model catalog refresh requires the OMP-compatible " + "catalog service, which is not installed.")
+        io.println("Error: model catalog refresh requires the OMP-compatible " + "catalog service, which is not installed.")
         return 1
     }
     let models = filteredModels(session, pattern, action == "find")
@@ -447,15 +385,15 @@ func runModelsCli(
         for (model in models) {
             values.add(cliModelValue(session, model))
         }
-        println(encodeAgentValue(objectValue([ValueField("models", listValue(values.toArray()))])))
+        io.println(encodeAgentValue(objectValue([ValueField("models", listValue(values.toArray()))])))
         return 0
     }
     if (session.models().isEmpty()) {
-        println("No models available. Set API keys in environment variables.")
+        io.println("No models available. Set API keys in environment variables.")
         return 0
     }
     if (models.isEmpty()) {
-        println("No models matching \"" + pattern + "\"")
+        io.println("No models matching \"" + pattern + "\"")
         return 0
     }
     var activeProvider = ""
@@ -464,14 +402,14 @@ func runModelsCli(
         let provider = session.modelProvider(model)
         if (provider != activeProvider) {
             if (activeProvider != "") {
-                println()
+                io.println()
             }
             activeProvider = provider
             providerCount = countProviderModels(session, models, provider)
-            println(provider + " (" + providerCount.toString() + ")")
-            println("model")
+            io.println(provider + " (" + providerCount.toString() + ")")
+            io.println("model")
         }
-        println(session.rawModelId(model))
+        io.println(session.rawModelId(model))
     }
     0
 }
@@ -495,30 +433,30 @@ func workspaceFrontendCliArguments(arguments: Array<String>): Array<String> {
     values.toArray()
 }
 
-func runReadCli(session: ApplicationSession, arguments: Array<String>): Int64 {
+func runReadCli(session: ApplicationSession, arguments: Array<String>, io!: CliIo180 = consoleCliIo180): Int64 {
     if(hasArgument(arguments,"--help") || hasArgument(arguments,"-h")){
-        println("axyndra read <path-or-resource> [--destination <workspace-file>] [--interactive]");return 0}
+        io.println("axyndra read <path-or-resource> [--destination <workspace-file>] [--interactive]");return 0}
     let toolArguments=workspaceFrontendCliArguments(arguments)
     let input=ArrayList<ValueField>();let positional=ArrayList<String>();var destination="";var index:Int64=0;var positionalOnly=false
     while(index<toolArguments.size){
         if(positionalOnly){positional.add(toolArguments[index]);index++;continue}
         if(toolArguments[index]=="--"){positionalOnly=true;index++;continue}
         if(toolArguments[index]=="--destination"){
-            if(index+1>=toolArguments.size){println("error: destination is required");return 1}
+            if(index+1>=toolArguments.size){io.println("error: destination is required");return 1}
             destination=toolArguments[index+1];index+=2;continue}
         if(toolArguments[index]!="--interactive"){positional.add(toolArguments[index])};index++}
-    if(positional.size!=1){println("error: one path or resource is required");return 1}
+    if(positional.size!=1){io.println("error: one path or resource is required");return 1}
     input.add(ValueField("path",textValue(positional[0])))
     if(destination!=""){input.add(ValueField("destination",textValue(destination)))}
-    runSelectedWorkspaceCli(session,"read",objectValue(input.toArray()),hasArgument(arguments,"--interactive"))
+    runSelectedWorkspaceCli(session,"read",objectValue(input.toArray()),hasArgument(arguments,"--interactive"), io: io)
 }
 
 func runConfigCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra config [list|get|set|reset|path] [key] [value] " + "[--json]")
+        io.println("axyndra config [list|get|set|reset|path] [key] [value] " + "[--json]")
         return 0
     }
     let json = hasArgument(arguments, "--json")
@@ -529,18 +467,18 @@ func runConfigCli(
         positional[0]
     }
     if (action == "path") {
-        println(session.configRoot() + "/config.yml")
+        io.println(session.configRoot() + "/config.yml")
         return 0
     }
     let settings = match (loadProductSettings(session.configRoot())) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (action == "list") {
         if (json) {
-            println(
+            io.println(
                 encodeAgentValue(
                     objectValue(
                         [
@@ -569,16 +507,16 @@ func runConfigCli(
                 )
             )
         } else {
-            println("Settings:")
-            println("  schema_version = 1")
-            println("  default_model = " + if (settings.model == "") {
+            io.println("Settings:")
+            io.println("  schema_version = 1")
+            io.println("  default_model = " + if (settings.model == "") {
                 "(not set)"
             } else {
                 settings.model
             })
-            println("  async.enabled = " + settings.asyncEnabled.toString())
-            println("  shell.network_mode = " + shellNetworkModeName(settings.shellNetworkMode))
-            println("  sandbox.ca_bundle = " + if (settings.sandboxCaBundle == "") {
+            io.println("  async.enabled = " + settings.asyncEnabled.toString())
+            io.println("  shell.network_mode = " + shellNetworkModeName(settings.shellNetworkMode))
+            io.println("  sandbox.ca_bundle = " + if (settings.sandboxCaBundle == "") {
                 "(not set)"
             } else {
                 settings.sandboxCaBundle
@@ -588,18 +526,18 @@ func runConfigCli(
     }
     if (action == "get") {
         if (positional.size < 2) {
-            println("Usage: axyndra config get <key>")
+            io.println("Usage: axyndra config get <key>")
             return 1
         }
         return printConfigValue(
             settings,
             positional[1],
             json
-        )
+        , io: io)
     }
     if (action == "set") {
         if (positional.size < 3) {
-            println("Usage: axyndra config set <key> <value>")
+            io.println("Usage: axyndra config set <key> <value>")
             return 1
         }
         let value = joinArguments(positional, 2)
@@ -607,7 +545,7 @@ func runConfigCli(
         match (positional[1]) {
             case "default_model" =>
                 if (value.trimAscii() == "") {
-                    println("default_model must not be empty")
+                    io.println("default_model must not be empty")
                     return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -617,7 +555,7 @@ func runConfigCli(
             case "async.enabled" =>
                 let parsed = parseCliBool(value)
                 if (parsed.isNone()) {
-                    println("Invalid boolean value: " + value + ". Use true/false, yes/no, on/off, or 1/0")
+                    io.println("Invalid boolean value: " + value + ". Use true/false, yes/no, on/off, or 1/0")
                     return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -628,7 +566,7 @@ func runConfigCli(
                 let parsed = match (parseShellNetworkMode(value)) {
                     case Result.Ok(mode) => mode
                     case Result.Err(error) =>
-                        println(error.message)
+                        io.println(error.message)
                         return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -641,7 +579,7 @@ func runConfigCli(
                     ProductConfigScalar.Text(value.trimAscii())
                 ))
             case key =>
-                println("Unknown setting: " + key)
+                io.println("Unknown setting: " + key)
                 return 1
         }
         return saveCliSettings(
@@ -649,7 +587,7 @@ func runConfigCli(
             edits.toArray(),
             json,
             positional[1]
-        )
+        , io: io)
     }
     if (action == "reset") {
         let key = if (positional.size > 1) {
@@ -659,7 +597,7 @@ func runConfigCli(
         }
         if (key != "" && key != "default_model" && key != "async.enabled" &&
             key != "shell.network_mode" && key != "sandbox.ca_bundle") {
-            println("Unknown setting: " + key)
+            io.println("Unknown setting: " + key)
             return 1
         }
         let edits = ArrayList<ProductConfigEdit>()
@@ -692,9 +630,9 @@ func runConfigCli(
             edits.toArray(),
             json,
             key
-        )
+        , io: io)
     }
-    println("Unknown config command: " + action + "\nValid commands: list, get, set, reset, path")
+    io.println("Unknown config command: " + action + "\nValid commands: list, get, set, reset, path")
     1
 }
 
@@ -702,7 +640,7 @@ func printConfigValue(
     settings: ProductSettings,
     key: String,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let value: AgentValue
     match (key) {
         case "schema_version" => value = textValue("1")
@@ -712,11 +650,11 @@ func printConfigValue(
             value = textValue(shellNetworkModeName(settings.shellNetworkMode))
         case "sandbox.ca_bundle" => value = textValue(settings.sandboxCaBundle)
         case _ =>
-            println("Unknown setting: " + key)
+            io.println("Unknown setting: " + key)
             return 1
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
@@ -728,9 +666,9 @@ func printConfigValue(
         )
     } else {
         match (value.unifiedKind) {
-            case ValueKind.Text => println(value.text)
-            case ValueKind.Boolean => println(value.asBool().toString())
-            case _ => println(encodeAgentValue(value))
+            case ValueKind.Text => io.println(value.text)
+            case ValueKind.Boolean => io.println(value.asBool().toString())
+            case _ => io.println(encodeAgentValue(value))
         }
     }
     0
@@ -741,16 +679,16 @@ func saveCliSettings(
     edits: Array<ProductConfigEdit>,
     json: Bool,
     key: String
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let path = root + "/config.yml"
     match (updateProductConfig(root, edits)) {
         case Result.Ok(_) => ()
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
@@ -761,7 +699,7 @@ func saveCliSettings(
             )
         )
     } else {
-        println("Updated " + path)
+        io.println("Updated " + path)
     }
     0
 }
@@ -774,9 +712,9 @@ func parseCliBool(value: String): ?Bool {
     }
 }
 
-func runGrepCli(session: ApplicationSession, arguments: Array<String>): Int64 {
+func runGrepCli(session: ApplicationSession, arguments: Array<String>, io!: CliIo180 = consoleCliIo180): Int64 {
     if(hasArgument(arguments,"--help") || hasArgument(arguments,"-h")){
-        println("axyndra grep <pattern> [path-or-globs] [--count] [--case] [--no-gitignore] [--skip <n>] [--interactive]");return 0}
+        io.println("axyndra grep <pattern> [path-or-globs] [--count] [--case] [--no-gitignore] [--skip <n>] [--interactive]");return 0}
     let toolArguments=workspaceFrontendCliArguments(arguments)
     let positional=ArrayList<String>();var skip:Int64=0;var index:Int64=0;var positionalOnly=false
     while(index<toolArguments.size){
@@ -784,17 +722,17 @@ func runGrepCli(session: ApplicationSession, arguments: Array<String>): Int64 {
         if(positionalOnly){positional.add(argument);index++;continue}
         if(argument=="--"){positionalOnly=true;index++;continue}
         if(argument=="--skip"){
-            if(index+1>=toolArguments.size){println("error: skip requires an integer");return 1}
-            skip=parseCliInteger(toolArguments[index+1],-1);if(skip<0){println("error: skip requires a nonnegative integer");return 1}
+            if(index+1>=toolArguments.size){io.println("error: skip requires an integer");return 1}
+            skip=parseCliInteger(toolArguments[index+1],-1);if(skip<0){io.println("error: skip requires a nonnegative integer");return 1}
             index+=2;continue}
         if(!["--count","--case","--no-gitignore","--interactive"].contains(argument)){
-            if(argument.startsWith("-")){println("error: unsupported native grep flag: "+argument);return 1};positional.add(argument)}
+            if(argument.startsWith("-")){io.println("error: unsupported native grep flag: "+argument);return 1};positional.add(argument)}
         index++}
-    if(positional.size<1 || positional.size>2){println("error: pattern and optional native path filter are required");return 1}
+    if(positional.size<1 || positional.size>2){io.println("error: pattern and optional native path filter are required");return 1}
     runSelectedWorkspaceCli(session,"grep",objectValue([ValueField("pattern",textValue(positional[0])),
         ValueField("path",textValue(if(positional.size==2){positional[1]}else{""})),
         ValueField("count",boolValue(hasArgument(arguments,"--count"))),ValueField("case",boolValue(hasArgument(arguments,"--case"))),
-        ValueField("gitignore",boolValue(!hasArgument(arguments,"--no-gitignore"))),ValueField("skip",integerValue(skip))]),hasArgument(arguments,"--interactive"))
+        ValueField("gitignore",boolValue(!hasArgument(arguments,"--no-gitignore"))),ValueField("skip",integerValue(skip))]),hasArgument(arguments,"--interactive"), io: io)
 }
 
 func parseCliInteger(value: String, fallback: Int64): Int64 {
@@ -827,13 +765,13 @@ func joinCliLines(lines: Array<String>): String {
 func runAgentsCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (arguments.isEmpty() || hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra agents unpack [--force] [--json] " + "[--dir <path>|--user|--project]")
+        io.println("axyndra agents unpack [--force] [--json] " + "[--dir <path>|--user|--project]")
         return 0
     }
     if (arguments[0] != "unpack") {
-        println("Unknown agents action: " + arguments[0])
+        io.println("Unknown agents action: " + arguments[0])
         return 1
     }
     var force = false
@@ -854,7 +792,7 @@ func runAgentsCli(
             project = true
         } else if (argument == "--dir") {
             if (index + 1 >= arguments.size) {
-                println("Error: --dir requires a path")
+                io.println("Error: --dir requires a path")
                 return 1
             }
             authoredDirectory = arguments[index + 1]
@@ -862,17 +800,17 @@ func runAgentsCli(
         } else if (argument == "--fixture") {
             ()
         } else {
-            println("Error: unknown agents flag: " + argument)
+            io.println("Error: unknown agents flag: " + argument)
             return 1
         }
         index += 1
     }
     if (user && project) {
-        println("Choose either --user or --project, not both.")
+        io.println("Choose either --user or --project, not both.")
         return 1
     }
     if (authoredDirectory != "" && (user || project)) {
-        println("--dir cannot be combined with --user or --project.")
+        io.println("--dir cannot be combined with --user or --project.")
         return 1
     }
     let target = if (authoredDirectory != "") {
@@ -882,7 +820,7 @@ func runAgentsCli(
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) =>
-                printError(error)
+                printError(error, io: io)
                 return 1
         }
     } else if (project) {
@@ -894,18 +832,18 @@ func runAgentsCli(
         if (!exists(Path(target))) {
             Directory.create(target, recursive: true)
         } else if (!FileInfo(target).isDirectory()) {
-            println("error: agent target is not a directory: " + target)
+            io.println("error: agent target is not a directory: " + target)
             return 1
         }
     } catch (error: Exception) {
-        println("error: cannot create agent directory: " + error.message)
+        io.println("error: cannot create agent directory: " + error.message)
         return 1
     }
     let written = ArrayList<String>()
     let skipped = ArrayList<String>()
     let agents = match (session.bundledAgents()) {
         case Result.Err(error) =>
-            println("error: installed workflow roles are unavailable: " + error.code + ": " + error.message)
+            io.println("error: installed workflow roles are unavailable: " + error.code + ": " + error.message)
             return 1
         case Result.Ok(value) => value }
     for (agent in agents) {
@@ -924,12 +862,12 @@ func runAgentsCli(
             written.add(path)
         } catch (error: Exception) {
             let _ = removeIfExists(temporary)
-            println("error: cannot write agent " + agent.name + ": " + error.message)
+            io.println("error: cannot write agent " + agent.name + ": " + error.message)
             return 1
         }
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
@@ -945,17 +883,17 @@ func runAgentsCli(
             )
         )
     } else {
-        println("Bundled agents: " + agents.size.toString())
-        println("Target directory: " + target)
-        println("Written: " + written.size.toString())
+        io.println("Bundled agents: " + agents.size.toString())
+        io.println("Target directory: " + target)
+        io.println("Written: " + written.size.toString())
         if (!skipped.isEmpty()) {
-            println("Skipped existing: " + skipped.size.toString() + " (use --force to overwrite)")
+            io.println("Skipped existing: " + skipped.size.toString() + " (use --force to overwrite)")
         }
         for (path in written) {
-            println("  + " + path)
+            io.println("  + " + path)
         }
         for (path in skipped) {
-            println("  = " + path)
+            io.println("  = " + path)
         }
     }
     0
@@ -1868,84 +1806,6 @@ class PollingJsonlInput {
     }
 }
 
-func serveRpc(product: ProductRuntime, once: Bool, frontend: RpcFrontendShutdown113): Int64 {
-    let _ = frontend.install113(product)
-    let server = frontend.server113()
-    try {
-        frontend.startStartup113()
-        while (true) {
-            frontend.collectFinishedTasks113()
-            if (frontend.observedStartupFailure113()) {
-                return frontend.finishObservedExit113(1, !once)
-            }
-            if (frontend.startupReturned113()) { break }
-            sleep(Duration.millisecond * 10)
-        }
-        // These original plain writes/handle calls stay synchronous. The new
-        // policy begins only after the specific observation below; arbitrary
-        // physical EOF while an earlier plain call blocks remains OPEN.
-        frontend.writePlain113(server.ready())
-        let input = PollingJsonlInput()
-        while (true) {
-            frontend.requestPump113()
-            let polled = input.poll(50)
-            if (polled.eof) {
-                return frontend.finishObservedExit113(0, !once)
-            }
-            let line = match (polled.line) {
-                case Some(value) => value
-                case None => continue
-            }
-            let response = server.handle(line)
-            if (response != "") { frontend.writePlain113(response) }
-            if (once) {
-                // Preserve the original once behavior: already accepted work
-                // drains once and Bash is not cancelled by this mode.
-                return frontend.finishObservedExit113(0, !once)
-            }
-        }
-        0
-    } finally {
-        // Idempotent registration only. This parent never calls collect/close,
-        // takes an output lock, waits Future.get, or prints a timeout diagnostic.
-        frontend.requestShutdown113(!once)
-    }
-}
-
-func serveAcp(
-    product: ProductRuntime,
-    config: ProductConfig,
-    control113: AcpOwnedWorkerControl113
-): Int64 {
-    control113.ensureFrontendRegistryMetadata113(65536)
-    let output = RpcOutput()
-    let server = ProductAcpServer(
-        product,
-        { cwd => openProduct(config: acpSessionProductConfig(config, cwd)) },
-        // This explicit unsafe String convenience is never the production
-        // response port. Every send* method below selects the owned port.
-        { _ => throw IllegalStateException("ACP production has no bare String output") },
-        control113: control113,
-        ownedFailureOutput113: Some(output),
-        ownedResponseOutput113: Some(output)
-    )
-    control113.registerAtExitServer113(server)
-    // Stdlib has no unregister witness. This callback keeps only the small
-    // paid Root controller; a successfully closed server/input is explicitly
-    // removed after the whole frontend helper returns.
-    atExit({ => control113.closeRegisteredServerAtExit113() })
-    let inputPayment = control113.prepareFrontendCustody113()
-    let input = AcpOwnedJsonlInput113(control113, inputPayment)
-    control113.installFrontendCustody113(input)
-    let status = serveOwnedAcpBody113(server, input)
-    if (!server.detachFailedInputAfterClosedFrontendReturn113()) { return 1 }
-    if (!input.destroyInputAfterFailedFrontendReturn113()) { return 1 }
-    if (!server.retireOwnedCloseAfterFrontendHelperReturn113()) { return 1 }
-    if (!control113.collectFrontendAfterHelperReturn113()) { return 1 }
-    if (!control113.clearAtExitServerAfterFrontendReturn113(server)) { return 1 }
-    status
-}
-
 func serveOwnedAcpBody113(server: ProductAcpServer, input: AcpOwnedJsonlInput113): Int64 {
     var status: Int64 = 0
     try {
@@ -1990,8 +1850,8 @@ func serveOwnedAcpBody113(server: ProductAcpServer, input: AcpOwnedJsonlInput113
         case AcpOwnedCloseStatus113.Held => 1 }
 }
 
-func writeOwnedAcpClose113(frame: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
-    let answer = writeOwnedAcpCloseHelper113(frame)
+func writeOwnedAcpClose113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    let answer = writeOwnedAcpCloseHelper113(frame, io: io)
     match (answer) {
         case OwnedFailureDataOutcome113.Failure(_) => answer
         case OwnedFailureDataOutcome113.Value(_) =>
@@ -2004,8 +1864,8 @@ func writeOwnedAcpClose113(frame: AcpOwnedResponse113): OwnedFailureDataOutcome1
             catch (failure: Exception) { frame.captureOutputException113(failure) }
     }
 }
-func writeOwnedAcpFrontendFailure113(frame: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
-    let answer = writeOwnedAcpFrontendFailureHelper113(frame)
+func writeOwnedAcpFrontendFailure113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    let answer = writeOwnedAcpFrontendFailureHelper113(frame, io: io)
     match (answer) {
         case OwnedFailureDataOutcome113.Failure(_) => answer
         case OwnedFailureDataOutcome113.Value(_) =>
@@ -2018,12 +1878,12 @@ func writeOwnedAcpFrontendFailure113(frame: AcpOwnedResponse113): OwnedFailureDa
             catch (failure: Exception) { frame.captureOutputException113(failure) }
     }
 }
-func writeOwnedAcpFrontendFailureHelper113(frame: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
-    frame.withResponse113({ value => getStdErr().flush(); writeFdUtf8LineChecked122(2, value); Result<Unit>.Ok(()) })
+func writeOwnedAcpFrontendFailureHelper113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    frame.withResponse113({ value => io.flush(); io.eprintln(value); Result<Unit>.Ok(()) })
 }
 
-func writeOwnedAcpCloseHelper113(frame: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
-    frame.withResponse113({ value => getStdOut().flush(); writeFdUtf8LineChecked122(1, value); Result<Unit>.Ok(()) })
+func writeOwnedAcpCloseHelper113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    frame.withResponse113({ value => io.flush(); io.println(value); Result<Unit>.Ok(()) })
 }
 
 func acpSessionProductConfig(
@@ -2034,6 +1894,7 @@ func acpSessionProductConfig(
         settingsRoot: config.settingsRoot,
         stateRoot: config.stateRoot,
         workspaceRoot: workspaceRoot,
+        distributionRoot: config.distributionRoot,
         fixture: config.fixture,
         unsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
         approvalMode: config.approvalMode,
@@ -2046,7 +1907,9 @@ func acpSessionProductConfig(
         modelStreamFaultProfile: config.modelStreamFaultProfile,
         compactionOverride: config.compactionOverride,
         startupMode: config.startupMode,
-        extensionSignatureVerifier: config.extensionSignatureVerifier
+        extensionSignatureVerifier: config.extensionSignatureVerifier,
+        fixtureTransactionCommitMonitor: config.fixtureTransactionCommitMonitor,
+        fixtureDerivedSettlementFailureObserver: config.fixtureDerivedSettlementFailureObserver
     )
 }
 
@@ -2057,6 +1920,8 @@ class OwnedRpcFailureAnswer113 {
 
 class RpcOutput <: OwnedRpcFrameOutput & OwnedRpcFailureOutput113 & AcpOwnedResponseOutput113 {
     private let lock = Mutex()
+    private let io: CliIo180
+    init(io!: CliIo180 = consoleCliIo180) { this.io = io }
 
     public func writeAcpResponse113(value: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
         let answer = writeAcpResponseHelper113(value)
@@ -2074,14 +1939,14 @@ class RpcOutput <: OwnedRpcFrameOutput & OwnedRpcFailureOutput113 & AcpOwnedResp
     }
     private func writeAcpResponseHelper113(value: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
         lock.lock()
-        try { value.withResponse113({ frame => getStdOut().flush(); writeFdUtf8LineChecked122(1, frame); Result<Unit>.Ok(()) }) }
+        try { value.withResponse113({ frame => io.flush(); io.println(frame); Result<Unit>.Ok(()) }) }
         finally { lock.unlock() }
     }
 
     public func write(frame: OwnedRpcOutputFrame): Result<Unit> {
         lock.lock()
         let result = try {
-            frame.withFrame({ value => getStdOut().flush(); writeFdUtf8LineChecked122(1, value); Result.Ok(()) })
+            frame.withFrame({ value => io.flush(); io.println(value); Result.Ok(()) })
         } finally { lock.unlock() }
         match (result) { case Result.Err(error) => Result.Err(error)
             case Result.Ok(_) => frame.closeAfterFrameRetirement() }
@@ -2147,8 +2012,8 @@ class RpcOutput <: OwnedRpcFrameOutput & OwnedRpcFailureOutput113 & AcpOwnedResp
             match (render(error, fund)) {
                 case Result.Err(failure) => capture(failure)
                 case Result.Ok(frame) =>
-                    getStdOut().flush()
-                    writeFdUtf8LineChecked122(1, frame)
+                    io.flush()
+                    io.println(frame)
                     OwnedFailureDataOutcome113<Unit>.Value(())
             }
         } catch (failure: OwnedCanonicalPaidFailure113) {
@@ -2172,29 +2037,30 @@ class RpcOutput <: OwnedRpcFrameOutput & OwnedRpcFailureOutput113 & AcpOwnedResp
     func write(frame: String): Unit {
         lock.lock()
         try {
-            getStdOut().flush()
-            writeFdUtf8LineChecked122(1, frame)
+            io.flush()
+            io.println(frame)
         } finally {
             lock.unlock()
         }
     }
 }
 
-private func runPrint(product: ProductRuntime, prompt: String, failures: CliFailureOutput113): Int64 {
-    let session = product.applicationSession()
+func runPrint(product: ProductRuntime, prompt: String, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180,
+    session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
+    let session = session180 ?? product.applicationSession()
     failures.bindSession(session)
     let stream = StreamState()
-    session.subscribeOwned({
+    io.subscribeOwned180(session, {
         event => match (event.payload) {
             case AgentEventPayload.TextDelta(text) => if (text != "") {
-                    print(text)
+                    io.print(text)
                     stream.wroteText = true
                 }
             case AgentEventPayload.Extension(_, detail) =>
                 if (extensionCode(detail) == "model.text_delta") {
                     let text = eventText(event, "text")
                     if (text != "") {
-                        print(text)
+                        io.print(text)
                         stream.wroteText = true
                     }
                 }
@@ -2204,48 +2070,49 @@ private func runPrint(product: ProductRuntime, prompt: String, failures: CliFail
         failures: Some<OwnedFailureEventSink113>(failures))
     match (session.resumeStartup()) {
         case Result.Err(error) =>
-            if (stream.wroteText) { println() }
-            if (!failures.consumeCaller(session, error)) { printError(error) }
+            if (stream.wroteText) { io.println() }
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             return 1
         case Result.Ok(Some(response)) => match (response.approval) {
             case Some(approval) =>
-                if (stream.wroteText) { println() }
-                println("approval required: " + approval.operationId.value)
+                if (stream.wroteText) { io.println() }
+                io.println("approval required: " + approval.operationId.value)
                 return 3
             case None => ()
         }
         case Result.Ok(None) => ()
     }
     match (session.ownedRegistryCommand161(prompt)) {
-        case Some(owned) => return appConsumeOwnedRegistryPlain161(owned, session, stream, failures)
+        case Some(owned) => return appConsumeOwnedRegistryPlain161(owned, session, stream, failures, io: io)
         case None => ()
     }
     match (session.handle(prompt)) {
         case Result.Err(error) =>
             if (stream.wroteText) {
-                println()
+                io.println()
             }
-            if (!failures.consumeCaller(session, error)) { printError(error) }
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             1
         case Result.Ok(response) =>
             if (stream.wroteText) {
-                println()
+                io.println()
             } else if (response.text != "") {
-                println(response.text)
+                io.println(response.text)
             }
             match (response.approval) {
                 case Some(approval) =>
-                    println("approval required: " + approval.operationId.value)
+                    io.println("approval required: " + approval.operationId.value)
                     3
                 case None => 0
             }
     }
 }
 
-private func runJsonStream(product: ProductRuntime, prompt: String, failures: CliFailureOutput113): Int64 {
-    let session = product.applicationSession()
+func runJsonStream(product: ProductRuntime, prompt: String, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180,
+    session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
+    let session = session180 ?? product.applicationSession()
     failures.bindSession(session)
-    println(
+    io.println(
         encodeAgentValue(
             redactJsonAgentValue(objectValue(
                 [
@@ -2262,15 +2129,15 @@ private func runJsonStream(product: ProductRuntime, prompt: String, failures: Cl
         )
     )
     let stream = ApplicationJsonEventStream({ event =>
-        appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)))
-    })
-    session.subscribeOwned({ event => stream.accept(event) },
+        appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)), io: io)
+    }, io: io)
+    io.subscribeOwned180(session, { event => stream.accept(event) },
         CallbackOwnedAgentEventSink({ event => stream.acceptOwned(event) }),
         failures: Some<OwnedFailureEventSink113>(failures))
     match (session.resumeStartup()) {
         case Result.Err(error) =>
             stream.finish()
-            if (!failures.consumeCaller(session, error)) { printError(error) }
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             return 1
         case Result.Ok(Some(_)) => if (prompt == "") {
             stream.finish()
@@ -2280,14 +2147,14 @@ private func runJsonStream(product: ProductRuntime, prompt: String, failures: Cl
     }
     if (prompt == "") { return 0 }
     match (session.ownedRegistryCommand161(prompt)) {
-        case Some(owned) => return appConsumeOwnedRegistryJson161(owned, session, stream, failures)
+        case Some(owned) => return appConsumeOwnedRegistryJson161(owned, session, stream, failures, io: io)
         case None => ()
     }
     match (session.handle(prompt)) {
         case Result.Err(error) =>
             stream.finish()
             if (!failures.consumeCaller(session, error)) {
-            println(
+            io.println(
                 encodeAgentValue(
                     redactJsonAgentValue(objectValue(
                         [
@@ -2374,7 +2241,7 @@ private func runJsonStream(product: ProductRuntime, prompt: String, failures: Cl
                     )
                 case None => ()
             }
-            println(encodeAgentValue(redactJsonAgentValue(
+            io.println(encodeAgentValue(redactJsonAgentValue(
                 objectValue(fields.toArray())
             )))
             if (response.approval.isSome()) {
@@ -2405,12 +2272,13 @@ func applicationJsonEventDetail(event: AgentEvent): AgentValue {
 class ApplicationJsonEventStream {
     private let lock = Mutex()
     private let output: AgentEventSink
+    private let io: CliIo180
     private let text = ApplicationJsonDeltaStream()
     private let reasoning = ApplicationJsonDeltaStream()
     private let tools = ArrayList<ApplicationJsonToolStream>()
 
-    init(output: AgentEventSink) {
-        this.output = output
+    init(output: AgentEventSink, io!: CliIo180 = consoleCliIo180) {
+        this.output = output; this.io = io
     }
 
     func accept(event: AgentEvent): Unit {
@@ -2452,7 +2320,7 @@ class ApplicationJsonEventStream {
 
     func acceptOwned(event: OwnedAgentEvent): Result<Unit> {
         lock.lock()
-        try { writeOwnedApplicationJsonEvent(event) }
+        try { writeOwnedApplicationJsonEvent(event, io: io) }
         finally { lock.unlock() }
     }
 
@@ -2711,7 +2579,7 @@ class TuiRunEventCursor {
 class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailureAgentTuiBackend113 {
     private let session: ApplicationSession
     private let product: ProductRuntime
-    private let branchLabel: String
+    private var branchLabel: String = ""
     private let lock = Mutex()
     private var running = false
     private let uiRunEvents = TuiRunEventCursor()
@@ -2739,24 +2607,48 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
     private var focusedSubagentId = ""
     private var pendingSubagentApproval: ?TuiPendingSubagentApproval = None
     private let queuedSubagentApprovals = ArrayList<TuiPendingSubagentApproval>()
-
-    init(product: ProductRuntime, applicationSession!: ?ApplicationSession = None) {
-        this.product = product
-        this.session = match (applicationSession) {
-            case Some(value) => value
-            case None => product.applicationSession()
+    private var ownerSubscription180: ?ApplicationOwnedSubscription113 = None
+    private var ownerControls180: ?ApplicationControlSubscription180 = None
+    private var ownerSerializerLifetime180: ?OwnedTuiSerializerLifetime180 = None
+    private let ownerAllocation180: ?((Int64) -> LogicalJsonOwnerReservation)
+    private var pendingOwnerSubscription180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var pendingOwnerControls180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var initializerEntered180 = false
+    init(product: ProductRuntime, applicationSession!: ApplicationSession,
+        ownerAllocation180!: ?((Int64) -> LogicalJsonOwnerReservation) = None,
+        ownerSerializerLifetime180!: ?OwnedTuiSerializerLifetime180 = None) {
+        this.product = product; this.session = applicationSession
+        this.appEvents = AppEventCursor(ThreadId(applicationSession.id().value))
+        this.ownerSerializerLifetime180 = ownerSerializerLifetime180
+        this.ownerAllocation180 = ownerAllocation180
+    }
+    func initializeFrontend180(): Unit {
+        if (initializerEntered180) { throw IllegalStateException("TUI frontend initialization already entered") }
+        initializerEntered180 = true
+        branchLabel = workspaceBranch(session.workspaceRoot())
+        match (ownerAllocation180) {
+            case Some(allocate) =>
+                pendingOwnerSubscription180 = Some(allocate(65536))
+                ownerSubscription180 = Some(session.subscribeRetirableOwned113(pendingOwnerSubscription180.getOrThrow(),
+                    { event => forward(event) }, CallbackOwnedAgentEventSink({ event => forwardOwnedDisplay(event) }),
+                    failures: Some<OwnedFailureEventSink113>(OwnedTuiFailureAdmission113(ownedFailureQueue113))))
+                pendingOwnerSubscription180 = None<LogicalJsonOwnerReservation>
+                pendingOwnerControls180 = Some(allocate(65536))
+                ownerControls180 = Some(session.subscribeRetirableControls180(pendingOwnerControls180.getOrThrow(),
+                    { request => forwardAsk(request) }, { event => forwardJob(event) }, { event => forwardSubagent(event) }))
+                pendingOwnerControls180 = None<LogicalJsonOwnerReservation>
+            case None =>
+                session.subscribeOwned({ event => forward(event) },
+                    CallbackOwnedAgentEventSink({ event => forwardOwnedDisplay(event) }),
+                    failures: Some<OwnedFailureEventSink113>(OwnedTuiFailureAdmission113(ownedFailureQueue113)))
+                session.subscribeAsyncJobs({ event => forwardJob(event) })
+                session.subscribeSubagents({ event => forwardSubagent(event) })
+                session.subscribeAsks({ request => forwardAsk(request) })
         }
-        this.appEvents = AppEventCursor(ThreadId(this.session.id().value))
-        this.branchLabel = workspaceBranch(session.workspaceRoot())
-        session.subscribeOwned({event => forward(event)},
-            CallbackOwnedAgentEventSink({event => forwardOwnedDisplay(event)}),
-            failures: Some<OwnedFailureEventSink113>(OwnedTuiFailureAdmission113(ownedFailureQueue113)))
-        session.subscribeAsyncJobs({event => forwardJob(event)})
-        session.subscribeSubagents({event => forwardSubagent(event)})
         session.setAskInteractive(true)
-        session.subscribeAsks({request => forwardAsk(request)})
         let _ = session.resumeStartup()
     }
+
 
     public func observe(events: TuiAgentEventSink): Unit {
         lock.lock()
@@ -2834,6 +2726,75 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
     }
     private func endCopiedDisplayProducerBorrow(): Unit {
         lock.lock(); try { copiedDisplayProducerBorrows-- } finally { lock.unlock() } }
+    func awaitRootSerializerFrames180(): Bool {
+        while (true) {
+            lock.lock()
+            let framesEnded = copiedDisplayProducerClosing && copiedDisplayProducerBorrows == 0
+            let callersHeld = registryConstructing167 || pendingRegistryScope167.isSome() || pendingFailureMarker113.isSome()
+            lock.unlock()
+            if (framesEnded) { return !callersHeld }
+            sleep(Duration.millisecond)
+        }
+        false
+    }
+    func cancelOwnerTurn180(): Result<Unit> { session.cancel() }
+    func retireRootSerializer180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        if (!receipt.acknowledges180(this)) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        lock.lock()
+        let live = !copiedDisplayProducerClosing || copiedDisplayProducerBorrows != 0 ||
+            registryConstructing167 || pendingRegistryScope167.isSome() || pendingFailureMarker113.isSome()
+        lock.unlock()
+        if (live) { return ownedTuiDisplayError("display.serializer_producer_pending") }
+        match (ownedFailureQueue113.discardRegisteredOriginalsAfterActualFrames113()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        session.collectOwnedCheckpointFailure113()
+        match (ownerControls180) {
+            case Some(token) =>
+                while (!session.unsubscribeRetirableControls180(token)) { sleep(Duration.millisecond) }
+                if (!token.retireAfterUnsubscribe180()) { return ownedTuiDisplayError("display.control_subscription_pending") }
+                ownerControls180 = None
+            case None => () }
+        match (ownerSubscription180) {
+            case Some(token) =>
+                while (!session.unsubscribeRetirableOwned113(token)) { sleep(Duration.millisecond) }
+                if (!token.retireAfterUnsubscribe113()) { return ownedTuiDisplayError("display.subscription_pending") }
+                ownerSubscription180 = None
+            case None => () }
+        while (retainedCopiedDisplays.isSome() || retiringRegistryMetadata.isSome()) {
+            if (retiringRegistryMetadata.isSome()) {
+                match (retiringRegistryMetadata.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => retiringRegistryMetadata = None }
+            } else {
+                match (detachRootToolMetadata180(receipt)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            }
+        }
+        while (retainedRegistryResponses167.isSome() || retiringRegistryResponseMetadata167.isSome()) {
+            if (retiringRegistryResponseMetadata167.isSome()) {
+                match (retiringRegistryResponseMetadata167.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => retiringRegistryResponseMetadata167 = None }
+            } else {
+                match (detachRootRegistryMetadata180(receipt)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            }
+        }
+        match (ownedFailureQueue113.retireRootSerializedRegistry180(receipt, this)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        ownerSerializerLifetime180 = None
+        Result<Unit>.Ok(())
+    }
+    private func detachRootToolMetadata180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        let node = retainedCopiedDisplays.getOrThrow()
+        match (node.retireRootSerializedData180(receipt, this)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retiringRegistryMetadata = Some(node.takeMetadataAfterDataRetirement())
+        retainedCopiedDisplays = node.next; node.next = None
+        Result<Unit>.Ok(())
+    }
+    private func detachRootRegistryMetadata180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        let node = retainedRegistryResponses167.getOrThrow()
+        match (node.retireRootSerializedData180(receipt, this)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retiringRegistryResponseMetadata167 = Some(node.takeMetadataAfterDataRetirement167())
+        retainedRegistryResponses167 = node.next; node.next = None
+        Result<Unit>.Ok(())
+    }
     public func beginOwnedToolDisplayProducerClosing(): Unit {
         lock.lock()
         try {
@@ -3018,7 +2979,7 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
                         node.next = retainedRegistryResponses167; retainedRegistryResponses167 = Some(node)
                         pendingRegistryMetadata167 = None; pendingRegistryScope167 = None
                     } finally { lock.unlock() }
-                    node.installProjection167(this)
+                    node.installProjection167(this, serializerLifetime180: ownerSerializerLifetime180)
                     (node.originalResult167(), Some(node))
             }
         } finally {
@@ -3839,6 +3800,15 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
         }
     }
 
+    func copyTodoData180(): TuiTodoLoadResult {
+        let phases = match (session.todoPhases()) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return TuiTodoLoadResult(false, "", error.message) }
+        if (phases.isEmpty()) { return TuiTodoLoadResult(true, "", "No todos to copy.") }
+        match (session.todoMarkdown()) {
+            case Result.Ok(value) => TuiTodoLoadResult(true, value, "todo loaded")
+            case Result.Err(error) => TuiTodoLoadResult(false, "", error.message) }
+    }
     public func copyTodoMarkdown(): String {
         let phases = match (session.todoPhases()) {
             case Result.Ok(value) => value
@@ -5250,10 +5220,10 @@ private class CliFailureDelivery113 {
 // The actual Native reservation remains held for the Root process lifetime:
 // subscribeOwned has no unsubscribe, so mode return cannot prove those callback
 // aliases and their fixed metadata have retired. It is never a payload ACK.
-private class CliFailureOutput113 <: OwnedFailureEventSink113 & OwnedFailureEventAdmission113 {
+class CliFailureOutput113 <: OwnedFailureEventSink113 & OwnedFailureEventAdmission113 {
     private let rootMetadata: LogicalJsonOwnerReservation
     private let lock = Mutex()
-    private let output = RpcOutput()
+    private let output: RpcOutput
     private let json: Bool
     private var session: ?ApplicationSession = None<ApplicationSession>
     private var rejectedMarker: ?AgentError = None<AgentError>
@@ -5262,8 +5232,8 @@ private class CliFailureOutput113 <: OwnedFailureEventSink113 & OwnedFailureEven
     private var stagingControl: ?CliFailureAlias113 = None<CliFailureAlias113>
     private var retiringSource: ?CliFailureAlias113 = None<CliFailureAlias113>
     private var retiringControl: ?CliFailureAlias113 = None<CliFailureAlias113>
-    init(metadata: LogicalJsonOwnerReservation, json: Bool) {
-        this.rootMetadata = metadata; this.json = json
+    init(metadata: LogicalJsonOwnerReservation, json: Bool, io!: CliIo180 = consoleCliIo180) {
+        this.rootMetadata = metadata; this.json = json; this.output = RpcOutput(io: io)
     }
     func bindSession(actual: ApplicationSession): Unit {
         lock.lock(); try { session = Some(actual) } finally { lock.unlock() }
@@ -5398,8 +5368,8 @@ private class CliFailureOutput113 <: OwnedFailureEventSink113 & OwnedFailureEven
     }
 }
 
-func printError(error: AgentError): Unit {
-    println("error[" + error.code + "]: " + error.message)
+func printError(error: AgentError, io!: CliIo180 = consoleCliIo180): Unit {
+    io.println("error[" + error.code + "]: " + error.message)
 }
 
 func joinArguments(arguments: Array<String>, from: Int64): String {
@@ -5429,51 +5399,51 @@ func runStatusName(status: RunState): String {
 
 // Interactive confirmation is read only after displaying the actual frozen
 // review. No plugin response or CLI DTO manufactures a user approval.
-func runSelectedWorkspaceCli(session: ApplicationSession, contribution: String, args: AgentValue, interactive: Bool): Int64 {
+func runSelectedWorkspaceCli(session: ApplicationSession, contribution: String, args: AgentValue, interactive: Bool, io!: CliIo180 = consoleCliIo180): Int64 {
     let invocation=match(session.invokeWorkspaceTool(contribution,args)){
-        case Result.Err(error)=>printError(error);return 1;case Result.Ok(value)=>value}
+        case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
     try{
         var reviews:Int64=0
         while(invocation.approval().isSome()){
             let approval=invocation.approval().getOrThrow()
-            println(encodeAgentValue(approval.preview))
-            if(!interactive){println("Approval required; repeat with --interactive to review this actual Root.");return 1}
-            if(reviews>=2){println("error: too many independent native Root reviews");return 1};reviews++
-            println("Type approve "+approval.operationId.value+" to approve this exact Root; any other response rejects it.")
-            let choice=match(getStdIn().readln()){case Some(value)=>value;case None=>""}
+            io.println(encodeAgentValue(approval.preview))
+            if(!interactive){io.println("Approval required; repeat with --interactive to review this actual Root.");return 1}
+            if(reviews>=2){io.println("error: too many independent native Root reviews");return 1};reviews++
+            io.println("Type approve "+approval.operationId.value+" to approve this exact Root; any other response rejects it.")
+            let choice=match(io.readln()){case Some(value)=>value;case None=>""}
             let decision=if(choice=="approve "+approval.operationId.value){ApprovalDecision.Approve}else{ApprovalDecision.Reject}
-            match(invocation.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error);return 1;case Result.Ok(_)=>()}
+            match(invocation.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(_)=>()}
         }
-        let output=match(invocation.output()){case Result.Err(error)=>printError(error);return 1;case Result.Ok(value)=>value}
+        let output=match(invocation.output()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
         let hasResource=output.field("resource_request").isSome() || output.field("application_plan").isSome()
         if(hasResource && interactive){
-            println(encodeAgentValue(output))
-            println("Type execute-resource to submit a separate canonical Root for this exact frozen resource or file plan; any other response leaves it unapplied.")
-            let choice=match(getStdIn().readln()){case Some(value)=>value;case None=>""}
+            io.println(encodeAgentValue(output))
+            io.println("Type execute-resource to submit a separate canonical Root for this exact frozen resource or file plan; any other response leaves it unapplied.")
+            let choice=match(io.readln()){case Some(value)=>value;case None=>""}
             if(choice!="execute-resource"){return 0}
-            let resource=match(invocation.beginResource()){case Result.Err(error)=>printError(error);return 1;case Result.Ok(value)=>value}
+            let resource=match(invocation.beginResource()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
             try{
                 var resourceReviews:Int64=0
                 while(resource.approval().isSome()){
-                    if(resourceReviews>=2){println("error: too many independent resource Root reviews");return 1};resourceReviews++
+                    if(resourceReviews>=2){io.println("error: too many independent resource Root reviews");return 1};resourceReviews++
                     let approval=resource.approval().getOrThrow()
-                    println(encodeAgentValue(approval.preview))
-                    println("Type approve "+approval.operationId.value+" to approve this separate exact resource Root; any other response rejects it.")
-                    let answer=match(getStdIn().readln()){case Some(value)=>value;case None=>""}
+                    io.println(encodeAgentValue(approval.preview))
+                    io.println("Type approve "+approval.operationId.value+" to approve this separate exact resource Root; any other response rejects it.")
+                    let answer=match(io.readln()){case Some(value)=>value;case None=>""}
                     let decision=if(answer=="approve "+approval.operationId.value){ApprovalDecision.Approve}else{ApprovalDecision.Reject}
-                    match(resource.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error);return 1;case Result.Ok(_)=>()}
+                    match(resource.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(_)=>()}
                 }
-                let result=match(resource.output()){case Result.Err(error)=>printError(error);return 1;case Result.Ok(value)=>value}
-                printWorkspaceCliOutput(result)
+                let result=match(resource.output()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
+                printWorkspaceCliOutput(result, io: io)
             }finally{let _=resource.close()}
-        }else{printWorkspaceCliOutput(output)}
+        }else{printWorkspaceCliOutput(output, io: io)}
         0
     }finally{let _=invocation.close()}
 }
-func printWorkspaceCliOutput(output: AgentValue): Unit {
+func printWorkspaceCliOutput(output: AgentValue, io!: CliIo180 = consoleCliIo180): Unit {
     let content=output.field("content") ?? output.field("entries") ?? output.field("matches") ?? output.field("paths") ?? textValue(encodeAgentValue(output))
     let text=if(content.unifiedKind==ValueKind.Text){content.text}else{encodeAgentValue(output)}
-    print(text);if(!text.endsWith("\n")){println()}
+    io.print(text);if(!text.endsWith("\n")){io.println()}
 }
 
 
@@ -5530,11 +5500,11 @@ private func prepayActualRegistryCli161(owned: OwnedApplicationRegistryResponse1
     owned.prepayConsumerCopies161(owned.copiedResponseCopyInvoice161(json))
 }
 private func appConsumeOwnedRegistryPlain161(owned: OwnedApplicationRegistryResponse161,
-    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113): Int64 {
+    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
     try {
         prepayActualRegistryCli161(owned, false)
         let actual = owned.borrowForCli161({ result =>
-            actualRegistryPlainStdoutFrame161(result, session, stream, failures)
+            actualRegistryPlainStdoutFrame161(result, session, stream, failures, io: io)
         })
         if (!actual[0]) { heldActualRegistryCli161.hold(owned); return actual[1] }
         // Formatter, stdout and callback frames all returned before this token.
@@ -5545,19 +5515,19 @@ private func appConsumeOwnedRegistryPlain161(owned: OwnedApplicationRegistryResp
     } catch (_: Exception) { heldActualRegistryCli161.hold(owned); 1 }
 }
 private func actualRegistryPlainStdoutFrame161(result: Result<ApplicationResponse>,
-    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113): (Bool, Int64) {
+    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): (Bool, Int64) {
     try {
-        let status = originalRegistryPlainProjectionFrame161(result, session, stream, failures)
-        getStdOut().flush()
+        let status = originalRegistryPlainProjectionFrame161(result, session, stream, failures, io: io)
+        io.flush()
         (true, status)
     } catch (_: Exception) { (false, 1) }
 }
 private func appConsumeOwnedRegistryJson161(owned: OwnedApplicationRegistryResponse161,
-    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113): Int64 {
+    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
     try {
         prepayActualRegistryCli161(owned, true)
         let actual = owned.borrowForCli161({ result =>
-            actualRegistryJsonStdoutFrame161(result, session, stream, failures)
+            actualRegistryJsonStdoutFrame161(result, session, stream, failures, io: io)
         })
         if (!actual[0]) { heldActualRegistryCli161.hold(owned); return actual[1] }
         if (!owned.closeAfterActualCopiedResponse161(RetiredActualRegistryCliReferences161())) {
@@ -5567,10 +5537,10 @@ private func appConsumeOwnedRegistryJson161(owned: OwnedApplicationRegistryRespo
     } catch (_: Exception) { heldActualRegistryCli161.hold(owned); 1 }
 }
 private func actualRegistryJsonStdoutFrame161(result: Result<ApplicationResponse>,
-    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113): (Bool, Int64) {
+    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): (Bool, Int64) {
     try {
-        let status = originalRegistryJsonProjectionFrame161(result, session, stream, failures)
-        getStdOut().flush()
+        let status = originalRegistryJsonProjectionFrame161(result, session, stream, failures, io: io)
+        io.flush()
         (true, status)
     } catch (_: Exception) { (false, 1) }
 }
@@ -5586,16 +5556,17 @@ class RegistrySessionCliConsumer161 {
     private var plain: ?StreamState
     private var jsonStream: ?ApplicationJsonEventStream
     private let json: Bool
+    private let io: CliIo180
     private var closed = false
-    init(session: ApplicationSession, metadata: LogicalJsonOwnerReservation, json: Bool) {
-        this.metadata = Some(metadata); this.session = Some(session); this.json = json
-        let actual = CliFailureOutput113(metadata, json)
+    init(session: ApplicationSession, metadata: LogicalJsonOwnerReservation, json: Bool, io!: CliIo180 = consoleCliIo180) {
+        this.metadata = Some(metadata); this.session = Some(session); this.json = json; this.io = io
+        let actual = CliFailureOutput113(metadata, json, io: io)
         actual.bindSession(session)
         this.failures = Some(actual)
         this.plain = Some(StreamState())
         this.jsonStream = Some(ApplicationJsonEventStream({ event =>
-            appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)))
-        }))
+            appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)), io: io)
+        }, io: io))
     }
     func print(input: String): Int64 {
         lock.lock()
@@ -5604,9 +5575,9 @@ class RegistrySessionCliConsumer161 {
             match (session.getOrThrow().ownedRegistryCommand161(input)) {
                 case Some(owned) =>
                     if (json) {
-                        appConsumeOwnedRegistryJson161(owned, session.getOrThrow(), jsonStream.getOrThrow(), failures.getOrThrow())
+                        appConsumeOwnedRegistryJson161(owned, session.getOrThrow(), jsonStream.getOrThrow(), failures.getOrThrow(), io: io)
                     } else {
-                        appConsumeOwnedRegistryPlain161(owned, session.getOrThrow(), plain.getOrThrow(), failures.getOrThrow())
+                        appConsumeOwnedRegistryPlain161(owned, session.getOrThrow(), plain.getOrThrow(), failures.getOrThrow(), io: io)
                     }
                 case None => throw IllegalStateException("input is not a Registry maintenance command")
             }
@@ -5629,23 +5600,23 @@ class RegistrySessionCliConsumer161 {
     }
 }
 
-private func originalRegistryPlainProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113): Int64 {
+private func originalRegistryPlainProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
     match (result) {
         case Result.Err(error) =>
             if (stream.wroteText) {
-                appWriteRegistryLineChecked181("")
+                appWriteRegistryLineChecked181("", io: io)
             }
-            if (!failures.consumeCaller(session, error)) { appWriteRegistryLineChecked181("error[" + error.code + "]: " + error.message) }
+            if (!failures.consumeCaller(session, error)) { appWriteRegistryLineChecked181("error[" + error.code + "]: " + error.message, io: io) }
             1
         case Result.Ok(response) =>
             if (stream.wroteText) {
-                appWriteRegistryLineChecked181("")
+                appWriteRegistryLineChecked181("", io: io)
             } else if (response.text != "") {
-                appWriteRegistryLineChecked181(response.text)
+                appWriteRegistryLineChecked181(response.text, io: io)
             }
             match (response.approval) {
                 case Some(approval) =>
-                    appWriteRegistryLineChecked181("approval required: " + approval.operationId.value)
+                    appWriteRegistryLineChecked181("approval required: " + approval.operationId.value, io: io)
                     3
                 case None => 0
             }
@@ -5653,7 +5624,7 @@ private func originalRegistryPlainProjectionFrame161(result: Result<ApplicationR
 
 }
 
-private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113): Int64 {
+private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
     match (result) {
         case Result.Err(error) =>
             stream.finish()
@@ -5668,7 +5639,7 @@ private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationRe
                         ]
                     ))
                 )
-            )
+            , io: io)
             }
             1
         case Result.Ok(response) =>
@@ -5747,7 +5718,7 @@ private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationRe
             }
             appWriteRegistryLineChecked181(encodeAgentValue(redactJsonAgentValue(
                 objectValue(fields.toArray())
-            )))
+            )), io: io)
             if (response.approval.isSome()) {
                 3
             } else {
@@ -5758,9 +5729,9 @@ private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationRe
 
 // A successful formatter return also requires the actual fd write to finish.
 // On a partial write or EPIPE the caller retains its same paid response.
-func appWriteRegistryLineChecked181(text: String): Unit {
-    getStdOut().flush()
-    writeFdUtf8LineChecked122(1, text)
+func appWriteRegistryLineChecked181(text: String, io!: CliIo180 = consoleCliIo180): Unit {
+    io.flush()
+    io.println(text)
 }
 
 // The constructor consumes only the actual opaque Screen receipt. No empty

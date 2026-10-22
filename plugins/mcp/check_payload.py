@@ -239,11 +239,58 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(peer.plugin.wait(timeout=3), 3)
             self.assertEqual(peer.observed(), [])
 
+        # The physical reader must retain its exact byte bound across fd
+        # chunks; whitespace padding changes no logical input or authority.
+        with PayloadPeer() as peer:
+            for size in (8191, 8192, 8193, peer.frame_limit):
+                with self.subTest(physical_bytes=size):
+                    frame = peer.invocation(dict(action='invalid'), kind='service_prepare')
+                    peer.current = frame
+                    raw = encoded(frame)
+                    wire = raw + b' ' * (size - len(raw)) + b'\n'
+                    with peer.send_lock:
+                        peer.plugin.stdin.write(wire); peer.plugin.stdin.flush()
+                    response = peer.next()
+                    self.assertEqual(response['type'], 'result')
+                    for name in check.IDENTITY:
+                        self.assertEqual(response[name], frame[name])
+                    self.assertFalse(response['ok'])
+                    self.assertEqual(peer.observed(), [])
+            # Split a valid UTF-8 scalar at the 8192-byte read boundary.
+            frame = peer.invocation(dict(action='invalid', marker='\U00010348'), kind='service_prepare')
+            peer.current = frame
+            raw = encoded(frame)
+            wire = b' ' * (8191 - raw.index('\U00010348'.encode())) + raw + b'\n'
+            with peer.send_lock:
+                peer.plugin.stdin.write(wire[:8192]); peer.plugin.stdin.flush()
+                peer.plugin.stdin.write(wire[8192:]); peer.plugin.stdin.flush()
+            response = peer.next()
+            self.assertEqual(response['type'], 'result'); self.assertFalse(response['ok'])
+            self.assertEqual(response['id'], frame['id'])
+            self.assertEqual(peer.observed(), [])
+
+        for failure in ('overflow', 'incomplete', 'invalid-utf8'):
+            with self.subTest(physical_failure=failure), PayloadPeer() as peer:
+                frame = peer.invocation(dict(action='invalid', marker='\U00010348'), kind='service_prepare')
+                raw = encoded(frame)
+                if failure == 'overflow':
+                    wire = raw + b' ' * (peer.frame_limit + 1 - len(raw)) + b'\n'
+                elif failure == 'incomplete':
+                    wire = raw
+                else:
+                    wire = raw.replace('\U00010348'.encode(), b'\xff') + b'\n'
+                with peer.send_lock:
+                    peer.plugin.stdin.write(wire); peer.plugin.stdin.flush()
+                    if failure == 'incomplete': peer.plugin.stdin.close()
+                self.assertEqual(peer.plugin.wait(timeout=3), 3)
+                self.assertEqual(peer.observed(), [])
+
     def test_logical_payload_overlap_offset_digest_and_cross_invocation_are_rejected(self):
-        for mode in ('overlap', 'offset', 'digest', 'identity', 'window'):
+        for mode in ('overlap', 'offset', 'digest', 'identity', 'window', 'odd-hex', 'uppercase-hex', 'non-hex', 'invalid-utf8'):
             with self.subTest(mode=mode), PayloadPeer() as peer:
                 frame = peer.invocation(dict(action='start', configuration=config()), run='maintenance')
                 source = encoded(frame)
+                if mode == 'invalid-utf8': source = b'\xff' + source[1:]
                 peer.send_begin(frame, source, **({'sha256': 'a'*64} if mode == 'digest' else {}))
                 if mode == 'overlap':
                     peer.send_begin(frame, source)
@@ -251,8 +298,11 @@ class PayloadTests(unittest.TestCase):
                     chunk = envelope(frame, 'payload_chunk', offset=1 if mode == 'offset' else 0, bytes_hex=source.hex())
                     if mode == 'identity': chunk['epoch'] += 1
                     if mode == 'window': chunk['payload']['window'] += '-foreign'
+                    if mode == 'odd-hex': chunk['payload']['bytes_hex'] = source.hex()[:-1]
+                    if mode == 'uppercase-hex': chunk['payload']['bytes_hex'] = source.hex().upper()
+                    if mode == 'non-hex': chunk['payload']['bytes_hex'] = 'g' + source.hex()[1:]
                     peer.send_raw(chunk)
-                    if mode == 'digest': peer.send_raw(envelope(frame, 'payload_end'))
+                    if mode in ('digest', 'invalid-utf8'): peer.send_raw(envelope(frame, 'payload_end'))
                 self.assertEqual(peer.plugin.wait(timeout=3), 3)
                 self.assertEqual(peer.observed(), [])
 

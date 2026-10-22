@@ -43,6 +43,20 @@ if [[ ! -x "$source_binary" ]]; then
   printf 'axyndra: build artifact is missing: %s\n' "$source_binary" >&2
   exit 2
 fi
+native_required=false
+source_dynamic=$(readelf -d "$source_binary")
+if "$GREP" -Fq '[libprocess4cj_native.so]' <<< "$source_dynamic"; then native_required=true; fi
+source_native_root=${AXYNDRA_SOURCE_NATIVE_ROOT:-"$root/libs/process4cj/native"}
+if [[ "$native_required" == true && -n "${AXYNDRA_SOURCE_BINARY:-}" && -z "${AXYNDRA_SOURCE_NATIVE_ROOT:-}" ]]; then
+  printf 'axyndra: explicit dynamic host requires its matched AXYNDRA_SOURCE_NATIVE_ROOT\n' >&2
+  exit 2
+fi
+if [[ -n "${AXYNDRA_SOURCE_NATIVE_ROOT:-}" && ( -L "$source_native_root" || ! -d "$source_native_root" ) ]]; then
+  printf 'axyndra: explicit native input must be a real directory\n' >&2
+  exit 2
+fi
+source_native="$source_native_root/libprocess4cj_native.so"
+native_provenance=()
 if ! command -v patchelf >/dev/null 2>&1; then
   printf 'axyndra: patchelf is required to package a relocatable candidate\n' >&2
   exit 2
@@ -55,14 +69,28 @@ if [[ ! -x "$network_bridge" ]]; then
   printf 'axyndra: mediated network gateway helper is missing: %s\n' "$network_bridge" >&2
   exit 2
 fi
+if [[ "$native_required" == true || -n "${AXYNDRA_SOURCE_NATIVE_ROOT:-}" ]]; then
+  source_native_sha256=$(python3 "$root/scripts/package_host_provenance.py" --hash-file "$source_native")
+fi
 
 source_binary_sha256=$(python3 "$root/scripts/package_host_provenance.py" --hash-file "$source_binary")
 mkdir -p -- "$package_root/bin" "$package_root/lib" "$package_root/diagnostics"
 cp -f -- "$source_binary" "$package_root/bin/axyndra"
 cp -f -- "$network_bridge" "$package_root/bin/sandbox-net-bridge"
+if [[ "$native_required" == true ]]; then
+  cp -- "$source_native" "$package_root/lib/libprocess4cj_native.so"
+  copied_native_sha256=$(python3 "$root/scripts/package_host_provenance.py" --hash-file "$package_root/lib/libprocess4cj_native.so")
+  after_native_sha256=$(python3 "$root/scripts/package_host_provenance.py" --hash-file "$source_native")
+  if [[ "$source_native_sha256" != "$copied_native_sha256" || "$source_native_sha256" != "$after_native_sha256" ]]; then
+    printf 'axyndra: native input changed during package copy\n' >&2
+    exit 2
+  fi
+  native_provenance=(--native-source "$source_native" --native-before-sha256 "$source_native_sha256" --native-copy-sha256 "$copied_native_sha256")
+fi
 
 runtime_paths=(
-  "$root/libs/process4cj/native"
+  "$package_root/lib"
+  "$source_native_root"
   "$sdk_root/runtime/lib/linux_x86_64_cjnative"
   "$sdk_root/tools/lib"
   "$stdx_root"
@@ -71,6 +99,10 @@ export LD_LIBRARY_PATH=$(IFS=:; printf '%s' "${runtime_paths[*]}")
 
 queue=("$package_root/bin/axyndra")
 seen='|'
+if [[ "$native_required" == true ]]; then
+  queue+=("$package_root/lib/libprocess4cj_native.so")
+  seen+='libprocess4cj_native.so|'
+fi
 while ((${#queue[@]})); do
   current=${queue[0]}
   queue=("${queue[@]:1}")
@@ -141,5 +173,5 @@ python3 "$root/scripts/package_host_licenses.py" --root "$package_root" \
   --sdk-root "$sdk_root" --stdx-root "$stdx_root" --repository-license "$root/LICENSE"
 python3 "$root/scripts/package_host_provenance.py" --root "$package_root" \
   --binary "$source_binary" --source-sha256 "$source_binary_sha256" \
-  --recipe "$root/packaging/distributions.json" --profile "$distribution" "${explicit_binary[@]}"
+  --recipe "$root/packaging/distributions.json" --profile "$distribution" "${explicit_binary[@]}" "${native_provenance[@]}"
 printf '%s\n' "$package_root/bin/axyndra"

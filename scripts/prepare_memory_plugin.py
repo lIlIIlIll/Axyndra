@@ -110,7 +110,12 @@ def prepare(output=None):
                    evidence / 'build.log', 900)
         if 'cjpm build success' not in text or has_compiler_error(text):
             raise ValueError('actual compiler success is missing')
-        unit_text = run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test'], evidence / 'unit.log', 900,
+        # SDK workers execute independent test classes in separate processes.
+        # Every Native case owns its own in-memory journal, budget and producer;
+        # no shared filesystem fixture or mutable suite state is involved. Keep
+        # two workers bounded, all cases unfiltered, and each case unchanged.
+        unit_text = run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test', '--parallel', '2',
+                         '--no-progress'], evidence / 'unit.log', 900,
                         working_directory=plugin)
         unit = summary(unit_text)
         if unit != dict(total=138, passed=138, failed=0, skipped=0, errors=0):

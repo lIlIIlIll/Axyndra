@@ -170,7 +170,7 @@ class HostManagedChannelInvocation <: HostManagedServiceInvocation {
         // Conservative evidence from the actual host executor after canonical
         // handoff, never a plugin claim. A failed write may have sent a prefix.
         writeAttempted.store(true)
-        match (hostPhysicalTransportDiagnostic(14, 2, 0, { => lease.writePreparedChild(context, childContext, child, binding()) })) {
+        match (lease.writePreparedChild(context, childContext, child, binding())) {
             case Result.Err(error) =>
                 hostManagedJobIoDiagnostic(child.source.operationRoot, "broker-write", error)
                 // This fact comes from the actual canonical child executor,
@@ -217,7 +217,7 @@ class HostManagedChannelInvocation <: HostManagedServiceInvocation {
         } else if (name == "process.channel.write") {
             // The existing broker reuses parent-slot lending, policy, derived
             // Operation admission, handoff, execution and durable settlement.
-            let response = match (hostPhysicalTransportDiagnostic(13, 2, 0, { => broker.execute(invocationId, requestId, name, argumentsJson) })) {
+            let response = match (broker.execute(invocationId, requestId, name, argumentsJson)) {
                 case JavaScriptHostResult.Err(error) => return JavaScriptHostResult.Err(error)
                 case JavaScriptHostResult.Ok(value) => value
             }

@@ -17,6 +17,27 @@ class PluginRegistryInitialState {
     let loadErrors = ArrayList<PluginImportError>()
 }
 
+// Full typed DATA adopted by records/history/errors. The original per-field
+// factors and container/header invoices stay intact; private tree paths,
+// digest payloads and parser documents are not members of this graph.
+func pluginRegistryRetainedStateInvoice103(records: ArrayList<RawProductPluginRecord>,
+    history: HashMap<String, ArrayList<RawProductPluginRecord>>, errors: ArrayList<PluginImportError>): Int64 {
+    var invoice: Int64 = 8192
+    for (record in records) {
+        invoice = pluginRegistryInvoiceAdd78(invoice, pluginRegistryInvoiceAdd78(64, pluginOwnedRecordInvoice78(record)))
+    }
+    for ((key, values) in history) {
+        invoice = pluginRegistryInvoiceAdd78(invoice, key.size * 8 + 512 + 2048)
+        for (record in values) {
+            invoice = pluginRegistryInvoiceAdd78(invoice, pluginRegistryInvoiceAdd78(64, pluginOwnedRecordInvoice78(record)))
+        }
+    }
+    for (error in errors) {
+        invoice = pluginRegistryInvoiceAdd78(invoice, (error.code.size + error.message.size) * 8 + 8192 + 64)
+    }
+    invoice
+}
+
 func pluginLoadRegistryInitialState(settingsRoot: String, workspaceRoot: String,
     captured!: ?PluginRegistryExecutionPin = None, memory!: ?PluginRegistryStateMemory = None): PluginRegistryInitialState {
     let initial = PluginRegistryInitialState()
@@ -82,6 +103,17 @@ func pluginLoadRegistryPrivateRow78(settingsRoot: String, workspaceRoot: String,
     records: ArrayList<RawProductPluginRecord>, history: HashMap<String, ArrayList<RawProductPluginRecord>>,
     loadErrors: ArrayList<PluginImportError>, scope: PluginInstallScope, line: String,
     captured: ?PluginRegistryExecutionPin, memory: ?PluginRegistryStateMemory): Unit {
+    match (captured) { case Some(pin) => pin.beginRecordInspection103(); case None => () }
+    pluginLoadRegistryPrivateRowWorkingFrame103(settingsRoot, workspaceRoot, records, history, loadErrors, scope, line, captured, memory)
+    match (captured) {
+        case Some(pin) => pin.finishRecordInspection103(records, history, loadErrors)
+        case None => ()
+    }
+}
+private func pluginLoadRegistryPrivateRowWorkingFrame103(settingsRoot: String, workspaceRoot: String,
+    records: ArrayList<RawProductPluginRecord>, history: HashMap<String, ArrayList<RawProductPluginRecord>>,
+    loadErrors: ArrayList<PluginImportError>, scope: PluginInstallScope, line: String,
+    captured: ?PluginRegistryExecutionPin, memory: ?PluginRegistryStateMemory): Unit {
     let accounting: PluginPackageMetadataAccounting = match (captured) {
         case Some(pin) => pin.inspectionMemory()
         case None => memory.getOrThrow()
@@ -109,9 +141,12 @@ private func pluginLoadRegistryPrivateRowBody78(holder: PluginRegistryPrivateRow
     history: HashMap<String, ArrayList<RawProductPluginRecord>>, loadErrors: ArrayList<PluginImportError>,
     scope: PluginInstallScope, line: String, captured: ?PluginRegistryExecutionPin, memory: ?PluginRegistryStateMemory): Unit {
             if (line.trimAscii() == "") { return }
-            match (captured) { case Some(pin) => pin.beforeRecord(line); case None => () }
             holder.node = Some(parseUnifiedJson(line, maxBytes: 1048576, maxDepth: 16))
             let value = holder.node.getOrThrow()
+            if (!pluginLockFormatSupported(value)) {
+                loadErrors.add(PluginImportError("plugin.lock_format_unsupported", "unsupported plugin lock schema_version, fields, or typed facts; original state is retained"))
+                return
+            }
             let root = pluginLockText(value, "root")
             if (root == "") {
                 loadErrors.add(PluginImportError("plugin.lock_identity_mismatch", "plugin lock row has no package root"))
@@ -174,7 +209,7 @@ private func pluginLoadRegistryPrivateRowBody78(holder: PluginRegistryPrivateRow
                 scope: scope, explicitlyDisabled: explicitlyDisabled
             )
             match (captured) {
-                case Some(pin) => pin.beforeLoadedRecord78(record); pin.rememberRecord(record)
+                case Some(pin) => pin.beforeLoadedRecord78(record)
                 case None => memory.getOrThrow().beforeLoadedRecord78(record)
             }
             if (historyFor == "") {
@@ -202,4 +237,32 @@ private func pluginLoadRegistryPrivateRowBody78(holder: PluginRegistryPrivateRow
                 history[key] = values
             }
         
+}
+
+// Recognized historical rows move to v1 only on an explicit writer mutation.
+private func pluginLockFormatSupported(value: JsonNode): Bool {
+    if (value.unifiedKind != UnifiedJsonKind.Object) { return false }
+    match (value.field("schema_version")) {
+        case Some(version) =>
+            if (version.unifiedKind != UnifiedJsonKind.Number || version.asNumberText() != "1") { return false }
+        case None => ()
+    }
+    for (field in value.fields) {
+        match (field.name) {
+            case "schema_version" => ()
+            case "enabled" | "explicitly_disabled" =>
+                if (field.value.unifiedKind != UnifiedJsonKind.Boolean) { return false }
+            case "source_kind" =>
+                if (field.value.unifiedKind != UnifiedJsonKind.Text) { return false }
+                match (field.value.text) {
+                    case "local" | "git" | "npm" => ()
+                    case _ => return false
+                }
+            case "id" | "version" | "namespace" | "locator" | "root" |
+                "version_lock" | "revision" | "integrity" | "content_digest" | "history_for" =>
+                if (field.value.unifiedKind != UnifiedJsonKind.Text) { return false }
+            case _ => return false
+        }
+    }
+    true
 }

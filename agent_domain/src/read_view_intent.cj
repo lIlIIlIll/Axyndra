@@ -6,8 +6,8 @@ import yjson.*
 import yjson_support.*
 
 public let HOST_READ_VIEW_TOOL = "host.process.readview"
-public let HOST_READ_VIEW_VERSION = "read-view-intents/v1"
-public let HOST_READ_VIEW_FINGERPRINT = "host-read-view-v1"
+public let HOST_READ_VIEW_VERSION = "read-view-intents/v2"
+public let HOST_READ_VIEW_FINGERPRINT = "host-read-view-v2"
 public let HOST_READ_VIEW_MAX_FILES: Int64 = 1024
 public let HOST_READ_VIEW_MAX_BYTES: Int64 = 16777216
 
@@ -153,7 +153,7 @@ public func readViewChildArguments(parent: AgentValue, id: String): Result<Agent
         return readViewError("read_view.parent_invalid", "read view requires its frozen parent envelope")
     }
     let host = parent.field("host_plan").getOrThrow()
-    if (!httpIntentExactFields(host, ["version", "plugin", "package_digest", "generation", "configuration_digest", "contribution", "read_granted", "intents"]) ||
+    if (!httpIntentExactFields(host, ["version", "plugin", "package_digest", "generation", "configuration_digest", "contribution", "read_granted", "tool_payload_limits", "intents"]) ||
         httpIntentText(host, "version") != HOST_READ_VIEW_VERSION ||
         !httpServicePluginNamespace(httpIntentText(host, "plugin")) ||
         !httpServicePackageDigest(httpIntentText(host, "package_digest")) ||
@@ -162,6 +162,7 @@ public func readViewChildArguments(parent: AgentValue, id: String): Result<Agent
         host.field("read_granted").getOrThrow().unifiedKind != ValueKind.Boolean) {
         return readViewError("read_view.parent_invalid", "read view parent identity is invalid")
     }
+    if (!readViewPayloadProfileValid(host)) { return readViewError("read_view.payload_invalid", "read view payload profile must match its exact contribution") }
     let generation = try { UInt64.parse(httpIntentText(host, "generation")) } catch (_: Exception) { 0u64 }
     let intents = host.field("intents").getOrThrow()
     if (generation == 0u64 || intents.unifiedKind != ValueKind.List || intents.items.size != 1) {
@@ -171,7 +172,7 @@ public func readViewChildArguments(parent: AgentValue, id: String): Result<Agent
     match (validateReadViewIntent(intent)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     if (httpIntentText(intent, "id") != id) { return readViewError("read_view.intent_missing", "request does not name the frozen intent") }
     let fields = ArrayList<ValueField>()
-    for (name in ["plugin", "package_digest", "generation", "configuration_digest", "contribution"]) {
+    for (name in ["plugin", "package_digest", "generation", "configuration_digest", "contribution", "tool_payload_limits"]) {
         fields.add(ValueField(name, host.field(name).getOrThrow()))
     }
     fields.add(ValueField("intent", intent))
@@ -200,7 +201,8 @@ public func isReadViewServiceChildPlan(plan: NormalizedOperationPlan): Bool {
         plan.implementation.toolVersion != HOST_READ_VIEW_FINGERPRINT || plan.effectClass != OperationEffectClass.ReadOnly ||
         plan.networkPolicy.mode != NetworkPolicyMode.Denied || plan.retryDisposition != OperationRetryDisposition.Never ||
         match (plan.replayDisposition) { case ReplayDisposition.NeverReplay => false; case _ => true } ||
-        !httpIntentExactFields(plan.canonicalArguments, ["plugin", "package_digest", "generation", "configuration_digest", "contribution", "intent"])) { return false }
+        !httpIntentExactFields(plan.canonicalArguments, ["plugin", "package_digest", "generation", "configuration_digest", "contribution", "tool_payload_limits", "intent"]) ||
+        !readViewPayloadProfileValid(plan.canonicalArguments)) { return false }
     if (validateReadViewIntent(plan.canonicalArguments.field("intent").getOrThrow()).isError()) { return false }
     let required = readViewRequiredCapabilities(plan.canonicalArguments)
     if (required.size != plan.requiredCapabilities.size) { return false }
@@ -245,6 +247,13 @@ public func readViewServiceChildAllowed(parent: NormalizedOperationPlan, child: 
         cap.resource != "" && cap.resource != parent.toolName) { return false }
     for (required in child.requiredCapabilities where !ceiling.allows(required.kind, resource: required.resource)) { return false }
     true
+}
+
+func readViewPayloadProfileValid(value: AgentValue): Bool {
+    let raw = match (value.field("tool_payload_limits")) { case Some(item) => item; case None => return false }
+    if (raw.unifiedKind == ValueKind.Null) { return true }
+    let profile = ordinaryToolPayloadLimitsFromValue(raw)
+    profile.isSome() && profile.getOrThrow().contribution == httpIntentText(value, "contribution")
 }
 
 func readViewError<T>(code: String, message: String): Result<T> {

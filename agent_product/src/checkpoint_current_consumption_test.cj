@@ -25,7 +25,7 @@ class CheckpointCurrentConsumption11317Tests {
 
 private func checkpointCurrentConsumptionRollback11317(configuration: Bool): Unit {
     let f = CompactionPolicyFixture(hybrid: false)
-    let host = ProductJavaScriptPluginHost(settingsRoot: f.root + "/settings")
+    let host = f.host()
     let cancellation = CheckpointConsumptionCancellation11317()
     var owned: ?ProductCompactionReferenceQuery = None<ProductCompactionReferenceQuery>
     let observed = ArrayList<String>()

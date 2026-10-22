@@ -4,6 +4,7 @@ import agent_domain.*
 import agent_extension_runtime.*
 import std.collection.*
 import std.sync.*
+import std.fs.*
 
 foreign func axyndra_registry_snapshot_open(path: CString): Int64
 foreign func axyndra_registry_snapshot_size(handle: Int64): Int64
@@ -13,8 +14,8 @@ foreign func axyndra_registry_snapshot_validate(handle: Int64): Int32
 foreign func axyndra_registry_snapshot_close(handle: Int64): Unit
 
 // Data/resource extent only: no Source, execution or pin authority. Includes
-// real snapshot/watcher wrappers, the fixed 16 KiB native event buffer, original
-// comparison scratch, bound parent/name arrays and full path copy occurrences.
+// real snapshot/watcher wrappers, one retained 16 KiB native buffer reused for
+// events and byte comparisons, bound parent/name arrays and full path copies.
 // Kernel queues, like pipe queues, remain kernel FD resources; overflow or lost
 // watch evidence revokes the snapshot and never yields a partial admission.
 func pluginRegistrySnapshotObservationCost76(pathBytes: Int64): Int64 {
@@ -33,8 +34,10 @@ class PluginRegistryMetadataSnapshot {
 
     init(path: String) {
         this.path = path
+        let physical = if (Path(path).isAbsolute()) { path }
+            else { pluginRegistryFencePath180(path, canonicalize(Path(".")).toString()) }
         handle = unsafe {
-            let raw = LibC.mallocCString(path)
+            let raw = LibC.mallocCString(physical)
             try { axyndra_registry_snapshot_open(raw) } finally { LibC.free(raw) }
         }
         pluginRegistryNativeFailure(handle)
@@ -109,8 +112,6 @@ public class PluginRegistryExecutionPin {
     private var generationReleased = false
     private var loading = false
     private var pendingStatePublication = false
-    private var recordStart: Int64 = 0
-    private let recordCosts = HashMap<String, Int64>()
     private var armed = false
     private var revoked = false
     private var closed = false
@@ -128,7 +129,9 @@ public class PluginRegistryExecutionPin {
     func beginLoad(actual: PluginRegistryMetadataPayment): Unit {
         generation.beginLoad(actual); loadingPayment103 = Some(actual); memory.beginLoad103(actual); loading = true
     }
-    func prepareStatePublication103(): Unit { generation.retainState(loadingPayment103.getOrThrow()) }
+    func prepareStatePublication103(initial: PluginRegistryInitialState): Unit {
+        generation.retainState(pluginRegistryRetainedStateInvoice103(initial.records, initial.history, initial.loadErrors), loadingPayment103.getOrThrow())
+    }
     // The Registry outer capture finally calls this after its full inner frame
     // returns. This never claims that caller-owned record/data aliases ended.
     func retireLoadingPhase103(): Unit {
@@ -139,17 +142,20 @@ public class PluginRegistryExecutionPin {
             case None => ()
         }
     }
-    func beforeRecord(source: String): Unit {
-        recordStart = generation.loadCost(loadingPayment103.getOrThrow())
+    func beginRecordInspection103(): Unit { memory.beginRecord103() }
+    func finishRecordInspection103(records: ArrayList<RawProductPluginRecord>,
+        history: HashMap<String, ArrayList<RawProductPluginRecord>>, errors: ArrayList<PluginImportError>): Unit {
+        generation.retainLoadData103(pluginRegistryRetainedStateInvoice103(records, history, errors), loadingPayment103.getOrThrow())
+        // The complete private row helper returned. Only prepaid typed state
+        // remains reachable; no tree/DOM producer local exits this helper.
+        let returned = memory.takeReturnedRecordPayment103()
+        returned.close()
+    }
+    func retainLoadedState103(initial: PluginRegistryInitialState): Unit {
+        generation.retainLoadData103(pluginRegistryRetainedStateInvoice103(initial.records, initial.history, initial.loadErrors), loadingPayment103.getOrThrow())
     }
     func inspectionMemory(): PluginPackageMetadataAccounting { memory }
-    func beforeLoadedRecord78(record: RawProductPluginRecord): Unit { generation.charge(pluginOwnedRecordInvoice78(record), loadingPayment103.getOrThrow()) }
-    func rememberRecord(record: RawProductPluginRecord): Unit {
-        // Descriptor and lock fields came from this exact paid parser call.
-        let key = pluginScopeName(record.scope) + "|" + record.descriptor.root
-        let cost = generation.loadCost(loadingPayment103.getOrThrow()) - recordStart
-        recordCosts[key] = match (recordCosts.get(key)) { case Some(value) => max(value, cost); case None => cost }
-    }
+    func beforeLoadedRecord78(record: RawProductPluginRecord): Unit { memory.chargeWork103(pluginOwnedRecordInvoice78(record)) }
     func source(path: String): ?String {
         let selected = generation.source(path, loadingPayment103.getOrThrow())
         // Includes repeated workspace-grant DOM decoding in the real loader.
@@ -161,12 +167,9 @@ public class PluginRegistryExecutionPin {
             throw PluginRegistryWriteError("plugin.registry_execution_stale", "installed execution pin cannot be armed")
         }
         validateSnapshots()
-        let cost = match (recordCosts.get(pluginScopeName(record.scope) + "|" + record.descriptor.root)) {
-            case Some(value) => value
-            case None => throw IllegalStateException("installed record has no paid metadata decode")
-        }
+        let cost = pluginOwnedRecordInvoice78(record)
         let selected = generation.finishLoad(cost, pluginRegistryPinIdentityInvoice103(record), loadingPayment103.getOrThrow())
-        selectedPayment103 = Some(selected); retainedCost = cost; loading = false; pendingStatePublication = true; recordCosts.clear()
+        selectedPayment103 = Some(selected); retainedCost = cost; loading = false; pendingStatePublication = true
         identity = pluginLockLine(record); scope = record.scope; installed = Some(record); armed = true
     }
     func completeStatePublication(): Unit {
@@ -228,7 +231,7 @@ public class PluginRegistryExecutionPin {
             throw IllegalStateException("capture phase must return before pin retirement")
         }
         generationReleased = true
-        installed = None; identity = ""; recordCosts.clear()
+        installed = None; identity = ""
         for (backing in ownedBackings) { backing.close() }; ownedBackings.clear()
         settingsRoot = ""; workspaceRoot = ""
         let selected = selectedPayment103; selectedPayment103 = None

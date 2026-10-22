@@ -19,7 +19,7 @@ import yjson_support.*
 // the manager's Store/approval/lease contracts remain a separate obligation.
 class PinnedServiceFixture {
     let files = LifecycleConfigurationFixture()
-    let host = ProductJavaScriptPluginHost()
+    let host: ProductJavaScriptPluginHost
     let record: ProductPluginRecord
     let mountGeneration: UInt64
     let config: ProductPluginLifecycleConfiguration
@@ -30,6 +30,7 @@ class PinnedServiceFixture {
     private let registryOwners = ProductRegistryTestOwners()
 
     init(capacityProfile!: ?AgentValue = None, lifetimeMillis!: Int64 = 60000) {
+        host = ProductJavaScriptPluginHost(settingsRoot: files.settings)
         try {
         let binary = canonicalize(Path(getVariable("AXYNDRA_NATIVE_SERVICE_PLUGIN_FIXTURE").getOrThrow()))
         let source = files.root + "/native-service-source"
@@ -42,7 +43,14 @@ class PinnedServiceFixture {
             ValueField("contributions", listValue([objectValue([
                 ValueField("kind", textValue("service")), ValueField("name", textValue("session"))])]))
         ])).toArray())
-        record = match (registryOwners.openProduct(files.settings, files.workspace).importLocal(source)) {
+        let registry = registryOwners.openProduct(files.settings, files.workspace)
+        lifecycleTestRequire(host.ownRegistry(registry))
+        let imported = match (registry.importLocal(source)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+        }
+        imported.close()
+        record = match (registry.setEnabled("axyndra:pinned-service-fixture", true)) {
             case PluginRegistryResult.Ok(value) => value
             case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
@@ -65,9 +73,8 @@ class PinnedServiceFixture {
             CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn), Capability(CapabilityKind.ExtensionInvoke)]),
             epoch: 7, cancellation: cancellation.token,
             toolContext: ToolContextDescriptor(workspaceRoot: files.workspace, cwd: files.workspace))
-        grant = lifecycleTestRequire(config.bindService("stdio", ThreadId("target-thread"),
-            lifecycleTestRequire(host.serviceInstanceIdentity(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), mountGeneration)),
-            files.workspace, ExecutionResourceLimits(), pluginInvocationAuthorityScope(bindingContext)))
+        grant = lifecycleTestRequire(host.bindLifecycleService(config, "stdio", ThreadId("target-thread"),
+            files.workspace, ExecutionResourceLimits(), pluginInvocationAuthorityScope(bindingContext), mountGeneration))
         } catch (error: Exception) {
             try { let _ = host.close() } finally { cancellation.close(); registryOwners.close(); files.close() }
             throw error

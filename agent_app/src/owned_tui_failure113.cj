@@ -291,6 +291,14 @@ class OwnedTuiFailureEntry113 {
                 case Result.Ok(_) => display = Option<OwnedTuiFailureDisplay113>.None; Result<Unit>.Ok(()) }
             case None => Result<Unit>.Ok(()) }
     }
+    func retireRootSerializedData180(receipt: TuiRootSerializerRetirement180, producer: Object): Result<Unit> {
+        if (!receipt.acknowledges180(producer) || hasOriginalDebt()) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        match (display) {
+            case Some(value) => match (value.closeUnpublishedCopiedFailure113()) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => display = None }
+            case None => () }
+        Result<Unit>.Ok(())
+    }
     func takeMetadataAfterDataRetirement(): LogicalJsonCopiedDisplayAllocation {
         if (original.isSome() || secondary.isSome() || display.isSome() || unpublishedAllocation.isSome() || working) {
             throw IllegalStateException("failure display registration is still live") }
@@ -366,6 +374,26 @@ class OwnedTuiFailureQueue113 {
             if (stop.isSome() && refEq(actual, stop.getOrThrow())) { break }
             lock.lock(); node = actual.next; lock.unlock()
         }
+    }
+    func retireRootSerializedRegistry180(receipt: TuiRootSerializerRetirement180, producer: Object): Result<Unit> {
+        if (!receipt.acknowledges180(producer) || hasOriginalDebt()) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        while (true) {
+            match (retiringMetadata) {
+                case Some(paid) => match (paid.closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => retiringMetadata = None }
+                case None => () }
+            if (first.isNone()) { return Result<Unit>.Ok(()) }
+            match (detachRootSerializedMetadata180(receipt, producer)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        }
+        Result<Unit>.Ok(())
+    }
+    private func detachRootSerializedMetadata180(receipt: TuiRootSerializerRetirement180, producer: Object): Result<Unit> {
+        let node = first.getOrThrow()
+        match (node.retireRootSerializedData180(receipt, producer)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retiringMetadata = Some(node.takeMetadataAfterDataRetirement())
+        first = node.next; node.next = None
+        if (first.isNone()) { last = None }
+        Result<Unit>.Ok(())
     }
     func retireCopiedRegistry(retired: RetiredOwnedTuiScreenReferences): Result<Unit> {
         if (!retired.copiedReferencesRetired() || hasOriginalDebt()) { return ownedTuiDisplayError("display.failure_input_pending") }

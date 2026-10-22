@@ -112,12 +112,15 @@
     "agent_runtime/src/owned_failure_data113_test.cj",
     "agent_runtime/src/owned_failure_publication113_test.cj",
     "agent_runtime/src/owned_outer_error_frame_334_test.cj",
-    "agent_runtime/src/paid_error_encoder113_test.cj"
+    "agent_runtime/src/paid_error_encoder113_test.cj",
+    "agent_runtime/src/tool_snapshot_measure159_test.cj"
   ],
   "agent_store": [
     "agent_store/src/backend_allocation_phase_test.cj",
     "agent_store/src/channel_startup_read_memo_test.cj",
     "agent_store/src/channel_write_memo_recording_test.cj",
+    "agent_store/src/context_boundary_budget_event_test.cj",
+    "agent_store/src/context_boundary_budget_store_test.cj",
     "agent_store/src/context_read_stored_payment_test.cj",
     "agent_store/src/continuation_document_read_scope_test.cj",
     "agent_store/src/current_stored_value_comparison_test.cj",
@@ -201,6 +204,7 @@
     "agent_host_runtime/src/host_document_window_owner_test.cj",
     "agent_host_runtime/src/host_journal_stream_writer_test.cj",
     "agent_host_runtime/src/host_latest_journal_stream_input_test.cj",
+    "agent_host_runtime/src/host_lifecycle_startup_scope_test.cj",
     "agent_host_runtime/src/host_live_initial_prepared_backing_332_test.cj",
     "agent_host_runtime/src/host_live_policy_base_input_test.cj",
     "agent_host_runtime/src/host_live_policy_canonical_backing_test.cj",
@@ -327,6 +331,7 @@
   "agent_product": [
     "agent_product/src/application_handoff_test.cj",
     "agent_product/src/application_owned_consumer11318_test.cj",
+    "agent_product/src/application_plan_review_pressure_test.cj",
     "agent_product/src/application_retirable_subscription113_test.cj",
     "agent_product/src/canonical_root_snapshot_test.cj",
     "agent_product/src/checkpoint_current_consumption_test.cj",

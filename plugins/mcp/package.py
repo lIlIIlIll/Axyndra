@@ -51,6 +51,86 @@ def stdx_notices(library_directory):
     raise ValueError('StdX LICENSE and Open_Source_Software_Notice.docx are required')
 
 
+def package_identifier(value):
+    if not re.fullmatch(r'[a-z0-9_-]{1,128}', value):
+        raise ValueError('package id must be 1..128 lowercase ASCII letters, digits, hyphen or underscore')
+    return value
+
+
+def selected_manifest(identifier):
+    manifest = json.loads((ROOT / 'axyndra.plugin.json').read_text())
+    manifest['id'] = package_identifier(identifier)
+    return manifest
+
+
+def verify_clone_source(source):
+    source = source.resolve()
+    if not source.is_dir():
+        raise ValueError('clone source must be an existing local independent package')
+    files = [path for path in source.rglob('*') if path.is_file()]
+    if any(path.is_symlink() for path in source.rglob('*')):
+        raise ValueError('clone source must not contain symlinks')
+    if sum(path.stat().st_size for path in files) > 268435456:
+        raise ValueError('clone source exceeds the host package byte limit')
+    manifest = json.loads((source / 'axyndra.plugin.json').read_text())
+    if manifest != selected_manifest(manifest.get('id', '')):
+        raise ValueError('clone source has a different immutable MCP manifest contract')
+    provenance = json.loads((source / 'package-provenance.json').read_text())
+    if any(provenance.get(key) != value for key, value in
+           [('schema_version', 1), ('platform', 'linux-x86_64'), ('version', '1.0.0')]):
+        raise ValueError('clone source has an unsupported provenance recipe')
+    if not re.fullmatch(r'[0-9a-f]{64}', provenance.get('source_binary_sha256', '')):
+        raise ValueError('clone source has no valid compiled-source digest')
+    expected = {'axyndra.plugin.json', 'package-provenance.json', 'bin/mcp-client-plugin'}
+    plugin = source / 'bin/mcp-client-plugin'
+    if digest(plugin) != provenance.get('plugin_sha256') or not os.access(plugin, os.X_OK):
+        raise ValueError('clone source executable differs from its provenance')
+    if 'manifest_sha256' in provenance and digest(source / 'axyndra.plugin.json') != provenance['manifest_sha256']:
+        raise ValueError('clone source manifest differs from its provenance')
+    for directory, key in [('lib', 'bundled_libraries_sha256'), ('licenses', 'bundled_licenses_sha256')]:
+        hashes = provenance.get(key)
+        if not isinstance(hashes, dict) or not hashes or len(hashes) > 128:
+            raise ValueError('clone source has an invalid runtime or license inventory')
+        for name, sha in hashes.items():
+            if not isinstance(name, str) or Path(name).name != name or name in ('.', '..'):
+                raise ValueError('clone source inventory escapes its package')
+            path = source / directory / name
+            if not path.is_file() or digest(path) != sha:
+                raise ValueError('clone source runtime or license digest differs')
+            expected.add(directory + '/' + name)
+    if {str(path.relative_to(source)) for path in files} != expected:
+        raise ValueError('clone source contains undeclared or missing package files')
+    clean = os.environ.copy()
+    for name in ['LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT']:
+        clean.pop(name, None)
+    system = set()
+    for binary in [plugin, *(source / 'lib').iterdir()]:
+        for name, resolved in dependencies(binary, clean):
+            if system_library(resolved):
+                system.add(name)
+            elif not resolved.is_relative_to(source):
+                raise ValueError('clone source runtime closure escapes the independent package')
+    if provenance.get('required_system_libraries') != sorted(system):
+        raise ValueError('clone source system runtime inventory differs from its provenance')
+    return provenance
+
+
+def clone_package(arguments):
+    source = arguments.clone_source.resolve()
+    provenance = verify_clone_source(source)
+    output = arguments.output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.mcp-client-clone-', dir=output.parent) as temporary:
+        stage = Path(temporary)
+        shutil.copytree(source, stage, dirs_exist_ok=True)
+        (stage / 'axyndra.plugin.json').write_text(json.dumps(selected_manifest(arguments.id), indent=2) + '\n')
+        provenance['manifest_sha256'] = digest(stage / 'axyndra.plugin.json')
+        (stage / 'package-provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+        verify_clone_source(stage)
+        if output.exists():
+            raise ValueError('output appeared during cloning; refusing to replace it')
+        stage.rename(output)
+    print(output)
 def package(arguments):
     if not arguments.binary or not arguments.binary.is_file():
         raise ValueError('compiled plugin is missing; run build-package.sh without --skip-build')
@@ -66,7 +146,7 @@ def package(arguments):
         plugin = stage / 'bin/mcp-client-plugin'
         shutil.copy2(arguments.binary, plugin)
         plugin.chmod(0o755)
-        shutil.copy2(ROOT / 'axyndra.plugin.json', stage / 'axyndra.plugin.json')
+        (stage / 'axyndra.plugin.json').write_text(json.dumps(selected_manifest(arguments.id), indent=2) + '\n')
         shutil.copy2(arguments.sdk_root / 'LICENSE', stage / 'licenses/cangjie-runtime.txt')
         shutil.copy2(stdx_license, stage / 'licenses/cangjie-stdx.txt')
         shutil.copy2(stdx_notice, stage / 'licenses/cangjie-stdx-Open_Source_Software_Notice.docx')
@@ -104,6 +184,7 @@ def package(arguments):
         provenance = {
             'schema_version': 1, 'platform': 'linux-x86_64', 'version': '1.0.0',
             'source_binary_sha256': digest(arguments.binary), 'plugin_sha256': digest(plugin),
+            'manifest_sha256': digest(stage / 'axyndra.plugin.json'),
             'required_system_libraries': sorted(required_system),
             'bundled_libraries_sha256': {path.name: digest(path) for path in sorted((stage / 'lib').iterdir())},
             'bundled_licenses_sha256': {path.name: digest(path) for path in sorted((stage / 'licenses').iterdir())},
@@ -123,13 +204,18 @@ def main():
     parser.add_argument('--binary', type=Path)
     parser.add_argument('--sdk-root', type=Path)
     parser.add_argument('--stdx-root', type=Path)
+    parser.add_argument('--id', default='mcp-client', type=package_identifier)
+    parser.add_argument('--clone-source', type=Path, help='verify and clone a local independent package without rebuilding its executable')
     parser.add_argument('--validate', action='store_true')
     arguments = parser.parse_args()
     try:
         if arguments.output.resolve().exists():
             raise ValueError('output must be a new directory; existing packages are never merged or deleted')
         if not arguments.validate:
-            package(arguments)
+            if arguments.clone_source:
+                clone_package(arguments)
+            else:
+                package(arguments)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f'MCP client package failed: {error}\n')
 

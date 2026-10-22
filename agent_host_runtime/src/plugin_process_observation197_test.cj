@@ -23,11 +23,12 @@ private func processObservationSelectionAccepted197(services: Array<String>, inv
 @Test
 class ActualProcessObservationSelection197Tests {
     @TestCase
-    func exactObserverSelectionPreservesTheOriginalTwoServiceMaximum(): Unit {
+    func exactObserverSelectionsRespectClosedServiceInventory(): Unit {
         @Expect(processObservationSelectionAccepted197(["process.observe"]))
         @Expect(processObservationSelectionAccepted197(["process.observe"], invocation: "extension.invoke"))
         @Expect(processObservationSelectionAccepted197(["peer.list", "peer.receive"]))
-        @Expect(!processObservationSelectionAccepted197(["peer.list", "peer.receive", "job.list"]))
+        @Expect(processObservationSelectionAccepted197(["peer.list", "peer.receive", "job.list"]))
+        @Expect(!processObservationSelectionAccepted197(["peer.list", "peer.receive", "peer.list"]))
         @Expect(processObservationSelectionAccepted197(["process.service"], invocation: "process.spawn"))
     }
     @TestCase

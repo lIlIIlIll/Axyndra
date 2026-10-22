@@ -49,14 +49,18 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         externalFrame!: ?ExternalReceivedFrame = None, directPreparationOwner!: ?HostDirectPreparationOwner = None,
         commandParticipant!: ?PluginDocumentCommitParticipant = None,
         commandAdmission!: ?(ActiveRunSnapshot) -> Result<Unit> = None,
-        commandControlAdmission159e!: ?(RunId, Int64) -> Result<Unit> = None): OwnedHostDirectToolResult113 {
+        commandControlAdmission159e!: ?(RunId, Int64) -> Result<Unit> = None,
+        executionSettings180!: AgentValue = nullValue(), approvalModeOverride180!: ?ApprovalMode = None<ApprovalMode>,
+        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>,
+        frontendCancellation180!: ?CancellationToken = None<CancellationToken>): OwnedHostDirectToolResult113 {
         let actual = match (runId) { case Some(value) => value; case None => ids.nextRunId() }
         let result = execute(sessionId, capabilities, call, contextSnapshot, Some(actual), approvalDecision,
             executionRoot: executionRoot, trustedControl: trustedControl, budget: budget,
             hostServiceOrigin: hostServiceOrigin, hostCallerCancellation: hostCallerCancellation,
             externalConnection: externalConnection, externalRequest: externalRequest, externalFrame: externalFrame,
             directPreparationOwner: directPreparationOwner, commandParticipant: commandParticipant,
-            commandAdmission: commandAdmission, commandControlAdmission159e: commandControlAdmission159e)
+            commandAdmission: commandAdmission, commandControlAdmission159e: commandControlAdmission159e,
+            executionSettings180: executionSettings180, modelFaultCounters180: modelFaultCounters180, approvalModeOverride180: approvalModeOverride180, frontendCancellation180: frontendCancellation180)
         ownedFailures113.take(actual, result)
     }
 
@@ -86,7 +90,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
     public func executeExternalTool(connection: ExternalIngressConnection, request: ExternalRequestId,
         call: ToolCall, approvalDecision!: ?ApprovalDecision = None,
         budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
-        receivedFrame!: ?ExternalReceivedFrame = None): Result<ToolInvocationResult> {
+        receivedFrame!: ?ExternalReceivedFrame = None, dataReturn180!: ?HostCanonicalInputReturn180 = None<HostCanonicalInputReturn180>): Result<ToolInvocationResult> {
         match (connection.validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let binding = connection.binding
         let probe = ToolInvocationContext(RunId("external-scope-probe"), SessionId(binding.threadId.value),
@@ -97,9 +101,13 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         }
         execute(SessionId(binding.threadId.value), binding.ceiling, call,
             InvocationContextProjection(), None<RunId>, approvalDecision, budget: budget,
-            externalConnection: Some(connection), externalRequest: Some(request), externalFrame: receivedFrame)
+            externalConnection: Some(connection), externalRequest: Some(request), externalFrame: receivedFrame, dataReturn180: dataReturn180)
     }
 
+    private func contextForRequest180(root: String, settings: AgentValue, counters: ?ModelStreamFaultCounters180): ToolContextDescriptor {
+        let base = contextForRoot(root)
+        if (settings.unifiedKind == ValueKind.Null) { base } else { ToolContextDescriptor(base, settings, modelFaultCounters180: counters) }
+    }
     public func execute(
         sessionId: SessionId,
         capabilities: CapabilitySet,
@@ -118,7 +126,12 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         directPreparationOwner!: ?HostDirectPreparationOwner = None,
         commandParticipant!: ?PluginDocumentCommitParticipant = None,
         commandAdmission!: ?(ActiveRunSnapshot) -> Result<Unit> = None,
-        commandControlAdmission159e!: ?(RunId, Int64) -> Result<Unit> = None
+        commandControlAdmission159e!: ?(RunId, Int64) -> Result<Unit> = None,
+        executionSettings180!: AgentValue = nullValue(),
+        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>,
+        approvalModeOverride180!: ?ApprovalMode = None<ApprovalMode>,
+        frontendCancellation180!: ?CancellationToken = None<CancellationToken>,
+        dataReturn180!: ?HostCanonicalInputReturn180 = None<HostCanonicalInputReturn180>
     ): Result<ToolInvocationResult> {
         if ((commandAdmission.isSome() && commandControlAdmission159e.isSome()) ||
             commandParticipant.isSome() != (commandAdmission.isSome() || commandControlAdmission159e.isSome()) ||
@@ -128,16 +141,18 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
             externalConnection.isSome() || approvalDecision.isSome())) {
             return directPreparationError("command.direct_origin_mixed") }
         if (externalConnection.isSome() != externalRequest.isSome() ||
-            (externalConnection.isSome() && (trustedControl || hostServiceOrigin.isSome() || hostCallerCancellation.isSome()))) {
+            (externalConnection.isSome() && (trustedControl || hostServiceOrigin.isSome() || hostCallerCancellation.isSome() ||
+                frontendCancellation180.isSome() || modelFaultCounters180.isSome() || executionSettings180.unifiedKind != ValueKind.Null || approvalModeOverride180.isSome()))) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied, "external.origin_mixed", "external calls cannot claim trusted host control"))
         }
         match (hostCallerCancellation) {
             case Some(value) => match (value.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             case None => ()
         }
+        match (frontendCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         if (approvalDecision.isSome() && pipeline.requiresSeparatePreparationDecision(ToolInvocationContext(
             RunId("direct-approval-preflight"), sessionId, capabilities,
-            toolContext: contextForRoot(workspaceRoot)), call)) {
+            toolContext: contextForRequest180(workspaceRoot, executionSettings180, modelFaultCounters180), approvalModeOverride: approvalModeOverride180), call)) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                 "context.read_separate_approval_required", "read-backed tools require separate frozen read and mutation reviews through Application command approval")) }
         match (preAdmissionPolicy(call)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -174,10 +189,12 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         let ordinary159e = catalog.isPublishedOrdinaryTool159e(call.name, threadId: Some(ThreadId(sessionId.value)))
         let lane159e = hostGatewayModelLane159e(catalog, effectiveRunId, capabilities, ordinary159e, ThreadId(sessionId.value))
         let frame159e = hostCreateDirectGatewayFrame159e(lane159e)
+        match (dataReturn180) { case Some(receiver) => receiver.bindGatewayFrame180(frame159e); case None => () }
         let result159e = executeGatewayConsumerFrame159e(runtime, lane159e, frame159e, ordinary159e,
             sessionId, capabilities, call, approvalDecision, executionRoot, trustedControl, budget,
             hostCallerCancellation, directPreparationOwner, commandParticipant, commandAdmission, commandControlAdmission159e,
-            contextProjection, effectiveRunId, runBudget, externalConnection, externalRequest, externalFrame, hostServiceOrigin)
+            contextProjection, effectiveRunId, runBudget, externalConnection, externalRequest, externalFrame, hostServiceOrigin,
+            executionSettings180, modelFaultCounters180, approvalModeOverride180, frontendCancellation180, dataReturn180)
         match (frame159e) { case Some(frame) => frame.observeCatalogResult204(result159e); case None => () }
         // All concrete start, admission, Context and executor helpers returned.
         // Runtime and deferred consumers each hold independent paid views.
@@ -193,8 +210,11 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         commandParticipant: ?PluginDocumentCommitParticipant, commandAdmission: ?(ActiveRunSnapshot) -> Result<Unit>,
         commandControlAdmission159e: ?(RunId, Int64) -> Result<Unit>, contextProjection: InvocationContextProjection,
         effectiveRunId: RunId, runBudget: AgentValue, externalConnection: ?ExternalIngressConnection,
-        externalRequest: ?ExternalRequestId, externalFrame: ?ExternalReceivedFrame, hostServiceOrigin: ?HostServiceOrigin
+        externalRequest: ?ExternalRequestId, externalFrame: ?ExternalReceivedFrame, hostServiceOrigin: ?HostServiceOrigin,
+        executionSettings180: AgentValue, modelFaultCounters180: ?ModelStreamFaultCounters180, approvalModeOverride180: ?ApprovalMode, frontendCancellation180: ?CancellationToken,
+        dataReturn180: ?HostCanonicalInputReturn180
     ): Result<ToolInvocationResult> {
+        match (dataReturn180) { case Some(receiver) => receiver.enterOriginalStartHelper180(); case None => () }
         let admitted159e = startGatewayRunFrame159e(runtime, lane159e, effectiveRunId, sessionId, call,
             contextProjection, runBudget, budget, externalConnection, externalRequest, externalFrame, hostServiceOrigin)
         let (started, serviceAdmission, externalAdmission) = match (admitted159e) {
@@ -203,7 +223,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         executeAdmittedGatewayFrame159e(runtime, started, serviceAdmission, externalAdmission,
             frame159e, ordinary159e, sessionId, capabilities, call, approvalDecision, executionRoot, trustedControl, budget,
             hostCallerCancellation, directPreparationOwner, commandParticipant, commandAdmission, commandControlAdmission159e,
-            contextProjection, effectiveRunId)
+            contextProjection, effectiveRunId, executionSettings180, modelFaultCounters180, approvalModeOverride180, frontendCancellation180, dataReturn180)
     }
     private func startGatewayRunFrame159e(runtime: AgentThreadRuntime, lane159e: ModelLane,
         effectiveRunId: RunId, sessionId: SessionId, call: ToolCall,
@@ -258,7 +278,9 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         hostCallerCancellation: ?CancellationToken, directPreparationOwner: ?HostDirectPreparationOwner,
         commandParticipant: ?PluginDocumentCommitParticipant,
         commandAdmission: ?(ActiveRunSnapshot) -> Result<Unit>, commandControlAdmission159e: ?(RunId, Int64) -> Result<Unit>,
-        contextProjection: InvocationContextProjection, effectiveRunId: RunId): Result<ToolInvocationResult> {
+        contextProjection: InvocationContextProjection, effectiveRunId: RunId,
+        executionSettings180: AgentValue, modelFaultCounters180: ?ModelStreamFaultCounters180, approvalModeOverride180: ?ApprovalMode, frontendCancellation180: ?CancellationToken,
+        dataReturn180: ?HostCanonicalInputReturn180): Result<ToolInvocationResult> {
         let cancellation = if (externalAdmission.isSome()) { externalAdmission.getOrThrow().cancellationToken } else { match (runtime.childCancellationToken(
             expectedRunId: Some(started.runId),
             expectedEpoch: Some(started.epoch)
@@ -268,23 +290,28 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         } }
         match (commandAdmission) {
             case Some(bindActualRun) => match (bindActualRun(started.forkIndependentView159())) {
-                case Result.Err(error) => return finishDirectExecution(runtime, started, Result.Err(error)); case Result.Ok(_) => () }
+                case Result.Err(error) => return finishDirectExecution(runtime, started, Result.Err(error), dataReturn180: dataReturn180); case Result.Ok(_) => () }
             case None => ()
         }
         match (commandControlAdmission159e) {
             case Some(bindActualRun) => match (bindActualRun(started.runId, started.epoch)) {
-                case Result.Err(error) => return finishDirectExecution(runtime, started, Result.Err(error)); case Result.Ok(_) => () }
+                case Result.Err(error) => return finishDirectExecution(runtime, started, Result.Err(error), dataReturn180: dataReturn180); case Result.Ok(_) => () }
             case None => ()
         }
-        let startupCancellation = HostCallerCancellation(cancellation, hostCallerCancellation)
+        let startupCancellation = HostCallerCancellation(cancellation, hostCallerCancellation, frontendCancellation180: frontendCancellation180)
         let invocationRoot = if (executionRoot.trimAscii() == "") { workspaceRoot } else { executionRoot }
         // Borrow the immutable snapshot owned and persisted by this actual Run;
         // a publication change cannot substitute a newly resolved catalog here.
+        let contextData180 = match (dataReturn180) { case Some(receiver) => Some(receiver.reserveContextBeforeConstruction180()); case None => None<LogicalJsonOwnerReservation> }
         let invocationContext = ToolInvocationContext(effectiveRunId, sessionId, capabilities, epoch: started.epoch,
-            cancellation: startupCancellation.token, toolContext: contextForRoot(invocationRoot),
+            cancellation: startupCancellation.token, toolContext: contextForRequest180(invocationRoot, executionSettings180, modelFaultCounters180),
+            approvalModeOverride: approvalModeOverride180,
             contextProjection: contextProjection, budget: budget, toolSetSnapshot: if (ordinary159e) { started.lane.legacyToolSetSnapshot159() } else { None<ToolSetSnapshot> },
             ownedToolSetSnapshot159: if (ordinary159e) { started.lane.forkOwnedToolSetSnapshot159() } else { None<SharedToolSetSnapshot159> }, trustedControl: trustedControl,
-            hostDocumentCommitParticipant: commandParticipant)
+            hostDocumentCommitParticipant: commandParticipant,
+            ownedInvocationData180: contextData180)
+        match (dataReturn180) { case Some(receiver) => receiver.bindActualContext180(invocationContext); case None => () }
+        invocationContext.bindPaidExecutionFailureSink173(ownedFailures113)
         match (frame159e) { case Some(frame) => frame.bindContext159e(invocationContext); case None => () }
         match (frame159e) { case Some(frame) => frame.bindCatalogConsumer204(pipeline.beginHostCatalogConsumer204(invocationContext)); case None => () }
         let actualOwner: ?HostDirectPreparationOwner = if (directPreparationOwner.isSome()) { directPreparationOwner }
@@ -295,7 +322,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         match (actualOwner) {
             case Some(owner) =>
                 match (frame159e) { case Some(frame) => frame.expectOwnerReturn159e(); case None => () }
-                owner.bind({ result => finishDirectExecution(runtime, started, result) },
+                owner.bind({ result => finishDirectExecution(runtime, started, result, dataReturn180: dataReturn180) },
                 { => startupCancellation.close() },
                 { => acknowledgeDirectCleanup(runtime, started, call.callId, call.name, budget) },
                 ownedFailures113: Some(ownedFailures113), ownedRun113: Some(started.runId), gatewayFrame159e: frame159e)
@@ -312,7 +339,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         )
         let result = match (actualOwner) {
             case Some(owner) => owner.complete(execution)
-            case None => finishDirectExecution(runtime, started, execution)
+            case None => finishDirectExecution(runtime, started, execution, dataReturn180: dataReturn180)
         }
         // The internally-created nondeferred owner has no caller which could
         // later retire it. Its original real SQL/physical proof remains required.
@@ -320,9 +347,14 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
             match (actualOwner) { case Some(owner) => let _ = owner.closeAcknowledgement(); case None => () }
         }
         result
-        } catch (_: Exception) {
+        } catch (error: OwnedCanonicalDataFailure113) {
+            match (dataReturn180) { case Some(receiver) => receiver.retainOriginalException180(error); case None => () }
+            let failed = Result<ToolInvocationResult>.Err(error.error)
+            match (actualOwner) { case Some(owner) => owner.complete(failed); case None => failed }
+        } catch (error: Exception) {
+            match (dataReturn180) { case Some(receiver) => receiver.retainOriginalException180(error); case None => () }
             let failed = Result<ToolInvocationResult>.Err(AgentError(AgentErrorKind.RecoveryRequired,
-                "command.direct_execution_failed", "Direct invocation retained unresolved canonical work"))
+                "command.direct_execution_failed", error.message))
             match (actualOwner) { case Some(owner) => owner.complete(failed); case None => failed }
         } finally { if (actualOwner.isNone()) { startupCancellation.close() } }
     }
@@ -422,7 +454,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         } catch (_: Exception) { hostDirectCleanupError() }
     }
     private func finishDirectExecution(runtime: AgentThreadRuntime, started: ActiveRunSnapshot,
-        execution: Result<ToolInvocationResult>): Result<ToolInvocationResult> {
+        execution: Result<ToolInvocationResult>, dataReturn180!: ?HostCanonicalInputReturn180 = None<HostCanonicalInputReturn180>): Result<ToolInvocationResult> {
         var resultTransferred = false
         try {
         let terminal = match (terminalState(started.runId, execution)) {
@@ -431,6 +463,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
         }
         if (terminal == RunState.Cancelled) {
             let consumed204 = consumeDirectCancellationFrame204(runtime, started)
+            match (dataReturn180) { case Some(receiver) => receiver.bindOriginalScope180(consumed204[2]); case None => () }
             // The complete settlement consumer has returned. This independent
             // returned Run view is distinct from started and the Runtime root.
             match (consumed204[1]) { case Some(view) => view.returnOwnedLaneView159(); case None => () }
@@ -440,6 +473,7 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
             }
         }
         let consumed204 = consumeDirectFinishFrame204(runtime, started, terminal)
+        match (dataReturn180) { case Some(receiver) => receiver.bindOriginalScope180(consumed204[2]); case None => () }
         match (consumed204[1]) { case Some(view) => view.returnOwnedLaneView159(); case None => () }
         match (consumed204[0]) {
             case Result.Ok(_) => resultTransferred = true; execution
@@ -452,15 +486,15 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
     // their whole frames return. They export only its original error or the
     // independent prepaid Run view which the outer caller then actually returns.
     private func consumeDirectCancellationFrame204(runtime: AgentThreadRuntime,
-        started: ActiveRunSnapshot): (Result<Unit>, ?ActiveRunSnapshot) {
+        started: ActiveRunSnapshot): (Result<Unit>, ?ActiveRunSnapshot, ?OwnedTaskReturnWitness113) {
         match (runtime.cancel(1000,
             expectedRunId: Some(started.runId), expectedEpoch: Some(started.epoch))) {
-            case Result.Ok(value) => (Result<Unit>.Ok(()), Some(value.run))
-            case Result.Err(error) => (Result<Unit>.Err(error), None<ActiveRunSnapshot>)
+            case Result.Ok(value) => (Result<Unit>.Ok(()), Some(value.run), value.ownedTaskReturnWitness113())
+            case Result.Err(error) => (Result<Unit>.Err(error), None<ActiveRunSnapshot>, None<OwnedTaskReturnWitness113>)
         }
     }
     private func consumeDirectFinishFrame204(runtime: AgentThreadRuntime,
-        started: ActiveRunSnapshot, terminal: RunState): (Result<Unit>, ?ActiveRunSnapshot) {
+        started: ActiveRunSnapshot, terminal: RunState): (Result<Unit>, ?ActiveRunSnapshot, ?OwnedTaskReturnWitness113) {
         match (runtime.finish(
             terminal, 1000,
             expectedRunId: Some(started.runId),
@@ -471,8 +505,8 @@ public class HostCanonicalToolGateway <: HostServiceToolControl {
                 "direct tool did not complete"
             }
         )) {
-            case Result.Ok(value) => (Result<Unit>.Ok(()), Some(value.run))
-            case Result.Err(error) => (Result<Unit>.Err(error), None<ActiveRunSnapshot>)
+            case Result.Ok(value) => (Result<Unit>.Ok(()), Some(value.run), value.ownedTaskReturnWitness113())
+            case Result.Err(error) => (Result<Unit>.Err(error), None<ActiveRunSnapshot>, None<OwnedTaskReturnWitness113>)
         }
     }
 

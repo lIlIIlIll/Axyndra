@@ -15,10 +15,12 @@ import yjson_support.*
 class OrdinaryPayloadObserver <: JavaScriptHostObserver {
     let requests = AtomicInt64(0)
     private let bytes: Int64
-    init(bytes!: Int64 = 900000) { this.bytes = bytes }
+    private let reject: Bool
+    init(bytes!: Int64 = 900000, reject!: Bool = false) { this.bytes = bytes; this.reject = reject }
     public func onProgress(invocation: String, value: String): JavaScriptHostResult<Unit> { JavaScriptHostResult.Ok(()) }
     public func onServiceRequest(invocation: String, request: String, service: String, arguments: String): JavaScriptHostResult<String> {
         requests.fetchAdd(1)
+        if (reject) { return hostError("fixture.denied", "actual host service rejected the request") }
         JavaScriptHostResult.Ok(stringifyUnifiedJson(objectValue([ValueField("text", textValue(String.fromUtf8(Array<Byte>(bytes, repeat: 120))))])))
     }
 }
@@ -77,16 +79,53 @@ class OrdinaryToolNativePayloadTests {
         @Expect(nativePayloadUsageEqual(nativePayloadOwnerBudget.usage(), before))
     }
     @TestCase
-    func noPluginFrameOrPrepareKindCanSelectOrExpandTheOrdinaryProfile(): Unit {
+    func noPluginFrameOrServicePrepareKindCanSelectOrExpandTheOrdinaryProfile(): Unit {
         let root = ordinaryPayloadRoot(); let host = ordinaryPayloadHost(root); let observer = OrdinaryPayloadObserver()
         try {
-            @Expect(quotaCode(host.invoke("run", "{}", identity: quotaIdentity("prepare"), serviceRequestLimit: 0,
+            @Expect(quotaCode(host.invoke("run", "{}", identity: quotaIdentity("service_prepare"), serviceRequestLimit: 0,
                 toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")))), "extension.tool_payload_unsupported")
             @Expect(quotaCode(host.invoke("run", "{}", identity: quotaIdentity("tool"),
                 toolPayloadLimits: Some(OrdinaryToolPayloadLimits("other")))), "extension.tool_payload_unsupported")
             @Expect(quotaCode(host.invoke("run", "{}", identity: quotaIdentity("tool"), serviceRequestLimit: 33,
                 toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")))), "extension.service_limit_invalid")
             @Expect(!exists(Path(root + "/worker.invocations"))); @Expect(observer.requests.load(), 0)
+        } finally { @Expect(host.awaitCleanup(timeoutMillis: 2000).isOk()); remove(root, recursive: true) }
+    }
+    @TestCase
+    func purePrepareNegotiatesRepresentationButCannotCallHostServices(): Unit {
+        let root = ordinaryPayloadRoot(); let host = ordinaryPayloadHost(root); let observer = OrdinaryPayloadObserver()
+        try {
+            @Expect(quotaCode(host.invoke("run", "{\"mode\":\"pure\"}", identity: quotaIdentity("prepare"),
+                toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")))), "extension.tool_payload_unsupported")
+            @Expect(!exists(Path(root + "/worker.invocations")))
+            let result = match (host.invoke("run", "{\"mode\":\"pure\"}", identity: quotaIdentity("prepare"),
+                serviceRequestLimit: 0, toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")), observer: Some(observer))) {
+                case JavaScriptHostResult.Ok(value) => value; case JavaScriptHostResult.Err(error) => throw IllegalStateException(error.code) }
+            try { @Expect(!result.isError); @Expect(parseUnifiedJson(result.resultJson).field("intents").isSome()) }
+            finally { result.releasePayload() }
+            @Expect(observer.requests.load(), 0)
+            let denied = host.invoke("run", "{}", identity: quotaIdentity("prepare"), serviceRequestLimit: 0,
+                toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")), observer: Some(observer))
+            match (denied) {
+                case JavaScriptHostResult.Err(_) => ()
+                case JavaScriptHostResult.Ok(unexpected) => try { @Expect(false) } finally { unexpected.releasePayload() }
+            }
+            @Expect(observer.requests.load(), 0)
+        } finally { @Expect(host.awaitCleanup(timeoutMillis: 2000).isOk()); remove(root, recursive: true) }
+    }
+    @TestCase
+    func actualServiceErrorKeepsTheSelectedInnerWindowAndRemainsAnError(): Unit {
+        let root = ordinaryPayloadRoot(); let host = ordinaryPayloadHost(root)
+        let observer = OrdinaryPayloadObserver(reject: true)
+        try {
+            let result = match (host.invoke("run", "{}", identity: quotaIdentity("tool"),
+                toolPayloadLimits: Some(OrdinaryToolPayloadLimits("run")), observer: Some(observer))) {
+                case JavaScriptHostResult.Ok(value) => value
+                case JavaScriptHostResult.Err(error) => throw IllegalStateException(error.code) }
+            try {
+                @Expect(result.isError); @Expect(observer.requests.load(), 1)
+                @Expect(parseUnifiedJson(result.resultJson).field("code").getOrThrow().text, "fixture.denied")
+            } finally { result.releasePayload() }
         } finally { @Expect(host.awaitCleanup(timeoutMillis: 2000).isOk()); remove(root, recursive: true) }
     }
     @TestCase
@@ -188,7 +227,7 @@ func ordinaryPayloadFixtureSource(): String {
     "        if value['type']=='payload_end': break\n" +
     "        assert part['offset']==len(body);body.extend(bytes.fromhex(part['bytes_hex']))\n" +
     "    assert len(body)==header['bytes'] and hashlib.sha256(body).hexdigest()==header['sha256']\n" +
-    "    decoded=json.loads(body);assert all(decoded[k]==first[k] for k in KEYS);return decoded\n" +
+    "    decoded=json.loads(body);assert all(decoded[k]==first[k] for k in KEYS);assert decoded['payload_window']==header['window'];return decoded\n" +
     "def logical(frame,window,partial=False):\n" +
     "    body=json.dumps(frame,separators=(',',':')).encode();common=dict(schema='axyndra.logical-json/v1',window=window,transfer_sequence=1)\n" +
     "    emit(dict(env(frame,'payload_begin'),payload=dict(common,message_type='result',bytes=len(body),sha256=hashlib.sha256(body).hexdigest())))\n" +
@@ -207,9 +246,12 @@ func ordinaryPayloadFixtureSource(): String {
     "        result=dict(env(invocation,'result'),ok=True,result=dict(text='x'*300000),payload_window=window)\n" +
     "        logical(result,window,partial=True);pathlib.Path(__file__+'.partial').write_text('begun')\n" +
     "        cancelled=receive();assert cancelled['type']=='cancel';emit(env(invocation,'cancelled'));break\n" +
+    "    if invocation['kind']=='prepare' and invocation['arguments'].get('mode')=='pure':\n" +
+    "        emit(dict(env(invocation,'result'),ok=True,result=dict(intents=[]),payload_window=window));continue\n" +
     "    question=dict(env(invocation,'service_request'),request_id='child',service='fixture.echo',arguments={});emit(question)\n" +
     "    response=receive();assert response['type']=='service_response' and response['request_id']=='child'\n" +
-    "    result=dict(env(invocation,'result'),ok=True,result=response['result'])\n" +
+    "    assert response.get('payload_window','')==window\n" +
+    "    result=dict(env(invocation,'result'),ok=response['ok'],result=response.get('result',response.get('error')))\n" +
     "    if window:result['payload_window']=window\n" +
     "    if len(json.dumps(result))>262144:logical(result,window)\n" +
     "    else:emit(result)\n"

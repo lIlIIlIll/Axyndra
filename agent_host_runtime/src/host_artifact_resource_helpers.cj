@@ -5,12 +5,21 @@ import agent_store.*
 import agent_extension_runtime.*
 import tool_runtime.*
 import std.convert.*
+import std.fs.*
 
 foreign func axyndra_read_view_probe(path: CString, output: CPointer<UInt8>, capacity: Int64): Int32
 
+// Native identity/copy primitives require absolute physical names. Prefix
+// only the actual CWD; never canonicalize authored components or erase a
+// symlink before the original no-follow check. Descriptive paths stay intact.
+func hostPhysicalReadResourcePath180(path: String): String {
+    if (Path(path).isAbsolute()) { return path }
+    canonicalize(Path(".")).join(path).toString()
+}
+
 public func hostReadResourceWitness(path: String): Result<String> {
     unsafe {
-        let name = LibC.mallocCString(path); let buffer = LibC.malloc<UInt8>(count: 256)
+        let name = LibC.mallocCString(hostPhysicalReadResourcePath180(path)); let buffer = LibC.malloc<UInt8>(count: 256)
         try {
             let code = axyndra_read_view_probe(name, buffer, 256)
             if (code != 0) { return hostPluginResourceError("read_view.resource_invalid", "read resource must have a stable link-free regular identity") }

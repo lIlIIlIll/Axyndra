@@ -59,7 +59,7 @@ class ActualRpcWorkerRetirement113Tests {
             asyncEnabled: false, approvalMode: ApprovalMode.Yolo)).value().getOrThrow()
         let session = product.applicationSession()
         let gate = RpcWorkerFrameGate113("\"type\":\"prompt_result\"")
-        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) })
+        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) }, reserveProductControlMetadata113)
         gate.armed.store(true)
         let first = spawn { server.handle("{\"id\":\"first\",\"type\":\"prompt\",\"message\":\"hello original accepted turn\"}") }
         try {
@@ -95,7 +95,7 @@ class ActualRpcWorkerRetirement113Tests {
             settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true,
             asyncEnabled: false, approvalMode: ApprovalMode.Yolo)).value().getOrThrow()
         let gate = RpcWorkerFrameGate113("\"type\":\"prompt_result\"")
-        let server = ProductJsonlRpcServer(product.applicationSession(), { frame => gate.emit(frame) })
+        let server = ProductJsonlRpcServer(product.applicationSession(), { frame => gate.emit(frame) }, reserveProductControlMetadata113)
         gate.armed.store(true)
         let request = spawn { server.handle("{\"id\":\"worker-prompt\",\"type\":\"prompt\",\"message\":\"hello worker boundary\"}") }
         try {
@@ -135,7 +135,7 @@ class ActualRpcWorkerRetirement113Tests {
             implementationVersion: "rpc113", implementationFingerprint: "rpc113"), executor).isOk())
         let session = product.applicationSession()
         let gate = RpcWorkerFrameGate113("\"code\":\"tool.execution_completed\"")
-        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) })
+        let server = ProductJsonlRpcServer(session, { frame => gate.emit(frame) }, reserveProductControlMetadata113)
         product.fixtureProbe.getOrThrow().enqueueToolCallReply("rpc-worker-call113", "rpc_worker_tool113", objectValue([]))
         try {
             @Expect(server.handle("{\"id\":\"ask\",\"type\":\"prompt\",\"message\":\"perform the actual approved fixture tool\"}").contains("\"success\":true"))

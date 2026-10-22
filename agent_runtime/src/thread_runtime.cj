@@ -1088,9 +1088,12 @@ public class AgentThreadRuntime {
                 case None => return externalDenied("external.owner_inactive")
             }
             let (state, _) = owned.lifecycle.machine.snapshot()
-            if (settling || !owned.directAttestationAllowed || state != RunState.Running ||
+            // Cancellation preserves this exact live owner, but its guard
+            // separately rejects the cancelled token before any execution.
+            if (settling || !owned.directAttestationAllowed ||
+                (state != RunState.Running && state != RunState.Cancelling) ||
                 owned.runId.value != runId.value || owned.epoch != epoch || owned.externalGuard.isNone() ||
-                !refEq(owned.externalGuard.getOrThrow(), guard) || guard.token().isCancelled()) {
+                !refEq(owned.externalGuard.getOrThrow(), guard)) {
                 return externalDenied("external.owner_inactive")
             }
             Result.Ok(())

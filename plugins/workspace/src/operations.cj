@@ -103,6 +103,7 @@ func wsReadText(root: String, path: String, maximumBytes!: Int64 = 16777216): St
 }
 
 func wsPrefix(source: String, ceiling: Int64): String {
+    if (source.size <= ceiling) { return source }
     let bytes = source.toArray()
     var end = min(bytes.size, max(0, ceiling))
     while (end > 0 && end < bytes.size && (bytes[end] & 0xC0) == 0x80) { end-- }
@@ -167,25 +168,62 @@ func wsReadMapped(input: JsonNode, root: String, physical: String): JsonNode {
     if (FileInfo(Path(absolute)).isDirectory()) {
         let result = wsDirectory(root, physical); result.put("path", jsonString(target.path)); return result
     }
+    match (workspaceInvocationPayment) { case Some(payment) =>
+        let extent = FileInfo(Path(absolute)).size
+        payment.ensureRetainedPeak(extent * 8 + workspaceResultLimit("read") * 16 + 1048576)
+        case None => () }
     let content = wsReadText(root, physical)
     let offset = if (target.hasRange) { target.offset } else { wsInteger(input, "offset", 1) }
     let limit = if (target.hasRange) { target.limit } else { wsInteger(input, "limit", 2000) }
     if (offset < 1 || limit < 1) { throw WorkspaceFailure("tool.read_range", "offset and limit must be positive") }
-    let lines = content.split("\n")
-    let start = min(offset - 1, lines.size)
-    let end = min(lines.size, start + min(limit, 10000))
-    let selected = joinLines(lines[start..end])
-    var returned = wsPrefix(selected, WORKSPACE_RESULT_BYTES)
+    let (totalLines, startByte, endByte) = workspaceReadLineWindow(content, offset - 1, min(limit, 10000))
+    let start = min(offset - 1, totalLines)
+    let end = min(totalLines, start + min(limit, 10000))
+    let selected = if (startByte == 0 && endByte == content.size) { content } else { content[startByte..endByte] }
+    let fullTag = if (target.raw) { "" } else { hashlineTag(content) }
+    let maximum = workspaceResultLimit("read")
+    var returned = wsPrefix(selected, maximum)
     while (true) {
-        let rendered = if (target.raw) { returned } else { formatHashlineRange(target.path, content, returned, start + 1) }
-        let output = jsonObject([JsonObjectEntry("path", jsonString(target.path)), JsonObjectEntry("content", jsonString(rendered)),
+        match (workspaceInvocationPayment) { case Some(payment) =>
+            payment.ensureRetainedPeak(content.size * 8 + maximum * 16 + 1048576)
+            case None => () }
+        let rendered = if (target.raw) { returned } else { formatHashlineRange(target.path, fullTag, returned, start + 1) }
+        let output = jsonObject([JsonObjectEntry("path", jsonString(target.path)), JsonObjectEntry("content", jsonString("")),
             JsonObjectEntry("bytes", jsonNumber(content.size.toString())), JsonObjectEntry("returned_bytes", jsonNumber(returned.size.toString())),
-            JsonObjectEntry("offset", jsonNumber((start + 1).toString())), JsonObjectEntry("truncated", jsonBool(end < lines.size || returned.size < selected.size))])
-        if (stringifyUnifiedJson(output).size <= WORKSPACE_RESULT_BYTES) { return output }
+            JsonObjectEntry("offset", jsonNumber((start + 1).toString())), JsonObjectEntry("truncated", jsonBool(end < totalLines || returned.size < selected.size))])
+        let metadata = stringifyUnifiedJson(output)
+        let encodedBytes = metadata.size + workspaceEscapedBytes(rendered) - 2
+        let nestedBytes = workspaceEscapedBytes(metadata) + workspaceEscapedTwiceBytes(rendered) - 6
+        let serviceFits = match (workspacePayloadProfile) { case Some(profile) => nestedBytes + 4096 < profile.maxServiceResponseBytes
+            case None => true }
+        if (encodedBytes <= maximum && serviceFits) {
+            match (workspaceInvocationPayment) { case Some(payment) =>
+                payment.ensureDecoded(content.size + rendered.size + encodedBytes + nestedBytes, logicalJsonValueNodeCount(output))
+                case None => () }
+            output.put("content", jsonString(rendered)); return output
+        }
         if (returned.size == 0) { throw WorkspaceFailure("workspace.output_limit", "Read metadata exceeds result limit") }
         returned = wsPrefix(returned, returned.size * 3 / 4)
     }
     jsonNull()
+}
+
+// Select line byte boundaries without allocating a node for every file line.
+// A trailing newline still contributes the final empty line, as before.
+func workspaceReadLineWindow(content: String, first: Int64, count: Int64): (Int64, Int64, Int64) {
+    var lines: Int64 = 1
+    var start = if (first == 0) { 0 } else { content.size }
+    var end = content.size
+    unsafe {
+        let bytes = acquireArrayRawData(content.rawData())
+        try { for (index in 0..content.size) {
+            if (bytes.pointer.read(index) != 10u8) { continue }
+            if (lines == first) { start = index + 1 }
+            if (lines >= first && lines - first == count) { end = index }
+            lines++
+        } } finally { releaseArrayRawData(bytes) }
+    }
+    (lines, start, max(start, end))
 }
 
 func wsStringArray(values: Array<String>): JsonNode {

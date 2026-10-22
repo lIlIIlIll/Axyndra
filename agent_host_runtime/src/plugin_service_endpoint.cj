@@ -4,6 +4,7 @@ import agent_plugin_registry.*
 import agent_ports.*
 
 import agent_domain.*
+import agent_runtime.*
 import agent_extension_runtime.*
 import tool_runtime.*
 import process4cj as process
@@ -71,7 +72,7 @@ public class HostPinnedNativeServiceEndpoint {
         entry: HostJavaScriptPluginThreadHost, grant: HostNativeServiceEndpointGrant,
         maintenanceThread: ThreadId, route: String, nonce: String) {
         this.seal = seal; this.generation = generation; this.entry = entry
-        this.worker = entry.host; this.workerGeneration = entry.host.generation
+        this.worker = entry.host; this.workerGeneration = entry.host.workerIncarnation
         this.namespace = generation.extensionId; this.route = route; this.grant = grant
         this.targetThread = grant.endpointTargetThread(); this.maintenanceThread = maintenanceThread
         let plan = grant.endpointBinding()
@@ -162,7 +163,7 @@ public class HostPinnedNativeServiceEndpoint {
 
     public func invoke(argumentsJson: String, identity: JavaScriptHostInvocationIdentity,
         context: ToolInvocationContext, timeoutMillis: Int64,
-        observer: ?JavaScriptHostObserver, prepared!: ?PreparedToolInvocation = None): Result<HostJavaScriptPluginInvocationResult> {
+        observer: ?JavaScriptHostObserver, prepared!: ?PreparedToolInvocation = None, decodedData180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>): Result<HostJavaScriptPluginInvocationResult> {
         var delegated = false
         match (prepared) { case Some(actual) =>
             if (hostManagedJobSource(actual.source.operationRoot).isSome()) {
@@ -236,11 +237,10 @@ public class HostPinnedNativeServiceEndpoint {
             // count and the broker must also enforce cumulative byte budgets.
             let requestLimit = if (identity.kind == "service_prepare") { 0 }
                 else { min(8192, 2 * ((window + 24) / 25) + 2) }
-            let response = hostPhysicalTransportDiagnostic(10, if (identity.kind == "service_prepare") { 1 } else { 2 }, argumentsJson.size, { => worker.invoke(route, argumentsJson, identity: identity,
+            let response = worker.invoke(route, argumentsJson, identity: identity,
                 context: Some(JavaScriptHostInvocationContext(cwd: context.cwd, hasUI: false)),
                 cancellation: source.token, timeoutMillis: window, serviceRequestLimit: requestLimit,
-                observer: if (identity.kind == "service_prepare") { None } else { observer }) })
-            hostPhysicalTransportDiagnosticOutcome(if (identity.kind == "service_prepare") { 1 } else { 2 }, response)
+                observer: if (identity.kind == "service_prepare") { None } else { observer })
             if (context.cancellation.isCancelled() || generation.isClosing() || source.token.isCancelled()) {
                 match (response) { case JavaScriptHostResult.Ok(value) => value.releasePayload(); case _ => () }
                 revoke()
@@ -249,11 +249,11 @@ public class HostPinnedNativeServiceEndpoint {
             match (response) {
                 case JavaScriptHostResult.Err(error) => revoke(); Result.Err(hostJavascriptPluginAgentError(error))
                 case JavaScriptHostResult.Ok(value) =>
-                    match (hostPhysicalTransportDiagnostic(12, if (identity.kind == "service_prepare") { 1 } else { 2 }, value.resultJson.size, { => hostJavascriptPluginDecodeValue(value.resultJson, maxBytes: match (servicePayloadLimits(grant.endpointBinding()).value().getOrThrow()) {
+                    match (hostJavascriptPluginDecodeValue(value.resultJson, maxBytes: match (servicePayloadLimits(grant.endpointBinding()).value().getOrThrow()) {
                         case Some(limits) => if (identity.kind == "service_prepare") { limits.maxPrepareBytes } else { limits.maxResultBytes }
                         case None => if (identity.kind == "service_prepare") { serviceProtocolLimits(grant.endpointBinding()).value().getOrThrow().maxPrepareBytes }
                             else { serviceProtocolLimits(grant.endpointBinding()).value().getOrThrow().maxResultBytes }
-                    }) })) {
+                    }, decodedData180: decodedData180)) {
                         case Result.Ok(result) => Result.Ok(HostJavaScriptPluginInvocationResult(result, value.isError, releasePayload: { => value.releasePayload() }))
                         case Result.Err(_) =>
                             value.releasePayload()

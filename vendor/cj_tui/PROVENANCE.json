@@ -9,8 +9,8 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "8e5661de9925e3debb8cf9d83064fd04eb462bf8b5adf48f81fc9f5cb7a803d7",
-  "vendored_files": 62,
+  "vendored_manifest_sha256": "bc0110456c3a6cbb4507f021b93efc26bac11b18210535dcd13ae4afa8192c08",
+  "vendored_files": 76,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
     "project": "oh-my-pi",
@@ -24,13 +24,24 @@
       "packages/core/src/terminal.cj",
       "packages/core/src/app.cj",
       "packages/core/src/text_area.cj",
-      "packages/core/src/presentation_backend_test.cj"
+      "packages/core/src/presentation_backend_test.cj",
+      "packages/core/cjpm.toml",
+      "packages/core/native/build.sh",
+      "packages/core/native/terminal_signal.c",
+      "packages/core/tests/terminal_signal/cjpm.toml",
+      "packages/core/tests/terminal_signal/src/main.cj",
+      "packages/core/tests/terminal_signal/check.py",
+      "packages/core/tests/terminal_signal/native_guard_test.c"
     ],
     "contracts": [
       "primary presentation writes history to native terminal scrollback",
       "fullscreen presentation owns alternate-screen lifecycle",
       "history batches are prepared, rendered, and acknowledged exactly once",
-      "completion overlays remain inside the bounded editor surface"
+      "completion overlays remain inside the bounded editor surface",
+      "POSIX signal restoration uses native immutable termios storage and lock-free scalar mode publication without entering the Cangjie runtime",
+      "static target-specific terminal FFI is rebuilt from source in isolated profiles and adds no runtime DSO",
+      "normal close restores original signal dispositions; raw Ctrl-C remains input; signal exits retain 128 plus signal",
+      "native terminal smoke evidence covers Linux PTY only; Windows retains its console fallback and macOS is not execution-validated"
     ],
     "consumer_files": [
       "agent_tui/src/tui.cj",

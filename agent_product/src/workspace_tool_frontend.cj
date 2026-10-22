@@ -91,6 +91,7 @@ public class ProductWorkspaceInvocation {
     private let cancellation: CancellationSource
     private let owner: ProductDirectPreparationOwner
     private let resourceTool: String
+    private let operatorOptions180: ?ProductOperatorOptions180
     private let lock = Mutex()
     private var completed: ?ToolResult = None
     private var frozenOutput = ""
@@ -99,10 +100,13 @@ public class ProductWorkspaceInvocation {
     private var closing = false
     private var closeFailure: ?AgentError = None
     private var closingPayload: ?ToolResult = None
-    init(product: ProductRuntime, selection: ProductWorkspaceSelection, resourceTool!: String = "") {
-        let actualCancellation=CancellationSource()
+    init(product: ProductRuntime, selection: ProductWorkspaceSelection, resourceTool!: String = "",
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>) {
+        let actualCancellation=CancellationSource(parent:callerCancellation180)
         let actualSelection=selection
         this.product=product;this.selection=selection;this.resourceTool=resourceTool
+        this.operatorOptions180=operatorOptions180
         this.cancellation=actualCancellation
         owner=ProductDirectPreparationOwner({=>
             match(actualCancellation.token.check()){case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>actualSelection.current()}})
@@ -114,7 +118,7 @@ public class ProductWorkspaceInvocation {
                 else if(resourceTool=="read_resource"){CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)])}
                 else{CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead),Capability(CapabilityKind.WorkspaceWrite)])},
             ToolCall("workspace-"+product.nextWorkspaceCallId(),if(resourceTool==""){selection.tool}else{resourceTool},arguments),owner,cancellation.token,
-            budget:ExecutionBudget(maxToolCalls:if(resourceTool==""){3}else{1},maxConcurrentTools:1)))
+            budget:ExecutionBudget(maxToolCalls:if(resourceTool==""){3}else{1},maxConcurrentTools:1),operatorOptions180:operatorOptions180))
     }
     public func approval(): ?ApprovalRequest { owner.approval() }
     public func decide(operationId: String, decision: ApprovalDecision): Result<Unit> {

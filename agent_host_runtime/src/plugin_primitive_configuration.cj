@@ -165,20 +165,19 @@ class HostPrimitiveConfiguration111 {
     }
 
     func copyPreparedPlan(value: AgentValue): AgentValue {
-        let bytes = logicalJsonWriteReservationBytes(value, 8388608)
-        let nodes = logicalJsonValueNodeCount(value)
         let loan = payment.deriveRetainedLease()
         var retained = false
         try {
-            // Encoding, decode input and returned DOM overlap. Count every
-            // occurrence before making the independent raw copy.
-            loan.ensureRetainedPeak(bytes * 16 + nodes * 512 + 1048576)
-            let frozen = parseUnifiedJson(encodeAgentValue(value), maxBytes: 8388608)
-            let data = HostPrimitivePlanData111(loan, frozen)
+            // Register the actual DATA owner before any scanner/codec work.
+            // Its immutable raw DOM stays paid even after the producer returns.
+            loan.ensureRetainedPeak(65536)
+            let data = HostPrimitivePlanData111(loan, nullValue())
             planLock.lock()
             try { copiedPlans.add(data); retained = true }
             finally { planLock.unlock() }
-            frozen
+            data.installCopiedPlanFrame111(value)
+            data.copiedPlanProducerReturned111()
+            data.value
         } finally { if (!retained) { loan.close() } }
     }
     // Same installed allocation only. A completed physical worker does not
@@ -260,7 +259,7 @@ class HostPrimitiveConfiguration111 {
         try {
         let bytes = encoded.toArray()
         let code = unsafe {
-            let source = LibC.mallocCString(path)
+            let source = LibC.mallocCString(hostPhysicalReadResourcePath180(path))
             try {
                 let expected = LibC.mallocCString(witness)
                 try {
@@ -277,13 +276,43 @@ class HostPrimitiveConfiguration111 {
     }
 }
 
-// Raw ToolDescriptor/Prepared APIs have no consumer-retirement contract. This
-// opt-in pilot keeps their copied graph funded, rather than using worker ACK or
-// callback return as a false data ACK. Reclamation is explicitly not completed.
+// Raw ToolDescriptor/Prepared APIs have no consumer-retirement contract. Their
+// independently copied DOMs stay paid. Only the distinct complete codec
+// producer, whose inputs/String are cleared after actual helper return, ends.
 private class HostPrimitivePlanData111 {
     let payment: LogicalJsonOwnerReservation
-    let value: AgentValue
-    init(payment: LogicalJsonOwnerReservation, value: AgentValue) { this.payment = payment; this.value = value }
+    private var copiedValue111: AgentValue
+    prop value: AgentValue { get() { copiedValue111 } }
+    private var producerPayment111: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var producerSource111: ?AgentValue = None<AgentValue>
+    private var producerText111: ?String = None<String>
+    init(payment: LogicalJsonOwnerReservation, value: AgentValue) { this.payment = payment; this.copiedValue111 = value }
+    func installCopiedPlanFrame111(source: AgentValue): Unit {
+        let producer = payment.deriveRetainedLease()
+        producerPayment111 = Some(producer)
+        // The original formatter/scanner control is funded BEFORE measuring.
+        producer.ensureRetainedPeak(1048576)
+        let bytes = logicalJsonWriteReservationBytes(source, 8388608)
+        let nodes = logicalJsonValueNodeCount(source)
+        let dataInvoice = bytes * 16 + nodes * 512
+        // Keep every original graph/codec multiplier and maximum. Both full
+        // source/encoded input and independently copied DOM overlap here.
+        producer.ensureRetainedPeak(dataInvoice + 1048576)
+        payment.ensureRetainedPeak(dataInvoice + 65536)
+        producerSource111 = Some(source)
+        producerText111 = Some(encodeAgentValue(producerSource111.getOrThrow()))
+        copiedValue111 = parseUnifiedJson(producerText111.getOrThrow(), maxBytes: 8388608)
+    }
+    func copiedPlanProducerReturned111(): Unit {
+        // installCopiedPlanFrame111 has really RETURNED. No raw copied DOM
+        // is acknowledged or retired; it remains in value under payment.
+        clearCopiedPlanProducerFrame111()
+        producerPayment111.getOrThrow().close()
+        producerPayment111 = None<LogicalJsonOwnerReservation>
+    }
+    private func clearCopiedPlanProducerFrame111(): Unit {
+        producerSource111 = None<AgentValue>; producerText111 = None<String>
+    }
 }
 
 // A paid cache of immutable configuration bytes, never a second installed
@@ -505,7 +534,10 @@ func hostPrimitiveSelections111(document: AgentValue, namespace: String, package
                 !hostDocumentLogicalName(httpIntentText(tool, "preparation_provider"))) {
                 return hostPluginResourceError("plugin.primitive_selection_invalid", "primitive profile requires an exact local contribution and pure Provider") }
             let services = tool.field("services").getOrThrow()
-            if (services.unifiedKind != ValueKind.List || services.items.isEmpty() || services.items.size > 2) {
+            // Membership and uniqueness below bound this set to the finite
+            // canonical service inventory. The two-service child profile is
+            // not the cardinality of peer/job profiles (receive/wait/send).
+            if (services.unifiedKind != ValueKind.List || services.items.isEmpty()) {
                 return hostPluginResourceError("plugin.primitive_selection_invalid", "invalid exact child service selection") }
             let selectedServices = HashSet<String>()
             for (service in services.items) {
@@ -610,7 +642,7 @@ public func hostValidateProcessRootConfiguration180(value:AgentValue,plan:Normal
         return hostPluginResourceError("hub.process_root_configuration_changed","whole issued operator selection changed")}
     let bytes=encoded.toArray()
     let code=unsafe{
-        let path=LibC.mallocCString(httpIntentText(value,"path"))
+        let path=LibC.mallocCString(hostPhysicalReadResourcePath180(httpIntentText(value,"path")))
         try{let expected=LibC.mallocCString(witness)
             try{let raw=acquireArrayRawData(bytes)
                 try{axyndra_read_view_equal(path,expected,raw.pointer,bytes.size)}finally{releaseArrayRawData(raw)}}

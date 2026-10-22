@@ -61,7 +61,7 @@ class PluginTransportBudgetTests {
         let fixture = LifecycleOwnerFixture(registerControl: false)
         let port = LocalProcessPort(LocalWorkspace(fixture.configuration.workspace), sandboxEnabled: true,
             lifecycleChannelOutputBytes: Some(4096))
-        let owner = ProductPluginLifecycleOwner(fixture.database, port)
+        let owner = ProductPluginLifecycleOwner(fixture.database, port, operations: fixture.product.vnext.operations)
         let control = ProductPluginLifecycleControl(owner)
         try {
             @Expect(!fixture.product.unregisterTool(PLUGIN_LIFECYCLE_TOOL))

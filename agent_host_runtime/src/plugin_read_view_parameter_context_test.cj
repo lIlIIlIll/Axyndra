@@ -25,6 +25,24 @@ class ReadViewParameterContextTests {
         @Expect(hostReadViewRelativeWorkingDirectory("/tmp/workspace", "project").isError())
         @Expect(hostReadViewRelativeWorkingDirectory("/tmp/workspace", "/tmp/workspace/a\u{0000}").isError())
     }
+    @TestCase
+    func relativeProtectedRootsKeepWorkspaceReadableAndActualStateSecret217(): Unit {
+        let relative = "../home"
+        let protectedFile = hostResolveThroughExistingAncestor(Path(relative)).join("private.txt").toString()
+        let ordinaryFile = "/home/example-user/workspace/fixture.txt"
+        for (state in [false, true]) {
+            let host = HostJavaScriptPluginHost({ root => HostLocalReadTargetInspector(root) },
+                settingsRoot: if (state) { "" } else { relative },
+                readViewStateRoot: if (state) { relative } else { "" })
+            try {
+                @Expect(host.readViewSensitive(ordinaryFile), false)
+                @Expect(host.readViewSensitive(protectedFile))
+                if (state) { @Expect(host.contextReadHardSensitive(protectedFile)) }
+                @Expect(host.contextReadHardSensitive("/home/example-user/workspace/.env"))
+                @Expect(host.contextReadHardSensitive("/home/example-user/workspace/credentials/token"))
+            } finally { host.close().value().getOrThrow() }
+        }
+    }
 }
 
 

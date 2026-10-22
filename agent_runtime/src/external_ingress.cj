@@ -291,8 +291,13 @@ class ExternalRequestGuard {
     func token(): CancellationToken { invocationToken.getOrThrow() }
     func validate(): Result<Unit> {
         match (connection.validateCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        if (!connection.owns(this) || requestSource.token.isCancelled()) { return externalDenied("external.request_not_owned") }
-        ownerCurrent()
+        if (!connection.owns(this)) { return externalDenied("external.request_not_owned") }
+        match (ownerCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        // Cancellation ends execution eligibility, not the identity of the
+        // original request. Preserve the actual bound invocation's cause so
+        // the canonical executor can settle after acknowledged cleanup.
+        match (token().check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        requestSource.token.check()
     }
     func validatePlan(plan: NormalizedOperationPlan): Result<Unit> {
         match (validate()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }

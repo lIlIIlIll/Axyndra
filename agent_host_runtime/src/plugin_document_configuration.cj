@@ -72,7 +72,7 @@ public class HostPluginDocumentConfiguration {
         let path = Path(settingsRoot).join("plugins").join("documents.json").toString()
         let bytes=encoded.toArray();let length=bytes.size
         let code=unsafe {
-            let source=LibC.mallocCString(path)
+            let source=LibC.mallocCString(hostPhysicalReadResourcePath180(path))
             try {
                 let expected=LibC.mallocCString(witness)
                 try {

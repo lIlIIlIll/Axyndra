@@ -16,13 +16,15 @@ public class HostPaidValueProjection151 {
     private var values: ?ArrayList<HostProjectionValue151> = Some(ArrayList<HostProjectionValue151>())
     private var fields: ?ArrayList<HostProjectionField151> = Some(ArrayList<HostProjectionField151>())
     private var output: ?AgentValue = Option<AgentValue>.None
-    private var retained: Int64 = 4096
+    // Fixed private headers AND the eventual canonical publication carrier
+    // are prepaid together; transferring completed DATA needs no new budget.
+    private var retained: Int64 = 13312
     private var borrowed: Int64 = 0
     private var published = false
     private var closed = false
 
     public init(owner: LogicalJsonOwnerReservation) {
-        owner.ensureRetainedPeak(4096)
+        owner.ensureRetainedPeak(retained)
         this.owner = owner
     }
     private func available(): Unit {
@@ -214,8 +216,8 @@ public class HostPaidValueProjection151 {
         try {
             available()
             if (borrowed != 0 || output.isNone()) { throw IllegalStateException("projection frame is still active") }
-            // No new loan is admitted after transfer to the canonical consumer.
-            fund(512, 2)
+            // The publication carrier was paid before any projection DATA.
+            // No new loan/allocation invoice is admitted during transfer.
             published = true
             ToolResultPayloadLease({ => retirePublished151() })
         } finally { lock.unlock() }

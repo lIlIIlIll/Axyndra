@@ -2,6 +2,7 @@ package agent_core
 
 import agent_domain.*
 import agent_ports.*
+import agent_runtime.*
 import logical_json_payload.LogicalJsonOwnerReservation as ImportedLogicalJsonOwnerReservation
 import std.sync.*
 
@@ -24,6 +25,16 @@ class CoreModelInput159 <: ModelInputDataBudget159 {
     private var retiring = false
     var next159: ?CoreModelInput159 = None<CoreModelInput159>
     var debtNext159: ?CoreModelInput159 = None<CoreModelInput159>
+    private var originalTaskWitness180: ?OwnedTaskReturnWitness113 = None<OwnedTaskReturnWitness113>
+    private var originalFailure180: ?Exception = None<Exception>
+    func bindOriginalTaskWitness180(value: ?OwnedTaskReturnWitness113): Unit {
+        lock.lock(); try { originalTaskWitness180 = value } finally { lock.unlock() }
+    }
+    private func originalTaskWitnessReturnedFrame180(): Bool {
+        let actual = try { lock.lock(); originalTaskWitness180 } finally { lock.unlock() }
+        match (actual) { case Some(value) => value.allOwnedProducersReturned113(); case None => false }
+    }
+
 
     init(payment: LogicalJsonOwnerReservation, request: ModelRequest) {
         this.payment = Some(payment)
@@ -95,7 +106,9 @@ class CoreModelInput159 <: ModelInputDataBudget159 {
     func returnedCaller159(): Unit {
         lock.lock(); try { callerReturned = true } finally { lock.unlock() }
     }
-    func hold159(): Unit { lock.lock(); try { held = true } finally { lock.unlock() } }
+    func hold159(error!: ?Exception = None<Exception>): Unit {
+        lock.lock(); try { held = true; if (originalFailure180.isNone()) { originalFailure180 = error } } finally { lock.unlock() }
+    }
 
     private func returnedFutureFrame159(): Bool {
         let selected = try { lock.lock(); future } finally { lock.unlock() }
@@ -107,6 +120,7 @@ class CoreModelInput159 <: ModelInputDataBudget159 {
         }
     }
     func takeReturnedPayment159(): ?LogicalJsonOwnerReservation {
+        if (!originalTaskWitnessReturnedFrame180()) { return None<LogicalJsonOwnerReservation> }
         // No collector holds the input cell lock while reading the provider's
         // separate DATA witness. Its complete query frame returns first.
         if (returnedInputWitnessFrame159()) {
@@ -135,6 +149,7 @@ class CoreModelInput159 <: ModelInputDataBudget159 {
             // checked above. This returns only this independently held input.
             match (toolsBorrow159) { case Some(value) => value.returnModelToolsFrame159(); case None => () }
             toolsBorrow159 = None<ModelInputToolsBorrow159>
+            originalTaskWitness180 = None<OwnedTaskReturnWitness113>
             let value = payment
             payment = None<LogicalJsonOwnerReservation>
             value
@@ -177,7 +192,18 @@ func removeReturnedModelInputDebt159(value: CoreModelInput159): Unit {
 // Unknown ModelPort implementations retain their input allocation. The raw
 // compatibility contract cannot prove that their request aliases have retired.
 func executeModelInput159(model: ModelPort, request: ModelRequest, events: ModelEventSink,
-    custody: ?CoreModelInput159): Result<ModelReply> {
+    custody: ?CoreModelInput159, settings180: AgentValue,
+    counters180: ?ModelStreamFaultCounters180, stopped180: () -> Bool): Result<ModelReply> {
+    match (executeFrozenModelFault180(settings180, counters180, events, stopped180)) {
+        case Some(result) =>
+            // The complete local injection helper returned without exposing
+            // request to a provider. Its actual action/Future/caller must still
+            // return before the existing custody collector can clear anything.
+            match (custody) { case Some(value) => value.recordInputReturn159(true); case None => () }
+            return result
+        case None => ()
+    }
+
     match (model) {
         case consumer: ReturningModelInputPort159 =>
             let owner = match (custody) {

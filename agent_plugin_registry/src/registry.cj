@@ -199,6 +199,11 @@ public open class PluginRegistry {
         this.loadErrors = initial.loadErrors
         stateMemory = Some(memory)
     }
+    // DATA only: no descriptor, pin, generation proof or execution authority.
+    // Independent consumers retain their own loan in this actual SUM bank.
+    public func deriveRetainedData113(bytes: Int64): LogicalJsonOwnerReservation {
+        metadataCustody.deriveRetainedData113(bytes)
+    }
     protected func effectiveRecords(): OwnedPluginRecordList { requireOpenLocked(); ownRecordList78(effectiveRawRecords()) }
     private func ownOptionalRecord78(value: ?RawProductPluginRecord): ?ProductPluginRecord {
         match (value) { case Some(record) => Some(ownRecord78(record)); case None => None }
@@ -410,6 +415,7 @@ public open class PluginRegistry {
                 phase.pendingMetadata = None
                 actual.beginLoad(phase.loadingPayment103.getOrThrow())
                 let initial = pluginLoadRegistryInitialState(settingsRoot, workspaceRoot, captured: Some(actual))
+                actual.retainLoadedState103(initial)
                 if (!initial.loadErrors.isEmpty()) {
                     let error = initial.loadErrors[0]; return ownValueResult78(pluginImportError<PluginRegistryExecutionPin>(error.code, error.message))
                 }
@@ -430,7 +436,7 @@ public open class PluginRegistry {
                             }
                         case None => ()
                     }
-                    actual.arm(record); held.validate(); actual.prepareStatePublication103()
+                    actual.arm(record); held.validate(); actual.prepareStatePublication103(initial)
                     publishState(initial, None, Some(shared))
                     actual.completeStatePublication()
                     phase.retained = true; return ownValueResult78(PluginImportResult.Ok(actual))
@@ -464,27 +470,35 @@ public open class PluginRegistry {
     }
 
     public func inspect(root: String): PluginRegistryResult<OwnedPluginPackageDescriptor> {
+        let memory = try {
+            registryLock.lock()
+            try { requireOpenLocked(); PluginRegistryStateMemory(metadataCustody) }
+            finally { registryLock.unlock() }
+        } catch (_: LogicalJsonPayloadError) {
+            return pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
+        }
+        try { inspectCurrentPackageFrame78(root, memory) }
+        catch (_: LogicalJsonPayloadError) {
+            pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
+        } finally {
+            // The complete parser/publication helper returned; only the
+            // separately paid published backing can retain its raw outputs.
+            memory.close()
+        }
+    }
+
+    private func inspectCurrentPackageFrame78(root: String,
+        memory: PluginRegistryStateMemory): PluginRegistryResult<OwnedPluginPackageDescriptor> {
+        // Pure current-byte inspection owns call-local DATA in the same
+        // custody. Hashing must not block another invocation behind a watcher.
+        let observed = inspectPluginPackage(root, metadataAccounting: Some(memory))
         registryLock.lock()
         try {
             requireOpenLocked()
-            let memory = PluginRegistryStateMemory(metadataCustody)
-            activeInspection = Some(memory)
-            try {
-                match (inspectLocked(root)) {
-                    case PluginPackageResult.Ok(value) =>
-                        PluginRegistryResult.Ok(ownDescriptor78(value))
-                    case PluginPackageResult.Err(error) =>
-                        PluginRegistryResult.Err(ownError78(error))
-                }
-            } catch (_: LogicalJsonPayloadError) {
-                pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
-            } finally {
-                // The actual parser helper has returned. Its raw outputs are
-                // now private owned backings or have been fully discarded.
-                activeInspection = None; memory.close()
+            match (observed) {
+                case PluginPackageResult.Ok(value) => PluginRegistryResult.Ok(ownDescriptor78(value))
+                case PluginPackageResult.Err(error) => PluginRegistryResult.Err(ownError78(error))
             }
-        } catch (_: LogicalJsonPayloadError) {
-            pluginRegistryStaticFailure78("plugin.registry_metadata_capacity")
         } finally { registryLock.unlock() }
     }
 
@@ -890,9 +904,15 @@ public open class PluginRegistry {
             values.add(previous)
             return pluginImportError("plugin.not_found", "plugin id is not imported")
         }
-        records[index] = previous
+        // Package history is not a transferable execution grant.
+        let replacement = RawProductPluginRecord(
+            previous.descriptor, previous.sourceKind, previous.locator,
+            previous.versionLock, previous.revisionLock, previous.integrityLock,
+            previous.contentLock, false, previous.importedAt, scope: previous.scope,
+            explicitlyDisabled: current.explicitlyDisabled)
+        records[index] = replacement
         match (writeLock(current.scope)) {
-            case PluginImportResult.Ok(_) => PluginImportResult.Ok(previous)
+            case PluginImportResult.Ok(_) => PluginImportResult.Ok(replacement)
             case PluginImportResult.Err(error) =>
                 records[index] = current
                 values.remove(at: values.size - 1)
@@ -1136,6 +1156,21 @@ public open class PluginRegistry {
                     case None => pluginImportError("plugin.not_found", "plugin id is not imported")
                 }
         }
+    }
+
+    // Management resolution reports fatal stored-state errors before selecting a
+    // record. This is not an execution pin or a grant; the writer fence still
+    // reloads and validates exact current state before every publication.
+    public func resolveForMutation(id: String, scope!: ?PluginInstallScope = None): PluginRegistryResult<ProductPluginRecord> {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            if (!loadErrors.isEmpty()) {
+                let error = loadErrors[0]
+                return ownValueResult78(pluginImportError<ProductPluginRecord>(error.code, error.message))
+            }
+            ownRecordResult78(resolveRecord(id, scope))
+        } finally { registryLock.unlock() }
     }
 
     public func get(id: String): ?ProductPluginRecord {
@@ -1682,6 +1717,7 @@ func pluginMaterializeSnapshotRoot(
 func pluginLockLine(record: RawProductPluginRecord, historyFor!: String = ""): String {
     let fields = ArrayList<ValueField>()
     fields.add(all: [
+        ValueField("schema_version", integerValue(1)),
         ValueField("id", textValue(record.descriptor.id)),
         ValueField("version", textValue(record.descriptor.version)),
         ValueField("namespace", textValue(record.descriptor.namespace)),

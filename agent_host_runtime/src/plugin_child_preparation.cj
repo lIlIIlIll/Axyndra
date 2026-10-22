@@ -92,7 +92,7 @@ func hostCanonicalizePluginChild111(host: HostJavaScriptPluginHost, operations: 
     let processProjection180=if(configuration.permitsService(localTool,"process.service") || configuration.permitsService(localTool,"process.observe")){
         Some(configuration.retainProcessProjection180())}else{Option<HostPaidValueProjection151>.None}
     let options = match (if (resultWriter) { hostResultSlotOptions150(host, configuration, context) }
-        else if(processProjection180.isSome()){host.processOptions180(processProjection180.getOrThrow())}
+        else if(processProjection180.isSome()){host.processOptions180(context,processProjection180.getOrThrow())}
         else { host.childOptions111() }) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
     if(call.arguments.field(CONTEXT_READ_INPUT_FIELD).isSome()) {

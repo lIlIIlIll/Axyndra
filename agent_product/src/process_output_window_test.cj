@@ -282,7 +282,7 @@ class PluginOutputWindowAttachTests {
     func metadataDelayDoesNotLookLikeTwoCompletedOutputPumps(): Unit {
         let fixture = LifecycleOwnerFixture(registerControl: false)
         let port = OutputAttachProbePort(fixture.configuration.workspace)
-        let owner = ProductPluginLifecycleOwner(fixture.database, port)
+        let owner = ProductPluginLifecycleOwner(fixture.database, port, operations: fixture.product.vnext.operations)
         let control = ProductPluginLifecycleControl(owner)
         let caller = CancellationSource()
         @Expect(!fixture.product.unregisterTool(PLUGIN_LIFECYCLE_TOOL))
@@ -322,7 +322,7 @@ class PluginOutputWindowAttachTests {
         for (cancelled in [false, true]) {
             let fixture = LifecycleOwnerFixture(registerControl: false)
             let port = OutputAttachProbePort(fixture.configuration.workspace)
-            let owner = ProductPluginLifecycleOwner(fixture.database, port)
+            let owner = ProductPluginLifecycleOwner(fixture.database, port, operations: fixture.product.vnext.operations)
             let control = ProductPluginLifecycleControl(owner)
             let caller = CancellationSource()
             @Expect(!fixture.product.unregisterTool(PLUGIN_LIFECYCLE_TOOL))

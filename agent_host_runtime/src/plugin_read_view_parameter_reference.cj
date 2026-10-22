@@ -86,6 +86,7 @@ func hostReadViewReferencedRequest(binding: AgentValue, input: AgentValue, expec
 func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, descriptor: PluginPackageDescriptor,
     configuration: HostPluginHttpConfiguration, namespace: String, tool: String, generation: UInt64,
     context: ToolInvocationContext, call: ToolCall): Result<AgentValue> {
+    let payload = configuration.toolPayloadLimits(tool)
     let extent = try { logicalJsonWriteReservationBytes(call.arguments, HOST_READ_VIEW_INPUT_BYTES) }
         catch (_: Exception) { return hostPluginResourceError("read_view.parameter_input_limit", "original input exceeds its existing bounded shape") }
     // This is the existing native shared pool; no uncharged body or descriptor
@@ -111,7 +112,7 @@ func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, des
             epoch: context.epoch, operationId: "", callId: call.callId, kind: "prepare")
         let result = match (host.invoke(namespace, tool, encoded, identity: identity,
             cancellation: context.cancellation, processLimits: context.budget.processLimits, timeoutMillis: 5000,
-            expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest)) {
+            expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest, toolPayloadLimits: payload)) {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
         if (result.isError || !httpIntentExactFields(result.value, ["intents"])) {
             return hostPluginResourceError("read_view.prepare_rejected", "native package did not return pure read-view intents") }
@@ -137,7 +138,9 @@ func hostPrepareReferencedReadViewInvocation(host: HostJavaScriptPluginHost, des
             ValueField("version", textValue(HOST_READ_VIEW_VERSION)), ValueField("plugin", textValue(namespace)),
             ValueField("package_digest", textValue(descriptor.contentDigest)), ValueField("generation", textValue(generation.toString())),
             ValueField("configuration_digest", textValue(configuration.digest)), ValueField("contribution", textValue(tool)),
-            ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))), ValueField("intents", listValue([frozen]))]))]))
+            ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))),
+            ValueField("tool_payload_limits", match (payload) { case Some(value) => value.value(); case None => nullValue() }),
+            ValueField("intents", listValue([frozen]))]))]))
     } catch (_: Exception) {
         return hostPluginResourceError("read_view.parameter_input_invalid", "parameter metadata cannot represent the complete bounded original input")
     } finally { charge.close() }

@@ -63,13 +63,16 @@ for library in sorted(found):
     root = LIBS / library
     manifest = tomllib.loads((root / "cjpm.toml").read_text(encoding="utf-8"))
     dependencies = manifest.get("dependencies", {})
+    # The pure provider's frozen primitive codec shares only typed Domain data
+    # validators. No reusable library may import an execution/Store authority.
+    forbidden = FORBIDDEN - {"agent_domain"} if library == "pure_provider_runtime" else FORBIDDEN
     if isinstance(dependencies, dict):
-        for dependency in sorted(set(dependencies).intersection(FORBIDDEN)):
+        for dependency in sorted(set(dependencies).intersection(forbidden)):
             errors.append(f"libs/{library}/cjpm.toml depends on forbidden Agent package {dependency}")
     for source in sorted((root / "src").glob("**/*.cj")):
         text = source.read_text(encoding="utf-8")
         for imported in IMPORT.findall(text):
-            if imported in FORBIDDEN:
+            if imported in forbidden:
                 errors.append(f"{source.relative_to(ROOT)} imports forbidden Agent package {imported}")
 
 sdk_manifest = tomllib.loads((ROOT / "agent_sdk" / "cjpm.toml").read_text(encoding="utf-8"))

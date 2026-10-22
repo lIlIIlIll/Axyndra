@@ -21,9 +21,9 @@ func materializeRecipeOracle151(state: WorkflowYieldState111, text: String): (Ag
     } else { first }
     let recipe = answer.field("projection").getOrThrow()
     let output = if (httpIntentText(recipe, "kind") == "fields") {
-        let fields = ArrayList<ValueField>()
-        for (section in state.sections) { for (label in section.labels) { fields.add(ValueField(label, section.data)) } }
-        objectValue(fields.toArray())
+        let projected = objectValue([])
+        for (section in state.sections) { for (label in section.labels) { projected.put(label, section.data) } }
+        projected
     } else {
         match (recipe.field("reference").getOrThrow().asNumberText()) {
             case "0" => state.terminal.getOrThrow()
@@ -93,5 +93,39 @@ class WorkflowTaskProjection151Tests {
         refused = false
         try { let _ = workflowTaskProjection151(extra) } catch (_: Exception) { refused = true }
         @Expect(refused)
+    }
+    @TestCase
+    func advertisedTaskDeclarationAcceptsSingleOrBatchBeforeAnyEffect111(): Unit {
+        var advertised = Option<AgentValue>.None
+        for (tool in workflowPrimitiveTools111().items) {
+            if (tool.field("name").getOrThrow().asString() == "task") {
+                advertised = tool.field("input_schema")
+            }
+        }
+        let raw = advertised.getOrThrow()
+        @Expect(raw.field("type").getOrThrow().asString(), "object")
+        let schema = JsonSchema.fromValue(raw)
+        for (text in [
+            "{\"agent\":\"scout\",\"task\":\"inspect\"}",
+            "{\"task\":\"inspect\",\"context\":\"optional\",\"effort\":\"hi\",\"network\":{\"mode\":\"denied\"}}",
+            "{\"context\":\"shared\",\"tasks\":[{\"task\":\"inspect\"}]}"
+        ]) {
+            let arguments = parseUnifiedJson(text)
+            @Expect(schema.validate(arguments).valid)
+            @Expect(parseWorkflowTaskBatch(ToolCall("schema-only", "task", arguments)).isOk())
+        }
+        for (text in [
+            "{\"task\":\"single\",\"context\":\"shared\",\"tasks\":[{\"task\":\"batch\"}]}",
+            "{\"context\":\"shared\",\"tasks\":[]}",
+            "{\"tasks\":[{\"task\":\"missing shared context\"}]}",
+            "{\"task\":\"inspect\",\"unknown\":true}"
+        ]) {
+            @Expect(!schema.validate(parseUnifiedJson(text)).valid)
+        }
+        let tasks = Array<AgentValue>(8, { _ => objectValue([ValueField("task", textValue("inspect"))]) })
+        let batch = objectValue([ValueField("context", textValue("shared")), ValueField("tasks", listValue(tasks))])
+        @Expect(schema.validate(batch).valid)
+        batch.put("tasks", listValue(Array<AgentValue>(9, { _ => objectValue([ValueField("task", textValue("inspect"))]) })))
+        @Expect(!schema.validate(batch).valid)
     }
 }

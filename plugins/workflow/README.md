@@ -15,6 +15,12 @@ They are authored, not executed. Build with build-package.sh, then invoke
 check.py --package <output-directory>. Pure policy state is query-local.
 Large documents exceeding the existing generic content profile remain open.
 
+Packaging uses the explicitly selected SDK and StdX roots. Dependency lookup
+starts with the repository Native library directory, then the selected SDK
+`runtime/lib/linux_x86_64_cjnative`, its `tools/lib`, and the resolved StdX
+directory. Ambient `LD_LIBRARY_PATH` entries are not appended to these inputs;
+the existing relocated-package check still uses the packaged libraries.
+
 
 The optional `plan_write` Tool owns the original complete-plan schema, ASCII
 trim validation and review response. Its inspected contribution and native
@@ -59,8 +65,9 @@ Select these contributions in the ordinary `plugins/primitives.json` document,
 using the actual installed namespace and content digest. The selected services
 are respectively `peer.list`/`peer.receive`, `peer.send`/`peer.wait`,
 `job.list`/`job.wait`, `job.cancel`, and the exclusive `process.service`.
-Each uses `frozen-primitives-v1` and `prepare_child`. The original Host limit of
-two selected services, exact per-service capability selection, canonical
+Each uses `frozen-primitives-v1` and `prepare_child`. The Host enforces the
+closed twelve-service inventory, unique selections and the existing child/process
+mutual exclusion. Exact per-service capability selection, canonical
 Source/Run/Receipt checks, budget, cancellation and physical process ownership
 remain enforced. Installing a family gives no capability or approval.
 

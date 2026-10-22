@@ -6,6 +6,7 @@ import agent_runtime.*
 import agent_store.*
 import tool_runtime.*
 import std.fs.*
+import std.env.*
 import yjson.*
 import yjson_support.*
 
@@ -52,11 +53,32 @@ class ExternalDerivedClock { var now = agentUtcMillis() }
 // No process, filesystem mutation, transport or Host service is simulated here.
 class ExternalDerivedProbe <: ToolExecutor {
     var calls: Int64 = 0
+    var cancelExecuting: ?() -> Unit = None
+    var evidenceContext: ?ToolInvocationContext = None
+    public func executeObserved(context: ToolInvocationContext, prepared: PreparedToolInvocation): ToolExecutionOutcome {
+        let result = execute(context, prepared)
+        let evidence: ?ToolExecutionCancellationEvidence = match (result) {
+            case Result.Err(error) => observeToolExecutionCancellation(
+                match (evidenceContext) { case Some(value) => value; case None => context },
+                prepared, error, context.cancellation)
+            case Result.Ok(_) => None
+        }
+        ToolExecutionOutcome(result, cancellationEvidence: evidence)
+    }
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
         expect(prepared.source.kind == PreparedInvocationSourceKind.Derived &&
             prepared.source.runId.value == context.runId.value && !context.trustedControl,
             "probe receives the actual unprivileged Derived source")
         calls += 1
+        match (cancelExecuting) {
+            case Some(cancel) =>
+                cancel()
+                match (context.cancellation.check()) {
+                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Ok(_) => throw IllegalStateException("actual request cancellation did not reach its executor token")
+                }
+            case None => ()
+        }
         Result.Ok(ToolResult(prepared.call.callId,
             objectValue([ValueField("sentinel", textValue("EXTERNAL_DERIVED_SCOPE"))])))
     }
@@ -102,7 +124,7 @@ class ExternalDerivedFixture {
     let key = "javascript-service:external-derived-root-call:read"
 
     init() {
-        root = Directory.createTemp("/tmp").toString()
+        root = Directory.createTemp(match (getVariable("TMPDIR")) { case Some(value) => value; case None => "/tmp" }).toString()
         database = SqliteDatabase(root + "/state.db")
         store = DurableOperationStore(database)
         let sink = SqliteThreadCommitSink(database)
@@ -266,10 +288,67 @@ func externalDerivedCase(mode: String): Unit {
                 "different-principal", binding.generation, binding.threadId, binding.permissionDomain,
                 [binding.exported(fixture.call.name).getOrThrow()], binding.ceiling.values, binding.expiresAtMillis, []))
         }
+        else if (mode == "executing-cancel" || mode == "foreign-observation" || mode == "observation-failure") {
+            let child = ready(fixture.pipeline.prepareDerived(parentContext, childContext,
+                fixture.childCall, fixture.parent, fixture.key))
+            fixture.store.markExecutingWithSource(Some(OperationRootSource.Direct(fixture.source)), fixture.parent.operationId,
+                parentContext.runId, fixture.parent.operationPlan, agentUtcMillis(), false).value().getOrThrow()
+            fixture.store.markExecutionHandoffWithSource(Some(OperationRootSource.Direct(fixture.source)), fixture.parent.operationId,
+                parentContext.runId, fixture.source.threadId, agentUtcMillis()).value().getOrThrow()
+            fixture.pipeline.admitDerived(childContext, child).value().getOrThrow()
+            fixture.probe.cancelExecuting = Some({ =>
+                fixture.connection.cancelRequest(ExternalRequestId(ExternalRequestIdKind.Text, value: "request")).value().getOrThrow()
+            })
+            if (mode == "foreign-observation") { fixture.probe.evidenceContext = Some(fixture.view(caps: Some(narrow))) }
+            let returnedExecution: Array<?ReturnedToolExecutionObservation> = [None]
+            let failure = fixture.pipeline.executePrepared(childContext, child, {_ => Result.Ok(())},
+                executionObservation: Some({ actual =>
+                    returnedExecution[0] = Some(actual)
+                    if (mode == "observation-failure") { throw IllegalStateException("actual terminal consumer failed") }
+                })).error().getOrThrow()
+            if (mode == "foreign-observation" || mode == "observation-failure") {
+                expect(fixture.probe.calls == 1 &&
+                    !returnedExecution[0].getOrThrow().provesReturnedCancellation(child, failure) &&
+                    fixture.store.loadDerivedOperationState(child.operationId, parentContext.runId).value().getOrThrow() == "executing" &&
+                    fixture.store.loadDerivedOperationReceipt(child.operationId, parentContext.runId).value().getOrThrow().isNone(),
+                    "foreign-context evidence or failed callback cannot settle or falsely acknowledge executing debt")
+                if (mode == "observation-failure") { expect(failure.kind == AgentErrorKind.RecoveryRequired &&
+                    failure.code == "tool.execution_observation_failed", "callback failure remains Unknown instead of relabelling original cancellation") }
+                return
+            }
+            let cause = fixture.admission.cancellationToken.check().error().getOrThrow()
+            expect(fixture.probe.calls == 1 && failure.kind == AgentErrorKind.Cancelled &&
+                failure.code == cause.code && failure.message == cause.message &&
+                fixture.connection.validateCurrent().isOk(),
+                "the actual executing child returns its acknowledged cancellation without replacing it with ownership loss")
+            let actual = returnedExecution[0].getOrThrow()
+            expect(actual.provesReturnedCancellation(child, failure) &&
+                !actual.provesReturnedCancellation(fixture.parent, failure) &&
+                !actual.provesReturnedCancellation(child, AgentError(failure.kind, failure.code, failure.message)),
+                "only the original returned executor observation proves its exact Prepared cancellation; copied errors and naked tokens do not")
+            fixture.store.settleDerivedOperation(parentContext.runId, fixture.parent.operationId,
+                VNextOperationReceipt("receipt-" + child.operationId.value, child.operationId, OperationOutcome.Cancelled,
+                    objectValue([ValueField("error_code", textValue(failure.code))]), objectValue([]), agentUtcMillis())).value().getOrThrow()
+            expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='cancelled'") == 1 &&
+                fixture.database.scalarInt("SELECT COUNT(*) FROM operations WHERE state='recovery_required'") == 0 &&
+                sameNormalizedOperationPlan(fixture.store.loadPlan(child.operationId, parentContext.runId).value().getOrThrow(), child.operationPlan) &&
+                fixture.database.query("PRAGMA foreign_key_check").isEmpty(),
+                "the actual acknowledged child cancellation retains its sole canonical Receipt and unchanged normalized plan without recovery debt")
+            expect(fixture.pipeline.prepareDerived(parentContext, childContext,
+                fixture.childCall, fixture.parent, fixture.key).isError() && fixture.probe.calls == 1,
+                "retaining original cancellation evidence cannot authorize another child or effect")
+            return
+        }
         else if (mode == "late-cancel") {
             let child = ready(fixture.pipeline.prepareDerived(parentContext, childContext,
                 fixture.childCall, fixture.parent, fixture.key))
             fixture.connection.cancelRequest(ExternalRequestId(ExternalRequestIdKind.Text, value: "request")).value().getOrThrow()
+            let cause = fixture.admission.cancellationToken.check().error().getOrThrow()
+            let sourceFailure = fixture.source.validateLiveSource().error().getOrThrow()
+            expect(sourceFailure.kind == AgentErrorKind.Cancelled && sourceFailure.code == cause.code &&
+                sourceFailure.message == cause.message && fixture.connection.validateCurrent().isOk(),
+                "cancelled prepared request retains its exact live connection and original cancellation cause, not lost ownership; source=" +
+                    sourceFailure.code + ": " + sourceFailure.message + "; cause=" + cause.code + ": " + cause.message)
             expect(fixture.admission.cancellationToken.isCancelled() &&
                 fixture.pipeline.admitDerived(childContext, child).isError() &&
                 fixture.pipeline.executePrepared(childContext, child).isError(),
@@ -300,11 +379,11 @@ main(): Int64 {
     var completed: Int64 = 0
     for (mode in ["narrowed", "same-context", "parent-cap", "parent-run", "parent-epoch", "parent-token",
         "child-widen", "child-run", "child-epoch", "child-path", "child-env", "child-token",
-        "expired", "revoked", "changed-binding", "late-cancel"]) {
+        "expired", "revoked", "changed-binding", "late-cancel", "executing-cancel", "foreign-observation", "observation-failure"]) {
         externalDerivedCase(mode)
         completed += 1
     }
-    expect(completed == 16, "all positive and source-rejection scenarios completed")
-    println("External derived context contract passed: 16 scenarios")
+    expect(completed == 19, "all positive and source-rejection scenarios completed")
+    println("External derived context contract passed: 19 scenarios")
     0
 }

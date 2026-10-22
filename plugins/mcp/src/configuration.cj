@@ -9,6 +9,8 @@ import yjson_support.*
 // matching operator grants and actual credentials belong solely to the host.
 class McpPluginConfiguration {
     let requestTimeoutMillis: Int64
+    let maxFrameBytes: Int64
+    let gracefulShutdownMillis: Int64
     let maxPages: Int64
     let maxTools: Int64
     let transport: String
@@ -23,8 +25,10 @@ class McpPluginConfiguration {
     init(value: JsonNode, limits!: ProtocolLimits = ProtocolLimits()) {
         this.limits = limits
         transport = text(value, "transport")
-        if (transport == "stdio") { exact(value, ["version", "transport", "request_timeout_ms", "directory"]) }
-        else { exact(value, ["version", "transport", "request_timeout_ms", "directory", "http"]) }
+        let configurationFields = ArrayList<String>(["version", "transport", "request_timeout_ms", "directory"])
+        if (transport == "http") { configurationFields.add("http") }
+        if (value.field("framing").isSome()) { configurationFields.add("framing") }
+        exact(value, configurationFields.toArray())
         require(number(value, "version") == 1 && (transport == "stdio" || transport == "http"),
             "mcp_plugin.configuration_unsupported")
         let directory = field(value, "directory")
@@ -32,14 +36,23 @@ class McpPluginConfiguration {
         requestTimeoutMillis = number(value, "request_timeout_ms")
         maxPages = number(directory, "max_pages")
         maxTools = number(directory, "max_tools")
-        require(requestTimeoutMillis >= 100 && requestTimeoutMillis <= limits.timeout &&
+        require(requestTimeoutMillis >= 1 && requestTimeoutMillis <= limits.timeout &&
             maxPages >= 1 && maxPages <= (if (limits.isExplicit) { 1024 } else { 8 }) && maxTools >= 1 && maxTools <= limits.tools,
             "mcp_plugin.configuration_limit")
+        if (value.field("framing").isSome()) {
+            let framing = field(value, "framing")
+            exact(framing, ["max_frame_bytes", "graceful_shutdown_ms"])
+            maxFrameBytes = canonicalNumber(framing, "max_frame_bytes", 1024, limits.result)
+            gracefulShutdownMillis = canonicalNumber(framing, "graceful_shutdown_ms", 0, 9223372036854775807)
+        } else { maxFrameBytes = limits.result; gracefulShutdownMillis = 0 }
         let base = ArrayList<JsonObjectEntry>([
             JsonObjectEntry("version", jsonNumber("1")), JsonObjectEntry("transport", jsonString(transport)),
             JsonObjectEntry("request_timeout_ms", jsonNumber(requestTimeoutMillis.toString())),
             JsonObjectEntry("directory", jsonObject([JsonObjectEntry("max_pages", jsonNumber(maxPages.toString())),
                 JsonObjectEntry("max_tools", jsonNumber(maxTools.toString()))]))])
+        base.add(JsonObjectEntry("framing", jsonObject([
+            JsonObjectEntry("max_frame_bytes", jsonNumber(maxFrameBytes.toString())),
+            JsonObjectEntry("graceful_shutdown_ms", jsonNumber(gracefulShutdownMillis.toString()))])))
         if (transport == "http") {
             let http = field(value, "http")
             let fields = ArrayList<String>(["url", "credential_refs", "max_response_bytes", "prefer_sse"])
@@ -58,9 +71,11 @@ class McpPluginConfiguration {
             }
             let prefix: Int64 = if (url.startsWith("https://")) { 8 } else if (url.startsWith("http://")) { 7 } else { 0 }
             require(prefix > 0 && url.size > prefix, "mcp_plugin.http_url_invalid")
-            let slash = url[prefix..].indexOf("/")
-            require(slash.isSome() && !url[prefix..prefix + slash.getOrThrow()].contains("@"),
-                "mcp_plugin.http_url_invalid")
+            let remainder = url[prefix..]
+            var end = remainder.size
+            match (remainder.indexOf("/")) { case Some(index) => end = index; case None => () }
+            match (remainder.indexOf("?")) { case Some(index) => if (index < end) { end = index }; case None => () }
+            require(end > 0 && !remainder[..end].contains("@"), "mcp_plugin.http_url_invalid")
             // Reuse the library's HTTPS/loopback URL validation, without
             // constructing its direct-network default exchange backend.
             let _ = McpStreamableHttpClientConfig(url, origin: origin, headers: headers)

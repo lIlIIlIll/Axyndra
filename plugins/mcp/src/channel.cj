@@ -138,7 +138,12 @@ class BrokerChannel <: McpStdioChannel {
     }
     public func flush(): Unit { require(!closed.load(), "mcp_plugin.session_closed") }
     public func abort(): Unit { closed.store(true) }
-    public func stop(_: Int64): Unit { abort() }
+    // This closes only local readers. Physical half-close/grace/reap is the
+    // Host's normal stop using its frozen operator lifecycle policy; EOF is
+    // not a new invocation window and cannot mint a broker request.
+    public func stop(graceMillis: Int64): Unit {
+        require(graceMillis >= 0, "mcp_plugin.shutdown_invalid"); abort()
+    }
     public func close(): Unit { abort() }
 }
 

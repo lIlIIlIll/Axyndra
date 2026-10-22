@@ -34,19 +34,39 @@ class WorkflowDocumentUpload {
     let id:String
     let bytes:Int64
     let digest:String
-    var data: ?ArrayList<Byte> = Some(ArrayList<Byte>())
+    var data: ?Array<Byte>
     var text:?String=None
-    init(id:String,bytes:Int64,digest:String){this.id=id;this.bytes=bytes;this.digest=digest}
+    private var received:Int64=0
+    init(id:String,bytes:Int64,digest:String){
+        this.id=id;this.bytes=bytes;this.digest=digest
+        this.data=Some(Array<Byte>(bytes,repeat:0))
+    }
     func append(offset:Int64,hex:String):Unit {
-        if(text.isSome() || offset!=data.getOrThrow().size || hex.size==0 || hex.size%2!=0 || hex.size>WORKFLOW_DOCUMENT_CHUNK*2 ||
-            hex.size/2>bytes-data.getOrThrow().size){throw PureProviderError("document.data_chunk","chunk overlaps, repeats or exceeds its declaration")}
-        let raw=hex.toArray()
-        for(i in 0..raw.size/2){data.getOrThrow().add(UInt8(documentDataNibble(raw[i*2])*16+documentDataNibble(raw[i*2+1])))}
+        if(text.isSome() || offset!=received || hex.size==0 || hex.size%2!=0 || hex.size>WORKFLOW_DOCUMENT_CHUNK*2 ||
+            hex.size/2>bytes-received){throw PureProviderError("document.data_chunk","chunk overlaps, repeats or exceeds its declaration")}
+        let target=data.getOrThrow()
+        // The original extent/offset checks prove every pair and destination
+        // index. Reuse the logical receiver's synchronous pinned decoder;
+        // neither pointer escapes, and even invalid hex unpins both arrays.
+        unsafe {
+            let source=acquireArrayRawData(hex.rawData())
+            try {
+                let destination=acquireArrayRawData(target)
+                try {
+                    for(i in 0..hex.size/2){
+                        let high=documentDataNibble(source.pointer.read(i*2))
+                        let low=documentDataNibble(source.pointer.read(i*2+1))
+                        destination.pointer.write(offset+i,UInt8(high*16+low))
+                    }
+                } finally {releaseArrayRawData(destination)}
+            } finally {releaseArrayRawData(source)}
+        }
+        received+=hex.size/2
     }
     func complete():String {
         if(text.isSome()){return text.getOrThrow()}
-        if(data.getOrThrow().size!=bytes){throw PureProviderError("document.data_incomplete","all declared bytes are required")}
-        let raw=data.getOrThrow().toArray()
+        if(received!=bytes){throw PureProviderError("document.data_incomplete","all declared bytes are required")}
+        let raw=data.getOrThrow()
         if(modelPolicySha256(raw)!=digest){throw PureProviderError("document.data_hash","uploaded data differs from the frozen content digest")}
         let value=String.fromUtf8(raw);text=Some(value);data=None;value
     }
@@ -138,10 +158,9 @@ class WorkflowDocumentData {
         try {
             let parameterNodes=logicalJsonValueNodeCount(original)
             charge.ensureDecoded(measure,parameterNodes)
-            // Four input extents cover growing upload backing (<=2I), the
-            // complete byte copy (I) and UTF-8 text (I) at upload completion.
-            // This is raw retained storage in the original pool; it does not
-            // lower ordinary message or independently live wire charges.
+            // The declared upload extent is funded before allocating its
+            // fixed byte storage. Keep the original conservative four input
+            // extents and independently live wire charges unchanged.
             charge.ensureRetainedPeak(count*4+measure*8+parameterNodes*512+1048576)
             let frozen:?AgentValue=if(chunked){None}else{
                 let encoded=stringifyUnifiedJson(original)

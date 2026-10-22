@@ -144,10 +144,10 @@ public class CheckpointRuntime {
             let store = SqlitePostCanonicalCheckpointStore(database, { bytes: Int64 => reserveNativeDocumentPayload(bytes) })
             match (directBoundary) {
                 case Some(boundary) => store.saveDirect(checkpoint, thread.thread, context.contextProjection,
-                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), boundary,
+                    context.toolSetSnapshot, "rewind", plan, plan.canonicalArguments, result, agentUtcMillis(), boundary,
                     { => context.cancellation.check() })
                 case None => store.save(checkpoint, thread.thread, context.runId, context.epoch, context.contextProjection,
-                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), { => context.cancellation.check() }) }
+                    context.toolSetSnapshot, "rewind", plan, plan.canonicalArguments, result, agentUtcMillis(), { => context.cancellation.check() }) }
 
         } else {
             // Preserve original completed-thread replay/idempotency and fork
@@ -182,9 +182,9 @@ public class CheckpointRuntime {
             let store = SqlitePostCanonicalCheckpointStore(database, { bytes: Int64 => reserveNativeDocumentPayload(bytes) })
             match (directBoundary) {
                 case Some(boundary) => store.saveDirect(checkpoint, thread.thread, context.contextProjection,
-                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), boundary, guard)
+                    context.toolSetSnapshot, "rewind", plan, plan.canonicalArguments, result, agentUtcMillis(), boundary, guard)
                 case None => store.save(checkpoint, thread.thread, context.runId, context.epoch, context.contextProjection,
-                    context.toolSetSnapshot, "rewind", plan, result, agentUtcMillis(), guard) }
+                    context.toolSetSnapshot, "rewind", plan, plan.canonicalArguments, result, agentUtcMillis(), guard) }
         } else {
             // Original completed-thread replay/fork support remains a data save.
             SqliteContextCheckpointStore(database).save(checkpoint, thread, agentUtcMillis())
@@ -254,9 +254,9 @@ public class CheckpointRuntime {
         let store = SqlitePostCanonicalCheckpointStore(database, { bytes => reserveNativeDocumentPayload(bytes) })
         match (directBoundary) {
             case Some(boundary) => store.saveDirect(checkpoint, thread, context.contextProjection,
-                context.toolSetSnapshot, "rewind", originalPlan, result, agentUtcMillis(), boundary, guard)
+                context.toolSetSnapshot, "rewind", originalPlan, originalPlan.canonicalArguments, result, agentUtcMillis(), boundary, guard)
             case None => store.save(checkpoint, thread, context.runId, context.epoch, context.contextProjection,
-                context.toolSetSnapshot, "rewind", originalPlan, result, agentUtcMillis(), guard) }
+                context.toolSetSnapshot, "rewind", originalPlan, originalPlan.canonicalArguments, result, agentUtcMillis(), guard) }
     }
 
     

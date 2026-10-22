@@ -25,11 +25,46 @@ public class HostPluginPolicyResult {
 // Callers supply already-authorized facts and must validate every proposed
 // value before using an existing Host model/data/commit port. Neither input
 // data nor policy output grants a capability or creates canonical evidence.
+// A pure input stays in the actual pinned package's DATA custody. Native
+// transport reservations/floors and all authorization checks remain separate.
+private func hostPolicyQueryPayment193(host: HostJavaScriptPluginHost, namespace: String,
+    contribution: String, expectedDigest: String): Result<LogicalJsonOwnerReservation> {
+    let binding = match (host.policyProviderBinding(namespace, contribution)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    if (binding.digest != expectedDigest) {
+        return hostPluginResourceError("policy.provider_changed", "selected policy no longer matches its pinned package") }
+    let mounted = match (host.servicePackage(namespace, binding.generation)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    try {
+        if (!mounted.textEquals(PluginDescriptorText.Namespace, namespace) ||
+            !mounted.textEquals(PluginDescriptorText.ContentDigest, expectedDigest)) {
+            return hostPluginResourceError("policy.provider_changed", "policy input lost its actual package data owner") }
+        Result.Ok(mounted.deriveCopiedDataPayment(65536))
+    } finally { mounted.close() }
+}
+
 public func hostQueryPluginPolicy(host: HostJavaScriptPluginHost, namespace: String, contribution: String,
     expectedDigest: String, input: AgentValue, thread: ThreadId, cancellation: CancellationToken,
     requestId: String, deadline!: ?MonoTime = None): Result<HostPluginPolicyResult> {
+    let payment = match (hostPolicyQueryPayment193(host, namespace, contribution, expectedDigest)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    try {
+        hostQueryPluginPolicyFrame193<HostPluginPolicyResult>(host, namespace, contribution, expectedDigest,
+            input, thread, cancellation, requestId, deadline,
+            { query => HostFrozenPluginContentQuery(query, [], payment) },
+            { response, binding => HostPluginPolicyResult(response, binding) })
+    } finally { payment.close() }
+}
+
+// The document caller pays the input from the actual installed descriptor.
+// This path cannot allocate an unrelated reservation or fall back to one.
+func hostQueryPluginPolicyPaidInput(host: HostJavaScriptPluginHost, namespace: String, contribution: String,
+    expectedDigest: String, input: AgentValue, payment: LogicalJsonOwnerReservation, thread: ThreadId,
+    cancellation: CancellationToken, requestId: String): Result<HostPluginPolicyResult> {
     hostQueryPluginPolicyFrame193<HostPluginPolicyResult>(host, namespace, contribution, expectedDigest,
-        input, thread, cancellation, requestId, deadline, { response, binding => HostPluginPolicyResult(response, binding) })
+        input, thread, cancellation, requestId, None<MonoTime>,
+        { query => HostFrozenPluginContentQuery(query, [], payment) },
+        { response, binding => HostPluginPolicyResult(response, binding) })
 }
 
 // The actual response has its original independent payload custody. No input
@@ -47,22 +82,25 @@ public class HostPolicyScalarResult193 {
 public func hostQueryPluginPolicyScalars193(host: HostJavaScriptPluginHost, namespace: String, contribution: String,
     expectedDigest: String, input: AgentValue, thread: ThreadId, cancellation: CancellationToken,
     requestId: String): Result<HostPolicyScalarResult193> {
-    hostQueryPluginPolicyFrame193<HostPolicyScalarResult193>(host, namespace, contribution, expectedDigest,
-        input, thread, cancellation, requestId, None<MonoTime>,
-        { response, binding => HostPolicyScalarResult193(response, binding.generation) })
+    let payment = match (hostPolicyQueryPayment193(host, namespace, contribution, expectedDigest)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    try {
+        hostQueryPluginPolicyFrame193<HostPolicyScalarResult193>(host, namespace, contribution, expectedDigest,
+            input, thread, cancellation, requestId, None<MonoTime>,
+            { query => HostFrozenPluginContentQuery(query, [], payment) },
+            { response, binding => HostPolicyScalarResult193(response, binding.generation) })
+    } finally { payment.close() }
 }
 
 private func hostQueryPluginPolicyFrame193<T>(host: HostJavaScriptPluginHost, namespace: String, contribution: String,
     expectedDigest: String, input: AgentValue, thread: ThreadId, cancellation: CancellationToken,
-    requestId: String, deadline: ?MonoTime, make: (HostJavaScriptPluginInvocationResult, HostPluginPolicyBinding) -> T): Result<T> {
+    requestId: String, deadline: ?MonoTime, capture: (AgentValue) -> HostFrozenPluginContentQuery,
+    make: (HostJavaScriptPluginInvocationResult, HostPluginPolicyBinding) -> T): Result<T> {
     match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     if (hostPolicyQueryRemaining(deadline) <= 0) { return hostPluginResourceError("policy.deadline_exceeded", "policy observation deadline expired") }
     let query = objectValue([ValueField("schema", textValue("axyndra.policy-query/v1")), ValueField("input", input)])
-    // TEMP_DIAGNOSTIC: fixed labels and duration only; remove before final gates.
-    let diagnosticFreeze = MonoTime.now()
-    let frozen = try { HostFrozenPluginContentQuery(query, [], observed: true) }
+    let frozen = try { capture(query) }
         catch (_: Exception) { return hostPluginResourceError("policy.query_limit", "policy input exceeds its bounded data codec or aggregate capacity") }
-        finally { hostCompactionDiagnosticRecord("policy-freeze", diagnosticFreeze) }
     try {
         let binding = match (host.policyProviderBinding(namespace, contribution)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
@@ -73,15 +111,11 @@ private func hostQueryPluginPolicyFrame193<T>(host: HostJavaScriptPluginHost, na
         if (remaining <= 0) { return hostPluginResourceError("policy.deadline_exceeded", "policy observation deadline expired") }
         let identity = JavaScriptHostInvocationIdentity(threadId: thread.value, runId: "", epoch: 0,
             operationId: "", callId: requestId, kind: "provider")
-        let diagnosticEncode = MonoTime.now()
-        let encoded = try { stringifyUnifiedJson(frozen.query) }
-            finally { hostCompactionDiagnosticRecord("policy-encode", diagnosticEncode) }
-        let diagnosticInvoke = MonoTime.now()
-        let response = try { match (host.invoke(namespace, contribution, encoded, identity: identity,
+        let encoded = stringifyUnifiedJson(frozen.query)
+        let response = match (host.invoke(namespace, contribution, encoded, identity: identity,
             cancellation: cancellation, expectedInstanceGeneration: binding.generation,
             authorityScope: "pure-policy", timeoutMillis: remaining)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value } }
-            finally { hostCompactionDiagnosticRecord("policy-invoke", diagnosticInvoke) }
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         var retained = false
         try {
             if (response.isError || !httpIntentExactFields(response.value, ["schema", "value"]) ||

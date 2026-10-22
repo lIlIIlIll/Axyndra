@@ -165,7 +165,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}

@@ -33,6 +33,7 @@ private func managedActualPrepareBinding(thread:ThreadId,run:RunId,epoch:Int64,l
         ValueField("target_thread_id",textValue(thread.value)),ValueField("permission_domain",textValue(digest)),
         ValueField("workspace_root",textValue("/workspace")),ValueField("workspace_mode",textValue("workspace_readonly")),
         ValueField("network",networkPolicyCanonicalValue(NetworkPolicy(NetworkPolicyMode.Denied))),
+        ValueField("lifecycle_policy",processShutdownPolicyValue(0)),
         ValueField("launch_digest",textValue(digest)),ValueField("lane_id",textValue(lane.value)),ValueField("run_id",textValue(run.value)),
         ValueField("epoch",integerValue(epoch)),ValueField("resource_state",textValue("planned"))])
 }

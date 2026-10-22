@@ -107,6 +107,12 @@ public class HostProcessSecretChannel <: ProcessChannel & HostManagedChannelPhys
     public func terminalStatus(): Result<?Int64> { raw.terminalStatus() }
     public func abort(): Result<Unit> { closed.store(true); raw.abort() }
     public func close(): Result<Unit> { closed.store(true); raw.close() }
+    public func closeGracefully(plan:NormalizedOperationPlan,requestedGraceMillis:Int64):Result<Unit>{
+        // Keep private drain/projection alive until the original physical owner
+        // has actually returned; the enclosing lease withdrew caller rights.
+        let result=raw.closeGracefully(plan,requestedGraceMillis)
+        closed.store(true);result
+    }
     private func withhold(): Result<ProcessChannelRead> {
         failed.store(true)
         // No writer lock is acquired. LocalProcessPort still owns any failed

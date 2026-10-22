@@ -9,6 +9,7 @@ import selectors
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PACKAGE = None
 KEYS = ['protocol', 'extension_id', 'extension_version', 'generation', 'id', 'tool', 'kind',
@@ -95,7 +96,7 @@ def parameter_input(value):
     encoded=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()
     return {'schema':'axyndra.read-view-parameter-input/v1','reference':{
         'binding':{'thread_id':'workspace-thread','run_id':'workspace-run','epoch':2,'call_id':'workspace-call',
-                   'tool_name':'plugin.workspace.write','plugin':'workspace','contribution':'write',
+                   'tool_name':'plugin.axyndra:workspace.write','plugin':'axyndra:workspace','contribution':'write',
                    'package_digest':'sha256:'+hashlib.sha256(b'actual-package-fixture').hexdigest(),'generation':'7',
                    'configuration_digest':hashlib.sha256(b'actual-operator-fixture').hexdigest()},
         'input_bytes':len(encoded),'input_sha256':hashlib.sha256(encoded).hexdigest(),'metadata':parameter_metadata(value)}}
@@ -106,6 +107,13 @@ class WorkspacePackageTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='workspace-plugin-check-')
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
+        # Preserve fixture .gitignore coverage without inheriting an operator's
+        # global exclusion of the disk-backed temporary checkout.
+        home = self.base / 'home'; home.mkdir()
+        config = self.base / 'config'; config.mkdir()
+        isolated = patch.dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config),
+                              GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+        isolated.start(); self.addCleanup(isolated.stop)
         self.root = self.base / 'workspace'; self.root.mkdir()
         (self.root / 'first.txt').write_text('before\n', encoding='utf-8')
         (self.root / 'second.txt').write_text('alpha\nbeta\ngamma\n', encoding='utf-8')
@@ -392,7 +400,9 @@ class WorkspacePackageTests(unittest.TestCase):
 
     def test_referenced_binding_cannot_cross_call_thread_run_epoch_or_generation(self):
         for key,value in [('call_id','other-call'),('thread_id','other-thread'),('run_id','other-run'),
-                          ('epoch',3),('generation','8'),('tool_name','plugin.workspace.read')]:
+                          ('epoch',3),('generation','8'),('tool_name','plugin.workspace.read'),
+                          ('plugin','workspace'),('plugin','pi:workspace'),
+                          ('tool_name','plugin.workspace.write'),('tool_name','plugin.axyndra:workspace.read')]:
             projected=parameter_input({'path':'new.txt','content':'x'*32768})
             projected['reference']['binding'][key]=value
             with Protocol(self.root) as wire:

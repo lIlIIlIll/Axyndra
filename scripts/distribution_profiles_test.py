@@ -151,6 +151,40 @@ class ThreeProfileProvenanceTests(unittest.TestCase):
                 provenance.publish(root, source, ROOT / 'packaging/distributions.json', 'coding', provenance.digest(source))
             self.assertFalse((root / 'package-provenance.json').exists())
 
+    def test_native_provenance_pairs_host_with_before_copy_after_and_relocated_bytes(self):
+        provenance = self.provenance_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); source = self.stage_minimal(root)
+            native = root / 'native-source'; native.write_bytes(b'frozen native input')
+            copied = provenance.digest(native)
+            output = root / 'lib/libprocess4cj_native.so'
+            output.write_bytes(b'relocated native bytes')
+            result = provenance.publish(root, source, ROOT / 'packaging/distributions.json',
+                'minimal', provenance.digest(source), True, native, copied, copied)
+            self.assertEqual(result['native_input'], dict(
+                source_binary_sha256=provenance.digest(source), before_sha256=copied,
+                copied_sha256=copied, after_sha256=copied, packaged_sha256=provenance.digest(output)))
+            self.assertNotEqual(copied, result['native_input']['packaged_sha256'])
+
+    def test_native_missing_changed_copy_changed_source_and_partial_input_fail_closed(self):
+        provenance = self.provenance_module()
+        for fault in ['missing', 'source', 'copy', 'partial', 'symlink']:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); source = self.stage_minimal(root)
+                native = root / 'native-source'; native.write_bytes(b'frozen native input')
+                frozen = provenance.digest(native); copied = frozen
+                (root / 'lib/libprocess4cj_native.so').write_bytes(b'relocated native bytes')
+                if fault == 'missing': native.unlink()
+                if fault == 'source': native.write_bytes(b'mutated native input')
+                if fault == 'copy': copied = '0' * 64
+                if fault == 'partial': copied = None
+                if fault == 'symlink':
+                    target = root / 'other-native'; native.rename(target); native.symlink_to(target.name)
+                with self.assertRaises(ValueError):
+                    provenance.publish(root, source, ROOT / 'packaging/distributions.json',
+                        'minimal', provenance.digest(source), True, native, frozen, copied)
+                self.assertFalse((root / 'package-provenance.json').exists())
+
     def test_minimal_recipe_rejects_optional_provider_and_existing_output_without_mutation(self):
         for fault in ['plugin', 'provider', 'authority', 'existing']:
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:

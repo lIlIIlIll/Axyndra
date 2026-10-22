@@ -33,7 +33,9 @@ class RpcFrontendTask113 {
 class RpcFrontendShutdown113 {
     private let metadata: LogicalJsonOwnerReservation
     private let lock = Mutex()
-    private let output = RpcOutput()
+    private let output: RpcOutput
+    private let io180: CliIo180
+    private let observerPayment180: ?LogicalJsonOwnerReservation
     private var session: ?ApplicationSession = None<ApplicationSession>
     private var server: ?ProductJsonlRpcServer = None<ProductJsonlRpcServer>
     private var startup: ?RpcFrontendTask113 = None<RpcFrontendTask113>
@@ -50,16 +52,25 @@ class RpcFrontendShutdown113 {
     private let exitRequested = AtomicBool(false)
     private let expired = AtomicBool(false)
 
-    init(metadata: LogicalJsonOwnerReservation) { this.metadata = metadata }
+    init(metadata: LogicalJsonOwnerReservation, io180!: CliIo180 = consoleCliIo180,
+        observerPayment180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>) {
+        this.metadata = metadata; this.output = RpcOutput(io: io180); this.io180 = io180; this.observerPayment180 = observerPayment180
+    }
 
-    func install113(product: ProductRuntime): ApplicationSession {
-        let actual = product.applicationSession()
+    func install113(product: ProductRuntime, session180!: ?ApplicationSession = None<ApplicationSession>): ApplicationSession {
+        let actual = session180 ?? product.applicationSession()
         session = Some(actual)
         // The registered Session subscriber retains this exact controller via
         // emit; its metadata never depends on a disappearing local holder.
         server = Some(ProductJsonlRpcServer(actual,
-            { frame => writePlain113(frame) }, ownedOutput: Some<OwnedRpcFrameOutput>(output)))
+            { frame => writePlain113(frame) }, { bytes => deriveWorkerMetadata113(bytes) },
+            ownedOutput: Some<OwnedRpcFrameOutput>(output), observerPayment180: observerPayment180))
         actual
+    }
+    private func deriveWorkerMetadata113(bytes: Int64): LogicalJsonOwnerReservation {
+        let paid = metadata.deriveRetainedLease()
+        try { paid.ensureRetainedPeak(bytes); paid }
+        catch (error: Exception) { paid.close(); throw error }
     }
     func server113(): ProductJsonlRpcServer { server.getOrThrow() }
     func writePlain113(frame: String): Unit { output.write(frame) }
@@ -126,7 +137,7 @@ class RpcFrontendShutdown113 {
                         if (size < 0 || size > (Int64.Max - 65536) / 8) {
                             throw IllegalStateException("rpc.startup_output_extent_overflow") }
                         task.metadata.getOrThrow().ensureRetainedPeak(65536 + size * 8)
-                        printError(error)
+                        printError(error, io: io180)
                     }
             }
         } catch (failure: OwnedCanonicalPaidFailure113) {
@@ -198,7 +209,8 @@ class RpcFrontendShutdown113 {
                 let dataClear = actual.collectFrontendOutputRetirement113()
                 let workersClear = actual.collectRunWorkerRetirement113()
                 if (startupReturned.load() && dataClear && workersClear &&
-                    session.getOrThrow().queuedCount() == 0) {
+                    session.getOrThrow().queuedCount() == 0 &&
+                    (observerPayment180.isNone() || actual.retireFrontendSubscriptions180())) {
                     cleanupReady.store(true); return
                 }
                 sleep(Duration.millisecond * 10)
@@ -208,8 +220,11 @@ class RpcFrontendShutdown113 {
         catch (failure: Exception) { captureException113(task, failure) }
     }
 
-    // The only completion query used by the parent. It touches this short
-    // metadata lock and Future.tryGet, never server/frame/output/stdout locks.
+    private func joinOriginalTaskHelper113(task: RpcFrontendTask113): Unit {
+        task.future.getOrThrow().get()
+    }
+    // tryGet only selects an already-ready original Future. The complete
+    // private get helper, not the readiness query, precedes alias removal.
     // A successful helper removes Future/cell aliases before returning a lease.
     private func takeReturnedTaskLease113(kind: Int64): ?LogicalJsonOwnerReservation {
         lock.lock()
@@ -221,6 +236,8 @@ class RpcFrontendShutdown113 {
             let returned = try { actual.tryGet().isSome() }
                 catch (_: Exception) { value.unavailable = true; debt.store(true); false }
             if (!returned) { return None<LogicalJsonOwnerReservation> }
+            try { joinOriginalTaskHelper113(value) }
+            catch (_: Exception) { value.unavailable = true; debt.store(true); return None<LogicalJsonOwnerReservation> }
             value.future = None<Future<Unit>>
             let paid = value.metadata
             value.metadata = None<LogicalJsonOwnerReservation>
@@ -256,6 +273,17 @@ class RpcFrontendShutdown113 {
         // Root still holds every unACKed source/output/secondary and Future.
         // Returning nonzero is not a physical exit/kill or consumption receipt.
         1
+    }
+    func retireOwnerFrontendReferences180(): Bool {
+        collectFinishedTasks113()
+        lock.lock()
+        try {
+            if (observerPayment180.isNone() || !cleanupReady.load() || debt.load() ||
+                startup.isSome() || pump.isSome() || cleanup.isSome() || startupStaging.isSome() ||
+                pumpStaging.isSome() || cleanupStaging.isSome()) { return false }
+            server = None<ProductJsonlRpcServer>; session = None<ApplicationSession>
+            true
+        } finally { lock.unlock() }
     }
     func finishRootStatus113(status: Int64): Int64 {
         // This explicit use AFTER serveRpc's return keeps the Root-scope owner

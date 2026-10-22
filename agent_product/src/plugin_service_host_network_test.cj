@@ -236,7 +236,7 @@ class PluginServiceHostNetworkTests {
             approvalMode: ApprovalMode.AlwaysAsk, asyncEnabled: false)))
         let database = SqliteDatabase(files.root + "/state/state.db")
         let port = LifecycleCleanupGate(files.workspace)
-        let owner = ProductPluginLifecycleOwner(database, port)
+        let owner = ProductPluginLifecycleOwner(database, port, operations: product.vnext.operations)
         try {
             let service = files.service(); service.put("executable", textValue("/usr/bin/cat")); service.put("arguments", listValue([]))
             service.put("network", networkPolicyCanonicalValue(NetworkPolicy(NetworkPolicyMode.HostNetwork)))
@@ -245,7 +245,8 @@ class PluginServiceHostNetworkTests {
             let context = ToolInvocationContext(RunId("scope-only"), SessionId("custom-port-target"), productCapabilities(),
                 epoch: 1, toolContext: productToolContext(files.workspace))
             let grant = lifecycleTestRequire(config.bindService("stdio", ThreadId("custom-port-target"), "custom-port-instance",
-                files.workspace, ExecutionResourceLimits(), pluginInvocationAuthorityScope(context)))
+                files.workspace, ExecutionResourceLimits(), pluginInvocationAuthorityScope(context),
+                registryAdmission: Some(files.registryAdmission())))
             let control = ProductPluginLifecycleControl(owner)
             lifecycleTestRequire(product.registerTool(control.descriptor(), control))
             let result = control.launch(product.vnext, SessionId("custom-port-maintenance"), grant, productCapabilities(),

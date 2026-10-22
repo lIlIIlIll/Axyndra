@@ -1327,11 +1327,14 @@ class PluginRuntimeContractTests {
             "{\"name\":\"command-only\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"extensions/index.js\"]}}".toArray())
         File.writeTo(source + "/extensions/index.js", (
             "export default function (pi) {\n" +
-            "  pi.registerCommand('inspect', { description: 'Inspect state', handler: async () => {} });\n" +
+            "  pi.registerCommand('inspect', { description: 'Inspect state', handler: async (args, ctx) => {\n" +
+            "    if (ctx.cwd !== args || ctx.signal.aborted || ctx.hasUI !== false) throw new Error('command context mismatch');\n" +
+            "  } });\n" +
             "}\n"
         ).toArray())
         let product = match (openProduct(config: ProductConfig(
-            settingsRoot: settings, stateRoot: state, workspaceRoot: workspace, fixture: true
+            settingsRoot: settings, stateRoot: state, workspaceRoot: workspace, fixture: true,
+            approvalMode: ApprovalMode.Yolo
         ))) {
             case Result.Ok(value) => value
             case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
@@ -1358,6 +1361,7 @@ class PluginRuntimeContractTests {
             if (commands.size == 1) {
                 @Expect(commands[0].routeName, "plugin." + productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + ".inspect")
                 @Expect(commands[0].description, "Inspect state")
+                @Expect(product.applicationSession().invokeJavaScriptPluginCommand(commands[0].routeName, workspace, { _, _ => () }).isOk(), true)
             }
             let disabled = match (product.setPluginEnabled(
                 productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), false, PluginInstallScope.Workspace
@@ -1375,9 +1379,77 @@ class PluginRuntimeContractTests {
                 case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             @Expect(product.applicationSession().javascriptPluginCommands().size, 1)
+            let unsupportedSource = workspace + "/unsupported-plugin"
+            Directory.create(unsupportedSource, recursive: true)
+            File.writeTo(unsupportedSource + "/package.json", (
+                "{\"name\":\"unsupported-type\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"index.js\"]}}"
+            ).toArray())
+            File.writeTo(unsupportedSource + "/index.js", (
+                "import { Type } from 'typebox';\n" +
+                "export default function (pi) { Type.Number(); }\n"
+            ).toArray())
+            let unsupported = match (product.importLocalPlugin(unsupportedSource, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
+            }
+            let unsupportedNamespace = productRegistryCopyText83(unsupported.descriptor.copyText(PluginDescriptorText.Namespace))
+            @Expect(match (product.setPluginEnabled(unsupportedNamespace, true, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Err(error) => error.code == "extension.pi_type_unsupported"
+                case PluginRegistryResult.Ok(_) => false
+            }, true)
+            var unsupportedFound = false
+            for (record in productRegistryRecords83(product.pluginSnapshots())) {
+                if (productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == unsupportedNamespace) {
+                    unsupportedFound = true
+                    @Expect(record.enabled, false)
+                }
+            }
+            @Expect(unsupportedFound, true)
+            @Expect(product.applicationSession().javascriptPluginCommands().size, 1)
             let closeResult = product.close()
             @Expect(closeResult.isOk(), true)
             @Expect(product.applicationSession().javascriptPluginCommands().size, 0)
+        } finally {
+            let _ = product.close()
+            remove(root, recursive: true)
+        }
+    }
+
+    @TestCase
+    func publicPiToolPreservesUnsupportedContextDiagnostic(): Unit {
+        let root = pluginContractTemp("pi-unsupported-context")
+        let settings = root + "/home"
+        let workspace = root + "/workspace"
+        let source = workspace + "/plugin"
+        Directory.create(source, recursive: true)
+        File.writeTo(source + "/package.json", (
+            "{\"name\":\"unsupported-context\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"index.js\"]}}"
+        ).toArray())
+        File.writeTo(source + "/index.js", (
+            "import { Type } from 'typebox';\n" +
+            "export default function (pi) { pi.registerTool({\n" +
+            "name: 'probe', label: 'Probe', description: 'Unsupported context probe',\n" +
+            "parameters: Type.Object({}), execute: async (_id, _args, _signal, _update, ctx) => ctx.sessionManager\n" +
+            "}); }\n"
+        ).toArray())
+        let product = match (openProduct(config: ProductConfig(
+            settingsRoot: settings, stateRoot: root + "/state", workspaceRoot: workspace,
+            fixture: true, approvalMode: ApprovalMode.Yolo
+        ))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        try {
+            let imported = match (product.importLocalPlugin(source, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
+            }
+            let namespace = productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace))
+            @Expect(product.setPluginEnabled(namespace, true, PluginInstallScope.Workspace).isOk(), true)
+            @Expect(match (product.applicationSession().invokeLocalTool("plugin." + namespace + ".probe", objectValue([]))) {
+                case Result.Err(error) => error.code == "extension.pi_context_unsupported" && error.message.contains("sessionManager")
+                case Result.Ok(value) => value.releasePayload(); false
+            }, true)
         } finally {
             let _ = product.close()
             remove(root, recursive: true)

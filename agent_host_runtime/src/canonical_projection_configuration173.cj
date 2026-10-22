@@ -61,7 +61,7 @@ public class HostCanonicalProjectionSelection173 {
             // installed snapshot for the entire captured alias lifetime.
             let bytes = encoded.toArray()
             let code = unsafe {
-                let source = LibC.mallocCString(path)
+                let source = LibC.mallocCString(hostPhysicalReadResourcePath180(path))
                 try {
                     let expected = LibC.mallocCString(witness)
                     try {

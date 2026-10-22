@@ -2,9 +2,10 @@ package agent_host_runtime
 
 import agent_domain.*
 import agent_runtime.*
-import agent_plugin_registry.{PluginRegistry, ProductPluginRecord, PluginRegistryResult}
+import agent_plugin_registry.{PluginRegistry, ProductPluginRecord, PluginRegistryResult, copyVerifiedPluginSnapshot}
 import agent_extension_runtime.{JavaScriptToolDescriptor, reserveNativeControlMetadata}
 import tool_runtime.*
+import std.env.*
 import std.fs.*
 import std.sync.*
 import std.time.*
@@ -183,3 +184,56 @@ class ActualOwnedCatalogSnapshot159cTests {
         try { catalogSnapshotActual159c(true) } finally { setup.close() }
     }
 }
+
+private func ordinaryCatalogRecord221(value: PluginRegistryResult<ProductPluginRecord>): ProductPluginRecord {
+    match (value) {
+        case PluginRegistryResult.Ok(record) => record
+        case PluginRegistryResult.Err(error) =>
+            try { throw IllegalStateException(error.code) } finally { error.close() }
+    }
+}
+
+@Test
+class OrdinaryCatalogLifetimeSmoke221 {
+    @TestCase
+    func actualPlainNativeCatalogRetiresAfterItsWholePublicationReturns(): Unit {
+        let parent = match (getVariable("TMPDIR")) {
+            case Some(value) => value
+            case None => "/tmp"
+        }
+        let fixture = match (getVariable("AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE")) {
+            case Some(value) => value
+            case None => throw IllegalStateException("original Native tool fixture is required")
+        }
+        let root = Directory.createTemp(parent).toString()
+        let source = root + "/source"
+        Directory.create(source, recursive: true)
+        copyVerifiedPluginSnapshot(fixture[..fixture.lastIndexOf("/").getOrThrow()], source)
+        File.writeTo(source + "/axyndra.plugin.json", (
+            "{\"id\":\"ordinary-catalog\",\"version\":\"1.0.0\"," +
+            "\"entry_kind\":\"native-executable\",\"entrypoint\":\"native-plugin-tool\"," +
+            "\"sdk_range\":\"[2.0.0,3.0.0)\",\"protocol_range\":\"axyndra-js-host-v2\"," +
+            "\"contributions\":[{\"kind\":\"tool\",\"name\":\"echo\"}]}"
+        ).toArray())
+        let registry = PluginRegistry(root + "/settings", root)
+        let host = HostJavaScriptPluginHost({ path => HostLocalReadTargetInspector(path) }, settingsRoot: root + "/settings")
+        let catalog = ToolCatalog()
+        try {
+            ordinaryCatalogRecord221(registry.importLocal(source)).close()
+            let record = ordinaryCatalogRecord221(registry.setEnabled("axyndra:ordinary-catalog", true))
+            try {
+                @Expect(host.ownRegistry(registry).isOk())
+                @Expect(hostMountAndRegisterPluginTools(record, host, catalog).isOk())
+                @Expect(catalog.definitionNamesEqual159(["plugin.axyndra:ordinary-catalog.echo"]))
+                // No public Raw descriptor or snapshot escaped this Catalog.
+                // The distinct Host generation still owns its legacy graph.
+                @Expect(catalog.retireCatalogData159())
+            } finally { record.close() }
+        } finally {
+            let _ = host.close()
+            registry.close()
+            remove(root, recursive: true)
+        }
+    }
+}
+

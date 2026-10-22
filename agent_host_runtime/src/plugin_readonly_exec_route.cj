@@ -108,7 +108,7 @@ public class HostPluginReadOnlyExecTarget {
         caps.add(Capability(CapabilityKind.ExtensionInvoke, resource: name))
         let child = ToolInvocationContext(parent.runId, parent.sessionId, CapabilitySet(values: caps.toArray()),
             sequence: parent.currentSequence(), epoch: parent.epoch,
-            toolContext: ToolContextDescriptor(workspaceRoot: parent.workspaceRoot, cwd: parent.cwd, environment: parent.environment, services: parent.services),
+            toolContext: ToolContextDescriptor(workspaceRoot: parent.workspaceRoot, cwd: parent.cwd, environment: parent.environment, services: parent.services, executionSettings180: parent.executionSettings180, modelFaultCounters180: parent.modelFaultCounters180),
             cancellation: parent.cancellation, approvalModeOverride: parent.approvalModeOverride, outputSink: parent.outputSink,
             budget: parent.budget, budgetModeFn: parent.budgetModeFn, contextProjection: parent.contextProjection, toolSetSnapshot: parent.legacyToolSetSnapshot159,
             ownedToolSetSnapshot159: parent.forkOwnedToolSetSnapshot159())

@@ -18,6 +18,7 @@ type HostNativeProcessChannelQueue = HostProcessChannelQueue
 // raw I/O only; protocol framing and semantic results belong to the plugin.
 public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhysicalProcessObservation & HostManagedChannelNamespaceObservation {
     private let command: process.ManagedProcess
+    private let cancellation: CancellationToken
     private let registryAdmission: ?() -> Result<PluginRegistryExecutionFence>
     private let stdout = HostNativeProcessChannelQueue()
     private let stderr = HostNativeProcessChannelQueue()
@@ -103,6 +104,7 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
             throw IllegalArgumentException("process channel requires finite lifetime and byte limits")
         }
         this.command = command
+        this.cancellation = cancellation
         this.registryAdmission = registryAdmission
         this.maxInputBytes = maxInputBytes
         this.maxOutputBytes = maxOutputBytes
@@ -122,9 +124,9 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
             this.monitor = Some(spawn {
             var leaderExited = false
             while (!isStopping()) {
-                if (cancellation.isCancelled()) {
-                    stopWith(hostNativeChannelError("process.channel_cancelled", "process channel was cancelled"))
-                    break
+                match (cancellation.check()) {
+                    case Result.Err(cause) => stopWith(cause); break
+                    case Result.Ok(_) => ()
                 }
                 if (timeoutMillis > 0 && (MonoTime.now() - started).toMilliseconds() >= timeoutMillis) {
                     stopWith(hostNativeChannelError("process.channel_deadline", "process channel lifetime elapsed"))
@@ -257,6 +259,7 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
         stateLock.lock()
         try {
             if (stopping || inputClosing || inputClosed) {
+                match (terminalCause) { case Some(error) => return Result.Err(error); case None => () }
                 return Result.Err(hostNativeChannelError("process.channel_closed", "process channel input is closed"))
             }
             if (bytes.size > maxInputBytes - inputBytes) {
@@ -336,7 +339,10 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
         }
         stateLock.lock()
         try {
-            if (stopping) { return Result.Err(hostNativeChannelError("process.channel_closed", "process channel is closed")) }
+            if (stopping) {
+                match (terminalCause) { case Some(error) => return Result.Err(error); case None => () }
+                return Result.Err(hostNativeChannelError("process.channel_closed", "process channel is closed"))
+            }
             if (inputClosed) { return Result.Ok(()) }
             if (inputClosing) {
                 return Result.Err(hostNativeChannelError("process.channel_half_close_pending", "process channel input closure is pending"))
@@ -362,19 +368,44 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
             Result.Ok(naturalExit)
         } finally { stateLock.unlock() }
     }
+    public func closeGracefully(plan:NormalizedOperationPlan,requestedGraceMillis:Int64):Result<Unit>{
+        let ceiling=match(processShutdownPlanGrace(plan)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        if(requestedGraceMillis<0 || requestedGraceMillis>ceiling){
+            return Result.Err(hostNativeChannelError("process.channel_grace_invalid","requested grace exceeds frozen normalized policy"))}
+        let graceMillis=requestedGraceMillis
+        if(!isStopping()){
+            match(closeInput()){case Result.Err(error)=>let _=abort();return Result.Err(error);case Result.Ok(_)=>()}
+            let started=MonoTime.now()
+            // Elapsed subtraction preserves every nonnegative Int64 without
+            // overflow or silently clamping the operator's duration.
+            while(!isStopping() && (MonoTime.now()-started).toMilliseconds()<graceMillis){
+                stateLock.lock();let exited=try{naturalExit.isSome()}finally{stateLock.unlock()}
+                if(exited && stdoutDone.load() && stderrDone.load()){break}
+                sleep(Duration.millisecond)
+            }
+        }
+        // Actual wait/reap, both reader and monitor Future.get(), native close
+        // and reservation return still use the existing acknowledged path.
+        close()
+    }
     public func abort(): Result<Unit> {
-        stopWith(hostNativeChannelError("process.channel_cancelled", "process channel was cancelled"))
+        let cause = match (cancellation.check()) {
+            case Result.Err(error) => error
+            case Result.Ok(_) => hostNativeChannelError("process.channel_cancelled", "process channel was cancelled")
+        }
+        stopWith(cause)
         Result.Ok(())
     }
     public func close(): Result<Unit> {
         closeLock.lock()
         try {
-            if (closed) { return Result.Ok(()) }
-            if (!cleanupStarted || (cleanupDone.load() && cleanupFailed.load())) {
+            if (!closed && (!cleanupStarted || (cleanupDone.load() && cleanupFailed.load()))) {
                 cleanupStarted = true
                 cleanupDone.store(false)
                 cleanupFailed.store(false)
-                stopWith(hostNativeChannelError("process.channel_closed", "process channel is closed"), signal: false)
+                let cause = match (cancellation.check()) { case Result.Err(error) => error
+                    case Result.Ok(_) => hostNativeChannelError("process.channel_closed", "process channel is closed") }
+                stopWith(cause, signal: false)
                 // Keep every blocking native call and join in an owned cleanup
                 // task. A stuck cleanup keeps its lease/reservation and never
                 // turns a bounded close request into an unbounded wait.
@@ -391,6 +422,9 @@ public class HostNativeProcessChannel <: ProcessChannel & HostManagedChannelPhys
         if (cleanupFailed.load()) {
             return Result.Err(hostNativeChannelError("process.channel_close_failed", "process channel cleanup failed and remains retained"))
         }
+        closeLock.lock();let returned=try{cleanupFuture}finally{closeLock.unlock()}
+        try{match(returned){case Some(value)=>value.get();case None=>()}}
+        catch(_:Exception){return Result.Err(hostNativeChannelError("process.channel_close_failed","cleanup Future did not return successfully"))}
         Result.Ok(())
     }
     private func cleanup(): Unit {

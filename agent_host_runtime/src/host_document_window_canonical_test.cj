@@ -94,7 +94,7 @@ class WindowCanonicalFixture{
                     Result<Unit>.Ok(())}))
         this.root=selectedRoot;this.database=selectedDatabase;this.runtime=selectedRuntime
         this.store=DurableOperationStore(selectedDatabase);this.active=selectedActive
-        this.artifacts=HostArtifactStore(selectedRoot+"/artifacts",database:Some(selectedDatabase))
+        this.artifacts=HostArtifactStore(selectedRoot+"/artifacts",database:Some(selectedDatabase),operations:Some(store))
         this.parent=selectedParent;this.binding=selectedBinding;this.cancellation=selectedCancellation
     }
     func current():Result<Unit>{

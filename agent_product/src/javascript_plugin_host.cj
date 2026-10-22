@@ -23,6 +23,8 @@ public type ProductJavaScriptPluginInvocationResult = agent_host_runtime.HostJav
 
 public type ProductJavaScriptPluginCommand = agent_host_runtime.HostJavaScriptPluginCommand
 
+public type ProductJavaScriptPluginView = agent_host_runtime.HostJavaScriptPluginView
+
 public type ProductJavaScriptPluginHook = agent_host_runtime.HostJavaScriptPluginHook
 
 public class ProductJavaScriptPluginHost <: agent_host_runtime.HostJavaScriptPluginHost {

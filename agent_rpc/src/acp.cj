@@ -15,9 +15,25 @@ import std.sync.*
 
 public type AcpProductFactory = (String) -> Result<ProductRuntime>
 public type AcpProductCloser = (ProductRuntime) -> Result<Unit>
+public type AcpApplicationFactory180 = (ProductRuntime, ?SessionId) -> ApplicationSession
+
+// Standalone ACP owns its Product; an owner-backed ACP peer owns an actual
+// DATA loan to the longliving Root instead. Both lifetimes have real close.
+enum AcpProductScope180 {
+    Standalone(AcpProductCloser) | RootLoan(LogicalJsonOwnerReservation)
+    func close180(product: ProductRuntime): Result<Unit> {
+        match (this) {
+            case Standalone(closer) => closer(product)
+            case RootLoan(paid) => paid.close(); Result.Ok(())
+        }
+    }
+}
 
 public class ProductAcpServer {
     private let host: ProductRuntime
+    private let requestIdAllocator180: ?(() -> Int64)
+    private let applicationFactory180: AcpApplicationFactory180
+    private let sharedRootPayment180: ?LogicalJsonOwnerReservation
     private let factory: AcpProductFactory
     private let closer: AcpProductCloser
     private let hostOwner: AcpProductOwner
@@ -58,9 +74,15 @@ public class ProductAcpServer {
         closer!: AcpProductCloser = closeAcpProduct,
         control113!: AcpOwnedWorkerControl113 = newAcpOwnedWorkerControl113(),
         ownedFailureOutput113!: ?OwnedRpcFailureOutput113 = None<OwnedRpcFailureOutput113>,
-        ownedResponseOutput113!: ?AcpOwnedResponseOutput113 = None<AcpOwnedResponseOutput113>
+        ownedResponseOutput113!: ?AcpOwnedResponseOutput113 = None<AcpOwnedResponseOutput113>,
+        sharedRootPayment180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>,
+        applicationFactory180!: AcpApplicationFactory180 = { product, id => product.applicationSession(sessionId: id) },
+        requestIdAllocator180!: ?(() -> Int64) = None<() -> Int64>
     ) {
         this.control113 = control113
+        this.requestIdAllocator180 = requestIdAllocator180
+        this.applicationFactory180 = applicationFactory180
+        this.sharedRootPayment180 = sharedRootPayment180
         this.ownedResponseOutput113 = ownedResponseOutput113
         this.responses113 = AcpOwnedResponseRegistry113(control113)
         this.closeJournal113 = AcpOwnedCloseJournal113(control113)
@@ -71,10 +93,24 @@ public class ProductAcpServer {
         this.emit = emit
         this.closer = closer
         let hostMetadata = control113.prepareMetadata113(65536)
-        this.hostOwner = AcpProductOwner(host, closer, control113, closeJournal113, hostMetadata)
+        let scope = match (sharedRootPayment180) {
+            case None => AcpProductScope180.Standalone(closer)
+            case Some(root) => let paid = root.deriveRetainedLease()
+                paid.ensureRetainedPeak(65536); AcpProductScope180.RootLoan(paid)
+        }
+        this.hostOwner = AcpProductOwner(host, scope, control113, closeJournal113, hostMetadata)
         hostMetadata.observeHelperReturned113()
         this.hostOwner.retain()
         if (ownedResponseOutput113.isNone()) { control113.registerUnsafeFixtureServer113(this) }
+    }
+    private func productScope180(): AcpProductScope180 {
+        match (sharedRootPayment180) {
+            case None => AcpProductScope180.Standalone(closer)
+            case Some(root) =>
+                let paid = root.deriveRetainedLease()
+                paid.ensureRetainedPeak(65536)
+                AcpProductScope180.RootLoan(paid)
+        }
     }
     // Production accepts the actual paid source, and returns no escaping
     // String/DOM. Main retires that source only after this whole helper returns.
@@ -515,6 +551,12 @@ public class ProductAcpServer {
         }
     }
 
+    // The authenticated native ACP coordinator already consumed the real
+    // initialize response on its first Owner. A newly selected workspace
+    // connection installs that same protocol state, without manufacturing a
+    // duplicate response or acknowledging any unpublished output.
+    public func initializeOwnerConnection180(): Unit { let _ = initialize() }
+
     private func initialize(): Result<AgentValue> {
         lock.lock()
         try {
@@ -610,8 +652,8 @@ public class ProductAcpServer {
             case Result.Ok(item) => item
             case Result.Err(error) => return Result.Err(error)
         }
-        let owner = AcpProductOwner(product, closer, control113, closeJournal113, metadata)
-        let session = product.applicationSession()
+        let owner = AcpProductOwner(product, productScope180(), control113, closeJournal113, metadata)
+        let session = applicationFactory180(product, None<SessionId>)
         match (product.replaceMessages(session.id(), [])) {
             case Result.Ok(_) => ()
             case Result.Err(error) =>
@@ -773,7 +815,7 @@ public class ProductAcpServer {
         }
         let record = AcpSessionRecord(
             source.owner,
-            source.product.applicationSession(sessionId: Some(target)),
+            applicationFactory180(source.product, Some(target)),
             source.cwd,
             control113, metadata
         )
@@ -1397,7 +1439,7 @@ public class ProductAcpServer {
                     case Result.Ok(value) => value
                     case Result.Err(error) => return Result.Err(error)
                 }
-                let owner = AcpProductOwner(product, closer, control113, closeJournal113, metadata)
+                let owner = AcpProductOwner(product, productScope180(), control113, closeJournal113, metadata)
                 if (product.workspace.rootPath() != workspace) {
                     let error = AgentError(
                         AgentErrorKind.Conflict,
@@ -1427,7 +1469,7 @@ public class ProductAcpServer {
                 }
                 let record = AcpSessionRecord(
                     owner,
-                    product.applicationSession(sessionId: Some(SessionId(sessionId))),
+                    applicationFactory180(product, Some(SessionId(sessionId))),
                     persistedCwd,
                     control113, metadata
                 )
@@ -1571,6 +1613,7 @@ public class ProductAcpServer {
         } finally { lock.unlock() }
     }
     private func nextRequestId(): Int64 {
+        match (requestIdAllocator180) { case Some(allocate) => return allocate(); case None => () }
         lock.lock()
         try {
             requestCounter += 1
@@ -2089,16 +2132,16 @@ class AcpProductOwner {
     private var fixtureProductCleanupSucceeded113 = false
     private var fixtureProductCleanup113: ?AcpOwnedCloseProducer113 = None<AcpOwnedCloseProducer113>
 
-    private let closer: AcpProductCloser
+    private let scope180: AcpProductScope180
     private let lock = Mutex()
     private var references: Int64 = 0
     private var closed = false
     private var closeError: ?AgentError = None
 
-    init(product: ProductRuntime, closer: AcpProductCloser, control113: AcpOwnedWorkerControl113, closeJournal113: AcpOwnedCloseJournal113, metadata113: AcpOwnedMetadata113) {
+    init(product: ProductRuntime, scope180: AcpProductScope180, control113: AcpOwnedWorkerControl113, closeJournal113: AcpOwnedCloseJournal113, metadata113: AcpOwnedMetadata113) {
         this.metadata113 = metadata113
         this.product = product
-        this.closer = closer
+        this.scope180 = scope180
         this.control113 = control113
         this.closeJournal113 = closeJournal113
         metadata113.setGuard113({ => clearCompatibilityCacheAfterCallerReturn113() })
@@ -2165,7 +2208,7 @@ class AcpProductOwner {
         closeProducer113 = Some(producer)
         producer.setRetirementGuard113({ => clearCompatibilityCacheAfterCallerReturn113() })
         closeInvoked113 = true
-        let result = producer.run113({ => closer(product) })
+        let result = producer.run113({ => scope180.close180(product) })
         producer.observeReturned113()
         if (control113.isUnsafeFixtureUnitScope113()) {
             // Register/fund BEFORE the additional actual Product callback.
@@ -2320,7 +2363,7 @@ func acpOperationAndCloseFailure<T>(
     }
 }
 
-func canonicalAcpCwd(value: String): Result<String> {
+public func canonicalAcpCwd(value: String): Result<String> {
     if (!isAbsolutePath(value)) {
         return acpInvalid("cwd must be an absolute path")
     }

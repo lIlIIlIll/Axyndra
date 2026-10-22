@@ -75,7 +75,8 @@ func documentProtocolIdentity(frame: JsonNode, hello: JsonNode, contextEnabled!:
 }
 
 func documentProtocolReady(hello: JsonNode, id: String, version: String,
-    tools: JsonNode, commands: Array<String>, providers: Array<String>, contexts!: Array<String> = []): Unit {
+    tools: JsonNode, commands: Array<String>, providers: Array<String>, contexts!: Array<String> = [],
+    views!: Array<String> = []): Unit {
     if (providerText(hello, "type") != "hello" || providerInteger(hello, "generation") < 1 ||
         providerText(hello, "protocol") != "axyndra-js-host-v2" || providerText(hello, "extension_id") != id ||
         providerText(hello, "extension_version") != version || tools.unifiedKind != UnifiedJsonKind.List || tools.items.isEmpty()) {
@@ -105,6 +106,10 @@ func documentProtocolReady(hello: JsonNode, id: String, version: String,
     fields.add(JsonObjectEntry("tools", tools))
     fields.add(JsonObjectEntry("commands", jsonArray(commands.map { name => jsonObject([
         JsonObjectEntry("name", jsonString(name)), JsonObjectEntry("description", jsonString("Pure user command proposal"))]) })))
+    // Only emitted when declared: an always-present empty array would enlarge
+    // every plugin's ready frame for no contract content.
+    if (!views.isEmpty()) { fields.add(JsonObjectEntry("views", jsonArray(views.map { name => jsonObject([
+        JsonObjectEntry("name", jsonString(name)), JsonObjectEntry("description", jsonString("Pure declarative view"))]) }))) }
     fields.add(JsonObjectEntry("hooks", jsonArray([])))
     fields.add(JsonObjectEntry("providers", jsonArray(providers.map { name => jsonObject([
         JsonObjectEntry("name", jsonString(name)), JsonObjectEntry("description", jsonString("Pure policy data")),
@@ -126,11 +131,14 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
     execute: (String, JsonNode, DocumentPolicyBroker) -> DocumentPolicyToolResult,
     command: (String, JsonNode) -> JsonNode,
     contextProviders!: Array<String> = [], contextHandler!: ?(String, JsonNode) -> JsonNode = None,
+    views!: Array<String> = [],
     primitiveTools!: Array<String> = [],
     primitiveExecute!: ?(String, JsonNode, FrozenPrimitiveBroker111) -> DocumentPolicyToolResult = None): Int64 {
     if (getCommandLine().size != 1 || providers.isEmpty() || providers.size > 32 || commands.size > 32 ||
         tools.unifiedKind != UnifiedJsonKind.List || tools.items.isEmpty() || tools.items.size > 32) { return 2 }
     if (contextProviders.size>32 || (!contextProviders.isEmpty() && contextHandler.isNone())) { return 2 }
+    let viewNames=HashSet<String>()
+    for (name in views) { if (!httpIntentIdentifier(name) || viewNames.contains(name)) { return 2 }; viewNames.add(name) }
     let contexts=HashSet<String>()
     for (name in contextProviders) {
         if (!httpIntentIdentifier(name) || contexts.contains(name)) { return 2 }; contexts.add(name)

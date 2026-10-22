@@ -246,7 +246,8 @@ class ProductTuiBackendPlanReviewTests {
             ).value().getOrThrow()
             actualProduct205 = Some(product)
             installAppPlanWorkflowFixture(product)
-            let backend = ProductTuiBackend(product)
+            let backend = ProductTuiBackend(product, applicationSession: product.applicationSession())
+            backend.initializeFrontend180()
             let events = ArrayList<TuiAgentEvent>()
             let sink: TuiAgentEventSink = {event => events.add(event)}
             let opened = backend.submit("/plan fixture plan write", sink)
@@ -368,6 +369,7 @@ class ProductTuiBackendPlanReviewTests {
             installAppPlanWorkflowFixture(product)
             let applicationSession = product.applicationSession()
             let backend = ProductTuiBackend(product, applicationSession: applicationSession)
+            backend.initializeFrontend180()
             let sink: TuiAgentEventSink = {_ => ()}
             let opened = backend.submit("/plan fixture plan write", sink)
             let openedBody = match (opened.action) {

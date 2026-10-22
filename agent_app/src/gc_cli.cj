@@ -12,10 +12,10 @@ import std.convert.*
 func runGcCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printGcHelp()
+        printGcHelp(io: io)
         return 0
     }
     let parseError = gcParseError(arguments)
@@ -74,13 +74,13 @@ func runGcCli(
     let result = match (session.garbageCollect(options)) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (hasArgument(arguments, "--json")) {
-        println(encodeAgentValue(gcResultValue(result)))
+        io.println(encodeAgentValue(gcResultValue(result)))
     } else {
-        printGcText(result)
+        printGcText(result, io: io)
     }
     let errors = collectGcResultErrors(result)
     if (!errors.isEmpty()) {
@@ -268,21 +268,21 @@ func walGcValue(value: ProductWalGcResult): AgentValue {
     ])
 }
 
-func printGcText(result: ProductGcResult): Unit {
-    println(
+func printGcText(result: ProductGcResult, io!: CliIo180 = consoleCliIo180): Unit {
+    io.println(
         "GC " + if (result.apply) { "applied" } else { "dry-run" } +
             " (" + result.agentDir + ")"
     )
     match (result.blobs) {
         case Some(value) =>
-            println(
+            io.println(
                 "blobs: " + value.deleted.toString() + "/" +
                     value.wouldDelete.toString() + " files, " +
                     formatGcBytes(value.bytes) + ", " +
                     value.referenced.toString() + " refs"
             )
             if (!value.errors.isEmpty()) {
-                println(
+                io.println(
                     "blob errors: " + value.errors.size.toString()
                 )
             }
@@ -290,20 +290,20 @@ func printGcText(result: ProductGcResult): Unit {
     }
     match (result.archive) {
         case Some(value) =>
-            println(
+            io.println(
                 "sessions: " + value.archived.toString() + "/" +
                     value.wouldArchive.toString() + " archived, " +
                     value.historyRowsDeleted.toString() +
                     " history rows removed"
             )
             if (value.skippedActive > 0) {
-                println(
+                io.println(
                     "sessions skipped active: " +
                         value.skippedActive.toString()
                 )
             }
             if (!value.errors.isEmpty()) {
-                println(
+                io.println(
                     "session errors: " + value.errors.size.toString()
                 )
             }
@@ -311,7 +311,7 @@ func printGcText(result: ProductGcResult): Unit {
     }
     match (result.wal) {
         case Some(value) =>
-            println(
+            io.println(
                 "wal: " + if (value.checkpointed) {
                     "checkpointed"
                 } else {
@@ -362,43 +362,43 @@ func gcOneDecimal(bytes: Int64, divisor: Int64): String {
         (tenths % 10).toString()
 }
 
-func printGcHelp(): Unit {
-    println("Run storage garbage collection")
-    println()
-    println("USAGE")
-    println("  $ axyndra gc [FLAGS]")
-    println()
-    println("FLAGS")
-    println(
+func printGcHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println("Run storage garbage collection")
+    io.println()
+    io.println("USAGE")
+    io.println("  $ axyndra gc [FLAGS]")
+    io.println()
+    io.println("FLAGS")
+    io.println(
         "      --apply                          " +
             "Apply changes (default is dry-run)"
     )
-    println("      --json                           Output JSON")
-    println(
+    io.println("      --json                           Output JSON")
+    io.println(
         "      --agent-dir=<value>              " +
             "Agent directory to maintain"
     )
-    println(
+    io.println(
         "      --blobs                          " +
             "Sweep unreferenced blobs"
     )
-    println(
+    io.println(
         "      --archive                        " +
             "Archive cold sessions"
     )
-    println(
+    io.println(
         "      --wal                            " +
             "Checkpoint history/model database WAL files"
     )
-    println(
+    io.println(
         "      --cold-archive-after-days=<int>  " +
             "Minimum session age before archiving"
     )
-    println(
+    io.println(
         "      --retain-newest-global=<int>     " +
             "Always keep this many newest sessions active"
     )
-    println(
+    io.println(
         "      --retain-newest-per-cwd=<int>    " +
             "Always keep this many newest sessions per cwd active"
     )

@@ -255,8 +255,9 @@ func completedInitiatorVisitOriginal173e(tx: SqliteTransaction,item: ThreadItem,
                     consume("initial."+column+":"+kind,raw)})
             }else{consume("initial."+column+":"+kind,raw)}})}
     let ra=[SqlParameter.Text(run),SqlParameter.Text(item.threadId.value),SqlParameter.Text(item.turnId.value)]
+    // v20 retired runs.continuation; exact canonical payload/digest were visited above.
     for(column in ["id","thread_id","turn_id","epoch","state","lane_snapshot","skill_snapshot","budget","usage",
-        "started_at_millis","finished_at_millis","cancellation_reason","app_snapshot","continuation"]){
+        "started_at_millis","finished_at_millis","cancellation_reason","app_snapshot"]){
         payment.raw173e(tx,column," FROM runs WHERE id=? AND thread_id=? AND turn_id=?",ra,
             {kind,raw=>consume("run."+column+":"+kind,raw)})}
     // Actual operation/effect/state/receipt and their exact canonical Items.

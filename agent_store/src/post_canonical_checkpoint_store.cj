@@ -16,19 +16,22 @@ public class SqlitePostCanonicalCheckpointStore {
     public init(database: SqliteDatabase, allocate: (Int64) -> LogicalJsonOwnerReservation) {
         this.database = database; this.allocate = allocate
     }
+    // Both values are synchronous DATA borrows from the actual producer. The
+    // semantic ToolCall arguments can be a subtree of its normalized wrapper;
+    // the complete original frozen plan is still compared independently.
     public func save(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         run: RunId, epoch: Int64, projection: InvocationContextProjection,
-        toolSet: ?ToolSetSnapshot, toolName: String, expectedPlan: NormalizedOperationPlan, result: ToolResult,
+        toolSet: ?ToolSetSnapshot, toolName: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult,
         createdAtMillis: Int64, guard: () -> Result<Unit>): Result<Unit> {
         saveCurrent(checkpoint, expected, run, epoch, projection, toolSet, toolName,
-            expectedPlan, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>)
+            expectedPlan, expectedCallArguments, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>)
     }
     public func saveDirect(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         projection: InvocationContextProjection, toolSet: ?ToolSetSnapshot, toolName: String,
-        expectedPlan: NormalizedOperationPlan, result: ToolResult, createdAtMillis: Int64, boundary: DirectPostCanonicalProjectionBoundary,
+        expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult, createdAtMillis: Int64, boundary: DirectPostCanonicalProjectionBoundary,
         guard: () -> Result<Unit>): Result<Unit> {
         boundary.consume({ => saveCurrent(checkpoint, expected, boundary.source.runId,
-            boundary.source.epoch, projection, toolSet, toolName, expectedPlan, result, createdAtMillis,
+            boundary.source.epoch, projection, toolSet, toolName, expectedPlan, expectedCallArguments, result, createdAtMillis,
             guard, Some(boundary)) })
     }
     // Retained canonical DATA for an actually finished Run. This does not
@@ -37,39 +40,39 @@ public class SqlitePostCanonicalCheckpointStore {
     // complete same-TX prefix/budget/record guards below remain mandatory.
     public func saveRetainedData173(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         run: RunId, epoch: Int64, projection: InvocationContextProjection,
-        toolSet: ?ToolSetSnapshot, expectedPlan: NormalizedOperationPlan, result: ToolResult,
+        toolSet: ?ToolSetSnapshot, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult,
         createdAtMillis: Int64, guard: () -> Result<Unit>): Result<Unit> {
         saveCurrent(checkpoint, expected, run, epoch, projection, toolSet, expectedPlan.toolName,
-            expectedPlan, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>, inactiveData173: true)
+            expectedPlan, expectedCallArguments, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>, inactiveData173: true)
     }
     // The supplied opaque share is a synchronous borrow. Its actual producer
     // retains ownership until this complete Store/TX helper has returned.
     public func saveOwned185(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         run: RunId, epoch: Int64, projection: InvocationContextProjection,
-        toolSet: SharedToolSetSnapshot159, toolName: String, expectedPlan: NormalizedOperationPlan, result: ToolResult,
+        toolSet: SharedToolSetSnapshot159, toolName: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult,
         createdAtMillis: Int64, guard: () -> Result<Unit>): Result<Unit> {
         saveCurrent(checkpoint, expected, run, epoch, projection, None<ToolSetSnapshot>, toolName,
-            expectedPlan, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>, ownedToolSet185: Some(toolSet))
+            expectedPlan, expectedCallArguments, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>, ownedToolSet185: Some(toolSet))
     }
     public func saveDirectOwned185(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         projection: InvocationContextProjection, toolSet: SharedToolSetSnapshot159, toolName: String,
-        expectedPlan: NormalizedOperationPlan, result: ToolResult, createdAtMillis: Int64, boundary: DirectPostCanonicalProjectionBoundary,
+        expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult, createdAtMillis: Int64, boundary: DirectPostCanonicalProjectionBoundary,
         guard: () -> Result<Unit>): Result<Unit> {
         boundary.consume({ => saveCurrent(checkpoint, expected, boundary.source.runId,
-            boundary.source.epoch, projection, None<ToolSetSnapshot>, toolName, expectedPlan, result, createdAtMillis,
+            boundary.source.epoch, projection, None<ToolSetSnapshot>, toolName, expectedPlan, expectedCallArguments, result, createdAtMillis,
             guard, Some(boundary), ownedToolSet185: Some(toolSet)) })
     }
     public func saveRetainedOwned185(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         run: RunId, epoch: Int64, projection: InvocationContextProjection,
-        toolSet: SharedToolSetSnapshot159, expectedPlan: NormalizedOperationPlan, result: ToolResult,
+        toolSet: SharedToolSetSnapshot159, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult,
         createdAtMillis: Int64, guard: () -> Result<Unit>): Result<Unit> {
         saveCurrent(checkpoint, expected, run, epoch, projection, None<ToolSetSnapshot>, expectedPlan.toolName,
-            expectedPlan, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>,
+            expectedPlan, expectedCallArguments, result, createdAtMillis, guard, None<DirectPostCanonicalProjectionBoundary>,
             inactiveData173: true, ownedToolSet185: Some(toolSet))
     }
     private func saveCurrent(checkpoint: ContextCheckpoint, expected: ThreadRecord,
         run: RunId, epoch: Int64, projection: InvocationContextProjection,
-        toolSet: ?ToolSetSnapshot, toolName: String, expectedPlan: NormalizedOperationPlan, result: ToolResult,
+        toolSet: ?ToolSetSnapshot, toolName: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, result: ToolResult,
         createdAtMillis: Int64, guard: () -> Result<Unit>,
         directBoundary: ?DirectPostCanonicalProjectionBoundary, inactiveData173!: Bool = false,
         ownedToolSet185!: ?SharedToolSetSnapshot159 = None): Result<Unit> {
@@ -98,7 +101,7 @@ public class SqlitePostCanonicalCheckpointStore {
                     owner, retained, allocate, guard, directBoundary, inactiveData173: inactiveData173, ownedToolSet185: ownedToolSet185)
                 let readback = PostCanonicalCheckpointReadback(tx, owner, retained)
                 let boundary = PostCanonicalCheckpointBoundary(tx, expected, run, epoch,
-                    checkpoint.coversThroughItemOrdinal, result, toolName, expectedPlan, owner, retained, allocate, guard,
+                    checkpoint.coversThroughItemOrdinal, result, toolName, expectedPlan, expectedCallArguments, owner, retained, allocate, guard,
                     match (directBoundary) { case Some(value) => Some(value.source); case None => None<DirectToolCallRef> })
                 try {
                 match (readback.visit(expected.id, expected.revision, 0, guard,
@@ -124,7 +127,7 @@ public class SqlitePostCanonicalCheckpointStore {
                 // Items/plan/Receipt too. Re-read the COMPLETE window and
                 // Source again in the same TX, after old captured IDs drop.
                 requirePostCanonicalCheckpointWindow(tx, expected, run, epoch, checkpoint, result,
-                    toolName, expectedPlan, owner, retained, allocate, guard,
+                    toolName, expectedPlan, expectedCallArguments, owner, retained, allocate, guard,
                     match (directBoundary) { case Some(value) => Some(value.source); case None => None<DirectToolCallRef> })
                 // A failing final guard THROWS, so the existing transaction
                 // rolls back the INSERT. Returning Result.Err would commit.
@@ -180,6 +183,7 @@ private class PostCanonicalCheckpointBoundary {
     private let result: ToolResult
     private let tool: String
     private let expectedPlan: NormalizedOperationPlan
+    private let expectedCallArguments: AgentValue
     private let owner: LogicalJsonOwnerReservation
     private let base: Int64
     private let allocate: (Int64) -> LogicalJsonOwnerReservation
@@ -191,9 +195,9 @@ private class PostCanonicalCheckpointBoundary {
     var callItem: ?ItemId = None<ItemId>
     var resultItem: ?ItemId = None<ItemId>
     init(tx: SqliteTransaction, thread: ThreadRecord, run: RunId, epoch: Int64, cover: Int64,
-        result: ToolResult, tool: String, expectedPlan: NormalizedOperationPlan, owner: LogicalJsonOwnerReservation, base: Int64,
+        result: ToolResult, tool: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, owner: LogicalJsonOwnerReservation, base: Int64,
         allocate: (Int64) -> LogicalJsonOwnerReservation, guard: () -> Result<Unit>, direct: ?DirectToolCallRef) {
-        this.direct = direct; this.expectedPlan = expectedPlan
+        this.direct = direct; this.expectedPlan = expectedPlan; this.expectedCallArguments = expectedCallArguments
         this.tx = tx; this.thread = thread; this.run = run; this.epoch = epoch
         this.cover = cover; this.result = result; this.tool = tool; this.owner = owner; this.base = base
         this.allocate = allocate; this.guard = guard }
@@ -222,7 +226,7 @@ private class PostCanonicalCheckpointBoundary {
                             source.call.name != name || !canonicalAgentValuesEqual(source.call.arguments, arguments)) {
                             throw IllegalStateException("checkpoint Direct full canonical call differs from the actual boundary") }
                         case None => () }
-                    requirePostCanonicalCheckpointCall(tx, thread, run, epoch, item, arguments, tool, expectedPlan,
+                    requirePostCanonicalCheckpointCall(tx, thread, run, epoch, item, arguments, tool, expectedPlan, expectedCallArguments,
                         owner, base, allocate, guard)
                     callItem = Some(ItemId(copy(item.id.value))) }
             case ThreadItemContent.ToolResult(id, op, receipt, output, failed) =>
@@ -347,7 +351,7 @@ private func requirePostCanonicalCheckpointCurrent(tx: SqliteTransaction, thread
     if (events.size != 1 || events[0].required(0).size != journalStreamInteger(budgetRows[0].required(0))) {
         throw IllegalStateException("checkpoint accounting event extent changed") }
     let event = decodeAgentValue(events[0].required(0), maxBytes: 8192).value().getOrThrow()
-    requireContextBoundaryBudget(tx, run, event.field("detail").getOrThrow())
+    requireContextBoundaryBudget(tx, run, contextBoundaryUsageValue(contextBoundaryBudgetEventUsage(event.field("detail").getOrThrow())))
     journalStreamCheck(guard)
 }
 
@@ -562,7 +566,7 @@ private func postCanonicalCheckpointCapabilityName(kind: CapabilityKind): String
 }
 
 private func requirePostCanonicalCheckpointCall(tx: SqliteTransaction, thread: ThreadRecord, run: RunId,
-    epoch: Int64, item: ThreadItem, arguments: AgentValue, tool: String, expectedPlan: NormalizedOperationPlan, owner: LogicalJsonOwnerReservation,
+    epoch: Int64, item: ThreadItem, arguments: AgentValue, tool: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue, owner: LogicalJsonOwnerReservation,
     retained: Int64, allocate: (Int64) -> LogicalJsonOwnerReservation, guard: () -> Result<Unit>): Unit {
     let args = [SqlParameter.Text(run.value), SqlParameter.Text(item.id.value),
         SqlParameter.Text(thread.id.value), SqlParameter.Int64Value(epoch)]
@@ -578,7 +582,7 @@ private func requirePostCanonicalCheckpointCall(tx: SqliteTransaction, thread: T
     withPostCanonicalCheckpointExpectedPlan(expectedPlan, owner, retained, guard, { original: AgentValue, expectedPeak: Int64 =>
         withLivePolicyStoredValueOwned(tx, "o.normalized_plan", suffix, args, allocate, guard, owner, expectedPeak, { raw: String =>
             let actual = decodeStoredValue(raw)
-            if (expectedPlan.toolName != tool || !canonicalAgentValuesEqual(expectedPlan.canonicalArguments, arguments) ||
+            if (expectedPlan.toolName != tool || !canonicalAgentValuesEqual(expectedCallArguments, arguments) ||
                 !canonicalAgentValuesEqual(actual, original)) {
                 throw IllegalStateException("checkpoint whole frozen operation plan differs from the original invocation") } }) })
 }
@@ -654,12 +658,12 @@ private func postCanonicalCheckpointWrite(tx: SqliteTransaction, checkpoint: Con
 }
 
 private func requirePostCanonicalCheckpointWindow(tx: SqliteTransaction, expected: ThreadRecord,
-    run: RunId, epoch: Int64, checkpoint: ContextCheckpoint, result: ToolResult, tool: String, expectedPlan: NormalizedOperationPlan,
+    run: RunId, epoch: Int64, checkpoint: ContextCheckpoint, result: ToolResult, tool: String, expectedPlan: NormalizedOperationPlan, expectedCallArguments: AgentValue,
     owner: LogicalJsonOwnerReservation, retained: Int64, allocate: (Int64) -> LogicalJsonOwnerReservation,
     guard: () -> Result<Unit>, direct: ?DirectToolCallRef): Unit {
     let readback = PostCanonicalCheckpointReadback(tx, owner, retained)
     let complete = PostCanonicalCheckpointBoundary(tx, expected, run, epoch,
-        checkpoint.coversThroughItemOrdinal, result, tool, expectedPlan, owner, retained, allocate, guard, direct)
+        checkpoint.coversThroughItemOrdinal, result, tool, expectedPlan, expectedCallArguments, owner, retained, allocate, guard, direct)
     try {
         match (readback.visit(expected.id, expected.revision, 0, guard,
             { item: ThreadItem, _: OwnedCanonicalThreadItemCustody => complete.read(item) })) {

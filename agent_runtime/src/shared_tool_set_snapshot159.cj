@@ -16,6 +16,17 @@ public class SharedToolSetSnapshot159 {
     init(owner: SharedToolSnapshotState159, payment: LogicalJsonOwnerReservation) {
         this.owner = Some(owner); this.handlePayment = Some(payment)
     }
+    private var contextDataInvoice180: Int64 = 131072
+    public func reserveInvocationSettingsCopy180(value: AgentValue): Unit {
+        lock.lock()
+        try {
+            let _ = owner.getOrThrow()
+            let meter = ToolSnapshotMeasure159(handlePayment.getOrThrow(), priorInvoice: contextDataInvoice180)
+            meter.addValue159(value); meter.addSlots159(32); meter.fund159()
+            contextDataInvoice180 = meter.retainedInvoice159()
+        } finally { lock.unlock() }
+    }
+
     public func contentEqualsShared159(other: SharedToolSetSnapshot159): Bool {
         var first: ?SharedToolSnapshotLoan159 = Some(begin159())
         var second: ?SharedToolSnapshotLoan159 = None<SharedToolSnapshotLoan159>
@@ -484,6 +495,8 @@ class SharedToolSnapshotLoan159 {
     private var owner: ?SharedToolSnapshotState159
     private var snapshot: ?ToolSetSnapshot
     private var payment: ?LogicalJsonOwnerReservation
+    private var firstContentDigest159: ?String = None<String>
+    private var secondContentDigest159: ?String = None<String>
     init(owner: SharedToolSnapshotState159, snapshot: ToolSetSnapshot, payment: LogicalJsonOwnerReservation) {
         this.owner = Some(owner); this.snapshot = Some(snapshot); this.payment = Some(payment)
     }
@@ -642,9 +655,22 @@ class SharedToolSnapshotLoan159 {
         storedCheckpointToolSetMatches185(lane, snapshot.getOrThrow())
     }
     func content159(expected: ToolSetSnapshot): Bool {
+        // Both immutable source snapshots remain paid by their actual loans.
+        // Only the first 64-byte digest overlaps the second complete codec
+        // helper; no canonical DOM/String/formatter from the first survives.
+        produceContentDigestFrame159(snapshot.getOrThrow(), true)
+        produceContentDigestFrame159(expected, false)
+        firstContentDigest159.getOrThrow() == secondContentDigest159.getOrThrow()
+    }
+    private func produceContentDigestFrame159(value: ToolSetSnapshot, first: Bool): Unit {
         let meter = ToolSnapshotMeasure159(payment.getOrThrow())
-        meter.addSnapshot159(snapshot.getOrThrow()); meter.addSnapshot159(expected); meter.fund159()
-        toolSetSnapshotContentDigest(snapshot.getOrThrow()) == toolSetSnapshotContentDigest(expected)
+        meter.addSnapshot159(value)
+        // Separate bounded result/header storage remains in this loan until
+        // the whole comparison caller returns, including its failure paths.
+        meter.addSlots159(32); meter.fund159()
+        let digest = toolSetSnapshotContentDigest(value)
+        if (first) { firstContentDigest159 = Some(digest) }
+        else { secondContentDigest159 = Some(digest) }
     }
     func holdFailure159(): Unit { owner.getOrThrow().holdFailure159(this) }
     func clear159(): (?LogicalJsonOwnerReservation, ?LogicalJsonOwnerReservation, ?LogicalJsonOwnerReservation) {
@@ -653,6 +679,7 @@ class SharedToolSnapshotLoan159 {
             // the original graph. Keep this independently paid loan intact.
             return (None<LogicalJsonOwnerReservation>, None<LogicalJsonOwnerReservation>, None<LogicalJsonOwnerReservation>)
         }
+        firstContentDigest159 = None<String>; secondContentDigest159 = None<String>
         snapshot = Option<ToolSetSnapshot>.None
         let detached = owner.getOrThrow().returnLoan159()
         owner = Option<SharedToolSnapshotState159>.None

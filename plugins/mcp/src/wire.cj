@@ -48,23 +48,49 @@ func exact(value: JsonNode, names: Array<String>): Unit {
     }
 }
 func hex(bytes: Array<Byte>): String {
-    let alphabet = "0123456789abcdef".toArray()
-    let result = ArrayList<Byte>()
-    for (byte in bytes) { result.add(alphabet[Int64(byte) / 16]); result.add(alphabet[Int64(byte) % 16]) }
-    String.fromUtf8(result.toArray())
+    let result = Array<Byte>(bytes.size * 2, repeat: 0)
+    // Callers already own the bounded serialization charge. Borrow both exact
+    // extents synchronously; no pointer survives the loop or failure.
+    unsafe {
+        let source = acquireArrayRawData(bytes)
+        try {
+            let target = acquireArrayRawData(result)
+            try {
+                for (index in 0..bytes.size) {
+                    let byte = source.pointer.read(index)
+                    let high = byte / 16u8; let low = byte % 16u8
+                    target.pointer.write(index * 2, if (high < 10u8) { high + 48u8 } else { high + 87u8 })
+                    target.pointer.write(index * 2 + 1, if (low < 10u8) { low + 48u8 } else { low + 87u8 })
+                }
+            } finally { releaseArrayRawData(target) }
+        } finally { releaseArrayRawData(source) }
+    }
+    String.fromUtf8(result)
 }
 func unhex(value: String, maximum: Int64): Array<Byte> {
     require(value.size % 2 == 0 && value.size <= maximum * 2, "mcp_plugin.channel_response_invalid")
-    let bytes = value.toArray()
-    let result = ArrayList<Byte>()
+    let result = Array<Byte>(value.size / 2, repeat: 0)
     func digit(value: Byte): Byte {
         if (value >= 48u8 && value <= 57u8) { return value - 48u8 }
         if (value >= 97u8 && value <= 102u8) { return value - 87u8 }
         throw PluginFailure("mcp_plugin.channel_response_invalid")
     }
-    var index: Int64 = 0
-    while (index < bytes.size) { result.add(digit(bytes[index]) * 16u8 + digit(bytes[index + 1])); index += 2 }
-    result.toArray()
+    // Validate every lowercase nibble before it reaches its exact destination.
+    // The existing extent bound proves both source reads and each target write.
+    unsafe {
+        let source = acquireArrayRawData(value.rawData())
+        try {
+            let target = acquireArrayRawData(result)
+            try {
+                for (index in 0..result.size) {
+                    let high = digit(source.pointer.read(index * 2))
+                    let low = digit(source.pointer.read(index * 2 + 1))
+                    target.pointer.write(index, high * 16u8 + low)
+                }
+            } finally { releaseArrayRawData(target) }
+        } finally { releaseArrayRawData(source) }
+    }
+    result
 }
 func sha(value: String): String { let hash = SHA256(); hash.write(value.toArray()); hex(hash.finish()) }
 func stableId(invocation: JsonNode): String {
@@ -81,6 +107,9 @@ func sameIdentity(left: JsonNode, right: JsonNode): Bool {
 }
 func sameJson(left: JsonNode, right: JsonNode): Bool {
     if (left.unifiedKind != right.unifiedKind) { return false }
+    // Canonical JSON string encoding is injective: decoded text equality has
+    // the same result without escaping/copying large scalar values twice.
+    if (left.unifiedKind == UnifiedJsonKind.Text) { return left.text == right.text }
     if (left.unifiedKind == UnifiedJsonKind.Object) {
         if (left.fields.size != right.fields.size) { return false }
         for (entry in left.fields) {
@@ -100,8 +129,8 @@ func envelope(invocation: JsonNode, typeName: String): ArrayList<JsonObjectEntry
     for (name in IDENTITY_FIELDS) { entries.add(JsonObjectEntry(name, field(invocation, name))) }
     entries
 }
-func validateInvocation(frame: JsonNode, limits!: ProtocolLimits = ProtocolLimits()): Unit {
-    require(text(frame, "protocol") == "axyndra-js-host-v2" && text(frame, "extension_id") == "mcp-client" &&
+func validateInvocation(frame: JsonNode, extensionId!: String, limits!: ProtocolLimits = ProtocolLimits()): Unit {
+    require(text(frame, "protocol") == "axyndra-js-host-v2" && text(frame, "extension_id") == extensionId &&
         text(frame, "extension_version") == "1.0.0" && number(frame, "generation") > 0 &&
         text(frame, "tool") == "session" && text(frame, "command_id") == "", "mcp_plugin.identity_invalid")
     for (name in ["id", "thread_id", "run_id", "call_id"]) {
@@ -143,7 +172,9 @@ class WireOutput {
         writeGuarded(value, { => true })
     }
     func writeGuarded(value: JsonNode, allowed: () -> Bool): Unit {
-        let encoded = stringifyUnifiedJson(value)
+        writeEncodedGuarded(stringifyUnifiedJson(value), allowed)
+    }
+    private func writeEncodedGuarded(encoded: String, allowed: () -> Bool): Unit {
         require(encoded.size <= limits.frame, "mcp_plugin.frame_limit")
         lock.lock()
         try { if (!allowed()) { return }; let output = getStdOut(); output.write((encoded + "\n").toArray()); output.flush() }
@@ -157,13 +188,25 @@ class WireOutput {
         let small = payloadSmallJsonBound(value, 65536)
         let charge: ?PayloadCharge = if (limits.payload.isSome() && !reserved) { Some(payloadPool.acquire((if (small <= 65536) { small } else { maximum }) + 65536)) } else { None }
         try {
-        require(stringifyUnifiedJson(value).size <= (if (text(invocation, "kind") == "service_prepare") { limits.prepared } else { limits.result }), "mcp_plugin.result_limit")
+        // Serialize the already paid value exactly once. Header and window
+        // encoding still use the standard serializer; only this trusted
+        // envelope joins their canonical JSON fragments in the old order.
+        let encodedValue = stringifyUnifiedJson(value)
+        require(encodedValue.size <= maximum, "mcp_plugin.result_limit")
         let entries = envelope(invocation, "result")
-        entries.add(JsonObjectEntry("ok", jsonBool(ok))); entries.add(JsonObjectEntry("result", value))
-        if (limits.payload.isSome()) { entries.add(JsonObjectEntry("payload_window", field(invocation, "payload_window"))) }
-        let result = jsonObject(entries.toArray())
-        let encoded = stringifyUnifiedJson(result)
-        if (encoded.size <= limits.frame) { writeGuarded(result, allowed); return }
+        entries.add(JsonObjectEntry("ok", jsonBool(ok)))
+        let header = stringifyUnifiedJson(jsonObject(entries.toArray()))
+        let encodedWindow = if (limits.payload.isSome()) { stringifyUnifiedJson(field(invocation, "payload_window")) } else { "" }
+        let builder = StringBuilder(header.size + 10 + encodedValue.size +
+            (if (limits.payload.isSome()) { 18 + encodedWindow.size } else { 0 }))
+        builder.append(header[..header.size - 1])
+        builder.append(",\"result\":"); builder.append(encodedValue)
+        if (limits.payload.isSome()) {
+            builder.append(",\"payload_window\":"); builder.append(encodedWindow)
+        }
+        builder.append("}")
+        let encoded = builder.toString()
+        if (encoded.size <= limits.frame) { writeEncodedGuarded(encoded, allowed); return }
         require(limits.payload.isSome() && encoded.size <= limits.payload.getOrThrow().message, "mcp_plugin.result_limit")
         let window = text(invocation, "payload_window")
         require(window != "" && window.size <= 256, "mcp_plugin.payload_window_invalid")
@@ -192,7 +235,7 @@ class WireOutput {
 // mutator remains running; a silent host can then stall every worker at GC.
 // Poll only a bounded interval, never pin a Cangjie buffer while waiting, and
 // read only after readiness. The one-reader invariant makes that read safe.
-class ProtocolInput <: InputStream {
+class ProtocolInput {
     private var buffered: Array<Byte> = []
     private var offset: Int64 = 0
     private var eof = false
@@ -200,56 +243,59 @@ class ProtocolInput <: InputStream {
     private var frameCharge: ?PayloadCharge = None
     func retainFrame(value: PayloadCharge): Unit { require(frameCharge.isNone()); frameCharge = Some(value) }
     func takeFrameCharge(): ?PayloadCharge { let value = frameCharge; frameCharge = None; value }
-    public func read(buffer: Array<Byte>): Int64 {
-        if (buffer.isEmpty()) { return 0 }
+    // Consume one physical line directly from the sole fd reader's buffered
+    // chunks. Keep prefetched successor bytes owned here, not in a frame.
+    func readLine(maxBytes: Int64): ?ArrayList<Byte> {
+        let result = ArrayList<Byte>()
         while (true) {
             match (transferDeadline) { case Some(value) => require(MonoTime.now() < value, "mcp_plugin.payload_expired"); case None => () }
-            if (offset < buffered.size) {
-                let count = if (buffer.size < buffered.size - offset) { buffer.size } else { buffered.size - offset }
-                for (index in 0..count) { buffer[index] = buffered[offset + index] }
-                offset += count; return count
+            if (offset == buffered.size) {
+                if (eof) { require(result.isEmpty(), "mcp_plugin.incomplete_frame"); return None }
+                if (!waitReadableFd(0, 10)) { sleep(Duration.millisecond); continue }
+                match (readFdChunk(0, maxBytes: 8192)) {
+                    case Some(value) => buffered = value; offset = 0
+                    case None => eof = true; continue
+                }
             }
-            if (eof) { return 0 }
-            if (!waitReadableFd(0, 10)) {
-                sleep(Duration.millisecond)
-                continue
+            var end = offset
+            unsafe {
+                let chunk = acquireArrayRawData(buffered)
+                try { while (end < buffered.size && chunk.pointer.read(end) != 10u8) { end++ } }
+                finally { releaseArrayRawData(chunk) }
             }
-            match (readFdChunk(0, maxBytes: 8192)) {
-                case Some(value) => buffered = value; offset = 0
-                case None => eof = true; return 0
-            }
+            require(end - offset <= maxBytes - result.size, "mcp_plugin.frame_limit")
+            result.add(all: buffered[offset..end])
+            offset = end
+            match (transferDeadline) { case Some(value) => require(MonoTime.now() < value, "mcp_plugin.payload_expired"); case None => () }
+            if (end < buffered.size) { offset++; return Some(result) }
         }
-        0
+        None
     }
 }
 
 func readFrame(stream: ProtocolInput, maxBytes!: Int64 = FRAME_LIMIT, payloadEnabled!: Bool = false): ?JsonNode {
     let raw: ?PayloadCharge = if (payloadEnabled) { Some(payloadPool.acquire(maxBytes, transfer: false)) } else { None }
     try {
-        let result = ArrayList<Byte>(); let one = Array<Byte>(1, repeat: 0)
-        while (true) {
-            if (stream.read(one) == 0) { require(result.isEmpty(), "mcp_plugin.incomplete_frame"); return None }
-            if (one[0] == 10u8) {
-                // Scan the existing raw buffer before UTF8/string/DOM copies.
-                // 512 bytes/token is a conservative accounting coefficient,
-                // not a measured RSS claim. Bounds keep every product <64 MiB.
-                let nodes = if (payloadEnabled) { payloadFrameNodeCount(result) } else { 0 }
-                require(result.size <= 4194304 && nodes <= 65536, "mcp_plugin.frame_limit")
-                let retainedCost = if (max(1, result.size) * 8 > result.size * 4 + nodes * 512 + 1048576) {
-                    max(1, result.size) * 8
-                } else { result.size * 4 + nodes * 512 + 1048576 }
-                let charge: ?PayloadCharge = if (payloadEnabled) { Some(payloadPool.acquire((retainedCost + 1) / 2, transfer: false)) } else { None }
-                var transferred = false
-                try {
-                    let source = String.fromUtf8(result.toArray())
-                    if (payloadEnabled) { payloadNodeBound(source) }
-                    let parsed = parseUnifiedJson(source, maxBytes: maxBytes, maxDepth: 32)
-                    match (charge) { case Some(value) => stream.retainFrame(value); transferred = true; case None => () }
-                    return Some(parsed)
-                } finally { if (!transferred) { match (charge) { case Some(value) => value.close(); case None => () } } }
-            }
-            require(result.size < maxBytes, "mcp_plugin.frame_limit"); result.add(one[0])
+        let result = match (stream.readLine(maxBytes)) {
+            case Some(value) => value
+            case None => return None
         }
-        None
+        // Scan the existing raw buffer before UTF8/string/DOM copies.
+        // 512 bytes/token is a conservative accounting coefficient,
+        // not a measured RSS claim. Bounds keep every product <64 MiB.
+        let nodes = if (payloadEnabled) { payloadFrameNodeCount(result) } else { 0 }
+        require(result.size <= 4194304 && nodes <= 65536, "mcp_plugin.frame_limit")
+        let retainedCost = if (max(1, result.size) * 8 > result.size * 4 + nodes * 512 + 1048576) {
+            max(1, result.size) * 8
+        } else { result.size * 4 + nodes * 512 + 1048576 }
+        let charge: ?PayloadCharge = if (payloadEnabled) { Some(payloadPool.acquire((retainedCost + 1) / 2, transfer: false)) } else { None }
+        var transferred = false
+        try {
+            let source = String.fromUtf8(result.toArray())
+            if (payloadEnabled) { payloadNodeBound(source) }
+            let parsed = parseUnifiedJson(source, maxBytes: maxBytes, maxDepth: 32)
+            match (charge) { case Some(value) => stream.retainFrame(value); transferred = true; case None => () }
+            Some(parsed)
+        } finally { if (!transferred) { match (charge) { case Some(value) => value.close(); case None => () } } }
     } finally { match (raw) { case Some(value) => value.close(); case None => () } }
 }

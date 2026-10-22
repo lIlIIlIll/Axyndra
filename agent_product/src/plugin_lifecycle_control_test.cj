@@ -53,13 +53,14 @@ class LifecycleControlFixture {
             CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn), Capability(CapabilityKind.ExtensionInvoke)]), epoch: 1,
             toolContext: productToolContext(configuration.workspace)))
         grant = lifecycleTestRequire(lifecycleTestRequire(configuration.load()).bindService("stdio",
-            ThreadId("target-thread"), "host-minted-instance", configuration.workspace, ExecutionResourceLimits(), scope))
+            ThreadId("target-thread"), "host-minted-instance", configuration.workspace, ExecutionResourceLimits(), scope,
+            registryAdmission: Some(configuration.registryAdmission())))
         product = lifecycleTestRequire(openProduct(config: ProductConfig(workspaceRoot: configuration.workspace,
             settingsRoot: configuration.settings, stateRoot: configuration.root + "/state", fixture: true,
             approvalMode: ApprovalMode.AlwaysAsk, asyncEnabled: false)))
         database = SqliteDatabase(configuration.root + "/state/state.db")
         processes = LifecycleControlProcessProbe(configuration.workspace)
-        owner = ProductPluginLifecycleOwner(database, processes)
+        owner = ProductPluginLifecycleOwner(database, processes, operations: product.vnext.operations)
         control = ProductPluginLifecycleControl(owner)
         lifecycleTestRequire(product.registerTool(control.descriptor(), control))
     }

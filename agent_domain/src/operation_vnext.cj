@@ -154,6 +154,22 @@ public class NormalizedOperationPlan {
     public prop contextReadFacts: Array<ContextReadFactLink> { get() { readFacts.clone() } }
     // A DATA count lets the payer fund the original clone BEFORE allocation.
     public func contextReadFactCount180(): Int64 { readFacts.size }
+    // Closed numeric observation of every variable String occurrence in the
+    // fact wire graph. Immutable constructor bounds also bound this sum; no
+    // fact, Origin, String, Array clone or authority leaves this helper.
+    public func contextReadFactTextBytes180(): Int64 {
+        var bytes: Int64 = 0
+        for (fact in readFacts) {
+            bytes += fact.operationId.value.size + fact.runId.value.size + fact.sourceItemId.value.size +
+                fact.resultItemId.value.size + fact.receiptId.size + fact.outputDigest.size
+            let origin = fact.origin
+            bytes += origin.ownerNamespace.size + origin.packageDigest.size + origin.configurationDigest.size +
+                origin.projectionDigest.size * 2 + origin.readPlanDigest.size + origin.requestId.size +
+                origin.parentCallItemId.size + origin.parentKind.size + origin.parentOperationId.size +
+                origin.parentDecisionId.size + origin.parentScopedCallId.size
+        }
+        bytes
+    }
 
     public init(
         toolName: String,

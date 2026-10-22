@@ -18,7 +18,8 @@ func readViewContractArguments(): AgentValue {
         ValueField("version", textValue(HOST_READ_VIEW_VERSION)), ValueField("plugin", textValue("axyndra:read-view-contract")),
         ValueField("package_digest", textValue("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
         ValueField("generation", textValue("1")), ValueField("configuration_digest", textValue("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")),
-        ValueField("contribution", textValue("read")), ValueField("read_granted", boolValue(true)), ValueField("intents", listValue([intent]))]))])
+        ValueField("contribution", textValue("read")), ValueField("read_granted", boolValue(true)),
+        ValueField("tool_payload_limits", nullValue()), ValueField("intents", listValue([intent]))]))])
 }
 func readViewContractRootPlan(): NormalizedOperationPlan {
     NormalizedOperationPlan("plugin.axyndra:read-view-contract.read", readViewContractArguments(),
@@ -32,6 +33,9 @@ func readViewContractChildPlan(change: String): NormalizedOperationPlan {
     if (change == "witness") { args.field("intent").getOrThrow().field("resources").getOrThrow().items[0].put("witness", textValue("f:9:9:384:5:1:0:1:0")) }
     if (change == "contribution") { args.put("contribution", textValue("other")) }
     if (change == "configuration") { args.put("configuration_digest", textValue("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")) }
+    if (change == "profile") { args.put("tool_payload_limits", OrdinaryToolPayloadLimits("read").value()) }
+    if (change == "foreign-profile") { args.put("tool_payload_limits", OrdinaryToolPayloadLimits("other").value()) }
+    if (change == "generation") { args.put("generation", textValue("2")) }
     NormalizedOperationPlan(HOST_READ_VIEW_TOOL, args, readViewRequiredCapabilities(args),
         OperationEffectClass.ReadOnly, OperationRetryDisposition.Never, "view-child-binding",
         toolVersion: HOST_READ_VIEW_FINGERPRINT, implementationFingerprint: HOST_READ_VIEW_FINGERPRINT)
@@ -39,12 +43,12 @@ func readViewContractChildPlan(change: String): NormalizedOperationPlan {
 
 func readViewParentIntentContract(): Unit {
     for (committed in [false, true]) {
-        for (scenario in ["completed", "unknown", "path", "witness", "contribution", "configuration", "wrong-key", "no-handoff",
+        for (scenario in ["completed", "unknown", "path", "witness", "contribution", "configuration", "profile", "foreign-profile", "generation", "wrong-key", "no-handoff",
             "cancel-before-execute", "epoch-before-handoff", "missing-proof", "root-bypass"]) {
             readViewParentIntentScenario(committed, scenario)
         }
     }
-    println("Read-view exact ParentIntent durable contract passed: 24 scenarios")
+    println("Read-view exact ParentIntent durable contract passed: 30 scenarios")
 }
 
 func readViewParentIntentScenario(committed: Bool, scenario: String): Unit {
@@ -86,7 +90,7 @@ func readViewParentIntentScenario(committed: Bool, scenario: String): Unit {
             return
         }
         let admission = store.prepareDerivedOperation(child, parent, run, source, key, childPlan)
-        if (["path", "witness", "contribution", "configuration", "wrong-key", "no-handoff"].contains(scenario)) {
+        if (["path", "witness", "contribution", "configuration", "profile", "foreign-profile", "generation", "wrong-key", "no-handoff"].contains(scenario)) {
             expect(admission.isError(), label + " must reject changed or absent frozen authority")
             expect(database.scalarInt("SELECT COUNT(*) FROM operations WHERE id='view-child'") == 0 &&
                 database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_parent_intent_authorized'") == 0,

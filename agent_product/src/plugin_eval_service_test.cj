@@ -154,7 +154,6 @@ class PluginEvalServiceTests {
     func directCellsPersistResetAndRemainPrivateToActualServiceInstances(): Unit {
         let fixture = EvalServiceProductFixture()
         try {
-            @Expect(fixture.product.unregisterTool("bash")); @Expect(fixture.product.unregisterTool("bash_readonly"))
             @Expect(!managedCompleted(fixture.start("eval-one")).isError)
             @Expect(!managedCompleted(fixture.start("eval-two")).isError)
             @Expect(fixture.childReceipts(), 0)

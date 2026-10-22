@@ -5,6 +5,7 @@ This proves plugin protocol/session behavior, not Product/SQLite authorization.
 No transport substitution inside mcp4cj and no execution of forged host authority.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -44,6 +45,7 @@ class Peer:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.plugin = subprocess.Popen([str(BINARY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.frames = queue.Queue()
+            self.send_lock = threading.Lock()
             self.errors = bytearray()
             self.reader = threading.Thread(target=self._read, daemon=True)
             self.reader.start()
@@ -81,8 +83,10 @@ class Peer:
                 self.errors.extend(chunk)
 
     def send(self, frame):
-        self.plugin.stdin.write((json.dumps(frame, ensure_ascii=False, separators=(',', ':')) + '\n').encode())
-        self.plugin.stdin.flush()
+        encoded = (json.dumps(frame, ensure_ascii=False, separators=(',', ':')) + '\n').encode()
+        with self.send_lock:
+            self.plugin.stdin.write(encoded)
+            self.plugin.stdin.flush()
 
     def next(self, timeout=15):
         value = self.frames.get(timeout=timeout)
@@ -144,18 +148,30 @@ class Peer:
         self.current = frame
         self.send(frame)
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            message = self.next(max(.01, deadline - time.monotonic()))
-            if message['type'] == 'service_request':
-                assert kind != 'service_prepare', 'pure preparation performed I/O'
+        # stdout and stderr reads are independent broker requests. A quiet
+        # stderr poll must not serialize every ready stdout chunk behind its
+        # wait_ms; the real host brokers both stream readers concurrently.
+        def answer_read(message):
+            try:
                 self.answer(message, fail=fail_services)
-                continue
-            assert message['type'] == 'result', message
-            for key in IDENTITY:
-                assert message[key] == frame[key]
-            self.current = None
-            return message
-        raise TimeoutError('native invocation deadline')
+            except BaseException as error:
+                self.frames.put(error)
+        with ThreadPoolExecutor(max_workers=2) as reads:
+            while time.monotonic() < deadline:
+                message = self.next(max(.01, deadline - time.monotonic()))
+                if message['type'] == 'service_request':
+                    assert kind != 'service_prepare', 'pure preparation performed I/O'
+                    if message['service'] == 'process.channel.read':
+                        reads.submit(answer_read, message)
+                    else:
+                        self.answer(message, fail=fail_services)
+                    continue
+                assert message['type'] == 'result', message
+                for key in IDENTITY:
+                    assert message[key] == frame[key]
+                self.current = None
+                return message
+            raise TimeoutError('native invocation deadline')
 
     def start(self):
         return self.invoke({'action': 'start', 'configuration': configuration()}, call='startup', run='maintenance')

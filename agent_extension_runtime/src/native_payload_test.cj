@@ -77,7 +77,7 @@ class NativeLogicalPayloadTests {
 
     @TestCase
     func malformedDeclarationsIdentityOffsetsAndDensePhysicalJsonReleaseAllCharges(): Unit {
-        for (mode in ["oversized", "identity", "offset", "overlap", "dense"]) {
+        for (mode in ["oversized", "identity", "offset", "overlap", "dense", "uppercase_hex", "invalid_hex", "odd_hex", "extra_hex"]) {
             let before = nativePayloadOwnerBudget.usage(); let root = nativePayloadTestRoot(); let host = nativePayloadTestHost(root)
             try {
                 let result = host.invoke("session", "{\"mode\":\"" + mode + "\"}", identity: quotaIdentity("service"), timeoutMillis: 2000)
@@ -188,7 +188,12 @@ func nativePayloadFixtureSource(): String {
     "    if mode in ('oversized','identity'):continue\n" +
     "    if mode=='overlap':emit(begin);continue\n" +
     "    for offset in range(0,len(source),16384):\n" +
-    "        emit(payload(f,'payload_chunk',offset=offset+(1 if mode=='offset' else 0),bytes_hex=source[offset:offset+16384].hex()))\n" +
+    "        encoded=source[offset:offset+16384].hex()\n" +
+    "        if mode=='uppercase_hex':encoded=encoded.upper()\n" +
+    "        if mode=='invalid_hex':encoded='g'+encoded[1:]\n" +
+    "        if mode=='odd_hex':encoded=encoded[:-1]\n" +
+    "        if mode=='extra_hex':encoded+='00'\n" +
+    "        emit(payload(f,'payload_chunk',offset=offset+(1 if mode=='offset' else 0),bytes_hex=encoded))\n" +
     "        if mode in ('partial','offset'):break\n" +
     "    if mode=='partial':continue\n" +
     "    emit(payload(f,'payload_end'))\n"

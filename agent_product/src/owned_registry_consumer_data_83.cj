@@ -2,6 +2,7 @@ package agent_product
 
 import agent_domain.*
 import agent_plugin_registry.*
+import std.collection.*
 import std.sync.*
 import yjson.*
 import yjson_support.*
@@ -32,6 +33,59 @@ class ProductRegistryEscapedCopyDebt83 {
 // No budget is created here. Every node below is prepaid from the actual
 // incoming Registry byte loan in the original process aggregate.
 let productRegistryEscapedCopies83 = ProductRegistryEscapedCopyDebt83()
+
+// A cutover collection is private DATA, not a public Raw response. Its sole
+// consumers are synchronous Product visitors; no Array/String view escapes.
+// The incoming Registry loan pays the holder and every cell before allocation.
+class ProductMountedPluginInstances83 {
+    private let payment: LogicalJsonOwnerReservation
+    private var records: ?ArrayList<ProductPluginRecord>
+    private var closed = false
+    init(payment: LogicalJsonOwnerReservation) {
+        this.payment = payment
+        this.records = Some(ArrayList<ProductPluginRecord>())
+    }
+    func capture(list: OwnedPluginRecordList, selected: (ProductPluginRecord) -> Bool): Unit {
+        for (index in 0..list.size) {
+            let record = list.take(index)
+            if (selected(record)) { records.getOrThrow().add(record) } else { record.close() }
+        }
+    }
+    func visit(action: (ProductPluginRecord) -> PluginRegistryResult<Unit>): PluginRegistryResult<Unit> {
+        for (record in records.getOrThrow()) {
+            match (action(record)) { case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error); case PluginRegistryResult.Ok(_) => () }
+        }
+        PluginRegistryResult.Ok(())
+    }
+    private func retirePrivateCells(): Unit {
+        let original = records
+        records = None<ArrayList<ProductPluginRecord>>
+        match (original) {
+            case Some(values) => for (record in values) { record.close() }; values.clear()
+            case None => ()
+        }
+    }
+    func close(): Unit {
+        if (closed) { return }
+        // Both private visitors returned. Host pins and Hook generations own
+        // independent data; these taken views never leave the collection.
+        // Clear their actual backings before the collection payment retires.
+        retirePrivateCells()
+        closed = true
+        payment.close()
+    }
+}
+
+func productRegistryMountedInstances83(list: OwnedPluginRecordList, selected: (ProductPluginRecord) -> Bool): ProductMountedPluginInstances83 {
+    try {
+        let size = list.size
+        if (size > (134217728 - 8192) / 256) { throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity") }
+        let payment = list.deriveCopiedDataPayment(size * 256 + 8192)
+        let captured = ProductMountedPluginInstances83(payment)
+        try { captured.capture(list, selected); captured }
+        catch (error: Exception) { captured.close(); throw error }
+    } finally { list.close() }
+}
 
 func productRegistryCopyInvoice83(bytes: Int64, extra: Int64): Int64 {
     if (bytes < 0 || extra < 0 || extra > 134217728 - 8192 ||
@@ -67,7 +121,7 @@ func productRegistryErrorText83(error: PluginRegistryOwnedError, field: PluginRe
         case PluginRegistryStaticReason.ExecutionNotCurrent => "installed execution pin is not current"
         case PluginRegistryStaticReason.InstalledRecordAbsent => "installed record is absent"
         case PluginRegistryStaticReason.ComponentAliasInvalid => "initial context configuration or its exact installed binding is unavailable"
-        case PluginRegistryStaticReason.None => return productRegistryCopyText83(error.copyText(field), custody: custody)
+        case PluginRegistryStaticReason.NoStaticReason => return productRegistryCopyText83(error.copyText(field), custody: custody)
     }
     match (field) { case PluginRegistryErrorText.Message => message; case PluginRegistryErrorText.Source => ""; case PluginRegistryErrorText.Field => "" }
 }
@@ -184,3 +238,134 @@ func productRegistryAllowedControls83(descriptor: OwnedPluginPackageDescriptor, 
     productRegistryPrepayCells83(descriptor, count, custody: custody)
     Array<String>(count, { index => productRegistryCopyText83(contribution.copyAllowedControl(index), custody: custody) })
 }
+
+// Only Product's two synchronous managed-import callers use this holder. The
+// three namespace consumers perform paid lookups or a fenced rollback; they
+// return independently paid Record/Error handles, never this private String.
+class ProductImportNamespace83 <: OwnedRegistryResponseRetirement161 {
+    private var custody: ?OwnedApplicationRegistryResponse161
+    private var namespace: ?String = None<String>
+    private var ownedOutcomeCaptured = false
+    private var importFrameReturned = false
+    private var unknown = false
+    init(custody: OwnedApplicationRegistryResponse161) { this.custody = Some(custody) }
+    func copyNamespace(descriptor: OwnedPluginPackageDescriptor): Unit {
+        namespace = Some(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace),
+            custody: custody))
+    }
+    private func invokeNamespaceFrame(
+        action: (String) -> PluginRegistryResult<ProductPluginRecord>
+    ): PluginRegistryResult<ProductPluginRecord> {
+        action(namespace.getOrThrow())
+    }
+    func invokeImport(
+        action: (String) -> PluginRegistryResult<ProductPluginRecord>
+    ): PluginRegistryResult<ProductPluginRecord> {
+        let result = invokeNamespaceFrame(action)
+        ownedOutcomeCaptured = true
+        result
+    }
+    func holdUnknown(): Unit {
+        if (unknown) { return }
+        unknown = true
+        match (custody) { case Some(value) => productRegistryHoldUnknownResponse161(value); case None => () }
+    }
+    private func clearNamespaceFrame(): Unit { namespace = None<String> }
+    func retireAfterImportFrameReturned(): Unit {
+        if (!ownedOutcomeCaptured || unknown) { holdUnknown(); return }
+        // The caller invokes this only after invokeImport and the entire real
+        // import/activation/rollback frame returned its independently paid result.
+        importFrameReturned = true
+        clearNamespaceFrame()
+        let actual = custody.getOrThrow()
+        actual.markProducerReturned161()
+        if (actual.closeAfterActualCopiedResponse161(this)) {
+            custody = None<OwnedApplicationRegistryResponse161>
+        } else { holdUnknown() }
+    }
+    public func copiedReferencesRetired(): Bool {
+        ownedOutcomeCaptured && importFrameReturned && namespace.isNone() && !unknown
+    }
+}
+// Only private Axyndra Native lifecycle frames consume these copies. Their
+// fixed errors, mount(record) result and unmount Unit do not contain them. An
+// opaque signature verifier may retain its manifest, so its loan stays paid.
+class ProductNativeLifecycleCopies83 <: OwnedRegistryResponseRetirement161 {
+    private var custody: ?OwnedApplicationRegistryResponse161
+    private var texts: ?ArrayList<String> = Some(ArrayList<String>())
+    private var arrays: ?ArrayList<Array<String>> = None<ArrayList<Array<String>>>
+    private var nativeFrameReturned = false
+    private var unknown = false
+    init(custody: OwnedApplicationRegistryResponse161) { this.custody = Some(custody) }
+    func text(value: PluginRegistryResult<OwnedRegistryUtf8>): String {
+        let copied = productRegistryCopyText83(value, custody: custody)
+        texts.getOrThrow().add(copied)
+        copied
+    }
+    func capabilities(descriptor: OwnedPluginPackageDescriptor): Array<String> {
+        let copied = productRegistryCapabilities83(descriptor, custody: custody)
+        if (arrays.isNone()) { arrays = Some(ArrayList<Array<String>>()) }
+        arrays.getOrThrow().add(copied)
+        copied
+    }
+    func holdUnknown(): Unit {
+        if (unknown) { return }
+        unknown = true
+        match (custody) { case Some(value) => productRegistryHoldUnknownResponse161(value); case None => () }
+    }
+    private func clearPrivateBackingsFrame(): Unit {
+        let oldTexts = texts
+        let oldArrays = arrays
+        texts = None<ArrayList<String>>
+        arrays = None<ArrayList<Array<String>>>
+        match (oldTexts) { case Some(values) => values.clear(); case None => () }
+        match (oldArrays) { case Some(values) => values.clear(); case None => () }
+    }
+    func retireAfterNativeFrameReturned(): Unit {
+        if (unknown) { holdUnknown(); return }
+        // Called only after the entire concrete activation/deactivation helper
+        // has returned without exporting these copies. Host/Catalog data and
+        // cleanup workers have independent owners; this is not their ACK.
+        nativeFrameReturned = true
+        clearPrivateBackingsFrame()
+        let actual = custody.getOrThrow()
+        actual.markProducerReturned161()
+        if (actual.closeAfterActualCopiedResponse161(this)) {
+            custody = None<OwnedApplicationRegistryResponse161>
+        } else { holdUnknown() }
+    }
+    public func copiedReferencesRetired(): Bool {
+        nativeFrameReturned && texts.isNone() && arrays.isNone() && !unknown
+    }
+}
+func productRegistryNativeLifecycleCopies83(
+    descriptor: OwnedPluginPackageDescriptor,
+    copiedCells!: Int64 = 11
+): ProductNativeLifecycleCopies83 {
+    let peak = 65536
+    let custody = OwnedApplicationRegistryResponse161(descriptor.deriveCopiedDataPayment(peak), peak)
+    try {
+        // At most nine scalar-copy cells plus two capability-array cells, or
+        // eight scalar-copy cells plus three arrays on the verifier path.
+        // Deactivation has exactly three namespace-copy cells.
+        custody.prepayCollection161(copiedCells)
+        // The descriptor/record belong to the caller; only new private copies
+        // are adopted. Closing this holder cannot close that borrowed input.
+        ProductNativeLifecycleCopies83(custody)
+    } catch (error: Exception) { productRegistryHoldUnknownResponse161(custody); throw error }
+}
+
+func productRegistryImportNamespace83(descriptor: OwnedPluginPackageDescriptor): ProductImportNamespace83 {
+    // This existing-bank header pays the holder and custody cells before they
+    // allocate. copyText83 still pays its full unchanged byte/copy invoice before
+    // allocating the Array or String. Neither payment is an authority grant.
+    let peak = 65536
+    let custody = OwnedApplicationRegistryResponse161(descriptor.deriveCopiedDataPayment(peak), peak)
+    try {
+        custody.keepDescriptor161(descriptor)
+        let owner = ProductImportNamespace83(custody)
+        owner.copyNamespace(descriptor)
+        owner
+    } catch (error: Exception) { productRegistryHoldUnknownResponse161(custody); throw error }
+}
+

@@ -183,6 +183,7 @@ public class ProductNativeToolInvocation {
     private let selection: ProductSelectedNativeTool
     private let cancellation: CancellationSource
     private let owner: ProductDirectPreparationOwner
+    private let operatorOptions180: ?ProductOperatorOptions180
     private let lock=Mutex()
     private var completed: ?ToolResult=None
     private var closingPayload: ?ToolResult=None
@@ -194,9 +195,11 @@ public class ProductNativeToolInvocation {
     private var started=false
     private var starting=false
     private let artifactReads=ArrayList<ProductNativeToolInvocation>()
-    init(selection: ProductSelectedNativeTool) {
-        let actualSelection=selection;let actualCancellation=CancellationSource()
-        this.selection=selection;this.cancellation=actualCancellation
+    init(selection: ProductSelectedNativeTool,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>) {
+        let actualSelection=selection;let actualCancellation=CancellationSource(parent:callerCancellation180)
+        this.selection=selection;this.cancellation=actualCancellation;this.operatorOptions180=operatorOptions180
         this.owner=ProductDirectPreparationOwner({=>
             match(actualCancellation.token.check()){case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>actualSelection.current()}})
     }
@@ -212,7 +215,7 @@ public class ProductNativeToolInvocation {
             let canonicalArguments=if(resourceCall.isSome()){arguments}else{
                 match(selection.shellArguments(arguments)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}}
             consume(selection.product.vnext.executeDeferredCanonicalTool(selection.session,selection.capabilities,
-                match(resourceCall){case Some(call)=>call;case None=>ToolCall("native-user-"+selection.product.nextWorkspaceCallId(),selection.toolName,canonicalArguments)},owner,cancellation.token,budget:budget))
+                match(resourceCall){case Some(call)=>call;case None=>ToolCall("native-user-"+selection.product.nextWorkspaceCallId(),selection.toolName,canonicalArguments)},owner,cancellation.token,budget:budget,operatorOptions180:operatorOptions180))
         }finally{lock.lock();try{starting=false}finally{lock.unlock()}}
     }
     public func approval(): ?ApprovalRequest { owner.approval() }

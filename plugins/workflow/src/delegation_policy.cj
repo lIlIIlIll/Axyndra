@@ -47,13 +47,13 @@ func workflowYieldedOutput111(state: WorkflowYieldState111, lastText: String): A
                 return textValue(lastText)
             }
             if (!state.sections.isEmpty()) {
-                let fields = ArrayList<ValueField>()
+                let output = objectValue([])
                 for (section in state.sections) {
                     for (label in section.labels) {
-                        fields.add(ValueField(label, section.data))
+                        output.put(label, section.data)
                     }
                 }
-                return objectValue(fields.toArray())
+                return output
             }
             let parsed = decodeAgentValue(lastText)
             match (parsed) {

@@ -13,6 +13,13 @@ public func newAcpOwnedWorkerControl113(): AcpOwnedWorkerControl113 {
     AcpOwnedWorkerControl113(paid)
 }
 
+// A broker frontend lends from its already existing bank; constructing its
+// controller does not allocate a second physical worker Root.
+public func newAcpOwnedWorkerControl113(paid: LogicalJsonOwnerReservation): AcpOwnedWorkerControl113 {
+    paid.ensureRetainedPeak(65536)
+    AcpOwnedWorkerControl113(paid)
+}
+
 public interface AcpFrontendCustody113 {
     func retireAfterFrontendHelperReturn113(): Bool
     func isRetired113(): Bool
@@ -199,6 +206,24 @@ public class AcpOwnedWorkerControl113 {
             metadata113 = None<ArrayList<AcpOwnedMetadata113>>
             paid = None<LogicalJsonOwnerReservation>; rootRetired113 = true
             Some(original)
+        } finally { lock.unlock() }
+    }
+
+    // A peer lends this payment from the existing owner bank. Global bank
+    // lease counts include other clients and are not a local no-alias proof.
+    public func takeOwnerFrontendPaymentAfterScopeReturn180(): ?LogicalJsonOwnerReservation {
+        if (!collectMetadataAfterCallerReturn113()) { return None<LogicalJsonOwnerReservation> }
+        lock.lock()
+        try {
+            if (rootRetired113 || unsafeLegacyAliases113 || calls != 0 || atExitServer113.isSome() ||
+                atExitFrames113 != 0 || frontend113.isSome() || unregisteredFrontend113.isSome() ||
+                metadataCollection113 || unregisteredMetadata113.isSome() || !metadata113.getOrThrow().isEmpty() ||
+                startupJournal113.isSome() || startupJournalPayment113.isSome() || startupFrame113.isSome() ||
+                startupUnregisteredFrame113.isSome()) { return None<LogicalJsonOwnerReservation> }
+            metadata113 = None<ArrayList<AcpOwnedMetadata113>>
+            unsafeFixtureServers113 = None<ArrayList<ProductAcpServer>>
+            let actual = paid.getOrThrow(); paid = None<LogicalJsonOwnerReservation>; rootRetired113 = true
+            Some(actual)
         } finally { lock.unlock() }
     }
 

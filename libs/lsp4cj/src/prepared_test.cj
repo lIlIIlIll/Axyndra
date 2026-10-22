@@ -87,10 +87,10 @@ class LspPreparedChannelTests {
     func foreignReusedAndFailedPreparedDispatchCannotWriteAgain(): Unit {
         let channel = PreparedObservedChannel(preparedLspScript())
         let foreignChannel = PreparedObservedChannel(preparedLspScript())
-        let client = LspClient(channel); let foreign = LspClient(foreignChannel)
+        let client = LspClient(channel); let foreignClient = LspClient(foreignChannel)
         try {
             let prepared = lspPreparedRequire(client.prepareRequest("bound-key", "echo", jsonObject([])))
-            @Expect(lspPreparedCode(foreign.dispatchPrepared(prepared)), "lsp.prepared_foreign")
+            @Expect(lspPreparedCode(foreignClient.dispatchPrepared(prepared)), "lsp.prepared_foreign")
             @Expect(foreignChannel.writes.load(), 0)
             channel.reject.store(true)
             @Expect(lspPreparedCode(client.dispatchPrepared(prepared)), "lsp.write_failed")
@@ -98,7 +98,7 @@ class LspPreparedChannelTests {
             @Expect(lspPreparedCode(client.dispatchPrepared(prepared)), "lsp.prepared_reused")
             @Expect(channel.writes.load(), 1)
             @Expect(client.pendingCount(), 0)
-        } finally { let _ = client.close(); let _ = foreign.close() }
+        } finally { let _ = client.close(); let _ = foreignClient.close() }
     }
 
     @TestCase

@@ -37,6 +37,10 @@ Product 的默认 Hub 业务入口已移除；显式安装的 peers/messages/job
 
 以下内容保留原始记录。出现“当前”“仍存”或 `Done` 时，只指对应日期与源码
 检查点；当前候选的依赖和产物必须重新检查，历史失败不会被后续修复覆盖。
+退休源码的历史链接固定到经核对的 #43 提交，不是当前安装或执行入口。
+当前实现分别见 [Program](../plugins/program/src/main.cj)、
+[Eval](../plugins/eval/src/main.cj)、[LSP](../plugins/lsp/src/configuration.cj)、
+[MCP 迁移](mcp-plugin-migration.md)；其余插件按上文发行配方选择。
 
 ## 核对范围
 
@@ -53,18 +57,18 @@ Product 的默认 Hub 业务入口已移除；显式安装的 peers/messages/job
 | --- | --- | --- | --- |
 | 包管理 | `agent_product/src/plugin_runtime.cj`、`agent_product/src/plugin_acquisition.cj`、`agent_product/src/plugin_maintenance.cj`、`agent_extension_runtime/src/plugin_package.cj` | 静态检查、来源锁、摘要、快照、启停状态、staging、更新/回滚/GC；维护获取已不调用 BashTool；删除旧 Web 路径后的无模型 CLI 全生命周期和全新包门禁已实测通过 | 通用组件依赖、完整贡献目录与发行矩阵 |
 | 进程宿主 | `agent_extension_runtime/src/javascript_host.cj`、`agent_product/src/javascript_plugin_host.cj`、`agent_product/src/javascript_plugin_service.cj` | 原生可执行端点复用有界 IPC、generation、取消、隔离 launcher、受控 broker；已有 Tool/Command 贡献；Direct 根准入、只读包进程及文件计划服务已有真实定向证据 | 其他贡献种类；完整服务级授权、挂起和未知效果恢复 |
-| 旧原生 SDK / 业务分发 | `agent_sdk/src/extension.cj`、`agent_extensions/src/extensions.cj`、`agent_product/src/tools.cj` | 参数/计划校验、ToolPipeline 和 canonical 执行链；AST 与网页搜索业务分支已删除 | `HostOperationIntent`、`ProductExtensionOperationHost` 仍让宿主执行 workspace 文件搜索/写入；注册包装不能视为外迁 |
-| MCP Client | `agent_product/src/mcp_runtime.cj`、`extensions/mcp_extension/src/mcp_extension.cj`、`agent_mcp`、`libs/mcp4cj` | 已有协议、transport、发现/调用/取消契约；MCP adapter 已从通用 `agent_extensions` 拆出 | 产品仍链接独立 adapter package；客户端配置、发现、连接、tool bridge、协议依赖仍须归属可安装 MCP 插件 |
-| MCP Server | `agent_product/src/product_mcp_server.cj`、`agent_app/src/mcp_server_cli.cj` | 外部请求进入既有受控执行的基础 | Server 组件、启动命令独立交付；外部 principal 不伪造模型决定；防止导出循环 |
+| 旧原生 SDK / 业务分发 | `agent_sdk/src/extension.cj`、[agent_extensions/src/extensions.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_extensions/src/extensions.cj)、`agent_product/src/tools.cj` | 参数/计划校验、ToolPipeline 和 canonical 执行链；AST 与网页搜索业务分支已删除 | `HostOperationIntent`、`ProductExtensionOperationHost` 仍让宿主执行 workspace 文件搜索/写入；注册包装不能视为外迁 |
+| MCP Client | [agent_product/src/mcp_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/mcp_runtime.cj)、`extensions/mcp_extension/src/mcp_extension.cj`、`agent_mcp`、`libs/mcp4cj` | 已有协议、transport、发现/调用/取消契约；MCP adapter 已从通用 `agent_extensions` 拆出 | 产品仍链接独立 adapter package；客户端配置、发现、连接、tool bridge、协议依赖仍须归属可安装 MCP 插件 |
+| MCP Server | [agent_product/src/product_mcp_server.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/product_mcp_server.cj)、[agent_app/src/mcp_server_cli.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_app/src/mcp_server_cli.cj) | 外部请求进入既有受控执行的基础 | Server 组件、启动命令独立交付；外部 principal 不伪造模型决定；防止导出循环 |
 | AST / web search | `plugins/ast`、`plugins/web_search` | AST 查询/编辑和 Brave/Tavily/Searx 业务均已外迁，旧宿主实现、静态 package 和专属 search CLI 已删除；复用通用只读进程、不可变文件计划和受控 HTTP；删除后的相关合同、122 项 Product 单元、真实 CLI 管理/调用及全新包门禁已通过 | 完整发行及性能矩阵按 A0/A7 继续验收 |
-| GitHub | `agent_product/src/github_tool.cj` | 网络/进程/凭据和效果管线 | API/CLI、schema、命令、结果由插件持有 |
+| GitHub | [agent_product/src/github_tool.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/github_tool.cj) | 网络/进程/凭据和效果管线 | API/CLI、schema、命令、结果由插件持有 |
 | LSP / DAP | `plugins/lsp`、`plugins/dap`、`libs/lsp4cj`、`libs/dap4cj` | 进程控制、文件审批、工作区版本 | 两个独立安装和生命周期；Product 内建 DAP 已删除，原完整调试合同迁移到公开 canonical 入口，当前二进制验收待运行 |
-| eval | `agent_product/src/eval_runtime.cj`、`agent_product/src/tools.cj` | 隔离、进程回收、取消、预算 | 语言运行器和连续单元私有状态外迁；不共享插件宿主/PTC 解释器状态 |
+| eval | [agent_product/src/eval_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/eval_runtime.cj)、`agent_product/src/tools.cj` | 隔离、进程回收、取消、预算 | 语言运行器和连续单元私有状态外迁；不共享插件宿主/PTC 解释器状态 |
 | Workspace / Shell | `agent_product/src/tools.cj`、`agent_product/src/local_infrastructure.cj`、`extensions/workspace_search_extension`、`extensions/workspace_write_extension` | 文件身份/边界、冲突校验、原子变更、进程/PTY/网络规则 | 工具表达和算法外迁；宿主保留通用原语；无 Shell 时安装器仍可工作 |
-| Program / file plans | `agent_product/src/program_worker.cj`、`agent_product/src/program_runtime.cj`、`agent_product/src/file_application_plan.cj` | #43 派生 Operation、父预算、只读限制、精确计划审批 | worker/语言适配/工具包装外迁，不能另建执行权威或扩张可写 PTC |
+| Program / file plans | [agent_product/src/program_worker.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_worker.cj)、[agent_product/src/program_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_runtime.cj)、`agent_product/src/file_application_plan.cj` | #43 派生 Operation、父预算、只读限制、精确计划审批 | worker/语言适配/工具包装外迁，不能另建执行权威或扩张可写 PTC |
 | Skills / context | `agent_skills`、`plugins/skills/src/discovery.cj`、`agent_product/src/prompt_runtime.cj`、`tool_runtime/src/context.cj` | 来源信任、有界发现、惰性引用、固定内容；工具上下文已换为不可变通用投影 | `SkillStackSnapshot` 仍进入 Core、runtime、store 和 embed；完整上下文插件化仍须接入唯一版本体系 |
-| Memory / compaction | `agent_product/src/memory_tools.cj`、`agent_core/src/context.cj`、`agent_runtime` | canonical 原始事实、合法切点、预算和 checkpoint | 抽取、检索/embedding、候选摘要和模型建议进入策略插件 |
-| Workflow | `agent_product/src/todo_tool.cj`、`agent_product/src/goal_runtime.cj`、`agent_product/src/task_product.cj`、`task_runtime` | 子运行准入、审批、共享预算、父子取消 | Planning/Todo/Goal/Subagent 工具、角色和路由外迁 |
+| Memory / compaction | [agent_product/src/memory_tools.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/memory_tools.cj)、`agent_core/src/context.cj`、`agent_runtime` | canonical 原始事实、合法切点、预算和 checkpoint | 抽取、检索/embedding、候选摘要和模型建议进入策略插件 |
+| Workflow | [agent_product/src/todo_tool.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/todo_tool.cj)、[agent_product/src/goal_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/goal_runtime.cj)、`agent_product/src/task_product.cj`、`task_runtime` | 子运行准入、审批、共享预算、父子取消 | Planning/Todo/Goal/Subagent 工具、角色和路由外迁 |
 | Model | `model_adapters`、`agent_product/src/product.cj` | `ModelPort`、唯一 AgentCore/Attempt、预算、冻结输入、结果验证 | wire/provider/auth/discovery 外迁；缺模型仍可启动管理；不能隐藏重试 |
 
 ### 配置、命令与数据
@@ -72,7 +76,7 @@ Product 的默认 Hub 业务入口已移除；显式安装的 peers/messages/job
 | 表面 | 当前格式或位置 | 切换要求 |
 | --- | --- | --- |
 | 主配置 | `agent_product/src/config.cj` 检查 `schema_version: 1`；包含 shell、model、compaction 等业务配置 | 插件配置独立命名空间；宿主政策和 grant 独立；未知字段/旧版本显式拒绝或按已定义迁移 |
-| MCP 配置 / 生态声明 | `agent_product/src/mcp_runtime.cj`、包 descriptor 的 MCP component | 解析/适配进入 MCP 组件；静态 inspect/help 不启动服务；缺插件明确报告 |
+| MCP 配置 / 生态声明 | [agent_product/src/mcp_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/mcp_runtime.cj)、包 descriptor 的 MCP component | 解析/适配进入 MCP 组件；静态 inspect/help 不启动服务；缺插件明确报告 |
 | 插件 HTTP 配置 | `agent_product/src/plugin_http_configuration.cj`；按包身份/摘要冻结非秘密配置、精确请求 grant 与 opaque credential refs | 新原生 HTTP 插件不读取旧 provider 环境变量；缺少匹配配置显式拒绝；更新摘要不继承旧授权，回滚不自动启用 |
 | CLI / slash | 通用 `agent_app/src/tools_cli.cj`、`agent_app/src/plugin_cli.cj`；仍有 `mcp-server` 和 `/mcp` 业务入口 | `tools inspect/invoke` 与 `plugin` 管理不依赖模型调用；专属 `search`/`q` 已退役；其余业务命令须来自有类型贡献和前端能力协商 |
 | 插件安装事实 | 用户/工作区 `plugins/lock.jsonl`、`plugins/packages` 和版本历史，由 `ProductPluginRuntime` 管理 | 复用来源/内容锁；未知版本不能覆盖；升级中断保留旧代；回滚不恢复撤销授权 |
@@ -255,7 +259,7 @@ Product 原生测试先运行 `python3 support_tests/native_plugin_fixture/check
 | 无 Shell 注册的维护获取 | 在 `support_tests/product_thread_runtime_contract` 构建后执行 `../../scripts/pinned_cangjie target/release/bin/main --plugin-acquisition-contract` | 最终实际通过；移除两项 Shell 注册后，真实 Git/npm 获取、原生命令执行、来源锁/Receipt、失败更新和 staging 清理全部通过 |
 | 完整 Product Thread 契约 | 在上述 package 执行 `../../scripts/pinned_cangjie cjpm build`，再执行 `../../scripts/pinned_cangjie target/release/bin/main`（无筛选参数） | 最终实际通过、exit 0；Program/类型化 broker/原生审批与 Receipt 路径实际执行；这仍不是全部发行矩阵 |
 | Thread 取消竞态 | 在 `support_tests/thread_runtime_integration_contract` 执行 `../../scripts/pinned_cangjie cjpm run` | 最终实际通过；finish、child token、resolveOperation 校验预期 Run/epoch，旧调用不能结算后续 Run |
-| MCP adapter 提取 | 在 `support_tests/mcp_extension_contract` 执行 `../../scripts/pinned_cangjie cjpm run` | 实际通过；只证明已提取的编译 adapter 契约，不证明外置 MCP 插件 |
+| MCP adapter 提取 | 在 [support_tests/mcp_extension_contract (historical source)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/support_tests/mcp_extension_contract/src/main.cj) 执行 `../../scripts/pinned_cangjie cjpm run` | 实际通过；只证明已提取的编译 adapter 契约，不证明外置 MCP 插件 |
 
 完整 Product 汇总逐一核对 95 个不同用例与 cjpm dry-run 清单；每个独立进程的
 输出为 `TOTAL 95 / PASSED 1 / SKIPPED 94`，汇总时只计其指定用例，不能把被筛掉的

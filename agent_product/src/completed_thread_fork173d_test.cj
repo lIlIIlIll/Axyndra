@@ -159,6 +159,7 @@ class InstalledCompletedThreadFork173dTests {
         // oracle snapshot/container/codec before these test-only copies.
         let oracle = reserveNativeControlMetadata(8388608)
         try {
+            @Expect(f.database.scalarInt("SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"), 0)
             coreCompletedCheckpoint173d(f)
             let before = completedForkExecutionCount173d(f.database)
             let original = SqliteThreadCommitSink(f.database).loadThread(ThreadId(f.session.value))

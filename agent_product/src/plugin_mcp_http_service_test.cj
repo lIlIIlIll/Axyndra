@@ -268,8 +268,6 @@ class PluginMcpHttpServiceTests {
             @Expect(fixture.observed().isEmpty())
             @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations"), 0)
             @Expect(session.approval().isNone())
-            @Expect(fixture.product.unregisterTool("bash"))
-            @Expect(fixture.product.unregisterTool("bash_readonly"))
             let started = lifecycleTestRequire(session.handle(fixture.command() + " --approve"))
             @Expect(!started.agentInvoked && started.approval.isNone())
             let observed = fixture.observed()

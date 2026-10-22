@@ -37,7 +37,8 @@ main(): Int64 {
         let application = product.applicationSession()
         let server = ProductJsonlRpcServer(
             application,
-            {frame => output.add(frame)}
+            {frame => output.add(frame)},
+            reserveProductControlMetadata113
         )
         if (getVariable("AXYNDRA_RPC_CONTRACT_SCOPE") == Some("bash-once")) {
             expect(server.handle("{\"id\":\"once\",\"type\":\"bash\",\"command\":\"sleep 0.05; printf rpc-once\"}") == "",
@@ -427,6 +428,23 @@ main(): Int64 {
                 .contains("\"answer\":\"reviewed\""),
             "RPC resolves durable child transcripts after task completion"
         )
+        let terminalChildren = server.handle(
+            "{\"id\":\"sub-terminal\",\"type\":\"get_subagents\",\"includeTerminal\":true}")
+        expect(
+            terminalChildren.contains("\"success\":true") &&
+                terminalChildren.contains("\"id\":\"fixture-child\"") &&
+                terminalChildren.contains("\"status\":\"completed\"") &&
+                server.handle("{\"id\":\"sub-active-explicit\",\"type\":\"get_subagents\",\"includeTerminal\":false}")
+                    .contains("\"subagents\":[]"),
+            "RPC explicit terminal query observes the actual completed child without changing active-only queries"
+        )
+        for (invalid in ["null", "\"true\""]) {
+            let rejected = server.handle(
+                "{\"id\":\"sub-terminal-invalid\",\"type\":\"get_subagents\",\"includeTerminal\":" + invalid + "}")
+            expect(rejected.contains("\"success\":false") &&
+                rejected.contains("includeTerminal must be a boolean"),
+                "RPC terminal selection rejects non-boolean input rather than widening the query")
+        }
         let taskSession = application.id()
         expect(
             application.newSession().isOk() && application.allSubagents().isEmpty() &&
@@ -434,6 +452,15 @@ main(): Int64 {
                 application.switchSession(taskSession).isOk() &&
                 application.subagentTranscript(subagentId: "fixture-child").isOk(),
             "subagent snapshots and transcripts are scoped to the active " + "parent session"
+        )
+        expect(
+            application.switchSession(handoffSource).isOk() &&
+                server.handle("{\"id\":\"sub-terminal-other-parent\",\"type\":\"get_subagents\",\"includeTerminal\":true}")
+                    .contains("\"subagents\":[]") &&
+                application.switchSession(taskSession).isOk() &&
+                server.handle("{\"id\":\"sub-terminal-restored-parent\",\"type\":\"get_subagents\",\"includeTerminal\":true}")
+                    .contains("\"id\":\"fixture-child\""),
+            "RPC terminal snapshots remain isolated to the actual active parent session"
         )
         let toolCountBeforeHost = application.tools().size
         let hostToolsResponse = server.handle(
@@ -653,7 +680,8 @@ main(): Int64 {
         let asyncOutput = FrameCollector()
         let asyncServer = ProductJsonlRpcServer(
             asyncApplication,
-            {frame => asyncOutput.add(frame)}
+            {frame => asyncOutput.add(frame)},
+            reserveProductControlMetadata113
         )
         installWorkflowContractPolicy(asyncProduct)
         let asyncTaskDeadline = agentUtcMillis() + 30000
@@ -686,7 +714,8 @@ main(): Int64 {
         let asyncBashOutput = FrameCollector()
         let asyncBashServer = ProductJsonlRpcServer(
             asyncBashApplication,
-            {frame => asyncBashOutput.add(frame)}
+            {frame => asyncBashOutput.add(frame)},
+            reserveProductControlMetadata113
         )
         let asyncBashDeadline = agentUtcMillis() + 30000
         let bashCompletedFrame = "\"type\":\"bash\",\"status\":\"completed\""
@@ -750,7 +779,8 @@ main(): Int64 {
         let providerApplication = providerProduct.applicationSession()
         let providerServer = ProductJsonlRpcServer(
             providerApplication,
-            {_ => ()}
+            {_ => ()},
+            reserveProductControlMetadata113
         )
         let providerCatalog = providerServer.handle("{\"id\":\"provider-list\",\"type\":" + "\"get_login_providers\"}")
         expect(
@@ -1059,7 +1089,7 @@ func runTodoRpcPendingReviewContract(root:String):Unit {
         stateRoot:directory+"/sessions",workspaceRoot:directory,fixture:true,
         approvalMode:ApprovalMode.AlwaysAsk,asyncEnabled:false)).value().getOrThrow()
     let output=FrameCollector();let application=product.applicationSession()
-    let server=ProductJsonlRpcServer(application,{frame=>output.add(frame)})
+    let server=ProductJsonlRpcServer(application,{frame=>output.add(frame)},reserveProductControlMetadata113)
     let database=SqliteDatabase(directory+"/sessions/state.db")
     try{
         installWorkflowContractPolicy(product)

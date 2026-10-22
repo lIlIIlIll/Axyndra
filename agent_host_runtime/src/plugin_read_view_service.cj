@@ -35,6 +35,9 @@ public func hostValidatePluginReadViewParent(host: HostJavaScriptPluginHost, set
         configuration.ordinaryReadTools.contains(tool) != plan.field("read_granted").getOrThrow().asBool()) {
         return hostPluginResourceError("read_view.grant_changed", "ordinary Tool operator grant changed after preparation")
     }
+    let selectedPayload = match (configuration.toolPayloadLimits(tool)) { case Some(value) => value.value(); case None => nullValue() }
+    if (canonicalAgentValue(selectedPayload) != canonicalAgentValue(plan.field("tool_payload_limits").getOrThrow())) {
+        return hostPluginResourceError("read_view.payload_changed", "ordinary read-view representation profile changed after preparation") }
     let intent = plan.field("intents").getOrThrow().items[0]
     match (hostValidateReadViewDeadline(host, configuration, namespace, tool, generation, intent)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -52,8 +55,8 @@ public func hostRegisterPluginReadViewService(catalog: ToolCatalog, host: HostJa
         "Execute a package worker in an exact, host-authorized read-resource snapshot.",
         hostObjectSchema([hostSchemaProperty("plugin", "string"), hostSchemaProperty("generation", "string"),
             hostSchemaProperty("package_digest", "string"), hostSchemaProperty("configuration_digest", "string"),
-            hostSchemaProperty("contribution", "string"), hostSchemaProperty("intent", "object")],
-            ["plugin", "generation", "package_digest", "configuration_digest", "contribution", "intent"])),
+            hostSchemaProperty("contribution", "string"), ValueField("tool_payload_limits", objectValue([ValueField("type", listValue([textValue("object"), textValue("null")]))])), hostSchemaProperty("intent", "object")],
+            ["plugin", "generation", "package_digest", "configuration_digest", "contribution", "tool_payload_limits", "intent"])),
         Capability(CapabilityKind.WorkspaceRead), hostServiceOnly: true, neverReplay: true,
         implementationVersion: HOST_READ_VIEW_FINGERPRINT, implementationFingerprint: HOST_READ_VIEW_FINGERPRINT,
         capabilityResolver: Some({ call => readViewRequiredCapabilities(call.arguments)[0] }),
@@ -117,7 +120,23 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
         } finally { cleanupLock.unlock() }
     }
 
+    public func executeObserved(context: ToolInvocationContext, prepared: PreparedToolInvocation): ToolExecutionOutcome {
+        let cleanupData: Array<String> = ["not_returned"]
+        let returned = executeActual(context, prepared, cleanupData)
+        // execute returns cancellation only after the original channel and
+        // private view acknowledged cleanup. Pending cleanup returns Unknown.
+        let evidence: ?ToolExecutionCancellationEvidence = match (returned) {
+            case Result.Err(error) => observeToolExecutionCancellation(context, prepared, error, context.cancellation)
+            case Result.Ok(_) => None
+        }
+        ToolExecutionOutcome(returned, cancellationEvidence: evidence,
+            diagnostic: objectValue([ValueField("readview_executor_entered", boolValue(true)),
+                ValueField("cleanup_return", textValue(cleanupData[0]))]))
+    }
     public func execute(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ToolResult> {
+        executeActual(context, prepared, ["not_returned"])
+    }
+    private func executeActual(context: ToolInvocationContext, prepared: PreparedToolInvocation, cleanupData: Array<String>): Result<ToolResult> {
         if (prepared.source.kind != PreparedInvocationSourceKind.Derived || prepared.source.parentOperationId.isNone() ||
             prepared.source.operationRoot.isNone() || !isReadViewServiceChildPlan(prepared.operationPlan)) {
             return hostPluginResourceError("read_view.source_invalid", "read view requires an admitted exact ParentIntent child")
@@ -150,8 +169,11 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
             case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
         }
         match (reserveView()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let view = try { Directory.createTemp("/tmp").toString() }
-            catch (_: Exception) {
+        let view = try {
+            let scratch = Path(settingsRoot).join("read-views")
+            if (!exists(scratch)) { Directory.create(scratch, recursive: true) }
+            Directory.createTemp(scratch.toString()).toString()
+        } catch (_: Exception) {
                 cleanupLock.lock(); activeViews--; cleanupLock.unlock()
                 return hostPluginResourceError("read_view.snapshot_unavailable", "cannot create a private bounded read view")
             }
@@ -161,7 +183,12 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
             case Result.Ok(value) => value
             case Result.Err(error) =>
                 cancellation.close(); let done = cleanup(owned)
+                cleanupData[0] = if (done.isError()) { "pending" } else { "acknowledged" }
                 cleanupLock.lock(); activeViews--; if (done.isError()) { retained.add(owned) }; cleanupLock.unlock()
+                if (done.isError()) {
+                    return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                        "read_view.cleanup_pending", "worker cleanup is still owned; the read view was not released", retryable: false, fallbackAllowed: false))
+                }
                 return Result.Err(error)
         }
         let finished = CancellationSource()
@@ -184,9 +211,14 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
                 registration.dispose(); cancellation.close()
             }
         let done = cleanup(owned)
+        cleanupData[0] = if (done.isError()) { "pending" } else { "acknowledged" }
         cleanupLock.lock(); activeViews--; if (done.isError()) { retained.add(owned) }; cleanupLock.unlock()
-        if (done.isError()) { return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
-            "read_view.cleanup_pending", "worker cleanup is still owned; the read view was not released", retryable: false, fallbackAllowed: false)) }
+        if (done.isError()) {
+            match (outcome) { case Result.Ok(value) => value.releasePayload(); case Result.Err(_) => () }
+            return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "read_view.cleanup_pending", "worker cleanup is still owned; the read view was not released", retryable: false, fallbackAllowed: false))
+        }
+
         outcome
     }
 
@@ -240,7 +272,12 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
             
             case None => ()
         }
-        let maximumOutput = if (request.field("input").isSome()) { HOST_READ_VIEW_INPUT_OUTPUT_BYTES } else { PLUGIN_READONLY_PROCESS_OUTPUT_BYTES }
+        let payload = ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("tool_payload_limits").getOrThrow())
+        let serviceMaximum = match (payload) { case Some(value) => value.maxServiceResponseBytes - 4096
+            case None => if (request.field("input").isSome()) { 262144 } else { 196608 } }
+        if (serviceMaximum < 128) { return hostPluginResourceError("read_view.output_limit", "selected profile cannot contain the worker service envelope") }
+        let maximumOutput = match (payload) { case Some(_) => serviceMaximum
+            case None => if (request.field("input").isSome()) { HOST_READ_VIEW_INPUT_OUTPUT_BYTES } else { PLUGIN_READONLY_PROCESS_OUTPUT_BYTES } }
         let originalLimits = context.budget.processLimits
         let limits = ExecutionResourceLimits(
             maxOutputBytes: if (originalLimits.maxOutputBytes > 0) { min(originalLimits.maxOutputBytes, maximumOutput) } else { maximumOutput },
@@ -250,6 +287,10 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
         var timeout = hostPluginProcessTimeout(request)
         if (context.cancellation.deadlineMillis > 0) { timeout = min(timeout, context.cancellation.deadlineMillis - agentUtcMillis()) }
         if (timeout < 1) { return hostPluginResourceError("read_view.deadline", "read view deadline expired before launch") }
+        let payment = try { reserveNativeDocumentPayload(maximumOutput) } catch (_: Exception) {
+            return hostPluginResourceError("read_view.output_capacity", "shared logical JSON output capacity is exhausted") }
+        var transferred = false
+        try {
         let channel = match (processes.openChannel(ProcessRequest(executable, operationId: prepared.operationId,
             arguments: argv.toArray(), workingDirectory: view, filesystemRoot: view,
             sandboxMode: ProcessSandboxMode.IsolatedReadOnly, readOnlyMounts: [packageRoot],
@@ -259,10 +300,16 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
         }
         match (channel.closeInput()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let output = ArrayList<Byte>(); let errors = ArrayList<Byte>(); var outDone = false; var errDone = false
+        var encodedBytes: Int64 = 128
         while (!outDone || !errDone) {
             match (hostReadViewCancellation(context)) { case Result.Err(error) => let _ = channel.abort(); return Result.Err(error); case Result.Ok(_) => () }
             for (stream in [ProcessChannelStream.Stdout, ProcessChannelStream.Stderr]) {
                 let read = match (channel.read(stream, 8192, 25)) { case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+                let nextEncoded = encodedBytes + hostReadViewEscapedBytes(read.bytes)
+                if (read.bytes.size > limits.maxOutputBytes - output.size - errors.size || nextEncoded > serviceMaximum) {
+                    let _ = channel.abort(); return hostPluginResourceError("read_view.output_limit", "worker output exceeds the frozen raw or escaped service bound") }
+                payment.ensureDecoded(output.size + errors.size + read.bytes.size + nextEncoded, 32)
+                encodedBytes = nextEncoded
                 match (stream) {
                     case ProcessChannelStream.Stdout => output.add(all: read.bytes); outDone = read.eof
                     case ProcessChannelStream.Stderr => errors.add(all: read.bytes); errDone = read.eof
@@ -285,7 +332,19 @@ public class HostPluginReadViewExecutor <: ToolExecutor {
         let result = objectValue([ValueField("exit_code", integerValue(status)),
             ValueField("stdout", textValue(String.fromUtf8(output.toArray()))), ValueField("stderr", textValue(String.fromUtf8(errors.toArray()))),
             ValueField("timed_out", boolValue(false)), ValueField("truncated", boolValue(false))])
-        if (stringifyUnifiedJson(result).size > (if (request.field("input").isSome()) { 262144 } else { 196608 })) { return hostPluginResourceError("read_view.output_limit", "encoded worker result exceeds its service bound") }
-        Result.Ok(ToolResult(prepared.call.callId, result, isError: status != 0))
+        payment.ensureDecoded(logicalJsonWriteReservationBytes(result, serviceMaximum), logicalJsonValueNodeCount(result))
+        if (stringifyUnifiedJson(result).size > serviceMaximum) { return hostPluginResourceError("read_view.output_limit", "encoded worker result exceeds its service bound") }
+        let returned = ToolResult(prepared.call.callId, result, isError: status != 0, payloadLease: Some(ToolResultPayloadLease({ => payment.close() })))
+        transferred = true; Result.Ok(returned)
+        } finally { if (!transferred) { payment.close() } }
     }
+}
+
+func hostReadViewEscapedBytes(bytes: Array<Byte>): Int64 {
+    var total: Int64 = 0
+    for (byte in bytes) {
+        total += if (byte == 34u8 || byte == 92u8 || byte == 8u8 || byte == 9u8 || byte == 10u8 || byte == 12u8 || byte == 13u8) { 2 }
+            else if (byte < 32u8) { 6 } else { 1 }
+    }
+    total
 }

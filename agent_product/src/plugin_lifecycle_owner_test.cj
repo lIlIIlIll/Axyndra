@@ -64,14 +64,15 @@ class LifecycleOwnerFixture {
             approvalMode: ApprovalMode.AlwaysAsk, asyncEnabled: false)))
         database = SqliteDatabase(configuration.root + "/state/state.db")
         processes = LifecycleCleanupGate(configuration.workspace)
-        owner = ProductPluginLifecycleOwner(database, processes)
+        owner = ProductPluginLifecycleOwner(database, processes, operations: product.vnext.operations)
         control = ProductPluginLifecycleControl(owner)
         if (registerControl) { lifecycleTestRequire(product.registerTool(control.descriptor(), control)) }
     }
     func ceiling(): CapabilitySet { CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn), Capability(CapabilityKind.ExtensionInvoke)]) }
     func grant(instance: String): ProductPluginLifecycleLaunchGrant {
         lifecycleTestRequire(config.bindService("stdio", ThreadId("target-thread"), instance,
-            configuration.workspace, ExecutionResourceLimits(), permissionDomain))
+            configuration.workspace, ExecutionResourceLimits(), permissionDomain,
+            registryAdmission: Some(configuration.registryAdmission())))
     }
     func launch(instance: String, thread: String): ProductPluginLifecycleLease {
         let result = lifecycleTestRequire(control.launch(product.vnext, SessionId(thread), grant(instance), ceiling(),
@@ -123,7 +124,8 @@ class ProductPluginLifecycleOwnerTests {
             @Expect(fixture.processes.opens, 1)
             let secondGrant = lifecycleTestRequire(lifecycleTestRequire(fixture.configuration.load()).bindService("stdio",
                 ThreadId("other-target-thread"), fixture.grant.instanceIdentity, fixture.configuration.workspace,
-                ExecutionResourceLimits(), lifecycleText(fixture.grant.launchPlan, "permission_domain")))
+                ExecutionResourceLimits(), lifecycleText(fixture.grant.launchPlan, "permission_domain"),
+                registryAdmission: Some(fixture.configuration.registryAdmission())))
             let second = lifecycleTestRequire(fixture.control.launch(fixture.product.vnext, SessionId("second-scope-maintenance"),
                 secondGrant, fixture.ceiling(), { lease, _, _ => Result.Ok(lifecycleControlEcho(lease, "second-scope\n")) },
                 approvalDecision: Some(ApprovalDecision.Approve))).lease.getOrThrow()

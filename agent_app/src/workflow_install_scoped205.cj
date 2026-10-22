@@ -7,6 +7,8 @@ import std.fs.*
 import std.sync.*
 import yjson_support.*
 
+private let appPlanWorkflowInstallationScopes205 = AppPlanWorkflowInstallationScopes205()
+
 // Private synchronous installation only. Every child comes from the actual
 // imported Registry record. No global legacy debt, invocation or Source is
 // cleared. A failed/unknown installation retains this exact prelinked owner.
@@ -75,7 +77,6 @@ private class AppPlanWorkflowInstallationScopes205 {
         } finally { lock.unlock() }
     }
 }
-private let appPlanWorkflowInstallationScopes205 = AppPlanWorkflowInstallationScopes205()
 
 private func appInstallPlanWorkflowFrame205(actual: AppPlanWorkflowInstallationFrame205,
     product: ProductRuntime, record: ProductPluginRecord): Unit {

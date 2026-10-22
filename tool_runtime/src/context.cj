@@ -5,6 +5,8 @@ import agent_runtime.*
 import std.collection.*
 import std.deriving.*
 import std.sync.*
+import yjson_support.*
+import yjson.*
 
 // A deliberately filtered, immutable view.  It never reads the host
 // environment; composition roots must explicitly provide every visible value.
@@ -168,12 +170,33 @@ public class ToolContextDescriptor {
     public let cwd: String
     public let environment: ToolEnvironmentView
     public let services: ToolServiceView
+    // Frozen request configuration, not execution authority. Permissions still
+    // evaluate the invocation capabilities against its one normalized plan.
+    private let frozenExecutionSettings180: AgentValue
+    public prop executionSettings180: AgentValue { get() {
+        if (frozenExecutionSettings180.unifiedKind == ValueKind.Null) { frozenExecutionSettings180 }
+        else { frozenExecutionSettings180.deepCopy() }
+    } }
+    public let modelFaultCounters180: ?ModelStreamFaultCounters180
+    public func measureExecutionSettings180(meter: ToolSnapshotMeasure159): Unit {
+        meter.addValue159(frozenExecutionSettings180)
+        if (modelFaultCounters180.isSome()) { meter.addSlots159(32) }
+    }
+    public init(base: ToolContextDescriptor) {
+        workspaceRoot = base.workspaceRoot; cwd = base.cwd
+        environment = base.environment; services = base.services
+        frozenExecutionSettings180 = base.frozenExecutionSettings180
+        modelFaultCounters180 = base.modelFaultCounters180
+    }
+
 
     public init(
         workspaceRoot!: String = "",
         cwd!: String = "",
         environment!: ToolEnvironmentView = ToolEnvironmentView(),
-        services!: ToolServiceView = ToolServiceView()
+        services!: ToolServiceView = ToolServiceView(),
+        executionSettings180!: AgentValue = nullValue(),
+        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>
     ) {
         if (workspaceRoot.contains("\u{0000}") || cwd.contains("\u{0000}")) {
             throw IllegalArgumentException("tool context paths must not contain NUL")
@@ -182,6 +205,22 @@ public class ToolContextDescriptor {
         this.cwd = cwd
         this.environment = ToolEnvironmentView(entries: environment.entries())
         this.services = ToolServiceView(descriptors: services.descriptors())
+        if (executionSettings180.unifiedKind != ValueKind.Null && executionSettings180.unifiedKind != ValueKind.Object) {
+            throw IllegalArgumentException("execution settings must be an object or absent")
+        }
+        this.frozenExecutionSettings180 = if (executionSettings180.unifiedKind == ValueKind.Null) { executionSettings180 } else { executionSettings180.deepCopy() }
+        this.modelFaultCounters180 = modelFaultCounters180
+    }
+    // The base has already frozen its immutable environment and service views.
+    // Adding request configuration must not duplicate those paid snapshots.
+    public init(base: ToolContextDescriptor, executionSettings180: AgentValue,
+        modelFaultCounters180!: ?ModelStreamFaultCounters180 = None<ModelStreamFaultCounters180>) {
+        if (executionSettings180.unifiedKind != ValueKind.Object && executionSettings180.unifiedKind != ValueKind.Null) {
+            throw IllegalArgumentException("execution settings must be an object or absent")
+        }
+        workspaceRoot = base.workspaceRoot; cwd = base.cwd; environment = base.environment; services = base.services
+        this.frozenExecutionSettings180 = if (executionSettings180.unifiedKind == ValueKind.Null) { executionSettings180 } else { executionSettings180.deepCopy() }
+        this.modelFaultCounters180 = modelFaultCounters180
     }
 }
 
@@ -190,6 +229,7 @@ private type InvocationValue_budgetModeFn159 = ?() -> BudgetMode
 private type InvocationValue_hostDocumentCommitParticipant159 = ?PluginDocumentCommitParticipant
 
 public class ToolInvocationContext {
+    private var ownedInvocationData180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var invocationData_runId159: Option<RunId> = None<RunId>
     public prop runId: RunId {
         get() {
@@ -307,6 +347,61 @@ public class ToolInvocationContext {
             } finally { toolSnapshotLock159.unlock() }
         }
     }
+    private var invocationData_executionSettings180: Option<AgentValue> = None<AgentValue>
+    public prop executionSettings180: AgentValue {
+        get() {
+            toolSnapshotLock159.lock()
+            try {
+                requireToolSnapshotFrame159()
+                match (invocationParent159) {
+                    case Some(parent) => if (invocationRetained159) { parent.retainedData_executionSettings180() } else { parent.executionSettings180 }
+                    case None => let value = invocationData_executionSettings180.getOrThrow()
+                        if (value.unifiedKind == ValueKind.Null) { value } else { fundSettingsCopy180(value); value.deepCopy() }
+                }
+            } finally { toolSnapshotLock159.unlock() }
+        }
+    }
+    private var settingsCopyInvoice180: Int64 = 131072
+    private func fundSettingsCopy180(value: AgentValue): Unit {
+        if (value.unifiedKind == ValueKind.Null) { return }
+        match (ownedInvocationData180) {
+            case Some(paid) =>
+                let meter = ToolSnapshotMeasure159(paid, priorInvoice: settingsCopyInvoice180)
+                meter.addValue159(value); meter.addSlots159(32); meter.fund159()
+                settingsCopyInvoice180 = meter.retainedInvoice159()
+            case None => match (ownedToolSnapshot159) {
+                case Some(owned) => owned.reserveInvocationSettingsCopy180(value)
+                case None => match (deferredInvocationPayment159) {
+                    case Some(owned) => owned.reserveInvocationSettingsCopy180(value); case None => () }
+            }
+        }
+    }
+    public func modelSettingsDescriptor180(): ToolContextDescriptor {
+        beginInvocationAction159()
+        try {
+            let settings = executionSettings180
+            // The getter paid its copy. This second immutable descriptor copy
+            // is prepaid on the same actual view before construction.
+            toolSnapshotLock159.lock()
+            try { fundSettingsCopy180(settings) } finally { toolSnapshotLock159.unlock() }
+            ToolContextDescriptor(executionSettings180: settings, modelFaultCounters180: modelFaultCounters180)
+        } finally { endInvocationAction159() }
+    }
+
+    private var invocationData_modelFaultCounters180: Option<Option<ModelStreamFaultCounters180>> = None<Option<ModelStreamFaultCounters180>>
+    public prop modelFaultCounters180: ?ModelStreamFaultCounters180 {
+        get() {
+            toolSnapshotLock159.lock()
+            try {
+                requireToolSnapshotFrame159()
+                match (invocationParent159) {
+                    case Some(parent) => if (invocationRetained159) { parent.retainedData_modelFaultCounters180() } else { parent.modelFaultCounters180 }
+                    case None => invocationData_modelFaultCounters180.getOrThrow()
+                }
+            } finally { toolSnapshotLock159.unlock() }
+        }
+    }
+
     private var invocationData_approvalModeOverride159: Option<InvocationValue_approvalModeOverride159> = None<InvocationValue_approvalModeOverride159>
     public prop approvalModeOverride: ?ApprovalMode {
         get() {
@@ -463,8 +558,10 @@ public class ToolInvocationContext {
         toolSetSnapshot!: ?ToolSetSnapshot = None,
         trustedControl!: Bool = false,
         hostDocumentCommitParticipant!: ?PluginDocumentCommitParticipant = None,
-        ownedToolSetSnapshot159!: ?SharedToolSetSnapshot159 = None
+        ownedToolSetSnapshot159!: ?SharedToolSetSnapshot159 = None,
+        ownedInvocationData180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     ) {
+        this.ownedInvocationData180 = ownedInvocationData180
         this.invocationData_runId159 = Some(runId)
         this.invocationData_sessionId159 = Some(sessionId)
         if (epoch < 0) { throw IllegalArgumentException("tool invocation epoch must not be negative") }
@@ -475,6 +572,8 @@ public class ToolInvocationContext {
         this.invocationData_environment159 = Some(ToolEnvironmentView(entries: toolContext.environment.entries()))
         this.invocationData_cancellation159 = Some(cancellation)
         this.invocationData_services159 = Some(ToolServiceView(descriptors: toolContext.services.descriptors()))
+        this.invocationData_executionSettings180 = Some(toolContext.executionSettings180)
+        this.invocationData_modelFaultCounters180 = Some(toolContext.modelFaultCounters180)
         this.sequence = sequence
         this.sequenceOwner = None
         this.invocationData_approvalModeOverride159 = Some(approvalModeOverride)
@@ -528,18 +627,40 @@ public class ToolInvocationContext {
                         try { stable.addRetainedInvocationChild159() }
                         catch (error: Exception) { share.close159(); throw error }
                     }
-                    try { ToolInvocationContext(stable, share, retainedData159: true) }
+                    try { ToolInvocationContext(stable, Some(share), None<LogicalJsonOwnerReservation>, retainedData159: true) }
                     catch (error: Exception) {
                         // The failed constructor has physically returned. The
                         // parent is still live under this call's actual loan.
                         if (refEq(stable, this)) { retainedInvocationChildren159-- }
                         else {
-                            let returned = stable.returnRetainedInvocationChild159()
-                            match (returned) { case Some(value) => value.close159(); case None => () }
+                            closeInvocationPayments180(stable.returnRetainedInvocationChild159())
                         }
                         share.close159(); throw error
                     }
-                case None => this
+                case None =>
+                    let original = match (ownedInvocationData180) {
+                        case Some(value) => value
+                        case None => throw IllegalStateException("escaping Context has no prepaid DATA owner")
+                    }
+                    let stable = match (invocationParent159) {
+                        case Some(parent) => parent.stableInvocationOwner159(); case None => this }
+                    let child = original.deriveRetainedLease()
+                    try { child.ensureRetainedPeak(16384) }
+                    catch (error: Exception) { child.close(); throw error }
+                    if (refEq(stable, this)) {
+                        if (retainedInvocationChildren159 == Int64.Max) { child.close(); throw IllegalStateException("invocation child count overflow") }
+                        retainedInvocationChildren159++
+                    } else {
+                        try { stable.addRetainedInvocationChild159() }
+                        catch (error: Exception) { child.close(); throw error }
+                    }
+                    try { ToolInvocationContext(stable, None<SharedToolSetSnapshot159>, Some(child), retainedData159: true) }
+                    catch (error: Exception) {
+                        if (refEq(stable, this)) { retainedInvocationChildren159-- }
+                        else { closeInvocationPayments180(stable.returnRetainedInvocationChild159()) }
+                        child.close(); throw error
+                    }
+
             }
         } finally { toolSnapshotLock159.unlock() }
     }
@@ -606,6 +727,22 @@ public class ToolInvocationContext {
             invocationData_services159.getOrThrow()
         } finally { toolSnapshotLock159.unlock() }
     }
+    private func retainedData_executionSettings180(): AgentValue {
+        toolSnapshotLock159.lock()
+        try {
+            if (retainedInvocationChildren159 <= 0) { throw IllegalStateException("no retained invocation data owner") }
+            let value = invocationData_executionSettings180.getOrThrow()
+            if (value.unifiedKind == ValueKind.Null) { value } else { fundSettingsCopy180(value); value.deepCopy() }
+        } finally { toolSnapshotLock159.unlock() }
+    }
+    private func retainedData_modelFaultCounters180(): ?ModelStreamFaultCounters180 {
+        toolSnapshotLock159.lock()
+        try {
+            if (retainedInvocationChildren159 <= 0) { throw IllegalStateException("no retained invocation data owner") }
+            invocationData_modelFaultCounters180.getOrThrow()
+        } finally { toolSnapshotLock159.unlock() }
+    }
+
     private func retainedData_approvalModeOverride159(): InvocationValue_approvalModeOverride159 {
         toolSnapshotLock159.lock()
         try {
@@ -664,18 +801,24 @@ public class ToolInvocationContext {
             retainedInvocationChildren159++
         } finally { toolSnapshotLock159.unlock() }
     }
-    private func returnRetainedInvocationChild159(): ?SharedToolSetSnapshot159 {
+    private func returnRetainedInvocationChild159(): (?SharedToolSetSnapshot159, ?LogicalJsonOwnerReservation) {
         toolSnapshotLock159.lock()
         try {
             if (retainedInvocationChildren159 <= 0) { throw IllegalStateException("invocation child was not retained") }
             retainedInvocationChildren159--
-            if (!toolSnapshotReturned159 || retainedInvocationChildren159 != 0) { return None<SharedToolSetSnapshot159> }
+            if (!toolSnapshotReturned159 || retainedInvocationChildren159 != 0) {
+                return (None<SharedToolSetSnapshot159>, None<LogicalJsonOwnerReservation>) }
             clearPrivateInvocationData159()
-            let payment = deferredInvocationPayment159
-            deferredInvocationPayment159 = None<SharedToolSetSnapshot159>
-            payment
+            let snapshot = deferredInvocationPayment159; deferredInvocationPayment159 = None<SharedToolSetSnapshot159>
+            let metadata = ownedInvocationData180; ownedInvocationData180 = None<LogicalJsonOwnerReservation>
+            (snapshot, metadata)
         } finally { toolSnapshotLock159.unlock() }
     }
+    private func closeInvocationPayments180(values: (?SharedToolSetSnapshot159, ?LogicalJsonOwnerReservation)): Unit {
+        match (values[0]) { case Some(value) => value.close159(); case None => () }
+        match (values[1]) { case Some(value) => value.close(); case None => () }
+    }
+
     // Package-private actual-instance DATA identity. This is neither a Run id
     // nor a caller-supplied permission. The normal Context and its own paid
     // derived/view metadata retain this bounded pointer; no Scope is exported.
@@ -716,14 +859,15 @@ public class ToolInvocationContext {
         // entered callback's handler/sequence/carrier before that call ends.
         // Both paths share the same paid child registration; the wrapper,
         // rather than its callee, owns this particular scope's revocation.
+        if (!hasOwnedToolSetSnapshot159() && !hasOwnedInvocationData180()) { return this }
         retainInvocationContext159Action159()
     }
-    private init(parent: ToolInvocationContext, share: SharedToolSetSnapshot159,
+    private init(parent: ToolInvocationContext, share: ?SharedToolSetSnapshot159, metadata: ?LogicalJsonOwnerReservation,
         retainedData159!: Bool = false) {
         invocationParent159 = Some(parent); invocationView159 = true
         catalogInvocationRoot204 = Some(parent.catalogRootFrame204())
         invocationRetained159 = retainedData159
-        rawToolSnapshot159 = None<ToolSetSnapshot>; ownedToolSnapshot159 = Some(share)
+        rawToolSnapshot159 = None<ToolSetSnapshot>; ownedToolSnapshot159 = share; ownedInvocationData180 = metadata
         sequence = 0; sequenceOwner = Some(parent)
         // No descriptor/environment/projection copy and no new closure here.
         // The parent fields are visible only through the live-view properties.
@@ -780,38 +924,34 @@ public class ToolInvocationContext {
     }
     private func finishInvocationRetirement159(): Unit {
         if (invocationView159) { finishInvocationViewRetirement159(); return }
-        let returned = clearOwnedToolSetFrame159()
-        match (returned) { case Some(value) => value.close159(); case None => () }
+        closeInvocationPayments180(clearOwnedToolSetFrame159())
     }
     private func finishInvocationViewRetirement159(): Unit {
-        // clearInvocationView159 returns only the exact two paid carriers;
-        // all parent/control/snapshot aliases have left its helper frame.
         let returned = clearInvocationView159()
+        // Private Context/control/getter aliases have left the complete clear
+        // helper before either the parent's deferred or this child invoice.
         match (returned[1]) {
-            case Some(parent) =>
-                let parentPayment = parent.returnRetainedInvocationChild159()
-                match (parentPayment) { case Some(value) => value.close159(); case None => () }
+            case Some(parent) => closeInvocationPayments180(parent.returnRetainedInvocationChild159())
             case None => ()
         }
-        match (returned[0]) { case Some(value) => value.close159(); case None => () }
+        closeInvocationPayments180((returned[0], returned[2]))
     }
-    private func clearInvocationView159(): (?SharedToolSetSnapshot159, ?ToolInvocationContext) {
+    private func clearInvocationView159(): (?SharedToolSetSnapshot159, ?ToolInvocationContext, ?LogicalJsonOwnerReservation) {
         toolSnapshotLock159.lock()
         try {
             if (!invocationView159 || toolSnapshotReturned159) {
-                return (None<SharedToolSetSnapshot159>, None<ToolInvocationContext>) }
+                return (None<SharedToolSetSnapshot159>, None<ToolInvocationContext>, None<LogicalJsonOwnerReservation>) }
             toolSnapshotReturned159 = true
             let returned = ownedToolSnapshot159
+            let metadata = ownedInvocationData180; ownedInvocationData180 = None<LogicalJsonOwnerReservation>
             let parent = if (invocationRetained159) { invocationParent159 } else { None<ToolInvocationContext> }
-            ownedToolSnapshot159 = None<SharedToolSetSnapshot159>
-            rawToolSnapshot159 = None<ToolSetSnapshot>
-            invocationParent159 = None<ToolInvocationContext>
-            invocationRetained159 = false
-            sequenceOwner = None<ToolInvocationContext>
-            clearPrivateInvocationData159()
-            (returned, parent)
+            ownedToolSnapshot159 = None<SharedToolSetSnapshot159>; rawToolSnapshot159 = None<ToolSetSnapshot>
+            invocationParent159 = None<ToolInvocationContext>; invocationRetained159 = false
+            sequenceOwner = None<ToolInvocationContext>; clearPrivateInvocationData159()
+            (returned, parent, metadata)
         } finally { toolSnapshotLock159.unlock() }
     }
+
     private func clearPrivateInvocationData159(): Unit {
         catalogInvocationRoot204 = None<ToolInvocationContext>
         invocationData_runId159 = None<RunId>
@@ -823,6 +963,8 @@ public class ToolInvocationContext {
         invocationData_environment159 = None<ToolEnvironmentView>
         invocationData_cancellation159 = None<CancellationToken>
         invocationData_services159 = None<ToolServiceView>
+        invocationData_executionSettings180 = None<AgentValue>
+        invocationData_modelFaultCounters180 = None<Option<ModelStreamFaultCounters180>>
         invocationData_approvalModeOverride159 = None<InvocationValue_approvalModeOverride159>
         invocationData_outputSink159 = None<ToolOutputSink>
         invocationData_budget159 = None<ExecutionBudget>
@@ -863,6 +1005,9 @@ public class ToolInvocationContext {
                 case None => true
             }
         } finally { toolSnapshotLock159.unlock() }
+    }
+    public func hasOwnedInvocationData180(): Bool {
+        toolSnapshotLock159.lock(); try { requireToolSnapshotFrame159(); ownedInvocationData180.isSome() } finally { toolSnapshotLock159.unlock() }
     }
     public func hasOwnedToolSetSnapshot159(): Bool {
         beginInvocationAction159()
@@ -935,22 +1080,22 @@ public class ToolInvocationContext {
     public func returnOwnedToolSetFrame159(): Unit {
         requestInvocationRetirement159()
     }
-    private func clearOwnedToolSetFrame159(): ?SharedToolSetSnapshot159 {
+    private func clearOwnedToolSetFrame159(): (?SharedToolSetSnapshot159, ?LogicalJsonOwnerReservation) {
         toolSnapshotLock159.lock()
         try {
-            if (toolSnapshotReturned159) { return None<SharedToolSetSnapshot159> }
-            let returned = ownedToolSnapshot159
-            ownedToolSnapshot159 = None<SharedToolSetSnapshot159>
-            rawToolSnapshot159 = None<ToolSetSnapshot>
-            toolSnapshotReturned159 = true
+            if (toolSnapshotReturned159) { return (None<SharedToolSetSnapshot159>, None<LogicalJsonOwnerReservation>) }
+            let returned = ownedToolSnapshot159; ownedToolSnapshot159 = None<SharedToolSetSnapshot159>
+            rawToolSnapshot159 = None<ToolSetSnapshot>; toolSnapshotReturned159 = true
             if (retainedInvocationChildren159 > 0) {
                 deferredInvocationPayment159 = returned
-                return None<SharedToolSetSnapshot159>
+                return (None<SharedToolSetSnapshot159>, None<LogicalJsonOwnerReservation>)
             }
             clearPrivateInvocationData159()
-            returned
+            let metadata = ownedInvocationData180; ownedInvocationData180 = None<LogicalJsonOwnerReservation>
+            (returned, metadata)
         } finally { toolSnapshotLock159.unlock() }
     }
+
     // Numeric accounting only. A typed consumer cannot accidentally create a
     // historical raw graph merely to charge its independently retained input.
     public func closedToolSetRetainedCounts159(bytes: Int64, nodes: Int64): (Int64, Int64) {
@@ -1318,6 +1463,8 @@ public class ToolInvocationContext {
         this.invocationData_environment159 = Some(previous.environment)
         this.invocationData_cancellation159 = Some(previous.cancellation)
         this.invocationData_services159 = Some(previous.services)
+        this.invocationData_executionSettings180 = Some(previous.executionSettings180)
+        this.invocationData_modelFaultCounters180 = Some(previous.modelFaultCounters180)
         this.invocationData_approvalModeOverride159 = Some(previous.approvalModeOverride)
         this.invocationData_outputSink159 = Some(previous.outputSink)
         this.invocationData_budget159 = Some(previous.budget)

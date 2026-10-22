@@ -176,7 +176,7 @@ class MinimalHostRuntime {
         match (hostRegisterPluginHttpService(catalog, host, operations, settingsRoot, options.caBundle)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         lifecycle = match (hostCreatePluginLifecycleManager(database, catalog, host, services, processes,
-            payloadArtifacts: Some(artifacts), caBundle: options.caBundle, operations: Some(operations))) {
+            payloadArtifacts: Some(artifacts), caBundle: options.caBundle, operations: operations)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => Some(value) }
         match (hostRegisterPluginDocumentService(catalog)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -515,7 +515,7 @@ func createMinimalHostRuntime(settings: String, workspace: String, options: Mini
         let network: NetworkGatewayPort = HostLocalNetworkGatewayPort()
         let processes = hostCreatePluginRuntimeProcessPort(inspector, sandboxEnabled: true,
             sandboxCaBundle: options.caBundle, networkGateway: Some(network))
-        let artifacts = HostArtifactStore(options.stateRoot, database: Some(database))
+        let artifacts = HostArtifactStore(options.stateRoot, database: Some(database), operations: Some(operations))
         let host = HostJavaScriptPluginHost({ path => HostLocalReadTargetInspector(path) },
             settingsRoot: settings, readViewStateRoot: options.stateRoot)
         match (host.ownRegistry(registry)) { case Result.Err(error) => throw IllegalStateException(error.describe()); case Result.Ok(_) => () }

@@ -12,17 +12,17 @@ import std.fs.*
 func runWorktreeCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printWorktreeHelp()
+        printWorktreeHelp(io: io)
         return 0
     }
     let unknown = worktreeUnknownOption(arguments)
     if (unknown != "") {
-        println("error: Nonexistent flag: " + unknown)
-        println()
-        println("Run `axyndra worktree --help` for details.")
+        io.println("error: Nonexistent flag: " + unknown)
+        io.println()
+        io.println("Run `axyndra worktree --help` for details.")
         return 2
     }
     let positionals = worktreePositionals(arguments)
@@ -35,15 +35,15 @@ func runWorktreeCli(
         } else {
             positionals[0]
         }
-        println(
+        io.println(
             "error: Expected action to be one of: list, clear; got \"" +
                 authored + "\""
         )
-        println()
-        println("USAGE")
-        println("  $ axyndra worktree [ACTION] [FLAGS]")
-        println()
-        println("Run `axyndra worktree --help` for details.")
+        io.println()
+        io.println("USAGE")
+        io.println("  $ axyndra worktree [ACTION] [FLAGS]")
+        io.println()
+        io.println("Run `axyndra worktree --help` for details.")
         return 1
     }
     let action = if (positionals.isEmpty()) {
@@ -60,19 +60,19 @@ func runWorktreeCli(
             hasArgument(arguments, "--dry-run") ||
                 hasArgument(arguments, "-n"),
             json
-        )
+        , io: io)
     }
-    listWorktrees(session, json)
+    listWorktrees(session, json, io: io)
 }
 
 func listWorktrees(
     session: ApplicationSession,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let entries = match (session.managedWorktrees()) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (json) {
@@ -80,11 +80,11 @@ func listWorktrees(
         for (entry in entries) {
             values.add(worktreeEntryValue(entry))
         }
-        println(encodeAgentValue(listValue(values.toArray())))
+        io.println(encodeAgentValue(listValue(values.toArray())))
         return 0
     }
     if (entries.isEmpty()) {
-        println(
+        io.println(
             "No agent-managed worktrees found under " +
                 Path(session.configRoot()).join("wt").toString() + "."
         )
@@ -95,16 +95,16 @@ func listWorktrees(
     for (entry in entries) {
         if (entry.orphanReason == "") {
             live++
-            println("live      " + entry.path)
+            io.println("live      " + entry.path)
         } else {
             orphaned++
-            println("orphaned  " + entry.path)
+            io.println("orphaned  " + entry.path)
         }
         let detail = worktreeEntryDetail(entry)
-        if (detail != "") { println("          " + detail) }
+        if (detail != "") { io.println("          " + detail) }
     }
-    println()
-    println(
+    io.println()
+    io.println(
         live.toString() + " live · " +
             orphaned.toString() + " orphaned · " +
             entries.size.toString() + " total"
@@ -117,16 +117,16 @@ func clearWorktrees(
     all: Bool,
     dryRun: Bool,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let result = match (session.clearManagedWorktrees(all, dryRun)) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (dryRun) {
         if (json) {
-            println(encodeAgentValue(objectValue([
+            io.println(encodeAgentValue(objectValue([
                 ValueField(
                     "wouldRemove",
                     cliStringList(result.wouldRemove)
@@ -135,7 +135,7 @@ func clearWorktrees(
             return 0
         }
         if (result.wouldRemove.isEmpty()) {
-            println(
+            io.println(
                 if (all) {
                     "No worktrees to remove."
                 } else {
@@ -145,10 +145,10 @@ func clearWorktrees(
             return 0
         }
         for (path in result.wouldRemove) {
-            println("would remove  " + path)
+            io.println("would remove  " + path)
         }
-        println()
-        println(
+        io.println()
+        io.println(
             result.wouldRemove.size.toString() + " dir" +
                 if (result.wouldRemove.size == 1) {
                     " would be removed."
@@ -162,7 +162,7 @@ func clearWorktrees(
     let failed = result.failed()
     if (json) {
         if (result.results.isEmpty()) {
-            println(encodeAgentValue(objectValue([
+            io.println(encodeAgentValue(objectValue([
                 ValueField("removed", integerValue(0)),
                 ValueField("kept", integerValue(result.kept))
             ])))
@@ -180,7 +180,7 @@ func clearWorktrees(
                 }
                 values.add(objectValue(fields.toArray()))
             }
-            println(encodeAgentValue(objectValue([
+            io.println(encodeAgentValue(objectValue([
                 ValueField("removed", integerValue(removed)),
                 ValueField("failed", integerValue(failed)),
                 ValueField("results", listValue(values.toArray()))
@@ -189,7 +189,7 @@ func clearWorktrees(
         return if (failed > 0) { 1 } else { 0 }
     }
     if (result.results.isEmpty()) {
-        println(
+        io.println(
             if (all) {
                 "No worktrees to remove."
             } else {
@@ -200,16 +200,16 @@ func clearWorktrees(
     }
     for (entry in result.results) {
         if (entry.ok) {
-            println("removed  " + entry.path)
+            io.println("removed  " + entry.path)
         } else {
-            println("failed   " + entry.path)
+            io.println("failed   " + entry.path)
             if (entry.error != "") {
-                println("          " + entry.error)
+                io.println("          " + entry.error)
             }
         }
     }
-    println()
-    println(
+    io.println()
+    io.println(
         removed.toString() + " removed" +
             if (failed > 0) {
                 " · " + failed.toString() + " failed"
@@ -290,30 +290,30 @@ func worktreeUnknownOption(arguments: Array<String>): String {
     ""
 }
 
-func printWorktreeHelp(): Unit {
-    println("List or clear agent-managed git worktrees (~/.axyndra/wt)")
-    println()
-    println("USAGE")
-    println("  $ axyndra worktree [ACTION] [FLAGS]")
-    println()
-    println("ARGUMENTS")
-    println("  ACTION   list (default) or clear (list|clear)")
-    println()
-    println("FLAGS")
-    println(
+func printWorktreeHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println("List or clear agent-managed git worktrees (~/.axyndra/wt)")
+    io.println()
+    io.println("USAGE")
+    io.println("  $ axyndra worktree [ACTION] [FLAGS]")
+    io.println()
+    io.println("ARGUMENTS")
+    io.println("  ACTION   list (default) or clear (list|clear)")
+    io.println()
+    io.println("FLAGS")
+    io.println(
         "      --all      Clear every entry, including live " +
             "PR-checkout worktrees (clear)"
     )
-    println(
+    io.println(
         "  -n, --dry-run  Print what would be removed without " +
             "touching the filesystem (clear)"
     )
-    println("  -j, --json     Emit machine-readable JSON")
-    println()
-    println("EXAMPLES")
-    println("  axyndra worktree")
-    println("  axyndra worktree list --json")
-    println("  axyndra worktree clear")
-    println("  axyndra worktree clear --dry-run")
-    println("  axyndra worktree clear --all")
+    io.println("  -j, --json     Emit machine-readable JSON")
+    io.println()
+    io.println("EXAMPLES")
+    io.println("  axyndra worktree")
+    io.println("  axyndra worktree list --json")
+    io.println("  axyndra worktree clear")
+    io.println("  axyndra worktree clear --dry-run")
+    io.println("  axyndra worktree clear --all")
 }

@@ -88,6 +88,19 @@ public func requireContextBoundaryCurrent(tx: SqliteTransaction, expected: RunCo
     actual
 }
 
+// Typed storage has eight usage fields; public event detail also carries its
+// exact discriminator. Neither projection introduces execution authority.
+func contextBoundaryBudgetEventUsage(detail: AgentValue): ExecutionUsage {
+    if (detail.field("code").isNone()) { return contextBoundaryUsage(detail) }
+    contextBoundaryShape(detail, ["code", "turns", "model_requests", "drain_model_requests", "tool_calls",
+        "active_tools", "input_tokens", "output_tokens", "cost_micros"])
+    if (contextBoundaryText(detail, "code") != "budget.updated") {
+        throw IllegalStateException("context boundary accounting discriminator is invalid") }
+    let fields = ArrayList<ValueField>(8)
+    for (field in detail.fields where field.name != "code") { fields.add(field) }
+    contextBoundaryUsage(objectValue(fields.toArray()))
+}
+
 public func requireContextBoundaryBudget(tx: SqliteTransaction, run: RunId, usage: AgentValue): Unit {
     let _ = contextBoundaryUsage(usage)
     let rows = tx.query("SELECT payload,sequence FROM app_run_events WHERE run_id=? AND json_valid(payload)=1 " +
@@ -110,7 +123,7 @@ public func requireContextBoundaryBudget(tx: SqliteTransaction, run: RunId, usag
         contextBoundaryInteger(event, "timestamp_ms") < 0 || contextBoundaryText(event, "trace_id") == "" ||
         contextBoundaryText(event, "kind") != "budget" ||
         contextBoundaryText(event, "run_id") != run.value || contextBoundaryText(event, "payload_type") != "budget_updated" ||
-        canonicalAgentValue(contextBoundaryField(event, "detail")) != canonicalAgentValue(usage) ||
+        canonicalAgentValue(contextBoundaryUsageValue(contextBoundaryBudgetEventUsage(contextBoundaryField(event, "detail")))) != canonicalAgentValue(usage) ||
         contextBoundaryUsage(usage).activeTools != 0) { throw IllegalStateException("context boundary accounting mismatch") }
 }
 

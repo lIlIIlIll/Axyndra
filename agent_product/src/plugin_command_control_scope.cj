@@ -23,6 +23,8 @@ class ProductPluginCommandScope {
     let route: String
     let argumentsDigest: String
     let cancellation: CancellationToken
+    let operatorOptions180: ?ProductOperatorOptions180
+    let callerCancellation180: ?CancellationToken
     private let applicationCurrent: () -> Result<Unit>
     private let continuationCurrent: () -> Result<Unit>
     private let prepareControl: (ProductCommandProposal) -> Result<String>
@@ -35,15 +37,19 @@ class ProductPluginCommandScope {
 
     init(sessionId: SessionId, commandId: String, route: String, arguments: String,
         cancellation: CancellationToken, current: () -> Result<Unit>,
-        continuationCurrent: () -> Result<Unit>, prepareControl: (ProductCommandProposal) -> Result<String>) {
+        continuationCurrent: () -> Result<Unit>, prepareControl: (ProductCommandProposal) -> Result<String>,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>) {
         this.sessionId = sessionId; this.commandId = commandId; this.route = route
         this.argumentsDigest = modelPolicySha256Text(arguments)
         this.cancellation = cancellation; this.applicationCurrent = current
         this.continuationCurrent = continuationCurrent; this.prepareControl = prepareControl
+        this.operatorOptions180 = operatorOptions180; this.callerCancellation180 = callerCancellation180
     }
     func bind(host: ProductJavaScriptPluginHost, selected: ProductJavaScriptPluginCommand,
         arguments: String, actualSession: SessionId, actualCommand: String): Result<Unit> {
         match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (callerCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         match (applicationCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         if (actualSession.value != sessionId.value || actualCommand != commandId || selected.routeName != route ||
             modelPolicySha256Text(arguments) != argumentsDigest) { return commandControlError("plugin.command_scope_mismatch") }
@@ -60,6 +66,7 @@ class ProductPluginCommandScope {
     }
     func current(): Result<Unit> {
         match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (callerCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         match (applicationCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         lock.lock()
         let actual = try {

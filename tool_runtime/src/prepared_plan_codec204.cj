@@ -2,7 +2,6 @@ package tool_runtime
 
 import agent_domain.*
 import std.collection.*
-import std.time.MonoTime
 import yjson.*
 import yjson_support.*
 
@@ -132,12 +131,9 @@ func storeRetryName204(retry: OperationRetryDisposition): String {
 }
 
 func encodeStoredValue204(value: AgentValue): String {
-    let encodeTimer = channelWriteMemoDiagnosticStart()
     let output = ArrayList<Byte>()
     appendStoredValue204(output, value)
-    let encoded = String.fromUtf8(output.toArray())
-    if (encoded.size >= 1048576) { channelWriteMemoDiagnosticRecord(10, encodeTimer, a: encoded.size) }
-    encoded
+    String.fromUtf8(output.toArray())
 }
 
 func appendStoredValue204(output: ArrayList<Byte>, value: AgentValue): Unit {

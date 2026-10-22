@@ -12,7 +12,7 @@ import yjson_support.*
 // It holds the complete original event only inside its paid borrow; the fixed
 // writer owns each transient chunk until print returns. Only a successful
 // final newline and stdout flush permit retirement of this event's alias.
-func writeOwnedApplicationJsonEvent(event: OwnedAgentEvent): Result<Unit> {
+func writeOwnedApplicationJsonEvent(event: OwnedAgentEvent, io!: CliIo180 = consoleCliIo180): Result<Unit> {
     let result = event.withEvent(1048576, { actual =>
         match (actual.payload) {
             case AgentEventPayload.Extension(kind, detail) =>
@@ -27,10 +27,10 @@ func writeOwnedApplicationJsonEvent(event: OwnedAgentEvent): Result<Unit> {
                         ValueField("event", detail)
                     ]))
                     match (writeOwnedRedactedAgentValue(value.getOrThrow(),
-                        { part => appWriteOwnedJsonBytes182(part, false) }, { => Result.Ok(()) })) {
+                        { part => appWriteOwnedJsonBytes182(part, false, io: io) }, { => Result.Ok(()) })) {
                         case Result.Err(error) => return Result.Err(error)
                         case Result.Ok(_) => () }
-                    match (appWriteOwnedJsonBytes182("", true)) {
+                    match (appWriteOwnedJsonBytes182("", true, io: io)) {
                         case Result.Err(error) => return Result.Err(error)
                         case Result.Ok(_) => () }
                     Result.Ok(())
@@ -52,11 +52,11 @@ func writeOwnedApplicationJsonEvent(event: OwnedAgentEvent): Result<Unit> {
 
 // Return the real IO failure through the original paid fixed writer.
 // This carries no event alias, Source, receipt or retirement authority.
-private func appWriteOwnedJsonBytes182(part: String, finalLine: Bool): Result<Unit> {
+private func appWriteOwnedJsonBytes182(part: String, finalLine: Bool, io!: CliIo180 = consoleCliIo180): Result<Unit> {
     try {
-        getStdOut().flush()
-        if (finalLine) { writeFdUtf8LineChecked122(1, part) }
-        else { writeFdUtf8Checked182(1, part) }
+        io.flush()
+        if (finalLine) { io.println(part) }
+        else { io.print(part) }
         Result.Ok(())
     } catch (error: Exception) {
         Result<Unit>.Err(AgentError(AgentErrorKind.RecoveryRequired,

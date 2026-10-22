@@ -75,6 +75,22 @@ Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`a
 
 - `agent_domain` 使用 `yjson`/`yjson_support` 表示 `AgentValue` 和 JSON 协议值，
   并通过 `process4cj` 类型参与取消适配；它不拥有文件、网络、RPC 或终端 I/O。
+- Snapshot DATA 测量使用原 owner bank：数值文本按实际 UTF-8 长度及原复制、
+  canonical framing 系数计费，不把文本上限当作每份小数值的实际占用。格式化预付额
+  依据冻结 SDK 的 512-byte 数值格式化 buffer；原始 number literal 由 accessor 借用。
+  SDK 升级须重新证明该内部 extent；这不修改文本、codec、Native aggregate 或超时上限。
+- Registry 的 immutable generation 继续持有并支付完整 snapshot/path/watch/FD 图。
+  每个实际 lock-row 私有 helper 用同一 custody 的派生 loan 支付其完整 tree-path、
+  digest 与 DOM 工作；helper 真正返回后，先支付所有仍可达 records/history/errors
+  的 typed DATA，才清除并关闭 working loan。pin/state 不再把已返回 inspection
+  work 的累计账单重复保留为 DATA；原 4MiB validation/loading 预付、复制系数、
+  Native physical high-water、16MiB floor 与 aggregate 上限均不变。
+- 普通 Tool 的 descriptor/executor、回调和 Pi hook 由实际 Catalog 的独立 DATA share
+  持有，不因未选择配置 loader 而永久保留生产者。仅原 HTTP、read-view、delegation
+  和 document loader 保留各自既有的 legacy 标记；标记仍先于原校验与错误分支。
+  公开 Raw 导出、动态注册错误和未知 callback/异常继续保留真实债务。只有全部生产与
+  消费 helper 返回且实际容器清除后，Catalog 才能归还自己的 share；这不归还另一个
+  Host generation 的 Raw graph，也不把物理进程退出当作 DATA ACK。
 - `ModelPort.execute` 是唯一模型执行原语，只有 `agent_core` 可以调用。Provider
   的 profile/model 解析、typed API adapter、协议编码和网络错误分类属于
   `model_adapters`。协议只能由显式 `model.apiId` 选择；同协议厂商差异使用该 API
@@ -120,6 +136,10 @@ Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`a
 不是新的运行时契约。切分依据是语义 owner、持久化事务和副作用 handoff，而不是
 文件大小或 package 数量；`→` 表示当前源码中的主要调用关系。
 
+Program 行是后续 #43 的历史补充，链接固定在 `4d88fa6072f7176a6d236a1cb39b33529d5b609d`；
+这些 Program 文件不在 E0-01 原始提交中。当前入口是
+[独立 Program 插件](../plugins/program/src/main.cj)，不再是 Product 内建 worker。
+
 | 边界 | Owner 与源码入口 | 调用关系与事务范围 | Split risk | 回归锚点 | 本次验证状态 |
 | --- | --- | --- | --- | --- | --- |
 | Model request / Attempt / retry | `agent_core/src/core.cj` 的 `continueRun`、`buildBoundedModelRequest`、`executeCanonicalModelTurn`、`executeModelWithTurnRetry`、`persistModelAttemptBeforeRequest`、`claimModelAttemptBeforeRequest`；`persistence_runtime/src/sqlite_run_repository.cj`；`agent_core/src/model_control.cj` 的 `ControlledModelPort.execute` | `continueRun → executeCanonicalModelTurn → executeModelWithTurnRetry → Attempt policy/claim → ControlledModelPort.execute`。Attempt policy 和 restart boundary 各自在 Run repository 的 SQLite transaction 内完成；provider adapter 只执行一次 wire call。 | 把 retry/Attempt owner 放进 provider 会重复计费、破坏 replay identity，或让未接受的 reply 进入 transcript。 | `deadlineRetryExactReplayContract`、`modelResumeCrashWindowMatrixContract`、`failedAttemptDoesNotPolluteTranscriptContract`、`partialToolCallNeverEscapesContract` | **已有且本次验证**：`vnext-contracts` 通过。 |
@@ -130,10 +150,10 @@ Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`a
 | Persistence transaction boundaries | `persistence_runtime/src/sqlite_run_repository.cj`；`agent_store/src/thread_commit_sink.cj`；`agent_store/src/operation_commit.cj`；`agent_store/src/operation_runtime_store.cj` | Attempt policy/restart、Thread transition、operation-result receipt/item/run/thread projection 分别在各自 sink/repository transaction 内完成；`AgentStore.commitOperationResult` 能在一个 SQLite transaction 中联合写 operation receipt、operation state、ToolResult Item、Run 和 Thread revision。model call、内存预算、executor 外部副作用、task snapshot 不在同一跨组件 transaction。 | 把“一个 SQLite transaction”误写成“整个 product operation 原子”会掩盖 handoff 后崩溃、外部副作用与 transcript/task snapshot 的恢复窗口。 | `attemptPolicyAtomicityContract`、`retryAttemptAtomicityContract`、`restartAttemptAtomicityContract`、`continuationCasIdempotencyContract`、`durableCommitRollbackContract`、`repeatedCrashRecoveryContract` | **已有且本次验证**：`sqlite_run_repository_contract`、`agent_store_contract`、`chaos_contract` 通过；真实 product restart replay 仍未单独验证。 |
 | Product composition / Skills / process / eval / extensions | `agent_product/src/product.cj` 的 `ProductRuntime`；`plugins/skills/src/discovery.cj` 的 `ProductSkillRuntime`；`agent_product/src/local_infrastructure.cj` 的 `LocalProcessPort`；`agent_extension_runtime/src/runtime.cj` / `safe_lifecycle.cj` | Composition root 组装唯一 AgentCore、Thread registry、ToolPipeline、stores 与 process port；Skill snapshot 在 admission 时冻结；process/eval 属于 product resource owner；compiled extension runtime 负责 discovery/validation/activation lifecycle，不拥有 Thread semantics。 | 把 skill discovery、process/eval kernel 或 extension lifecycle 直接变成 semantic commit owner，会绕过 Run/Operation/approval boundary；动态 package/JS host 仍不应从当前 lifecycle 代码推断为已交付。 | `product_prompt_contract`、`product_contract`、`skill_runtime_vnext_contract`、`extensions_contract` | **已有且本次验证**：product skill fixture 与 product build 通过；compiled-extension/eval 的完整宿主矩阵未运行。 |
 | Durable handoff / external effect / result replay | `tool_runtime/src/tools.cj` 的 `executePrepared`；`agent_store/src/operation_runtime_store.cj` 的 `markExecuting` / `markExecutionHandoff`；`agent_store/src/operation_commit.cj` | `loadPlan/loadCommittedToolResult → current descriptor/capability recheck → markExecuting → markExecutionHandoff → afterHandoff → executor → commitOperationResult`。handoff 是 executor 前最后一个 durable marker；已有 committed result 直接 replay，未确认外部结果不能猜测为 success。 | 在 handoff 前后重新 resolve raw invocation，或把 Unknown 当可安全 retry，会重复外部 effect；把 receipt 与 semantic Item 拆成无 owner 的独立写也会污染 transcript。 | `operation_domain_vnext_contract`、`agent_store_contract`、`chaos_contract`、`tool_runtime_contract` | **已有且本次验证**：prepared-only、receipt 与 crash-state contracts 通过；真实外部 effect replay 未运行。 |
-| Programmatic tool calling | `agent_product/src/program_runtime.cj` (`ProductToolProgramProcessRuntime`, `ToolProgramSubcallHost`); `agent_store/src/operation_runtime_store.cj` (`prepareDerivedOperation`, `settleDerivedOperation`) | AgentCore enters an independent bounded Program worker only from a validated, committed `run_program` root. The host admits fixed read-only calls as derived Operations and persists child Receipts without Thread Items. For each child, Core releases the parent slot, charges the child against the same Run tool-call and active-tool budget, and transfers the slot back after child settlement; trusted SDK/CLI/MCP calls use a separate canonical-control root path. `maxParallelCalls=1`. | Treating Program calls as raw authority can bypass the root capability ceiling; claiming parallel execution beyond the one-slot limit can violate ordering and starvation assumptions. | `product_thread_runtime_contract`, `tool_runtime_contract`, `agent_store_contract` | E3-03/E3-04 verified: pinned-SDK Product, AgentCore, and Tool Runtime contracts passed, including one-slot child handoff, shared budget charging, and budget-exhaustion rejection. Later E3 acceptance remains separate. |
+| Programmatic tool calling | [agent_product/src/program_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_runtime.cj) (`ProductToolProgramProcessRuntime`, `ToolProgramSubcallHost`); `agent_store/src/operation_runtime_store.cj` (`prepareDerivedOperation`, `settleDerivedOperation`) | AgentCore enters an independent bounded Program worker only from a validated, committed `run_program` root. The host admits fixed read-only calls as derived Operations and persists child Receipts without Thread Items. For each child, Core releases the parent slot, charges the child against the same Run tool-call and active-tool budget, and transfers the slot back after child settlement; trusted SDK/CLI/MCP calls use a separate canonical-control root path. `maxParallelCalls=1`. | Treating Program calls as raw authority can bypass the root capability ceiling; claiming parallel execution beyond the one-slot limit can violate ordering and starvation assumptions. | `product_thread_runtime_contract`, `tool_runtime_contract`, `agent_store_contract` | E3-03/E3-04 verified: pinned-SDK Product, AgentCore, and Tool Runtime contracts passed, including one-slot child handoff, shared budget charging, and budget-exhaustion rejection. Later E3 acceptance remains separate. |
 | Managed async job / final message settlement | `agent_product/src/task_product.cj` 的 `ProductAsyncJobState` / `startBashJob`；`agent_product/src/task_persistence.cj`；`agent_product/src/product.cj` 的 `appendExternalMessageOnce` | worker 捕获 `PreparedToolInvocation` 和 `operationId`，不重新 resolve raw call；task snapshot、process outcome、external message、receipt/ack 是不同持久化步骤，最终消息使用 once-only delivery identity。 | 把 async worker 当第二 executor/semantic owner，或声称 task snapshot、外部 effect、Thread message 同一 transaction，会掩盖 process crash、late settlement 和 duplicate delivery 窗口。 | `task_persistence_contract`、`product_contract`、`rpc` frontend regression | **已有但未验证**：当前源码有 handoff/settlement path，但 E3/E4 的 crash/replay/PTY matrix 尚未运行。 |
-| Program approval / Draining settlement | `agent_product/src/program_runtime.cj`, `agent_product/src/program_worker.cj`, `tool_runtime/src/context.cj`, `agent_store/src/operation_runtime_store.cj` | An approval-required child is admitted then settled as `Rejected`; the worker returns denial and fails the Program. The interpreter stack is not persisted. A live Draining check rejects nested work before the scheduler or child action. Re-execution uses a new Run ID. | Program calls cannot add capability or network authority; the fixed read-only allowlist does not naturally enter the approval-needed branch. | `product_thread_runtime_contract`, `tool_runtime_contract` | Focused contracts pass: Product verifies a fresh Run ID; Tool Runtime verifies Draining prevents scheduler and action invocation. Approval settlement is source-inspected, not naturally triggered by the allowlist. |
-| Program root/child result evidence | `agent_product/src/program_runtime.cj`; `agent_store/src/thread_codec.cj`; `agent_store/src/operation_runtime_store.cj` | Product persists canonical root ToolResult and linked child Receipts without child Items; the source artifact is hash-verified before launch. Parent cancellation after child #1 retains its Receipt, commits no completed root ToolResult, settles the Run as cancelled, and cleans the worker directory. Reuse requires matching descriptor/plan identity and a durable child Receipt. | Never reconstruct interpreter state from call sequence; missing/unknown child Receipt returns RecoveryRequired instead of replay. Unexpected process/IPC failures are source-inspected, not separately fault-injected. | `product_thread_runtime_contract`; `tool_runtime_contract`; `agent_store_contract` | Product cancellation/cleanup, Tool Runtime revocation stale-result, and Agent Store plan-identity contracts pass. |
+| Program approval / Draining settlement | [agent_product/src/program_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_runtime.cj), [agent_product/src/program_worker.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_worker.cj), `tool_runtime/src/context.cj`, `agent_store/src/operation_runtime_store.cj` | An approval-required child is admitted then settled as `Rejected`; the worker returns denial and fails the Program. The interpreter stack is not persisted. A live Draining check rejects nested work before the scheduler or child action. Re-execution uses a new Run ID. | Program calls cannot add capability or network authority; the fixed read-only allowlist does not naturally enter the approval-needed branch. | `product_thread_runtime_contract`, `tool_runtime_contract` | Focused contracts pass: Product verifies a fresh Run ID; Tool Runtime verifies Draining prevents scheduler and action invocation. Approval settlement is source-inspected, not naturally triggered by the allowlist. |
+| Program root/child result evidence | [agent_product/src/program_runtime.cj (historical #43)](https://github.com/lIlIIlIll/Axyndra/blob/4d88fa6072f7176a6d236a1cb39b33529d5b609d/agent_product/src/program_runtime.cj); `agent_store/src/thread_codec.cj`; `agent_store/src/operation_runtime_store.cj` | Product persists canonical root ToolResult and linked child Receipts without child Items; the source artifact is hash-verified before launch. Parent cancellation after child #1 retains its Receipt, commits no completed root ToolResult, settles the Run as cancelled, and cleans the worker directory. Reuse requires matching descriptor/plan identity and a durable child Receipt. | Never reconstruct interpreter state from call sequence; missing/unknown child Receipt returns RecoveryRequired instead of replay. Unexpected process/IPC failures are source-inspected, not separately fault-injected. | `product_thread_runtime_contract`; `tool_runtime_contract`; `agent_store_contract` | Product cancellation/cleanup, Tool Runtime revocation stale-result, and Agent Store plan-identity contracts pass. |
 ### E0-01 responsibility seams
 
 候选责任 seam 只在上表所列的 invariant 交界处成立：
@@ -207,6 +227,45 @@ async task snapshot 或其他 repository 调用。
 - `axyndra_agent_testkit` 3 提供只依赖 Native SDK 的纯数据 handler contract、确定性时钟/ID/取消；
   `agent_testkit` 仅在内部提供 scripted Provider/Tool/policy、仓储故障注入与
   P50/P95/P99 聚合。它是测试能力，不等于真实 Provider、PTY 或发布环境证明。
+
+## JSONL RPC child snapshots
+
+```json
+{"id":"child-inspection","type":"get_subagents","includeTerminal":true}
+```
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `id` | string | No | `""` | Request correlation ID. |
+| `type` | string | Yes | — | `get_subagents`. |
+| `includeTerminal` | boolean | No | `false` | Include all canonical child snapshots for the active parent session. |
+
+With `includeTerminal` absent or `false`, `data.subagents` contains only
+`running` and `blocked` children, preserving the active-only query contract.
+With `true`, it also exposes retained completed, failed, cancelled, or
+recovery-required states through the existing `ApplicationSession.allSubagents()`
+query. It does not wait for, acknowledge, settle, or relabel any child. Other
+JSON types, including `null` and the string `"true"`, fail with
+`includeTerminal must be a boolean`. Parent-session isolation, canonical owner
+custody, and the existing RPC frame/chunk output limits are unchanged.
+
+## Native Workflow Task input forms
+
+The installed Workflow `task` declaration is an object with two closed,
+mutually exclusive `oneOf` forms: one `task` string with optional `agent`
+(default `task`), `name`, `context`, `effort`, `outputSchema`, `schemaMode`,
+and `network`; or required shared `context` plus `tasks` containing one to
+eight existing typed task items, with optional batch `network`. Mixing the
+single-task fields into the batch form is rejected before effects. This
+declaration describes the existing Native parser; it does not select Host
+primitives, grant capabilities, or change execution, transport, or timeout
+bounds. Task/Yield callers must still explicitly select their installed
+primitive profiles and `prepare_child` provider before preparation.
+
+Native Task 的 section-label 投影按原 section/label 顺序执行 `put`：重复 label
+覆盖先前值，不向拒绝重复 key 的 object constructor 传入重复字段。错误、terminal、
+last-turn、sections 与最后文本解码的原优先级，以及所有原输入、输出和超时上限不变。
+非空 `sections` 若没有任何 label，仍投影为空 object，不回退到解析最后文本。
 
 ## Run inspection and controlled application
 

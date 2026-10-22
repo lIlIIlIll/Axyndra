@@ -163,7 +163,12 @@ class DapOwnedNativePhaseControls{
             try{fixture.workflow.acknowledge(sequence,jsonObject([JsonObjectEntry("schema",jsonString("axyndra.managed-channel-close-result/v1")),
                 JsonObjectEntry("lease_id",jsonString(fixture.session.leaseId)),JsonObjectEntry("resources_released",jsonBool(false))]))}
                 catch(_:Exception){refused=true}
-            @Expect(refused,true);@Expect(text(fixture.session.policy.snapshot(),"status")!="terminated",true)
+            @Expect(refused,true)
+            // Adapter termination is not a physical release acknowledgement.
+            // A rejected release must leave the same close obligation pending.
+            let pending=fixture.workflow.next()
+            @Expect(text(field(pending,"operation"),"kind"),"close")
+            @Expect(number(pending,"sequence"),sequence)
             fixture.workflow.acknowledge(sequence,jsonObject([JsonObjectEntry("schema",jsonString("axyndra.managed-channel-close-result/v1")),
                 JsonObjectEntry("lease_id",jsonString(fixture.session.leaseId)),JsonObjectEntry("resources_released",jsonBool(true))]))
             @Expect(text(fixture.workflow.next(),"status"),"complete")

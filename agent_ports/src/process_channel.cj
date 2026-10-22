@@ -86,6 +86,12 @@ public interface ProcessChannel {
         Result.Err(AgentError(AgentErrorKind.Configuration, "process.channel_terminal_unsupported",
             "channel does not provide a verified payload exit status"))
     }
+    // Host-private cleanup only, after actual frozen plan verification. The
+    // duration narrows that plan; it grants no read, tool or network authority.
+    func closeGracefully(plan:NormalizedOperationPlan,requestedGraceMillis:Int64):Result<Unit>{
+        Result.Err(AgentError(AgentErrorKind.Configuration,"process.channel_grace_unsupported",
+            "channel cannot prove graceful producer and reader cleanup"))
+    }
     // Abort must not wait for an input lock or a pipe reader.
     func abort(): Result<Unit>
     func close(): Result<Unit>

@@ -124,11 +124,42 @@ class PendingHostAsk {
     }
 }
 
+class HostAskSubscriber180 {
+    let id: Int64
+    private let frameLock = Mutex()
+    private var sink: ?HostAskEventSink
+    private var activeFrames: Int64 = 0
+    private var closing = false
+    init(id: Int64, sink: HostAskEventSink) { this.id = id; this.sink = Some(sink) }
+    func invoke180(event: HostAskRequest): Unit {
+        frameLock.lock()
+        try {
+            if (closing) { return }
+            if (activeFrames == Int64.Max) { throw IllegalStateException("control dispatch frame overflow") }
+            activeFrames++
+        } finally { frameLock.unlock() }
+        try { invokeSinkHelper180(event) }
+        finally { frameLock.lock(); try { activeFrames-- } finally { frameLock.unlock() } }
+    }
+    private func invokeSinkHelper180(event: HostAskRequest): Unit {
+        frameLock.lock(); let actual = try { sink.getOrThrow() } finally { frameLock.unlock() }
+        actual(event)
+    }
+    func closeReturnedFrames180(): Bool {
+        frameLock.lock()
+        try {
+            closing = true
+            if (activeFrames != 0) { return false }
+            sink = None<HostAskEventSink>; true
+        } finally { frameLock.unlock() }
+    }
+}
 public class HostAskRuntime {
     private let lock = Mutex()
     private let interactiveSessions = ArrayList<String>()
     private let pending = ArrayList<PendingHostAsk>()
-    private let subscribers = ArrayList<HostAskEventSink>()
+    private let subscribers = ArrayList<HostAskSubscriber180>()
+    private var subscriberCounter180: Int64 = 0
 
     public init() {}
 
@@ -163,12 +194,27 @@ public class HostAskRuntime {
             lock.unlock()
         }
     }
-    public func subscribe(sink: HostAskEventSink): Unit {
+    public func subscribe(sink: HostAskEventSink): Unit { let _ = subscribeOwnerAsks180(sink) }
+    public func subscribeOwnerAsks180(sink: HostAskEventSink): Int64 {
         lock.lock()
         try {
-            subscribers.add(sink)
-        } finally {
-            lock.unlock()
+            if (subscriberCounter180 == Int64.Max) { throw IllegalStateException("ask subscription id overflow") }
+            subscriberCounter180++
+            subscribers.add(HostAskSubscriber180(subscriberCounter180, sink)); subscriberCounter180
+        } finally { lock.unlock() }
+    }
+    public func unsubscribeOwnerAsks180(id: Int64): Unit {
+        while (true) {
+            lock.lock()
+            let returned = try {
+                var complete = true
+                for (index in 0..subscribers.size where subscribers[index].id == id) {
+                    complete = subscribers[index].closeReturnedFrames180()
+                    if (complete) { subscribers.remove(at: index) }; break
+                }
+                complete
+            } finally { lock.unlock() }
+            if (returned) { return }; sleep(Duration.millisecond)
         }
     }
 
@@ -309,7 +355,7 @@ public class HostAskRuntime {
                 "Ask request was cancelled before frontend delivery"
             ))
         }
-        let sinks = ArrayList<HostAskEventSink>()
+        let sinks = ArrayList<HostAskSubscriber180>()
         lock.lock()
         try {
             if (stringIndex(interactiveSessions, request.sessionId.value) < 0) {
@@ -332,7 +378,7 @@ public class HostAskRuntime {
         } finally {
             lock.unlock()
         }
-        for (sink in sinks) { sink(request) }
+        for (sink in sinks) { sink.invoke180(request) }
 
         var waitedMillis: Int64 = 0
         while (true) {

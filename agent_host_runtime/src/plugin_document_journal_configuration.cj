@@ -101,7 +101,7 @@ func hostCaptureDocumentJournalOperator(settingsRoot:String):Result<HostJournalO
 func hostDocumentJournalWitnessCurrent(settingsRoot:String,relative:String,encoded:String,witness:String):Result<Unit>{
     let path=Path(settingsRoot).join(relative).toString();let bytes=encoded.toArray()
     let code=unsafe{
-        let source=LibC.mallocCString(path);let expected=LibC.mallocCString(witness)
+        let source=LibC.mallocCString(hostPhysicalReadResourcePath180(path));let expected=LibC.mallocCString(witness)
         let raw=acquireArrayRawData(bytes)
         try{axyndra_read_view_equal(source,expected,raw.pointer,bytes.size)}
         finally{releaseArrayRawData(raw);LibC.free(expected);LibC.free(source)}

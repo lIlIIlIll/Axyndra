@@ -9,6 +9,7 @@ import std.sync.*
 class ProviderToolStream {
     let name: String
     var arguments = ""
+    var argumentsObserved = false
     var completed = false
     init(name: String) { this.name = name }
 }
@@ -145,7 +146,7 @@ class ProviderStream {
                     case None => return fail("model.provider_tool_order") }
                 if (tool.completed || observedTerminal.isSome()) { return fail("model.provider_tool_order") }
                 if (kind == "tool_arguments") {
-                    let delta = providerText(value, "text"); tool.arguments += delta
+                    let delta = providerText(value, "text"); tool.argumentsObserved = true; tool.arguments += delta
                     events(ModelEvent.ToolArgumentsDelta(id, delta))
                 } else { tool.completed = true; events(ModelEvent.ToolCallCompleted(id)) }
             case "started" =>
@@ -227,8 +228,11 @@ class ProviderStream {
                     for (tool in request.tools where tool.name == block.name) { declared = true }
                     if (!declared) { throw IllegalArgumentException("undeclared final tool call") }
                     match (tools.get(block.callId)) { case Some(stream) =>
-                        if (!stream.completed || stream.name != block.name || canonicalAgentValue(parseUnifiedJson(stream.arguments)) !=
-                            canonicalAgentValue(block.arguments)) { throw IllegalArgumentException("streamed tool call drift") }
+                        // No partial argument event is not an observed empty argument.
+                        // Even an explicitly empty delta must still parse and agree.
+                        if (!stream.completed || stream.name != block.name || (stream.argumentsObserved &&
+                            canonicalAgentValue(parseUnifiedJson(stream.arguments)) != canonicalAgentValue(block.arguments))) {
+                            throw IllegalArgumentException("streamed tool call drift") }
                         case None => if (request.streaming) { throw IllegalArgumentException("missing streamed tool call") } }
                 case _ => ()
             }

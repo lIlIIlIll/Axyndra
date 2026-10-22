@@ -10,6 +10,7 @@ import agent_runtime.*
 import agent_store.*
 import tool_runtime.*
 import std.collection.*
+import std.convert.*
 import std.deriving.*
 import std.fs.*
 import std.sync.*
@@ -26,6 +27,7 @@ enum HostLifecycleLeaseState { Opening | Pending | Sealed | Activating | Active 
 // store, ProcessPort owns native resources, and ToolCatalog owns publications.
 public class HostPluginLifecycleOwner {
     private let database: SqliteDatabase
+    private let operations: DurableOperationStore
     private let processes: ProcessPort
     private let seal = HostLifecycleOwnerSeal()
     private let payloadArtifacts: ?HostArtifactStore
@@ -34,9 +36,10 @@ public class HostPluginLifecycleOwner {
     private var closed = false
     private let cleanupObserver:?HostManagedChannelCleanupObserver
 
-    public init(database: SqliteDatabase, processes: ProcessPort, payloadArtifacts!: ?HostArtifactStore = None,
+    public init(database: SqliteDatabase, processes: ProcessPort, operations!: DurableOperationStore, payloadArtifacts!: ?HostArtifactStore = None,
         cleanupObserver!:?HostManagedChannelCleanupObserver=None) {
         this.database = database; this.processes = processes; this.payloadArtifacts = payloadArtifacts
+        this.operations = operations
         this.cleanupObserver=cleanupObserver
     }
 
@@ -93,7 +96,7 @@ public class HostPluginLifecycleOwner {
                 }
             }
             if (count >= 32 || matching >= maximum) { return hostLifecycleLeaseError("plugin.lifecycle_capacity") }
-            lease = HostPluginLifecycleLease(seal, database, processes, context, prepared, grant,
+            lease = HostPluginLifecycleLease(seal, database, operations, processes, context, prepared, grant,
                 "service-lease-" + entropy, payloadArtifacts: payloadArtifacts)
             leases.add(lease)
         } finally { lock.unlock() }
@@ -167,7 +170,7 @@ public class HostPluginLifecycleOwner {
                     }
                 }
                 if (count >= 32 || matching >= maximum) { return hostLifecycleLeaseError("plugin.lifecycle_capacity") }
-                lease = HostPluginLifecycleLease(seal, database, processes, context, child, base,
+                lease = HostPluginLifecycleLease(seal, database, operations, processes, context, child, base,
                     "service-lease-" + entropy, payloadArtifacts: payloadArtifacts, managedGrant: Some(actual))
                 leases.add(lease); adopted = true
             } finally { lock.unlock() }
@@ -243,6 +246,13 @@ public class HostPluginLifecycleOwner {
     public func revoke(lease: HostPluginLifecycleLease): Result<Unit> {
         if (!owns(lease)) { return hostLifecycleLeaseError("plugin.lifecycle_owner_mismatch") }
         lease.revoke()
+    }
+    // Scalar observation only; never revoke, join, ACK or rebuild a grant.
+    func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock(); try {
+            for (lease in leases) { if (lease.hasOwnerLifetimeDebt180()) { return true } }
+            false
+        } finally { lock.unlock() }
     }
     public func close(): Result<Unit> {
         let selected: Array<HostPluginLifecycleLease>
@@ -350,6 +360,8 @@ public class HostPluginLifecycleLease {
     private let attemptedRefreshes = HashSet<String>()
     private let ioScopes = ArrayList<HostLifecycleIoScope>()
     private var cleanupRunning = false
+    private let frozenShutdownGrace:Int64
+    private var gracefulCleanup:?Int64=None<Int64>
     private var managedCloseAcknowledged=false
     private var managedPhysicalCustodyObserved=false
     private var managedPhysicalCloseHadError=false
@@ -364,12 +376,13 @@ public class HostPluginLifecycleLease {
     private let startupCancelled = AtomicBool(false)
     private let stdoutDone = AtomicBool(true)
     private let stderrDone = AtomicBool(true)
+    private let monitorStop=AtomicBool(false)
     private var monitor: ?Future<Unit> = None
     private var stdoutPump: ?Future<Unit> = None
     private var stderrPump: ?Future<Unit> = None
     private var cleanup: ?Future<Unit> = None
 
-    init(ownerSeal: HostLifecycleOwnerSeal, database: SqliteDatabase, processes: ProcessPort,
+    init(ownerSeal: HostLifecycleOwnerSeal, database: SqliteDatabase, operations: DurableOperationStore, processes: ProcessPort,
         context: ToolInvocationContext, prepared: PreparedToolInvocation,
         grant: HostPluginLifecycleLaunchGrant, leaseId: String, payloadArtifacts!: ?HostArtifactStore = None,
         managedGrant!: ?HostManagedProcessGrant = None) {
@@ -377,7 +390,7 @@ public class HostPluginLifecycleLease {
         this.heldContext = Some(context); this.heldPrepared = Some(prepared); this.heldGrant = Some(grant); this.leaseId = leaseId
         this.callerCancellation = context.cancellation
         this.managedGrant = managedGrant
-        this.invocationStore = DurableOperationStore(database)
+        this.invocationStore = operations
         this.launchDigest = grant.digest; this.operationId = prepared.operationId; this.runId = context.runId
         this.instanceIdentity = grant.instanceIdentity
         this.targetThread = grant.targetThread
@@ -395,6 +408,11 @@ public class HostPluginLifecycleLease {
         this.maxStartupWrites = hostLifecycleInt(startup, "max_writes", 256)
         this.maxTotalInput = hostLifecycleInt(limitsPlan, "max_input_bytes", HOST_PLUGIN_LIFECYCLE_IO_BYTES)
         this.maxTotalOutput = hostLifecycleInt(limitsPlan, "max_output_bytes", HOST_PLUGIN_LIFECYCLE_TRANSPORT_OUTPUT_BYTES)
+        let frozenPolicy=match(managedGrant){case Some(actual)=>
+            actual.child.operationPlan.canonicalArguments.field("binding").getOrThrow().field("lifecycle_policy").getOrThrow()
+            case None=>prepared.operationPlan.canonicalArguments.field("lifecycle_policy").getOrThrow()}
+        hostLifecycleLeaseAssert(canonicalAgentValue(frozenPolicy)==canonicalAgentValue(plan.field("lifecycle_policy").getOrThrow()))
+        this.frozenShutdownGrace=processShutdownPlanGrace(prepared.operationPlan).value().getOrThrow()
         this.source = CancellationSource(deadlineMillis: expiresAt)
     }
     public func cancellationToken(): CancellationToken { source.token }
@@ -403,8 +421,26 @@ public class HostPluginLifecycleLease {
     public func observeRevocation(callback: () -> Unit): CancellationRegistration {
         revocation.token.onCancel({ _ => callback() })
     }
+    func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock(); try {
+            if (state != HostLifecycleLeaseState.Released || opening || cleanupRunning ||
+                channel.isSome() || !ioScopes.isEmpty() || startupCancellation.isSome() ||
+                unpublishedManagedScopeDebt.isSome() || unpublishedManagedScopePeer.isSome() ||
+                managedPhysicalCloseError.isSome()) { return true }
+            try {
+                match (monitor) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                match (stdoutPump) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                match (stderrPump) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                match (cleanup) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                false
+            } catch (_: Exception) { true }
+        } finally { lock.unlock() }
+    }
     public func resourcesReleased(): Bool {
-        lock.lock(); try { state == HostLifecycleLeaseState.Released } finally { lock.unlock() }
+        lock.lock();let (released,returned)=try{(state==HostLifecycleLeaseState.Released,cleanup)}finally{lock.unlock()}
+        if(!released){return false}
+        // Join the cleanup Future as well as its terminal marker.
+        try{match(returned){case Some(value)=>value.get();case None=>()};true}catch(_:Exception){false}
     }
     public func isActive(): Bool {
         lock.lock(); try { state == HostLifecycleLeaseState.Active && agentUtcMillis() < expiresAt }
@@ -416,20 +452,30 @@ public class HostPluginLifecycleLease {
             lock.lock(); try { startupCancellation = Some(registration) } finally { lock.unlock() }
             monitor = Some(spawn {
                 var nextConfigurationCheck = agentUtcMillis()
-                while (!resourcesReleased()) {
+                while (!monitorStop.load()) {
                     var stopping = false
+                    var graceful = false
                     var pending = false
                     var exited = false
                     lock.lock()
                     try {
                         stopping = state == HostLifecycleLeaseState.Closing
+                        graceful = gracefulCleanup.isSome()
                         pending = state == HostLifecycleLeaseState.Opening || state == HostLifecycleLeaseState.Pending ||
                             state == HostLifecycleLeaseState.Sealed || state == HostLifecycleLeaseState.Activating
                         exited = !opening && channel.isSome() && stdoutDone.load() && stderrDone.load()
                     } finally { lock.unlock() }
                     lock.lock(); let scopes = try { ioScopes.toArray() } finally { lock.unlock() }
                     for (scope in scopes) { scope.checkDeadline() }
-                    if (stopping) { tryCleanup() }
+                    if (stopping) {
+                        if(graceful && (source.token.isCancelled() || agentUtcMillis()>=expiresAt)){let _=revoke()}
+                        else if(graceful && agentUtcMillis()>=nextConfigurationCheck){
+                            let current=match(managedGrant){case Some(actual)=>actual.stillCurrentForCleanup();case None=>grant.stillCurrent()}
+                            if(current.isError()){let _=revoke()}
+                            nextConfigurationCheck=agentUtcMillis()+250
+                        }
+                        tryCleanup()
+                    }
                     else if (exited || source.token.isCancelled() || agentUtcMillis() >= expiresAt ||
                         (pending && (callerCancellation.isCancelled() || agentUtcMillis() >= startupUntil))) { let _ = revoke() }
                     else if (agentUtcMillis() >= nextConfigurationCheck) {
@@ -746,7 +792,7 @@ public class HostPluginLifecycleLease {
             return hostLifecycleLeaseError("managed_channel.resource_binding_changed") }
         let initial = managedGrant.getOrThrow().child.operationPlan.canonicalArguments.field("binding").getOrThrow()
         for (key in ["package_digest", "configuration_digest", "endpoint_identity", "directory_revision", "directory_digest",
-            "implementation_version", "implementation_fingerprint", "schema_digest", "workspace_root", "workspace_mode", "network"]) {
+            "implementation_version", "implementation_fingerprint", "schema_digest", "workspace_root", "workspace_mode", "network", "lifecycle_policy"]) {
             if (canonicalAgentValue(initial.field(key).getOrThrow()) != canonicalAgentValue(binding.field(key).getOrThrow())) {
                 return hostLifecycleLeaseError("managed_channel.resource_binding_changed") }
         }
@@ -993,10 +1039,16 @@ public class HostPluginLifecycleLease {
             match (hostManagedChannelVerifyExecuting(port, rootContext, parent, childContext, child,
                 { => verifyManagedResource(rootContext, parent, binding, port) })) {
                 case Result.Err(error) => return Result.Err(error); case _ => () }
-            let _ = revoke()
-            let until = MonoTime.now() + Duration.millisecond * 2000
+            let grace=match(operation.field("grace_ms")){case Some(value)=>Int64.parse(value.asNumberText());case None=>frozenShutdownGrace}
+            if(grace<0 || grace>frozenShutdownGrace){return hostLifecycleLeaseError("managed_channel.close_grace_ceiling")}
+            match(beginGracefulClose(grace)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            let started=MonoTime.now()
             while (!resourcesReleased()) {
-                if (MonoTime.now() >= until) { return hostLifecycleIoUnknown() }
+                if(rootContext.cancellation.isCancelled() ||
+                    (rootContext.budget.deadlineMillis>0 && agentUtcMillis()>=rootContext.budget.deadlineMillis)){
+                    let _=revoke();return hostLifecycleIoCancelled()}
+                let elapsed=(MonoTime.now()-started).toMilliseconds()
+                if(elapsed>=grace && elapsed-grace>=2000){return hostLifecycleIoUnknown()}
                 tryCleanup(); sleep(Duration.millisecond)
             }
             // Only after the real close ACK, prove the exact still-executing
@@ -1092,7 +1144,7 @@ public class HostPluginLifecycleLease {
                     inputBytes += bytes.size; writes += 1; selected = channel.getOrThrow()
                 } finally { lock.unlock() }
                 let result = hostLifecycleWritePreparedChunks(bytes, { part =>
-                    let physical = hostPhysicalTransportDiagnostic(15, 2, part.size, { => selected.write(part) })
+                    let physical = selected.write(part)
                     match (physical) { case Result.Err(error) => hostManagedJobIoDiagnostic(childPrepared.source.operationRoot, "physical-write", error); case _ => () }
                     physical
                 }, { =>
@@ -1428,12 +1480,64 @@ public class HostPluginLifecycleLease {
         finally { lock.unlock() }
         if (pending) { finishRevocation(selected) }
     }
+    // Normal stop reads policy only from the original normalized plan.
+    func stopFrozen():Result<Unit>{
+        lock.lock();let already=try{state==HostLifecycleLeaseState.Closing || state==HostLifecycleLeaseState.Released}finally{lock.unlock()}
+        if(!already){
+            match(grant.stillCurrent()){case Result.Err(error)=>let _=revoke();return Result.Err(error);case Result.Ok(_)=>()}
+            if(managedGrant.isNone()){
+                match(summaryText){case Some(summary)=>
+                    match(hostValidateLifecycleStartupReceipt(database,context,prepared,grant,summary)){
+                        case Result.Err(error)=>let _=revoke();return Result.Err(error);case Result.Ok(_)=>()}
+                    case None=>let _=revoke();return hostLifecycleLeaseError("process.shutdown_startup_missing")}
+            }else{
+                // The actual admitted spawn retained these immutable contexts;
+                // cleanup rechecks their capability/resource ceiling, never a
+                // Native boolean or a new descriptor-derived authorization.
+                let actual=managedGrant.getOrThrow()
+                match(actual.stillCurrentForCleanup()){case Result.Err(error)=>return Result.Err(error);case _=>()}
+                let binding=actual.child.operationPlan.canonicalArguments.field("binding").getOrThrow()
+                for(required in actual.child.operationPlan.requiredCapabilities){
+                    if(!actual.childContext.capabilities.allows(required.kind,resource:required.resource)){
+                        let _=revoke();return hostLifecycleLeaseError("managed_channel.capability_denied")}}
+                let resources=actual.actualProcessResources();let ceiling=actual.childContext.budget.processLimits
+                if(!hostLifecycleResourceFits(resources.maxOutputBytes,ceiling.maxOutputBytes) ||
+                    !hostLifecycleResourceFits(resources.addressSpaceBytes,ceiling.addressSpaceBytes) ||
+                    !hostLifecycleResourceFits(resources.fileSizeBytes,ceiling.fileSizeBytes) ||
+                    !hostLifecycleResourceFits(resources.openFiles,ceiling.openFiles) ||
+                    !hostLifecycleResourceFits(resources.processes,ceiling.processes) ||
+                    !hostLifecycleResourceFits(resources.cpuSeconds,ceiling.cpuSeconds) ||
+                    processShutdownPolicyGrace(binding.field("lifecycle_policy").getOrThrow()).value().getOrThrow()!=frozenShutdownGrace){
+                    let _=revoke();return hostLifecycleLeaseError("managed_channel.process_ceiling")}
+            }
+            if(processShutdownPolicyGrace(grant.launchPlan.field("lifecycle_policy").getOrThrow()).value().getOrThrow()!=frozenShutdownGrace){
+                let _=revoke();return hostLifecycleLeaseError("process.shutdown_policy_changed")}
+            match(beginGracefulClose(frozenShutdownGrace)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        }
+        tryCleanup()
+        if(resourcesReleased()){Result.Ok(())}else{hostLifecycleLeaseError("plugin.lifecycle_cleanup_pending")}
+    }
+    private func beginGracefulClose(grace:Int64):Result<Unit>{
+        lock.lock();try{
+            if(state==HostLifecycleLeaseState.Released){return Result.Ok(())}
+            if(state!=HostLifecycleLeaseState.Active || opening || channel.isNone() || grace<0 || grace>frozenShutdownGrace){
+                return hostLifecycleLeaseError("process.shutdown_not_active")}
+            invalidateOutputWindowsLocked();state=HostLifecycleLeaseState.Closing;gracefulCleanup=Some(grace)
+        }finally{lock.unlock()}
+        // Caller authority is withdrawn immediately. Only private bounded
+        // draining continues, without any new read/write/tool/network right.
+        let _=revocation.cancel()
+        stdout.finish(error:Some(hostLifecycleLeaseFailure("plugin.lifecycle_closed")))
+        stderr.finish(error:Some(hostLifecycleLeaseFailure("plugin.lifecycle_closed")))
+        tryCleanup();Result.Ok(())
+    }
     public func revoke(): Result<Unit> {
         let selected: ?ProcessChannel
         lock.lock()
         try {
             if (state == HostLifecycleLeaseState.Released) { return Result.Ok(()) }
             invalidateOutputWindowsLocked()
+            gracefulCleanup=None<Int64>
             state = HostLifecycleLeaseState.Closing; selected = channel
         } finally { lock.unlock() }
         finishRevocation(selected)
@@ -1459,12 +1563,38 @@ public class HostPluginLifecycleLease {
             if (state != HostLifecycleLeaseState.Closing || opening || cleanupRunning) { return }
             cleanupRunning = true
             try {
+                let graceful=gracefulCleanup
                 cleanup = Some(spawn {
-                    var observedClose:?Result<Unit>=try{Some(processes.closeChannelOperation(operationId))}
+                    var observedClose:?Result<Unit>=try{
+                        match((graceful,channel)){case(Some(duration),Some(actual))=>
+                            match(actual.closeGracefully(prepared.operationPlan,duration)){case Result.Err(_)=>let _=actual.abort();case Result.Ok(_)=>()}
+                            case _=>()}
+                        Some(processes.closeChannelOperation(operationId))}
                         catch(_:Exception){None<Result<Unit>>}
-                    let released=managedPhysicalCloseAccepted(observedClose)
+                    var released=managedPhysicalCloseAccepted(observedClose)
+                    if(released){
+                        // Done/EOF are hints, never acknowledgement: join both
+                        // original Host reader Futures before final release.
+                        try{for(reader in [stdoutPump,stderrPump]){match(reader){case Some(value)=>value.get();case None=>()}}}
+                        catch(_:Exception){released=false}
+                        lock.lock();let readersAndScopesReturned=try{ioScopes.isEmpty()}finally{lock.unlock()}
+                        if(released && readersAndScopesReturned){
+                            monitorStop.store(true)
+                            try{match(monitor){case Some(value)=>value.get();case None=>()}}
+                            catch(_:Exception){released=false}
+                        }
+                    }
                     var registration: ?CancellationRegistration = None
-                    var finished = false
+                    lock.lock();var dependenciesReturned=try{
+                        if(released && ioScopes.isEmpty()){
+                            registration=startupCancellation;startupCancellation=None;true
+                        }else{false}
+                    }finally{lock.unlock()}
+                    if(dependenciesReturned){
+                        try{match(registration){case Some(value)=>value.dispose();case None=>()}
+                            registration=None;source.close();revocation.close()}
+                        catch(_:Exception){dependenciesReturned=false}
+                    }
                     lock.lock()
                     try {
                         if(managedGrant.isSome()){
@@ -1477,7 +1607,7 @@ public class HostPluginLifecycleLease {
                         // racing next retry cannot outrun a paid old error.
                         observedClose=None<Result<Unit>>
                         cleanupRunning = false
-                        if (released && stdoutDone.load() && stderrDone.load() && ioScopes.isEmpty() &&
+                        if (released && dependenciesReturned && stdoutDone.load() && stderrDone.load() && ioScopes.isEmpty() &&
                             acknowledgeUnpublishedManagedScopeDebt() && match (managedGrant) { case Some(actual) => actual.releaseAfterPhysicalCleanup({ =>
                                 heldContext = None; heldPrepared = None; heldGrant = None
                                 // The original namespace close really ACKed.
@@ -1486,12 +1616,8 @@ public class HostPluginLifecycleLease {
                                 managedPhysicalCloseError=None<AgentError> })
                                 case None => true }) {
                             state = HostLifecycleLeaseState.Released; channel = None
-                            registration = startupCancellation
-                            startupCancellation = None; finished = true
                         }
                     } finally { lock.unlock() }
-                    match (registration) { case Some(value) => value.dispose(); case None => () }
-                    if (finished) { source.close(); revocation.close() }
                 })
             } catch (_: Exception) { cleanupRunning = false }
         } finally { lock.unlock() }
@@ -1518,6 +1644,8 @@ public class HostPluginLifecycleLease {
                                 state == HostLifecycleLeaseState.Sealed || state == HostLifecycleLeaseState.Activating)
                         if (allowed) { outputBytes += value.bytes.size }
                     } finally { lock.unlock() }
+                    lock.lock();let draining=try{state==HostLifecycleLeaseState.Closing && gracefulCleanup.isSome()}finally{lock.unlock()}
+                    if(draining){continue}
                     if (!allowed || !queue.append(value.bytes)) { let _ = revoke(); return }
                 }
                 if (value.eof) { queue.finish(); return }

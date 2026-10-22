@@ -13,7 +13,7 @@ class InstalledCompactionEventBatchTests {
     @TestCase
     func actualInstalledBatchAndLegacyLayoutKeepSameBytesAndFinalRevocationFence(): Unit {
         let f=CompactionPolicyFixture(hybrid:false)
-        let host=ProductJavaScriptPluginHost(settingsRoot:f.root+"/settings")
+        let host=f.host()
         let cancellation=CompactionBatchCancellationSource()
         let queries=ArrayList<ProductCompactionReferenceQuery>()
         try {

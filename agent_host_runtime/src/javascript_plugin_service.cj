@@ -1383,7 +1383,9 @@ public class HostJavaScriptPluginServiceBroker {
                 case Result.Ok(_) => () }
             case None => ()
         }
-        match (pipeline.executePrepared(executionContext, prepared)) {
+        let returnedExecution: Array<?ReturnedToolExecutionObservation> = [None]
+        match (pipeline.executePrepared(executionContext, prepared, {_ => Result.Ok(())},
+            executionObservation: Some({ actual => returnedExecution[0] = Some(actual) }))) {
             case Result.Ok(ToolInvocationResult.Completed(result)) =>
                 try { settleToolResult(
                     invocationId, requestId, service, call, prepared, requestKey, result
@@ -1413,7 +1415,7 @@ public class HostJavaScriptPluginServiceBroker {
                     )
                 )
             case Result.Err(error) => settleExecutionError(
-                invocationId, requestId, service, call, prepared, requestKey, error
+                invocationId, requestId, service, call, prepared, requestKey, error, returnedExecution[0]
             )
         }
     }
@@ -1679,8 +1681,13 @@ public class HostJavaScriptPluginServiceBroker {
         prepared: PreparedToolInvocation,
         requestKey: String,
         error: AgentError,
-        outcome!: OperationOutcome = OperationOutcome.Rejected
+        outcome!: OperationOutcome = OperationOutcome.Rejected,
+        executionDiagnostic!: ?AgentValue = None
     ): JavaScriptHostResult<String> {
+        let verification = verificationValue(prepared, requestKey, invocationId, requestId, service)
+        if (outcome == OperationOutcome.Unknown) {
+            match (executionDiagnostic) { case Some(value) => verification.put("execution_observation_diagnostic", value); case None => () }
+        }
         let receipt = VNextOperationReceipt(
             "receipt-" + prepared.operationId.value,
             prepared.operationId,
@@ -1694,7 +1701,7 @@ public class HostJavaScriptPluginServiceBroker {
                 ValueField("error_code", textValue(error.code)),
                 ValueField("error_message", textValue(error.message))
             ]),
-            verificationValue(prepared, requestKey, invocationId, requestId, service),
+            verification,
             agentUtcMillis()
         )
         match (operations.settleDerivedOperation(
@@ -1713,7 +1720,8 @@ public class HostJavaScriptPluginServiceBroker {
         call: ToolCall,
         prepared: PreparedToolInvocation,
         requestKey: String,
-        error: AgentError
+        error: AgentError,
+        returnedExecution: ?ReturnedToolExecutionObservation
     ): JavaScriptHostResult<String> {
         let state = match (operations.loadDerivedOperationState(
             prepared.operationId, rootContext.runId
@@ -1724,7 +1732,15 @@ public class HostJavaScriptPluginServiceBroker {
         let outcome = if (state == "prepared" || state == "waiting_approval") {
             OperationOutcome.Rejected
         } else if (state == "executing") {
-            OperationOutcome.Unknown
+            // Only the actual trusted executor's cleanup-returned cancellation
+            // can retire an executing child. Token state, validation errors or
+            // decoder-reported cancellation alone leave the outcome Unknown.
+            match (returnedExecution) {
+                case Some(actual) => if (actual.provesReturnedCancellation(prepared, error)) {
+                    OperationOutcome.Cancelled
+                } else { OperationOutcome.Unknown }
+                case None => OperationOutcome.Unknown
+            }
         } else {
             match (operations.loadDerivedOperationReceipt(prepared.operationId, rootContext.runId)) {
                 case Result.Ok(Some(receipt)) => return responseFromReceipt(
@@ -1740,7 +1756,10 @@ public class HostJavaScriptPluginServiceBroker {
         }
         settleAndReject(
             invocationId, requestId, service, call, prepared, requestKey, error,
-            outcome: outcome
+            outcome: outcome, executionDiagnostic: if (outcome == OperationOutcome.Unknown) {
+                Some(match (returnedExecution) { case Some(actual) => actual.returnedErrorDiagnostic(error)
+                    case None => objectValue([ValueField("observation_present", boolValue(false))]) })
+            } else { None }
         )
     }
 
@@ -1828,7 +1847,7 @@ public func hostMakeJavaScriptPluginChildContext(
             workspaceRoot: rootContext.workspaceRoot,
             cwd: rootContext.cwd,
             environment: rootContext.environment,
-            services: rootContext.services
+            services: rootContext.services, executionSettings180: rootContext.executionSettings180, modelFaultCounters180: rootContext.modelFaultCounters180
         ),
         cancellation: rootContext.cancellation,
         approvalModeOverride: rootContext.approvalModeOverride,
@@ -1933,7 +1952,7 @@ public func hostMakeManagedChannelChildContext(
             workspaceRoot: rootContext.workspaceRoot,
             cwd: rootContext.cwd,
             environment: rootContext.environment,
-            services: rootContext.services
+            services: rootContext.services, executionSettings180: rootContext.executionSettings180, modelFaultCounters180: rootContext.modelFaultCounters180
         ),
         cancellation: rootContext.cancellation,
         approvalModeOverride: rootContext.approvalModeOverride,

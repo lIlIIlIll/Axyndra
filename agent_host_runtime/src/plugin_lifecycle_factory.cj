@@ -12,10 +12,10 @@ public func hostCreatePluginLifecycleManager(database: SqliteDatabase, catalog: 
     javascriptPlugins: HostJavaScriptPluginHost, services: HostJavaScriptPluginServiceRuntime,
     processes: ProcessPort, payloadArtifacts!: ?HostArtifactStore = None,
     caBundle!: String = "", managedJobLauncher!: ?HostManagedJobLauncher = None,
-    operations!: ?DurableOperationStore = None,installOwnedChannel!:Bool=false,
+    operations!: DurableOperationStore, installOwnedChannel!: Bool = false,
     cleanupObserver!:?HostManagedChannelCleanupObserver=None): Result<HostPluginLifecycleManager> {
-        let store = match (operations) { case Some(value) => value; case None => hostOperationStore(database) }
-        let owner = HostPluginLifecycleOwner(database, processes, payloadArtifacts: payloadArtifacts,cleanupObserver:cleanupObserver)
+        let store = operations
+        let owner = HostPluginLifecycleOwner(database, processes, operations: store, payloadArtifacts: payloadArtifacts, cleanupObserver: cleanupObserver)
         let control = HostPluginLifecycleControl(owner)
         let refreshControl = HostPluginLifecycleRefreshControl()
         let httpControl = HostHttpLifecycleControl(store)

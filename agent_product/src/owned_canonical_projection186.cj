@@ -1,6 +1,7 @@
 package agent_product
 
 import agent_host_runtime.*
+import agent_extension_runtime.{reserveNativeControlMetadata}
 import agent_domain.*
 import agent_runtime.*
 import agent_store.*
@@ -115,7 +116,9 @@ class ProductOwnedCanonicalProjectionRoute186 <: HostOwnedCanonicalProjectionRou
                 case Some(error) => return Result<Unit>.Err(error); case None => () }
             let output = checkpointPolicyMaterialize113(query, proposal)
             query.check()
-            let copied = HostPaidValueProjection151(allocate(4096))
+            // The caller outlives the mounted/query frame. Its copied output
+            // owns an independently retiring slot in the SAME Native bank.
+            let copied = HostPaidValueProjection151(reserveNativeControlMetadata(4096))
             var published = false
             try {
                 copied.retainValue151(1, output); copied.projectValue151(1)
@@ -164,6 +167,7 @@ class ProductOwnedCanonicalProjectionRoute186 <: HostOwnedCanonicalProjectionRou
         ownedToolSet185: ?SharedToolSetSnapshot159, selection: ProductPolicySelection): OwnedFailureDataOutcome113<Unit> {
         match (selected.requirePlan173(context, plan)) {
             case Result.Err(error) => return captureOwnedFailureData113<Unit>(error, allocate); case Result.Ok(_) => () }
+        let expectedCallArguments = plan.canonicalArguments.field("projection_arguments").getOrThrow()
         let recipe = plan.canonicalArguments.field("projection_recipe").getOrThrow()
         if (recipe.field("post_canonical").getOrThrow().unifiedKind == ValueKind.Null) {
             return OwnedFailureDataOutcome113<Unit>.Value(()) }
@@ -181,25 +185,25 @@ class ProductOwnedCanonicalProjectionRoute186 <: HostOwnedCanonicalProjectionRou
                 match (ownedToolSet185) {
                     case Some(owned) => match (boundary) {
                         case Some(actual) => store.saveDirectOwned185(checkpoint, header, context.contextProjection, owned,
-                            plan.toolName, plan, result, agentUtcMillis(), actual, guard)
+                            plan.toolName, plan, expectedCallArguments, result, agentUtcMillis(), actual, guard)
                         case None =>
                             if (header.activeTurnId.isNone()) {
                                 store.saveRetainedOwned185(checkpoint, header, context.runId, context.epoch,
-                                    context.contextProjection, owned, plan, result, agentUtcMillis(), guard)
+                                    context.contextProjection, owned, plan, expectedCallArguments, result, agentUtcMillis(), guard)
                             } else {
                                 store.saveOwned185(checkpoint, header, context.runId, context.epoch, context.contextProjection,
-                                    owned, plan.toolName, plan, result, agentUtcMillis(), guard) } }
+                                    owned, plan.toolName, plan, expectedCallArguments, result, agentUtcMillis(), guard) } }
                     case None =>
                 match (boundary) {
                     case Some(actual) => store.saveDirect(checkpoint, header, context.contextProjection, context.legacyToolSetSnapshot159,
-                        plan.toolName, plan, result, agentUtcMillis(), actual, guard)
+                        plan.toolName, plan, expectedCallArguments, result, agentUtcMillis(), actual, guard)
                     case None =>
                         if (header.activeTurnId.isNone()) {
                             store.saveRetainedData173(checkpoint, header, context.runId, context.epoch,
-                                context.contextProjection, context.legacyToolSetSnapshot159, plan, result, agentUtcMillis(), guard)
+                                context.contextProjection, context.legacyToolSetSnapshot159, plan, expectedCallArguments, result, agentUtcMillis(), guard)
                         } else {
                             store.save(checkpoint, header, context.runId, context.epoch, context.contextProjection,
-                                context.legacyToolSetSnapshot159, plan.toolName, plan, result, agentUtcMillis(), guard) } }
+                                context.legacyToolSetSnapshot159, plan.toolName, plan, expectedCallArguments, result, agentUtcMillis(), guard) } }
                 }
             }, result.callId, context.cancellation, routeRecipe173: Some(recipe))
     }

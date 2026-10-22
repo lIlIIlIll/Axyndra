@@ -351,6 +351,8 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
         "XDG_STATE_HOME": str(home / "xdg-state"),
         "XDG_CACHE_HOME": str(home / "xdg-cache"),
         "TMPDIR": str(case_dir / "tmp"),
+        "TMP": str(case_dir / "tmp"),
+        "TEMP": str(case_dir / "tmp"),
         "TUI_PATH_COVERAGE_PROVIDER_PORT": str(port),
         # The value is intentionally fictional and only exists in this case.
         "AXYNDRA_TUI_COVERAGE_KEY": "tui-coverage-fake-key-2026",
@@ -360,6 +362,8 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
         "CANGJIE_SDK_ROOT",
         "CANGJIE_STDX_PATH",
         "CJ_SDK_LIBPATH",
+        "XDG_RUNTIME_DIR",
+        "AXYNDRA_NETWORK_BRIDGE",
         "LD_LIBRARY_PATH",
     ):
         value = os.environ.get(name)
@@ -381,6 +385,7 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
     existing_ld = environment.get("LD_LIBRARY_PATH", "")
     environment["LD_LIBRARY_PATH"] = ":".join(item for item in (native, existing_ld or f"{stdx}:{runtime}:{tools}") if item)
     environment["AXYNDRA_NATIVE_ROOT"] = native
+    environment.setdefault("AXYNDRA_NETWORK_BRIDGE", str(ROOT / "libs" / "process4cj" / "native" / "sandbox-net-bridge"))
     for directory in (home, workspace, case_dir / "tmp", *(home / name for name in ("xdg-config", "xdg-data", "xdg-state", "xdg-cache"))):
         directory.mkdir(parents=True, exist_ok=True)
     # No DISPLAY/WAYLAND_DISPLAY/clipboard service is inherited.  This keeps
@@ -441,7 +446,7 @@ class CaseRun:
         self.tmp.mkdir(parents=True, exist_ok=True)
         self.environment = clean_environment(self.home, self.workspace, self.case_dir)
         self.tmux_environment = dict(self.environment)
-        self.tmux_environment["TMUX_TMPDIR"] = "/tmp/axyndra-tui-tmux"
+        self.tmux_environment["TMUX_TMPDIR"] = os.environ.get("AXYNDRA_TUI_TMUX_TMPDIR", str(self.case_dir.parent.parent / "tmux"))
         Path(self.tmux_environment["TMUX_TMPDIR"]).mkdir(parents=True, exist_ok=True)
         self.assertions = AssertionRecorder(self.case_dir / "assertions.json")
         self.input_path = self.case_dir / "input.jsonl"
@@ -452,7 +457,7 @@ class CaseRun:
         self.fixture_stderr_path = self.case_dir / "fixture-stderr.log"
         self.stderr_path = self.case_dir / "stderr.log"
         self.terminal_path = self.case_dir / "terminal.ansi"
-        self.socket_name = f"axyndra-tui-{os.getpid()}-{time.time_ns()}"
+        self.socket_name = f"ax-{os.getpid()}-{time.time_ns():x}"
         self.tmux_socket = self.socket_name
         self.session = f"tui-{os.getpid()}-{time.time_ns()}"
 

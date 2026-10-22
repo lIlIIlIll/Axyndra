@@ -199,12 +199,20 @@ func workflowHubProcessRequest(arguments: AgentValue, shellMode: String): AgentV
         fields.add(ValueField("grep",textValue(workflowHubProcessText(arguments,"grep"))))}
     if(op=="send"){
         let signal=workflowHubProcessText(arguments,"signal")
-        let keys=workflowHubProcessStringList(arguments,"keys")
-        var data=workflowHubProcessText(arguments,"text")
-        if(data!="" && workflowHubProcessBool(arguments,"enter",true)){data+="\r"}
-        for(key in keys){data+=workflowHubProcessKey(key)}
-        if(signal=="" && data==""){throw PureProviderError("hub.process_send_empty","send requires text, keys, or signal")}
-        fields.add(ValueField("signal",textValue(signal)));fields.add(ValueField("stdin",textValue(data)))}
+        var data=""
+        var failure=nullValue()
+        try{
+            let keys=workflowHubProcessStringList(arguments,"keys")
+            data=workflowHubProcessText(arguments,"text")
+            if(data!="" && workflowHubProcessBool(arguments,"enter",true)){data+="\r"}
+            for(key in keys){data+=workflowHubProcessKey(key)}
+            if(signal=="" && data==""){throw PureProviderError("hub.process_send_empty","send requires text, keys, or signal")}
+        }catch(error:PureProviderError){
+            if(signal==""){throw error}
+            failure=objectValue([ValueField("code",textValue(error.code)),ValueField("message",textValue(error.message))])
+        }
+        fields.add(ValueField("signal",textValue(signal)));fields.add(ValueField("stdin",textValue(data)))
+        fields.add(ValueField("stdin_error",failure))}
     if(op=="wait"){
         let pattern=workflowHubProcessText(arguments,"pattern")
         if(pattern!=""){try{let _=Regex(pattern,[])}catch(error:Exception){

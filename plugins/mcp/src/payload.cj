@@ -98,15 +98,17 @@ class PayloadJsonTokenCounter {
             if (escaped) { escaped = false }
             else if (byte == b'\\') { escaped = true }
             else if (byte == b'"') { quoted = false }
-        } else if (byte == b'"') { quoted = true; nodes += 1 }
-        else if (byte == b'{' || byte == b'[' || byte == b',' || byte == b':') { nodes += 1 }
-        require(nodes <= 65536, "mcp_plugin.payload_nodes")
+        } else if (byte == b'"') {
+            quoted = true; nodes += 1; require(nodes <= 65536, "mcp_plugin.payload_nodes")
+        } else if (byte == b'{' || byte == b'[' || byte == b',' || byte == b':') {
+            nodes += 1; require(nodes <= 65536, "mcp_plugin.payload_nodes")
+        }
     }
 }
 func payloadNodeBound(source: String): Unit { let _ = payloadNodeCount(source) }
 func payloadNodeCount(source: String): Int64 {
     let counter = PayloadJsonTokenCounter()
-    for (byte in source.toArray()) { counter.accept(byte) }
+    for (byte in unsafe { source.rawData() }) { counter.accept(byte) }
     counter.nodes
 }
 func payloadFrameNodeCount(source: ArrayList<Byte>): Int64 {
@@ -116,7 +118,7 @@ func payloadFrameNodeCount(source: ArrayList<Byte>): Int64 {
 }
 func payloadDigest(value: String): Bool {
     if (value.size != 64) { return false }
-    for (byte in value.toArray() where !((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) { return false }
+    for (byte in unsafe { value.rawData() } where !((byte >= b'0' && byte <= b'9') || (byte >= b'a' && byte <= b'f'))) { return false }
     true
 }
 func payloadEnvelope(invocation: JsonNode, kind: String, window: String, values: Array<JsonObjectEntry>): JsonNode {
@@ -132,6 +134,7 @@ func payloadEnvelope(invocation: JsonNode, kind: String, window: String, values:
 // actual invocation worker and held until its JSON consumers have returned.
 class PayloadReceiver {
     private let limits: ProtocolLimits
+    private let extensionId: String
     let invocation: JsonNode
     let window: String
     let deadline: MonoTime
@@ -141,8 +144,9 @@ class PayloadReceiver {
     private var bytes: Array<Byte>
     private var offset: Int64 = 0
     private var complete = false
-    init(begin: JsonNode, limits: ProtocolLimits) {
+    init(begin: JsonNode, limits: ProtocolLimits, extensionId: String) {
         this.limits = limits
+        this.extensionId = extensionId
         require(limits.payload.isSome(), "mcp_plugin.payload_unsupported")
         payloadOuter(begin)
         let header = field(begin, "payload")
@@ -159,7 +163,7 @@ class PayloadReceiver {
             payloadDigest(digest), "mcp_plugin.payload_begin_invalid")
         // Validate ordinary source identity before reserving/allocating a body.
         let probe = envelope(begin, "invoke"); probe.add(JsonObjectEntry("arguments", jsonObject([])))
-        validateInvocation(jsonObject(probe.toArray()), limits: limits)
+        validateInvocation(jsonObject(probe.toArray()), extensionId: extensionId, limits: limits)
         invocation = begin
         deadline = MonoTime.now() + Duration.millisecond * limits.timeout
         charge = payloadPool.acquire(length)
@@ -187,7 +191,7 @@ class PayloadReceiver {
         let result = parseUnifiedJson(source, maxBytes: maximum, maxDepth: 32)
         require(text(result, "type") == "invoke" && text(result, "payload_window") == window &&
             sameIdentity(result, invocation), "mcp_plugin.payload_identity_invalid")
-        validateInvocation(result, limits: limits)
+        validateInvocation(result, extensionId: extensionId, limits: limits)
         require(MonoTime.now() < deadline, "mcp_plugin.payload_expired")
         complete = true; bytes = []
         Some(result)

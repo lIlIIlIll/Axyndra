@@ -53,7 +53,7 @@ public func hostDocumentChildContext(root: PreparedToolInvocation, context: Tool
     ToolInvocationContext(context.runId, context.sessionId, CapabilitySet(values: if (permitted) { [capability] } else { [] }),
         sequence: context.currentSequence(), epoch: context.epoch,
         toolContext: ToolContextDescriptor(workspaceRoot: context.workspaceRoot, cwd: context.cwd,
-            environment: ToolEnvironmentView(), services: context.services),
+            environment: ToolEnvironmentView(), services: context.services, executionSettings180: context.executionSettings180, modelFaultCounters180: context.modelFaultCounters180),
         cancellation: context.cancellation, approvalModeOverride: context.approvalModeOverride,
         outputSink: context.outputSink, budget: context.budget, budgetModeFn: context.budgetModeFn,
         contextProjection: context.contextProjection, toolSetSnapshot: context.legacyToolSetSnapshot159,

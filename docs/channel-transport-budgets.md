@@ -1,5 +1,34 @@
 # Service transport and content budgets
 
+## Frozen process shutdown
+
+An operator process service may set `lifecycle_policy` to
+`{"schema":"axyndra.process-shutdown/v1","grace_ms":3000}`. The duration is an
+exact nonnegative Int64, independent of request/startup timeouts. Omission
+normalizes to immediate cleanup (zero); no plugin setting grants a grace.
+The policy is part of the immutable launch digest and the normalized managed
+channel binding. A prepared close may request a smaller `grace_ms`, never a
+larger one. Changed configuration, executable, descriptor, source or current
+capability/resource ceilings do not adapt an already approved plan.
+
+Normal idle operator stop withdraws the catalog and invocation authority
+immediately, closes process stdin, and privately drains within that frozen
+interval. It then force-aborts the retained process group if necessary and
+uses the original cleanup owner for actual wait/reap, reader/monitor Future
+returns, callbacks and resource reservations. EOF, an exit observation or a
+request-to-close are not release acknowledgements. Cancellation, revocation,
+an active invocation stop and lifetime expiry keep immediate forced cleanup;
+shutdown introduces no additional tool, network or caller read authority.
+The existing bounded stop reply may report cleanup pending; it does not
+extend its deadline or release custody. Public acknowledgement waits for the
+same canonical operation settlement and actual cleanup Future/callback return.
+
+Managed-owned startup links the original caller cancellation token and deadline
+to service revocation before native directory I/O begins. The same scoped link
+remains armed through publication, then is disposed before startup custody is
+finished. A cancelled caller cannot acquire catalog authority while startup is
+blocked; cleanup still waits for actual endpoint and backend acknowledgement.
+
 An operator's lifecycle `max_output_bytes` and `resources.max_output_bytes`
 are equal, finite raw stdout-plus-stderr byte budgets for the entire service
 lifetime. They include protocol framing and escaping. The maximum is 128 MiB;

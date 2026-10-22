@@ -201,8 +201,6 @@ class PluginGithubServiceTests {
             } finally { networkFixture.close() }
             let fixture = GithubProductFixture(askOnNetwork: false)
             try {
-                @Expect(fixture.product.unregisterTool("bash"))
-                @Expect(fixture.product.unregisterTool("bash_readonly"))
                 @Expect(!managedCompleted(fixture.start("github-readonly")).isError)
                 @Expect(fixture.commands().size, 0)
                 let baselineApprovals = fixture.database.scalarInt("SELECT COUNT(*) FROM approvals")

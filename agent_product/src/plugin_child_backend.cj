@@ -117,7 +117,7 @@ class ProductPluginChildBackend111 <: HostPluginChildBackend111 {
         admission: HostPluginChildAdmission111): Result<ToolResult> {
         tasks.writePluginResultSlot150(context, request, admission)
     }
-    public func processFacts180(meter:HostPaidValueProjection151):Result<AgentValue>{tasks.pluginProcessFacts180(meter)}
+    public func processFacts180(context:ToolInvocationContext,meter:HostPaidValueProjection151):Result<AgentValue>{tasks.pluginProcessFacts180(context,meter)}
     public func observeProcessPreparation180(context:ToolInvocationContext,request:AgentValue,
         meter:HostPaidValueProjection151):Result<AgentValue>{tasks.observePluginProcessPreparation180(context,request,meter)}
     public func executeProcess180(context:ToolInvocationContext,input:AgentValue,

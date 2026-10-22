@@ -1345,6 +1345,14 @@ class AgentScreen <: TerminalFrameProvider {
         }
         match (key.code) {
             case KeyCode.CtrlC =>
+                if (working) {
+                    idleCtrlCArmed = false
+                    status = "cancelling"
+                    return backgroundTask("cancel", { =>
+                        backend.cancel()
+                        Event.Message("cancel requested")
+                    })
+                }
                 if (idleCtrlCArmed) {
                     UpdateResult.exit()
                 } else {

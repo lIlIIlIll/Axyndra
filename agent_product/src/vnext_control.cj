@@ -47,7 +47,7 @@ public class ProductVnextControl <: HostServiceToolControl {
     private let ids: ProductIds
     private let threadRuntimes: ThreadRuntimeRegistry
     private let canonicalTools: HostCanonicalToolGateway
-    private let operations: OperationRuntimePort
+    let operations: DurableOperationStore
     private let askRuntime: AskRuntime
     private let payloadArtifacts: ?ProductArtifactStore
     private let workspaceRoot: String
@@ -67,7 +67,7 @@ public class ProductVnextControl <: HostServiceToolControl {
         pipeline: ToolPipeline,
         ids: ProductIds,
         threadRuntimes: ThreadRuntimeRegistry,
-        operations: OperationRuntimePort,
+        operations: DurableOperationStore,
         askRuntime: AskRuntime,
         workspaceRoot: String,
         settingsRoot: String,
@@ -127,17 +127,19 @@ public class ProductVnextControl <: HostServiceToolControl {
         let services: HostJavaScriptPluginServiceRuntime = ProductJavaScriptPluginServiceRuntime(catalog, pipeline, operations, askRuntime,
             canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173)
         hostCreatePluginLifecycleManager(database, catalog, javascriptPlugins, services, processes,
-            payloadArtifacts: payloadArtifacts, caBundle: caBundle, managedJobLauncher: managedJobLauncher,installOwnedChannel:true,cleanupObserver:cleanupObserver)
+            operations: operations, payloadArtifacts: payloadArtifacts, caBundle: caBundle, managedJobLauncher: managedJobLauncher, installOwnedChannel: true, cleanupObserver: cleanupObserver)
     }
 
     // Real, finite, zero-effect parser ownership. No ToolCall, broker observer,
     // approval, hidden port or model request is created by this window.
 
 
-    // Local operator entry. The generic owner alone reads stdin and owns the
-    // connection; no MCP request can call this factory or supply a grant DTO.
-    public func servePluginStdio(grantId: String): Result<Unit> {
-        stdioIngress.servePluginStdio(grantId)
+    // Local operator entry. Explicit callbacks carry actual frontend I/O,
+    // while the same generic owner keeps its fixed grant and connection.
+    public func servePluginStdio(grantId: String, input180!: ?(() -> Result<?HostStdioInputFrame180>) = None,
+        output180!: ?((String) -> Result<Unit>) = None, callerCancellation180!: ?CancellationToken = None): Result<Unit> {
+        stdioIngress.servePluginStdio(grantId, input180: input180, output180: output180,
+            callerCancellation180: callerCancellation180)
     }
 
     public func createSharedHistoryLane(lane: LaneRecord): Result<Unit> {
@@ -213,17 +215,17 @@ public class ProductVnextControl <: HostServiceToolControl {
         SqliteInboxStepStore(database).hasPendingRpcLocalProcessing113(threadId)
     }
     func prepareActualRpcQueuedInput113(value: QueuedRunInitiatorData113, local: Bool,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
         SqliteInboxStepStore(database).prepareActualRpcQueuedInput113(value, local, allocate, retain)
     }
     func completeReturnedRpcInput113(value: QueuedRunInitiatorData113, local: Bool, accepted: Bool,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
         SqliteInboxStepStore(database).completeReturnedRpcInput113(value, local, accepted, allocate, retain)
     }
     func actualRpcQueuedInputTerminal113(value: QueuedRunInitiatorData113,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Bool {
         SqliteInboxStepStore(database).actualRpcQueuedInputTerminal113(value, allocate, retain)
     }
@@ -317,10 +319,13 @@ public class ProductVnextControl <: HostServiceToolControl {
         call: ToolCall,
         contextSnapshot!: InvocationContextProjection = InvocationContextProjection(),
         runId!: ?RunId = None,
-        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1)
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>
     ): Result<ToolInvocationResult> {
         executeCanonicalToolWithDecision(
-            sessionId, capabilities, call, contextSnapshot, runId, Option<ApprovalDecision>.None, budget: budget
+            sessionId, capabilities, call, contextSnapshot, runId, Option<ApprovalDecision>.None, budget: budget,
+            operatorOptions180: operatorOptions180, frontendCancellation180: callerCancellation180
         )
     }
 
@@ -330,11 +335,13 @@ public class ProductVnextControl <: HostServiceToolControl {
         owner: ProductDirectPreparationOwner, cancellation: CancellationToken,
         participant!: ?PluginDocumentCommitParticipant = None,
         contextSnapshot!: InvocationContextProjection = InvocationContextProjection(),
-        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1)): Result<ToolInvocationResult> {
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>): Result<ToolInvocationResult> {
         match (owner.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         executeCanonicalToolWithDecision(sessionId, capabilities, call, contextSnapshot, Option<RunId>.None, Option<ApprovalDecision>.None,
             budget: budget, hostCallerCancellation: Some(cancellation), directPreparationOwner: Some(owner),
-            commandParticipant: participant)
+            commandParticipant: participant, operatorOptions180: operatorOptions180, frontendCancellation180: callerCancellation180)
     }
 
     // Package-internal host service gateway. The caller supplies a dedicated
@@ -455,7 +462,9 @@ public class ProductVnextControl <: HostServiceToolControl {
         externalRequest!: ?ExternalRequestId = None,
         externalFrame!: ?ExternalReceivedFrame = None,
         directPreparationOwner!: ?ProductDirectPreparationOwner = None,
-        commandParticipant!: ?PluginDocumentCommitParticipant = None
+        commandParticipant!: ?PluginDocumentCommitParticipant = None,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        frontendCancellation180!: ?CancellationToken = None<CancellationToken>
     ): Result<ToolInvocationResult> {
         let bindCommand: ?(RunId, Int64) -> Result<Unit> = match (commandParticipant) {
             case Some(participant) => Some({ actualRun, actualEpoch =>
@@ -469,7 +478,11 @@ public class ProductVnextControl <: HostServiceToolControl {
             executionRoot: executionRoot, trustedControl: trustedControl, budget: budget,
             hostServiceOrigin: hostServiceOrigin, hostCallerCancellation: hostCallerCancellation,
             externalConnection: externalConnection, externalRequest: externalRequest, externalFrame: externalFrame,
-            directPreparationOwner: directPreparationOwner, commandParticipant: commandParticipant, commandControlAdmission159e: bindCommand)
+            directPreparationOwner: directPreparationOwner, commandParticipant: commandParticipant, commandControlAdmission159e: bindCommand,
+            executionSettings180: match (operatorOptions180) { case Some(options) => options.executionSettingsValue180(); case None => nullValue() },
+            modelFaultCounters180: match (operatorOptions180) { case Some(options) => options.modelFaultCounters180; case None => None<ModelStreamFaultCounters180> },
+            approvalModeOverride180: match (operatorOptions180) { case Some(options) => Some(options.approvalMode); case None => None<ApprovalMode> },
+            frontendCancellation180: frontendCancellation180)
     }
 
     func reserveManagedJob(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ManagedJobReservation> {
@@ -541,7 +554,7 @@ public class ProductVnextControl <: HostServiceToolControl {
                     let context = ToolInvocationContext(job.runId, SessionId(job.threadId.value), parent.capabilities,
                         epoch: started.epoch, cancellation: root.externalCancellationToken.getOrThrow(),
                         toolContext: ToolContextDescriptor(workspaceRoot: parent.workspaceRoot, cwd: parent.cwd,
-                            environment: parent.environment, services: parent.services), contextProjection: parent.contextProjection,
+                            environment: parent.environment, services: parent.services, executionSettings180: parent.executionSettings180, modelFaultCounters180: parent.modelFaultCounters180), contextProjection: parent.contextProjection,
                         budget: budget, trustedControl: false)
                     // Persist the exact approved plan through the sealed Task
                     // admission before looking up its current executor. A stale
@@ -1145,6 +1158,9 @@ public class ProductVnextControl <: HostServiceToolControl {
 
     public func createEffectScope(owner: ComponentInstanceRef): EffectScope {
         EffectScope(owner)
+    }
+    func bindCanonicalOwner180(owner: ActualProcessBrokerRoot180, product: ProductRuntime, config: ProductConfig): Unit {
+        owner.bindActualProduct180(product, database, operations, config)
     }
 
 }

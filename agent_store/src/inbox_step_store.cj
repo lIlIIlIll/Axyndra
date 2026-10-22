@@ -3,6 +3,8 @@ package agent_store
 import std.convert.*
 import std.collection.*
 import agent_domain.*
+import agent_runtime.RpcQueuedStoreFailure113
+import agent_runtime.RpcQueuedStorePayment113
 
 public class InboxClaimRequest {
     public let entryId: InboxEntryId
@@ -109,7 +111,7 @@ public class SqliteInboxStepStore {
     // Started local processing is durable and is not selected by queued replay.
     // It is explicitly not a Model Step or a Tool execution receipt.
     public func prepareActualRpcQueuedInput113(value: QueuedRunInitiatorData113, local: Bool,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
         let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
         try {
@@ -126,7 +128,7 @@ public class SqliteInboxStepStore {
     }
 
     public func completeReturnedRpcInput113(value: QueuedRunInitiatorData113, local: Bool, accepted: Bool,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
         let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
         try {
@@ -153,7 +155,7 @@ public class SqliteInboxStepStore {
     }
 
     public func actualRpcQueuedInputTerminal113(value: QueuedRunInitiatorData113,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retain: (RpcQueuedStoreFailure113) -> Unit): Bool {
         let cell = prepareRpcQueuedStoreCell113(value, allocate, retain)
         try {

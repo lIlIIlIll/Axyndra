@@ -60,6 +60,37 @@ func actualProcessExpectNoModel180(f:WorkflowChildFixture111):Unit{
 @Test
 class InstalledWorkflowActualProcess180Tests {
     @TestCase
+    func nullableFrozenOperatorNetworkKeepsActualProcessPreparationPolicy217(): Unit {
+        let f = WorkflowChildFixture111()
+        try {
+            actualProcessSelection180(f); actualProcessScript180(f)
+            let options = ProductOperatorOptions180(approvalMode: ApprovalMode.Yolo)
+            let start = hostServiceEntryCompleted(f.product.vnext.executeCanonicalTool(
+                SessionId("actual-process-nullable-217"), actualProcessCapabilities180(f),
+                actualProcessCall180(f, "nullable-start-217", "start", actualProcessStartFields180(f, "nullable217")),
+                budget: f.budget(), operatorOptions180: Some(options)))
+            try {
+                @Expect(!start.isError)
+                @Expect(!start.output.field("readyTimedOut").getOrThrow().asBool())
+                let daemon = start.output.field("daemon").getOrThrow()
+                @Expect(httpIntentText(daemon, "state"), "ready")
+                let pid = daemon.field("pid").getOrThrow().asInt64()
+                @Expect(pid > 0); @Expect(exists(Path("/proc/" + pid.toString())))
+                expectCanonicalReturnedReceipt(f.database, start)
+            } finally { start.releasePayload() }
+            let stop = hostServiceEntryCompleted(f.product.vnext.executeCanonicalTool(
+                SessionId("actual-process-nullable-217"), actualProcessCapabilities180(f),
+                actualProcessCall180(f, "nullable-stop-217", "stop", [ValueField("name", textValue("nullable217")),
+                    ValueField("timeout", integerValue(1))]), budget: f.budget(), operatorOptions180: Some(options)))
+            try {
+                @Expect(!stop.isError)
+                @Expect(stop.output.field("daemon").getOrThrow().field("pid").getOrThrow().unifiedKind, ValueKind.Null)
+                expectCanonicalReturnedReceipt(f.database, stop)
+            } finally { stop.releasePayload() }
+            actualProcessExpectNoModel180(f)
+        } finally { f.close() }
+    }
+    @TestCase
     func eightOriginalRoutesUseRealDerivedReceiptAndWholeProcessData180():Unit{
         let f=WorkflowChildFixture111()
         try{

@@ -16,6 +16,7 @@ class InvocationJob {
     init(invocation: JsonNode, deadline: MonoTime) { this.invocation = invocation; this.deadline = deadline }
 }
 func runProtocol(): Int64 {
+    let extensionId = installedMcpPackageId()
     let output = WireOutput()
     let input = ProtocolInput()
     let session = McpPluginSession(output)
@@ -35,7 +36,7 @@ func runProtocol(): Int64 {
             var kind = text(frame, "type")
             if (kind == "hello") {
                 require(hello.isNone() && text(frame, "protocol") == "axyndra-js-host-v2" &&
-                    text(frame, "extension_id") == "mcp-client" && text(frame, "extension_version") == "1.0.0" &&
+                    text(frame, "extension_id") == extensionId && text(frame, "extension_version") == "1.0.0" &&
                     number(frame, "generation") > 0, "mcp_plugin.hello_invalid")
                 output.configure(frame)
                 hello = Some(frame)
@@ -54,7 +55,7 @@ func runProtocol(): Int64 {
             }
             if (kind == "payload_begin") {
                 require(transfer.isNone() && (active.isNone() || active.getOrThrow().done.load()), "mcp_plugin.payload_overlap")
-                let receiver = PayloadReceiver(frame, output.limits)
+                let receiver = PayloadReceiver(frame, output.limits, extensionId)
                 if (windows.contains(receiver.window) || windows.size >= 8192) { receiver.close(); throw PluginFailure("mcp_plugin.payload_reused") }
                 windows.add(receiver.window); transfer = Some(receiver); input.transferDeadline = Some(receiver.deadline)
                 continue
@@ -77,7 +78,7 @@ func runProtocol(): Int64 {
                 output.write(jsonObject(envelope(frame, "cancelled").toArray())); continue
             }
             require(kind == "invoke" && (active.isNone() || active.getOrThrow().done.load()), "mcp_plugin.concurrent_invocation")
-            validateInvocation(frame, limits: output.limits)
+            validateInvocation(frame, extensionId: extensionId, limits: output.limits)
             match (worker) { case Some(value) => value.get(); case None => () }
             let invocationFrame = frame
             let job = InvocationJob(invocationFrame, match (transfer) { case Some(value) => value.deadline

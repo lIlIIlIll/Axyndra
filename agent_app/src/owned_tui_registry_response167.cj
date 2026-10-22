@@ -18,14 +18,16 @@ class OwnedTuiRegistryRegistration167 {
     init(scope: OwnedApplicationRegistryResponse161, metadata: LogicalJsonCopiedDisplayAllocation) {
         this.scope = Some(scope); this.metadata = Some(metadata)
     }
-    func installProjection167(producer: Object): Unit {
+    func installProjection167(producer: Object,
+        serializerLifetime180!: ?OwnedTuiSerializerLifetime180 = None): Unit {
         let actual = scope.getOrThrow()
         let invoice = actual.copiedTuiResponseInvoice167()
         match (actual.acquireTuiCopiedDisplay167(invoice)) {
             case Result.Err(error) => rememberProjectionFailure167(error); throw Exception("display.registry_projection_pending")
             case Result.Ok(value) => copyPayment = Some(value) }
         // The field retains the precise ticket if construction is unknown.
-        display = Some(OwnedTuiRegistryResponseDisplay167(producer, copyPayment.getOrThrow(), invoice))
+        display = Some(OwnedTuiRegistryResponseDisplay167(producer, copyPayment.getOrThrow(), invoice,
+            serializerLifetime180: serializerLifetime180))
         match (actual.borrowForTui167({ result =>
             rawResponse = Some(result); Result<Unit>.Ok(()) })) {
             case Result.Err(error) => rememberProjectionFailure167(error); throw Exception("display.registry_projection_pending")
@@ -52,6 +54,23 @@ class OwnedTuiRegistryRegistration167 {
                     return Result<Unit>.Err(AgentError(AgentErrorKind.RecoveryRequired,
                         "display.registry_original_pending", "maintenance response references remain paid")) }
                 scope = None
+            case None => () }
+        Result<Unit>.Ok(())
+    }
+    func retireRootSerializedData180(receipt: TuiRootSerializerRetirement180, producer: Object): Result<Unit> {
+        if (!receipt.acknowledges180(producer)) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        match (display) {
+            case Some(value) => match (value.closeAfterUnprojectedSerialization180(producer)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => display = None; copyPayment = None }
+            case None => match (copyPayment) {
+                case Some(value) => match (value.closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => copyPayment = None }
+                case None => () } }
+        clearRawResponseFrame167()
+        match (scope) {
+            case Some(value) => if (!value.closeAfterActualCopiedResponse161(receipt)) {
+                return ownedTuiDisplayError("display.registry_original_pending") }; scope = None
             case None => () }
         Result<Unit>.Ok(())
     }

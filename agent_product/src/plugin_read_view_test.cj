@@ -286,4 +286,41 @@ class PluginReadViewTests {
             @Expect(readViewChildren(database, "view-write-special"), 0)
         } finally { database.close(); product.close(); remove(root, recursive: true) }
     }
+
+    @TestCase
+    func frozenOrdinaryReadProfileAndGenerationCannotAdaptPendingApproval(): Unit {
+        for (change in ["profile", "removed", "generation"]) {
+            let root = readViewTestRoot("payload-drift-" + change)
+            let product = workspacePluginOpen(root, ApprovalMode.AlwaysAsk)
+            let database = SqliteDatabase(root + "/state/state.db")
+            try {
+                let record = workspacePluginInstall(product, root)
+                let path = root + "/settings/plugins/services.json"
+                let selected = parseUnifiedJson(String.fromUtf8(File.readFrom(path)))
+                selected.field("plugins").getOrThrow().items[0].field("configuration").getOrThrow().put("tool_payload_limits",
+                    listValue([OrdinaryToolPayloadLimits("read").value()]))
+                File.writeTo(path, stringifyUnifiedJson(selected).toArray())
+                let thread = "view-payload-" + change
+                let pending = readViewPending(product, record, thread, ".env:raw")
+                @Expect(readViewChildren(database, thread), 0)
+                let operation = pending.approval().getOrThrow().operationId.value
+                let current = parseUnifiedJson(String.fromUtf8(File.readFrom(path)))
+                let configuration = current.field("plugins").getOrThrow().items[0].field("configuration").getOrThrow()
+                if (change == "profile") { configuration.put("tool_payload_limits", listValue([
+                    OrdinaryToolPayloadLimits("read", maxResultBytes: 65536).value()])) }
+                else if (change == "removed") { configuration.put("tool_payload_limits", listValue([])) }
+                else {
+                    let namespace = productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))
+                    match (product.setPluginEnabled(namespace, false, PluginInstallScope.Workspace)) {
+                        case PluginRegistryResult.Ok(_) => (); case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code) }
+                    match (product.setPluginEnabled(namespace, true, PluginInstallScope.Workspace)) {
+                        case PluginRegistryResult.Ok(_) => (); case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code) }
+                }
+                if (change != "generation") { File.writeTo(path, stringifyUnifiedJson(current).toArray()) }
+                @Expect(pending.decide(operation, ApprovalDecision.Approve).isError())
+                @Expect(readViewChildren(database, thread), 0)
+                @Expect(String.fromUtf8(File.readFrom(root + "/workspace/.env")), "SENSITIVE-ONLY-AFTER-APPROVAL\n")
+            } finally { database.close(); product.close(); remove(root, recursive: true) }
+        }
+    }
 }

@@ -11,6 +11,42 @@ public let HOST_MANAGED_CHANNEL_SPAWN_TOOL = "host.process.channel.owned.spawn"
 public let HOST_MANAGED_CHANNEL_CLOSE_TOOL = "host.process.channel.owned.close"
 public let HOST_MANAGED_CHANNEL_EFFECT_FINGERPRINT = "host-managed-channel-owned-v1"
 
+// Generic operator lifecycle data; only an actual frozen operation supplies
+// this policy to physical cleanup. It never grants execution capabilities.
+public func processShutdownPolicyValue(graceMillis:Int64):AgentValue{
+    if(graceMillis<0){throw IllegalArgumentException("negative process shutdown grace")}
+    objectValue([ValueField("schema",textValue("axyndra.process-shutdown/v1")),
+        ValueField("grace_ms",numberValue(graceMillis.toString()))])
+}
+// Only normalized startup/spawn/close plans carry a physical policy. Raw
+// plugin configuration is descriptive data, not an execution fallback.
+public func processShutdownPlanGrace(plan:NormalizedOperationPlan):Result<Int64>{
+    try{
+        if(isManagedChannelOwnedChildPlan(plan)){
+            let kind=httpIntentText(plan.canonicalArguments.field("operation").getOrThrow(),"kind")
+            if(kind!="spawn" && kind!="close"){return managedChannelPlanError("process.shutdown_plan_invalid")}
+            return processShutdownPolicyGrace(plan.canonicalArguments.field("binding").getOrThrow().field("lifecycle_policy").getOrThrow())
+        }
+        if(plan.toolName!="host.plugin.lifecycle.start" ||
+            plan.implementation.toolVersion!="host-plugin-lifecycle-v1" ||
+            plan.implementation.implementationFingerprint!="host-plugin-lifecycle-v1" ||
+            !managedChannelPlanNever(plan) || httpIntentText(plan.canonicalArguments,"schema")!="axyndra.lifecycle-launch/v1"){
+            return managedChannelPlanError("process.shutdown_plan_invalid")}
+        processShutdownPolicyGrace(plan.canonicalArguments.field("lifecycle_policy").getOrThrow())
+    }catch(_:Exception){managedChannelPlanError("process.shutdown_plan_invalid")}
+}
+public func processShutdownPolicyGrace(value:AgentValue):Result<Int64>{
+    try{
+        if(!httpIntentExactFields(value,["schema","grace_ms"]) ||
+            httpIntentText(value,"schema")!="axyndra.process-shutdown/v1"){
+            return managedChannelPlanError("process.shutdown_policy_invalid")}
+        let field=value.field("grace_ms").getOrThrow();let grace=Int64.parse(field.asNumberText())
+        if(field.unifiedKind!=ValueKind.Number || grace<0 || grace.toString()!=field.asNumberText()){
+            return managedChannelPlanError("process.shutdown_policy_invalid")}
+        Result.Ok(grace)
+    }catch(_:Exception){managedChannelPlanError("process.shutdown_policy_invalid")}
+}
+
 // These are descriptive complete plans, never lease, Source or approval
 // factories. The registered typed Host executor selects its actual owner;
 // Store separately proves Source, ordinary decision and durable handoff.
@@ -19,11 +55,12 @@ public func validateManagedChannelRuntimeBinding(binding:AgentValue):Result<Unit
         let common=["plugin","package_digest","configuration_digest","instance_identity","endpoint_identity",
             "directory_revision","directory_digest","implementation_version","implementation_fingerprint","schema_digest",
             "target_thread_id","permission_domain","workspace_root","workspace_mode","network","launch_digest",
-            "lane_id","run_id","epoch","resource_state"]
+            "lane_id","run_id","epoch","resource_state","lifecycle_policy"]
         let active=httpIntentText(binding,"resource_state")=="active"
         let fields=ArrayList<String>(common)
         if(active){fields.add("lease_id");fields.add("startup_operation_id")}
         if(!httpIntentExactFields(binding,fields.toArray()) ||
+            processShutdownPolicyGrace(binding.field("lifecycle_policy").getOrThrow()).isError() ||
             (!active && httpIntentText(binding,"resource_state")!="planned") ||
             !httpServicePluginNamespace(httpIntentText(binding,"plugin")) ||
             !httpServicePackageDigest(httpIntentText(binding,"package_digest"))){
@@ -89,7 +126,13 @@ public func managedChannelRuntimeChildValueValid(value:AgentValue):Bool{
             return true
         }
         if(kind=="close"){
-            return httpIntentExactFields(operation,["kind","lease_id"]) &&
+            let fields=ArrayList<String>(["kind","lease_id"])
+            match(operation.field("grace_ms")){case None=>();case Some(value)=>
+                fields.add("grace_ms")
+                let requested=Int64.parse(value.asNumberText())
+                if(value.unifiedKind!=ValueKind.Number || requested<0 || requested.toString()!=value.asNumberText() ||
+                    requested>processShutdownPolicyGrace(binding.field("lifecycle_policy").getOrThrow()).value().getOrThrow()){return false}}
+            return httpIntentExactFields(operation,fields.toArray()) &&
                 httpIntentText(binding,"resource_state")=="active" &&
                 httpIntentText(operation,"lease_id")==httpIntentText(binding,"lease_id")}
         let configured=operation.field("configured_process")
@@ -157,7 +200,7 @@ public func managedChannelOwnedChildAllowed(parent:NormalizedOperationPlan,child
         let right=child.canonicalArguments.field("binding").getOrThrow()
         for(key in ["plugin","package_digest","configuration_digest","instance_identity","endpoint_identity","directory_revision",
             "directory_digest","implementation_version","implementation_fingerprint","schema_digest","target_thread_id","permission_domain",
-            "workspace_root","workspace_mode","network","launch_digest","lane_id","run_id","epoch"]){
+            "workspace_root","workspace_mode","network","launch_digest","lane_id","run_id","epoch","lifecycle_policy"]){
             if(canonicalAgentValue(left.field(key).getOrThrow())!=canonicalAgentValue(right.field(key).getOrThrow())){return false}}
         // Each resource, including an auxiliary process, needs its own actual
         // startup receipt/audit and Host inventory entry. The initial parent

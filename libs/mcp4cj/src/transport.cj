@@ -239,6 +239,44 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
     func acknowledgedSnapshot(): Bool { lock.lock(); try { accepted.isSome() } finally { lock.unlock() } }
 }
 
+// One reader owns stdout for its full lifetime; unread bytes belong to the
+// next frame, including UTF-8 split across physical reads.
+private class McpStdioLineReader {
+    private let input: InputStream
+    private let maximum: Int64
+    private let buffer = Array<Byte>(8192, repeat: 0)
+    private var offset: Int64 = 0
+    private var count: Int64 = 0
+
+    init(input: InputStream, maximum: Int64) {
+        this.input = input; this.maximum = maximum
+    }
+
+    func readLine(): ?String {
+        let output = ArrayList<Byte>(min(maximum, buffer.size))
+        while (true) {
+            if (offset == count) {
+                count = input.read(buffer); offset = 0
+                if (count <= 0) {
+                    if (output.isEmpty()) { return None }
+                    return Some(String.fromUtf8(output.toArray()))
+                }
+            }
+            var end = offset
+            while (end < count && buffer[end] != b'\n') { end++ }
+            if (end - offset > maximum - output.size) {
+                throw ProcessError(ProcessErrorKind.Frame, "line frame exceeds configured byte limit")
+            }
+            output.add(all: buffer[offset..end])
+            offset = end
+            if (end < count) {
+                offset++; return Some(String.fromUtf8(output.toArray()).removeSuffix("\r"))
+            }
+        }
+        None
+    }
+}
+
 public class StdioMcpTransport <: McpTransport {
     private let framing: McpFramingConfig
     private let channel: McpStdioChannel
@@ -485,9 +523,10 @@ public class StdioMcpTransport <: McpTransport {
     }
 
     private func readPump(): Unit {
+        let input = McpStdioLineReader(channel.stdout, framing.maxFrameBytes)
         while (state() == McpLifecycleState.Ready) {
             let line = try {
-                match (readLineBounded(channel.stdout, framing.maxFrameBytes, allowPartialAtEof: true)) {
+                match (input.readLine()) {
                     case Some(value) => value
                     case None => failAll(McpError(McpErrorKind.Transport, "mcp.stdio_eof", "MCP stdio server closed")); return
                 }

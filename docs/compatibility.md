@@ -54,6 +54,40 @@ Denial, cancellation, deadline and Host failure remain distinct. Public handler
 unit tests demonstrate data-contract behavior, not actual InstalledRoot policy,
 physical close acknowledgement, cross-platform execution, or global capacity.
 
+## Pi and Codex portable capability requests
+
+Pi declares portable requests in `pi.axyndra.capabilities` in `package.json`.
+Codex declares the same request-only subset in `extensions.axyndra.capabilities`
+in `plugin.json`; this is an Axyndra extension, not an OpenAI permission grant.
+Both accept an array of at most 16 strings containing only `workspace.read` and
+`workspace.write`. Whitespace is trimmed and duplicate requests collapse.
+A string instead of an array, nontext elements, empty/NUL-bearing values,
+unknown capabilities, and unknown fields in the Codex Axyndra overlay are
+refused during package inspection, before registry publication.
+
+Keep Codex hook declarations in their vendor overlay and requests separate:
+
+```json
+{
+  "name": "local-hooks",
+  "version": "1.0.0",
+  "extensions": {
+    "com.openai": { "hooks": "./hooks/hooks.json" },
+    "axyndra": { "capabilities": ["workspace.write"] }
+  }
+}
+```
+
+Static import executes no hook and starts disabled. Neither a hook declaration,
+these requests, nor enabling a package authorizes execution: the current
+invocation and its frozen normalized plan must still pass the actual policy and
+capability checks. PreToolUse modification requires the existing workspace-write
+boundary; PostToolUse observation requires the existing workspace-read or
+workspace-write boundary. Hook package files remain read-only in isolated
+execution. The supported Codex command-hook subset remains PreToolUse/PostToolUse,
+exact-name or `*` matching, and finite command timeouts; it does not imply
+arbitrary Codex JavaScript, vendor apps, hosted execution, or MCP activation.
+
 ## Persisted state and inspection
 
 The current SQLite format is **schema v28**. It is independent of the Native
@@ -62,6 +96,15 @@ nonempty legacy Todo/Goal bytes into namespaced `plugin_documents` in the same
 transaction as the schema version change; unsupported historical payloads
 remain data, not executable plugin configuration or authorization. The old
 metadata columns are a read-only archive, not a second write owner.
+
+Plugin lock rows use schema v1; known unversioned rows remain readable without
+rewriting them merely for inspection. Public enable/disable, update, rollback
+and uninstall resolve the existing Registry's fatal load error before choosing
+a record or changing an active instance. Unknown schema versions, fields or
+typed facts return `plugin.lock_format_unsupported` and preserve the original
+lock bytes; they are not reported as an unimported plugin or silently normalized.
+The existing writer fence still reloads and checks current state before every
+publication. This preflight is metadata validation, not a grant or execution pin.
 
 Schema migrations are forward-only. Stop other writers and back up the database
 and every referenced artifact blob before upgrading. Rolling back an executable

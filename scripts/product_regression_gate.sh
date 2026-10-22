@@ -10,6 +10,10 @@ bash scripts/check_atomic_workspace.sh
 # separate target trees or clean/rebuild workspace artifacts.
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 python3 support_tests/frontend_regressions/check.py all
+if [[ -z "${AXYNDRA_WORKFLOW_PLUGIN_PACKAGE:-}" ]]; then
+  AXYNDRA_WORKFLOW_PLUGIN_PACKAGE=$(python3 scripts/prepare_workflow_plugin.py)
+  export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
+fi
 python3 support_tests/process_broker_blackbox/check.py --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"
 # Build real base/update packages and exercise no-model maintenance, invocation,
 # durable HTTP authority and the complete local plugin lifecycle.

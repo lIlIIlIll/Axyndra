@@ -9,7 +9,13 @@ import yjson_support.*
 // Callers pay the fixed scanner/control frame BEFORE constructing this object.
 // It walks all original metadata; the original bank still decides admission.
 public class HubProcessPlanInvoice180 {
-    private var extent: Int64 = 131072
+    // Complete fixed plan/approval/replay/wire field names and framing fit
+    // within 4 KiB (including all optional fixed fields). Variable graph,
+    // text, collection members and fact occurrences are added below. The
+    // 128 KiB scanner/control allocation belongs to retainedPeak, not to the
+    // serialized extent: multiplying that scratch by 64 invented 8 MiB of
+    // codec DATA before the original writer had emitted even one field.
+    private var extent: Int64 = 4096
     private var entries: Int64 = 128
     private let fundScalar:(Int64)->Unit
     private var graphNodes:Int64=0
@@ -85,12 +91,16 @@ public class HubProcessPlanInvoice180 {
             case ReplayDisposition.RecoverByProbe(value) => text(value.value)
             case ReplayDisposition.Compensatable(value) => text(value.value)
             case _ => () }
-        // Each original ContextReadFactLink/Origin constructor enforces the
-        // existing scalar bounds. Count BEFORE the original getter clones its
-        // array; no guessed cap is imposed on the number of facts.
+        // Measure actual immutable field occurrences BEFORE the original
+        // getter clones its array. Charge worst-case JSON escaping for those
+        // bytes, plus every fixed field/schema and the existing node invoice.
+        // A nonexistent 64 KiB payload per fact must not be multiplied into
+        // the codec peak. No fact count, field limit or bank capacity changes.
         let facts = plan.contextReadFactCount180()
-        if (facts > Int64.Max / 65536) { throw LogicalJsonPayloadError("process fact invoice overflow") }
-        add(facts * 65536, facts * 128)
+        let factBytes = plan.contextReadFactTextBytes180()
+        if (facts > Int64.Max / 1024 || factBytes > (Int64.Max - facts * 1024) / 6) {
+            throw LogicalJsonPayloadError("process fact invoice overflow") }
+        add(facts * 1024 + factBytes * 6, facts * 128)
     }
     public func includeRequest180(request:AgentValue):Unit{graph(request)}
     public func includeRoot(value: HubProcessRootHandoff180): Unit {

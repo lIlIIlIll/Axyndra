@@ -20,6 +20,7 @@ experimental = [
 
 [internal]
 packages = [
+  "libs/logical_json_payload",
   "agent_history",
   "agent_minimal",
   "agent_plugin_registry",
@@ -39,10 +40,12 @@ packages = [
   "agent_cli",
   "model_adapters",
   "model_provider_runtime",
+  "model_fixture_runtime",
   "agent_embed",
   "agent_extension_runtime",
   "agent_testkit",
   "agent_product",
+  "agent_host_runtime",
   "agent_rpc",
   "agent_tui",
   "agent_app",

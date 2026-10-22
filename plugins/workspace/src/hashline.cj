@@ -76,17 +76,17 @@ func formatHashlineRead(path: String, content: String): String {
 
 func formatHashlineRange(
     path: String,
-    fullContent: String,
+    fullTag: String,
     selectedContent: String,
     firstLine: Int64
 ): String {
     let lines = selectedContent.split("\n")
-    var result = "[" + path + "#" + hashlineTag(fullContent) + "]"
+    let result = StringBuilder("[" + path + "#" + fullTag + "]")
     for (index in 0..lines.size) {
-        result += "\n" + (firstLine + index).toString() +
-            ":" + lines[index]
+        result.append("\n"); result.append((firstLine + index).toString())
+        result.append(":"); result.append(lines[index])
     }
-    result
+    result.toString()
 }
 
 func hashlineTag(content: String): String { normalizedContentTag(content) }

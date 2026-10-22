@@ -25,6 +25,7 @@ class PluginRegistryMetadataGeneration {
     private var rawCost: Int64 = 0
     private var pinCost: Int64 = 0
     private var latestStateCost: Int64 = 0
+    private var pendingStateCost: Int64 = 0
     private var loadingCost: Int64 = 0
     private var fenceCost: Int64 = 0
     private var loading = false
@@ -68,12 +69,6 @@ class PluginRegistryMetadataGeneration {
             if (closed) { throw LogicalJsonPayloadError("registry metadata generation is closed") }
             allocation.getOrThrow().derivePayment()
         } finally { lock.unlock() }
-    }
-    func beginPrivateDocument78(source: String, actual: PluginRegistryMetadataPayment): PluginPackagePrivateDocumentPayment78 {
-        lock.lock()
-        let selected = try { requireLoad103(actual); actual }
-            finally { lock.unlock() }
-        pluginRegistryBeginPrivateDocument78(selected, source, { bytes => charge(bytes, actual) })
     }
     // Only data lifetime changes. This payment is a real child of the same
     // generation allocation; no execution grant or caller record is exposed.
@@ -133,7 +128,7 @@ class PluginRegistryMetadataGeneration {
             if (references == 0) { closeLocked() } else { pay() }
         } finally { lock.unlock() }
     }
-    func retainState(actual: PluginRegistryMetadataPayment): Unit {
+    func retainState(retainedCost: Int64, actual: PluginRegistryMetadataPayment): Unit {
         lock.lock()
         try {
             requireLoad103(actual)
@@ -141,9 +136,9 @@ class PluginRegistryMetadataGeneration {
                 throw IllegalStateException("registry current state has no completed paid load")
             }
             let next = allocation.getOrThrow().derivePayment()
-            try { next.ensureRetainedPeak(pluginRegistryInvoiceAdd78(loadingCost, 8192)) }
+            try { next.ensureRetainedPeak(retainedCost) }
             catch (error: Exception) { next.close(); throw error }
-            pendingStatePayment = Some(next)
+            pendingStatePayment = Some(next); pendingStateCost = retainedCost
             pendingStateRetention = !stateRetained
             if (!stateRetained) { references++; stateRetained = true }
         } finally { lock.unlock() }
@@ -159,7 +154,7 @@ class PluginRegistryMetadataGeneration {
             // records/history/error reference. The NEW state was prepaid.
             let previous = statePayment
             statePayment = pendingStatePayment; pendingStatePayment = None
-            pendingStateRetention = false; latestStateCost = loadingCost
+            pendingStateRetention = false; latestStateCost = pendingStateCost; pendingStateCost = 0
             match (previous) { case Some(value) => value.close(); case None => () }
         } finally { lock.unlock() }
     }
@@ -214,19 +209,30 @@ class PluginRegistryMetadataGeneration {
             loadingPayment = Some(actual); loading = true; loadingCost = 0
         } finally { lock.unlock() }
     }
-    func charge(bytes: Int64, actual: PluginRegistryMetadataPayment): Unit {
+    func retainLoadData103(bytes: Int64, actual: PluginRegistryMetadataPayment): Unit {
         lock.lock()
         try {
             requireLoad103(actual)
             if (!loading || closed || revoked) {
                 throw IllegalStateException("registry metadata loader is not owned")
             }
-            loadingCost = add(loadingCost, bytes)
+            // This is the full reachable typed state, not inspection work.
+            // Retain its high-water while any loader/result alias remains.
+            loadingCost = max(loadingCost, bytes)
             actual.ensureRetainedPeak(add(4194304, loadingCost))
         } finally { lock.unlock() }
     }
-    func loadCost(actual: PluginRegistryMetadataPayment): Int64 {
-        lock.lock(); try { requireLoad103(actual); loadingCost } finally { lock.unlock() }
+    func openRecordInspection103(actual: PluginRegistryMetadataPayment): PluginRegistryMetadataPayment {
+        lock.lock()
+        try {
+            requireLoad103(actual)
+            if (!loading || revoked) { throw IllegalStateException("registry record inspection has no active load") }
+            let working = actual.derivePayment()
+            // The original loading owner retains its full4MiB caller/IO
+            // working prepayment. This child adds the discovered row work.
+            try { working.ensureRetainedPeak(4096); working }
+            catch (error: Exception) { working.close(); throw error }
+        } finally { lock.unlock() }
     }
     func finishLoad(retainedCost: Int64, identityCost: Int64, actual: PluginRegistryMetadataPayment): PluginRegistryMetadataPayment {
         lock.lock()
@@ -248,7 +254,7 @@ class PluginRegistryMetadataGeneration {
         lock.lock()
         try {
             requireLoad103(actual)
-            let pending = pendingStatePayment; pendingStatePayment = None
+            let pending = pendingStatePayment; pendingStatePayment = None; pendingStateCost = 0
             match (pending) { case Some(value) => value.close(); case None => () }
             if (pendingStateRetention) { stateRetained = false; references-- }
             pendingStateRetention = false; loadingCost = 0; loading = false; loadingPayment = None
@@ -259,20 +265,38 @@ class PluginRegistryMetadataGeneration {
 class PluginRegistryInspectionMemory <: PluginPackagePrivateDocumentAccounting78 {
     private let owner: PluginRegistryMetadataGeneration
     private var actual: ?PluginRegistryMetadataPayment = None
+    private var working: ?PluginRegistryMetadataPayment = None
+    private var workingInvoice: Int64 = 0
     init(owner: PluginRegistryMetadataGeneration) { this.owner = owner }
     func beginLoad103(payment: PluginRegistryMetadataPayment): Unit {
         if (actual.isSome()) { throw IllegalStateException("inspection phase already adopted") }; actual = Some(payment)
     }
     func retireLoad103(payment: PluginRegistryMetadataPayment): Unit {
         if (actual.isNone() || !refEq(actual.getOrThrow(), payment)) { throw IllegalStateException("inspection phase is foreign or retired") }
+        // Called only after the entire capture helper returned, including
+        // exceptional partial row construction that could not hand off DATA.
+        if (working.isSome()) { let returned = takeReturnedRecordPayment103(); returned.close() }
         actual = None
     }
-    public func beginPrivateDocument78(source: String): PluginPackagePrivateDocumentPayment78 { owner.beginPrivateDocument78(source, actual.getOrThrow()) }
+    func beginRecord103(): Unit {
+        if (working.isSome()) { throw IllegalStateException("registry record inspection overlaps a live producer") }
+        working = Some(owner.openRecordInspection103(actual.getOrThrow())); workingInvoice = 4096
+    }
+    func takeReturnedRecordPayment103(): PluginRegistryMetadataPayment {
+        let returned = working.getOrThrow(); working = None; workingInvoice = 0; returned
+    }
+    func chargeWork103(bytes: Int64): Unit {
+        let next = pluginRegistryInvoiceAdd78(workingInvoice, bytes)
+        working.getOrThrow().ensureRetainedPeak(next); workingInvoice = next
+    }
+    public func beginPrivateDocument78(source: String): PluginPackagePrivateDocumentPayment78 {
+        pluginRegistryBeginPrivateDocument78(working.getOrThrow(), source, { bytes => chargeWork103(bytes) })
+    }
     public func beforeDocument(source: String): Unit {
         // A lexical count, not a new node quota or a parser replacement.
         // The unchanged parser still validates all JSON grammar and limits.
         // Raw copies are prepaid before scanning, not after their creation.
-        owner.charge(source.size * 8 + 16384, actual.getOrThrow())
+        chargeWork103(source.size * 8 + 16384)
         var quoted = false; var escaped = false; var scalar = false; var nodes: Int64 = 0; var lines: Int64 = 1
         for (byte in source.toArray()) {
             if (byte == 10) { lines++ }
@@ -285,10 +309,10 @@ class PluginRegistryInspectionMemory <: PluginPackagePrivateDocumentAccounting78
             else if (byte == b'}' || byte == b']' || byte == b',' || byte == b':' || byte == 32 || byte == 9 || byte == 10 || byte == 13) { scalar = false }
             else if (!scalar) { scalar = true; nodes++ }
         }
-        owner.charge(nodes * 512 + lines * 64, actual.getOrThrow())
+        chargeWork103(nodes * 512 + lines * 64)
     }
     public func beforeTreePath(bytes: Int64): Unit {
         if (bytes < 0 || bytes > 16777216) { throw LogicalJsonPayloadError("registry package metadata path is outside resource bounds") }
-        owner.charge(bytes * 8 + 1024, actual.getOrThrow())
+        chargeWork103(bytes * 8 + 1024)
     }
 }

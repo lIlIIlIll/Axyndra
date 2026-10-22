@@ -197,8 +197,6 @@ class PluginMcpServiceTests {
     func actualPackagedClientDirectCallUsesExactDerivedBytesAndSingleSlot(): Unit {
         let fixture = McpProductFixture()
         try {
-            @Expect(fixture.product.unregisterTool("bash"))
-            @Expect(fixture.product.unregisterTool("bash_readonly"))
             @Expect(!managedCompleted(fixture.start("mcp-direct")).isError)
             @Expect(fixture.active("mcp-direct"))
             @Expect(fixture.observed().size, 2)

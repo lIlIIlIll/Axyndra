@@ -8,7 +8,6 @@ import agent_cli.*
 import agent_core.*
 import agent_domain.*
 import agent_runtime.*
-import agent_store.RpcQueuedStoreFailure113
 import agent_product.*
 import std.collection.*
 import std.convert.*
@@ -17,7 +16,13 @@ import std.sync.*
 public class ProductJsonlRpcServer {
     private let session: ApplicationSession
     private let emit: (String) -> Unit
+    private let observerPayment180: ?LogicalJsonOwnerReservation
+    private var eventSubscription180: ?ApplicationOwnedSubscription113 = None<ApplicationOwnedSubscription113>
+    private var controlSubscription180: ?ApplicationControlSubscription180 = None<ApplicationControlSubscription180>
     private let ownedOutput: ?OwnedRpcFrameOutput
+    // DATA funding only. Caller keeps the actual bank owner through every
+    // worker/consumer lifetime; allocation cannot create execution authority.
+    private let allocateWorkerMetadata113: (Int64) -> LogicalJsonOwnerReservation
     private let ownedDeliveries = ArrayList<OwnedProductRpcEventDelivery>()
     private let ownedFailureDeliveries113 = RpcOwnedFailureQueue113()
     private let unadmittedFailure113 = AtomicBool(false)
@@ -29,8 +34,8 @@ public class ProductJsonlRpcServer {
     // One actual prompt/decision Future; never infer retirement from running.
     private var runWorker113: ?Future<Unit> = None<Future<Unit>>
     private var runWorkerStartingFailed113 = false
-    // One actual Native-bank root; each concurrent worker derives a SUM-paid
-    // child without another pool, transfer slot or 16 MiB floor.
+    // One actual bank loan; concurrent worker and join invoices share its SUM.
+    // A frontend lends from its existing Root, without another 16 MiB floor.
     private var workerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var runWorkerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     private var commandWorkerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
@@ -40,6 +45,8 @@ public class ProductJsonlRpcServer {
     private var queuedInputCustody113: ?RpcQueuedRetainedInput113 = None<RpcQueuedRetainedInput113>
     private var workerSnapshotArrays113: Int64 = 0
     private var workerJoinFrames113: Int64 = 0
+    private var inactiveWorkerJoin180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private let inactiveWorkerFailures180 = Array<?Exception>(2, repeat: None<Exception>)
     private var bashWorkers: ?ArrayList<RpcBashWorker> = None<ArrayList<RpcBashWorker>>
     private var closing = false
     private var interactionProfile = "none"
@@ -57,11 +64,15 @@ public class ProductJsonlRpcServer {
     public init(
         session: ApplicationSession,
         emit: (String) -> Unit,
-        ownedOutput!: ?OwnedRpcFrameOutput = None
+        allocateWorkerMetadata: (Int64) -> LogicalJsonOwnerReservation,
+        ownedOutput!: ?OwnedRpcFrameOutput = None,
+        observerPayment180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
     ) {
         this.session = session
         this.emit = emit
         this.ownedOutput = ownedOutput
+        this.observerPayment180 = observerPayment180
+        this.allocateWorkerMetadata113 = allocateWorkerMetadata
         this.hostTools = Some(
             RpcHostToolBridge(
                 session,
@@ -90,7 +101,7 @@ public class ProductJsonlRpcServer {
             )
         })
         } else {
-            session.subscribeOwned({
+            installOwnedObserver180({
             event => emitFrame(
                 encodeAgentValue(
                     objectValue(
@@ -106,6 +117,15 @@ public class ProductJsonlRpcServer {
         }, CallbackOwnedAgentEventSink({ event => emitOwnedEvent(event) }),
             failures: Some(ProductRpcFailureSink113({ value => admitOwnedFailure113(value) })))
         }
+        match (observerPayment180) {
+            case Some(paid) =>
+                let controlPayment = paid.deriveRetainedLease()
+                controlPayment.ensureRetainedPeak(65536)
+                controlSubscription180 = Some(session.subscribeRetirableControls180(controlPayment,
+                    { request => publishInteractionRequest(request) },
+                    { event => emitAsyncJob180(event) },
+                    { event => emitSubagentFrame(event) }))
+            case None =>
         session.subscribeSubagents({
             event => emitSubagentFrame(event)
         })
@@ -126,6 +146,43 @@ public class ProductJsonlRpcServer {
                 )
             )
         })
+        }
+    }
+
+    private func emitAsyncJob180(event: ProductAsyncJobEvent): Unit {
+        emitFrame(encodeAgentValue(objectValue([
+            ValueField("type", textValue("async_job")),
+            ValueField("kind", textValue(event.kind)),
+            ValueField("payload", asyncJobRpcValue(event.snapshot))])))
+    }
+    private func installOwnedObserver180(ordinary: AgentEventSink, owned: OwnedAgentEventSink,
+        failures!: ?OwnedFailureEventSink113): Unit {
+        match (observerPayment180) {
+            case Some(paid) =>
+                let eventPayment = paid.deriveRetainedLease()
+                eventPayment.ensureRetainedPeak(65536)
+                eventSubscription180 = Some(session.subscribeRetirableOwned113(eventPayment,
+                    ordinary, owned, failures: failures))
+            case None => session.subscribeOwned(ordinary, owned, failures: failures)
+        }
+    }
+    // Called only after the actual worker, output and parser helpers return.
+    // Failure retains the concrete callbacks and their original DATA payments.
+    public func retireFrontendSubscriptions180(): Bool {
+        if (!collectRunWorkerRetirement113() || !collectFrontendOutputRetirement113()) { return false }
+        match (eventSubscription180) {
+            case Some(token) =>
+                if (!session.unsubscribeRetirableOwned113(token) || !token.retireAfterUnsubscribe113()) { return false }
+                eventSubscription180 = None<ApplicationOwnedSubscription113>
+            case None => ()
+        }
+        match (controlSubscription180) {
+            case Some(token) =>
+                if (!session.unsubscribeRetirableControls180(token) || !token.retireAfterUnsubscribe180()) { return false }
+                controlSubscription180 = None<ApplicationControlSubscription180>
+            case None => ()
+        }
+        true
     }
 
     public func ready(): String {
@@ -186,6 +243,10 @@ public class ProductJsonlRpcServer {
                 case Result.Ok(_) => ""
                 case Result.Err(error) => failure(id, command, error.message)
             }
+        }
+        if (command == "prompt" || command == "plugin_command" || command == "steer" ||
+            command == "follow_up" || command == "approve" || command == "approve_session" || command == "reject") {
+            joinInactiveWorkersBeforeAdmission180()
         }
         match (command) {
             case "prompt" =>
@@ -408,18 +469,18 @@ public class ProductJsonlRpcServer {
                     setSubagentSubscription(level)
                     success(id, command, data: objectValue([ValueField("level", textValue(level))]))
                 }
-            case "get_subagents" => success(
-                id,
-                command,
-                data: objectValue(
-                    [
-                        ValueField(
-                            "subagents",
-                            subagentSnapshotsValue(session.subagents())
-                        )
-                    ]
-                )
-            )
+            case "get_subagents" =>
+                let includeTerminal = match (value.field("includeTerminal")) {
+                    case Some(field) =>
+                        if (field.unifiedKind != ValueKind.Boolean) {
+                            return failure(id, command, "includeTerminal must be a boolean")
+                        }
+                        field.asBool()
+                    case None => false
+                }
+                success(id, command, data: objectValue([ValueField("subagents",
+                    subagentSnapshotsValue(if (includeTerminal) { session.allSubagents() } else { session.subagents() })
+                )]))
             case "get_subagent_messages" =>
                 let fromItem = productIntegerField(value, "fromItem")
                 if (fromItem < 0) {
@@ -488,11 +549,9 @@ public class ProductJsonlRpcServer {
                 productTextField(value, "mode"),
                 2
             )
-            case "compact" => applicationReply(
-                id,
-                command,
-                session.handle("/compact")
-            )
+            case "compact" =>
+                collectIdleWorkerRoot113()
+                applicationReply(id, command, session.handle("/compact"))
             case "set_auto_compaction" =>
                 let enabled = productBoolField(value, "enabled")
                 session.setAutoCompaction(enabled)
@@ -603,6 +662,60 @@ public class ProductJsonlRpcServer {
         }
     }
 
+    // A published terminal event may reach the peer just before the actual
+    // worker Future returns. Business inactivity selects a real join; it is
+    // never evidence of producer retirement or permission to refund its data.
+    private func joinInactiveWorkersBeforeAdmission180(): Unit {
+        if (!beginInactiveWorkerJoin180()) { return }
+        waitInactiveOriginalWorkers180()
+        let paid = clearInactiveJoinAfterWholeHelper180()
+        paid.close()
+    }
+    private func beginInactiveWorkerJoin180(): Bool {
+        lock.lock()
+        try {
+            if (closing || running || activePluginCommandRequestId != "" ||
+                runWorkerStartingFailed113 || pluginCommandStartingFailed113 ||
+                workerPaymentFailed113 || inactiveWorkerJoin180.isSome()) { return false }
+            if (runWorker113.isNone() && pluginCommandWorker.isNone()) { return false }
+            let paid = workerMetadata113.getOrThrow().deriveRetainedLease()
+            inactiveWorkerJoin180 = Some(paid)
+            try { paid.ensureRetainedPeak(rpcWorkerJoinPeak113(0)) }
+            catch (error: Exception) {
+                inactiveWorkerFailures180[0] = Some(error); workerPaymentFailed113 = true; throw error
+            }
+            workerJoinFrames113++
+            true
+        } finally { lock.unlock() }
+    }
+    private func waitInactiveOriginalWorkers180(): Unit {
+        lock.lock()
+        let prompt = runWorker113
+        let command = pluginCommandWorker
+        lock.unlock()
+        // Both original helpers are joined even if the first one throws.
+        match (prompt) { case Some(actual) => try { actual.get() }
+            catch (error: Exception) { retainInactiveWorkerFailure180(0, error) }; case None => () }
+        match (command) { case Some(actual) => try { actual.get() }
+            catch (error: Exception) { retainInactiveWorkerFailure180(1, error) }; case None => () }
+        for (error in inactiveWorkerFailures180) {
+            match (error) { case Some(original) => throw original; case None => () }
+        }
+    }
+    private func retainInactiveWorkerFailure180(index: Int64, error: Exception): Unit {
+        lock.lock()
+        try { inactiveWorkerFailures180[index] = Some(error); workerPaymentFailed113 = true }
+        finally { lock.unlock() }
+    }
+    private func clearInactiveJoinAfterWholeHelper180(): LogicalJsonOwnerReservation {
+        lock.lock()
+        try {
+            let paid = inactiveWorkerJoin180.getOrThrow()
+            inactiveWorkerJoin180 = None<LogicalJsonOwnerReservation>; workerJoinFrames113--
+            paid
+        } finally { lock.unlock() }
+    }
+
     // Caller holds the existing short server lock. No source, receipt or
     // resource refund is created by this physical-return check.
     private func runWorkerReturnedLocked113(): Bool {
@@ -613,7 +726,7 @@ public class ProductJsonlRpcServer {
     private func reserveWorkerMetadataLocked113(peak: Int64): ?LogicalJsonOwnerReservation {
         try {
             if (workerMetadata113.isNone()) {
-                workerMetadata113 = Some(reserveProductControlMetadata113(4096))
+                workerMetadata113 = Some(allocateWorkerMetadata113(4096))
             }
             let child = workerMetadata113.getOrThrow().deriveRetainedLease()
             try { child.ensureRetainedPeak(peak); Some(child) }
@@ -722,6 +835,31 @@ public class ProductJsonlRpcServer {
         let paid = workerMetadata113
         workerMetadata113 = None<LogicalJsonOwnerReservation>
         paid
+    }
+
+    // Maintenance does not create another prompt worker. Retire only actual
+    // returned worker/closure debt before that separate bounded consumer.
+    // A still-live Future, joining frame, or unacknowledged source is kept.
+    private func collectIdleWorkerRoot113(): Unit {
+        // Never retire request metadata beneath an unacknowledged DATA loan.
+        if (hasOwnedCheckpointFailureOutput113()) { return }
+        lock.lock()
+        let paid = try {
+            if (closing || running || activePluginCommandRequestId != "" ||
+                workerJoinFrames113 != 0 || workerSnapshotArrays113 != 0 || workerPaymentFailed113 ||
+                !runWorkerReturnedLocked113() || !allBashWorkersReturnedLocked113()) {
+                None<LogicalJsonOwnerReservation>
+            } else {
+                retireReturnedWorkerMetadataLocked113()
+                if (queuedInputCustody113.isSome() || runWorkerMetadata113.isSome() ||
+                    commandWorkerMetadata113.isSome()) {
+                    None<LogicalJsonOwnerReservation>
+                } else { takeRetiredWorkerRootLocked113() }
+            }
+        } finally { lock.unlock() }
+        // Every detaching helper/Future alias has returned before refunding
+        // this original root; subsequent workers allocate normally again.
+        rpcCloseWorkerMetadata113(paid)
     }
 
     private func startPrompt(id: String, command: String, message: String): Bool {
@@ -923,7 +1061,7 @@ public class ProductJsonlRpcServer {
                     return Result<ApplicationResponse>.Err(error) }
             source.origin = Some(origin)
             let result = session.handleRpcQueuedAtReturnedBoundary113(value, origin,
-                { bytes => source.allocate(bytes) }, { error => source.capturePrimary(error) }, source.payment,
+                { bytes => source.fundStoreWorkingFrame113(bytes) }, { error => source.capturePrimary(error) }, source.payment,
                 { cell => source.retainStoreCell113(cell) })
             // The WHOLE synchronous App/Store helper has now returned.
             source.retireReturnedStoreCells113()
@@ -956,7 +1094,7 @@ public class ProductJsonlRpcServer {
             return None<LogicalJsonOwnerReservation> }
         try {
             let done = session.rpcQueuedReferencesRetired113(source.origin.getOrThrow(),
-                { bytes => source.allocate(bytes) }, { cell => source.retainStoreCell113(cell) })
+                { bytes => source.fundStoreWorkingFrame113(bytes) }, { cell => source.retainStoreCell113(cell) })
             // Same whole-helper-return witness, also when the SQL says nonterminal.
             source.retireReturnedStoreCells113()
             if (!done) { return None<LogicalJsonOwnerReservation> }
@@ -3292,7 +3430,7 @@ class RpcQueuedRetainedInput113 {
             let _ = cell.admitConsumer113({ consumer => secondary = Some(consumer); true })
         } finally { storeLock113.unlock() }
     }
-    private func takeReturnedStoreCellPaymentHelper113(): ?LogicalJsonOwnerReservation {
+    private func takeReturnedStoreCellPaymentHelper113(): (Bool, ?LogicalJsonOwnerReservation) {
         storeLock113.lock()
         try {
             var previous: ?RpcQueuedStoreFailure113 = None<RpcQueuedStoreFailure113>
@@ -3300,23 +3438,26 @@ class RpcQueuedRetainedInput113 {
             while (cursor.isSome()) {
                 let cell = cursor.getOrThrow()
                 let next = cell.previous113
-                let paid = cell.takeRetirementPaymentAfterReturned113()
-                if (paid.isSome()) {
+                let borrowedReturned = cell.retireBorrowedAfterReturned113()
+                let paid = if (borrowedReturned) { None<LogicalJsonOwnerReservation> }
+                    else { cell.takeRetirementPaymentAfterReturned113() }
+                if (borrowedReturned || paid.isSome()) {
                     match (previous) { case Some(actual) => actual.previous113 = next
                         case None => storeCells113 = next }
-                    return paid
+                    return (true, paid)
                 }
                 previous = cursor; cursor = next
             }
-            None<LogicalJsonOwnerReservation>
+            (false, None<LogicalJsonOwnerReservation>)
         } finally { storeLock113.unlock() }
     }
     func retireReturnedStoreCells113(): Unit {
         // Actual whole App/Store return precedes this helper; unlink and its
         // lock/Future-free local frame return before child payment close.
         while (true) {
-            let paid = takeReturnedStoreCellPaymentHelper113()
-            match (paid) { case Some(actual) => actual.close(); case None => return }
+            let (retired, paid) = takeReturnedStoreCellPaymentHelper113()
+            if (!retired) { return }
+            match (paid) { case Some(actual) => actual.close(); case None => () }
         }
     }
     func observedStoreCustody113(): (Int64, Int64) {
@@ -3334,6 +3475,15 @@ class RpcQueuedRetainedInput113 {
         } finally { storeLock113.unlock() }
     }
 
+    func fundStoreWorkingFrame113(bytes: Int64): RpcQueuedStorePayment113 {
+        // These codec/query helpers are synchronous and serial in this exact
+        // worker. Its original input and queued aliases stay paid alongside
+        // the largest real Store working extent; no second full-input copy
+        // lease overlaps that same already-owned working frame.
+        let peak = rpcWorkerAdd113(inputPeak, rpcWorkerAdd113(65536, bytes))
+        payment.ensureRetainedPeak(peak)
+        RpcQueuedStorePayment113.Borrowed(payment, peak)
+    }
     func allocate(bytes: Int64): LogicalJsonOwnerReservation {
         let child = payment.deriveRetainedLease()
         try { child.ensureRetainedPeak(bytes); child }

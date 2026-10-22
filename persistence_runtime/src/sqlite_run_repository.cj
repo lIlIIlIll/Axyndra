@@ -508,6 +508,7 @@ public class SqliteRunRepository <: RunRepository & OwnedRunEventRepository & Ow
                 "SELECT runs.id,run_continuations.payload FROM runs " +
                     "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.thread_id=" +
                     sqliteText(sessionId.value) +
+                    " AND runs.state IN ('running','waiting_approval','cancelling','recovery_required')" +
                     " AND run_continuations.payload IS NOT NULL"
             )
             var pending: ?RunContinuation = None

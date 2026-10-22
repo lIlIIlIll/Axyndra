@@ -16,7 +16,7 @@ public class ToolSnapshotMeasure159 {
         if (priorInvoice < 131072) { throw LogicalJsonPayloadError("invalid prior snapshot invoice") }
         this.payment = payment; this.invoice = priorInvoice
     }
-    func retainedInvoice159(): Int64 { add(invoice, pathPeak) }
+    public func retainedInvoice159(): Int64 { add(invoice, pathPeak) }
     private func add(left: Int64, right: Int64): Int64 {
         if (left < 0 || right < 0 || right > Int64.Max - left) {
             throw LogicalJsonPayloadError("tool snapshot invoice overflow")
@@ -53,10 +53,13 @@ public class ToolSnapshotMeasure159 {
         try { return if (value.asBool()) { 4 } else { 5 } }
         catch (error: JsonException) { if (error.code != "type_mismatch") { throw error } }
         try {
-            // Same original-bank scratch before the pinned scalar formatter.
-            // It is a peak for this complete measuring phase, not a new pool
-            // or an allocation based on a guessed normalized numeric spelling.
-            payment.ensureRetainedPeak(add(add(invoice, pathPeak), 1048576))
+            // The pinned accessor borrows an existing literal spelling. Only
+            // Int64/UInt64 (at most 20 bytes) and Float64 format new text; the
+            // SDK Float64 C formatter has a fixed 512-byte buffer. Pay its
+            // buffer, copies and headers before calling it, then charge the
+            // actual UTF8 spelling below before any canonical/copy producer.
+            // This invoice is not the unchanged one-MiB text/codec bound.
+            payment.ensureRetainedPeak(add(add(invoice, pathPeak), 4096 + 512 * 16))
             let text = value.asNumberText()
             invoice = add(invoice, mul(text.size, 16))
             return add(1, frame159(text.size))

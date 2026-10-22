@@ -141,11 +141,12 @@ def prepare(output=None):
                 'FAILED' in text or 'ERROR:' in text or 'skipped' in text.lower():
             raise ValueError('Compaction protocol fixture must execute every case without failure or skip')
         sequence = run([sys.executable, str(ROOT / 'libs/pure_provider_runtime/tests/check_sequence.py'),
-                        '--package', str(package)], evidence / 'sequence.log', 240, environment)
+                        '--package', str(package), '--sequence-profile', 'provider-invoke-i63-v1'],
+                       evidence / 'sequence.log', 240, environment)
         sequence_cases = re.findall(r'^test_\w+ .*? \.\.\. (ok|skipped.*?)$', sequence, re.M)
         if len(sequence_cases) != 3 or any(value != 'ok' for value in sequence_cases) or \
                 not re.search(r'^Ran 3 tests in [0-9.]+s$', sequence, re.M) or not re.search(r'^OK$', sequence, re.M):
-            raise ValueError('the separate monotonic/legacy pure sequence contract must execute all three cases')
+            raise ValueError('the separate monotonic/legacy mixed policy sequence contract must execute all three cases')
         record['sequence_counts'] = dict(total=3, passed=3, failed=0, errors=0, skipped=0)
         if before != files(package):
             raise ValueError('package changed during protocol verification')

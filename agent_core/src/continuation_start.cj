@@ -58,6 +58,7 @@ func freezeContinuationRequest(value: AgentRunRequest): AgentRunRequest {
         modelCapabilitiesSnapshot: Some(frozenCaps), resolverVersion: value.resolverVersion,
         capabilities: CapabilitySet(values: value.capabilities.values.clone()), budget: value.budget, interactions: value.interactions,
         approvalModeOverride: value.approvalModeOverride, autoRetry: value.autoRetry, serviceTier: value.serviceTier,
+        callerCancellation180: value.callerCancellation180,
         pricing: value.pricing, imageInputs: images.toArray(), structuredOutput: model.structuredOutput,
         cachePolicy: value.cachePolicy, cacheKey: value.cacheKey, parallelToolCalls: value.parallelToolCalls,
         toolContext: toolContextDescriptorFromValue(parseUnifiedJson(stringifyUnifiedJson(toolContextDescriptorValue(value.toolContext)), maxBytes: 8388608)),

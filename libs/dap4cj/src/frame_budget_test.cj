@@ -47,8 +47,8 @@ class DapBatchFrameBudgetTests {
         let other = DapClient(PreparedObservedChannel(dapFixtureScript()))
         try {
             let first = dapPreparedRequire(client.prepareRequest("local", "echo", jsonObject([])))
-            let foreign = dapPreparedRequire(other.prepareRequest("foreign", "echo", jsonObject([])))
-            @Expect(dapPreparedCode(client.dispatchPreparedBatch([first, foreign])), "dap.prepared_foreign")
+            let foreignRequest = dapPreparedRequire(other.prepareRequest("foreign", "echo", jsonObject([])))
+            @Expect(dapPreparedCode(client.dispatchPreparedBatch([first, foreignRequest])), "dap.prepared_foreign")
             @Expect(channel.writes.load(), 0); @Expect(client.pendingCount(), 0)
             @Expect(client.dispatchPreparedBatch([first], timeoutMillis: 1000).isOk(), true)
             @Expect(channel.writes.load(), 1)

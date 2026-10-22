@@ -18,6 +18,7 @@ func installWorkflowContractPolicy(product: ProductRuntime): Unit {
         case PluginRegistryResult.Err(error) => throw IllegalStateException("workflow fixture import: " + supportRegistryExclusiveErrorCode96(error))
     }
     configureTodoContractDocument(product,record)
+    configureWorkflowContractPrimitives(product,record)
     match (product.setPluginEnabled(supportRegistryDescriptor96(record,"namespace"), true)) {
         case PluginRegistryResult.Ok(discard96) => supportRegistryDiscard96(discard96)
         case PluginRegistryResult.Err(error) => throw IllegalStateException("workflow fixture enable: " + supportRegistryExclusiveErrorCode96(error))
@@ -117,7 +118,7 @@ func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
             case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
             case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
             case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
-            case PluginRegistryStaticReason.None=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
 }
 func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
     try{supportRegistryErrorText96(error)}finally{error.close()}
@@ -175,6 +176,27 @@ func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
 }
 func supportRegistryField96(record:ProductPluginRecord,key:String):String{
     supportRegistryData96(record).text(key)
+}
+
+func configureWorkflowContractPrimitives(product:ProductRuntime,record:ProductPluginRecord):Unit{
+    let directory=product.settingsRoot+"/plugins"
+    if(!exists(Path(directory))){Directory.create(directory,recursive:true)}
+    let tools=[objectValue([ValueField("name",textValue("task")),
+        ValueField("profile",textValue("frozen-primitives-v1")),
+        ValueField("services",listValue([textValue("child.start"),textValue("child.wait")])),
+        ValueField("preparation_provider",textValue("prepare_child"))]),
+        objectValue([ValueField("name",textValue("yield")),
+        ValueField("profile",textValue("frozen-primitives-v1")),
+        ValueField("services",listValue([textValue("child.result.write")])),
+        ValueField("preparation_provider",textValue("prepare_child")),
+        ValueField("invocation_capability",textValue("workspace.read"))])]
+    // Explicit operator selection belongs to this isolated caller fixture,
+    // before enable/preparation, never to Product defaults or a retry.
+    File.writeTo(directory+"/primitives.json",stringifyUnifiedJson(objectValue([
+        ValueField("version",integerValue(1)),ValueField("plugins",listValue([objectValue([
+        ValueField("namespace",textValue(supportRegistryDescriptor96(record,"namespace"))),
+        ValueField("package_digest",textValue(supportRegistryDescriptor96(record,"content_digest"))),
+        ValueField("tools",listValue(tools))])]))])).toArray())
 }
 
 func configureTodoContractDocument(product:ProductRuntime,record:ProductPluginRecord):Unit{

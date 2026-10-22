@@ -54,8 +54,11 @@ func workspacePrepare(invocation: JsonNode): Unit {
         // excludes sensitive objects independently of rg flags or this input.
         resources.add(workspaceViewResource(".", ".", "directory"))
     }
+    let argv = if (tool == "read" && workspacePayloadProfile.isSome()) {
+        ["--view-worker-profile", tool, stringifyUnifiedJson(input), stringifyUnifiedJson(workspacePayloadProfile.getOrThrow().value())]
+    } else if (tool == "write") { ["--view-worker-file", tool] } else { ["--view-worker", tool, stringifyUnifiedJson(input)] }
     let fields = ArrayList<JsonObjectEntry>([JsonObjectEntry("executable", jsonString("bin/workspace-plugin")),
-        JsonObjectEntry("arguments", wsStringArray(if (tool == "write") { ["--view-worker-file", tool] } else { ["--view-worker", tool, stringifyUnifiedJson(input)] })),
+        JsonObjectEntry("arguments", wsStringArray(argv)), 
         JsonObjectEntry("timeout_ms", jsonNumber("30000"))])
     if (tool == "write") { fields.add(JsonObjectEntry("input", input)) }
     let request = jsonObject(fields.toArray())

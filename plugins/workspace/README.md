@@ -7,8 +7,8 @@ Product, SDK business extension, or Tool Runtime dependency. The host registers
 five names from the installed package: `plugin.axyndra:workspace.read`, `grep`,
 `glob`, `edit`, and `write` (with the same namespace prefix for each).
 
-No production replacement has been applied or validated yet. Old Workspace
-tools remain installed by default. This candidate is not completion of A4-01.
+Workspace is installed independently; Minimal has no built-in replacement read.
+Package-worker checks and actual Product acceptance are separate evidence.
 
 ## Process and write authority
 
@@ -18,9 +18,11 @@ identities and the operator configuration digest, and obtains any required
 approval. During actual canonical execution, `process.readview` accepts only
 `{intent_id}`. Its durable ParentIntent child rechecks authorization and object
 identity, copies approved regular files through link-free verified handles, and
-mounts only that private snapshot and the installed package for
-`bin/workspace-plugin --view-worker <tool> <json>`. The original workspace is not
-mounted; cwd is the snapshot, ambient environment is not inherited, and network is denied.
+mounts only that private snapshot and the installed package for the frozen
+`bin/workspace-plugin --view-worker <tool> <json>` argv, or
+`--view-worker-profile read <json> <profile>` when the operator selected the
+ordinary read profile before preparation. The original workspace is not mounted;
+cwd is the snapshot, ambient environment is not inherited, and network is denied.
 
 Read/hashline/search/edit algorithms remain in this package. The worker resolves
 its pinned `bin/rg` beside itself. It never invokes a Shell Tool or chooses a
@@ -94,34 +96,42 @@ sensitive reads or native extension execution. See [read views](../../docs/plugi
 
 ## Bounds and open compatibility gaps
 
-Input JSON is at most 16 KiB. Result and complete proposal JSON are at most
-64 KiB, and protocol frames at most 256 KiB. JSON escaping counts towards these
-limits. Read pages shrink on UTF-8 boundaries to fit; a large search result or
-edit proposal returns an explicit limit error. Whole-file reads are bounded at
-16 MiB; rg output at 16 MiB before rendering, with a 15-second deadline. These
-bounds are smaller than the former 1 MiB read pages and unbounded full-file read.
-Edit/write snapshots are individually capped at 64 KiB before constructing a
-proposal, and edit rejects more than 32 sections before reading any of them.
-Larger payloads need a generic immutable payload service, not silent truncation
-of edits. Service-only capacity profiles do not enlarge these ordinary Tool
-limits. At most 32 changed files fit a proposal, subject to its total byte bound.
+Without an ordinary Tool payload profile, input JSON remains at most 16 KiB and
+read result JSON at most 64 KiB. Write keeps its existing 32 KiB content limit
+and bounded frozen-file preparation. Protocol frames remain at most 256 KiB.
+JSON escaping counts toward these limits; read pages shrink on UTF-8 boundaries.
+
+An explicit operator `configuration.tool_payload_limits` entry for contribution
+`read` selects the ordinary profile before pure preparation. Its exact canonical
+value is frozen with package/configuration digests and generation into the
+parent, Derived request and private worker argv. The profile can retain complete
+32 KiB, 96 KiB and 1 MiB raw pages without global limit increases. Escaped stdout
+plus the host service envelope must also fit `max_service_response_bytes`; dense
+controls can require a shorter page. Read results report that as `truncated:true`.
+
+Logical invocation, service responses and replies use funded 16 KiB segments;
+physical frames remain bounded. Foreign/unsolicited profiles, changed windows,
+identity or excess logical bytes fail closed. Profiles cannot authorize host
+services during prepare, new resources, writable mounts or network access.
+Whole-file snapshots and rg output remain bounded at 16 MiB. Edit/write snapshots
+are individually capped at 64 KiB before constructing a proposal, with at most
+32 changed files and an unchanged total proposal bound.
 
 Workspace paths and explicit individually authorized outside/temp/sensitive
 regular-file reads are implemented by this candidate. They preserve the
 original authored path in read results and hashline headers. URI/Blob reads,
 artifact export, remote writes, special directory traversal, symlinks/hardlinks,
-and full legacy large-payload behavior remain unavailable here; old Product
-entries remain installed. Read views contain at most 1,024 resource entries,
-16 MiB of total source bytes, and depth 32. Search currently requests one bounded
-workspace snapshot, so large workspaces must use the retained old path until
-bounded selection/payload parity is implemented. New files appearing after
+and special-path traversal restrictions remain distinct from payload capacity.
+Read views contain at most 1,024 resource entries, 16 MiB of source bytes, and
+depth 32. Search requests one bounded workspace snapshot, so requests exceeding
+that snapshot must be narrowed. New files appearing after
 preparation do not enter an already-frozen view. Existing selected files must
 retain their frozen object identity and metadata at actual copy time.
 
-The old Product Server was separately observed to return an entire 1 MiB `:raw`
-read; its old write schema permits 32 KiB. This package still has the smaller
-16 KiB input and 64 KiB result/proposal limits above. It has not gained those
-legacy capacities merely because Service payload profiles exist.
+To retain the former Server 1 MiB `:raw` read, select the exact ordinary read
+profile described in [read views](../../docs/plugin-read-views.md). Service-only
+payload profiles do not enlarge ordinary Workspace reads. Absent or smaller
+ordinary profiles retain bounded results rather than adapting a prepared call.
 
 ## Build and validation
 
@@ -135,19 +145,30 @@ With the repository's pinned Cangjie SDK/stdx, native process bridge and
 
 ```sh
 python3 scripts/prepare_workspace_plugin.py
+# Keep independent artifacts and the lock-verified engine cache outside the host target:
+python3 scripts/prepare_workspace_plugin.py --output /new/package \
+  --engine-output /pinned/workspace-cache
 # Or supply already verified engine files:
 plugins/workspace/build-package.sh --output /new/package \
   --engine /pinned/rg --engine-license /pinned/LICENSE-MIT
 python3 plugins/workspace/check.py --package /new/package
+python3 plugins/workspace/check_payload.py --package /new/package
 export AXYNDRA_WORKSPACE_PLUGIN_PACKAGE=/new/package
 export AXYNDRA_READ_VIEW_PLUGIN_FIXTURE="$PWD/support_tests/read_view_fixture/main.py"
 # Include plugin_workspace_test.cj (3 cases) and plugin_read_view_test.cj
-# (9 cases) in the coordinated Product unit inventory. The independent
-# package check contains 34 actual process cases; no zero-match PASS is valid.
+# (10 cases) in the coordinated Product unit inventory. The independent
+# package checks contain 43 baseline and 9 ordinary-payload process cases.
 ```
 
-The package process tests run with SDK environment variables removed. Product
+Native `build-package.sh` entrypoints retain executable modes so the Coding
+and Full distribution builder can invoke each independent packager directly.
+
+The package process tests run with SDK environment variables removed and
+fixture-owned HOME/XDG Git settings; workspace `.gitignore` remains enabled,
+but operator-global exclusions cannot hide the test corpus. Product
 tests import the actual package, remove static read/grep/glob/edit/write and Shell
 registrations, inspect real Direct/Committed child receipts, and test durable
 hashline plan approval, rejection, cancellation, restart and multi-file CAS.
-None of these candidate tests has been compiled or executed yet.
+The strict independent Linux preparation gate executes all 43 baseline and nine
+ordinary-payload cases without skips. Worker-only evidence does not replace the separate
+Product authority and distribution acceptance gates.

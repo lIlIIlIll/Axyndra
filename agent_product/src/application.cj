@@ -11,7 +11,6 @@ import yjson.*
 import agent_cli.*
 import agent_core.*
 import agent_runtime.*
-import agent_store.RpcQueuedStoreFailure113
 import agent_domain.*
 import agent_extension_runtime.*
 import persistence_runtime.*
@@ -130,6 +129,8 @@ class ApplicationPluginSourceCommand {
 }
 public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSource {
     private let product: ProductRuntime
+    private let operatorOptions180: ?ProductOperatorOptions180
+    private let frontendCancellation180: ?CancellationToken
     private let router = CommandRouter()
     private let lock = Mutex()
     private var retirableSubscriptions113: ?ArrayList<ApplicationOwnedSubscription113> = None<ArrayList<ApplicationOwnedSubscription113>>
@@ -217,20 +218,28 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private var loopRemaining: Int64 = -1
     private var loopDeadlineMillis: Int64 = 0
 
-    public init(product: ProductRuntime, sessionId!: ?SessionId = None) {
+    public init(product: ProductRuntime, sessionId!: ?SessionId = None,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        frontendCancellation180!: ?CancellationToken = None<CancellationToken>) {
         this.product = product
+        this.operatorOptions180 = operatorOptions180
+        this.frontendCancellation180 = frontendCancellation180
         this.theme = product.theme
         this.autoCompaction = product.compactionEnabled()
         this.sessionId = match (sessionId) {
             case Some(value) => value
             case None => product.ids.nextSessionId()
         }
+        let initialModel = match (operatorOptions180) {
+            case Some(options) => if (options.modelOverride == "") { product.model } else { options.modelOverride }
+            case None => product.model
+        }
         var migrateModel = false
         this.currentModel = match (product.sessionModel(this.sessionId)) {
             case Result.Ok(value) =>
                 if (value == "") {
                     migrateModel = true
-                    product.model
+                    initialModel
                 } else {
                     value
                 }
@@ -241,7 +250,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                     error.message,
                     fields: [ErrorField("session_id", this.sessionId.value)]
                 ))
-                product.model
+                initialModel
         }
         // Older sessions have no model metadata. Persisting the resolved
         // default here migrates them lazily without a separate schema pass.
@@ -574,14 +583,14 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func invokeWorkspaceTool(contribution: String, arguments: AgentValue): Result<ProductWorkspaceInvocation> {
-        product.invokeWorkspaceTool(sessionId,contribution,arguments)
+        product.invokeWorkspaceTool(sessionId,contribution,arguments, operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)
     }
 
     public func invokeLocalTool(
         name: String,
         arguments: AgentValue
     ): Result<ToolResult> {
-        product.invokeLocalTool(sessionId, name, arguments)
+        product.invokeLocalTool(sessionId, name, arguments, operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)
     }
 
     public func registerTool(
@@ -645,7 +654,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         } finally { lock.unlock() }
         try {
             product.startPluginService(startup.target, namespace, serviceId, route,
-                approvalDecision: ApprovalDecision.Approve, cancellation: startup.cancellation.token)
+                approvalDecision: ApprovalDecision.Approve, cancellation: startup.cancellation.token,
+                operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)
         } finally {
             lock.lock()
             try {
@@ -682,10 +692,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         product.javascriptPluginCommands()
+    }
 
     public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
         product.javascriptPluginViews()
-    }
     }
 
     public func invokeJavaScriptPluginCommand(routeName: String, arguments: String,
@@ -721,13 +731,15 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             { => match(pluginContinuationSessionCurrent(target)){
                 case Result.Err(error)=>Result.Err(error)
                 case Result.Ok(_)=>match(todoSelection){case None=>Result.Ok(());case Some(value)=>value.current()}} },
-            { proposal => preparePluginUserControl(target, proposal) })
+            { proposal => preparePluginUserControl(target, proposal) },
+            operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)
         let control = ApplicationPluginCommandControl(product, scope, cancellation,
             { proposal, next => acceptPluginUserControl(target, cancellation, proposal, next) })
         lock.lock()
         try { activePluginCommandControl = Some(control) } finally { lock.unlock() }
+        let entered180 = control.enterOriginalCommandHelper180()
         let result = control.invoke(routeName, arguments, noticeSink)
-        finishPluginCommandControl(control)
+        finishPluginCommandControl(control, entered180)
         result
     }
 
@@ -752,13 +764,15 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             { => match(pluginContinuationSessionCurrent(target)){
                 case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>
                     currentGoalCommandSelection(selection,legacyBytes)} },
-            { proposal => preparePluginUserControl(target, proposal) })
+            { proposal => preparePluginUserControl(target, proposal) },
+            operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)
         let control = ApplicationPluginCommandControl(product, scope, cancellation,
             { proposal, next => acceptPluginUserControl(target, cancellation, proposal, next) })
         lock.lock()
         try { activePluginCommandControl = Some(control) } finally { lock.unlock() }
+        let entered180 = control.enterOriginalCommandHelper180()
         let result = control.invoke(routeName, arguments, noticeSink)
-        finishPluginCommandControl(control)
+        finishPluginCommandControl(control, entered180)
         result
     }
 
@@ -857,8 +871,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         match (update[1]) { case Some(value) => value.revoke(); case None => () }
         Result.Ok(())
     }
-    private func finishPluginCommandControl(control: ApplicationPluginCommandControl): Unit {
-        if (!control.isClosed()) { return }
+    private func finishPluginCommandControl(control: ApplicationPluginCommandControl, entered180: Bool): Unit {
+        if (!control.originalCommandHelperReturned180(entered180)) { return }
         lock.lock()
         try {
             if (activePluginCommandControl.isSome() && refEq(activePluginCommandControl.getOrThrow(), control)) {
@@ -873,7 +887,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         let actual = try { (activePluginCommandCancellation, activePluginCommandControl) } finally { lock.unlock() }
         match (actual[0]) { case Some(value) => let _ = value.cancel(); case None => () }
         match (actual[1]) {
-            case Some(value) => let result = value.cancel(); finishPluginCommandControl(value); result
+            case Some(value) =>
+                let entered180 = value.enterOriginalCommandHelper180()
+                let result = value.cancel(); finishPluginCommandControl(value, entered180); result
             case None => Result.Ok(()) }
     }
     public func cancelJavaScriptPluginCommand(): Unit { let _ = cancelPluginCommandControl() }
@@ -1418,7 +1434,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             modelOverride: currentModel,
             thinking: effectiveThinking(),
             userRequestedThinking: explicitRequestedThinking(),
-            thinkingSource: requestedThinkingSource()
+            thinkingSource: requestedThinkingSource(), operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
         )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let request = handoffRunRequest(base)
         setCurrentRequest(Some(request))
@@ -1919,6 +1935,14 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         finally { lock.unlock() }
     }
 
+    public func subscribeRetirableControls180(paid: LogicalJsonOwnerReservation,
+        asks: ProductAskEventSink, jobs: ProductAsyncJobEventSink,
+        subagents: ProductSubagentEventSink): ApplicationControlSubscription180 {
+        subscribeApplicationControls180(product, { => id() }, paid, asks, jobs, subagents)
+    }
+    public func unsubscribeRetirableControls180(token: ApplicationControlSubscription180): Bool {
+        unsubscribeApplicationControls180(product, token)
+    }
     public func subscribeRetirableOwned113(paid: LogicalJsonOwnerReservation,
         ordinary: AgentEventSink, owned: OwnedAgentEventSink,
         failures!: ?OwnedFailureEventSink113 = None<OwnedFailureEventSink113>): ApplicationOwnedSubscription113 {
@@ -2389,6 +2413,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             collectOwnedFailureAcknowledgements113()
             if (pendingCheckpointSlot113.isSome()) { return None<ApplicationOwnedCheckpointSlot113> }
             if (run.value.size > (Int64.Max - 16384) / 8) { return None<ApplicationOwnedCheckpointSlot113> }
+            // Startup needs its own physical Native owner, not spare room in
+            // the Registry floor after the bank has refused another owner.
+            // The returned consumer keeps this slot paid until its real ACK.
             let paid = reserveNativeControlMetadata(16384 + run.value.size * 8)
             try {
                 let slot = ApplicationOwnedCheckpointSlot113(run, paid)
@@ -2771,7 +2798,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func handleRpcQueuedAtReturnedBoundary113(value: QueuedInteraction,
-        origin: QueuedRunInitiatorData113, allocate: (Int64) -> LogicalJsonOwnerReservation,
+        origin: QueuedRunInitiatorData113, allocate: (Int64) -> RpcQueuedStorePayment113,
         capturePrimary: (AgentError) -> Unit, inputPayment: LogicalJsonOwnerReservation,
         retainStore: (RpcQueuedStoreFailure113) -> Unit): Result<ApplicationResponse> {
         if (value.durableItemId != origin.entryId.value || value.correlationId != origin.correlationId ||
@@ -2800,7 +2827,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     // This query does not consume DATA. The original App aliases/true ACK
     // bookkeeping, and the actual persisted row, must BOTH be settled.
     public func rpcQueuedReferencesRetired113(origin: QueuedRunInitiatorData113,
-        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
         retainStore: (RpcQueuedStoreFailure113) -> Unit): Bool {
         lock.lock()
         try {
@@ -3142,7 +3169,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             modeSystem: guidance.system,
             guide: guidance.guide,
             readOnly: planModeEnabled || vibeModeEnabled,
-            queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113
+            queuedInitiator113: queuedInitiator113, queuedInputPayment113: queuedInputPayment113,
+            operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
         )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         setCurrentRequest(Some(request))
         let clientResult = this.startOwnedCheckpointApplication113(request, eventSink())
@@ -3186,8 +3214,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             case None=>()}
         match (pluginCommandControl()) {
             case Some(control) =>
+                let entered180 = control.enterOriginalCommandHelper180()
                 let result = control.decide(operationId, decision)
-                finishPluginCommandControl(control)
+                finishPluginCommandControl(control, entered180)
                 return result
             case None => ()
         }
@@ -3306,7 +3335,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             currentRequest = Some(refreshed)
             refreshed
         } finally { lock.unlock() }
-        let mode = product.approvalSettings.mode
+        let mode = match (operatorOptions180) {
+            case Some(options) => options.approvalRoutingModeOverride ?? product.approvalSettings.mode
+            case None => product.approvalSettings.mode
+        }
         if (mode == ApprovalRoutingMode.Manual) {
             match (publishPendingApproval(request, approval)) {
                 case Result.Ok(_) => ()
@@ -3774,7 +3806,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         // Historical display remains available. A new approval requires a
         // current native binding and its exact successful canonical Receipt.
         if(requireStructured){
-            match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+            match(refreshCurrentPlanBinding()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             if(completedPlanCount(values,currentBinding:true)==0){return Result.Ok(Option<String>.None)}
         }
         var index = values.size
@@ -5045,7 +5077,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                     interactions: Some(this),
                     modeSystem: guidance.system,
                     guide: guidance.guide,
-                    readOnly: true
+                    readOnly: true, operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180
                 )) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
                 setCurrentRequest(Some(correction))
                 match (this.startOwnedCheckpointApplication113(correction, eventSink())) {
@@ -5083,7 +5115,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 let guidance=match(activeWorkflowGuidance()){case Result.Err(error)=>owner.revoke();return Result.Err(error);case Result.Ok(value)=>value}
                 let request = match (product.prepareRequest(owner.prompt, sessionId: Some(sessionId), modelOverride: currentModel,
                     thinking: effectiveThinking(), userRequestedThinking: explicitRequestedThinking(), thinkingSource: requestedThinkingSource(),
-                    interactions: Some(this), modeSystem: guidance.system, readOnly: planModeEnabled || vibeModeEnabled)) {
+                    interactions: Some(this), modeSystem: guidance.system, readOnly: planModeEnabled || vibeModeEnabled,
+                    operatorOptions180: operatorOptions180, callerCancellation180: frontendCancellation180)) {
                     case Result.Err(error) => owner.revoke(); return Result.Err(error); case Result.Ok(value) => value }
                 let continuation = match (product.preparePluginContinuation(owner, request)) {
                     case Result.Err(error) =>
@@ -5180,6 +5213,14 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         Result.Ok(value)
     }
 
+    private func refreshCurrentPlanBinding(): Result<Unit> {
+        let current = match (queryProductWorkflowPlanBinding(product, sessionId, activeTools())) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        currentPlanTool = current[0]
+        currentPlanVersion = current[1]
+        currentPlanFingerprint = current[2]
+        Result.Ok(())
+    }
     private func restoreWorkMode(target: SessionId): Unit {
         let mode = match (product.sessionWorkMode(target)) {
             case Result.Ok(value) => value
@@ -5312,7 +5353,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             lock.unlock()
         }
         let result = try {
-            product.compactSessionReport(sessionId, force: force)
+            product.compactSessionReport(sessionId, force: force, operatorOptions180: operatorOptions180)
         } finally {
             lock.lock()
             try {
@@ -5660,6 +5701,7 @@ func handoffRunRequest(base: AgentRunRequest): AgentRunRequest {
         budget: base.budget,
         interactions: base.interactions,
         approvalModeOverride: base.approvalModeOverride,
+        callerCancellation180: base.callerCancellation180,
         autoRetry: base.autoRetry,
         serviceTier: base.serviceTier,
         pricing: base.pricing,

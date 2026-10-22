@@ -23,6 +23,7 @@ class WorkflowNativeTests(unittest.TestCase):
         descriptor = json.loads((BINARY.parent.parent / 'axyndra.plugin.json').read_text())
         expected = {(value['kind'], value['name']) for value in descriptor['contributions']}
         fields = [('provider', 'providers'), ('tool', 'tools'), ('command', 'commands'),
+                  ('view', 'views'),
                   ('hook', 'hooks'), ('service', 'services'), ('model_provider', 'model_providers'),
                   ('context_provider', 'context_providers'), ('resource_provider', 'resource_providers'),
                   ('policy_provider', 'policy_providers')]

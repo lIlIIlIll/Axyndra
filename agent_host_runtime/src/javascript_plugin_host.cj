@@ -10,7 +10,7 @@ import agent_sdk.{PluginContributionKind, PluginToolExecutionProfile}
 import yjson.*
 import yjson_support.*
 import tool_runtime.*
-import agent_runtime.OwnedCanonicalThreadItemAliasCustody
+import agent_runtime.*
 import process4cj as process
 import std.collection.*
 import std.fs.Path
@@ -80,6 +80,13 @@ public class HostJavaScriptPluginHook {
         this.descriptor = descriptor
     }
 }
+// Freeze the actual protected directory, not portable components of a relative
+// spelling. In particular, ../home must never become the absolute /home prefix.
+private func hostCanonicalReadProtectionRoot217(root: String): String {
+    if (root == "") { return "" }
+    hostResolveThroughExistingAncestor(Path(root)).toString()
+}
+
 public open class HostJavaScriptPluginHost {
     // Same-bank payment remains in the actual Host even if reservation or
     // constructor/list registration throws after canonical handoff.
@@ -117,12 +124,12 @@ public open class HostJavaScriptPluginHost {
             case None => hostPluginResourceError("child.backend_missing", "actual controlled child backend is unavailable") }
         } finally { childBackendLock111.unlock() }
     }
-    func processOptions180(meter:HostPaidValueProjection151):Result<AgentValue>{
+    func processOptions180(context:ToolInvocationContext,meter:HostPaidValueProjection151):Result<AgentValue>{
         let backend:?HostPluginChildBackend111
         childBackendLock111.lock();try{backend=childBackend111}finally{childBackendLock111.unlock()}
         let actual=match(backend){case Some(value)=>value;case None=>return hostPluginResourceError<AgentValue>(
             "child.backend_missing","actual process resource owner is unavailable")}
-        let facts=match(actual.processFacts180(meter)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let facts=match(actual.processFacts180(context,meter)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         meter.fundAdditional151(65536,16)
         Result.Ok(objectValue([ValueField("background_enabled",boolValue(actual.backgroundEnabled())),ValueField("process_facts",facts)]))
     }
@@ -190,19 +197,30 @@ public open class HostJavaScriptPluginHost {
     public init(readTargetInspectors: HostReadTargetInspectorFactory,
         settingsRoot!: String = "", readViewStateRoot!: String = "",
         documentBackends!: (HostPluginDocumentConfiguration)->Result<Unit> = {_=>Result.Ok(())}) {
-        this.settingsRoot = settingsRoot
+        this.settingsRoot = hostCanonicalReadProtectionRoot217(settingsRoot)
         this.configureDocumentBackends=documentBackends
-        this.readViewStateRoot = readViewStateRoot
+        this.readViewStateRoot = hostCanonicalReadProtectionRoot217(readViewStateRoot)
         this.readTargetInspectors = readTargetInspectors
         launcher = HostSandboxedJavaScriptHostLauncher()
     }
     public func ownRegistry(registry: PluginRegistry): Result<Unit> {
         lock.lock(); try {
-            if (closed || installedRegistry.isSome() || !generations.isEmpty() || registry.settingsRoot != settingsRoot) {
+            if (closed || installedRegistry.isSome() || !generations.isEmpty() ||
+                hostCanonicalReadProtectionRoot217(registry.settingsRoot) != settingsRoot) {
                 return hostPluginResourceError("plugin.registry_owner_conflict", "host must bind its actual installed registry before activation")
             }
             installedRegistry = Some(registry); Result.Ok(())
         } finally { lock.unlock() }
+    }
+    public func bindLifecycleService(configuration: HostPluginLifecycleConfiguration, serviceId: String,
+        targetThread: ThreadId, workspaceRoot: String, hostLimits: ExecutionResourceLimits,
+        permissionDomain: String, expectedGeneration: UInt64): Result<HostPluginLifecycleLaunchGrant> {
+        let identity = match (serviceInstanceIdentity(configuration.namespace, expectedGeneration)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        configuration.bindService(serviceId, targetThread, identity, workspaceRoot, hostLimits, permissionDomain,
+            registryAdmission: Some({ => enterRegistryEffect(configuration.namespace, expectedGeneration) }))
     }
     func ownToolInputAttachments(artifacts: HostArtifactStore): Result<Unit> {
         lock.lock(); try {
@@ -380,7 +398,8 @@ public open class HostJavaScriptPluginHost {
         let components: ?RegistryContextComponentSnapshot = try {
             match (provider) { case Some(capture) => Some(capture()); case None => None }
         } catch (_: Exception) { return hostPluginResourceError("context.read_scopes_changed", "installed data roots are unavailable") }
-        hostLoadContextReadScopes(this, settingsRoot, components)
+        try { hostLoadContextReadScopes(this, settingsRoot, components) }
+        finally { match (components) { case Some(value) => value.close(); case None => () } }
     }
     public func prepareHttp(context: ToolInvocationContext, call: ToolCall,
         namespace: String, tool: String, generation: UInt64): Result<AgentValue> {
@@ -1113,8 +1132,8 @@ public open class HostJavaScriptPluginHost {
 
     public func prepareService(endpoint: HostPinnedNativeServiceEndpoint, argumentsJson: String,
         identity: JavaScriptHostInvocationIdentity, context: ToolInvocationContext,
-        timeoutMillis!: Int64 = 5000): Result<HostJavaScriptPluginInvocationResult> {
-        invokePinnedService(endpoint, argumentsJson, identity, context, "service_prepare", timeoutMillis, Option<JavaScriptHostObserver>.None, Option<PreparedToolInvocation>.None)
+        timeoutMillis!: Int64 = 5000, decodedData180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>): Result<HostJavaScriptPluginInvocationResult> {
+        invokePinnedService(endpoint, argumentsJson, identity, context, "service_prepare", timeoutMillis, Option<JavaScriptHostObserver>.None, Option<PreparedToolInvocation>.None, decodedData180)
     }
 
     public func invokeService(endpoint: HostPinnedNativeServiceEndpoint, argumentsJson: String,
@@ -1122,13 +1141,13 @@ public open class HostJavaScriptPluginHost {
         timeoutMillis!: Int64 = 30000,
         observer!: ?JavaScriptHostObserver = None,
         prepared!: ?PreparedToolInvocation = None): Result<HostJavaScriptPluginInvocationResult> {
-        invokePinnedService(endpoint, argumentsJson, identity, context, "service", timeoutMillis, observer, prepared)
+        invokePinnedService(endpoint, argumentsJson, identity, context, "service", timeoutMillis, observer, prepared, None<LogicalJsonOwnerReservation>)
     }
 
     private func invokePinnedService(endpoint: HostPinnedNativeServiceEndpoint, argumentsJson: String,
         identity: JavaScriptHostInvocationIdentity, context: ToolInvocationContext, kind: String,
         timeoutMillis: Int64,
-        observer: ?JavaScriptHostObserver, prepared: ?PreparedToolInvocation): Result<HostJavaScriptPluginInvocationResult> {
+        observer: ?JavaScriptHostObserver, prepared: ?PreparedToolInvocation, decodedData180: ?LogicalJsonOwnerReservation): Result<HostJavaScriptPluginInvocationResult> {
         if (!refEq(endpoint.seal, serviceEndpointSeal)) {
             return hostPluginResourceError("plugin.service_endpoint_foreign", "endpoint belongs to a different host owner")
         }
@@ -1141,7 +1160,7 @@ public open class HostJavaScriptPluginHost {
         if (identity.kind != kind || !hostJavascriptPluginLimitsFitHost(context.budget.processLimits)) {
             return hostPluginResourceError("plugin.service_invocation_invalid", "service kind or adapter resource envelope does not match")
         }
-        endpoint.invoke(argumentsJson, identity, context, timeoutMillis, observer, prepared: prepared)
+        endpoint.invoke(argumentsJson, identity, context, timeoutMillis, observer, prepared: prepared, decodedData180: decodedData180)
     }
 
     public func closeServiceEndpoint(endpoint: HostPinnedNativeServiceEndpoint,
@@ -1727,7 +1746,7 @@ public open class HostJavaScriptPluginHost {
                 cancellation: processCancellation.token,
                 timeoutMillis: if (finiteReadViewWindow.isSome()) { finiteCallMillis } else { timeoutMillis },
                 toolPayloadLimits: toolPayloadLimits, inputAttachment: inputAttachment,
-                serviceRequestLimit: if (identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") { 0 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS },
+                serviceRequestLimit: if (identity.kind == "prepare" || identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") { 0 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS },
                 observer: observer
             )
             match (response) {
@@ -2120,8 +2139,14 @@ public class HostJavaScriptPluginGeneration {
             Some(process.CancellationSource(parent: cancellation,
                 deadlineMillis: agentUtcMillis() + handshakeTimeoutMillis))
         } else { None }
+        // Native intent references name the immutable mounted generation.
+        // Physical workers are isolated by their actual channels/host identity;
+        // the Pi connection counter must not replace a Native binding token.
+        let wireGeneration = if (descriptor.entryKind == PluginEntryKind.NativeExecutable) {
+            instanceGeneration
+        } else { nextGeneration }
         let result = try {
-            hostStartRegistryJavaScriptHost159(descriptor, nextGeneration, launcher, registryPin,
+            hostStartRegistryJavaScriptHost159(descriptor, wireGeneration, launcher, registryPin,
                 timeoutMillis: timeoutMillis, serviceLimits: serviceLimits, payloadLimits: payloadLimits, ordinaryToolPayload: ordinaryToolPayload, providerSequence: providerSequence, contextSequence: contextSequence, cancellation: match (handshake) {
                     case Some(source) => Some(source.token)
                     case None => cancellation
@@ -2138,7 +2163,7 @@ public class HostJavaScriptPluginGeneration {
                 cleanupHost: if (started.cleanupComplete && started.collectCompletedDispatchData159()) { Option<JavaScriptExtensionHost>.None } else { Some(started) }
             ))
         }
-        nextGeneration += 1u64
+        if (descriptor.entryKind != PluginEntryKind.NativeExecutable) { nextGeneration += 1u64 }
         JavaScriptHostResult.Ok(started)
     }
     func ownedDescriptor81(): Result<OwnedPluginPackageDescriptor> {
@@ -2470,7 +2495,7 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         }
         let toolPayload: ?OrdinaryToolPayloadLimits = if (isFrozenReadonlyDelegationParentPlan(prepared.operationPlan)) {
             ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
-        } else if (isFrozenPluginDocumentParentPlan(prepared.operationPlan)) {
+        } else if (isFrozenPluginDocumentParentPlan(prepared.operationPlan) || isFrozenReadViewParentPlan(prepared.operationPlan)) {
             ordinaryToolPayloadLimitsFromValue(prepared.operationPlan.canonicalArguments.field("host_plan").getOrThrow().field("tool_payload_limits") ?? nullValue())
         } else { None }
         let identity = JavaScriptHostInvocationIdentity(
@@ -2550,7 +2575,8 @@ public class HostJavaScriptPluginToolExecutor <: ToolExecutor & OwnedToolExecuto
         var transferred = false
         try {
             match (observer.finishReadonly()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            match (observer.finishChild111()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            match (observer.finishChild111()) { case Result.Err(error) =>
+                return Result.Err(error); case Result.Ok(_) => () }
         match (observer.finishDocument()) { case Result.Err(error) =>
             match (outcome) {
                 case Result.Ok(_) => ()
@@ -2629,7 +2655,8 @@ public func hostOrdinaryToolPayloadSelection(settingsRoot: String, descriptor: P
     let requested = match (limits) { case None => return Result.Ok(""); case Some(value) => value }
     var declared = false
     for (entry in descriptor.contributions where entry.kind == PluginContributionKind.Tool && entry.name == tool) { declared = true }
-    if (descriptor.entryKind != PluginEntryKind.NativeExecutable || kind != "tool" ||
+    if (descriptor.entryKind != PluginEntryKind.NativeExecutable ||
+        (kind != "tool" && !(kind == "prepare" && descriptor.requestedCapabilities.contains("process.readview") && !document)) ||
         !declared || !availableTools.contains(tool) || requested.contribution != tool) {
         return hostPluginResourceError("plugin.tool_payload_selection_invalid", "ordinary payload selection requires the exact available native Tool") }
     // The caller selects this source from the actual frozen parent plan;
@@ -2712,9 +2739,21 @@ public func hostJavascriptPluginAgentError(error: JavaScriptHostError): AgentErr
 }
 public func hostJavascriptPluginDecodeValue(
     source: String,
-    maxBytes!: Int64 = 1048576
+    maxBytes!: Int64 = 1048576, decodedData180!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
 ): Result<AgentValue> {
     try {
+        match (decodedData180) {
+            case Some(paid) =>
+                if (source.size <= maxBytes) {
+                    if (source.size > (Int64.Max - 1114112) / 12) { throw LogicalJsonPayloadError("decoded ingress invoice overflow") }
+                    paid.ensureRetainedPeak(1114112 + source.size * 12)
+                    let nodes = logicalJsonNodeCount(source)
+                    if (nodes > (Int64.Max - 1114112 - source.size * 12) / 512) { throw LogicalJsonPayloadError("decoded ingress DOM invoice overflow") }
+                    paid.ensureRetainedPeak(1114112 + source.size * 12 + nodes * 512)
+                }
+            case None => ()
+        }
+
         Result.Ok(parseUnifiedJson(source, maxBytes: maxBytes))
     } catch (error: JsonException) {
         Result.Err(AgentError(

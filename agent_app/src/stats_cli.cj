@@ -15,10 +15,10 @@ import std.process.*
 func runStatsCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printStatsHelp()
+        printStatsHelp(io: io)
         return 0
     }
     match (statsParseError(arguments)) {
@@ -36,34 +36,34 @@ func runStatsCli(
     let stats = match (session.dashboardStats()) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
-    println(
+    io.println(
         "Synced 0 new entries from " + stats.files.toString() +
             " files (" + stats.overall.totalRequests.toString() +
             " total)"
     )
-    println("")
+    io.println("")
     if (hasArgument(arguments, "--json") ||
         hasArgument(arguments, "-j")) {
-        println(encodeAgentValue(statsValue(stats)))
+        io.println(encodeAgentValue(statsValue(stats)))
         return 0
     }
     if (hasArgument(arguments, "--summary") ||
         hasArgument(arguments, "-s")) {
-        printStatsSummary(stats.overall)
+        printStatsSummary(stats.overall, io: io)
         return 0
     }
     runStatsDashboard(
         session,
         stats,
         statsPort(arguments)
-    )
+    , io: io)
 }
 
-func printStatsHelp(): Unit {
-    println(
+func printStatsHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println(
         "View usage statistics\n\n" +
         "USAGE\n" +
         "  $ axyndra stats [FLAGS]\n\n" +
@@ -220,45 +220,45 @@ func statsUsageValue(value: ProductStatsOverall): AgentValue {
     ])
 }
 
-func printStatsSummary(overall: ProductStatsOverall): Unit {
-    println("=== AI Usage Statistics ===")
-    println("Overall:")
-    println(
+func printStatsSummary(overall: ProductStatsOverall, io!: CliIo180 = consoleCliIo180): Unit {
+    io.println("=== AI Usage Statistics ===")
+    io.println("Overall:")
+    io.println(
         "  Requests: " + overall.totalRequests.toString() +
             " (" + overall.failedRequests.toString() + " errors)"
     )
-    println(
+    io.println(
         "  Error Rate: " + statsPercent(
             overall.failedRequests,
             overall.totalRequests
         )
     )
-    println(
+    io.println(
         "  Total Tokens: " +
             (overall.totalInputTokens +
                 overall.totalOutputTokens).toString()
     )
-    println("  Input Tokens: " + overall.totalInputTokens.toString())
-    println("  Output Tokens: " + overall.totalOutputTokens.toString())
-    println(
+    io.println("  Input Tokens: " + overall.totalInputTokens.toString())
+    io.println("  Output Tokens: " + overall.totalOutputTokens.toString())
+    io.println(
         "  Cache Rate: " + statsPercent(
             overall.totalCacheReadTokens,
             overall.totalInputTokens
         )
     )
-    println("  Total Cost: " + if (overall.totalCostKnown) {
+    io.println("  Total Cost: " + if (overall.totalCostKnown) {
         "$" + statsCost(overall.totalCost)
     } else if (overall.totalRequests == 0) {
         "$0.0000"
     } else {
         "unknown"
     })
-    println(
+    io.println(
         "  Premium Requests: " +
             statsWholeNumber(overall.totalPremiumRequests)
     )
-    println("  Avg Duration: -")
-    println("  Avg TTFT: -")
+    io.println("  Avg Duration: -")
+    io.println("  Avg TTFT: -")
 }
 
 func statsPercent(numerator: Int64, denominator: Int64): String {
@@ -289,7 +289,7 @@ func runStatsDashboard(
     session: ApplicationSession,
     stats: ProductDashboardStats,
     port: Int64
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let root = session.stateRoot() + "/stats-dashboard"
     try {
         if (!exists(Path(root))) {
@@ -316,8 +316,8 @@ func runStatsDashboard(
             } catch (_: Exception) {}
         })
         let url = "http://127.0.0.1:" + port.toString() + "/"
-        println("Stats dashboard running at " + url)
-        println("Press Ctrl+C to stop.")
+        io.println("Stats dashboard running at " + url)
+        io.println("Press Ctrl+C to stop.")
         try {
             let opener = launch(
                 "/usr/bin/xdg-open",

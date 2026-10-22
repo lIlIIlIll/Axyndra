@@ -30,7 +30,7 @@ func hostManagedConfiguredScopeEqual(base:HostPluginLifecycleLaunchGrant,
     if(!base.managedSameConfiguredOwner(selected)){return false}
     let original=base.launchPlan;let actual=selected.launchPlan
     for(key in ["namespace","package_digest","configuration_digest","thread_id","instance_identity",
-        "permission_domain","package_root","workspace_root","workspace_mode","network","read_only_mounts"]){
+        "permission_domain","package_root","workspace_root","workspace_mode","network","read_only_mounts","lifecycle_policy"]){
         if(canonicalAgentValue(original.field(key).getOrThrow())!=canonicalAgentValue(actual.field(key).getOrThrow())){return false}}
     true
 }

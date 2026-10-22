@@ -75,6 +75,13 @@ export PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH"
 export LD_LIBRARY_PATH="$AXYNDRA_NATIVE_ROOT:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 
 "$root/scripts/prepare_native_deps.sh"
+# The vendored core's target-specific FFI links this archive transitively;
+# never replace or re-tokenize caller/manifest link-option values. Minimal
+# source profiles omit core and therefore do not require terminal artifacts.
+terminal_native="$root/vendor/cj_tui/packages/core/native/build.sh"
+if [[ -f "$terminal_native" ]]; then
+  bash "$terminal_native"
+fi
 export AXYNDRA_NETWORK_BRIDGE="$(prepare_network_bridge)"
 native_compiler=${AXYNDRA_NATIVE_CC:-$(command -v clang || true)}
 if [[ -n "$native_compiler" ]]; then

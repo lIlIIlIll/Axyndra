@@ -200,6 +200,7 @@ class HostManagedProcessGrant <: HostLifecycleProcessLaunchGrant{
                 if(hostLifecycleText(plan,key)!=hostLifecycleText(binding,key)){
                     return hostLifecycleLeaseError("managed_channel.configured_binding_changed")}}
             if(canonicalAgentValue(plan.field("network").getOrThrow())!=canonicalAgentValue(binding.field("network").getOrThrow()) ||
+                canonicalAgentValue(plan.field("lifecycle_policy").getOrThrow())!=canonicalAgentValue(binding.field("lifecycle_policy").getOrThrow()) ||
                 canonicalAgentValue(operation.field("network").getOrThrow())!=canonicalAgentValue(binding.field("network").getOrThrow()) ||
                 hostLifecycleText(operation,"workspace_mode")!=hostLifecycleText(binding,"workspace_mode")){
                 return hostLifecycleLeaseError("managed_channel.process_scope_changed")}
@@ -261,9 +262,27 @@ class HostManagedProcessGrant <: HostLifecycleProcessLaunchGrant{
     func stillCurrent():Result<Unit>{
         if(!beginBorrow()){return hostLifecycleLeaseError("managed_channel.grant_released")}
         try{
+        match(immutableShutdownIdentityCurrent()){case Result.Err(error)=>return Result.Err(error);case _=>()}
+        match(currentCallback.getOrThrow()()){case Result.Err(error)=>return Result.Err(error);case _=>()}
+        try{
+            match(actualAdapter){case Some(adapter)=>if(!adapter.isActive()){
+                return hostLifecycleLeaseError("managed_channel.actual_adapter_changed")};case None=>()}
+            match(namespaces){case Some(value)=>if(!value.current()){
+                return hostLifecycleLeaseError("managed_channel.actual_namespace_changed")};case None=>()}
+            Result.Ok(())
+        }catch(_:Exception){hostLifecycleLeaseError("managed_channel.executable_changed")}
+        }finally{endBorrow()}
+    }
+    // Only cleanup custody survives caller-resource revocation. This does not
+    // admit an effect: original operator/configuration/executable identities
+    // remain exact, while ordinary stillCurrent still checks caller authority.
+    func stillCurrentForCleanup():Result<Unit>{
+        if(!beginBorrow()){return hostLifecycleLeaseError("managed_channel.grant_released")}
+        try{immutableShutdownIdentityCurrent()}finally{endBorrow()}
+    }
+    private func immutableShutdownIdentityCurrent():Result<Unit>{
         match(base.stillCurrent()){case Result.Err(error)=>return Result.Err(error);case _=>()}
         match(retainedCeiling){case Some(value)=>match(value.stillCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()};case None=>()}
-        match(currentCallback.getOrThrow()()){case Result.Err(error)=>return Result.Err(error);case _=>()}
         try{
             let operationValue=operation.getOrThrow()
             let observed=if(role=="auxiliary"){
@@ -274,13 +293,8 @@ class HostManagedProcessGrant <: HostLifecycleProcessLaunchGrant{
             }else{hostLifecycleDirectory(cwd)}
             if(observed.resolved!=executable.resolved || observed.digest!=executable.digest || observed.size!=executable.size ||
                 observedCwd!=cwd){return hostLifecycleLeaseError("managed_channel.executable_changed")}
-            match(actualAdapter){case Some(adapter)=>if(!adapter.isActive()){
-                return hostLifecycleLeaseError("managed_channel.actual_adapter_changed")};case None=>()}
-            match(namespaces){case Some(value)=>if(!value.current()){
-                return hostLifecycleLeaseError("managed_channel.actual_namespace_changed")};case None=>()}
             Result.Ok(())
         }catch(_:Exception){hostLifecycleLeaseError("managed_channel.executable_changed")}
-        }finally{endBorrow()}
     }
     public func processRequest(operationId:OperationId):Result<ProcessRequest>{
         if(!beginBorrow()){return hostLifecycleLeaseError("managed_channel.grant_released")}

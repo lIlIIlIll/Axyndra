@@ -57,6 +57,15 @@ def package(arguments):
     if not arguments.sdk_root or not (arguments.sdk_root / 'LICENSE').is_file():
         raise ValueError('SDK runtime license is required')
     stdx_license, stdx_notice = stdx_notices(arguments.stdx_root)
+    # Match build-package.sh: compiler/ambient SDK libraries are not the
+    # selected SDK runtime closure, even when their SONAMEs are identical.
+    runtime_environment = os.environ.copy()
+    runtime_environment['LD_LIBRARY_PATH'] = os.pathsep.join(str(path) for path in [
+        REPOSITORY / 'libs/process4cj/native',
+        arguments.sdk_root / 'runtime/lib/linux_x86_64_cjnative',
+        arguments.sdk_root / 'tools/lib',
+        arguments.stdx_root.resolve(),
+    ])
     output = arguments.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.workflow-package-', dir=output.parent) as temporary:
@@ -79,7 +88,7 @@ def package(arguments):
         required_system = set()
         while queue:
             current = queue.pop(0)
-            for name, source in dependencies(current):
+            for name, source in dependencies(current, runtime_environment):
                 if system_library(source):
                     required_system.add(name)
                     continue

@@ -4,6 +4,7 @@ import agent_domain.*
 import agent_runtime.*
 import agent_plugin_registry.PluginRegistry
 import yjson.JsonNode
+import yjson_support.*
 import std.collection.*
 import std.fs.*
 import std.unittest.*

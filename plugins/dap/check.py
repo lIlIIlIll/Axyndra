@@ -26,7 +26,13 @@ class Peer:
    hello=dict(type='hello',protocol='axyndra-js-host-v2',extension_id='dap',extension_version='1.0.0',generation=7,capabilities=['process.channel'])
    if profile:hello['service_protocol_limits']=profile;hello['max_frame_bytes']=self.frame_limit
    self.send(hello)
-   ready=self.next();assert ready['type']=='ready' and ready['tools']==[] and ready['services'][0]['name']=='session'
+   ready=self.next();assert ready['type']=='ready' and [tool['name'] for tool in ready['tools']]==['debug'] and [service['name'] for service in ready['services']]==['session']
+   assert ready['commands']==[] and ready['hooks']==[] and ready['capabilities']==hello['capabilities']
+   schema=ready['tools'][0]['input_schema']
+   assert set(schema)=={'type','properties','required','additionalProperties'}
+   assert schema['type']=='object' and schema['required']==['action'] and schema['additionalProperties'] is False
+   actions=['launch','attach','set_breakpoint','remove_breakpoint','set_instruction_breakpoint','remove_instruction_breakpoint','data_breakpoint_info','set_data_breakpoint','remove_data_breakpoint','continue','step_over','step_in','step_out','pause','evaluate','stack_trace','threads','scopes','variables','disassemble','read_memory','write_memory','modules','loaded_sources','custom_request','output','terminate','sessions']
+   assert schema['properties']['action']=={'type':'string','enum':actions}
    self.configuration=dict(version=1,adapter_id='fixture',initialization={},request_timeout_ms=timeout)
   except BaseException:
    self.close();raise

@@ -129,12 +129,14 @@ public class HostArtifactStore {
     private let root: String
     private let previewBytes: Int64
     private let database: ?SqliteDatabase
+    private let operations: ?DurableOperationStore
     private let lock = Mutex()
 
     public init(
         stateRoot: String,
         previewBytes!: Int64 = HOST_ARTIFACT_PREVIEW_BYTES,
-        database!: ?SqliteDatabase = None
+        database!: ?SqliteDatabase = None,
+        operations!: ?DurableOperationStore = None
     ) {
         if (stateRoot.trimAscii() == "") {
             throw IllegalArgumentException("artifact state root must not be empty")
@@ -145,6 +147,7 @@ public class HostArtifactStore {
         this.root = Path(stateRoot).normalize().toString() + "/blobs"
         this.previewBytes = previewBytes
         this.database = database
+        this.operations = operations
     }
 
     public func capture(stream: String, content: String): HostArtifactCapture {
@@ -1228,9 +1231,9 @@ public class HostArtifactStore {
         lock.lock()
         try{
             match(ensureArtifactRoot()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-            if(database.isNone() || prepared.source.operationRoot.isNone()){
+            if(database.isNone() || operations.isNone() || prepared.source.operationRoot.isNone()){
                 return hostResourceError("plugin.document_result_source_missing")}
-            hostOperationStore(database.getOrThrow()).verifyDocumentFrozenResultExecuting(prepared.operationId,context.runId,
+            operations.getOrThrow().verifyDocumentFrozenResultExecuting(prepared.operationId,context.runId,
                 ThreadId(context.sessionId.value),context.epoch,prepared.source.operationRoot.getOrThrow(),prepared.operationPlan,current,
                 completedChildren:completedChildren)
         }finally{lock.unlock()}
@@ -1323,7 +1326,8 @@ public class HostArtifactStore {
 
     public func retainServiceArtifact(context: ToolInvocationContext, prepared: PreparedToolInvocation,
         binding: AgentValue, stream: String, writer: HostServiceArtifactWriter): Result<AgentValue> {
-        let actual = match (database) { case Some(value) => value
+        if (database.isNone()) { return hostResourceError("artifact.observation_store_required") }
+        let store = match (operations) { case Some(value) => value
             case None => return hostResourceError("artifact.observation_store_required") }
         let rootSource = match (prepared.source.operationRoot) { case Some(value) => value
             case None => return hostResourceError("artifact.observation_source_invalid") }
@@ -1336,7 +1340,7 @@ public class HostArtifactStore {
             let evidence = objectValue([ValueField("schema", textValue("axyndra.service-artifact-observation/v1")),
                 ValueField("stream", textValue(stream)), ValueField("artifact", artifact.value()),
                 ValueField("operation_id", textValue(prepared.operationId.value))])
-            match (hostOperationStore(actual).retainChannelArtifactObservation(prepared.operationId,
+            match (store.retainChannelArtifactObservation(prepared.operationId,
                 context.runId, ThreadId(context.sessionId.value), context.epoch, rootSource,
                 prepared.operationPlan, binding, evidence, { =>
                     if (context.cancellation.isCancelled()) { return hostResourceCancelled() }

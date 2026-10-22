@@ -16,7 +16,8 @@ func managedPlanTestBinding(active!:Bool=false,lease!:String="adapter-lease"):Ag
         ValueField("workspace_root",textValue("/workspace")),ValueField("workspace_mode",textValue("workspace_readonly")),
         ValueField("network",networkPolicyCanonicalValue(NetworkPolicy(NetworkPolicyMode.Denied))),
         ValueField("launch_digest",textValue(digest)),ValueField("lane_id",textValue("main")),ValueField("run_id",textValue("run-1")),
-        ValueField("epoch",numberValue("1")),ValueField("resource_state",textValue(if(active){"active"}else{"planned"}))])
+        ValueField("epoch",numberValue("1")),ValueField("resource_state",textValue(if(active){"active"}else{"planned"})),
+        ValueField("lifecycle_policy",processShutdownPolicyValue(3000))])
     if(active){value.put("lease_id",textValue(lease));value.put("startup_operation_id",textValue("spawn-"+lease))}
     value
 }
@@ -43,6 +44,29 @@ func managedPlanTestWrite(binding:AgentValue,sequence!:String="1",bytes!:String=
 
 @Test
 class ManagedChannelRuntimePlanTests{
+    @TestCase
+    func shutdownPolicyPreservesFullInt64AndCannotWidenTheFrozenCeiling():Unit{
+        for(grace in [0,3000,Int64.Max]){
+            @Expect(processShutdownPolicyGrace(processShutdownPolicyValue(grace)).value().getOrThrow(),grace)}
+        for(encoded in ["-1","1.0","1e0","9223372036854775808"]){
+            let policy=objectValue([ValueField("schema",textValue("axyndra.process-shutdown/v1")),ValueField("grace_ms",numberValue(encoded))])
+            @Expect(processShutdownPolicyGrace(policy).isError(),true)}
+        let binding=managedPlanTestBinding(active:true)
+        let operation=objectValue([ValueField("kind",textValue("close")),ValueField("lease_id",binding.field("lease_id").getOrThrow()),
+            ValueField("grace_ms",numberValue("3000"))])
+        let child=objectValue([ValueField("binding",binding),ValueField("sequence",numberValue("1")),
+            ValueField("request_key",textValue("managed-channel:parent-call:1")),ValueField("operation",operation)])
+        @Expect(managedChannelRuntimeChildValueValid(child),true)
+        operation.put("grace_ms",numberValue("3001"))
+        @Expect(managedChannelRuntimeChildValueValid(child),false)
+        operation.put("grace_ms",numberValue("0"))
+        @Expect(managedChannelRuntimeChildValueValid(child),true)
+        let parent=managedPlanTestParent(managedPlanTestBinding())
+        @Expect(processShutdownPlanGrace(parent).isError(),true)
+        @Expect(processShutdownPlanGrace(managedPlanTestWrite(binding)).isError(),true)
+        binding.put("lifecycle_policy",processShutdownPolicyValue(3001))
+        @Expect(managedChannelOwnedChildAllowed(parent,managedPlanTestWrite(binding)),false)
+    }
     @TestCase
     func plannedStartupCannotInventACompletedLeaseOrReadonlyGrant():Unit{
         let planned=managedPlanTestBinding()

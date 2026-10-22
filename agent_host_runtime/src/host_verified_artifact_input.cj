@@ -22,7 +22,7 @@ public class HostVerifiedArtifactInput {
     public func open(path:String):Result<Unit>{
         if(fd>=0){return hostPluginResourceError("plugin.document_payload_file_changed","document input handle is already owned")}
         let actual=unsafe{
-            let source=LibC.mallocCString(path);let expected=LibC.mallocCString(witness)
+            let source=LibC.mallocCString(hostPhysicalReadResourcePath180(path));let expected=LibC.mallocCString(witness)
             try{axyndra_document_input_open(source,expected,bytes)}
             finally{LibC.free(expected);LibC.free(source)}}
         if(actual<0){return hostPluginResourceError("plugin.document_payload_file_changed","document input cannot open its frozen link-free identity")}
@@ -33,7 +33,7 @@ public class HostVerifiedArtifactInput {
     func openJournalStream(path:String):Result<Unit>{
         if(fd>=0){return hostPluginResourceError("plugin.document_payload_file_changed","journal stream handle is already owned")}
         let actual=unsafe{
-            let source=LibC.mallocCString(path);let expected=LibC.mallocCString(witness)
+            let source=LibC.mallocCString(hostPhysicalReadResourcePath180(path));let expected=LibC.mallocCString(witness)
             try{axyndra_journal_stream_input_open(source,expected,bytes)}
             finally{LibC.free(expected);LibC.free(source)}}
         if(actual<0){return hostPluginResourceError("plugin.document_payload_file_changed","journal stream cannot open its frozen link-free identity")}

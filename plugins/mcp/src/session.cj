@@ -101,8 +101,8 @@ class McpPluginSession {
         // Operator grants remain host-owned for both transports. Merely
         // selecting a URL cannot open a socket from this endpoint sandbox.
         try {
-            let framing = McpFramingConfig(maxFrameBytes: output.limits.result, requestTimeoutMillis: selected.requestTimeoutMillis,
-                gracefulShutdownMillis: 0, maxConcurrentRequests: 1)
+            let framing = McpFramingConfig(maxFrameBytes: selected.maxFrameBytes, requestTimeoutMillis: selected.requestTimeoutMillis,
+                gracefulShutdownMillis: selected.gracefulShutdownMillis, maxConcurrentRequests: 1)
             let transport: McpTransport = if (selected.transport == "http") {
                 let port = BrokerHttpExchangePort(output, selected); port.setResponseReservation(responseReservation); http = Some(port)
                 port.openWindow(invocation, true, jsonNull())

@@ -51,6 +51,34 @@ func productSelectedPlanTool(runtime: ProductRuntime, selection: ProductPolicySe
     } finally { descriptor.close() }
 }
 
+// Current selection DATA, not permission to execute or an alternate history.
+// Review needs this exact publication plus its canonical completed Receipt;
+// guide/system/correction are consumed only when preparing an actual request.
+private func productCurrentWorkflowPlanBinding(runtime: ProductRuntime, sessionId: SessionId,
+    tools: Array<ModelToolDefinition>, selection: ProductPolicySelection,
+    binding: ProductPluginPolicyBinding): Result<(String, String, String)> {
+    let host = runtime.vnext.javascriptPlugins
+    match (selection.validateBinding(host, binding)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    let name = match (productSelectedPlanTool(runtime, selection, binding.generation, tools)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    let published = match (runtime.vnext.publishedToolIdentity(name, threadId: Some(ThreadId(sessionId.value)))) {
+        case None => return workflowConsumerError("workflow.plan_tool_missing"); case Some(value) => value }
+    if (published.implementationFingerprint != selection.namespace + ":" + selection.digest) {
+        return workflowConsumerError("workflow.source_changed") }
+    match (selection.validateBinding(host, binding)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+    Result.Ok((name, published.implementationVersion, published.implementationFingerprint))
+}
+
+func queryProductWorkflowPlanBinding(runtime: ProductRuntime, sessionId: SessionId,
+    tools: Array<ModelToolDefinition>): Result<(String, String, String)> {
+    let selection = match (loadProductPolicySelection(runtime.settingsRoot, "workflow")) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    let binding = match (runtime.vnext.javascriptPlugins.policyProviderBinding(selection.namespace, selection.provider)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    productCurrentWorkflowPlanBinding(runtime, sessionId, tools, selection, binding)
+}
 func queryProductWorkflowGuidance(runtime: ProductRuntime, sessionId: SessionId, mode: String,
     tools: Array<ModelToolDefinition>): Result<ProductWorkflowGuidance> {
     // Normal execution does not require an optional Workflow installation.
@@ -61,13 +89,9 @@ func queryProductWorkflowGuidance(runtime: ProductRuntime, sessionId: SessionId,
     let host=runtime.vnext.javascriptPlugins
     let binding=match(host.policyProviderBinding(selection.namespace,selection.provider)){
         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-    match(selection.validateBinding(host,binding)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-    let name=match(productSelectedPlanTool(runtime,selection,binding.generation,tools)){
-        case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-    let published=match(runtime.vnext.publishedToolIdentity(name,threadId:Some(ThreadId(sessionId.value)))){
-        case None=>return workflowConsumerError("workflow.plan_tool_missing");case Some(value)=>value}
-    if(published.implementationFingerprint!=selection.namespace+":"+selection.digest){
-        return workflowConsumerError("workflow.source_changed")}
+    let selected = match (productCurrentWorkflowPlanBinding(runtime, sessionId, tools, selection, binding)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    let name = selected[0]
     let cancellation=CancellationSource()
     try{
         let query=match(queryProductWorkflow(runtime,"guidance",[
@@ -81,7 +105,7 @@ func queryProductWorkflowGuidance(runtime: ProductRuntime, sessionId: SessionId,
                 return workflowConsumerError("workflow.source_changed")}
             let value=ProductWorkflowGuidance(name,workflowRoleText(query.response.value,"guide"),
                 workflowRoleText(query.response.value,"system"),workflowRoleText(query.response.value,"correction"),pin:Some(query.pin),
-                planVersion:published.implementationVersion,planFingerprint:published.implementationFingerprint)
+                planVersion:selected[1],planFingerprint:selected[2])
             match(value.validateCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
             let current=match(runtime.vnext.publishedToolIdentity(name,threadId:Some(ThreadId(sessionId.value)))){
                 case None=>return workflowConsumerError("workflow.plan_tool_missing");case Some(actual)=>actual}

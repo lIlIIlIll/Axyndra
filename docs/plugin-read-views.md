@@ -1,7 +1,7 @@
 # Ordinary Tool read views
 
-This document describes a staged, uncompiled addition. It does not remove the
-existing Workspace tools or complete issue #45 A4-01.
+Ordinary installed Workspace contributions use this prepared-only path. Completing
+the full Workspace acceptance matrix remains separate from representation limits.
 
 An ordinary native Tool package requests `process.readview`. Its pure `prepare`
 invocation receives `{input}` and returns one proposed intent:
@@ -16,15 +16,39 @@ it exposes an empty destination for a missing file, not its parent's contents.
 At most 32 authored roots expand to 1,024 total entries, depth 32 and 16 MiB of
 regular-file content. The worker request has at most 128 arguments and 64 KiB
 of argument text, a package-relative executable and a 1–60,000 ms timeout.
-The ordinary native protocol's smaller prepare/frame/result limits still apply.
+Pure preparation keeps its existing input, timeout and zero-host-service limits.
 
 Preparation is not content-read permission. Product resolves and classifies
 resources using actual Run capabilities, enumerates directories through verified
 handles, and freezes physical identities, file sizes, permission classes,
-package digest, generation, contribution and the current operator-file digest.
+package digest, generation, contribution, exact operator Tool payload profile and
+the current operator-file digest.
 No descriptor grant, metadata DTO, plugin assertion or model tool name replaces
 canonical runtime Source authority. The host-generated parent envelope is
-`{input,host_plan}` with version `read-view-intents/v1`.
+`{input,host_plan}` with version `read-view-intents/v2`.
+
+An operator can select `configuration.tool_payload_limits` for the exact installed
+`read` contribution. The ordinary profile is frozen before pure preparation and
+copied into both parent and Derived plans. Workspace includes that exact profile
+in its private worker argv, rather than accepting a model-authored result limit.
+Changed profiles, package/configuration digests or generations reject the prepared
+call instead of refilling its limits. Without a profile the 64 KiB read result
+and UTF-8-safe truncation behavior remain unchanged.
+
+For a 1 MiB raw page, set the existing ordinary profile fields to
+`schema:axyndra.ordinary-tool-payload/v1`, `contribution:read`,
+`max_input_bytes:2097152`, `max_result_bytes:1114112`,
+`max_service_response_bytes:1114112`, and `max_message_bytes:2162688`.
+The service bound also includes the escaped worker stdout and receipt envelope.
+Dense control characters can therefore return fewer bytes than ASCII under the
+same explicit profile, with `truncated:true`. Existing process-output ceilings
+can narrow this representation further. The profile grants no additional read,
+process-spawn, filesystem-write or network capability.
+
+Large native invocation, service-response and reply JSON uses the shared funded
+logical payload protocol with 16 KiB chunks and bounded physical frames. Exact
+window identity, sequencing, digest, decoded-node and escaped-copy accounting
+apply before allocation; cancellation clears the pending transfer.
 
 At execution, the plugin requests only `process.readview({intent_id})`, with
 request ID equal to the intent ID. The existing broker prepares and admits

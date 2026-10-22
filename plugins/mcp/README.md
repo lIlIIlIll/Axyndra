@@ -17,11 +17,91 @@ python3 scripts/prepare_mcp_plugin.py --output /absolute/new/mcp-client-package
 
 The helper requires all 51 actual cases without failure or skip, validates the
 packaged runtime/license provenance, and runs with loader overrides removed.
-Its real localhost peers and native artifact use a fixture host broker. This
+Its real localhost peers and native artifact use a fixture host broker.
+The fixture brokers stdout and stderr reads concurrently, so a quiet stderr
+poll cannot delay ready stdout chunks. All stream byte limits, exact identities,
+and the original 15-second invocation deadline still apply. This
 does not prove actual Minimal permission, lifecycle, process isolation or
 durable Receipt behavior. Earlier full-App results have their own frozen source
 and binary scope; current transitive inputs require fresh evidence. See the
 [acceptance matrix](../../docs/mcp-plugin-migration.md).
+
+The physical worker reader scans bounded 8 KiB chunks, retaining any prefetched
+tail for the next frame. Exact frame maxima, EOF/UTF-8 rules and the existing
+deadline remain unchanged. Payload accounting prepays raw decoding and retained
+call storage separately; removing scalar read overhead does not enlarge limits.
+
+## Opt-in historical configuration drafts
+
+`python3 plugins/mcp/migrate_legacy.py path/to/mcp.yml` reads the historical
+version-1 restricted YAML grammar and prints an inert JSON draft. It never
+installs, enables, discovers, launches a process, resolves environment values or
+publishes a grant. A missing file produces zero servers. Unknown/repeated fields,
+unsupported indentation, mixed transports, duplicate identities/targets/headers,
+invalid limits and unsafe HTTP authorities fail without changing the source or
+printing a partial draft. The original bytes and SHA-256 remain in the draft;
+treat that output as local configuration, not a file to commit.
+
+Every server retains its historical enabled flag as **data only**, exact argv,
+cwd, ordinary/secret environment source names, framing values, transport fields,
+HTTP URL/query bytes, bearer/header sources, Origin, SSE preference and trusted
+remote names. Defaults remain 8 MiB frames, 30-second requests and 3-second
+shutdown grace. Nondefault values are preserved, not silently clamped. Trusted
+remote names additionally map to the stable local `t_<SHA256>` names requested
+by an operator's `read_only_tools`; remote annotations do not grant trust.
+Custom header source names retain the original RFC-token grammar and exact legacy
+reserved denylist. Their inert credential requests still require operator review;
+preserving a draft does not bypass current host header or injection policy.
+
+Case-distinct legacy IDs receive distinct package IDs using the full SHA-256 of
+the original ID. Create each explicit local variant from an already built bundle:
+
+```sh
+PACKAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["servers"][0]["package_id"])' path/to/draft.json)
+python3 plugins/mcp/package.py --clone-source path/to/mcp-client-package \
+  --id "$PACKAGE_ID" --output path/to/new-independent-package
+```
+
+The clone verifies the exact manifest contract, executable, complete runtime and
+license inventories, original compiled-source provenance and independent loader
+closure before publishing a new directory. It does not rebuild or merge an
+existing package. `--id` also selects the manifest ID when packaging a compiled
+binary; omitting it retains `mcp-client` and version `1.0.0`. The worker obtains
+its exact ID from its installed immutable manifest beside the actual executable,
+not a hello frame, working directory, prefix match or global list of accepted IDs.
+
+Install each reviewed package disabled, obtain its real registry content digest,
+and deliberately select the exact process mounts/cwd, resources, lifetime,
+network/HTTP egress and TLS trust. Draft endpoint and credential source requests
+are not complete operator grants: fill the existing generic lifecycle/HTTP schema
+and bind its actual namespace/digest. For stdio, the requested physical stop policy
+is `{"schema":"axyndra.process-shutdown/v1","grace_ms":3000}` in the service's
+`lifecycle_policy`; normal host stop uses that frozen policy, whereas cancellation
+or revocation aborts. The plugin's local reader close does not mint a broker
+request outside an invocation window. Explicit startup approval is still required;
+static inspect/import/enable do not contact the MCP endpoint.
+
+The draft selects the existing bounded `protocol_limits` and `payload_limits`
+profiles so the legacy 30-second default and 8 MiB receive framing are not mapped
+back to the small default service profile. Actual host limits still apply: a draft
+preserves, but cannot authorize or widen, an out-of-range request. In particular,
+request bounds beyond 120 seconds and credential counts above the current generic
+host ceiling require a supported operator profile rather than truncation or
+plaintext credential expansion. MCP wire versions remain the documented library
+matrix; conversion does not introduce a protocol fallback.
+
+Run the public converter/native identity regressions separately from the unchanged
+51-case worker gate:
+
+```sh
+python3 plugins/mcp/check_migration.py --package path/to/current-package \
+  --baseline-package path/to/preserved-before-package --evidence path/to/result.json
+```
+
+The native identity checks exercise real packaged executables with loader overrides
+removed, including a pre-fix rejection and two independent namespaced clones.
+They are not a substitute for fixed-host startup, canonical receipts, external
+Server principals or drain evidence.
 
 ## Host integration
 
@@ -73,9 +153,14 @@ The nonsecret configuration has this exact shape:
 {"version":1,"transport":"stdio","request_timeout_ms":10000,"directory":{"max_pages":8,"max_tools":64}}
 ```
 
-Request timeout is 100–10000 ms; pages are 1–8 and tools are 1–64. A server may
-still return zero tools. Unknown fields, versions, transport names, credential
-fields and out-of-range values fail before any MCP I/O in stdio mode. These values only narrow
+Request timeout is positive and no greater than the frozen protocol profile (the
+default ceiling is 10000 ms). The default directory allows 1–8 pages and 1–64
+tools; an explicit profile allows up to 1024 pages and its frozen tool count. A
+server may still return zero tools. Unknown fields, versions, transport names,
+credential fields and out-of-range values fail before any MCP I/O in stdio mode.
+Optional `framing` has exactly `max_frame_bytes` and `graceful_shutdown_ms`: the
+frame is 1024 bytes through the selected logical result ceiling and grace is a
+nonnegative Int64, independent of request timeout. These values only narrow
 business limits; they never select an executable, environment, host lease,
 permission or secret. The HTTP shape below additionally requests a URL and opaque refs, without granting them. Operator configuration changes revoke
 the old host grant and require a fresh explicitly approved service startup.
@@ -98,6 +183,16 @@ emits **no service request**. Before a terminal result, the gate closes and all
 already issued polls drain under the same invocation identity. The host should
 give a native Service invocation a bounded service-request quota sufficient for
 these reads (plugin cap 4096, host profile ceiling 8192).
+
+Physical LF scans and lowercase hexadecimal encoding use bounded pinned arrays
+with exact output sizes. Array pins are released on every path; malformed hex
+and invalid logical UTF-8 still fail. Large results are serialized once with the
+standard JSON value/header/window encoder and a size-known envelope builder.
+The same result, frame, message, node, payment, cancellation and deadline guards
+apply before physical output. Decoded text equality avoids re-encoding scalar
+strings while preserving order-independent object identity and the existing
+numeric equality rules. These are implementation changes, not evidence of the
+unchanged 51-case gate passing for a newly built package.
 
 The common terminal result is exactly:
 
@@ -147,7 +242,8 @@ this plugin cannot declare that process cleanup is acknowledged.
 - Pending prepared frames: 128 (under 4 MiB raw); consumed identities: 4096,
   no eviction and no reuse. Reopening a new session requires a new actual host
   endpoint/lease/catalog identity and fresh approval.
-- MCP request timeout: configured 100–10000 ms; broker reply timeout: 5 seconds; terminal
+- MCP request timeout: positive and no larger than the frozen Service profile
+  (10 seconds without an explicit profile); broker reply timeout: 5 seconds; terminal
   poll drain: 2 seconds. Host startup, invocation and lifetime bounds may be
   stricter and are not extended by these local limits.
 
@@ -239,10 +335,10 @@ Unknown until the host's actual Operation facts decide settlement.
 
 The HTTP protocol fixture injects its test header only in its host-side socket
 request, verifies the real origin saw it, and withholds reflected secret output
-before plugin IPC. This checks the adapter's protocol behavior, not production
+before plugin IPC. This checks adapter protocol behavior, not production
 redaction, gateway isolation, canonical approval or Store Receipt integrity.
-Those require separate real Product tests. Running `check.py` now includes all 44
-cases; `check_http.py` supports thirteen HTTP/auth cases independently.
+Those require separate real Product tests. The current `check.py` inventory is
+51 cases; `check_http.py` also supports independent HTTP/auth runs.
 
 The preceding 256-case phase-5 checkpoint passed 36 packaged protocol cases,
 actual Product HTTP execution tests, the complete Store contract including 82
@@ -305,11 +401,11 @@ worker's existing reservation; SSE metadata is excluded, Content-Type matching
 is case-insensitive, and the charge remains until terminal publication. There is
 no automatic replay following an ambiguous effect or corrupt stored content.
 
-This increment authors six actual Product/SQLite cases (3 MiB exact input and
-output, 1 MiB SSE, explicit committed approval, corrupt content, dense mixed-case
-SSE, and absent-profile denial), thirty HTTP Store source/transition/cancellation
-cases and six native worker budget cases. They are **uncompiled and unexecuted**
-until recorded against the new source and binary. Older green reports do not
-cover these bytes. This profile does not establish complete legacy equivalence;
-timeouts beyond 120 seconds, full protocol lifecycle parity and removal of the
-built-in client remain separate migration requirements.
+Six Product/SQLite cases cover 3 MiB exact input/output, 1 MiB SSE, explicit
+committed approval, corrupt content, dense mixed-case SSE and absent-profile
+denial. Thirty HTTP Store cases cover source, transition and cancellation; six
+native worker cases cover payload budgets. Execution evidence belongs to each
+gate's exact source/binary report, not to this inventory. Do not infer unrun
+Product cases or complete legacy equivalence from a native worker result.
+Timeouts outside the supported host ceiling and complete lifecycle/principal
+matrices remain explicit requirements in the migration record.

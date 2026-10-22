@@ -78,7 +78,7 @@ class HostLiveInvocationContext159 {
 }
 
 func hostRetainLiveInvocationContext159(context: ToolInvocationContext): ?HostLiveInvocationContext159 {
-    if (!context.hasOwnedToolSetSnapshot159()) { return None<HostLiveInvocationContext159> }
+    if (!context.hasOwnedToolSetSnapshot159() && !context.hasOwnedInvocationData180()) { return None<HostLiveInvocationContext159> }
     // Original bank pays the Context and this fixed carrier/registry slot
     // before either allocation. No independent pool, Source or budget exists.
     let retained = context.retainInvocationContext159()

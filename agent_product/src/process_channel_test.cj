@@ -116,6 +116,21 @@ func rawChannelAwaitError(channel: ProcessChannel, stream: ProcessChannelStream)
     }
     throw IllegalStateException("channel never reported the required terminal failure")
 }
+func rawChannelAssertOriginalCancellation180(error: AgentError, source: CancellationSource): Unit {
+    let original = match (source.token.check()) {
+        case Result.Err(value) => value
+        case Result.Ok(_) => throw IllegalStateException("fixture cancellation must precede channel error") }
+    @Expect(error.kind, original.kind)
+    @Expect(error.code, original.code)
+    @Expect(error.message, original.message)
+    @Expect(error.retryable, original.retryable)
+    @Expect(error.fallbackAllowed, original.fallbackAllowed)
+    @Expect(error.fields.size, original.fields.size)
+    for (field in original.fields) { @Expect(error.field(field.name), Some(field.value)) }
+    @Expect(error.attemptFailure.isNone(), original.attemptFailure.isNone())
+    @Expect(error.observation.isNone(), original.observation.isNone())
+}
+
 
 class RawChannelPending {
     let started = AtomicBool(false)
@@ -425,8 +440,9 @@ class ProductProcessChannelTests {
                 if (mode == "cancel") { let _ = fixture.source.cancel() }
                 else if (mode == "deadline") { sleep(Duration.millisecond * 800) }
                 if (mode != "close") {
-                    @Expect(rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stderr).code,
-                        if (mode == "cancel") { "process.channel_cancelled" } else { "process.channel_deadline" })
+                    let terminal = rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stderr)
+                    if (mode == "cancel") { rawChannelAssertOriginalCancellation180(terminal, fixture.source) }
+                    else { @Expect(terminal.code, "process.channel_deadline") }
                 }
                 @Expect(rawChannelAwaitUnit(RawChannelPending({ => fixture.channel.close() })).isOk())
                 @Expect(MonoTime.now() - started < Duration.second * 3)
@@ -464,8 +480,9 @@ class ProductProcessChannelTests {
                 if (mode == "cancel") { let _ = fixture.source.cancel() }
                 // Do not drain stdout: this is precisely the queue wait that
                 // used to lose its monitor after the leader's natural exit.
-                @Expect(rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stderr).code,
-                    if (mode == "cancel") { "process.channel_cancelled" } else { "process.channel_deadline" })
+                let terminal = rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stderr)
+                if (mode == "cancel") { rawChannelAssertOriginalCancellation180(terminal, fixture.source) }
+                else { @Expect(terminal.code, "process.channel_deadline") }
                 @Expect(rawChannelAwaitUnit(RawChannelPending({ => fixture.channel.close() })).isOk())
                 @Expect(fixture.releases.load(), 1)
                 @Expect(!fixture.command.isAlive())
@@ -523,13 +540,16 @@ class ProductProcessChannelTests {
             sleep(Duration.millisecond * 100)
             @Expect(pending.completed.load(), false)
             let started = MonoTime.now()
-            let _ = fixture.source.cancel()
+            let _ = fixture.source.cancel(reason: Some(CancellationReason(CancellationReasonKind.Parent,
+                "fixture.parent_cancelled", "original parent cancellation cause", cancelledAtMillis: 123)))
             @Expect(rawChannelAwaitUnit(pending).isOk(), false)
-            @Expect(rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stdout).code, "process.channel_cancelled")
+            rawChannelAssertOriginalCancellation180(rawChannelAwaitError(fixture.channel, ProcessChannelStream.Stdout), fixture.source)
             @Expect(rawChannelAwaitUnit(RawChannelPending({ => fixture.channel.close() })).isOk(), true)
             @Expect(MonoTime.now() - started < Duration.second * 2, true)
             @Expect(fixture.releases.load(), 1)
-            @Expect(rawChannelReadError(fixture.channel.read(ProcessChannelStream.Stdout, 1, 0)), "process.channel_cancelled")
+            match (fixture.channel.read(ProcessChannelStream.Stdout, 1, 0)) {
+                case Result.Err(error) => rawChannelAssertOriginalCancellation180(error, fixture.source)
+                case Result.Ok(_) => throw IllegalStateException("cancelled channel must preserve its original terminal cause") }
         } finally { fixture.close() }
     }
 

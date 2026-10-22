@@ -12,10 +12,10 @@ import std.convert.*
 func runSshCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printSshHelp()
+        printSshHelp(io: io)
         return 0
     }
     match (sshParseError(arguments)) {
@@ -34,7 +34,7 @@ func runSshCli(
         return runSshList(
             session,
             hasArgument(arguments, "--json")
-        )
+        , io: io)
     }
     let name = if (positionals.size > 1) {
         positionals[1]
@@ -42,18 +42,18 @@ func runSshCli(
         ""
     }
     if (action == "add") {
-        return runSshAdd(session, arguments, name)
+        return runSshAdd(session, arguments, name, io: io)
     }
     if (action == "remove") {
-        return runSshRemove(session, arguments, name)
+        return runSshRemove(session, arguments, name, io: io)
     }
-    println("Unknown action: " + action)
-    println("Valid actions: add, remove, list")
+    io.println("Unknown action: " + action)
+    io.println("Valid actions: add, remove, list")
     1
 }
 
-func printSshHelp(): Unit {
-    println(
+func printSshHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println(
         "Manage SSH host configurations\n\n" +
         "USAGE\n" +
         "  $ axyndra ssh [ACTION] [TARGETS...] [FLAGS]\n\n" +
@@ -154,35 +154,35 @@ func sshPositionals(arguments: Array<String>): Array<String> {
 func runSshList(
     session: ApplicationSession,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let hosts = match (session.listSshHosts()) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            println("Error: " + error.message)
+            io.println("Error: " + error.message)
             return 1
     }
     if (json) {
-        println(encodeAgentValue(objectValue([
+        io.println(encodeAgentValue(objectValue([
             ValueField("project", sshHostMapValue(hosts.project)),
             ValueField("user", sshHostMapValue(hosts.user))
         ])))
         return 0
     }
     if (hosts.project.isEmpty() && hosts.user.isEmpty()) {
-        println("No SSH hosts configured")
-        println("Add one with: axyndra ssh add <name> --host <address>")
+        io.println("No SSH hosts configured")
+        io.println("Add one with: axyndra ssh add <name> --host <address>")
         return 0
     }
     if (!hosts.project.isEmpty()) {
-        println("Project SSH Hosts (.axyndra/ssh.json):")
-        printSshHosts(hosts.project)
+        io.println("Project SSH Hosts (.axyndra/ssh.json):")
+        printSshHosts(hosts.project, io: io)
     }
     if (!hosts.project.isEmpty() && !hosts.user.isEmpty()) {
-        println("")
+        io.println("")
     }
     if (!hosts.user.isEmpty()) {
-        println("User SSH Hosts (~/.axyndra/ssh.json):")
-        printSshHosts(hosts.user)
+        io.println("User SSH Hosts (~/.axyndra/ssh.json):")
+        printSshHosts(hosts.user, io: io)
     }
     0
 }
@@ -191,10 +191,10 @@ func runSshAdd(
     session: ApplicationSession,
     arguments: Array<String>,
     name: String
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (name == "") {
-        println("Error: Host name required")
-        println(
+        io.println("Error: Host name required")
+        io.println(
             "Usage: axyndra ssh add <name> --host <address> " +
                 "[--user <user>] [--port <port>] [--key <path>]"
         )
@@ -202,8 +202,8 @@ func runSshAdd(
     }
     let address = argumentValue(arguments, "--host")
     if (address == "") {
-        println("Error: --host is required")
-        println("Usage: axyndra ssh add <name> --host <address>")
+        io.println("Error: --host is required")
+        io.println("Usage: axyndra ssh add <name> --host <address>")
         return 1
     }
     let authoredPort = argumentValue(arguments, "--port")
@@ -212,13 +212,13 @@ func runSshAdd(
         let parsed = try {
             Int64.parse(authoredPort)
         } catch (_: Exception) {
-            println(
+            io.println(
                 "Error: Port must be an integer between 1 and 65535"
             )
             return 1
         }
         if (parsed < 1 || parsed > 65535) {
-            println(
+            io.println(
                 "Error: Port must be an integer between 1 and 65535"
             )
             return 1
@@ -239,13 +239,13 @@ func runSshAdd(
         )
     )) {
         case Result.Ok(_) =>
-            println(
+            io.println(
                 "Added SSH host \"" + name + "\" to " +
                     scope + " config"
             )
             0
         case Result.Err(error) =>
-            println("Error: " + error.message)
+            io.println("Error: " + error.message)
             1
     }
 }
@@ -254,10 +254,10 @@ func runSshRemove(
     session: ApplicationSession,
     arguments: Array<String>,
     name: String
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (name == "") {
-        println("Error: Host name required")
-        println(
+        io.println("Error: Host name required")
+        io.println(
             "Usage: axyndra ssh remove <name> " +
                 "[--scope project|user]"
         )
@@ -266,13 +266,13 @@ func runSshRemove(
     let scope = sshScope(arguments)
     match (session.removeSshHost(scope, name)) {
         case Result.Ok(_) =>
-            println(
+            io.println(
                 "Removed SSH host \"" + name + "\" from " +
                     scope + " config"
             )
             0
         case Result.Err(error) =>
-            println("Error: " + error.message)
+            io.println("Error: " + error.message)
             1
     }
 }
@@ -321,7 +321,7 @@ func sshHostMapValue(hosts: Array<ProductSshHost>): AgentValue {
     objectValue(values.toArray())
 }
 
-func printSshHosts(hosts: Array<ProductSshHost>): Unit {
+func printSshHosts(hosts: Array<ProductSshHost>, io!: CliIo180 = consoleCliIo180): Unit {
     for (host in hosts) {
         var line = "  " + host.name + "  " + host.host
         if (host.username != "") {
@@ -340,6 +340,6 @@ func printSshHosts(hosts: Array<ProductSshHost>): Unit {
         if (host.description != "") {
             line += "  - " + host.description
         }
-        println(line)
+        io.println(line)
     }
 }

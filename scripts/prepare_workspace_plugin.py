@@ -15,6 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CASES = 43
+EXPECTED_PAYLOAD_CASES = 9
 
 
 def digest(path):
@@ -47,7 +48,7 @@ def run(command, log, timeout, environment=None):
     return text
 
 
-def prepare(output=None):
+def prepare(output=None, engine_output=None):
     if sys.platform != 'linux':
         raise ValueError('the independently packaged Workspace fixture requires Linux')
     plugin = ROOT / 'plugins/workspace'
@@ -69,8 +70,14 @@ def prepare(output=None):
         if len(cases) != EXPECTED_CASES or len(set(cases)) != EXPECTED_CASES:
             raise ValueError('review the independent Workspace protocol test inventory')
         record['cases'] = cases
+        payload_source = ast.parse((plugin / "check_payload.py").read_text())
+        payload_cases = [node.name for node in ast.walk(payload_source)
+                         if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+        if len(payload_cases) != EXPECTED_PAYLOAD_CASES or len(set(payload_cases)) != EXPECTED_PAYLOAD_CASES:
+            raise ValueError("review the independent Workspace ordinary-payload test inventory")
+        record["payload_cases"] = payload_cases
         lock = json.loads((plugin / 'engine.lock.json').read_text())
-        engine = ROOT / 'target/plugin-contract-fixtures' / ('ripgrep-' + lock['version'])
+        engine = engine_output or ROOT / 'target/plugin-contract-fixtures' / ('ripgrep-' + lock['version'])
         run([sys.executable, str(plugin / 'fetch-engine.py'), '--output', str(engine)],
             evidence / 'engine.log', 120)
         text = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package),
@@ -109,10 +116,19 @@ def prepare(output=None):
                 not re.search(rf'^Ran {EXPECTED_CASES} tests in [0-9.]+s$', text, re.M) or not re.search(r'^OK$', text, re.M) or \
                 'FAILED' in text or 'ERROR:' in text or 'skipped' in text.lower():
             raise ValueError('Workspace protocol fixture must execute every case without failure or skip')
+        payload_text = run([sys.executable, str(plugin / "check_payload.py"), "--package", str(package)],
+                           evidence / "ordinary-payload.log", 240, environment)
+        payload_observed = re.findall(r"^test_\w+ .*? \.\.\. (ok|skipped.*?)$", payload_text, re.M)
+        if len(payload_observed) != EXPECTED_PAYLOAD_CASES or any(item != "ok" for item in payload_observed) or \
+                not re.search(rf"^Ran {EXPECTED_PAYLOAD_CASES} tests in [0-9.]+s$", payload_text, re.M) or \
+                not re.search(r"^OK$", payload_text, re.M) or "FAILED" in payload_text or "ERROR:" in payload_text:
+            raise ValueError("Workspace ordinary payload fixture must execute every case without failure or skip")
         if before != files(package):
             raise ValueError('package changed during protocol verification')
         record.update(status='PASS', protocol_counts={'total': EXPECTED_CASES, 'passed': EXPECTED_CASES,
                       'failed': 0, 'errors': 0, 'skipped': 0}, package_files=before,
+                      payload_protocol_counts={"total": EXPECTED_PAYLOAD_CASES, "passed": EXPECTED_PAYLOAD_CASES,
+                                               "failed": 0, "errors": 0, "skipped": 0},
                       entrypoint_sha256=digest(entry), package_provenance=provenance)
     except Exception as error:
         record['error'] = str(error)
@@ -125,9 +141,10 @@ def prepare(output=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, help='new package directory; default is under target/plugin-contract-fixtures')
+    parser.add_argument('--engine-output', type=Path, help='cache directory verified by the reviewed engine lock')
     arguments = parser.parse_args()
     try:
-        print(prepare(arguments.output))
+        print(prepare(arguments.output, arguments.engine_output))
     except (OSError, ValueError, KeyError) as error:
         print(f'Workspace fixture preparation failed: {error}', file=sys.stderr)
         raise SystemExit(1)

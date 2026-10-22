@@ -1,4 +1,4 @@
-"""A dedicated Linux subreaper for one original bounded RPC case.
+"""A dedicated Linux subreaper for one original bounded unit-test invocation.
 
 Unknown process identity is a failure, never proof of return. A physical exit
 does not acknowledge retained test DATA. No arguments/environment are sampled.
@@ -15,6 +15,9 @@ import sys
 import time
 
 CLEANUP_SECONDS = .25
+_PROCESS_CAPS = {'case': 60, 'compilation': 900, 'host-case': 900}
+_WORKER_MODES = {'case': '--owned-worker', 'compilation': '--owned-compilation-worker',
+                 'host-case': '--owned-host-worker'}
 
 
 def _cell(raw):
@@ -189,8 +192,8 @@ def _cleanup(process, owned, root_pid=None, root_start=None):
 def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='case'):
     if sys.platform != 'linux' or not Path('/proc').is_dir():
         raise ValueError('RPC process isolation requires Linux process identities')
-    maximum = 60 if purpose == 'case' else 900
-    if purpose not in ('case', 'compilation') or not 0 < seconds <= maximum or not math.isfinite(execution_deadline):
+    maximum = _PROCESS_CAPS.get(purpose, 0)
+    if not 0 < seconds <= maximum or not math.isfinite(execution_deadline):
         raise ValueError('original role-specific cap and absolute monotonic deadline are mandatory')
     libc = ctypes.CDLL(None, use_errno=True)
     prctl = libc.prctl
@@ -310,8 +313,8 @@ def _actual_clean_worker_receipt(result, execution_deadline, seconds):
 
 def _run_owned(command, log, seconds, cwd=None, purpose='case'):
     """The CI parent never becomes subreaper or reaps a shared child's handle."""
-    maximum = 60 if purpose == 'case' else 900
-    if sys.platform != 'linux' or purpose not in ('case', 'compilation') or not 0 < seconds <= maximum:
+    maximum = _PROCESS_CAPS.get(purpose, 0)
+    if sys.platform != 'linux' or not 0 < seconds <= maximum:
         raise ValueError('fresh Linux watcher and original role-specific process cap required')
     log = Path(log).resolve()
     receipt = log.with_name(log.name + '.process.json')
@@ -326,7 +329,7 @@ def _run_owned(command, log, seconds, cwd=None, purpose='case'):
         remaining_after_cleanup=[], unreaped_owned_processes=[], unknown=[])
     with watcher_log.open('xb') as output:
         try:
-            worker_mode = '--owned-worker' if purpose == 'case' else '--owned-compilation-worker'
+            worker_mode = _WORKER_MODES[purpose]
             witness = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), worker_mode,
                 str(log), str(receipt), str(seconds), repr(execution_deadline), '--', *command], cwd=cwd,
                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
@@ -392,14 +395,19 @@ def run_compilation(command, log, seconds=900, cwd=None):
     return _run_owned(command, log, seconds, cwd=cwd, purpose='compilation')
 
 
+def run_host_case(command, log, seconds, cwd=None):
+    return _run_owned(command, log, seconds, cwd=cwd, purpose='host-case')
+
+
 def main():
-    if len(sys.argv) < 8 or sys.argv[1] not in ('--owned-worker', '--owned-compilation-worker') or sys.argv[6] != '--':
+    purposes = {mode: purpose for purpose, mode in _WORKER_MODES.items()}
+    if len(sys.argv) < 8 or sys.argv[1] not in purposes or sys.argv[6] != '--':
         raise ValueError('dedicated worker expects fresh raw/receipt, seconds, absolute monotonic deadline, --, exact argv')
     log, receipt, seconds = Path(sys.argv[2]), Path(sys.argv[3]), float(sys.argv[4])
     execution_deadline = float(sys.argv[5])
     if receipt.exists() or log.exists():
         raise ValueError('actual worker paths must be fresh')
-    purpose = 'case' if sys.argv[1] == '--owned-worker' else 'compilation'
+    purpose = purposes[sys.argv[1]]
     result = _run_worker(sys.argv[7:], log, seconds, execution_deadline, purpose=purpose)
     receipt.write_text(json.dumps(result, indent=2) + '\n')
     return 0 if result['exit_code'] == 0 else 1

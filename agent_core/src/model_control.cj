@@ -8,6 +8,8 @@ import std.convert.*
 import std.deriving.*
 import std.sync.*
 import std.time.*
+import yjson.*
+import yjson_support.*
 
 public enum ModelAttemptRecoveryMode {
     Disabled | RecoveryV1
@@ -59,6 +61,22 @@ public class ModelAttemptRecoveryPolicy {
             case ModelAttemptRecoveryMode.Disabled => false
         }
     }
+}
+
+func modelAttemptRecoveryForSettings180(settings: AgentValue, fallback: ModelAttemptRecoveryPolicy): ModelAttemptRecoveryPolicy {
+    if (settings.unifiedKind == ValueKind.Null) { return fallback }
+    if (requiredCoreTextField(settings, "schema") != "axyndra.operator-request-settings/v1") {
+        throw IllegalArgumentException("unsupported frozen request settings schema")
+    }
+    let value = requiredCoreValueField(settings, "model_attempt_recovery")
+    let mode = match (requiredCoreTextField(value, "mode")) {
+        case "recovery_v1" => ModelAttemptRecoveryMode.RecoveryV1
+        case "disabled" => ModelAttemptRecoveryMode.Disabled
+        case _ => throw IllegalArgumentException("unsupported frozen recovery mode")
+    }
+    ModelAttemptRecoveryPolicy(mode: mode, attemptTimeoutMillis: requiredCoreIntegerField(value, "attempt_timeout_ms"),
+        maxRecoveryRetries: requiredCoreIntegerField(value, "max_recovery_retries"), hardTimeoutMillis: requiredCoreIntegerField(value, "hard_timeout_ms"),
+        streamIdleMillis: requiredCoreIntegerField(value, "stream_idle_ms"), recentProgressMillis: requiredCoreIntegerField(value, "recent_progress_ms"))
 }
 
 // Online attempt timing is deliberately process-local. Implementations expose
@@ -133,6 +151,9 @@ public class AttemptDeadlineContext {
             min(policy.streamIdleMillis, idleLimitMillis)
         } else { policy.streamIdleMillis }
         lastProgressAt = started
+    }
+    public func acceptsEvents180(): Bool {
+        lock.lock(); try { accepting } finally { lock.unlock() }
     }
 
     public func record(event: ModelEvent): Bool {
@@ -672,9 +693,10 @@ public class ControlledModelPort <: ModelPort & ReturningModelInputPort159 & Ret
                             error.kind,
                             error.code,
                             error.message,
-                            retryable: false,
+                            retryable: error.retryable,
                             fallbackAllowed: error.fallbackAllowed,
-                            fields: fields.toArray()
+                            fields: fields.toArray(),
+                            attemptFailure: error.attemptFailure, observation: error.observation
                         )
                     } else {
                         error
@@ -708,7 +730,7 @@ public class ControlledModelPort <: ModelPort & ReturningModelInputPort159 & Ret
                         case Result.Ok(_) => ()
                         case Result.Err(usageError) => return Result.Err(usageError)
                     }
-                    if (!normalized.retryable || attempt == options.maxAttempts) {
+                    if (activity.hasEvents() || !normalized.retryable || attempt == options.maxAttempts) {
                         return Result.Err(normalized)
                     }
                     let remaining = options.timeoutMillis -

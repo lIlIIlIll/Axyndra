@@ -38,7 +38,7 @@ public interface HostPluginChildBackend111 {
     func observeResultSlot150(context: ToolInvocationContext, consume: (Bool, Int64, Bool) -> Unit): Result<Unit>
     func writeResultSlot150(context: ToolInvocationContext, request: AgentValue,
         admission: HostPluginChildAdmission111): Result<ToolResult>
-    func processFacts180(meter:HostPaidValueProjection151):Result<AgentValue>{
+    func processFacts180(context: ToolInvocationContext, meter:HostPaidValueProjection151):Result<AgentValue>{
         hostPluginResourceError("hub.process_backend_missing","actual process resource owner is unavailable")}
     func observeProcessPreparation180(context:ToolInvocationContext,request:AgentValue,meter:HostPaidValueProjection151):Result<AgentValue>{
         hostPluginResourceError("hub.process_backend_missing","actual process resource owner is unavailable")}
@@ -55,14 +55,24 @@ public interface HostPluginChildBackend111 {
 public class HostPluginChildAdmission111 {
     private let host: HostJavaScriptPluginHost
     private let operations: OperationRuntimePort
-    private let context: ToolInvocationContext
+    private var liveContext180: ?ToolInvocationContext
+    private var ownedContext180: ?ToolInvocationContext = None<ToolInvocationContext>
+    private prop context: ToolInvocationContext { get() { liveContext180.getOrThrow() } }
+    // Paid immutable descriptive identity survives only for result matching and
+    // pure completion. It cannot replace the live Context in check/execution.
+    private let originalRun180: RunId
+    private let originalSession180: SessionId
+    private let originalEpoch180: Int64
+    private let originalBudget180: ExecutionBudget
+    private let originalCancellation180: CancellationToken
+
     private let prepared: PreparedToolInvocation
     private let configuration: HostPrimitiveConfiguration111
     private let generation: UInt64
     private let localTool: String
     private let lock = Mutex()
     private var claimed = false
-    public prop cancellation: CancellationToken { get() { context.cancellation } }
+    public prop cancellation: CancellationToken { get() { originalCancellation180 } }
     public prop callId: String { get() { prepared.call.callId } }
     public prop parentCallId: String { get() { httpIntentText(binding(), "parent_call_id") } }
     public prop sourceIdentity: String { get() { "plugin:" + configuration.namespace + ":" +
@@ -70,11 +80,36 @@ public class HostPluginChildAdmission111 {
     init(host: HostJavaScriptPluginHost, operations: OperationRuntimePort, context: ToolInvocationContext,
         prepared: PreparedToolInvocation, configuration: HostPrimitiveConfiguration111,
         generation: UInt64, localTool: String) {
-        this.host = host; this.operations = operations; this.context = context; this.prepared = prepared
+        this.host = host; this.operations = operations; this.liveContext180 = Some(context); this.prepared = prepared
         this.configuration = configuration; this.generation = generation; this.localTool = localTool
+        originalRun180 = context.runId; originalSession180 = context.sessionId; originalEpoch180 = context.epoch
+        originalBudget180 = context.budget; originalCancellation180 = context.cancellation
     }
+    public func retainOriginalContextForChildWorker180(actual: ToolInvocationContext): Result<ToolInvocationContext> {
+        lock.lock(); try {
+            if (ownedContext180.isSome()) { return Result.Ok(ownedContext180.getOrThrow()) }
+            if (liveContext180.isNone() || !refEq(liveContext180.getOrThrow(), actual)) {
+                return hostPluginResourceError("child.context_owner_changed", "actual admission lost its original invocation view")
+            }
+            configuration.retainWorkerMetadata111(65536)
+            let retained = actual.retainInvocationContext159()
+            ownedContext180 = Some(retained); liveContext180 = Some(retained); Result.Ok(retained)
+        } finally { lock.unlock() }
+    }
+    // Task's external actual Future.get collector calls this only after every
+    // executable state/callback alias is detached; no status/Unit ACK proves it.
+    public func returnContextAfterOriginalChildHelpers180(): Unit {
+        lock.lock(); let retained = try {
+            let actual = ownedContext180; ownedContext180 = None<ToolInvocationContext>
+            if (actual.isSome()) { liveContext180 = None<ToolInvocationContext> }; actual
+        } finally { lock.unlock() }
+        match (retained) { case Some(actual) => actual.returnOwnedToolSetFrame159(); case None => () }
+    }
+    public func hasRetainedOriginalContext180(): Bool { lock.lock(); try { ownedContext180.isSome() } finally { lock.unlock() } }
+
     private func binding(): AgentValue { prepared.operationPlan.canonicalArguments.field("binding").getOrThrow() }
     public func check(): Result<Unit> {
+        if (liveContext180.isNone()) { return hostPluginResourceError("child.live_context_retired", "retired metadata cannot authorize a child execution") }
         if(pluginPrimitiveInvocationName111(prepared.operationPlan.canonicalArguments)!=configuration.invocationName(localTool,service:pluginPrimitivePlanService111(prepared.operationPlan))) {
             return hostPluginResourceError("child.invocation_capability_changed","actual hidden invocation changed its selected capability") }
         match (hostChildPreparationCurrent111(host, configuration, generation, localTool, context, binding(),service:pluginPrimitivePlanService111(prepared.operationPlan))) {
@@ -503,11 +538,11 @@ public class HostPluginChildAdmission111 {
     // child owner. It is not permission to start or revive anything.
     // Immutable identity only; these fields cannot construct an execution Source.
     public prop originalParentOperation111:?OperationId {get(){prepared.source.parentOperationId}}
-    public prop originalParentEpoch111:Int64 {get(){context.epoch}}
+    public prop originalParentEpoch111:Int64 {get(){originalEpoch180}}
     public func persistedParent(context:ToolInvocationContext,result:ToolResult):?OperationId {
-        if(result.isError || this.context.runId.value!=context.runId.value ||
-            this.context.sessionId.value!=context.sessionId.value || this.context.epoch!=context.epoch ||
-            !refEq(this.context.budget,context.budget) || parentCallId!=result.callId ||
+        if(result.isError || originalRun180.value!=context.runId.value ||
+            originalSession180.value!=context.sessionId.value || originalEpoch180!=context.epoch ||
+            !refEq(originalBudget180,context.budget) || parentCallId!=result.callId ||
             prepared.source.parentOperationId.isNone() || pluginPrimitivePlanService111(prepared.operationPlan)!="child.start") {
             return Option<OperationId>.None }
         let parent=prepared.source.parentOperationId.getOrThrow()
@@ -525,9 +560,9 @@ public class HostPluginChildAdmission111 {
         start.lock.lock()
         try {
         if (!refEq(host,start.host) || !refEq(configuration,start.configuration) || generation!=start.generation ||
-            localTool!=start.localTool || !start.claimed || !refEq(context.budget,start.context.budget) ||
-            context.sessionId.value!=start.context.sessionId.value || context.runId.value!=start.context.runId.value ||
-            context.epoch!=start.context.epoch || prepared.source.parentOperationId.isNone() || start.prepared.source.parentOperationId.isNone() ||
+            localTool!=start.localTool || !start.claimed || !refEq(context.budget,start.originalBudget180) ||
+            context.sessionId.value!=start.originalSession180.value || context.runId.value!=start.originalRun180.value ||
+            context.epoch!=start.originalEpoch180 || prepared.source.parentOperationId.isNone() || start.prepared.source.parentOperationId.isNone() ||
             prepared.source.parentOperationId.getOrThrow().value!=start.prepared.source.parentOperationId.getOrThrow().value ||
             receipt.operationId.value!=start.prepared.operationId.value || receipt.receiptId!="receipt-"+start.prepared.operationId.value ||
             receipt.outcome!=OperationOutcome.Completed) { return false }
@@ -568,13 +603,13 @@ public class HostPluginChildAdmission111 {
     public func completionProjection151(observation: AgentValue,
         cancellation: CancellationToken): Result<AgentValue> {
         match (completionCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let completion = frozenDefinition111().field("completion").getOrThrow()
+        let completion = completionRecipeForQuery111()
         let recipe = completion.field("input").getOrThrow()
         let provider = httpIntentText(completion, "provider")
         let response = match (hostQueryPluginPolicy(host, configuration.namespace, provider, configuration.packageDigest,
             objectValue([ValueField("schema", textValue("axyndra.child-projection-query/v1")),
                 ValueField("recipe", recipe), ValueField("observation", observation)]),
-            ThreadId(context.sessionId.value), cancellation, prepared.call.callId + ":completion-projection151")) {
+            ThreadId(originalSession180.value), cancellation, prepared.call.callId + ":completion-projection151")) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         try {
             if (response.binding.namespace != configuration.namespace || response.binding.digest != configuration.packageDigest ||
@@ -588,12 +623,12 @@ public class HostPluginChildAdmission111 {
     }
     public func complete(observation: AgentValue, cancellation: CancellationToken): Result<AgentValue> {
         match (completionCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let completion = frozenDefinition111().field("completion").getOrThrow()
+        let completion = completionRecipeForQuery111()
         let response = match (hostQueryPluginPolicy(host, configuration.namespace,
             httpIntentText(completion, "provider"), configuration.packageDigest,
             objectValue([ValueField("schema", textValue("axyndra.child-completion-query/v1")),
                 ValueField("recipe", completion.field("input").getOrThrow()), ValueField("observation", observation)]),
-            ThreadId(context.sessionId.value), cancellation, prepared.call.callId + ":completion")) {
+            ThreadId(originalSession180.value), cancellation, prepared.call.callId + ":completion")) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         try {
             if (response.binding.namespace != configuration.namespace || response.binding.digest != configuration.packageDigest ||
@@ -606,6 +641,16 @@ public class HostPluginChildAdmission111 {
             match (completionCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             Result.Ok(copied)
         } finally { response.close() }
+    }
+    private func completionRecipeForQuery111(): AgentValue {
+        // This private full query consumer borrows the immutable field from
+        // its own prepared invocation, retained by this admission throughout
+        // the query. It does not export a new raw snapshot to an unknown caller.
+        let input = prepared.operationPlan.canonicalArguments.field("intent").getOrThrow().field("input").getOrThrow()
+        if (input.field("resume").isSome()) {
+            return input.field("resume").getOrThrow().field("proposal").getOrThrow().field("completion").getOrThrow()
+        }
+        input.field("completion").getOrThrow()
     }
     public func frozenDefinition111():AgentValue {
         let input=prepared.operationPlan.canonicalArguments.field("intent").getOrThrow().field("input").getOrThrow()
@@ -732,7 +777,7 @@ func hostChildServiceContext111(root: PreparedToolInvocation, context: ToolInvoc
     let child = ToolInvocationContext(context.runId, context.sessionId, context.capabilities,
         sequence: context.currentSequence(), epoch: context.epoch,
         toolContext: ToolContextDescriptor(workspaceRoot: context.workspaceRoot, cwd: context.cwd,
-            environment: context.environment, services: context.services),
+            environment: context.environment, services: context.services, executionSettings180: context.executionSettings180, modelFaultCounters180: context.modelFaultCounters180),
         cancellation: context.cancellation, approvalModeOverride: context.approvalModeOverride,
         outputSink: context.outputSink, budget: context.budget, budgetModeFn: context.budgetModeFn,
         contextProjection: context.contextProjection, toolSetSnapshot: context.legacyToolSetSnapshot159,

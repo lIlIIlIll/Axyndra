@@ -20,7 +20,8 @@ public func coreContextBoundaryRequestValue(request: AgentRunRequest): AgentValu
 public func coreContextBoundaryRequestFromValue(
     value: AgentValue,
     interactions!: ?AgentInteractionSource = None,
-    ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>
+    ownedEvents!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>,
+    callerCancellation180!: ?CancellationToken = None<CancellationToken>
 ): AgentRunRequest {
     let frozen = contextBoundaryRequestFreeze(value)
     contextBoundaryRequestFields(frozen, ["schema", "run_id", "thread_id", "lane_id", "model_input",
@@ -78,6 +79,7 @@ public func coreContextBoundaryRequestFromValue(
         resolverVersion: contextBoundaryRequestUInt32(frozen, "resolver_version"),
         capabilities: CapabilitySet(values: capabilities.toArray()), budget: budget, interactions: interactions,
         approvalModeOverride: approvalModeFromName(approvalName), autoRetry: requiredCoreBoolField(frozen, "auto_retry"),
+        callerCancellation180: callerCancellation180,
         serviceTier: model.serviceTier, pricing: contextBoundaryRequestPricingFromValue(requiredCoreValueField(frozen, "pricing")),
         imageInputs: images.toArray(), structuredOutput: model.structuredOutput,
         cachePolicy: model.cachePolicy, cacheKey: model.cacheKey, parallelToolCalls: model.parallelToolCalls,
@@ -286,7 +288,9 @@ func contextBoundaryRequestModelFields(value: AgentValue): Unit {
 }
 
 func contextBoundaryRequestToolFields(value: AgentValue): Unit {
-    contextBoundaryRequestFields(value, ["workspace_root", "cwd", "environment", "services"])
+    if (value.field("execution_settings").isSome()) {
+        contextBoundaryRequestFields(value, ["workspace_root", "cwd", "environment", "services", "execution_settings"])
+    } else { contextBoundaryRequestFields(value, ["workspace_root", "cwd", "environment", "services"]) }
     for (entry in requiredCoreListField(value, "environment")) { contextBoundaryRequestFields(entry, ["name", "value"]) }
     for (entry in requiredCoreListField(value, "services")) { contextBoundaryRequestFields(entry, ["kind", "name", "version"]) }
 }

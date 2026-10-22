@@ -23,7 +23,7 @@ foreign func axyndra_read_view_header(source: CString, witness: CString, destina
 public func hostReadViewDirectory(path: String, witness: String): Result<Array<String>> {
     let buffer = Array<Byte>(1048576, repeat: 0)
     let count = unsafe {
-        let name = LibC.mallocCString(path); let expected = LibC.mallocCString(witness)
+        let name = LibC.mallocCString(hostPhysicalReadResourcePath180(path)); let expected = LibC.mallocCString(witness)
         let raw = acquireArrayRawData(buffer)
         try { axyndra_read_view_directory(name, expected, raw.pointer, buffer.size) }
         finally { releaseArrayRawData(raw); LibC.free(expected); LibC.free(name) }
@@ -41,8 +41,8 @@ public func hostReadViewDirectory(path: String, witness: String): Result<Array<S
 
 public func hostReadViewHeader(source: String, witness: String, destination: String, maximum: Int64, startMarker: String, endMarker: String, trimASCII: Bool): Result<Int64> {
     unsafe {
-        let src = LibC.mallocCString(source); let expected = LibC.mallocCString(witness)
-        let dst = LibC.mallocCString(destination); let start = LibC.mallocCString(startMarker); let end = LibC.mallocCString(endMarker)
+        let src = LibC.mallocCString(hostPhysicalReadResourcePath180(source)); let expected = LibC.mallocCString(witness)
+        let dst = LibC.mallocCString(hostPhysicalReadResourcePath180(destination)); let start = LibC.mallocCString(startMarker); let end = LibC.mallocCString(endMarker)
         try {
             let count = axyndra_read_view_header(src, expected, dst, maximum, start, end, if (trimASCII) { 1 } else { 0 })
             if (count < 0) { return hostPluginResourceError("read_view.resource_changed", "bounded header lost its verified regular-file identity") }
@@ -52,11 +52,7 @@ public func hostReadViewHeader(source: String, witness: String, destination: Str
 }
 
 public func hostReadViewCancellation(context: ToolInvocationContext): Result<Unit> {
-    if (context.cancellation.isCancelled() ||
-        (context.cancellation.deadlineMillis > 0 && agentUtcMillis() >= context.cancellation.deadlineMillis)) {
-        return Result.Err(AgentError(AgentErrorKind.Cancelled, "read_view.cancelled", "read view invocation was cancelled or expired"))
-    }
-    Result.Ok(())
+    context.cancellation.check()
 }
 
 // Directory expansion belongs to the generic resource boundary, not the
@@ -399,12 +395,13 @@ public func hostPreparePluginReadViewInvocation(host: HostJavaScriptPluginHost, 
     if (configuration.usesReadViewParameterReference(tool)) {
         return hostPrepareReferencedReadViewInvocation(host, descriptor, configuration, namespace, tool, generation, context, call)
     }
+    let payload = configuration.toolPayloadLimits(tool)
     let arguments = objectValue([ValueField("input", call.arguments)])
     let identity = JavaScriptHostInvocationIdentity(threadId: context.sessionId.value, runId: context.runId.value,
         epoch: context.epoch, operationId: "", callId: call.callId, kind: "prepare")
     let result = match (host.invoke(namespace, tool, stringifyUnifiedJson(arguments), identity: identity,
         cancellation: context.cancellation, processLimits: context.budget.processLimits, timeoutMillis: 5000,
-        expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest)) {
+        expectedInstanceGeneration: generation, authorityScope: "pure-read-view:" + configuration.digest, toolPayloadLimits: payload)) {
         case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error)
     }
     if (result.isError || !httpIntentExactFields(result.value, ["intents"])) {
@@ -438,7 +435,9 @@ public func hostPreparePluginReadViewInvocation(host: HostJavaScriptPluginHost, 
         ValueField("version", textValue(HOST_READ_VIEW_VERSION)), ValueField("plugin", textValue(namespace)),
         ValueField("package_digest", textValue(descriptor.contentDigest)), ValueField("generation", textValue(generation.toString())),
         ValueField("configuration_digest", textValue(configuration.digest)), ValueField("contribution", textValue(tool)),
-        ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))), ValueField("intents", listValue([frozen]))]))]))
+        ValueField("read_granted", boolValue(configuration.ordinaryReadTools.contains(tool))),
+        ValueField("tool_payload_limits", match (payload) { case Some(value) => value.value(); case None => nullValue() }),
+        ValueField("intents", listValue([frozen]))]))]))
 }
 
 public func hostPluginReadViewSideEffect(call: ToolCall): Bool {

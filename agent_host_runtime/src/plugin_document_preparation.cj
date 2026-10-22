@@ -338,11 +338,23 @@ public func hostQueryDocumentPreparationProvider(host: HostJavaScriptPluginHost,
     if (binding.namespace != namespace || binding.contribution != provider ||
         binding.digest != configuration.packageDigest || binding.generation != generation) {
         return hostPluginResourceError("plugin.document_preparation_provider_changed", "preparation Provider differs from the original Tool package and generation") }
-    let response = match (hostQueryPluginPolicy(host, namespace, provider, configuration.packageDigest,
-        objectValue([ValueField("schema", textValue("axyndra.tool-preparation-query/v1")),
-            ValueField("tool", textValue(localTool)), ValueField("input", call.arguments)]),
-        ThreadId(context.sessionId.value), context.cancellation, call.callId)) {
+    let mounted = match (host.servicePackage(namespace, generation)) {
         case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    // Derive DATA custody before constructing the query and its carriers.
+    // This is the same installed metadata root, not execution authority.
+    let payment = try {
+        if (!mounted.textEquals(PluginDescriptorText.Namespace, namespace) ||
+            !mounted.textEquals(PluginDescriptorText.ContentDigest, configuration.packageDigest)) {
+            return hostPluginResourceError("plugin.document_preparation_provider_changed", "preparation Provider package differs from its data custody") }
+        mounted.deriveCopiedDataPayment(65536)
+    } finally { mounted.close() }
+    let response = try {
+        match (hostQueryPluginPolicyPaidInput(host, namespace, provider, configuration.packageDigest,
+            objectValue([ValueField("schema", textValue("axyndra.tool-preparation-query/v1")),
+                ValueField("tool", textValue(localTool)), ValueField("input", call.arguments)]), payment,
+            ThreadId(context.sessionId.value), context.cancellation, call.callId)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    } finally { payment.close() }
     var transferred = false
     try {
         if (response.binding.generation != generation || response.binding.digest != configuration.packageDigest ||

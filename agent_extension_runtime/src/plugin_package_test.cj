@@ -63,6 +63,67 @@ class PluginPackageContractTests {
     }
 
     @TestCase
+    func codexPortableCapabilitiesAreExplicitRequestsNotHookAuthority(): Unit {
+        let requested = parsePluginPackageManifest(PluginManifestFamily.Codex,
+            "{\"name\":\"codex-requests\",\"extensions\":{\"axyndra\":{\"capabilities\":[\" workspace.read \",\"workspace.write\",\"workspace.read\"]}}}",
+            source: "local:/fixture/codex-requests")
+        @Expect(match (requested) {
+            case PluginPackageResult.Ok(value) => value.ecosystem == PluginEcosystem.Codex &&
+                value.requestedCapabilities == ["workspace.read", "workspace.write"]
+            case PluginPackageResult.Err(_) => false
+        })
+        let vendor = parsePluginPackageManifest(PluginManifestFamily.Codex,
+            "{\"name\":\"codex-no-request\",\"extensions\":{\"com.openai\":{\"hooks\":{\"PreToolUse\":[]},\"capabilities\":[\"workspace.write\"]}}}",
+            source: "local:/fixture/codex-no-request")
+        @Expect(match (vendor) {
+            case PluginPackageResult.Ok(value) => value.requestedCapabilities.isEmpty()
+            case PluginPackageResult.Err(_) => false
+        })
+    }
+
+    @TestCase
+    func codexRequestedCapabilityOverlayRejectsUnknownAndMalformedFacts(): Unit {
+        for (overlay in ["null", "[]", "{\"grant\":true}", "{\"schema_version\":999,\"capabilities\":[\"workspace.write\"]}"]) {
+            let result = parsePluginPackageManifest(PluginManifestFamily.Codex,
+                "{\"name\":\"codex-invalid\",\"extensions\":{\"axyndra\":" + overlay + "}}",
+                source: "local:/fixture/codex-invalid")
+            @Expect(match (result) {
+                case PluginPackageResult.Err(error) => error.code == "plugin.codex_overlay_invalid" &&
+                    error.field.startsWith("extensions.axyndra")
+                case PluginPackageResult.Ok(_) => false
+            })
+        }
+        for (declared in ["null", "\"workspace.read\"", "{}", "[true]", "[1]", "[\"\"]", "[\"workspace.read\\u0000\"]", "[\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\",\"workspace.read\"]"]) {
+            let result = parsePluginPackageManifest(PluginManifestFamily.Codex,
+                "{\"name\":\"codex-invalid\",\"extensions\":{\"axyndra\":{\"capabilities\":" + declared + "}}}",
+                source: "local:/fixture/codex-invalid")
+            @Expect(match (result) {
+                case PluginPackageResult.Err(error) => error.code == "plugin.capability_list_invalid" &&
+                    error.field == "extensions.axyndra.capabilities"
+                case PluginPackageResult.Ok(_) => false
+            })
+        }
+        for (capability in ["process.spawn", "network.http", "workspace.read:/outside", "ambient", "host.*"]) {
+            let result = parsePluginPackageManifest(PluginManifestFamily.Codex,
+                "{\"name\":\"codex-widened\",\"extensions\":{\"axyndra\":{\"capabilities\":[\"" + capability + "\"]}}}",
+                source: "local:/fixture/codex-widened")
+            @Expect(match (result) {
+                case PluginPackageResult.Err(error) => error.code == "plugin.capability_unsupported"
+                case PluginPackageResult.Ok(_) => false
+            })
+        }
+    }
+
+    @TestCase
+    func sharedCapabilityParserKeepsLegacyNativeInspectionPolicy(): Unit {
+        let value = parseUnifiedJson("{\"capabilities\":\"network.access:example.test:443\"}")
+        @Expect(match (pluginCapabilityList(value, "capabilities", "local:/fixture/native")) {
+            case PluginPackageResult.Ok(items) => items == ["network.access:example.test:443"]
+            case PluginPackageResult.Err(_) => false
+        })
+    }
+
+    @TestCase
     func codexHostedOnlyMappingIsBlocked(): Unit {
         let result = parsePluginPackageManifest(
             PluginManifestFamily.Codex,

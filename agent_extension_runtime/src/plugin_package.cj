@@ -1122,6 +1122,7 @@ func pluginContentDigest(root: String,
     let payload = StringBuilder()
     payload.append("axyndra-package-tree-v2\n")
     var verifiedBytes: Int64 = 0
+    let digestScratch = Array<Byte>(if (state.paths.isEmpty()) { 0 } else { 65536 }, repeat: 0)
     for (relativePath in state.paths) {
         let path = Path(root).join(relativePath)
         let info = try { FileInfo(path) } catch (error: Exception) {
@@ -1141,7 +1142,7 @@ func pluginContentDigest(root: String,
         verifiedBytes += info.size
         // Preserve the exact v2 tree format, but do not allocate each native
         // library or run the small canonical-value SHA implementation over it.
-        let fileDigest = try { pluginPackageFileDigest(path, info.size, root) } catch (_: Exception) {
+        let fileDigest = try { pluginPackageFileDigest(path, info.size, root, digestScratch) } catch (_: Exception) {
             return pluginPackageError("plugin.package_tree_changed",
                 "package file changed or could not be read within its recorded size", source: root, field: relativePath)
         }
@@ -1168,7 +1169,7 @@ func pluginContentDigest(root: String,
 // The caller supplies the size from its bounded file inspection. Contents are
 // still re-read on every inspection; this is neither a cache nor an mtime trust
 // shortcut. The canonical tree digest and installed lock format stay v2.
-func pluginPackageFileDigest(path: Path, expectedSize: Int64, root: String): String {
+func pluginPackageFileDigest(path: Path, expectedSize: Int64, root: String, scratch: Array<Byte>): String {
     if (expectedSize < 0 || expectedSize > 268435456) {
         throw IllegalArgumentException("package file size exceeds digest bounds")
     }
@@ -1177,12 +1178,11 @@ func pluginPackageFileDigest(path: Path, expectedSize: Int64, root: String): Str
     let hash = SHA256()
     var count: Int64 = 0
     try {
-        let buffer = Array<Byte>(65536, repeat: 0)
         while (true) {
-            let read = file.read(buffer)
+            let read = file.read(scratch)
             if (read == 0) { break }
             if (read > expectedSize - count) { throw IllegalArgumentException("package file grew during verification") }
-            hash.write(buffer[..read]); count += read
+            hash.write(scratch[..read]); count += read
         }
     } finally { file.close() }
     pluginPackageDigestPath(path, root)
@@ -1353,7 +1353,7 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
         ""
     }
     let dependencies = ArrayList<PluginPackageDependency>()
-    let requestedCapabilities = ArrayList<String>()
+    var requestedCapabilities: Array<String> = []
     if (hasPiManifest) {
         match (pi.field("axyndra")) {
             case Some(overlay) =>
@@ -1365,40 +1365,10 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
                         field: "pi.axyndra"
                     )
                 }
-                match (overlay.field("capabilities")) {
-                    case Some(capabilities) =>
-                        if (capabilities.unifiedKind != UnifiedJsonKind.List ||
-                            capabilities.items.size > 16) {
-                            return pluginPackageError(
-                                "plugin.capability_list_invalid",
-                                "Pi Axyndra capabilities must be a list of at most 16 items",
-                                source: source,
-                                field: "pi.axyndra.capabilities"
-                            )
-                        }
-                        for (item in capabilities.items) {
-                            if (item.unifiedKind != UnifiedJsonKind.Text) {
-                                return pluginPackageError(
-                                    "plugin.capability_list_invalid",
-                                    "Pi Axyndra capabilities must contain strings",
-                                    source: source,
-                                    field: "pi.axyndra.capabilities"
-                                )
-                            }
-                            let capability = item.text.trimAscii()
-                            if (capability != "workspace.read" && capability != "workspace.write") {
-                                return pluginPackageError(
-                                    "plugin.capability_unsupported",
-                                    "Pi JavaScript plugins may request only workspace.read and workspace.write",
-                                    source: source,
-                                    field: "pi.axyndra.capabilities"
-                                )
-                            }
-                            if (!requestedCapabilities.contains(capability)) {
-                                requestedCapabilities.add(capability)
-                            }
-                        }
-                    case None => ()
+                requestedCapabilities = match (pluginCapabilityList(overlay, "capabilities", source,
+                    portableWorkspaceOnly: true, capabilityField: "pi.axyndra.capabilities")) {
+                    case PluginPackageResult.Ok(items) => items
+                    case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                 }
             case None => ()
         }
@@ -1429,7 +1399,7 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
             "pi-package-conventions-v1"
         },
         entrypoint: entrypoint,
-        requestedCapabilities: requestedCapabilities.toArray(),
+        requestedCapabilities: requestedCapabilities,
     ))
 }
 
@@ -1496,6 +1466,7 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
             field: "$schema"
         )
     }
+    var requestedCapabilities: Array<String> = []
     match (value.field("extensions")) {
         case Some(extensions) =>
             if (extensions.unifiedKind != UnifiedJsonKind.Object) {
@@ -1515,6 +1486,25 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
                             source: source,
                             field: "extensions.com.openai"
                         )
+                    }
+                case None => ()
+            }
+            match (extensions.field("axyndra")) {
+                case Some(overlay) =>
+                    if (overlay.unifiedKind != UnifiedJsonKind.Object) {
+                        return pluginPackageError("plugin.codex_overlay_invalid",
+                            "Codex Axyndra requested-capability overlay must be an object",
+                            source: source, field: "extensions.axyndra")
+                    }
+                    for (field in overlay.fields where field.name != "capabilities") {
+                        return pluginPackageError("plugin.codex_overlay_invalid",
+                            "Codex Axyndra requested-capability overlay supports only capabilities",
+                            source: source, field: "extensions.axyndra." + field.name)
+                    }
+                    requestedCapabilities = match (pluginCapabilityList(overlay, "capabilities", source,
+                        portableWorkspaceOnly: true, capabilityField: "extensions.axyndra.capabilities")) {
+                        case PluginPackageResult.Ok(items) => items
+                        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                     }
                 case None => ()
             }
@@ -1554,6 +1544,7 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
         PluginManifestFamily.Codex,
         source,
         components: components.toArray(),
+        requestedCapabilities: requestedCapabilities,
         compatibilityProfile: "codex-manifest-v1"
     ))
 }
@@ -1906,27 +1897,44 @@ func pluginOptionalText(value: JsonNode, field: String, fallback: String): Plugi
 // Capability resources are opaque policy metadata, not filesystem paths.
 // Legacy network.access:host:port values must remain inspectable during
 // migration even though native activation rejects that unsupported capability.
-func pluginCapabilityList(value: JsonNode, field: String, source: String): PluginPackageResult<Array<String>> {
+func pluginCapabilityList(value: JsonNode, field: String, source: String,
+    portableWorkspaceOnly!: Bool = false, capabilityField!: String = ""): PluginPackageResult<Array<String>> {
+    let diagnosticField = if (capabilityField == "") { field } else { capabilityField }
     let declared = match (value.field(field)) {
         case None => return PluginPackageResult.Ok([])
         case Some(item) => item
     }
-    let items = if (declared.unifiedKind == UnifiedJsonKind.Text) {
+    let limit = if (portableWorkspaceOnly) { 16 } else { 128 }
+    let items = if (declared.unifiedKind == UnifiedJsonKind.Text && !portableWorkspaceOnly) {
         [declared]
-    } else if (declared.unifiedKind == UnifiedJsonKind.List && declared.items.size <= 128) {
+    } else if (declared.unifiedKind == UnifiedJsonKind.List && declared.items.size <= limit) {
         declared.items
     } else {
         return pluginPackageError("plugin.capability_list_invalid",
-            "capabilities must be bounded text or an array of at most 128 strings", source: source, field: field)
+            if (portableWorkspaceOnly) { "portable capability requests must be an array of at most 16 strings" }
+                else { "capabilities must be bounded text or an array of at most 128 strings" },
+            source: source, field: diagnosticField)
     }
-    let output = ArrayList<String>()
+    let count = if (declared.unifiedKind == UnifiedJsonKind.Text) { 1 } else { declared.items.size }
+    if (count == 0) { return PluginPackageResult.Ok([]) }
+    let output = ArrayList<String>(count)
     for (item in items) {
-        if (item.unifiedKind != UnifiedJsonKind.Text || item.text.trimAscii() == "" ||
-            item.text.size > 4096 || item.text.contains("\u{0000}")) {
+        if (item.unifiedKind != UnifiedJsonKind.Text) {
             return pluginPackageError("plugin.capability_list_invalid",
-                "capability must be bounded nonempty text", source: source, field: field)
+                "capability must be bounded nonempty text", source: source, field: diagnosticField)
         }
-        output.add(item.text.trimAscii())
+        let text = item.text
+        let capability = text.trimAscii()
+        if (capability == "" || text.size > 4096 || text.contains("\u{0000}")) {
+            return pluginPackageError("plugin.capability_list_invalid",
+                "capability must be bounded nonempty text", source: source, field: diagnosticField)
+        }
+        if (portableWorkspaceOnly && capability != "workspace.read" && capability != "workspace.write") {
+            return pluginPackageError("plugin.capability_unsupported",
+                "portable plugins may request only workspace.read and workspace.write",
+                source: source, field: diagnosticField)
+        }
+        if (!portableWorkspaceOnly || !output.contains(capability)) { output.add(capability) }
     }
     PluginPackageResult.Ok(output.toArray())
 }

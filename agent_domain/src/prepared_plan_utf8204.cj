@@ -5,7 +5,7 @@ package agent_domain
 // before allocating them and owns their separate complete-consumer lifetime.
 // There is no Source, DB, Run, capability, approval or consumer ACK here.
 public interface PreparedPlanUtf8Owner204 {
-    prop byteCount: Int64 { get() }
+    prop byteCount: Int64
     func byteAt(index: Int64): UInt8
     func deriveCopiedPlanPayment204(invoice: Int64): LogicalJsonOwnerReservation
 }

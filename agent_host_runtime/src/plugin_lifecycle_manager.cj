@@ -66,11 +66,8 @@ public class HostPluginLifecycleManager {
         approval:ApprovalDecision,budget!:ExecutionBudget=ExecutionBudget(maxToolCalls:1,maxConcurrentTools:1)):Result<HostPluginManagedStart>{
         let port=match(ownedChannelPort){case Some(value)=>value
             case None=>return managedChannelDriverError("managed_channel.actual_factory_not_installed")}
-        let identity=match(host.serviceInstanceIdentity(configuration.namespace,expectedGeneration)){
-            case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-        let grant=match(configuration.bindService(serviceId,ThreadId(targetContext.sessionId.value),identity,
-            targetContext.workspaceRoot,budget.processLimits,hostPluginInvocationAuthorityScope(targetContext),
-            registryAdmission:Some({=>host.enterRegistryEffect(configuration.namespace,expectedGeneration)}))){
+        let grant=match(host.bindLifecycleService(configuration,serviceId,ThreadId(targetContext.sessionId.value),
+            targetContext.workspaceRoot,budget.processLimits,hostPluginInvocationAuthorityScope(targetContext),expectedGeneration)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         if(maintenanceThread.value==grant.targetThread.value || targetContext.cancellation.isCancelled()){
             return managedChannelDriverError("managed_channel.maintenance_scope_invalid")}
@@ -92,6 +89,10 @@ public class HostPluginLifecycleManager {
                 refreshControl,payloadOwner:Some(owner))
             services.add(managed)
         }finally{lock.unlock()}
+        // Keep caller cancellation linked through directory I/O and promotion,
+        // not merely checked after a blocked canonical startup returns.
+        let startupScope=HostLifecycleIoScope(targetContext.cancellation.deadlineMillis,{=>let _=managed.revoke()})
+        startupScope.arm(targetContext.cancellation)
         var published=false
         try{
             let started=match(control.launch(vnext,SessionId(maintenanceThread.value),grant,targetContext.capabilities,
@@ -113,9 +114,10 @@ public class HostPluginLifecycleManager {
             let complete=match(started.outcome){case ToolInvocationResult.Completed(value)=>!value.isError;case _=>false}
             if(!complete){return Result.Ok(HostPluginManagedStart(started.outcome,None<HostPluginManagedService>))}
             match(managed.publish()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-            if(targetContext.cancellation.isCancelled()){return managedChannelDriverError("managed_channel.startup_cancelled")}
+            startupScope.checkDeadline()
+            if(startupScope.finish() || targetContext.cancellation.isCancelled()){return managedChannelDriverError("managed_channel.startup_cancelled")}
             published=true;Result.Ok(HostPluginManagedStart(started.outcome,Some(managed)))
-        }finally{managed.finishStartup();if(!published){let _=managed.revoke()}}
+        }finally{let _=startupScope.finish();managed.finishStartup();if(!published){let _=managed.revoke()}}
     }
     func acquireOwnedChannelEffectHandoff(context:ToolInvocationContext,child:PreparedToolInvocation):Result<ToolExecutionHandoffLease>{
         if(!isManagedChannelOwnedChildPlan(child.operationPlan)){return managedChannelDriverError("managed_channel.actual_child_family_changed")}
@@ -132,13 +134,8 @@ public class HostPluginLifecycleManager {
         expectedGeneration: UInt64, startup: HostPluginManagedStartup, approvalDecision: ApprovalDecision,
         budget!: ExecutionBudget = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1)
     ): Result<HostPluginManagedStart> {
-        let identity = match (host.serviceInstanceIdentity(configuration.namespace, expectedGeneration)) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(value) => value
-        }
-        let grant = match (configuration.bindService(serviceId, ThreadId(targetContext.sessionId.value), identity,
-            targetContext.workspaceRoot, budget.processLimits, hostPluginInvocationAuthorityScope(targetContext),
-            registryAdmission: Some({ => host.enterRegistryEffect(configuration.namespace, expectedGeneration) }))) {
+        let grant = match (host.bindLifecycleService(configuration, serviceId, ThreadId(targetContext.sessionId.value),
+            targetContext.workspaceRoot, budget.processLimits, hostPluginInvocationAuthorityScope(targetContext), expectedGeneration)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(value) => value
         }
@@ -282,6 +279,13 @@ public class HostPluginLifecycleManager {
         }
     }
 
+    public func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock(); try {
+            if (owner.hasOwnerLifetimeDebt180()) { return true }
+            for (service in services) { if (service.hasOwnerLifetimeDebt180()) { return true } }
+            false
+        } finally { lock.unlock() }
+    }
     public func statuses(): Array<AgentValue> {
         lock.lock(); let selected = try { services.toArray() } finally { lock.unlock() }
         selected.map({ value => value.status() })
@@ -291,7 +295,7 @@ public class HostPluginLifecycleManager {
         var found = false; var pending = false
         for (service in selected where service.matches(target, namespace, serviceId)) {
             found = true
-            if (service.revoke().isError()) { pending = true }
+            if (service.stopFrozen().isError()) { pending = true }
         }
         if (!found) { hostLifecycleLeaseError("plugin.service_not_active") }
         else if (pending) { hostLifecycleLeaseError("plugin.lifecycle_manager_cleanup_pending") }
@@ -406,9 +410,11 @@ public class HostPluginManagedService {
     private var leaseRegistration: ?CancellationRegistration = None
     private var endpointRegistration: ?process.CancellationRegistration = None
     private var closing = false
+    private var normalShutdown=false
     private var released = false
     private var startupFinished = false
     private var cleanupRunning = false
+    private let monitorStop=AtomicBool(false)
     private var monitor: ?Future<Unit> = None
     private var cleanup: ?Future<Unit> = None
     init(catalog: ToolCatalog, host: HostJavaScriptPluginHost,
@@ -449,16 +455,17 @@ public class HostPluginManagedService {
             hostLifecycleText(grant.endpointBinding(), "service_id") == serviceId
     }
     public func status(): AgentValue {
+        let acknowledged=resourcesReleased()
         lock.lock()
         try {
             objectValue([ValueField("plugin", textValue(namespace)),
                 ValueField("service_id", grant.endpointBinding().field("service_id").getOrThrow()),
                 ValueField("target_thread_id", textValue(grant.endpointTargetThread().value)),
-                ValueField("state", textValue(if (released) { "released" } else if (closing) { "draining" }
+                ValueField("state", textValue(if (acknowledged) { "released" } else if (closing) { "draining" }
                     else if (publication.isSome()) { "ready" } else { "starting" })),
                 ValueField("directory_revision", match (publication) { case Some(value) => integerValue(value.revision); case None => integerValue(0) }),
                 ValueField("refresh_error", textValue(refreshError)), ValueField("refreshing", boolValue(refreshing)),
-                ValueField("cleanup_acknowledged", boolValue(released))])
+                ValueField("cleanup_acknowledged", boolValue(acknowledged))])
         } finally { lock.unlock() }
     }
     func captureEndpoint(value: HostPinnedNativeServiceEndpoint): Unit {
@@ -469,7 +476,25 @@ public class HostPluginManagedService {
     func sameLaunch(other: HostNativeServiceEndpointGrant): Bool {
         resource.launchKey() == hostManagedServiceLaunchKey(other)
     }
-    public func resourcesReleased(): Bool { lock.lock(); try { released } finally { lock.unlock() } }
+    // Inspect the actual private owners, not allocated status DTOs. A
+    // completed Future is observed here; original cleanup joins stay in close.
+    func hasOwnerLifetimeDebt180(): Bool {
+        lock.lock(); try {
+            if (!released || !startupFinished || cleanupRunning || invocationOpening ||
+                invocation.isSome() || refreshing || preparations != 0 || pendingManagedJob.isSome() ||
+                !managedJobPreparations.isEmpty() || leaseRegistration.isSome() || endpointRegistration.isSome()) { return true }
+            try {
+                match (monitor) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                match (cleanup) { case Some(value) => if (value.tryGet().isNone()) { return true }; case None => () }
+                false
+            } catch (_: Exception) { true }
+        } finally { lock.unlock() }
+    }
+    public func resourcesReleased():Bool{
+        lock.lock();let (done,returned)=try{(released,cleanup)}finally{lock.unlock()}
+        if(!done){return false}
+        try{match(returned){case Some(value)=>value.get();case None=>()};true}catch(_:Exception){false}
+    }
     public func active(): Bool {
         lock.lock()
         let selectedEndpoint = try { if (closing || publication.isNone()) { return false }; endpoint }
@@ -541,18 +566,24 @@ public class HostPluginManagedService {
             case Result.Ok(value) => value
         }
         lock.lock()
-        try { publication = Some(result); startupFinished = true } finally { lock.unlock() }
+        try { publication = Some(result) } finally { lock.unlock() }
         // A revocation before the CAS makes it fail. A revocation after the
         // CAS withdraws the same owner; neither can leave a usable late entry.
         if (!active() || grant.stillCurrent().isError()) {
             let _ = revoke(); return hostLifecycleLeaseError("plugin.lifecycle_publication_stale")
         }
-        monitor = Some(spawn {
-            while (!resourcesReleased()) {
-                if (!active()) { let _ = revoke() }
-                sleep(Duration.millisecond * 25)
-            }
-        })
+        // Register the actual Task under the same lock used by cleanup.
+        // finishStartup runs only after this publication frame returns.
+        lock.lock()
+        try{
+            if(!closing && !released){monitor = Some(spawn {
+                while (!monitorStop.load()) {
+                    lock.lock();let shuttingDown=try{closing}finally{lock.unlock()}
+                    if (!shuttingDown && !active()) { let _ = revoke() }
+                    sleep(Duration.millisecond * 25)
+                }
+            })}
+        }finally{lock.unlock()}
         Result.Ok(())
     }
 
@@ -1257,10 +1288,39 @@ public class HostPluginManagedService {
         Result.Ok(())
     }
 
+    private func closeResourceNormally():Result<Unit>{
+        match(resource as HostManagedChannelResource){case Some(value)=>return value.stopFrozen();case None=>()}
+        match(resource as HostManagedOwnedChannelResource){case Some(value)=>value.stopFrozen();case None=>resource.revoke()}
+    }
+    func stopFrozen():Result<Unit>{
+        lock.lock();let stopping=try{closing || released}finally{lock.unlock()}
+        if(!stopping){match(grant.stillCurrent()){case Result.Err(error)=>let _=revoke();return Result.Err(error);case Result.Ok(_)=>()}}
+        lock.lock()
+        let (first,selectedOwner,selectedEndpoint,leaseObserver,endpointObserver,busy)=try{
+            if(released){return Result.Ok(())}
+            // Active invocations keep their immediate cancellation path.
+            let busy=invocationOpening || invocation.isSome() || refreshing || preparations>0
+            let first=!closing && !busy
+            let leases=if(busy){None<CancellationRegistration>}else{leaseRegistration}
+            let endpoints=if(busy){None<process.CancellationRegistration>}else{endpointRegistration}
+            if(!busy){closing=true;if(first){normalShutdown=true};leaseRegistration=None;endpointRegistration=None}
+            (first,catalogOwner,endpoint,leases,endpoints,busy)
+        }finally{lock.unlock()}
+        if(busy){return revoke()}
+        match(leaseObserver){case Some(value)=>value.dispose();case None=>()}
+        match(endpointObserver){case Some(value)=>value.dispose();case None=>()}
+        if(first){
+            try{match(selectedOwner){case Some(value)=>let _=catalog.revokeOwned(value);case None=>()}}catch(_:Exception){}
+            try{match(selectedEndpoint){case Some(value)=>value.revoke();case None=>()}}catch(_:Exception){}
+            try{let _=closeResourceNormally()}catch(_:Exception){let _=resource.revoke()}
+        }
+        startCleanup()
+        if(resourcesReleased()){Result.Ok(())}else{hostLifecycleLeaseError("plugin.lifecycle_manager_cleanup_pending")}
+    }
     public func revoke(): Result<Unit> {
         lock.lock()
         let (first, selectedOwner, selectedEndpoint, selectedInvocation) = try {
-            if (released) { return Result.Ok(()) }; let previous = closing; closing = true
+            if (released) { return Result.Ok(()) }; let previous = closing; closing = true;normalShutdown=false
             (!previous, catalogOwner, endpoint, invocation)
         }
             finally { lock.unlock() }
@@ -1270,6 +1330,9 @@ public class HostPluginManagedService {
             try { match (selectedEndpoint) { case Some(value) => value.revoke(); case None => () } } catch (_: Exception) {}
             try { let _ = resource.revoke() } catch (_: Exception) {}
         }
+        // Safety revocation overrides a normal grace even after authority was
+        // already withdrawn; it must not wait for that grace to elapse.
+        if(!first){try{let _=resource.revoke()}catch(_:Exception){}}
         startCleanup()
         if (resourcesReleased()) { Result.Ok(()) } else { hostLifecycleLeaseError("plugin.lifecycle_manager_cleanup_pending") }
     }
@@ -1287,20 +1350,25 @@ public class HostPluginManagedService {
                         catch (_: Exception) { false }
                     let invocationClosed = try { match (selectedInvocation) { case Some(value) => value.close().isOk(); case None => true } }
                         catch (_: Exception) { false }
-                    let resourceClosed = try { let _ = resource.revoke(); resource.resourcesReleased() && !resource.retainsStartup() }
+                    lock.lock();let normal=try{normalShutdown}finally{lock.unlock()}
+                    let resourceClosed = try { let _ = if(normal){closeResourceNormally()}else{resource.revoke()}; resource.resourcesReleased() && !resource.retainsStartup() }
                         catch (_: Exception) { false }
                     if (finished && endpointClosed && invocationClosed && resourceClosed) {
+                        monitorStop.store(true)
+                        try{match(monitor){case Some(value)=>value.get();case None=>()}}
+                        catch(_:Exception){lock.lock();try{cleanupRunning=false}finally{lock.unlock()};return}
                         match(resource as HostManagedOwnedChannelResource){case Some(actual)=>
                             lock.lock();try{directoryText=None;publication=None;catalogOwner=None;endpoint=None}finally{lock.unlock()}
                             if(actual.acknowledgeMetadataAfterPhysicalCleanup().isError()){continue}
                             case None=>()}
                         lock.lock()
                         let (leaseObserver, endpointObserver) = try {
-                            released = true; cleanupRunning = false; invocation = None
-                            (leaseRegistration, endpointRegistration)
+                            let selected=(leaseRegistration,endpointRegistration)
+                            leaseRegistration=None;endpointRegistration=None;selected
                         } finally { lock.unlock() }
                         match (leaseObserver) { case Some(value) => value.dispose(); case None => () }
                         match (endpointObserver) { case Some(value) => value.dispose(); case None => () }
+                        lock.lock();try{released=true;cleanupRunning=false;invocation=None}finally{lock.unlock()}
                         return
                     }
                     sleep(Duration.millisecond * 25)

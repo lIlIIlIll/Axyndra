@@ -1750,6 +1750,11 @@ typedef struct {
     int frozen;
     int watch_fd, watch_descriptor, watch_stale;
     char watch_name[PATH_MAX];
+    /* Same prepaid 16 KiB extent, owned with this opaque snapshot. Cangjie
+     * generation validation/close serialize access; unpublished captures are
+     * exclusive. Reuse it for event draining and byte comparisons so native
+     * observation never puts this large scratch on a coroutine's C stack. */
+    uint8_t observation_buffer[16384];
     struct stat identity;
     uint8_t *bytes;
     int64_t size;
@@ -1802,11 +1807,11 @@ static int p4_registry_snapshot_watch_drain(p4_registry_snapshot *held) {
     (void)held; return -ENOTSUP;
 #else
     if (held->watch_stale || held->watch_fd < 0 || held->watch_descriptor < 0) return -ESTALE;
-    uint8_t buffer[16384];
+    uint8_t *buffer = held->observation_buffer;
     /* A continuously busy unrelated ancestor cannot make an admission hang.
      * Incomplete observation is stale, never a successful partial proof. */
     for (size_t reads = 0; reads < 64; ++reads) {
-        ssize_t count = read(held->watch_fd, buffer, sizeof(buffer));
+        ssize_t count = read(held->watch_fd, buffer, sizeof(held->observation_buffer));
         if (count < 0 && errno == EINTR) continue;
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
         if (count <= 0) { held->watch_stale = 1; return count < 0 ? -errno : -ESTALE; }
@@ -1961,8 +1966,7 @@ int32_t axyndra_registry_snapshot_validate(int64_t opaque) {
     if (current < 0) return current;
     int result = p4_registry_snapshot_identity(held, current);
     if (result == 0) result = p4_registry_snapshot_identity(held, held->fd);
-    uint8_t *buffer = result == 0 ? malloc(16384) : NULL;
-    if (result == 0 && buffer == NULL) result = -ENOMEM;
+    uint8_t *buffer = held->observation_buffer;
     int64_t offset = 0;
     while (result == 0 && offset < held->size) {
         size_t amount = (size_t)(held->size - offset); if (amount > 16384) amount = 16384;
@@ -1975,7 +1979,7 @@ int32_t axyndra_registry_snapshot_validate(int64_t opaque) {
     if (result == 0) result = p4_registry_snapshot_identity(held, current);
     if (result == 0) result = p4_registry_snapshot_identity(held, held->fd);
     if (result == 0) result = p4_registry_snapshot_watch_drain(held);
-    free(buffer); close(current); return result;
+    close(current); return result;
 }
 
 void axyndra_registry_snapshot_close(int64_t opaque) {
@@ -3213,7 +3217,7 @@ int32_t process4cj_input_close180(int64_t opaque) {
 }
 
 /* Private opened-process signalling. The caller invoices this exact fixed
- * synchronous frame before entry. No heap, process-wide directory snapshot,
+ * synchronous per-call scratch before entry. No process-wide directory snapshot,
  * shell command or supplied PID can stand in for the native owner identity. */
 typedef struct {
     p4_process_target targets[P4_MAX_DESCENDANTS];
@@ -3386,9 +3390,12 @@ int32_t process4cj_signal_owned_tree180(int64_t pid, int64_t expected_start, int
     if (pid < 1 || pid > INT_MAX || expected_start < 1 ||
         (signal_value != SIGINT && signal_value != SIGTERM && signal_value != SIGHUP &&
          signal_value != SIGQUIT && signal_value != SIGKILL)) return EINVAL;
-    p4_owned_signal_frame180 frame;
-    memset(&frame, 0, sizeof(frame));
-    frame.targets[frame.count++] = (p4_process_target){ (pid_t)pid, (uint64_t)expected_start, 1 };
+    /* This exact frame was prepaid by the opened owner before FFI entry.
+     * An unmanaged 172 KiB automatic frame cannot grow a Cangjie stack.
+     * Per-call heap custody is isolated even during concurrent cancellation. */
+    p4_owned_signal_frame180 *frame = calloc(1, sizeof(*frame));
+    if (frame == NULL) return ENOMEM;
+    frame->targets[frame->count++] = (p4_process_target){ (pid_t)pid, (uint64_t)expected_start, 1 };
     int result = 0; int stable_passes = 0; int captured = 0;
     /* Stop exact identities, then re-read ALL current parents, including the
      * stopped subreaper. A child can fork and exit before its SIGSTOP reaches
@@ -3396,18 +3403,18 @@ int32_t process4cj_signal_owned_tree180(int64_t pid, int64_t expected_start, int
      * full passes after the stops close that window. The old 4096-entry cap
      * is unchanged; churn/overflow/unknown observations fail closed. */
     for (size_t pass = 0; pass < P4_MAX_DESCENDANTS + 2; ++pass) {
-        size_t previous_count = frame.count;
-        for (size_t index = 0; index < frame.count; ++index) {
-            if (!frame.stopped[index]) {
+        size_t previous_count = frame->count;
+        for (size_t index = 0; index < frame->count; ++index) {
+            if (!frame->stopped[index]) {
                 int accepted = 0;
-                result = p4_pidfd_signal180(&frame.targets[index], SIGSTOP, &accepted);
-                frame.stopped[index] = (uint8_t)accepted;
+                result = p4_pidfd_signal180(&frame->targets[index], SIGSTOP, &accepted);
+                frame->stopped[index] = (uint8_t)accepted;
                 if (result == ESRCH && index != 0) { result = 0; continue; }
                 if (result) break;
                 int stopped = 0;
                 for (int attempt = 0; attempt < 100; ++attempt) {
                     char state = '\0';
-                    result = p4_exact_stat180(&frame.targets[index], &state);
+                    result = p4_exact_stat180(&frame->targets[index], &state);
                     if (result == ESRCH && index != 0) { result = 0; stopped = 1; break; }
                     if (result) break;
                     if (state == 'T' || state == 't' || state == 'Z' || state == 'X') { stopped = 1; break; }
@@ -3416,12 +3423,12 @@ int32_t process4cj_signal_owned_tree180(int64_t pid, int64_t expected_start, int
                 if (result) break;
                 if (!stopped) { result = ETIMEDOUT; break; }
             }
-            result = p4_collect_owned_children180(&frame, &frame.targets[index]);
+            result = p4_collect_owned_children180(frame, &frame->targets[index]);
             if ((result == ESRCH || result == ENOENT) && index != 0) result = 0;
             if (result) break;
         }
         if (result) break;
-        if (frame.count == previous_count) ++stable_passes;
+        if (frame->count == previous_count) ++stable_passes;
         else stable_passes = 0;
         if (stable_passes == 2) { captured = 1; break; }
     }
@@ -3429,19 +3436,20 @@ int32_t process4cj_signal_owned_tree180(int64_t pid, int64_t expected_start, int
     if (!result) {
         /* targets[0] is the ONLY subreaper. Never deliver the requested
          * signal to it, particularly SIGKILL: it must remain alive to reap. */
-        for (size_t index = frame.count; index > 1; --index) {
-            int actual = p4_pidfd_signal180(&frame.targets[index - 1], signal_value, NULL);
+        for (size_t index = frame->count; index > 1; --index) {
+            int actual = p4_pidfd_signal180(&frame->targets[index - 1], signal_value, NULL);
             if (actual != ESRCH && actual && !result) result = actual;
         }
     }
     /* Always resume the exact subreaper too. It may produce the private
      * receipt only after real ECHILD. Errors remain UNKNOWN/paid, never an
      * excuse to kill it and promote parent waitpid to a tree receipt. */
-    for (size_t index = frame.count; index > 0; --index) {
-        if (!frame.stopped[index - 1]) continue;
-        int actual = p4_pidfd_signal180(&frame.targets[index - 1], SIGCONT, NULL);
+    for (size_t index = frame->count; index > 0; --index) {
+        if (!frame->stopped[index - 1]) continue;
+        int actual = p4_pidfd_signal180(&frame->targets[index - 1], SIGCONT, NULL);
         if (actual != ESRCH && actual && !result) result = actual;
     }
+    free(frame);
     return result;
 #endif
 }

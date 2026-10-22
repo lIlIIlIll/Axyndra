@@ -22,6 +22,8 @@ import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin_cli_blackbox"))
 from owned_process import owned_process, termination_signals
+from rpc_client import RpcClient
+from check import stored_value
 
 
 def require(value, message):
@@ -177,6 +179,67 @@ def rpc_approve(args):
     return {"fixture": str(f.path), "approvals": [first["operationId"], second["operationId"]]}
 
 
+def rpc_goal_budget(args):
+    """An installed Goal must prepare again while its prior allowance is live."""
+    f = Fixture(args, "rpc-goal-budget")
+    row = f.record
+    configuration = f.settings / "plugins"
+    (configuration / "documents.json").write_text(json.dumps({
+        "version": 1, "plugins": [{"namespace": row["namespace"],
+            "package_digest": row["content_digest"], "tools": [
+                {"name": name, "preparation_provider": "prepare_document",
+                 "documents": [{"key": name, "read": True, "write": True}]}
+                for name in ("todo", "goal")]}]}) + "\n", encoding="utf-8")
+    (configuration / "todo-tools.json").write_text(json.dumps({
+        "schema": "axyndra.todo-tools/v1", "namespace": row["namespace"],
+        "package_digest": row["content_digest"], "tool": "todo", "command": "todo"}) + "\n", encoding="utf-8")
+    (configuration / "policies.json").write_text(json.dumps({
+        "version": 1, "bindings": {"workflow": {"namespace": row["namespace"],
+            "package_digest": row["content_digest"], "provider": "propose", "plan_tool": "plan_write"}}}) + "\n", encoding="utf-8")
+    argv = [str(args.app), "--cwd", str(f.workspace), "--approval-mode", "trusted", "--mode", "rpc"]
+    with RpcClient(argv, workspace=f.workspace, environment=f.env, evidence=f.log,
+                   label="goal", timeout=args.timeout) as rpc:
+        _, state = rpc.request("get_state")
+        require(state.get("success"), "actual RPC state unavailable")
+        session = state["data"]["sessionId"]
+
+        def command(name, arguments):
+            identifier, accepted = rpc.request("plugin_command",
+                routeName="plugin." + row["namespace"] + "." + name, arguments=arguments)
+            require(accepted.get("success"), "installed Command was not accepted: " + repr(accepted))
+            completed = rpc.wait(lambda value: value.get("type") == "plugin_command_completed" and
+                                 value.get("requestId") == identifier)
+            require(completed.get("ok"), "installed Command failed: " + repr(completed))
+
+        # Preserve the original consumer sequence: Todo revision2, then Goal
+        # set/budget200/pause in ONE running app with actual retained custody.
+        command("todo", json.dumps({"op": "init", "items": ["first", "second"]}))
+        command("todo", "done first")
+        command("goal", "set preserve canonical user budget")
+        command("goal", "budget 200")
+        with sqlite3.connect(f.database.as_uri() + "?mode=ro", uri=True) as db:
+            facts = [stored_value(payload) for (payload,) in db.execute(
+                "SELECT payload FROM audit_events WHERE thread_id=? AND kind LIKE 'host_continuation_accounting_v1:%' ORDER BY id", (session,))]
+            require(facts and facts[-1]["token_budget"] == 200 and facts[-1]["enabled"],
+                    "positive budget200 was not applied to the canonical live allowance")
+        command("goal", "pause")
+        with sqlite3.connect(f.database.as_uri() + "?mode=ro", uri=True) as db:
+            facts = [stored_value(payload) for (payload,) in db.execute(
+                "SELECT payload FROM audit_events WHERE thread_id=? AND kind LIKE 'host_continuation_accounting_v1:%' ORDER BY id", (session,))]
+            require(facts and facts[-1]["token_budget"] == 200 and not facts[-1]["enabled"],
+                    "explicit pause changed the budget or failed to disable its canonical allowance")
+            require(db.execute("SELECT revision FROM plugin_documents WHERE thread_id=? AND document_key='todo'", (session,)).fetchall() == [(2,)],
+                    "Todo init/done did not retain canonical revision2")
+            require(db.execute("SELECT COUNT(*) FROM thread_metadata WHERE goal_payload<>'' OR todo_payload<>''").fetchone()[0] == 0,
+                    "installed commands wrote legacy Goal/Todo state")
+            require(db.execute("SELECT COUNT(*) FROM model_attempts").fetchone()[0] == 0,
+                    "Goal control fabricated a ModelDecision")
+            require(db.execute("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')").fetchone()[0] == 0,
+                    "Goal preparation left an unsettled canonical operation")
+            (f.log / "goal-allowance.json").write_text(json.dumps(facts, indent=2) + "\n", encoding="utf-8")
+    return {"fixture": str(f.path), "budget": 200, "paused": True, "todo_revision": 2}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app", type=Path, required=True)
@@ -192,7 +255,7 @@ def main():
     before = {"app": sha(args.app), "package": package_seal(args.workflow_package), "runner": sha(Path(__file__))}
     results = []
     with termination_signals():
-        for case in (cli_approve, cli_eof, rpc_approve):
+        for case in (cli_approve, cli_eof, rpc_approve, rpc_goal_budget):
             try:
                 details = case(args)
                 results.append({"name": case.__name__, "status": "PASS", "details": details})

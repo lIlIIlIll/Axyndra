@@ -23,8 +23,8 @@ class RequestPayloadObserver <: JavaScriptHostObserver {
     }
 }
 func requestPayloadFixtureRoot():String{
-    let root=Directory.createTemp("/tmp").toString()
     let source=getVariable("AXYNDRA_REPO_ROOT").getOrThrow()+"/support_tests/ordinary_request_payload_host_fixture/peer.py"
+    let root=Directory.createTemp(getVariable("TMPDIR").getOrDefault({ => "/tmp" })).toString()
     File.writeTo(root+"/worker",File.readFrom(source));let _=FileInfo(root+"/worker").setExecutable(true);root
 }
 @Test

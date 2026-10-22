@@ -120,6 +120,7 @@ public class ProductConfig {
 public enum ProductStartupMode {
     | Full
     | LocalMaintenance
+    | Owner
 }
 
 public type ProductIds = agent_host_runtime.HostIds
@@ -247,6 +248,37 @@ public class ProductRuntime {
     private let vnextDatabase: SqliteDatabase
     private let threadRuntimes: ThreadRuntimeRegistry
     private let installedModelInputOwner159: ?HostInstalledModelPort
+    private var configuredModelSettings180: ?ToolContextDescriptor = None<ToolContextDescriptor>
+    private var configuredModelSettingsPayment180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    func freezeConfiguredModelSettings180(profile: ?ModelStreamFaultProfile, recovery: ModelAttemptRecoveryPolicy): Unit {
+        match (profile) {
+            case None => ()
+            case Some(value) =>
+                let paid = match (catalog.reserveRegistryData180(131072)) {
+                    case Some(owner) => owner
+                    case None => throw OwnedCanonicalDataFailure113(AgentError(AgentErrorKind.RecoveryRequired,
+                        "model.controlled_fault_owner_missing", "configured fault profile has no original Registry DATA owner"))
+                }
+                configuredModelSettingsPayment180 = Some(paid)
+                if (value.id.size > Int64.Max - value.partialText.size || value.id.size + value.partialText.size > (Int64.Max - 131072) / 128) {
+                    throw LogicalJsonPayloadError("configured fault settings invoice overflow") }
+                paid.ensureRetainedPeak(131072 + (value.id.size + value.partialText.size) * 128)
+                let counters = ModelStreamFaultCounters180(paid)
+                let options = ProductOperatorOptions180(modelStreamFaultProfile: profile,
+                    modelAttemptRecovery: recovery, modelFaultCounters180: Some(counters))
+                configuredModelSettings180 = Some(ToolContextDescriptor(executionSettings180: options.executionSettingsValue180(),
+                    modelFaultCounters180: Some(counters)))
+    }
+    }
+    private func requestToolContext180(options: ?ProductOperatorOptions180, inherited: ?ToolContextDescriptor): ToolContextDescriptor {
+        let base = productToolContext(workspace.rootPath(), operatorOptions180: options)
+        let source = if (inherited.isSome()) { inherited }
+            else if (options.isSome()) { None<ToolContextDescriptor> } else { configuredModelSettings180 }
+        match (source) { case Some(value) => ToolContextDescriptor(base, value.executionSettings180,
+                modelFaultCounters180: value.modelFaultCounters180)
+            case None => base }
+    }
+
 
     init(
         client: AgentClient,
@@ -331,9 +363,9 @@ public class ProductRuntime {
     func activateStartupPlugins(): Result<Unit> {
         for (record in productRegistryRecords83(pluginRuntime.startupEffectiveRecords())) {
             match (activateProductPlugin(record)) {
-                case Result.Ok(_) => ()
-                case Result.Err(activationError) =>
-                    match (pluginRuntime.setEnabled(
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(activationError) =>
+                    match (setPluginEnabled(
                         productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)), false, record.scope
                     )) {
                         case PluginRegistryResult.Ok(_) => ()
@@ -390,8 +422,12 @@ public class ProductRuntime {
         contextSnapshot!: ?InvocationContextProjection = None,
         executionLaneId!: LaneId = LaneId("main"),
         queuedInitiator113!: ?QueuedRunInitiatorData113 = None<QueuedRunInitiatorData113>,
-        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+        queuedInputPayment113!: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>,
+        inheritedModelSettings180!: ?ToolContextDescriptor = None<ToolContextDescriptor>
     ): Result<AgentRunRequest> {
+        match (callerCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         let targetSession = match (sessionId) {
             case Some(value) => value
             case None => ids.nextSessionId()
@@ -415,11 +451,9 @@ public class ProductRuntime {
         }
         let system = promptBuild.text
         let capabilities = requestCapabilities(readOnly, sessionId: Some(targetSession))
-        let selectedModel = if (modelOverride == "") {
-            model
-        } else {
-            modelOverride
-        }
+        let optionModel180 = match (operatorOptions180) { case Some(options) => options.modelOverride; case None => "" }
+        let selectedModel = if (modelOverride != "") { modelOverride } else if (optionModel180 != "") { optionModel180 } else { model }
+
         let requestCompaction = compactionSettings.resolvedForModel(selectedModel)
         let metadata = modelMetadata(selectedModel)
         let neutral = productRequestModelPolicy(settingsRoot, selectedModel, fixtureProbe.isSome())
@@ -489,6 +523,8 @@ public class ProductRuntime {
             )),
             capabilities: capabilities,
             interactions: interactions,
+            approvalModeOverride: match (operatorOptions180) { case Some(options) => Some(options.approvalMode); case None => None<ApprovalMode> },
+            callerCancellation180: callerCancellation180,
             autoRetry: retryControl.isEnabled(),
             serviceTier: serviceTier,
             pricing: match (metadata) {
@@ -506,7 +542,7 @@ public class ProductRuntime {
                 ""
             },
             parallelToolCalls: selectedCapabilities.parallelToolCalling,
-            toolContext: productToolContext(workspace.rootPath()),
+            toolContext: requestToolContext180(operatorOptions180, inheritedModelSettings180),
             contextSnapshot: resolvedContext,
             initializeContext: initializeContext,
             contextWindow: providerContextWindow,
@@ -515,7 +551,7 @@ public class ProductRuntime {
             budget: ResourceBudget(
                 maxInputTokens: contextLimit,
                 maxOutputTokens: outputLimit,
-                maxWallMillis: wallTimeoutMillis,
+                maxWallMillis: match (operatorOptions180) { case Some(options) => if (options.wallTimeoutMillis > 0) { options.wallTimeoutMillis } else { wallTimeoutMillis }; case None => wallTimeoutMillis },
                 maxContextMessages: requestCompaction.requestMaxMessages
             )
         ))
@@ -682,10 +718,10 @@ public class ProductRuntime {
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         vnext.javascriptPluginCommands()
+    }
 
     public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
         vnext.javascriptPluginViews()
-    }
     }
 
     public func invokeJavaScriptPluginCommand(
@@ -767,7 +803,7 @@ public class ProductRuntime {
         owner: ProductDirectPreparationOwner, participant!: ?PluginDocumentCommitParticipant = None): Result<ToolInvocationResult> {
         match (scope.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         vnext.executeDeferredCanonicalTool(scope.sessionId, requestCapabilities(false), proposal.call(), owner,
-            scope.cancellation, participant: participant)
+            scope.cancellation, participant: participant, operatorOptions180: scope.operatorOptions180, callerCancellation180: scope.callerCancellation180)
     }
 
     // Explicit frontend maintenance entry. Installed/enabled plugin metadata
@@ -776,9 +812,12 @@ public class ProductRuntime {
     public func startPluginService(targetThread: SessionId, namespace: String, serviceId: String, route: String,
         approvalDecision!: ApprovalDecision,
         budget!: ExecutionBudget = ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1),
-        cancellation!: domain.CancellationToken = domain.CancellationSource().token
+        cancellation!: domain.CancellationToken = domain.CancellationSource().token,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>
     ): Result<ToolInvocationResult> {
         match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (callerCancellation180) { case Some(token) => match (token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
         let record = match (pluginRuntime.get(namespace)) {
             case Some(value) => value
             case None => return pluginProcessError("plugin.not_found", "plugin is not installed")
@@ -829,10 +868,11 @@ public class ProductRuntime {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(value) => value
         }
+        let startupCaller180 = agent_host_runtime.HostCallerCancellation(cancellation, callerCancellation180)
         let context = ToolInvocationContext(RunId("service-scope"), targetThread, productCapabilities(),
-            epoch: 1, cancellation: cancellation, toolContext: productToolContext(workspace.rootPath()), budget: budget)
+            epoch: 1, cancellation: startupCaller180.token, toolContext: productToolContext(workspace.rootPath(), operatorOptions180: operatorOptions180), budget: budget)
         let maintenance = ThreadId(ids.nextSessionId().value)
-        let started = if (httpConfiguration.isSome()) {
+        let started = try { if (httpConfiguration.isSome()) {
             manager.startHttpProtocol(vnext, context, maintenance, httpConfiguration.getOrThrow(),
                 serviceId, route, generation, approvalDecision, budget: budget)
         } else if(channelConfiguration.getOrThrow().configuration.field("transport").isSome() &&
@@ -842,7 +882,7 @@ public class ProductRuntime {
         } else {
             manager.startProtocol(vnext, context, maintenance, channelConfiguration.getOrThrow(),
                 serviceId, route, generation, approvalDecision, budget: budget)
-        }
+        } } finally { startupCaller180.close() }
         match (started) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(value) => Result.Ok(value.outcome)
@@ -1164,30 +1204,32 @@ public class ProductRuntime {
         }
     }
 
-    private func deactivateProductPlugin(record: ProductPluginRecord): Result<Unit> {
+    private func deactivateProductPlugin(record: ProductPluginRecord): PluginRegistryResult<Unit> {
         codexHookRuntime.revokePlugin(record)
         match (vnext.deactivateImportedPlugin(record)) {
-            case Result.Ok(_) => Result.Ok(())
+            case Result.Ok(_) => PluginRegistryResult.Ok(())
             case Result.Err(error) =>
                 match (restoreProductPlugin(record, restoreVnext: true)) {
-                    case Result.Ok(_) => Result.Err(error)
-                    case Result.Err(restoreError) => Result.Err(
-                        pluginDeactivationRestoreError(record, error, restoreError)
-                    )
+                    case Result.Ok(_) => productRegistryFailure83(pluginRuntime, error.code, error.message)
+                    case Result.Err(restoreError) =>
+                        let combined = pluginDeactivationRestoreError(record, error, restoreError)
+                        productRegistryFailure83(pluginRuntime, combined.code, combined.message)
                 }
         }
     }
 
-    private func activateProductPlugin(record: ProductPluginRecord): Result<Unit> {
+    private func activateProductPlugin(record: ProductPluginRecord): PluginRegistryResult<Unit> {
         match (pluginRuntime.checkComponentDependencies(record)) {
-            case PluginRegistryResult.Err(error) => return Result.Err(AgentError(AgentErrorKind.Configuration, error.code, productRegistryErrorText83(error, PluginRegistryErrorText.Message)))
+            // Keep the complete paid error, including source/field bytes. The
+            // Registry result must not round-trip through an unowned Raw error.
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(_) => ()
         }
         match (vnext.activateImportedPlugin(record)) {
-            case Result.Err(error) => Result.Err(error)
+            case Result.Err(error) => productRegistryFailure83(pluginRuntime, error.code, error.message)
             case Result.Ok(_) =>
                 codexHookRuntime.activatePlugin(record)
-                Result.Ok(())
+                PluginRegistryResult.Ok(())
         }
     }
 
@@ -1196,98 +1238,101 @@ public class ProductRuntime {
         operation: () -> PluginRegistryResult<ProductPluginRecord>
     ): PluginRegistryResult<ProductPluginRecord> {
         let effectiveBefore = pluginRuntime.get(namespace)
+        let originalMounted = mountedProductPluginInstances()
+        try {
+        match (effectiveBefore) {
+            case Some(previous) => if (previous.enabled) {
+                match (deactivateProductPlugin(previous)) {
+                    case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
+            }
+            case None => ()
+        }
+        let mounted = match (withdrawMountedProductPluginInstances()) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+        }
+        try {
         match (operation()) {
-            case PluginRegistryResult.Err(error) => PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Err(error) =>
+                match (remountProductPluginInstances(originalMounted)) {
+                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
+                match (effectiveBefore) {
+                    case Some(previous) => if (previous.enabled && previous.descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+                        match (activateProductPlugin(previous)) {
+                            case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                    }
+                    case None => ()
+                }
+                PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(record) =>
                 let effectiveAfter = pluginRuntime.get(namespace)
                 let effectiveChanged = match ((effectiveBefore, effectiveAfter)) {
                     case (Some(previous), Some(current)) =>
                         !pluginScopeEquals(previous.scope, current.scope) ||
-                            productRegistryCopyText83(previous.copyText(PluginRecordText.ContentLock)) != productRegistryCopyText83(current.copyText(PluginRecordText.ContentLock))
+                            !previous.sameText(PluginRecordText.ContentLock, current, PluginRecordText.ContentLock)
                     case (None, Some(_)) => true
                     case (Some(_), None) => true
                     case (None, None) => false
                 }
-                if (!effectiveChanged) { return PluginRegistryResult.Ok(record) }
-                match (effectiveBefore) {
-                    case Some(previous) =>
-                        if (previous.enabled) {
-                            match (deactivateProductPlugin(previous)) {
-                                case Result.Ok(_) => ()
-                                case Result.Err(error) =>
-                                    match (pluginRuntime.uninstall(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id)), record.scope)) {
-                                        case PluginRegistryResult.Ok(_) => let _ = activateProductPlugin(previous)
-                                        case PluginRegistryResult.Err(rollbackError) =>
-                                            return PluginRegistryResult.Err(rollbackError)
-                                    }
-                                    return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                            }
-                        }
-                    case None => ()
+                let activation = match (remountProductPluginInstances(if (effectiveChanged) { mounted } else { originalMounted })) {
+                    case PluginRegistryResult.Err(error) => PluginRegistryResult<Unit>.Err(error)
+                    case PluginRegistryResult.Ok(_) => match (effectiveAfter) {
+                        case Some(active) => if (active.enabled && (effectiveChanged || active.descriptor.entryKind != PluginEntryKind.NativeExecutable)) {
+                            activateProductPlugin(active)
+                        } else { PluginRegistryResult<Unit>.Ok(()) }
+                        case None => PluginRegistryResult<Unit>.Ok(())
+                    }
                 }
-                match (effectiveAfter) {
-                    case Some(current) =>
-                        if (current.enabled) {
-                            match (activateProductPlugin(current)) {
-                                case Result.Ok(_) => ()
-                                case Result.Err(error) =>
-                                    match (pluginRuntime.uninstall(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Id)), record.scope)) {
-                                        case PluginRegistryResult.Ok(_) =>
-                                            match (effectiveBefore) {
-                                                case Some(previous) => if (previous.enabled) {
-                                                    let _ = activateProductPlugin(previous)
-                                                }
-                                                case None => ()
-                                            }
-                                        case PluginRegistryResult.Err(rollbackError) =>
-                                            return PluginRegistryResult.Err(rollbackError)
-                                    }
-                                    return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                            }
+                match (activation) {
+                    case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(record)
+                    case PluginRegistryResult.Err(error) =>
+                        match (withdrawProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(withdrawError) => return PluginRegistryResult.Err(withdrawError)
+                            case PluginRegistryResult.Ok(_) => ()
                         }
-                    case None => ()
+                        match (pluginRuntime.uninstall(namespace, record.scope)) {
+                            case PluginRegistryResult.Err(rollbackError) =>
+                                match (remountProductPluginInstances(mounted)) {
+                                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(rollbackError)
+                                    case PluginRegistryResult.Ok(_) => return PluginRegistryResult.Err(rollbackError)
+                                }
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (remountProductPluginInstances(originalMounted)) {
+                            case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (effectiveBefore) {
+                            case Some(previous) => if (previous.enabled && previous.descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+                                match (activateProductPlugin(previous)) {
+                                    case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                                    case PluginRegistryResult.Ok(_) => ()
+                                }
+                            }
+                            case None => ()
+                        }
+                        PluginRegistryResult.Err(error)
                 }
-                PluginRegistryResult.Ok(record)
         }
+        } finally { mounted.close() }
+        } finally { originalMounted.close() }
     }
     private func replaceActiveProductPlugin(
         id: String,
         operation: () -> PluginRegistryResult<ProductPluginRecord>,
         restoreOnActivationFailure!: Bool = false
     ): PluginRegistryResult<ProductPluginRecord> {
-        let current = match (pluginRuntime.get(id)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
+        let current = match (pluginRuntime.resolveForMutation(id)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
-        let wasEnabled = current.enabled
-        if (wasEnabled) {
-            match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                case Result.Ok(_) => ()
-            }
-        }
-        match (operation()) {
-            case PluginRegistryResult.Err(error) =>
-                if (wasEnabled) { let _ = activateProductPlugin(current) }
-                PluginRegistryResult.Err(error)
-            case PluginRegistryResult.Ok(record) =>
-                if (!record.enabled) { return PluginRegistryResult.Ok(record) }
-                match (activateProductPlugin(record)) {
-                    case Result.Ok(_) => PluginRegistryResult.Ok(record)
-                    case Result.Err(error) =>
-                        if (restoreOnActivationFailure) {
-                            match (pluginRuntime.rollback(id)) {
-                                case PluginRegistryResult.Ok(restored) =>
-                                    if (wasEnabled) { let _ = activateProductPlugin(restored) }
-                                case PluginRegistryResult.Err(_) =>
-                                    let _ = pluginRuntime.setEnabled(id, false)
-                            }
-                        } else {
-                            let _ = pluginRuntime.setEnabled(id, false)
-                        }
-                        productRegistryFailure83(pluginRuntime, error.code, error.message)
-                }
-        }
+        replaceResolvedProductPlugin(id, current, operation, restoreOnActivationFailure: restoreOnActivationFailure)
     }
 
     public func updateLocalPlugin(id: String, root: String): PluginRegistryResult<ProductPluginRecord> {
@@ -1300,57 +1345,109 @@ public class ProductRuntime {
         operation: () -> PluginRegistryResult<ProductPluginRecord>,
         restoreOnActivationFailure!: Bool = false
     ): PluginRegistryResult<ProductPluginRecord> {
-        let current = match (pluginRuntime.get(id, scope)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        let current = match (pluginRuntime.resolveForMutation(id, scope: Some(scope))) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
+        replaceResolvedProductPlugin(id, current, operation, restoreOnActivationFailure: restoreOnActivationFailure)
+    }
+
+    private func replaceResolvedProductPlugin(
+        id: String,
+        current: ProductPluginRecord,
+        operation: () -> PluginRegistryResult<ProductPluginRecord>,
+        restoreOnActivationFailure!: Bool
+    ): PluginRegistryResult<ProductPluginRecord> {
         let effectiveBefore = pluginRuntime.get(id)
         let wasActive = match (effectiveBefore) {
-            case Some(previous) => previous.enabled && productRegistryCopyText83(previous.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(current.descriptor.copyText(PluginDescriptorText.Namespace)) &&
+            case Some(previous) => previous.enabled && previous.descriptor.sameText(PluginDescriptorText.Namespace, current.descriptor, PluginDescriptorText.Namespace) &&
                 pluginScopeEquals(previous.scope, current.scope)
             case None => false
         }
         if (wasActive) {
             match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                case Result.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+                case PluginRegistryResult.Ok(_) => ()
             }
         }
+        let mounted = match (withdrawMountedProductPluginInstances()) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+        }
+        try {
         match (operation()) {
             case PluginRegistryResult.Err(error) =>
-                if (wasActive) { let _ = activateProductPlugin(current) }
+                match (remountProductPluginInstances(mounted)) {
+                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
+                if (wasActive) {
+                    match (activateProductPlugin(current)) {
+                        case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                        case PluginRegistryResult.Ok(_) => ()
+                    }
+                }
                 PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(record) =>
                 let effectiveAfter = pluginRuntime.get(id)
                 let shouldActivate = match (effectiveAfter) {
-                    case Some(active) => active.enabled && productRegistryCopyText83(active.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) &&
+                    case Some(active) => active.enabled && active.descriptor.sameText(PluginDescriptorText.Namespace, record.descriptor, PluginDescriptorText.Namespace) &&
                         pluginScopeEquals(active.scope, record.scope)
                     case None => false
                 }
-                if (!shouldActivate) { return PluginRegistryResult.Ok(record) }
-                let active = match (effectiveAfter) {
-                    case Some(value) => value
-                    case None => return PluginRegistryResult.Ok(record)
+                let activation = match (remountProductPluginInstances(mounted)) {
+                    case PluginRegistryResult.Err(error) => PluginRegistryResult<Unit>.Err(error)
+                    case PluginRegistryResult.Ok(_) => if (shouldActivate) { activateProductPlugin(effectiveAfter.getOrThrow()) } else { PluginRegistryResult<Unit>.Ok(()) }
                 }
-                match (activateProductPlugin(active)) {
-                    case Result.Ok(_) => PluginRegistryResult.Ok(record)
-                    case Result.Err(error) =>
-                        if (restoreOnActivationFailure) {
-                            match (pluginRuntime.rollback(id, scope)) {
-                                case PluginRegistryResult.Ok(_) =>
-                                    match (effectiveBefore) {
-                                        case Some(previous) => if (wasActive) { let _ = activateProductPlugin(previous) }
-                                        case None => ()
-                                    }
-                                case PluginRegistryResult.Err(_) =>
-                                    let _ = pluginRuntime.setEnabled(id, false, scope)
-                            }
-                        } else {
-                            let _ = pluginRuntime.setEnabled(id, false, scope)
+                match (activation) {
+                    case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(record)
+                    case PluginRegistryResult.Err(error) =>
+                        match (withdrawProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(withdrawError) => return PluginRegistryResult.Err(withdrawError)
+                            case PluginRegistryResult.Ok(_) => ()
                         }
-                        productRegistryFailure83(pluginRuntime, error.code, error.message)
+                        let rollback = if (restoreOnActivationFailure) {
+                            pluginRuntime.rollback(id, current.scope)
+                        } else { pluginRuntime.setEnabled(id, false, current.scope) }
+                        match (rollback) {
+                            case PluginRegistryResult.Err(rollbackError) =>
+                                if (restoreOnActivationFailure) {
+                                    match (pluginRuntime.setEnabled(id, false, current.scope)) {
+                                        case PluginRegistryResult.Err(quarantineError) =>
+                                            match (remountProductPluginInstances(mounted)) {
+                                                case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(quarantineError)
+                                                case PluginRegistryResult.Ok(_) => return PluginRegistryResult.Err(quarantineError)
+                                            }
+                                        case PluginRegistryResult.Ok(_) => ()
+                                    }
+                                }
+                                // The durable writer's complete paid error is
+                                // primary even if fresh reinspection also fails.
+                                match (remountProductPluginInstances(mounted)) {
+                                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(rollbackError)
+                                    case PluginRegistryResult.Ok(_) => return PluginRegistryResult.Err(rollbackError)
+                                }
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (remountProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        if (restoreOnActivationFailure && wasActive) {
+                            match (pluginRuntime.get(id)) {
+                                case Some(restored) => if (restored.enabled) {
+                                    match (activateProductPlugin(restored)) {
+                                        case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                                        case PluginRegistryResult.Ok(_) => ()
+                                    }
+                                }
+                                case None => ()
+                            }
+                        }
+                        PluginRegistryResult.Err(error)
                 }
         }
+        } finally { mounted.close() }
     }
 
     public func updateLocalPlugin(
@@ -1381,9 +1478,9 @@ public class ProductRuntime {
         source: ProductPluginSourceRequest,
         approvalDecision!: ApprovalDecision
     ): PluginRegistryResult<ProductPluginRecord> {
-        let current = match (pluginRuntime.get(id)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
+        let current = match (pluginRuntime.resolveForMutation(id)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         updatePluginSourceInScope(id, current.scope, sessionId, source, approvalDecision)
     }
@@ -1405,9 +1502,9 @@ public class ProductRuntime {
         source: ProductPluginSourceRequest,
         approvalDecision: ApprovalDecision
     ): PluginRegistryResult<ProductPluginRecord> {
-        let current = match (pluginRuntime.get(id, scope)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        let current = match (pluginRuntime.resolveForMutation(id, scope: Some(scope))) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         let spec = match (productPluginSourceSpec(source, shellNetworkMode)) {
             case PluginImportResult.Ok(value) => value
@@ -1454,55 +1551,87 @@ public class ProductRuntime {
         )
     }
     public func uninstallPlugin(id: String): PluginRegistryResult<Unit> {
-        let current = match (pluginRuntime.get(id)) {
-            case Some(record) => record
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
+        let current = match (pluginRuntime.resolveForMutation(id)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         uninstallPlugin(id, current.scope)
     }
 
 
     public func uninstallPlugin(id: String, scope: PluginInstallScope): PluginRegistryResult<Unit> {
-        let current = match (pluginRuntime.get(id, scope)) {
-            case Some(record) => record
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        let current = match (pluginRuntime.resolveForMutation(id, scope: Some(scope))) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         let effectiveBefore = pluginRuntime.get(id)
         let wasEffective = match (effectiveBefore) {
-            case Some(previous) => productRegistryCopyText83(previous.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(current.descriptor.copyText(PluginDescriptorText.Namespace)) &&
+            case Some(previous) => previous.descriptor.sameText(PluginDescriptorText.Namespace, current.descriptor, PluginDescriptorText.Namespace) &&
                 pluginScopeEquals(previous.scope, current.scope)
             case None => false
         }
         let wasActive = wasEffective && current.enabled
         if (wasActive) {
             match (deactivateProductPlugin(current)) {
-                case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                case Result.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+                case PluginRegistryResult.Ok(_) => ()
             }
         }
+        let mounted = match (withdrawMountedProductPluginInstances()) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+        }
+        try {
         match (pluginRuntime.uninstall(id, scope)) {
             case PluginRegistryResult.Err(error) =>
-                if (wasActive) { let _ = activateProductPlugin(current) }
+                match (remountProductPluginInstances(mounted)) {
+                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
+                if (wasActive) {
+                    match (activateProductPlugin(current)) {
+                        case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                        case PluginRegistryResult.Ok(_) => ()
+                    }
+                }
                 PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(_) =>
-                let effectiveAfter = pluginRuntime.get(id)
-                match (effectiveAfter) {
-                    case Some(active) =>
-                        if (!wasEffective || !active.enabled) { return PluginRegistryResult.Ok(()) }
-                        match (activateProductPlugin(active)) {
-                            case Result.Ok(_) => PluginRegistryResult.Ok(())
-                            case Result.Err(error) =>
-                                match (pluginRuntime.restoreRecord(current)) {
-                                    case PluginRegistryResult.Err(restoreError) =>
-                                        return PluginRegistryResult.Err(restoreError)
-                                    case PluginRegistryResult.Ok(_) => ()
-                                }
-                                if (wasActive) { let _ = activateProductPlugin(current) }
-                                productRegistryFailure83(pluginRuntime, error.code, error.message)
+                let activation = match (remountProductPluginInstances(mounted)) {
+                    case PluginRegistryResult.Err(error) => PluginRegistryResult<Unit>.Err(error)
+                    case PluginRegistryResult.Ok(_) => match (pluginRuntime.get(id)) {
+                        case Some(active) => if (wasEffective && active.enabled) { activateProductPlugin(active) } else { PluginRegistryResult<Unit>.Ok(()) }
+                        case None => PluginRegistryResult<Unit>.Ok(())
+                    }
+                }
+                match (activation) {
+                    case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(())
+                    case PluginRegistryResult.Err(error) =>
+                        match (withdrawProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(withdrawError) => return PluginRegistryResult.Err(withdrawError)
+                            case PluginRegistryResult.Ok(_) => ()
                         }
-                    case None => PluginRegistryResult.Ok(())
+                        match (pluginRuntime.restoreRecord(current)) {
+                            case PluginRegistryResult.Err(restoreError) =>
+                                match (remountProductPluginInstances(mounted)) {
+                                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(restoreError)
+                                    case PluginRegistryResult.Ok(_) => return PluginRegistryResult.Err(restoreError)
+                                }
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (remountProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        if (wasActive) {
+                            match (activateProductPlugin(current)) {
+                                case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                                case PluginRegistryResult.Ok(_) => ()
+                            }
+                        }
+                        PluginRegistryResult.Err(error)
                 }
         }
+        } finally { mounted.close() }
     }
 
     public func garbageCollectPlugins(): PluginRegistryResult<OwnedRegistryTextList> {
@@ -1510,9 +1639,9 @@ public class ProductRuntime {
     }
 
     public func setPluginEnabled(id: String, enabled: Bool): PluginRegistryResult<ProductPluginRecord> {
-        let current = match (pluginRuntime.get(id)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found", "plugin id is not imported")
+        let current = match (pluginRuntime.resolveForMutation(id)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         setPluginEnabled(id, enabled, current.scope)
     }
@@ -1522,15 +1651,15 @@ public class ProductRuntime {
         enabled: Bool,
         scope: PluginInstallScope
     ): PluginRegistryResult<ProductPluginRecord> {
-        let target = match (pluginRuntime.get(id, scope)) {
-            case Some(value) => value
-            case None => return productRegistryFailure83(pluginRuntime, "plugin.not_found_in_scope", "plugin is not installed in the requested scope")
+        let target = match (pluginRuntime.resolveForMutation(id, scope: Some(scope))) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
         }
         let explicitDisableChange = pluginScopeEquals(scope, PluginInstallScope.User) &&
             !enabled && !target.explicitlyDisabled
         if (target.enabled == enabled && !explicitDisableChange &&
             (!enabled || target.descriptor.entryKind != PluginEntryKind.NativeExecutable ||
-                vnext.javascriptPlugins.instanceGeneration(productRegistryCopyText83(target.descriptor.copyText(PluginDescriptorText.Namespace))) != 0u64)) {
+                vnext.javascriptPlugins.instanceGeneration(target.descriptor) != 0u64)) {
             return PluginRegistryResult.Ok(target)
         }
         let effectiveBefore = pluginRuntime.get(id)
@@ -1538,41 +1667,116 @@ public class ProductRuntime {
             case Some(previous) =>
                 if (previous.enabled) {
                     match (deactivateProductPlugin(previous)) {
-                        case Result.Err(error) => return productRegistryFailure83(pluginRuntime, error.code, error.message)
-                        case Result.Ok(_) => ()
+                        case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+                        case PluginRegistryResult.Ok(_) => ()
                     }
                 }
             case None => ()
         }
+        let mounted = match (withdrawMountedProductPluginInstances()) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+        }
+        try {
         match (pluginRuntime.setEnabled(id, enabled, scope)) {
             case PluginRegistryResult.Err(error) =>
+                match (remountProductPluginInstances(mounted)) {
+                    // A failed reinspection must not replace the durable
+                    // writer rejection (including its paid source/field data).
+                    // Leave those generations revoked and return failure.
+                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
                 match (effectiveBefore) {
-                    case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
+                    case Some(previous) => if (previous.enabled) {
+                        match (activateProductPlugin(previous)) {
+                            case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                    }
                     case None => ()
                 }
                 PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(record) =>
-                let effectiveAfter = pluginRuntime.get(id)
-                match (effectiveAfter) {
-                    case Some(active) =>
-                        if (!active.enabled) { return PluginRegistryResult.Ok(record) }
-                        match (activateProductPlugin(active)) {
-                            case Result.Ok(_) => PluginRegistryResult.Ok(record)
-                            case Result.Err(error) =>
-                                match (pluginRuntime.restoreRecord(target)) {
-                                    case PluginRegistryResult.Err(restoreError) =>
-                                        return PluginRegistryResult.Err(restoreError)
+                let activation = match (remountProductPluginInstances(mounted)) {
+                    case PluginRegistryResult.Err(error) => PluginRegistryResult<Unit>.Err(error)
+                    case PluginRegistryResult.Ok(_) => match (pluginRuntime.get(id)) {
+                        case Some(active) => if (active.enabled) { activateProductPlugin(active) } else { PluginRegistryResult<Unit>.Ok(()) }
+                        case None => PluginRegistryResult<Unit>.Ok(())
+                    }
+                }
+                match (activation) {
+                    case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(record)
+                    case PluginRegistryResult.Err(error) =>
+                        match (withdrawProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(withdrawError) => return PluginRegistryResult.Err(withdrawError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (pluginRuntime.restoreRecord(target)) {
+                            case PluginRegistryResult.Err(restoreError) =>
+                                match (remountProductPluginInstances(mounted)) {
+                                    case PluginRegistryResult.Err(_) => return PluginRegistryResult.Err(restoreError)
+                                    case PluginRegistryResult.Ok(_) => return PluginRegistryResult.Err(restoreError)
+                                }
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        // Rollback publishes the lock again. Retire the failed
+                        // publication's new generations before recapturing the
+                        // same prior-mounted set from the restored Registry.
+                        match (remountProductPluginInstances(mounted)) {
+                            case PluginRegistryResult.Err(remountError) => return PluginRegistryResult.Err(remountError)
+                            case PluginRegistryResult.Ok(_) => ()
+                        }
+                        match (effectiveBefore) {
+                            case Some(previous) => if (previous.enabled) {
+                                match (activateProductPlugin(previous)) {
+                                    case PluginRegistryResult.Err(restoreError) => return PluginRegistryResult.Err(restoreError)
                                     case PluginRegistryResult.Ok(_) => ()
                                 }
-                                match (effectiveBefore) {
-                                    case Some(previous) => if (previous.enabled) { let _ = activateProductPlugin(previous) }
-                                    case None => ()
-                                }
-                                productRegistryFailure83(pluginRuntime, error.code, error.message)
+                            }
+                            case None => ()
                         }
-                    case None => PluginRegistryResult.Ok(record)
+                        PluginRegistryResult.Err(error)
                 }
         }
+        } finally { mounted.close() }
+    }
+
+    private func mountedProductPluginInstances(): ProductMountedPluginInstances83 {
+        // Freeze only actual live identities, in the paid Registry topological
+        // order. Enabled-but-withdrawn dependents are deliberately excluded.
+        productRegistryMountedInstances83(pluginRuntime.startupEffectiveRecords(), { record =>
+            record.descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                vnext.javascriptPlugins.instanceGeneration(record.descriptor) != 0u64 })
+    }
+
+    private func withdrawProductPluginInstances(records: ProductMountedPluginInstances83): PluginRegistryResult<Unit> {
+        records.visit({ record => deactivateProductPlugin(record) })
+    }
+
+    private func withdrawMountedProductPluginInstances(): PluginRegistryResult<ProductMountedPluginInstances83> {
+        let mounted = mountedProductPluginInstances()
+        match (withdrawProductPluginInstances(mounted)) {
+            case PluginRegistryResult.Err(error) =>
+                let restored = remountProductPluginInstances(mounted)
+                mounted.close()
+                match (restored) {
+                    case PluginRegistryResult.Err(restoreError) => PluginRegistryResult.Err(restoreError)
+                    case PluginRegistryResult.Ok(_) => PluginRegistryResult.Err(error)
+                }
+            case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(mounted)
+        }
+    }
+
+    private func remountProductPluginInstances(records: ProductMountedPluginInstances83): PluginRegistryResult<Unit> {
+        // Every durable publication, including rollback, revokes the full old
+        // generation. Reuse canonical catalog revoke/mount and fresh fenced
+        // captures; never adapt an old pin, prepared plan or approval.
+        match (withdrawProductPluginInstances(records)) {
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(_) => ()
+        }
+        records.visit({ record => activateProductPlugin(record) })
     }
 
     public func codexHookDiagnostics(): Array<String> {
@@ -1583,6 +1787,21 @@ public class ProductRuntime {
 
 
 
+
+    // Root uses this only after every original frontend Future/helper has
+    // returned. It neither cancels persistent jobs nor acknowledges DATA.
+    func hasOwnerLifetimeDebt180(): Bool {
+        if (taskRuntime.hasOwnerLifetimeDebt180()) { return true }
+        nativeFrontendLock.lock()
+        try { if (!nativeFrontendInvocations.isEmpty()) { return true } }
+        finally { nativeFrontendLock.unlock() }
+        managedPluginServiceLock.lock()
+        try {
+            match (managedPluginServices) {
+                case Some(value) => value.hasOwnerLifetimeDebt180()
+                case None => false }
+        } finally { managedPluginServiceLock.unlock() }
+    }
 
     public func close(): Result<Unit> {
         if (taskRuntime.hasPluginChildDebt111()) {
@@ -1643,12 +1862,14 @@ public class ProductRuntime {
         catalog.definitionsFor(capabilities, threadId: threadId)
     }
 
-    func acquireNativeFrontendInvocation(selection: ProductSelectedNativeTool): Result<ProductNativeToolInvocation> {
+    func acquireNativeFrontendInvocation(selection: ProductSelectedNativeTool,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>): Result<ProductNativeToolInvocation> {
         nativeFrontendLock.lock()
         try{
             if(nativeFrontendsClosing || nativeFrontendInvocations.size>=64){
                 return selectedNativeToolError("plugin.frontend_cleanup_capacity")}
-            let actual=ProductNativeToolInvocation(selection)
+            let actual=ProductNativeToolInvocation(selection,operatorOptions180:operatorOptions180,callerCancellation180:callerCancellation180)
             nativeFrontendInvocations.add(actual)
             Result.Ok(actual)
         }finally{nativeFrontendLock.unlock()}
@@ -1667,20 +1888,24 @@ public class ProductRuntime {
         Result.Ok(())
     }
     func acquireShellToolInvocation(sessionId: SessionId, readOnly!: Bool=false,
-        networkPolicy!: ?NetworkPolicy=None): Result<ProductNativeToolInvocation> {
+        networkPolicy!: ?NetworkPolicy=None,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>): Result<ProductNativeToolInvocation> {
         let selection=match(selectProductNativeFrontendTool(this,sessionId,if(readOnly){"shell-readonly"}else{"shell"},if(readOnly){"exec"}else{"bash"},networkPolicy:networkPolicy)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-        acquireNativeFrontendInvocation(selection)
+        acquireNativeFrontendInvocation(selection,operatorOptions180:operatorOptions180,callerCancellation180:callerCancellation180)
     }
 
     public func invokeShellTool(sessionId: SessionId, arguments: AgentValue,
-        readOnly!: Bool=false, budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:2,maxConcurrentTools:1)
+        readOnly!: Bool=false, budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:2,maxConcurrentTools:1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>
     ): Result<ProductNativeToolInvocation> {
         let selection=match(selectProductNativeFrontendTool(this,sessionId,if(readOnly){"shell-readonly"}else{"shell"},if(readOnly){"exec"}else{"bash"})){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         let canonicalArguments=match(selection.shellArguments(arguments)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-        let invocation=match(acquireNativeFrontendInvocation(selection)){
+        let invocation=match(acquireNativeFrontendInvocation(selection,operatorOptions180:operatorOptions180,callerCancellation180:callerCancellation180)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         match(invocation.start(canonicalArguments,budget)){
             case Result.Err(error)=>invocation.recordFailure(error);case Result.Ok(_)=>()}
@@ -1688,21 +1913,25 @@ public class ProductRuntime {
     }
 
     public func invokeProgramTool(sessionId: SessionId, code: String,
-        budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:3,maxConcurrentTools:1)
+        budget!: ExecutionBudget=ExecutionBudget(maxToolCalls:3,maxConcurrentTools:1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>
     ): Result<ProductNativeToolInvocation> {
         let selection=match(selectProductNativeFrontendTool(this,sessionId,"program","run")){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-        let invocation=match(acquireNativeFrontendInvocation(selection)){
+        let invocation=match(acquireNativeFrontendInvocation(selection,operatorOptions180:operatorOptions180,callerCancellation180:callerCancellation180)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         match(invocation.start(objectValue([ValueField("code",textValue(code))]),budget)){
             case Result.Err(error)=>invocation.recordFailure(error);case Result.Ok(_)=>()}
         Result.Ok(invocation)
     }
 
-    public func invokeWorkspaceTool(sessionId: SessionId, contribution: String, arguments: AgentValue): Result<ProductWorkspaceInvocation> {
+    public func invokeWorkspaceTool(sessionId: SessionId, contribution: String, arguments: AgentValue,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>): Result<ProductWorkspaceInvocation> {
         let selection=match(selectProductWorkspaceTool(this,sessionId,contribution)){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
-        let invocation=ProductWorkspaceInvocation(this,selection)
+        let invocation=ProductWorkspaceInvocation(this,selection,operatorOptions180:operatorOptions180,callerCancellation180:callerCancellation180)
         match(invocation.start(arguments)){
             case Result.Err(error)=>let _=invocation.close();Result.Err(error)
             case Result.Ok(_)=>Result.Ok(invocation)}
@@ -1713,7 +1942,9 @@ public class ProductRuntime {
         sessionId: SessionId,
         name: String,
         arguments: AgentValue,
-        contextSnapshot!: InvocationContextProjection = InvocationContextProjection()
+        contextSnapshot!: InvocationContextProjection = InvocationContextProjection(),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?domain.CancellationToken = None<domain.CancellationToken>
     ): Result<ToolResult> {
         let callId = "cli-" + name + "-" + ids.nextOperationId().value
         let capabilities = CapabilitySet(
@@ -1731,7 +1962,7 @@ public class ProductRuntime {
             sessionId,
             capabilities,
             ToolCall(callId, name, arguments),
-            contextSnapshot: contextSnapshot
+            contextSnapshot: contextSnapshot, operatorOptions180: operatorOptions180, callerCancellation180: callerCancellation180
         )) {
             case Result.Ok(ToolInvocationResult.Completed(result)) =>
                 if (result.isError) {
@@ -1794,6 +2025,8 @@ public class ProductRuntime {
     public func subscribeAsks(sink: ProductAskEventSink): Unit {
         askRuntime.subscribe(sink)
     }
+    public func subscribeOwnerAsks180(sink: ProductAskEventSink): Int64 { askRuntime.subscribeOwnerAsks180(sink) }
+    public func unsubscribeOwnerAsks180(id: Int64): Unit { askRuntime.unsubscribeOwnerAsks180(id) }
 
     public func pendingAsk(sessionId: SessionId): ?ProductAskRequest {
         askRuntime.current(sessionId)
@@ -1890,6 +2123,8 @@ public class ProductRuntime {
     public func subscribeAsyncJobs(sink: ProductAsyncJobEventSink): Int64 {
         taskRuntime.subscribeJobs(sink)
     }
+    public func unsubscribeSubagents180(id: Int64): Unit { taskRuntime.unsubscribeSubagents180(id) }
+    public func unsubscribeAsyncJobs180(id: Int64): Unit { taskRuntime.unsubscribeAsyncJobs180(id) }
 
     public func models(): Array<String> {
         modelNames
@@ -3012,12 +3247,12 @@ public class ProductRuntime {
 
     public func compactSession(
         sessionId: SessionId,
-        force!: Bool = true
+        force!: Bool = true, operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>
     ): Result<Int64> {
         let scope = compactionSummarizer.openScope(sessionId)
-        try { compactSessionWithScope(sessionId, force, scope.token) } finally { scope.close() }
+        try { compactSessionWithScope(sessionId, force, scope.token, operatorOptions180) } finally { scope.close() }
     }
-    private func compactSessionWithScope(sessionId: SessionId, force: Bool, cancellation: domain.CancellationToken): Result<Int64> {
+    private func compactSessionWithScope(sessionId: SessionId, force: Bool, cancellation: domain.CancellationToken, operatorOptions180: ?ProductOperatorOptions180): Result<Int64> {
         match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let messages = match (modelContext(sessionId)) {
             case Result.Ok(value) => value
@@ -3131,7 +3366,7 @@ public class ProductRuntime {
             tools,
             settings,
             sessionModel,
-            cancellation
+            cancellation, operatorOptions180
         )) {
             case Result.Ok(_) => Result.Ok(removed)
             case Result.Err(error) => Result.Err(error)
@@ -3162,10 +3397,10 @@ public class ProductRuntime {
     }
     public func compactSessionReport(
         sessionId: SessionId,
-        force!: Bool = true
+        force!: Bool = true, operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>
     ): Result<ProductCompactionReport> {
         let before = compactionTokenEstimate(sessionId)
-        match (compactSession(sessionId, force: force)) {
+        match (compactSession(sessionId, force: force, operatorOptions180: operatorOptions180)) {
             case Result.Ok(removed) =>
                 let after = compactionTokenEstimate(sessionId)
                 Result.Ok(ProductCompactionReport(
@@ -3218,7 +3453,7 @@ public class ProductRuntime {
         tools: Array<ModelToolDefinition>,
         settings: ProductCompactionSettings,
         sessionModel: String,
-        cancellation: domain.CancellationToken
+        cancellation: domain.CancellationToken, operatorOptions180: ?ProductOperatorOptions180
     ): Result<Unit> {
         if (vnextDatabase.scalarInt(
             "SELECT COUNT(*) FROM threads WHERE id=" + sqliteText(sessionId.value)
@@ -3388,7 +3623,7 @@ public class ProductRuntime {
                     sessionId,
                     summaryModel,
                     settings.summaryTimeoutMillis,
-                    settings.summaryMaxOutputTokens
+                    settings.summaryMaxOutputTokens, operatorOptions180
                 ),
                 deterministicSummary,
                 settings.summaryTimeoutMillis,
@@ -3461,7 +3696,7 @@ public class ProductRuntime {
         sessionId: SessionId,
         summaryModel: String,
         timeoutMillis: Int64,
-        maxOutputTokens: Int64
+        maxOutputTokens: Int64, operatorOptions180: ?ProductOperatorOptions180
     ): AgentRunRequest {
         let metadata = modelMetadata(summaryModel)
         let neutral = productRequestModelPolicy(settingsRoot, summaryModel, fixtureProbe.isSome())
@@ -3518,7 +3753,7 @@ public class ProductRuntime {
                 ""
             },
             parallelToolCalls: false,
-            toolContext: productToolContext(workspace.rootPath()),
+            toolContext: requestToolContext180(operatorOptions180, None<ToolContextDescriptor>),
             budget: ResourceBudget(
                 maxInputTokens: if (fixtureProbe.isSome()) { match (metadata) {
                     case Some(value) => match (value.contextWindow) {
@@ -4240,22 +4475,31 @@ func compactionSummaryWithOverview(structuredSummary: String, overview: String):
 }
 
 public func openProduct(config!: ProductConfig = ProductConfig()): Result<ProductRuntime> {
+    openProductAssembly180(config, None<ActualProcessBrokerRoot180>)
+}
+func openProductAssembly180(config: ProductConfig, ownerRoot180: ?ActualProcessBrokerRoot180): Result<ProductRuntime> {
     let localMaintenance = match (config.startupMode) {
         case ProductStartupMode.LocalMaintenance => true
+        case ProductStartupMode.Owner => true
         case ProductStartupMode.Full => false
     }
+    let ownerMode180 = match(config.startupMode) { case ProductStartupMode.Owner => true; case _ => false }
     if (!config.fixture) {
         match (ensureProductLayout(config.settingsRoot)) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
         }
     }
-    let loadedSettings = if (config.fixture &&
-        config.settingsRoot == defaultProductHome()) {
-        // A fixture model must not accidentally inherit the developer's live
-        // product configuration. Explicit fixture settings roots still load
-        // the real config contract so policy/configuration behavior remains
-        // testable without a real provider.
+    let isolateImplicitFixtureHome = if (config.fixture && config.settingsRoot == defaultProductHome()) {
+        match (getVariable("AXYNDRA_HOME")) {
+            case Some(value) => value.trimAscii() == ""
+            case None => true
+        }
+    } else { false }
+    let loadedSettings = if (isolateImplicitFixtureHome) {
+        // A fixture must not accidentally inherit the developer's implicit
+        // home. An explicit settings root or nonempty AXYNDRA_HOME is an
+        // operator selection and uses the same supported config contract.
         ProductSettings()
     } else {
         match (loadProductSettings(config.settingsRoot)) {
@@ -4294,7 +4538,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             case None => loadedSettings.compaction
         }
     )
-    let loadedProfiles: Array<ProviderProfile> = if (config.fixture || localMaintenance) {
+    let loadedProfiles: Array<ProviderProfile> = if (config.fixture || (localMaintenance && !ownerMode180)) {
         []
     } else {
         match (loadProviderProfiles(config.settingsRoot)) {
@@ -4302,7 +4546,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             case Result.Err(error) => return Result.Err(error)
         }
     }
-    let loadedCatalog: Array<ModelCatalogEntry> = if (config.fixture || localMaintenance) {
+    let loadedCatalog: Array<ModelCatalogEntry> = if (config.fixture || (localMaintenance && !ownerMode180)) {
         []
     } else {
         match (loadModelCatalog(config.settingsRoot)) {
@@ -4363,7 +4607,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
     }
     let artifactStore = ProductArtifactStore(
         config.stateRoot,
-        database: Some(vnextDatabase)
+        database: Some(vnextDatabase), operations: Some(operations)
     )
     let catalog = ToolCatalog()
     let uriRouter = InternalUriRouter()
@@ -4502,11 +4746,7 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
         ProductInstalledModelPort(javascriptPlugins, config.settingsRoot, vnextDatabase, threadRuntimes,
             processes, loadedCatalog, loadedProfiles, artifactStore)
     }
-    let effectiveModelPort: ModelPort = match (config.modelStreamFaultProfile) {
-        case Some(profile) => FaultInjectingModelPort(configuredPort, profile)
-        case None => configuredPort
-    }
-    let modelControl = ControlledModelPort(effectiveModelPort, runs: Some(runs))
+    let modelControl = ControlledModelPort(configuredPort, runs: Some(runs))
     match (registerPluginHttpService(catalog, javascriptPlugins, operations, config.settingsRoot, sandboxCaBundle)) {
         case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
@@ -4637,19 +4877,23 @@ public func openProduct(config!: ProductConfig = ProductConfig()): Result<Produc
             }
     )
     builtProduct = Some(product)
+    // The actual Root reaches the complete Product and finishes its existing
+    // supervisor storage initialization before any startup plugin activation.
+    match (ownerRoot180) { case Some(owner) => product.vnext.bindCanonicalOwner180(owner, product, config); case None => () }
+    product.freezeConfiguredModelSettings180(config.modelStreamFaultProfile, config.modelAttemptRecovery)
     match (product.activateStartupPlugins()) {
         case Result.Ok(_) => ()
         case Result.Err(error) =>
             let _ = product.close()
             return Result.Err(error)
     }
-    if (!localMaintenance && config.distributionRoot != "") {
+    if ((!localMaintenance || ownerMode180) && config.distributionRoot != "") {
         match (applyProductDistributionDefaults(product, config.distributionRoot)) {
             case Result.Ok(_) => ()
             case Result.Err(error) => let _ = product.close(); return Result.Err(error)
         }
     }
-    taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase))
+    taskRuntime.attach(product, ProductTaskPersistence(vnextDatabase), ownerRoot180: ownerRoot180)
     registryTransferred = true
     Result.Ok(product)
     } finally {
@@ -4956,12 +5200,27 @@ func productToolResultText(
     match (result.output.field(name)) {
         case Some(value) =>
             if (value.unifiedKind == ValueKind.Text && value.text != "") {
-                value.text
-            } else {
-                fallback
+                return value.text
             }
-        case None => fallback
+        case None => ()
     }
+    // The JavaScript protocol preserves a structured error object in the
+    // canonical Receipt. Project its diagnostic without changing that fact.
+    if (name == "error" || name == "message") {
+        match (result.output.field("error")) {
+            case Some(error) =>
+                let member = if (name == "error") { "code" } else { "message" }
+                match (error.field(member)) {
+                    case Some(value) =>
+                        if (value.unifiedKind == ValueKind.Text && value.text != "") {
+                            return value.text
+                        }
+                    case None => ()
+                }
+            case None => ()
+        }
+    }
+    fallback
 }
 
 func oauthNotSupported<T>(providerId: String): Result<T> {
@@ -5010,12 +5269,13 @@ func productToolContextValue(value: ToolContextDescriptor): AgentValue {
             ValueField("version", textValue(service.version))
         ]))
     }
-    objectValue([
+    let fields = ArrayList<ValueField>([
         ValueField("workspace_root", textValue(value.workspaceRoot)),
         ValueField("cwd", textValue(value.cwd)),
         ValueField("environment", listValue(environment.toArray())),
-        ValueField("services", listValue(services.toArray()))
-    ])
+        ValueField("services", listValue(services.toArray()))])
+    if (value.executionSettings180.unifiedKind != ValueKind.Null) { fields.add(ValueField("execution_settings", value.executionSettings180)) }
+    objectValue(fields.toArray())
 }
 
 func credentialPath(root: String, providerId: String): String {
@@ -5276,10 +5536,12 @@ func envOr(name: String, fallback: String): String {
     }
 }
 
-func productToolContext(workspaceRoot: String): ToolContextDescriptor {
+func productToolContext(workspaceRoot: String, operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>): ToolContextDescriptor {
     ToolContextDescriptor(
         workspaceRoot: workspaceRoot,
         cwd: workspaceRoot,
+        executionSettings180: match (operatorOptions180) { case Some(options) => options.executionSettingsValue180(); case None => nullValue() },
+        modelFaultCounters180: match (operatorOptions180) { case Some(options) => options.modelFaultCounters180; case None => None<ModelStreamFaultCounters180> },
         environment: productToolEnvironment(),
         services: ToolServiceView(descriptors: [
             ToolServiceDescriptor(ToolServiceKind.Workspace, "local-workspace"),

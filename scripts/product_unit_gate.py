@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tomllib
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -231,6 +232,114 @@ def run_isolated_agent_product(root, output_dir, log, case_prefix=None):
     return record
 
 
+def run_isolated_agent_host_runtime(root, output_dir, log):
+    """Execute every Host case without sharing intentional PaidHeld debt."""
+    from rpc_unit_isolation import qualified_filtered_result, _rpc_source_inputs, _rpc_compiled_inputs
+    from rpc_case_process_watch import run_host_case, process_custody_closed
+
+    member = 'agent_host_runtime'
+    base = [str(root / 'scripts/pinned_cangjie'), 'cjpm', 'test', '-m', member]
+    dry_log = output_dir / (member + '.dry-run.log')
+    command = base + ['--dry-run', '--no-color', '--no-progress']
+    record = dict(member=member, command=command, log=log.name, dry_run_log=dry_log.name,
+                  exit_code=1, status='FAIL', case_logs=[], runtime_total_seconds=900,
+                  physical_exit_is_data_consumption_ACK=False)
+    deadline = time.monotonic() + 900
+    try:
+        # Prepare the original launcher once. Re-running all Native/SDK
+        # preparation for every --skip-build case wastes the module budget.
+        runtime_names = ('CANGJIE_HOME', 'CANGJIE_ROOT', 'CANGJIE_PATH', 'CANGJIE_STDX_PATH',
+                         'CANGJIE_SDK_ROOT', 'AXYNDRA_SDK_ROOT', 'AXYNDRA_STDX_ROOT',
+                         'AXYNDRA_NATIVE_ROOT', 'AXYNDRA_NETWORK_BRIDGE',
+                         'LD_LIBRARY_PATH', 'PATH', 'DISABLE_ZOXIDE')
+        optional_names = ('AXYNDRA_CLANG_RUNTIME_PATH',)
+        runtime_log = output_dir / (member + '.runtime.log')
+        capture = ('import json,os; print(json.dumps({key:os.environ[key] for key in ' +
+                   repr(runtime_names + optional_names) + ' if key in os.environ}))')
+        prepare_command = [base[0], sys.executable, '-c', capture]
+        prepare_exit = run_logged(prepare_command, runtime_log, root)
+        record['runtime_preparation'] = dict(command=prepare_command, log=runtime_log.name,
+                                           exit_code=prepare_exit,
+                                           log_sha256=hashlib.sha256(runtime_log.read_bytes()).hexdigest())
+        if prepare_exit:
+            raise ValueError('Host original runtime preparation failed')
+        runtime = json.loads(runtime_log.read_text(errors='strict').splitlines()[-1])
+        if (not set(runtime_names).issubset(runtime) or
+                not set(runtime).issubset(runtime_names + optional_names) or
+                not all(isinstance(value, str) and value for value in runtime.values())):
+            raise ValueError('Host original launcher runtime is incomplete')
+        os.environ.update(runtime)
+        base = [str(Path(runtime['CANGJIE_HOME']) / 'tools/bin/cjpm'), 'test', '-m', member]
+        command = base + ['--dry-run', '--no-color', '--no-progress']
+        record['command'] = command
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('Host original whole-module deadline expired')
+        code = run_logged(command, dry_log, root, timeout=remaining)
+        text = dry_log.read_text(errors='strict')
+        log.write_text(text)
+        if code or has_compiler_error(text):
+            raise ValueError('Host complete compilation/enumeration failed')
+        cases = dry_run_cases(text)
+        totals = re.findall(r'Summary: TOTAL:\s*(\d+),\s*SKIPPED:\s*(\d+)', text)
+        if not totals or any(int(total) != len(cases) or int(skipped) != 0 for total, skipped in totals):
+            raise ValueError('Host enumeration omitted or skipped compiled identities')
+        record.update(scope=dict(enumerated=cases, selected=list(cases)),
+                      enumerated_case_count=len(cases), selected_case_count=len(cases),
+                      case_count=len(cases), total=len(cases), passed=0, failed=0, errors=0, skipped=0)
+        source = _rpc_source_inputs(root)
+        compiled = _rpc_compiled_inputs(root)
+        record.update(source_inputs=source, compiled_inputs=compiled)
+        directory = output_dir / (member + '-cases')
+        directory.mkdir(exist_ok=False)
+        for index, name in enumerate(cases):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError('Host original whole-module deadline expired')
+            case_log = directory / f'{index + 1:03d}-{name}.log'
+            # Keep the original SDK case deadline and whole-module budget.
+            command = base + ['--skip-build', '--filter', name, '--parallel', '1', '--no-color', '--no-progress']
+            observation = dict(qualified_case=name, command=command,
+                               log=case_log.relative_to(output_dir).as_posix(),
+                               remaining_module_seconds=remaining, process={}, status='FAIL')
+            record['case_logs'].append(observation)
+            process = run_host_case(command, case_log, remaining, cwd=root)
+            observation['process'] = process
+            observation['log_sha256'] = hashlib.sha256(case_log.read_bytes()).hexdigest()
+            with log.open('ab') as combined:
+                combined.write(('\nHost case: ' + name + '\n').encode())
+                combined.write(case_log.read_bytes())
+            try:
+                observed = qualified_filtered_result(case_log.read_bytes(), member, name, cases)
+                observation['result'] = observed
+                valid = (process['exit_code'] == 0 and not process['timed_out'] and
+                         process_custody_closed(process) and observed['summary']['passed'] == 1 and
+                         not has_compiler_error(case_log.read_text(errors='strict')))
+            except (AssertionError, UnicodeError, ValueError) as error:
+                observation['error'] = str(error)
+                valid = False
+            if valid:
+                observation['status'] = 'PASS'
+                record['passed'] += 1
+            elif observation.get('result', {}).get('summary', {}).get('failed') == 1:
+                record['failed'] += 1
+            else:
+                record['errors'] += 1
+            (output_dir / (member + '.isolation.json')).write_text(json.dumps(record, indent=2) + '\n')
+        record['source_inputs_unchanged'] = _rpc_source_inputs(root) == source
+        record['compiled_inputs_unchanged'] = _rpc_compiled_inputs(root) == compiled
+        if not record['source_inputs_unchanged'] or not record['compiled_inputs_unchanged']:
+            raise ValueError('Host source or compiled inputs changed during isolated execution')
+        if time.monotonic() > deadline:
+            raise ValueError('Host original whole-module deadline expired')
+        if record['passed'] == len(cases):
+            record.update(status='PASS', exit_code=0)
+    except (OSError, ValueError, KeyError, UnicodeError) as error:
+        record['error'] = str(error)
+    (output_dir / (member + '.isolation.json')).write_text(json.dumps(record, indent=2) + '\n')
+    return record
+
+
 def configure_http_fixture_environment(root):
     fixture = root.resolve() / 'support_tests/native_plugin_fixture'
     origin = fixture / 'http_stream_origin.py'
@@ -244,6 +353,16 @@ def configure_http_fixture_environment(root):
         'http_stream_origin_sha256': hashlib.sha256(origin.read_bytes()).hexdigest(),
         'mcp_http_product_peer_sha256': hashlib.sha256(peer.read_bytes()).hexdigest(),
     }
+
+
+def configure_ordinary_request_fixture_environment(root):
+    selected_root = root.resolve()
+    fixture = selected_root / "support_tests/ordinary_request_payload_host_fixture/peer.py"
+    if not fixture.is_file():
+        raise ValueError("ordinary service-request peer fixture is missing")
+    # Bind to this selected source, not a possibly inherited different snapshot.
+    os.environ["AXYNDRA_REPO_ROOT"] = str(selected_root)
+    return {"ordinary_request_payload_peer_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest()}
 
 
 
@@ -361,6 +480,7 @@ def main():
             result.update(configure_model_provider_fixture_environment(ROOT))
             result.update(configure_language_fixture_environment(ROOT))
             result.update(configure_installed_model_fixture_environment(ROOT))
+            result.update(configure_ordinary_request_fixture_environment(ROOT))
             result['plugin_fixtures'] = []
             for directory, command, environment_name in [
                 ('ast', [sys.executable, str(ROOT / 'scripts/prepare_ast_plugin.py')], 'AXYNDRA_AST_PLUGIN_PACKAGE'),
@@ -392,6 +512,11 @@ def main():
                     # a crashed or force-killed child can retain runner-owned resources
                     # until that process exits, contaminating the following case.
                     record = run_isolated_agent_product(ROOT, args.output_dir, log, args.case_prefix)
+                    if 'scope' in record:
+                        result['scope']['enumerated_cases'][member] = record['scope']['enumerated']
+                        result['scope']['selected_cases'][member] = record['scope']['selected']
+                elif member == 'agent_host_runtime':
+                    record = run_isolated_agent_host_runtime(ROOT, args.output_dir, log)
                     if 'scope' in record:
                         result['scope']['enumerated_cases'][member] = record['scope']['enumerated']
                         result['scope']['selected_cases'][member] = record['scope']['selected']

@@ -11,6 +11,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
     let runId: RunId
     let traceId: TraceId
     let source: CancellationSource
+    let recoveryPolicy180: ModelAttemptRecoveryPolicy
     let runtime: AgentThreadRuntime
     let ledger: ExecutionBudget
     private let lock = Mutex()
@@ -45,6 +46,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
     private let scheduledToolSlots = ArrayList<NestedToolSlotFrames>()
     private var cancellationRegistration: ?CancellationRegistration = None
     private var runtimeCancellationRegistration: ?CancellationRegistration = None
+    private var frontendCancellationRegistration180: ?CancellationRegistration = None<CancellationRegistration>
     private var closed = false
 
     init(
@@ -54,7 +56,9 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         initial!: RunState = RunState.Running,
         turns!: Int64 = 0,
         modelRequests!: Int64 = 0,
-        parentCancellation!: ?CancellationToken = None
+        parentCancellation!: ?CancellationToken = None,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>,
+        recoveryPolicy180!: ModelAttemptRecoveryPolicy = ModelAttemptRecoveryPolicy()
     ) {
         this.runId = runId
         this.traceId = TraceId("trace-" + runId.value)
@@ -65,6 +69,11 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
         this.ledger = execution
         this.turnCounter = turns
         this.requestCounter = modelRequests
+        this.recoveryPolicy180 = recoveryPolicy180
+        let actualSource180 = source
+        match (callerCancellation180) { case Some(token) =>
+            frontendCancellationRegistration180 = Some(token.onCancelReturning159({ cause => let _ = actualSource180.cancel(reason: Some(cause)) }))
+            case None => () }
     }
 
     // Sequence allocation, durable append, and live delivery form one ordered
@@ -376,6 +385,21 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
             try { modelInputCollectorActive159 = false } finally { lock.unlock() }
         }
     }
+    private func bindModelInputTaskWitness180(settlement: RuntimeSettlement): Unit {
+        let actual = settlement.ownedTaskReturnWitness113()
+        lock.lock()
+        try {
+            checkpointReturnWitness113 = actual
+            var cursor = modelInputHead159
+            while (cursor.isSome()) {
+                let owner = cursor.getOrThrow(); owner.bindOriginalTaskWitness180(actual); cursor = owner.next159
+            }
+        } finally { lock.unlock() }
+        // This is the Run's actual settlement. The original collector checks
+        // producer witness, provider return and complete Future.get before refund.
+        collectReturnedModelInputs159()
+    }
+
 
     func checkpointWaveCounts113(): (Bool, Int64, Int64) {
         collectReturnedModelInputs159()
@@ -459,7 +483,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
             settlement.run.state,
             reason
         )
-        lock.lock(); try { checkpointReturnWitness113 = settlement.ownedTaskReturnWitness113() } finally { lock.unlock() }
+        bindModelInputTaskWitness180(settlement)
         setState(settlement.run.state)
         Result.Ok(transition)
     }
@@ -507,7 +531,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
                 )
             ]
         }
-        lock.lock(); try { checkpointReturnWitness113 = settlement.ownedTaskReturnWitness113() } finally { lock.unlock() }
+        bindModelInputTaskWitness180(settlement)
         setState(terminal)
         Result.Ok(transitions)
     }
@@ -566,15 +590,18 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
 
     func close(): Unit {
         collectReturnedModelInputs159()
+
         match (takeContextUpdate()) { case Some(value) => value.cancel(); case None => () }
         lock.lock()
-        let (registration, runtimeRegistration) = try {
+        let (registration, runtimeRegistration, frontendRegistration180) = try {
             closed = true
             let value = cancellationRegistration
             let runtimeValue = runtimeCancellationRegistration
+            let frontendValue180 = frontendCancellationRegistration180
+            frontendCancellationRegistration180 = None<CancellationRegistration>
             cancellationRegistration = None
             runtimeCancellationRegistration = None
-            (value, runtimeValue)
+            (value, runtimeValue, frontendValue180)
         } finally {
             lock.unlock()
         }
@@ -583,6 +610,7 @@ class CoreRunControl <: PaidExecutionFailureSink173 {
             case None => ()
         }
         match (runtimeRegistration) { case Some(value) => value.dispose(); case None => () }
+        match (frontendRegistration180) { case Some(value) => value.dispose(); case None => () }
         source.close()
     }
 

@@ -7,12 +7,41 @@ import yjson_support.*
 
 import agent_core.*
 import agent_domain.*
-import agent_extension_runtime.reserveNativeDocumentPayload
 import agent_runtime.*
 import agent_store.*
 import persistence_runtime.*
 import std.convert.*
 import std.sync.*
+
+// Every scope and transient digest shares the actual selected package bank.
+// The primary loan lives until the concrete observation consumer closes it;
+// each historical digest gets an independent child, never the primary lease.
+func productContinuationDocumentScope(binding: ProductCommandBinding,
+    current: () -> Unit): Result<ContinuationDocumentReadScope> {
+    let installed = match (binding.host.servicePackage(binding.namespace, binding.generation)) {
+        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+    let payment = try {
+        if (!installed.textEquals(PluginDescriptorText.Namespace, binding.namespace) ||
+            !installed.textEquals(PluginDescriptorText.ContentDigest, binding.digest)) {
+            return commandControlError("plugin.command_package_changed") }
+        installed.deriveCopiedDataPayment(65536)
+    } finally { installed.close() }
+    let initial = AtomicBool(true)
+    try {
+        Result.Ok(ContinuationDocumentReadScope({ bytes =>
+            // Constructor calls first, before publication; subsequent calls
+            // belong to the scope's serialized transient digest helper.
+            if (initial.load()) { initial.store(false); payment.ensureRetainedPeak(bytes); payment }
+            else {
+                let child = payment.deriveRetainedLease()
+                try { child.ensureRetainedPeak(bytes); child }
+                catch (error: Exception) { child.close(); throw error }
+            }
+        }, current: current))
+    } catch (_: Exception) {
+        payment.close(); commandControlError("continuation.observation_capacity")
+    }
+}
 
 // Synchronous allocation handoff only; it cannot create an admission or read
 // permission. Until the real owner adopts the selection, any throw releases it.
@@ -129,8 +158,8 @@ class ProductCommandCommitParticipant <: PluginDocumentCommitParticipant {
     func completedDocument(database: SqliteDatabase): Result<(CompletedPluginDocumentObservation, ContinuationDocumentReadScope)> {
         lock.lock()
         let snapshot = try { (documentRevision, documentOperation, documentConfiguration, documentDigest, documentPayload) } finally { lock.unlock() }
-        let scope = try { ContinuationDocumentReadScope({ bytes => reserveNativeDocumentPayload(bytes) }) }
-            catch (_: Exception) { return commandControlError("continuation.observation_capacity") }
+        let scope = match (productContinuationDocumentScope(proposal.binding, { => () })) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         var retained = false
         try {
             let result = database.readTransaction<Result<CompletedPluginDocumentObservation>>({ tx =>
@@ -264,8 +293,8 @@ class ProductContinuationOwner {
         let pending = try { (pendingOrigin, pendingSelection) } finally { lock.unlock() }
         if (pending[0].isNone()) { return Result.Ok(()) }
         let origin = pending[0].getOrThrow()
-        let reading = try { ContinuationDocumentReadScope({ bytes => reserveNativeDocumentPayload(bytes) }, current: { => window.check() }) }
-            catch (_: Exception) { return commandControlError("continuation.observation_capacity") }
+        let reading = match (productContinuationDocumentScope(binding, { => window.check() })) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         let claim = try { database.readTransaction<Result<String>>({ tx =>
             let rows = reading.query(tx, "SELECT a.payload FROM audit_events a JOIN runs r ON r.id=a.run_id AND r.thread_id=a.thread_id " +
                 "JOIN turns t ON t.id=r.turn_id AND t.thread_id=r.thread_id WHERE a.thread_id=? AND a.run_id=? " +
@@ -328,8 +357,8 @@ class ProductContinuationOwner {
         match (selected.current(address.documentKey)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         lock.lock()
         let anchor = try { (watermarkOperation, watermarkRevision, watermarkDigest, anchorRun, anchorClaim, original.getOrThrow()) } finally { lock.unlock() }
-        let reading = try { ContinuationDocumentReadScope({ bytes => reserveNativeDocumentPayload(bytes) }, current: { => window.check() }) }
-            catch (_: Exception) { return commandControlError("continuation.observation_capacity") }
+        let reading = match (productContinuationDocumentScope(binding, { => window.check() })) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         var retained = false
         try {
         let observed = try { database.readTransaction<Result<(Array<CompletedPluginDocumentObservation>, Int64)>>({ tx =>
@@ -383,9 +412,9 @@ class ProductContinuationOwner {
         let request = prepared.requestCopy()
         if (request.sessionId.value != address.threadId.value || request.executionLaneId.value != address.laneId.value || request.prompt != prompt) {
             return commandControlError("continuation.request_changed") }
-        let reading = try { ContinuationDocumentReadScope({ bytes => reserveNativeDocumentPayload(bytes) },
-            current: { => match (selected) { case Some(value) => value.window.check(); case None => () } }) }
-            catch (_: Exception) { return commandControlError("continuation.observation_capacity") }
+        let reading = match (productContinuationDocumentScope(binding,
+            { => match (selected) { case Some(value) => value.window.check(); case None => () } })) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         try { database.readTransaction<Result<ContinuationRunOrigin>>({ tx =>
             let actual = match (facts.readFacts(tx, address)) {
                 case Result.Ok(Some(value)) => value; case Result.Err(error) => return Result.Err(error)

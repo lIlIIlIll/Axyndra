@@ -8,6 +8,7 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_host_runtime" = { path = "../agent_host_runtime", output-type = "static" }
   "logical_json_payload" = { path = "../libs/logical_json_payload", output-type = "static" }
   "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
   "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }

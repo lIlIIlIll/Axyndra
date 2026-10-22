@@ -121,9 +121,21 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                     case Result.Ok(value)=>value } }
             match (primitiveSelection) { case Some(value) => identity.ownPrimitiveConfiguration191(value); case None => () }
             let primitiveSelected=primitiveSelection.isSome()
-            // The owned Primitive loader exports no raw metadata. Other old
-            // operator loaders keep their exact conservative alias marker.
-            if (!dataOnly && !primitiveSelected) { identity.retainCatalogAliases159() }
+            let httpRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                descriptor.requestedCapabilities.contains("network.http")
+            let readViewRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                descriptor.requestedCapabilities.contains("process.readview")
+            let delegationRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                descriptor.requestedCapabilities.contains("tool.readonly")
+            let documentRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
+                descriptor.requestedCapabilities.contains("document.store")
+            // Catalog publishes ordinary descriptors/executors under its own
+            // counted DATA share. Only these legacy configuration callbacks
+            // lack that complete-consumer contract; preserve their marker
+            // before any of the original validation/error branches below.
+            if (httpRequested || readViewRequested || delegationRequested || documentRequested) {
+                identity.retainCatalogAliases159()
+            }
             let primitiveCapabilities:Array<Capability>=match(primitiveSelection) {
                 case Some(value)=>value.additionalCapabilities(toolData.name);case None=>[] }
             let primitiveInvocation=match(primitiveSelection) {
@@ -137,24 +149,16 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
                     let _ = hostManager.unmount(identity.namespace)
                     return hostPluginResourceError("child.primitive_missing", "selected contribution has no actual canonical child backend") }
             }
-            let httpRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
-                descriptor.requestedCapabilities.contains("network.http")
-            let readViewRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
-                descriptor.requestedCapabilities.contains("process.readview")
             if (readViewRequested && (httpRequested || descriptor.requestedCapabilities.contains("workspace.write") ||
                 descriptor.requestedCapabilities.contains("process.channel"))) {
                 let _ = hostManager.unmount(identity.namespace)
                 return hostPluginResourceError("read_view.capability_conflict", "read-view packages cannot combine ambient workspace-write, HTTP or channel grants")
             }
-            let delegationRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
-                descriptor.requestedCapabilities.contains("tool.readonly")
             if (delegationRequested) {
                 for (cap in descriptor.requestedCapabilities where cap != "tool.readonly" && cap != "workspace.read") {
                     let _ = hostManager.unmount(identity.namespace)
                     return hostPluginResourceError("readonly_delegation.capability_conflict", "delegation endpoint cannot also request another effect or service") }
             }
-            let documentRequested = !dataOnly && !primitiveSelected && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
-                descriptor.requestedCapabilities.contains("document.store")
             if (documentRequested && (serviceRuntime.isNone() || descriptor.requestedCapabilities.size != 1)) {
                 let _ = hostManager.unmount(identity.namespace)
                 return hostPluginResourceError("plugin.document_capability_conflict", "document tools require their exact broker and cannot combine unrelated services") }
@@ -242,6 +246,9 @@ private func hostMountCatalogIdentityFrame159(record: ProductPluginRecord,
         // error consumers above retain their separate conservative marker.
         match (catalog.registerBatch(candidates.toArray(), dataPayment: Some(identity))) {
             case Result.Err(error) =>
+                // Dynamic fields can borrow the rejected candidate name. No
+                // successful Catalog share owns this returned Raw error.
+                identity.retainCatalogAliases159()
                 let _ = hostManager.unmount(identity.namespace)
                 Result.Err(error)
             case Result.Ok(_) =>

@@ -25,6 +25,21 @@ let JAVASCRIPT_HOST_MAX_IDENTITY_FIELD_BYTES: Int64 = 256
 public let JAVASCRIPT_HOST_MAX_SERVICE_CALLS: Int64 = 32
 func hostNowMillis(): Int64 { DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() }
 
+foreign func memchr(bytes: CPointer<UInt8>, value: Int32, length: UIntNative): CPointer<UInt8>
+
+// The reader owns this buffer under readLock. Search only its initialized
+// [start,end) span; no String, slice or additional buffer is constructed.
+private func hostBufferedByteIndex(buffer: Array<Byte>, start: Int64, end: Int64, value: UInt8): Int64 {
+    if (start == end) { return end }
+    unsafe {
+        let raw = acquireArrayRawData(buffer)
+        try {
+            let found = memchr(raw.pointer + start, Int32(value), UIntNative(end - start))
+            if (found.isNull()) { end } else { Int64(found.toUIntNative() - raw.pointer.toUIntNative()) }
+        } finally { releaseArrayRawData(raw) }
+    }
+}
+
 public class JavaScriptHostError {
     public let code: String
     public let message: String
@@ -77,6 +92,18 @@ public class JavaScriptToolDescriptor {
 }
 
 public class JavaScriptCommandDescriptor {
+    public let name: String
+    public let description: String
+
+    public init(name: String, description!: String = "") {
+        this.name = name.trimAscii()
+        this.description = description
+    }
+}
+// A view is a declarative presentation identity. It carries no rendering
+// authority, no terminal control and no approval surface: the host chooses
+// what to draw and falls back to its own basic presentation on failure.
+public class JavaScriptViewDescriptor {
     public let name: String
     public let description: String
 
@@ -335,12 +362,10 @@ public class JavaScriptHostLaunchRequest {
             let seen = ArrayList<PluginContributionDefinition>()
             for (contribution in contributions) {
                 if ((contribution.kind != PluginContributionKind.Tool && contribution.kind != PluginContributionKind.Command &&
-                    contribution.kind != PluginContributionKind.View &&
                     contribution.kind != PluginContributionKind.Service && contribution.kind != PluginContributionKind.ModelProvider &&
                     contribution.kind != PluginContributionKind.ContextProvider && contribution.kind != PluginContributionKind.ResourceProvider && contribution.kind != PluginContributionKind.Provider) ||
                     (contribution.kind == PluginContributionKind.Tool && !validToolName(contribution.name)) ||
-                    ((contribution.kind == PluginContributionKind.Command || contribution.kind == PluginContributionKind.View ||
-                        contribution.kind == PluginContributionKind.Service ||
+                    ((contribution.kind == PluginContributionKind.Command || contribution.kind == PluginContributionKind.Service ||
                         contribution.kind == PluginContributionKind.ModelProvider || contribution.kind == PluginContributionKind.ContextProvider ||
                         (contribution.kind == PluginContributionKind.ResourceProvider || contribution.kind == PluginContributionKind.Provider)) &&
                         !validCommandName(contribution.name))) {
@@ -409,6 +434,10 @@ public class JavaScriptHostLaunchRequest {
     }
 }
 
+// Physical connection identity is independent of the immutable wire/mount
+// generation. Only the constructor holding a real ManagedProcess advances it.
+private let javascriptHostWorkerIncarnations = AtomicUInt64(1u64)
+
 public class JavaScriptExtensionHost {
     private var dispatchFence: ?JavaScriptHostDispatchFence
     private var dispatchWriteFrames159: Int64 = 0
@@ -416,6 +445,7 @@ public class JavaScriptExtensionHost {
     private var dispatchDataRetirementPending159 = false
     private let request: JavaScriptHostLaunchRequest
     private let process: ManagedProcess
+    public let workerIncarnation: UInt64
     private let observer: ?JavaScriptHostObserver
     private let stateLock = Mutex()
     private let payloadBudget = NativePayloadProcessBudget()
@@ -441,6 +471,7 @@ public class JavaScriptExtensionHost {
     private var nextInvocation: Int64 = 1
     private var toolsValue: Array<JavaScriptToolDescriptor>
     private var commandsValue: Array<JavaScriptCommandDescriptor>
+    private var viewsValue: Array<JavaScriptViewDescriptor> = []
     private var hooksValue: Array<JavaScriptHookDescriptor>
     private var servicesValue: Array<PluginServiceDescriptor> = []
     private var modelProvidersValue: Array<PluginModelProviderDescriptor> = []
@@ -457,13 +488,16 @@ public class JavaScriptExtensionHost {
         commands: Array<JavaScriptCommandDescriptor>,
         hooks: Array<JavaScriptHookDescriptor>,
         observer: ?JavaScriptHostObserver,
+        views!: Array<JavaScriptViewDescriptor> = [],
         dispatchFence!: ?JavaScriptHostDispatchFence = None
     ) {
         this.dispatchFence = dispatchFence
         this.request = request
         this.process = process
+        this.workerIncarnation = javascriptHostWorkerIncarnations.fetchAdd(1u64)
         this.toolsValue = tools
         this.commandsValue = commands
+        this.viewsValue = views
         this.hooksValue = hooks
         this.observer = observer
         let child = process
@@ -480,6 +514,7 @@ public class JavaScriptExtensionHost {
     public prop extensionVersion: String { get() { request.extensionVersion } }
     public prop tools: Array<JavaScriptToolDescriptor> { get() { toolsValue.clone() } }
     public prop commands: Array<JavaScriptCommandDescriptor> { get() { commandsValue.clone() } }
+    public prop views: Array<JavaScriptViewDescriptor> { get() { viewsValue.clone() } }
     public prop hooks: Array<JavaScriptHookDescriptor> { get() { hooksValue.clone() } }
     public prop services: Array<PluginServiceDescriptor> { get() { servicesValue.clone() } }
     public prop modelProviders: Array<PluginModelProviderDescriptor> { get() { modelProvidersValue.clone() } }
@@ -542,10 +577,10 @@ public class JavaScriptExtensionHost {
         let isContent = identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider"
         let isPrepare = identity.kind == "prepare" || identity.kind == "service_prepare" || isContent
         let isService = identity.kind == "service" || identity.kind == "service_prepare"
-        let physicalTransportRole: Int64 = if (!isService) { 0 } else if (isPrepare) { 1 } else { 2 }
         let payloadLimits: ?ServicePayloadLimits = if (isService && isNativeExecutableHostProfile(request.profile)) { request.payloadLimits } else { None }
         let contentPayload = isContent && contentPayloadEnabled
-        if (toolPayloadLimits.isSome() && (identity.kind != "tool" || !isNativeExecutableHostProfile(request.profile) ||
+        if (toolPayloadLimits.isSome() && ((identity.kind != "tool" && identity.kind != "prepare") ||
+            (identity.kind == "prepare" && serviceRequestLimit != 0) || !isNativeExecutableHostProfile(request.profile) ||
             !ordinaryToolPayloadEnabled || toolPayloadLimits.getOrThrow().contribution != name)) {
             return hostError("extension.tool_payload_unsupported", "ordinary Tool profile requires its exact declared native contribution and host negotiation")
         }
@@ -645,9 +680,6 @@ public class JavaScriptExtensionHost {
         var receiver: ?NativePayloadReceiver = None
         var outgoingPayload: ?NativePayloadProcessReservation = None
         var payloadReturned = false
-        var retainedResponseBytes: Int64 = 0
-        var retainedResponseNodes: Int64 = 0
-        var responseSequence: Int64 = 1
         try {
             cancellation.check()
             if (payloadEnabled) {
@@ -664,9 +696,9 @@ public class JavaScriptExtensionHost {
                 outgoingPayload.getOrThrow().ensureDecoded(argumentsJson.size, logicalJsonNodeCount(argumentsJson))
             }
             let arguments = try {
-                hostPhysicalTransportDiagnostic(1, physicalTransportRole, argumentsJson.size, { => parseUnifiedJson(argumentsJson, maxBytes: if (isPrepare) {
+                parseUnifiedJson(argumentsJson, maxBytes: if (isPrepare) {
                     if (payloadEnabled) { prepareInputLimit } else { min(request.maxFrameBytes, prepareInputLimit) }
-                } else { payloadMessageLimit }, maxDepth: 32) })
+                } else { payloadMessageLimit }, maxDepth: 32)
             } catch (error: Exception) {
                 return hostError("extension.arguments_invalid", error.message)
             }
@@ -675,27 +707,15 @@ public class JavaScriptExtensionHost {
             }
             if (payloadEnabled) {
                 receiver = Some(NativePayloadReceiver(payloadBudget,
-                    min(payloadMessageLimit, payloadResultLimit + 65536),
+                    min(payloadMessageLimit, (if (isPrepare) { prepareOutputLimit } else { payloadResultLimit }) + 65536),
                     payloadWindow, deadline, cancellation, physicalFrameBytes: request.maxFrameBytes,
                     allowServicePayloads: toolPayloadLimits.isSome() && identity.kind == "tool" && !isPrepare && isNativeExecutableHostProfile(request.profile),
                     servicePayloadMaximumBytes: if (toolPayloadLimits.isSome()) { payloadMessageLimit } else { 0 },
                     reserveMaximum: !isContent))
             }
-            let invokeEntries = invocationEnvelopeEntries(
-                "invoke", request, invocationId, toolName, identity
-            )
-            invokeEntries.add(JsonObjectEntry("arguments", arguments))
-            match (inputAttachment) { case Some(value) => invokeEntries.add(JsonObjectEntry("input_attachment", value)); case None => () }
-            if (payloadEnabled) { invokeEntries.add(JsonObjectEntry("payload_window", jsonString(payloadWindow))) }
-            match (toolPayloadLimits) { case Some(value) => invokeEntries.add(JsonObjectEntry("tool_payload_limits", value.value())); case None => () }
-            match (context) {
-                case Some(value) => invokeEntries.add(JsonObjectEntry("context", jsonObject([
-                    JsonObjectEntry("cwd", jsonString(value.cwd)),
-                    JsonObjectEntry("has_ui", jsonBool(!isPrepare && value.hasUI))
-                ])))
-                case None => ()
-            }
-            let invokeFrame = hostPhysicalTransportDiagnostic(2, physicalTransportRole, argumentsJson.size, { => jsonObject(invokeEntries.toArray()).stringify() })
+            let invokeFrame = buildInvocationFrame(invocationId, toolName, identity, arguments,
+                inputAttachment, payloadEnabled, payloadWindow, toolPayloadLimits, context,
+                isPrepare)
             let useLogicalPayload = invokeFrame.size + 1 > request.maxFrameBytes
             if (useLogicalPayload && (!payloadEnabled || invokeFrame.size > payloadMessageLimit)) {
                 return hostError("extension.arguments_too_large", "extension invocation exceeds its approved transport envelope")
@@ -704,337 +724,32 @@ public class JavaScriptExtensionHost {
             // prepare: an endpoint which never reads cannot retain the pipe.
             let guardedWrite = isPrepare || useLogicalPayload || payloadEnabled
             if (!guardedWrite) { writeInvocationLine(invokeFrame) }
-            var timerFuture: ?Future<Unit> = None<Future<Unit>>
             let inputTimer159h: ?JavaScriptHookTimer159h = if ((isHook || identity.kind == "provider" ||
                 ((identity.kind == "tool" || identity.kind == "prepare") && descriptor.isSome() &&
                     descriptor.getOrThrow().executionProfile == PluginToolExecutionProfile.DataOnly)) &&
                 captureHookTimerPayer159h().isSome()) {
                 Some(prepareHookTimer159h(identity, invocationId, toolName))
             } else { None<JavaScriptHookTimer159h> }
-            match (inputTimer159h) {
-                case Some(timerOwner159h) =>
-                    timerOwner159h.installTimer159h({ =>
-                while (!finishSource.token.isCancelled() &&
-                    !cancellation.isCancelled() && hostNowMillis() < deadline) {
-                    sleep(Duration.millisecond)
-                }
-                if (!finishSource.token.isCancelled()) {
-                    let userCause = cancellation.cause()
-                    let cause = match (userCause) {
-                        case Some(value) => value
-                        case None => CancellationCause(
-                            CancellationKind.Deadline,
-                            "extension.invocation_timeout",
-                            "JavaScript extension invocation exceeded its deadline",
-                            occurredAtMillis: hostNowMillis()
-                        )
-                    }
-                    if (userCause.isNone()) {
-                        let _ = timeoutSource.cancel(cause: Some(cause))
-                    }
-                    timerOwner159h.fundCancel159h(cause.code)
-                    let cancelCode159h = String.fromUtf8(cause.code.toArray())
-                    timerOwner159h.installCancel159h({ =>
-                        try {
-                            let cancelEntries = invocationEnvelopeEntries(
-                                "cancel", request, invocationId, toolName, identity
-                            )
-                            cancelEntries.add(JsonObjectEntry("reason", jsonString(cancelCode159h)))
-                            writeLine(jsonObject(cancelEntries.toArray()).stringify())
-                        } catch (_: Exception) {}
-                    })
-                    // A pure preparation may stop reading its input. Its
-                    // cancel write must not delay the bounded force cleanup.
-                    if (guardedWrite) { timerOwner159h.startCancel159h() }
-                    else { timerOwner159h.runCancelFrame159h() }
-                    let cancelDeadline = hostNowMillis() + 100
-                    while (!finishSource.token.isCancelled() &&
-                        !cancelAckSource.token.isCancelled() &&
-                        process.isAlive() && hostNowMillis() < cancelDeadline) {
-                        sleep(Duration.millisecond)
-                    }
-                    if (!finishSource.token.isCancelled() &&
-                        !cancelAckSource.token.isCancelled() && process.isAlive()) {
-                        let _ = process.cancel(cause)
-                    }
-                    timerOwner159h.joinCancel159h()
-                }
-                    })
-                    timerOwner159h.startTimer159h()
-                case None =>
-                    timerFuture = Some(spawn {
-                while (!finishSource.token.isCancelled() &&
-                    !cancellation.isCancelled() && hostNowMillis() < deadline) {
-                    sleep(Duration.millisecond)
-                }
-                if (!finishSource.token.isCancelled()) {
-                    let userCause = cancellation.cause()
-                    let cause = match (userCause) {
-                        case Some(value) => value
-                        case None => CancellationCause(
-                            CancellationKind.Deadline,
-                            "extension.invocation_timeout",
-                            "JavaScript extension invocation exceeded its deadline",
-                            occurredAtMillis: hostNowMillis()
-                        )
-                    }
-                    if (userCause.isNone()) {
-                        let _ = timeoutSource.cancel(cause: Some(cause))
-                    }
-                    let sendCancel = { =>
-                        try {
-                            let cancelEntries = invocationEnvelopeEntries(
-                                "cancel", request, invocationId, toolName, identity
-                            )
-                            cancelEntries.add(JsonObjectEntry("reason", jsonString(cause.code)))
-                            writeLine(jsonObject(cancelEntries.toArray()).stringify())
-                        } catch (_: Exception) {}
-                    }
-                    // A pure preparation may stop reading its input. Its
-                    // cancel write must not delay the bounded force cleanup.
-                    let cancelWrite: ?Future<Unit> = if (guardedWrite) {
-                        Some(spawn { sendCancel() })
-                    } else { sendCancel(); None }
-                    let cancelDeadline = hostNowMillis() + 100
-                    while (!finishSource.token.isCancelled() &&
-                        !cancelAckSource.token.isCancelled() &&
-                        process.isAlive() && hostNowMillis() < cancelDeadline) {
-                        sleep(Duration.millisecond)
-                    }
-                    if (!finishSource.token.isCancelled() &&
-                        !cancelAckSource.token.isCancelled() && process.isAlive()) {
-                        let _ = process.cancel(cause)
-                    }
-                    match (cancelWrite) {
-                        case Some(value) => let _ = value.get()
-                        case None => ()
-                    }
-                }
-                    })
-            }
+            var timerFuture = startInvocationWatchdog(inputTimer159h, invocationId, toolName,
+                identity, cancellation, finishSource, timeoutSource, cancelAckSource, deadline, guardedWrite)
             try {
                 // Start the preparation watchdog before a potentially blocked
                 // stdin write. Other invocation kinds keep their prior order.
                 if (useLogicalPayload) {
-                    hostPhysicalTransportDiagnostic(3, physicalTransportRole, invokeFrame.size, { => writeNativePayload(request, invocationId, toolName, identity, payloadWindow,
+                    writeNativePayload(request, invocationId, toolName, identity, payloadWindow,
                         invokeFrame, payloadMessageLimit, cancellation, deadline,
-                        { frame => writeInvocationLine(frame) }) })
-                } else if (guardedWrite) { hostPhysicalTransportDiagnostic(3, physicalTransportRole, invokeFrame.size, { => writeInvocationLine(invokeFrame) }) }
-                var progressCount = 0
-                var serviceRequestCount: Int64 = 0
-                // Service-only quotas may be larger; duplicate detection must
-                // remain linear overall, rather than scanning every prior id.
-                let serviceRequestIds = HashSet<String>()
-                let decodeReceiver = receiver
-                let parseReservation: ?(String) -> Unit = if (payloadEnabled) {
-                    Some({ text => decodeReceiver.getOrThrow().ensurePhysical(text) })
-                } else { None }
-                while (true) {
-                    var message = hostPhysicalTransportDiagnostic(4, physicalTransportRole, 0, { => readMessage(
-                        finishSource.token,
-                        deadline + 1100,
-                        maxFrameBytes: if (isPrepare) {
-                            if (payloadEnabled) { request.maxFrameBytes } else { min(request.maxFrameBytes, prepareOutputLimit) }
-                        } else { 0 }, payloadReserved: payloadEnabled, parseReservation: parseReservation
-                    ) })
-                    let incomingType = textField(message, "type")
-                    if (incomingType == "result" && payloadEnabled && textField(message, "payload_window") != payloadWindow) {
-                        closeAfterProtocolFailure()
-                        return hostError("extension.protocol_identity_mismatch", "profile result differs from its invocation window")
-                    }
-                    if (incomingType == "register_tool") {
-                        closeAfterProtocolFailure()
-                        return hostError(
-                            "extension.tool_registration_unsupported",
-                            "tool registration after the ready handshake is unsupported; the Run tool set is frozen"
-                        )
-                    }
-                    if (!matchesInvocationEnvelope(
-                        message, request, invocationId, toolName, identity
-                    )) {
-                        closeAfterProtocolFailure()
-                        return hostError(
-                            "extension.protocol_identity_mismatch",
-                            "extension response does not match the active invocation"
-                        )
-                    }
-                    if (textField(message, "type").startsWith("payload_")) {
-                        let logical = match (receiver) { case Some(value) => value; case None =>
-                            closeAfterProtocolFailure(); return hostError("extension.payload_unsupported", "logical payload is not enabled for this invocation") }
-                        let physicalPayloadMessage = message
-                        let expectedServicePayloadSequence = serviceRequestCount + 2
-                        match (hostPhysicalTransportDiagnostic(5, physicalTransportRole, 0, { => logical.accept(physicalPayloadMessage,
-                            serviceSequence: expectedServicePayloadSequence) })) { case None => continue; case Some(value) => message = value }
-                        if (!matchesInvocationEnvelope(message, request, invocationId, toolName, identity) ||
-                            textField(message, "payload_window") != payloadWindow) {
-                            closeAfterProtocolFailure()
-                            return hostError("extension.protocol_identity_mismatch", "logical result differs from its complete invocation identity")
-                        }
-                    } else if (receiver.isSome() && receiver.getOrThrow().pending && textField(message, "type") != "cancelled") {
-                        closeAfterProtocolFailure()
-                        return hostError("extension.payload_overlap", "normal frame interrupted a logical payload transfer")
-                    }
-                    let messageType = textField(message, "type")
-                    if (isPrepare && (messageType == "progress" || messageType == "service_request")) {
-                        closeAfterProtocolFailure()
-                        return hostError("extension.prepare_effect_forbidden",
-                            "pure preparation cannot emit progress or request host services")
-                    }
-                    if (messageType == "progress") {
-                        if (!hasField(message, "progress")) {
-                            closeAfterProtocolFailure()
-                            return hostError("extension.protocol_progress_invalid", "progress frame omitted its payload")
-                        }
-                        progressCount += 1
-                        if (progressCount > 128) {
-                            closeAfterProtocolFailure()
-                            return hostError("extension.protocol_progress_limit", "extension exceeded the progress-frame limit")
-                        }
-                        if (invocationCancellationCause(cancellation, timeoutSource).isNone()) {
-                            match (invocationObserver) {
-                                case Some(value) => match (value.onProgress(
-                                    invocationId, fieldJson(message, "progress")
-                                )) {
-                                    case JavaScriptHostResult.Ok(_) => ()
-                                    case JavaScriptHostResult.Err(error) =>
-                                        closeAfterProtocolFailure()
-                                        return JavaScriptHostResult.Err(error)
-                                }
-                                case None => ()
-                            }
-                        }
-                        continue
-                    }
-                    if (messageType == "service_request") {
-                        let requestId = textField(message, "request_id")
-                        let service = textField(message, "service")
-                        if (!validToolName(requestId) ||
-                            !validToolName(service) || !isObjectField(message, "arguments")) {
-                            closeAfterProtocolFailure()
-                            return hostError(
-                                "extension.protocol_service_invalid",
-                                "service request requires a bounded id, name, and object arguments"
-                            )
-                        }
-                        if (serviceRequestIds.contains(requestId)) {
-                            closeAfterProtocolFailure()
-                            return hostError(
-                                "extension.protocol_service_duplicate",
-                                "service request id was reused within one invocation"
-                            )
-                        }
-                        serviceRequestIds.add(requestId)
-                        serviceRequestCount += 1
-                        if (serviceRequestCount > serviceRequestLimit) {
-                            closeAfterProtocolFailure()
-                            return hostError(
-                                "extension.protocol_service_limit",
-                                "extension exceeded the per-invocation service request limit"
-                            )
-                        }
-                        match (invocationCancellationCause(cancellation, timeoutSource)) {
-                            case Some(cause) =>
-                                closeForCancellation(cause)
-                                return hostError(cause.code, cause.message)
-                            case None => ()
-                        }
-                        let physicalBrokerMessage = message
-                        let serviceResult = match (invocationObserver) {
-                            case Some(value) => hostPhysicalTransportDiagnostic(6, physicalTransportRole, 0, { => value.onServiceRequest(
-                                invocationId,
-                                requestId,
-                                service,
-                                fieldJson(physicalBrokerMessage, "arguments")
-                            ) })
-                            case None => hostError<String>(
-                                "extension.service_unsupported",
-                                "no host service adapter is configured for this extension invocation"
-                            )
-                        }
-                        // Sub-results remain live in the plugin interpreter until this
-                        // invocation terminates. Grow the existing outgoing allocation;
-                        // never borrow a third process transfer or refund per callback.
-                        let responseMaximum = match (toolPayloadLimits) { case Some(value) => value.maxServiceResponseBytes; case None => request.maxFrameBytes }
-                        if (toolPayloadLimits.isSome()) {
-                            match (serviceResult) { case JavaScriptHostResult.Ok(source) =>
-                                if (source.size > responseMaximum) { closeAfterProtocolFailure(); return hostError("extension.service_result_too_large", "service result exceeds the selected ordinary Tool profile") }
-                                retainedResponseBytes += source.size
-                                retainedResponseNodes += logicalJsonNodeCount(source)
-                                outgoingPayload.getOrThrow().ensureDecoded(argumentsJson.size + retainedResponseBytes + 65536,
-                                    logicalJsonNodeCount(argumentsJson) + retainedResponseNodes)
-                                case _ => () }
-                        }
-                        let responseFrame = match (hostPhysicalTransportDiagnostic(7, physicalTransportRole, 0, { => javascriptServiceResponseFrame(
-                            request,
-                            invocationId,
-                            toolName,
-                            identity,
-                            requestId,
-                            serviceResult,
-                            resultMaximum: responseMaximum, messageMaximum: if (toolPayloadLimits.isSome()) { payloadMessageLimit } else { request.maxFrameBytes }
-                        ) })) {
-                            case JavaScriptHostResult.Ok(value) => value
-                            case JavaScriptHostResult.Err(error) =>
-                                closeAfterProtocolFailure()
-                                return JavaScriptHostResult.Err(error)
-                        }
-                        responseSequence++
-                        if (responseFrame.size + 1 > request.maxFrameBytes && toolPayloadLimits.isSome()) {
-                            let physicalWriteSequence = responseSequence
-                            hostPhysicalTransportDiagnostic(8, physicalTransportRole, responseFrame.size, { => writeNativeServicePayload(request, invocationId, toolName, identity, payloadWindow, physicalWriteSequence,
-                                responseFrame, payloadMessageLimit, cancellation, deadline, { frame => writeInvocationLine(frame) }) })
-                        } else { hostPhysicalTransportDiagnostic(8, physicalTransportRole, responseFrame.size, { => writeInvocationLine(responseFrame) }) }
-                        match (receiver) { case Some(value) => value.clearCompletedServicePayload(); case None => () }
-                        continue
-                    }
-                    if (messageType == "cancelled") {
-                        let cause = match (invocationCancellationCause(cancellation, timeoutSource)) {
-                            case Some(value) => value
-                            case None =>
-                                closeAfterProtocolFailure()
-                                return hostError("extension.protocol_unexpected_cancel", "extension cancelled an invocation without a host cancellation")
-                        }
-                        let _ = cancelAckSource.cancel()
-                        closeForCancellation(cause)
-                        return hostError(cause.code, cause.message)
-                    }
-                    if (messageType != "result" || !isBooleanField(message, "ok") ||
-                        !hasField(message, "result")) {
-                        closeAfterProtocolFailure()
-                        return hostError(
-                            "extension.protocol_unexpected_message",
-                            "extension returned an invalid or unexpected protocol message"
-                        )
-                    }
-                    match (invocationCancellationCause(cancellation, timeoutSource)) {
-                        case Some(cause) =>
-                            closeForCancellation(cause)
-                            return hostError(cause.code, cause.message)
-                        case None => ()
-                    }
-                    let physicalTerminalMessage = message
-                    let resultJson = hostPhysicalTransportDiagnostic(9, physicalTransportRole, 0, { => fieldJson(physicalTerminalMessage, "result") })
-                    if (payloadEnabled && resultJson.size >
-                        payloadResultLimit) {
-                        closeAfterProtocolFailure()
-                        return hostError("extension.payload_result_limit", "logical result exceeds its approved bound")
-                    }
-                    let result = JavaScriptHostInvocationResult(invocationId, resultJson, isError: !boolField(message, "ok"))
-                    if (payloadEnabled) {
-                        if (toolPayloadLimits.isSome()) {
-                            outgoingPayload.getOrThrow().detachTransfer()
-                            receiver.getOrThrow().detachTransfer()
-                        }
-                        let ownedOutgoing = outgoingPayload
-                        let ownedReceiver = receiver
-                        result.retainPayload({ =>
-                            match (ownedOutgoing) { case Some(value) => value.close(); case None => () }
-                            match (ownedReceiver) { case Some(value) => value.close(); case None => () }
-                        })
-                        payloadReturned = true
-                    }
-                    return JavaScriptHostResult.Ok(result)
+                        { frame => writeInvocationLine(frame) })
+                } else if (guardedWrite) { writeInvocationLine(invokeFrame) }
+                let answer = readInvocationFrames(invocationId, toolName, identity, argumentsJson,
+                    cancellation, finishSource, timeoutSource, cancelAckSource, deadline,
+                    serviceRequestLimit, isPrepare, payloadEnabled, payloadWindow, payloadMessageLimit,
+                    payloadResultLimit, prepareOutputLimit, toolPayloadLimits,
+                    invocationObserver, receiver, outgoingPayload)
+                match (answer) {
+                    case JavaScriptHostResult.Ok(_) => payloadReturned = payloadEnabled
+                    case JavaScriptHostResult.Err(_) => ()
                 }
+                return answer
             } finally {
                 let _ = finishSource.cancel()
                 let _ = cancelAckSource.cancel()
@@ -1088,6 +803,369 @@ public class JavaScriptExtensionHost {
         }
         hostError("extension.protocol_failed", "extension invocation loop ended")
     }
+
+    private func buildInvocationFrame(invocationId: String, toolName: String,
+        identity: JavaScriptHostInvocationIdentity, arguments: JsonNode,
+        inputAttachment: ?JsonNode, payloadEnabled: Bool, payloadWindow: String,
+        toolPayloadLimits: ?OrdinaryToolPayloadLimits, context: ?JavaScriptHostInvocationContext,
+        isPrepare: Bool): String {
+        let invokeEntries = invocationEnvelopeEntries(
+            "invoke", request, invocationId, toolName, identity
+        )
+        invokeEntries.add(JsonObjectEntry("arguments", arguments))
+        match (inputAttachment) { case Some(value) => invokeEntries.add(JsonObjectEntry("input_attachment", value)); case None => () }
+        if (payloadEnabled) { invokeEntries.add(JsonObjectEntry("payload_window", jsonString(payloadWindow))) }
+        match (toolPayloadLimits) { case Some(value) => invokeEntries.add(JsonObjectEntry("tool_payload_limits", value.value())); case None => () }
+        match (context) {
+            case Some(value) => invokeEntries.add(JsonObjectEntry("context", jsonObject([
+                JsonObjectEntry("cwd", jsonString(value.cwd)),
+                JsonObjectEntry("has_ui", jsonBool(!isPrepare && value.hasUI))
+            ])))
+            case None => ()
+        }
+        jsonObject(invokeEntries.toArray()).stringify()
+    }
+
+    // Watchdog installation ends before any response I/O; callbacks retain
+    // the same cancellation sources, frozen identity and paid timer owner.
+    private func startInvocationWatchdog(inputTimer159h: ?JavaScriptHookTimer159h,
+        invocationId: String, toolName: String, identity: JavaScriptHostInvocationIdentity,
+        cancellation: CancellationToken, finishSource: CancellationSource,
+        timeoutSource: CancellationSource, cancelAckSource: CancellationSource,
+        deadline: Int64, guardedWrite: Bool): ?Future<Unit> {
+        match (inputTimer159h) {
+            case Some(timerOwner159h) =>
+                timerOwner159h.installTimer159h({ =>
+            while (!finishSource.token.isCancelled() &&
+                !cancellation.isCancelled() && hostNowMillis() < deadline) {
+                sleep(Duration.millisecond)
+            }
+            if (!finishSource.token.isCancelled()) {
+                let userCause = cancellation.cause()
+                let cause = match (userCause) {
+                    case Some(value) => value
+                    case None => CancellationCause(
+                        CancellationKind.Deadline,
+                        "extension.invocation_timeout",
+                        "JavaScript extension invocation exceeded its deadline",
+                        occurredAtMillis: hostNowMillis()
+                    )
+                }
+                if (userCause.isNone()) {
+                    let _ = timeoutSource.cancel(cause: Some(cause))
+                }
+                timerOwner159h.fundCancel159h(cause.code)
+                let cancelCode159h = String.fromUtf8(cause.code.toArray())
+                timerOwner159h.installCancel159h({ =>
+                    try {
+                        let cancelEntries = invocationEnvelopeEntries(
+                            "cancel", request, invocationId, toolName, identity
+                        )
+                        cancelEntries.add(JsonObjectEntry("reason", jsonString(cancelCode159h)))
+                        writeLine(jsonObject(cancelEntries.toArray()).stringify())
+                    } catch (_: Exception) {}
+                })
+                // A pure preparation may stop reading its input. Its
+                // cancel write must not delay the bounded force cleanup.
+                if (guardedWrite) { timerOwner159h.startCancel159h() }
+                else { timerOwner159h.runCancelFrame159h() }
+                let cancelDeadline = hostNowMillis() + 100
+                while (!finishSource.token.isCancelled() &&
+                    !cancelAckSource.token.isCancelled() &&
+                    process.isAlive() && hostNowMillis() < cancelDeadline) {
+                    sleep(Duration.millisecond)
+                }
+                if (!finishSource.token.isCancelled() &&
+                    !cancelAckSource.token.isCancelled() && process.isAlive()) {
+                    let _ = process.cancel(cause)
+                }
+                timerOwner159h.joinCancel159h()
+            }
+                })
+                timerOwner159h.startTimer159h()
+                None<Future<Unit>>
+            case None =>
+                Some(spawn {
+            while (!finishSource.token.isCancelled() &&
+                !cancellation.isCancelled() && hostNowMillis() < deadline) {
+                sleep(Duration.millisecond)
+            }
+            if (!finishSource.token.isCancelled()) {
+                let userCause = cancellation.cause()
+                let cause = match (userCause) {
+                    case Some(value) => value
+                    case None => CancellationCause(
+                        CancellationKind.Deadline,
+                        "extension.invocation_timeout",
+                        "JavaScript extension invocation exceeded its deadline",
+                        occurredAtMillis: hostNowMillis()
+                    )
+                }
+                if (userCause.isNone()) {
+                    let _ = timeoutSource.cancel(cause: Some(cause))
+                }
+                let sendCancel = { =>
+                    try {
+                        let cancelEntries = invocationEnvelopeEntries(
+                            "cancel", request, invocationId, toolName, identity
+                        )
+                        cancelEntries.add(JsonObjectEntry("reason", jsonString(cause.code)))
+                        writeLine(jsonObject(cancelEntries.toArray()).stringify())
+                    } catch (_: Exception) {}
+                }
+                // A pure preparation may stop reading its input. Its
+                // cancel write must not delay the bounded force cleanup.
+                let cancelWrite: ?Future<Unit> = if (guardedWrite) {
+                    Some(spawn { sendCancel() })
+                } else { sendCancel(); None }
+                let cancelDeadline = hostNowMillis() + 100
+                while (!finishSource.token.isCancelled() &&
+                    !cancelAckSource.token.isCancelled() &&
+                    process.isAlive() && hostNowMillis() < cancelDeadline) {
+                    sleep(Duration.millisecond)
+                }
+                if (!finishSource.token.isCancelled() &&
+                    !cancelAckSource.token.isCancelled() && process.isAlive()) {
+                    let _ = process.cancel(cause)
+                }
+                match (cancelWrite) {
+                    case Some(value) => let _ = value.get()
+                    case None => ()
+                }
+            }
+                })
+        }
+    }
+    // Submission and response consumption have separate stack lifetimes. The
+    // same invocation, watchdogs and paid payload owners cross this private cut.
+    private func readInvocationFrames(invocationId: String, toolName: String,
+        identity: JavaScriptHostInvocationIdentity, argumentsJson: String,
+        cancellation: CancellationToken, finishSource: CancellationSource,
+        timeoutSource: CancellationSource, cancelAckSource: CancellationSource,
+        deadline: Int64, serviceRequestLimit: Int64, isPrepare: Bool,
+        payloadEnabled: Bool, payloadWindow: String, payloadMessageLimit: Int64,
+        payloadResultLimit: Int64, prepareOutputLimit: Int64,
+        toolPayloadLimits: ?OrdinaryToolPayloadLimits,
+        invocationObserver: ?JavaScriptHostObserver, receiver: ?NativePayloadReceiver,
+        outgoingPayload: ?NativePayloadProcessReservation
+    ): JavaScriptHostResult<JavaScriptHostInvocationResult> {
+        var retainedResponseBytes: Int64 = 0
+        var retainedResponseNodes: Int64 = 0
+        var responseSequence: Int64 = 1
+        var progressCount = 0
+        var serviceRequestCount: Int64 = 0
+        // Service-only quotas may be larger; duplicate detection must
+        // remain linear overall, rather than scanning every prior id.
+        let serviceRequestIds = HashSet<String>()
+        let decodeReceiver = receiver
+        let parseReservation: ?(String) -> Unit = if (payloadEnabled) {
+            Some({ text => decodeReceiver.getOrThrow().ensurePhysical(text) })
+        } else { None }
+        while (true) {
+            var message = readMessage(
+                finishSource.token,
+                deadline + 1100,
+                maxFrameBytes: if (isPrepare) {
+                    if (payloadEnabled) { request.maxFrameBytes } else { min(request.maxFrameBytes, prepareOutputLimit) }
+                } else { 0 }, payloadReserved: payloadEnabled, parseReservation: parseReservation
+            )
+            let incomingType = textField(message, "type")
+            if (incomingType == "result" && payloadEnabled && textField(message, "payload_window") != payloadWindow) {
+                closeAfterProtocolFailure()
+                return hostError("extension.protocol_identity_mismatch", "profile result differs from its invocation window")
+            }
+            if (incomingType == "register_tool") {
+                closeAfterProtocolFailure()
+                return hostError(
+                    "extension.tool_registration_unsupported",
+                    "tool registration after the ready handshake is unsupported; the Run tool set is frozen"
+                )
+            }
+            if (!matchesInvocationEnvelope(
+                message, request, invocationId, toolName, identity
+            )) {
+                closeAfterProtocolFailure()
+                return hostError(
+                    "extension.protocol_identity_mismatch",
+                    "extension response does not match the active invocation"
+                )
+            }
+            if (textField(message, "type").startsWith("payload_")) {
+                let logical = match (receiver) { case Some(value) => value; case None =>
+                    closeAfterProtocolFailure(); return hostError("extension.payload_unsupported", "logical payload is not enabled for this invocation") }
+                let expectedServicePayloadSequence = serviceRequestCount + 2
+                match (logical.accept(message,
+                    serviceSequence: expectedServicePayloadSequence)) { case None => continue; case Some(value) => message = value }
+                if (!matchesInvocationEnvelope(message, request, invocationId, toolName, identity) ||
+                    textField(message, "payload_window") != payloadWindow) {
+                    closeAfterProtocolFailure()
+                    return hostError("extension.protocol_identity_mismatch", "logical result differs from its complete invocation identity")
+                }
+            } else if (receiver.isSome() && receiver.getOrThrow().pending && textField(message, "type") != "cancelled") {
+                closeAfterProtocolFailure()
+                return hostError("extension.payload_overlap", "normal frame interrupted a logical payload transfer")
+            }
+            let messageType = textField(message, "type")
+            if (isPrepare && (messageType == "progress" || messageType == "service_request")) {
+                closeAfterProtocolFailure()
+                return hostError("extension.prepare_effect_forbidden",
+                    "pure preparation cannot emit progress or request host services")
+            }
+            if (messageType == "progress") {
+                if (!hasField(message, "progress")) {
+                    closeAfterProtocolFailure()
+                    return hostError("extension.protocol_progress_invalid", "progress frame omitted its payload")
+                }
+                progressCount += 1
+                if (progressCount > 128) {
+                    closeAfterProtocolFailure()
+                    return hostError("extension.protocol_progress_limit", "extension exceeded the progress-frame limit")
+                }
+                if (invocationCancellationCause(cancellation, timeoutSource).isNone()) {
+                    match (invocationObserver) {
+                        case Some(value) => match (value.onProgress(
+                            invocationId, fieldJson(message, "progress")
+                        )) {
+                            case JavaScriptHostResult.Ok(_) => ()
+                            case JavaScriptHostResult.Err(error) =>
+                                closeAfterProtocolFailure()
+                                return JavaScriptHostResult.Err(error)
+                        }
+                        case None => ()
+                    }
+                }
+                continue
+            }
+            if (messageType == "service_request") {
+                let requestId = textField(message, "request_id")
+                let service = textField(message, "service")
+                if (!validToolName(requestId) ||
+                    !validToolName(service) || !isObjectField(message, "arguments")) {
+                    closeAfterProtocolFailure()
+                    return hostError(
+                        "extension.protocol_service_invalid",
+                        "service request requires a bounded id, name, and object arguments"
+                    )
+                }
+                if (serviceRequestIds.contains(requestId)) {
+                    closeAfterProtocolFailure()
+                    return hostError(
+                        "extension.protocol_service_duplicate",
+                        "service request id was reused within one invocation"
+                    )
+                }
+                serviceRequestIds.add(requestId)
+                serviceRequestCount += 1
+                if (serviceRequestCount > serviceRequestLimit) {
+                    closeAfterProtocolFailure()
+                    return hostError(
+                        "extension.protocol_service_limit",
+                        "extension exceeded the per-invocation service request limit"
+                    )
+                }
+                match (invocationCancellationCause(cancellation, timeoutSource)) {
+                    case Some(cause) =>
+                        closeForCancellation(cause)
+                        return hostError(cause.code, cause.message)
+                    case None => ()
+                }
+                let serviceResult = match (invocationObserver) {
+                    case Some(value) => value.onServiceRequest(
+                        invocationId,
+                        requestId,
+                        service,
+                        fieldJson(message, "arguments")
+                    )
+                    case None => hostError<String>(
+                        "extension.service_unsupported",
+                        "no host service adapter is configured for this extension invocation"
+                    )
+                }
+                // Sub-results remain live in the plugin interpreter until this
+                // invocation terminates. Grow the existing outgoing allocation;
+                // never borrow a third process transfer or refund per callback.
+                let responseMaximum = match (toolPayloadLimits) { case Some(value) => value.maxServiceResponseBytes; case None => request.maxFrameBytes }
+                if (toolPayloadLimits.isSome()) {
+                    match (serviceResult) { case JavaScriptHostResult.Ok(source) =>
+                        if (source.size > responseMaximum) { closeAfterProtocolFailure(); return hostError("extension.service_result_too_large", "service result exceeds the selected ordinary Tool profile") }
+                        retainedResponseBytes += source.size
+                        retainedResponseNodes += logicalJsonNodeCount(source)
+                        outgoingPayload.getOrThrow().ensureDecoded(argumentsJson.size + retainedResponseBytes + 65536,
+                            logicalJsonNodeCount(argumentsJson) + retainedResponseNodes)
+                        case _ => () }
+                }
+                let responseFrame = match (javascriptServiceResponseFrame(
+                    request,
+                    invocationId,
+                    toolName,
+                    identity,
+                    requestId,
+                    serviceResult,
+                    resultMaximum: responseMaximum, messageMaximum: if (toolPayloadLimits.isSome()) { payloadMessageLimit } else { request.maxFrameBytes },
+                    payloadWindow: payloadWindow
+                )) {
+                    case JavaScriptHostResult.Ok(value) => value
+                    case JavaScriptHostResult.Err(error) =>
+                        closeAfterProtocolFailure()
+                        return JavaScriptHostResult.Err(error)
+                }
+                responseSequence++
+                if (responseFrame.size + 1 > request.maxFrameBytes && toolPayloadLimits.isSome()) {
+                    writeNativeServicePayload(request, invocationId, toolName, identity, payloadWindow, responseSequence,
+                        responseFrame, payloadMessageLimit, cancellation, deadline, { frame => writeInvocationLine(frame) })
+                } else { writeInvocationLine(responseFrame) }
+                match (receiver) { case Some(value) => value.clearCompletedServicePayload(); case None => () }
+                continue
+            }
+            if (messageType == "cancelled") {
+                let cause = match (invocationCancellationCause(cancellation, timeoutSource)) {
+                    case Some(value) => value
+                    case None =>
+                        closeAfterProtocolFailure()
+                        return hostError("extension.protocol_unexpected_cancel", "extension cancelled an invocation without a host cancellation")
+                }
+                let _ = cancelAckSource.cancel()
+                closeForCancellation(cause)
+                return hostError(cause.code, cause.message)
+            }
+            if (messageType != "result" || !isBooleanField(message, "ok") ||
+                !hasField(message, "result")) {
+                closeAfterProtocolFailure()
+                return hostError(
+                    "extension.protocol_unexpected_message",
+                    "extension returned an invalid or unexpected protocol message"
+                )
+            }
+            match (invocationCancellationCause(cancellation, timeoutSource)) {
+                case Some(cause) =>
+                    closeForCancellation(cause)
+                    return hostError(cause.code, cause.message)
+                case None => ()
+            }
+            let resultJson = fieldJson(message, "result")
+            if (payloadEnabled && resultJson.size >
+                payloadResultLimit) {
+                closeAfterProtocolFailure()
+                return hostError("extension.payload_result_limit", "logical result exceeds its approved bound")
+            }
+            let result = JavaScriptHostInvocationResult(invocationId, resultJson, isError: !boolField(message, "ok"))
+            if (payloadEnabled) {
+                if (toolPayloadLimits.isSome()) {
+                    outgoingPayload.getOrThrow().detachTransfer()
+                    receiver.getOrThrow().detachTransfer()
+                }
+                let ownedOutgoing = outgoingPayload
+                let ownedReceiver = receiver
+                result.retainPayload({ =>
+                    match (ownedOutgoing) { case Some(value) => value.close(); case None => () }
+                    match (ownedReceiver) { case Some(value) => value.close(); case None => () }
+                })
+            }
+            return JavaScriptHostResult.Ok(result)
+        }
+        hostError("extension.protocol_failed", "extension invocation loop ended")
+    }
+
 
     public func close(): Unit {
         if (!markClosed()) { return }
@@ -1299,6 +1377,9 @@ public class JavaScriptExtensionHost {
     func setCommands(commands: Array<JavaScriptCommandDescriptor>): Unit {
         commandsValue = commands
     }
+    func setViews(views: Array<JavaScriptViewDescriptor>): Unit {
+        viewsValue = views
+    }
     func setHooks(hooks: Array<JavaScriptHookDescriptor>): Unit {
         hooksValue = hooks
     }
@@ -1452,6 +1533,8 @@ public class JavaScriptExtensionHost {
             }
             let output = ArrayList<Byte>()
             var wireBytes: Int64 = 0
+            var lineFeed: Int64 = -1
+            var carriageReturn: Int64 = -1
             while (true) {
                 // Bound local work between cancellation/deadline checks. Do
                 // not perform a UTC conversion and mutex query per wire byte.
@@ -1464,6 +1547,7 @@ public class JavaScriptExtensionHost {
                 if (readBufferOffset == readBufferCount) {
                     readBufferCount = process.stdout.read(readBuffer)
                     readBufferOffset = 0
+                    lineFeed = -1; carriageReturn = -1
                     if (readBufferCount <= 0) {
                         throw ProcessError(ProcessErrorKind.Exit, "extension stdout closed before a response")
                     }
@@ -1472,16 +1556,23 @@ public class JavaScriptExtensionHost {
                         throw ProcessError(ProcessErrorKind.DeadlineExceeded, "extension protocol read exceeded its deadline")
                     }
                 }
-                // The original8192-byte payment covers7936 read bytes and
-                // at most256 temporary slice bytes. No extra cache/owner.
-                // Copy ordinary bytes once per original cancellation quantum.
+                // Search each delimiter once per initialized buffered span
+                // with bounded memchr, not generic per-byte array callbacks.
+                // The original 8192-byte payment still covers the 7936-byte
+                // buffer and at most 256 temporary slice bytes.
+                if (lineFeed < readBufferOffset) {
+                    lineFeed = hostBufferedByteIndex(readBuffer, readBufferOffset, readBufferCount, 10u8)
+                }
+                if (carriageReturn < readBufferOffset) {
+                    carriageReturn = hostBufferedByteIndex(readBuffer, readBufferOffset, readBufferCount, 13u8)
+                }
                 // Clip to the first violating byte of either original cap,
                 // preserving exception precedence and the remaining cursor.
                 var batchLimit = min(readBufferCount - readBufferOffset, 256 - wireBytes % 256)
                 if (maxFrameBytes > 0) { batchLimit = min(batchLimit, max(1, maxFrameBytes - wireBytes + 1)) }
                 batchLimit = min(batchLimit, max(1, request.maxFrameBytes - output.size + 1))
-                let begin = readBufferOffset; var end = begin
-                while (end < begin + batchLimit && readBuffer[end] != 10u8 && readBuffer[end] != 13u8) { end += 1 }
+                let begin = readBufferOffset
+                let end = min(begin + batchLimit, min(lineFeed, carriageReturn))
                 let count = end - begin
                 if (count > 0) {
                     readBufferOffset = end; wireBytes += count
@@ -1754,18 +1845,23 @@ func completePluginHostHandshake(request: JavaScriptHostLaunchRequest,
                         host.closeAfterProtocolFailure()
                         JavaScriptHostResult.Err(error)
                     case JavaScriptHostResult.Ok(commandValues) =>
+                      match (parseViews(ready)) {
+                       case JavaScriptHostResult.Err(error) =>
+                        host.closeAfterProtocolFailure()
+                        JavaScriptHostResult.Err(error)
+                       case JavaScriptHostResult.Ok(viewValues) =>
                         match (parseHooks(ready)) {
                             case JavaScriptHostResult.Err(error) =>
                                 host.closeAfterProtocolFailure()
                                 JavaScriptHostResult.Err(error)
                             case JavaScriptHostResult.Ok(hookValues) =>
                                 if (isNativeExecutableHostProfile(request.profile) &&
-                                    !matchesNativePluginContributions(request.contributions, toolValues, commandValues, hookValues, services: services, modelProviders: modelProviders, contextProviders: contextProviders, resourceProviders: resourceProviders, policyProviders: policyProviders)) {
+                                    !matchesNativePluginContributions(request.contributions, toolValues, commandValues, hookValues, views: viewValues, services: services, modelProviders: modelProviders, contextProviders: contextProviders, resourceProviders: resourceProviders, policyProviders: policyProviders)) {
                                     host.closeAfterProtocolFailure()
                                     return hostError("extension.contributions_mismatch",
                                         "native ready contributions differ from the inspected package manifest")
                                 }
-                                if (toolValues.isEmpty() && commandValues.isEmpty() && hookValues.isEmpty() && services.isEmpty() && modelProviders.isEmpty() && contextProviders.isEmpty() && resourceProviders.isEmpty() && policyProviders.isEmpty()) {
+                                if (toolValues.isEmpty() && commandValues.isEmpty() && viewValues.isEmpty() && hookValues.isEmpty() && services.isEmpty() && modelProviders.isEmpty() && contextProviders.isEmpty() && resourceProviders.isEmpty() && policyProviders.isEmpty()) {
                                     host.closeAfterProtocolFailure()
                                     return hostError(
                                         "extension.registration_empty",
@@ -1810,9 +1906,11 @@ func completePluginHostHandshake(request: JavaScriptHostLaunchRequest,
                                 host.setPolicyProviders(policyProviders)
                                 host.setTools(toolValues)
                                 host.setCommands(commandValues)
+                                host.setViews(viewValues)
                                 host.setHooks(hookValues)
                                 JavaScriptHostResult.Ok(host)
                         }
+                      }
                 }
         }
     } catch (error: ProcessError) {
@@ -1838,13 +1936,14 @@ func matchesNativePluginContributions(
     tools: Array<JavaScriptToolDescriptor>,
     commands: Array<JavaScriptCommandDescriptor>,
     hooks: Array<JavaScriptHookDescriptor>,
+    views!: Array<JavaScriptViewDescriptor> = [],
     services!: Array<PluginServiceDescriptor> = [],
     modelProviders!: Array<PluginModelProviderDescriptor> = [],
     contextProviders!: Array<PluginContentProviderDescriptor> = [],
     resourceProviders!: Array<PluginContentProviderDescriptor> = [],
     policyProviders!: Array<PluginContentProviderDescriptor> = []
 ): Bool {
-    if (!hooks.isEmpty() || declared.size != tools.size + commands.size + services.size + modelProviders.size + contextProviders.size + resourceProviders.size + policyProviders.size) { return false }
+    if (!hooks.isEmpty() || declared.size != tools.size + commands.size + views.size + services.size + modelProviders.size + contextProviders.size + resourceProviders.size + policyProviders.size) { return false }
     for (contribution in declared) {
         var found = false
         if (contribution.kind == PluginContributionKind.Tool) {
@@ -1854,6 +1953,8 @@ func matchesNativePluginContributions(
                 tool.inputAttachmentMaxBytes == contribution.inputAttachmentMaxBytes) { found = true }
         } else if (contribution.kind == PluginContributionKind.Command) {
             for (command in commands where command.name == contribution.name) { found = true }
+        } else if (contribution.kind == PluginContributionKind.View) {
+            for (view in views where view.name == contribution.name) { found = true }
         } else if (contribution.kind == PluginContributionKind.Service) {
             for (service in services where service.name == contribution.name &&
                 service.supportsPreparationReference == contribution.supportsPreparationReference) { found = true }
@@ -1979,6 +2080,42 @@ func parseCommands(
             case None => ""
         }
         output.add(JavaScriptCommandDescriptor(name, description: description))
+    }
+    JavaScriptHostResult.Ok(output.toArray())
+}
+func parseViews(
+    ready: JsonNode
+): JavaScriptHostResult<Array<JavaScriptViewDescriptor>> {
+    let value = match (ready.field("views")) {
+        case Some(item) => item
+        case None => return JavaScriptHostResult.Ok([])
+    }
+    if (value.unifiedKind != UnifiedJsonKind.List || value.items.size > 64) {
+        return hostError("extension.views_invalid", "extension views must be a list of at most 64 entries")
+    }
+    let output = ArrayList<JavaScriptViewDescriptor>()
+    for (item in value.items) {
+        if (item.unifiedKind != UnifiedJsonKind.Object) {
+            return hostError("extension.view_invalid", "extension view descriptor must be an object")
+        }
+        let name = textField(item, "name")
+        if (!validCommandName(name)) {
+            return hostError("extension.view_name_invalid", "extension view name is invalid")
+        }
+        for (existing in output) {
+            if (existing.name == name) {
+                return hostError("extension.view_duplicate", "extension view name is duplicated")
+            }
+        }
+        let description = match (item.field("description")) {
+            case Some(node) =>
+                if (node.unifiedKind != UnifiedJsonKind.Text) {
+                    return hostError("extension.view_invalid", "extension view description must be text")
+                }
+                node.text
+            case None => ""
+        }
+        output.add(JavaScriptViewDescriptor(name, description: description))
     }
     JavaScriptHostResult.Ok(output.toArray())
 }
@@ -2118,7 +2255,7 @@ func javascriptServiceErrorFrame(
     identity: JavaScriptHostInvocationIdentity,
     requestId: String,
     code: String,
-    message: String
+    message: String, payloadWindow!: String = ""
 ): JavaScriptHostResult<String> {
     let safeCode = if (validToolName(code) && code.size <= 128) {
         code
@@ -2129,6 +2266,7 @@ func javascriptServiceErrorFrame(
     let entries = invocationEnvelopeEntries(
         "service_response", request, invocationId, toolName, identity
     )
+    if (payloadWindow != "") { entries.add(JsonObjectEntry("payload_window", jsonString(payloadWindow))) }
     entries.add(JsonObjectEntry("request_id", jsonString(requestId)))
     entries.add(JsonObjectEntry("ok", jsonBool(false)))
     entries.add(JsonObjectEntry("error", jsonObject([
@@ -2152,11 +2290,11 @@ func javascriptServiceResponseFrame(
     identity: JavaScriptHostInvocationIdentity,
     requestId: String,
     response: JavaScriptHostResult<String>,
-    resultMaximum!: Int64 = 0, messageMaximum!: Int64 = 0
+    resultMaximum!: Int64 = 0, messageMaximum!: Int64 = 0, payloadWindow!: String = ""
 ): JavaScriptHostResult<String> {
     let resultJson = match (response) {
         case JavaScriptHostResult.Err(error) => return javascriptServiceErrorFrame(
-            request, invocationId, toolName, identity, requestId, error.code, error.message
+            request, invocationId, toolName, identity, requestId, error.code, error.message, payloadWindow: payloadWindow
         )
         case JavaScriptHostResult.Ok(source) => source
     }
@@ -2170,12 +2308,13 @@ func javascriptServiceResponseFrame(
             identity,
             requestId,
             "extension.service_result_invalid",
-            "host service returned invalid JSON"
+            "host service returned invalid JSON", payloadWindow: payloadWindow
         )
     }
     let entries = invocationEnvelopeEntries(
         "service_response", request, invocationId, toolName, identity
     )
+    if (payloadWindow != "") { entries.add(JsonObjectEntry("payload_window", jsonString(payloadWindow))) }
     entries.add(JsonObjectEntry("request_id", jsonString(requestId)))
     entries.add(JsonObjectEntry("ok", jsonBool(true)))
     entries.add(JsonObjectEntry("result", result))
@@ -2188,7 +2327,7 @@ func javascriptServiceResponseFrame(
             identity,
             requestId,
             "extension.service_result_too_large",
-            "host service result exceeds the configured frame limit"
+            "host service result exceeds the configured frame limit", payloadWindow: payloadWindow
         )
     }
     JavaScriptHostResult.Ok(frame)

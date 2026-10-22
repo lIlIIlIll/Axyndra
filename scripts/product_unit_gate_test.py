@@ -15,61 +15,78 @@ import sys
 from unittest.mock import patch
 
 class UnitGateTest(unittest.TestCase):
-    def test_language_fixture_requires_both_peers_before_replacing_environment(self):
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-                'AXYNDRA_LSP_TEST_SERVER': 'stale-lsp', 'AXYNDRA_DAP_TEST_SERVER': 'stale-dap'}):
-            root = Path(temporary).resolve()
-            lsp = root / 'plugins/lsp/tests/lsp_peer.py'
-            lsp.parent.mkdir(parents=True)
-            lsp.write_bytes(b'# exact LSP peer')
-            with self.assertRaisesRegex(ValueError, 'language.*fixture is missing'):
-                configure_language_fixture_environment(root)
-            self.assertEqual(os.environ['AXYNDRA_LSP_TEST_SERVER'], 'stale-lsp')
-            self.assertEqual(os.environ['AXYNDRA_DAP_TEST_SERVER'], 'stale-dap')
-            dap = root / 'plugins/dap/tests/dap_peer.py'
-            dap.parent.mkdir(parents=True)
-            dap.write_bytes(b'# exact DAP peer')
-            result = configure_language_fixture_environment(root)
-            self.assertEqual(os.environ['AXYNDRA_LSP_TEST_SERVER'], str(lsp))
-            self.assertEqual(os.environ['AXYNDRA_DAP_TEST_SERVER'], str(dap))
-            self.assertEqual(result['language_fixture_sha256'], {
-                path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-                for path in [lsp, dap]})
+    def test_language_fixture_requires_all_peers_before_replacing_environment(self):
+        fixtures = {
+            'AXYNDRA_LSP_TEST_SERVER': 'plugins/lsp/tests/lsp_peer.py',
+            'AXYNDRA_DAP_TEST_SERVER': 'plugins/dap/tests/dap_peer.py',
+            'AXYNDRA_DAP_OWNED_TEST_SERVER': 'plugins/dap/tests/dap_owned_peer.py',
+        }
+        stale = {name: 'stale-' + name for name in fixtures}
+        for absent in fixtures:
+            with self.subTest(missing=absent), tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, stale):
+                root = Path(temporary).resolve()
+                for name, relative in fixtures.items():
+                    if name != absent:
+                        path = root / relative
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(name.encode())
+                with self.assertRaisesRegex(ValueError, absent + ' fixture is missing'):
+                    configure_language_fixture_environment(root)
+                for name, value in stale.items():
+                    self.assertEqual(os.environ[name], value)
+                missing = root / fixtures[absent]
+                missing.parent.mkdir(parents=True, exist_ok=True)
+                missing.write_bytes(absent.encode())
+                result = configure_language_fixture_environment(root)
+                for name, relative in fixtures.items():
+                    self.assertEqual(os.environ[name], str(root / relative))
+                self.assertEqual(result['language_fixture_sha256'], {
+                    relative: hashlib.sha256(name.encode()).hexdigest()
+                    for name, relative in fixtures.items()})
 
     def test_business_fixture_overrides_stale_path_and_records_exact_bytes(self):
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-                'AXYNDRA_GITHUB_TEST_COMMAND': 'stale-github', 'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': 'stale-read-view'}):
+        fixtures = {
+            'AXYNDRA_GITHUB_TEST_COMMAND': 'support_tests/plugin_github_service_peer/command.py',
+            'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': 'support_tests/read_view_fixture/main.py',
+            'AXYNDRA_DOCUMENT_PLUGIN_FIXTURE': 'support_tests/plugin_document_fixture/main.py',
+            'AXYNDRA_DATA_ONLY_PLUGIN_FIXTURE': 'support_tests/plugin_data_only_fixture/main.py',
+            'AXYNDRA_WORKFLOW_MIXED_FIXTURE': 'support_tests/plugin_document_fixture/mixed_provider.py',
+        }
+        stale = {name: 'stale-' + name for name in fixtures}
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, stale):
             root = Path(temporary).resolve()
-            fixtures = {
-                'AXYNDRA_GITHUB_TEST_COMMAND': root / 'support_tests/plugin_github_service_peer/command.py',
-                'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': root / 'support_tests/read_view_fixture/main.py',
-            }
-            for name, path in fixtures.items():
+            for name, relative in fixtures.items():
+                path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(name.encode())
             result = configure_business_fixture_environment(root)
-            for name, path in fixtures.items():
-                self.assertEqual(os.environ[name], str(path))
+            for name, relative in fixtures.items():
+                self.assertEqual(os.environ[name], str(root / relative))
             self.assertEqual(result['business_fixture_sha256'], {
-                path.relative_to(root).as_posix(): hashlib.sha256(name.encode()).hexdigest()
-                for name, path in fixtures.items()})
+                relative: hashlib.sha256(name.encode()).hexdigest()
+                for name, relative in fixtures.items()})
 
     def test_missing_business_fixture_preserves_environment(self):
-        fixtures = {'AXYNDRA_GITHUB_TEST_COMMAND': 'support_tests/plugin_github_service_peer/command.py',
-                    'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': 'support_tests/read_view_fixture/main.py'}
+        fixtures = {
+            'AXYNDRA_GITHUB_TEST_COMMAND': 'support_tests/plugin_github_service_peer/command.py',
+            'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': 'support_tests/read_view_fixture/main.py',
+            'AXYNDRA_DOCUMENT_PLUGIN_FIXTURE': 'support_tests/plugin_document_fixture/main.py',
+            'AXYNDRA_DATA_ONLY_PLUGIN_FIXTURE': 'support_tests/plugin_data_only_fixture/main.py',
+            'AXYNDRA_WORKFLOW_MIXED_FIXTURE': 'support_tests/plugin_document_fixture/mixed_provider.py',
+        }
+        stale = {name: 'stale-' + name for name in fixtures}
         for absent in fixtures:
-            with self.subTest(missing=absent), tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
-                    'AXYNDRA_GITHUB_TEST_COMMAND': 'stale-github', 'AXYNDRA_READ_VIEW_PLUGIN_FIXTURE': 'stale-read-view'}):
+            with self.subTest(missing=absent), tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, stale):
                 root = Path(temporary)
                 for name, relative in fixtures.items():
                     if name != absent:
                         path = root / relative
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_bytes(name.encode())
-                with self.assertRaisesRegex(ValueError, 'fixture is missing'):
+                with self.assertRaisesRegex(ValueError, absent + ' fixture is missing'):
                     configure_business_fixture_environment(root)
-                self.assertEqual(os.environ['AXYNDRA_GITHUB_TEST_COMMAND'], 'stale-github')
-                self.assertEqual(os.environ['AXYNDRA_READ_VIEW_PLUGIN_FIXTURE'], 'stale-read-view')
+                for name, value in stale.items():
+                    self.assertEqual(os.environ[name], value)
     def test_installed_model_fixture_requires_origin_and_actual_adapter_goldens(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=False):
             root = Path(temporary).resolve()
@@ -383,5 +400,22 @@ class UnitGateTest(unittest.TestCase):
     def test_fail_closed(self):
         for text in ['build success', 'Summary: TOTAL: 0\n    PASSED: 0, SKIPPED: 0, ERROR: 0\n    FAILED: 0', 'Summary: TOTAL: 2\n    PASSED: 1, SKIPPED: 0, ERROR: 0\n    FAILED: 0']:
             with self.assertRaises(ValueError): summary(text)
+
+class HostIsolationGateTest(unittest.TestCase):
+    def test_host_physical_role_preserves_rpc_cap_and_original_host_budget(self):
+        from rpc_case_process_watch import run_case, run_host_case, process_custody_closed
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = [sys.executable, '-c', 'pass']
+            with self.assertRaises(ValueError):
+                run_case(command, root / 'rpc.log', 61, cwd=root)
+            with self.assertRaises(ValueError):
+                run_host_case(command, root / 'over-host.log', 901, cwd=root)
+            result = run_host_case(command, root / 'host.log', 61, cwd=root)
+            self.assertEqual(result['custody_role'], 'host-case')
+            self.assertEqual(result['case_process_seconds'], 61)
+            self.assertEqual(result['exit_code'], 0)
+            self.assertTrue(process_custody_closed(result))
+            self.assertFalse(result['physical_exit_is_data_consumption_ACK'])
 
 if __name__ == '__main__': unittest.main()

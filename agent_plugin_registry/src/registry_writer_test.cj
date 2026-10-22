@@ -145,6 +145,64 @@ class RegistryWriterTests {
     }
 
     @TestCase
+    func unsupportedFormatAndUnknownFactsCannotBeRewritten(): Unit {
+        let _registryOwners = RegistryTestOwners()
+        try {
+            let root=Directory.createTemp("/tmp").toString()
+            try {
+                let registry=_registryOwners.openRegistry(root+"/settings",root)
+                let source=registryFixturePackage(root,"1.0.0")
+                registryFixtureRecord(registry.importLocal(source))
+                let path=root+"/settings/plugins/lock.jsonl"
+                let current=String.fromUtf8(File.readFrom(path))
+                @Expect(current.contains("\"schema_version\":1"))
+                for (future in [current.replace("\"schema_version\":1", "\"schema_version\":999"),
+                    current.replace("\"schema_version\":1", "\"schema_version\":1,\"future_fact\":{\"preserved\":true}"),
+                    current.replace("\"source_kind\":\"local\"", "\"source_kind\":\"future-installed-source\""),
+                    current.replace("\"locator\":\""+source+"\"", "\"locator\":{\"future_fact\":\"preserved\"}"),
+                    current.replace("\"enabled\":false", "\"enabled\":\"future-state\""),
+                    current.replace("\"explicitly_disabled\":false", "\"explicitly_disabled\":\"future-revocation-state\"")]) {
+                    @Expect(future != current)
+                    File.writeTo(path,future.toArray())
+                    @Expect(writerError(registry.setEnabled("pi:minimal-fixture",true)),"plugin.lock_format_unsupported")
+                    @Expect(String.fromUtf8(File.readFrom(path)),future)
+                }
+                // A recognized historical row remains usable and upgrades only
+                // when the caller actually requests a mutation.
+                let historical=current.replace("\"schema_version\":1,", "")
+                File.writeTo(path,historical.toArray())
+                @Expect(_registryOwners.openRegistry(root+"/settings",root).list().size,1)
+                @Expect(String.fromUtf8(File.readFrom(path)),historical)
+                @Expect(registry.setEnabled("pi:minimal-fixture",false).isOk())
+                @Expect(String.fromUtf8(File.readFrom(path)).contains("\"schema_version\":1"))
+            } finally { remove(root,recursive:true) }
+        } finally { _registryOwners.close() }
+    }
+
+    @TestCase
+    func rollbackCannotRestoreRevokedExecutionStateInEitherScope(): Unit {
+        let _registryOwners = RegistryTestOwners()
+        try {
+            for (scope in [PluginInstallScope.User, PluginInstallScope.Workspace]) {
+                let root=Directory.createTemp("/tmp").toString()
+                try {
+                    let registry=_registryOwners.openRegistry(root+"/settings",root)
+                    let one=registryFixtureRecord(registry.importLocal(registryFixturePackage(root,"1.0.0"),scope))
+                    registryFixtureRecord(registry.setEnabled("pi:minimal-fixture",true,scope))
+                    registryFixtureRecord(registry.updateLocal("pi:minimal-fixture",registryFixturePackage(root,"2.0.0"),scope))
+                    registryFixtureRecord(registry.setEnabled("pi:minimal-fixture",false,scope))
+                    let restored=registryFixtureRecord(registry.rollback("pi:minimal-fixture",scope))
+                    @Expect(restored.sameText(PluginRecordText.ContentLock,one,PluginRecordText.ContentLock),true)
+                    @Expect(!restored.enabled)
+                    @Expect(!_registryOwners.openRegistry(root+"/settings",root).list().at(0).enabled)
+                    @Expect(registry.setEnabled("pi:minimal-fixture",true,scope).isOk())
+                    @Expect(_registryOwners.openRegistry(root+"/settings",root).list().at(0).enabled)
+                } finally { remove(root,recursive:true) }
+            }
+        } finally { _registryOwners.close() }
+    }
+
+    @TestCase
     func userOnlyRegistryKeepsWorkspaceOptionalAndRejectsNulPaths(): Unit {
         let _registryOwners = RegistryTestOwners()
         try {

@@ -137,10 +137,11 @@ class ProductPolicySelection {
 
 func productPolicyConfigText(settingsRoot: String): Result<String> {
     try {
-        let root = canonicalize(Path(settingsRoot))
+        let requestedRoot = Path(settingsRoot)
+        if (!exists(requestedRoot)) { return productPolicySelectionError("policy.not_configured") }
+        let root = canonicalize(requestedRoot)
         let directory = root.join("plugins")
         let path = directory.join("policies.json")
-        if (!exists(directory)) { return productPolicySelectionError("policy.not_configured") }
         if (!exists(directory)) { return productPolicySelectionError("policy.not_configured") }
         if (!exists(path)) {
             if (FileInfo(directory).isSymbolicLink()) { return productPolicySelectionError("policy.configuration_invalid") }

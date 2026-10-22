@@ -9,7 +9,7 @@ foreign func axyndra_read_view_copy(source: CString, witness: CString, destinati
 
 public func hostReadResourceCopy(source: String, witness: String, destination: String, maximum: Int64): Result<Int64> {
     unsafe {
-        let src = LibC.mallocCString(source); let expected = LibC.mallocCString(witness); let dst = LibC.mallocCString(destination)
+        let src = LibC.mallocCString(hostPhysicalReadResourcePath180(source)); let expected = LibC.mallocCString(witness); let dst = LibC.mallocCString(hostPhysicalReadResourcePath180(destination))
         try {
             let count = axyndra_read_view_copy(src, expected, dst, maximum)
             if (count < 0) { return hostPluginResourceError("read_view.resource_changed", "read resource changed or cannot be copied through verified handles") }

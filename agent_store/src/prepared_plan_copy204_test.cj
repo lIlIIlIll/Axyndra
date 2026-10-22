@@ -59,7 +59,7 @@ private func receiverMetadataPlan204(): NormalizedOperationPlan {
         idempotencyKey: "copy-key", replayDisposition: Some(ReplayDisposition.Idempotent("copy-key")),
         toolVersion: "fixture-v2", implementationFingerprint: "fixture-implementation",
         schemaDigest: "fixture-schema", effectiveArgumentsDigest: "fixture-arguments",
-        replayContractVersion: 3u32, contextReadFacts: [reference])
+        replayContractVersion: 1u32, contextReadFacts: [reference])
 }
 
 private func receiverSummaryValue204(summary: WriteApprovalSummary): AgentValue {

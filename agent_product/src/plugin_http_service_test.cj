@@ -262,8 +262,6 @@ class PluginHttpServiceTests {
     func separatelyPackagedWebSearchUsesRealProductGatewayAndSearxOrigin(): Unit {
         let fixture = PluginHttpProductFixture("web-searx", "normal", method: "GET")
         try {
-            @Expect(fixture.product.unregisterTool("bash"))
-            @Expect(fixture.product.unregisterTool("bash_readonly"))
             let packageRoot = getVariable("AXYNDRA_WEB_SEARCH_PLUGIN_PACKAGE").getOrThrow()
             let record = match (fixture.product.importLocalPlugin(packageRoot)) {
                 case PluginRegistryResult.Ok(value) => value

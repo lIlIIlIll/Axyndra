@@ -67,7 +67,7 @@ func appRegistryErrorText83(error: PluginRegistryOwnedError, field: PluginRegist
         case PluginRegistryStaticReason.ExecutionNotCurrent => "installed execution pin is not current"
         case PluginRegistryStaticReason.InstalledRecordAbsent => "installed record is absent"
         case PluginRegistryStaticReason.ComponentAliasInvalid => "initial context configuration or its exact installed binding is unavailable"
-        case PluginRegistryStaticReason.None => return appRegistryCopyText83(error.copyText(field))
+        case PluginRegistryStaticReason.NoStaticReason => return appRegistryCopyText83(error.copyText(field))
     }
     match (field) { case PluginRegistryErrorText.Message => message; case PluginRegistryErrorText.Source => ""; case PluginRegistryErrorText.Field => "" }
 }

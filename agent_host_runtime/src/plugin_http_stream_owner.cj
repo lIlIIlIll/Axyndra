@@ -152,11 +152,29 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
         if (action.getOrThrow() == HostServiceAction.Start) { plan.field("grant").getOrThrow().field("startup").getOrThrow() }
         else { plan.field("window").getOrThrow() }
     }
-    private func validate(): Result<Unit> {
+    private func validateLifetime(): Result<Unit> {
         if (!gate.isOpen() || agentUtcMillis() >= until || service.resourceCancellation().isCancelled()) {
             return hostLifecycleLeaseError("http.stream_scope_closed")
         }
-        match (context.cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        context.cancellation.check()
+    }
+    // Already admitted pumps own their frozen request and channel. Waiting or
+    // dequeuing cannot authorize another effect; keep cancellation, the exact
+    // exchange owner and its original finite window live without rehashing the
+    // package/configuration on each poll. Publication still uses validate().
+    private func validateExchangeOwner(exchange: HostManagedHttpExchange): Result<Unit> {
+        match (validateLifetime()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        lock.lock()
+        let retained = try { active.isSome() && refEq(active.getOrThrow(), exchange) } finally { lock.unlock() }
+        if (!retained) { return hostLifecycleLeaseError("http.stream_exchange_changed") }
+        Result.Ok(())
+    }
+    private func validateExchangeLifetime(exchange: HostManagedHttpExchange): Result<Unit> {
+        match (validateExchangeOwner(exchange)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        exchange.source.token.check()
+    }
+    private func validate(): Result<Unit> {
+        match (validateLifetime()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         if (action.isSome()) {
             let current = match (service.maintenancePlan(context, prepared, action.getOrThrow())) {
@@ -237,7 +255,34 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
             case None => ()
         }
         match (result) {
-            case Result.Ok(_) => Result.Ok(ToolResult(callId, exchange.output()))
+            case Result.Ok(_) =>
+                // Cleanup ACK and ingress accounting discharge obligations, not
+                // authority. Revalidate immediately before the canonical child
+                // can publish its successful terminal Receipt.
+                match (validate()) {
+                    case Result.Err(error) => exchange.fail(error); return Result.Err(error)
+                    case Result.Ok(_) => ()
+                }
+                // The request clock governed completed I/O, not its separate
+                // cleanup grace. Current authority and the actual owner remain live.
+                match (validateExchangeOwner(exchange)) {
+                    case Result.Err(error) => exchange.fail(error); return Result.Err(error)
+                    case Result.Ok(_) => ()
+                }
+                if (!exchange.closeRequested.load() || !exchange.cleanupAcknowledged.load()) {
+                    return hostManagedChannelUnknown()
+                }
+                match (exchange.source.token.reason()) {
+                    case Some(reason) =>
+                        let requestDeadline = exchange.source.token.deadlineMillis
+                        if (reason.kind != CancellationReasonKind.Deadline || requestDeadline <= 0 || requestDeadline >= until ||
+                            reason.cancelledAtMillis < requestDeadline) {
+                            let error = exchange.source.token.check().error().getOrThrow()
+                            exchange.fail(error); return Result.Err(error)
+                        }
+                    case None => ()
+                }
+                Result.Ok(ToolResult(callId, exchange.output()))
             case Result.Err(error) => exchange.fail(error); Result.Err(error)
         }
     }
@@ -278,7 +323,7 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
             let reader = match (opened) { case Result.Err(error) => exchange.fail(error); return Result.Err(error); case Result.Ok(value) => value }
             exchange.lock.lock(); try { exchange.reader = Some(reader) } finally { exchange.lock.unlock() }
             while (!exchange.closeRequested.load() && !exchange.source.token.isCancelled() && exchange.selectedHead().isNone()) {
-                match (validate()) { case Result.Err(error) => exchange.fail(error); break; case Result.Ok(_) => () }
+                match (validateExchangeLifetime(exchange)) { case Result.Err(error) => exchange.fail(error); break; case Result.Ok(_) => () }
                 match (reader.pollHead()) {
                     case Result.Err(error) => exchange.fail(error)
                     case Result.Ok(Some(head)) => exchange.lock.lock(); try { exchange.head = Some(head) } finally { exchange.lock.unlock() }
@@ -286,7 +331,7 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
                 }
             }
             while (!exchange.closeRequested.load() && !exchange.source.token.isCancelled()) {
-                match (validate()) { case Result.Err(error) => exchange.fail(error); break; case Result.Ok(_) => () }
+                match (validateExchangeLifetime(exchange)) { case Result.Err(error) => exchange.fail(error); break; case Result.Ok(_) => () }
                 sleep(Duration.millisecond * 2)
             }
             if (exchange.source.token.isCancelled() || agentUtcMillis() >= until) {
@@ -420,7 +465,11 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
             return hostPluginServiceError("http.stream_worker_unavailable", "HTTP exchange worker could not be started")
         }
         while (exchange.selectedHead().isNone() && !exchange.workerSettled.load() && !exchange.source.token.isCancelled()) {
-            match (validate()) { case Result.Err(_) => break; case Result.Ok(_) => () }
+            // Waiting on this already-owned Future performs no new effect or
+            // publication. Keep live cancellation/deadline checks cheap; the
+            // child verifies full current authority before I/O, and the parent
+            // does so again before returning the observed response headers.
+            match (validateExchangeLifetime(exchange)) { case Result.Err(_) => break; case Result.Ok(_) => () }
             sleep(Duration.millisecond * 2)
         }
         let head = exchange.selectedHead()
@@ -429,6 +478,10 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
             return hostPluginServiceError("http.stream_open_failed", "HTTP response headers were not received within the authorized window")
         }
         match (validate()) {
+            case Result.Err(error) => rememberFailure(); let _ = exchange.closeResources(); return hostPluginServiceAgentError(error)
+            case Result.Ok(_) => ()
+        }
+        match (validateExchangeLifetime(exchange)) {
             case Result.Err(error) => rememberFailure(); let _ = exchange.closeResources(); return hostPluginServiceAgentError(error)
             case Result.Ok(_) => ()
         }
@@ -450,10 +503,15 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
         if (maximum < 1 || wait < 0 || exchange.selectedReader().isNone()) {
             return hostPluginServiceError("http.stream_read_invalid", "HTTP read bounds are invalid")
         }
+        match (validateExchangeLifetime(exchange)) {
+            case Result.Err(error) => exchange.fail(error); rememberFailure(); return hostPluginServiceAgentError(error)
+            case Result.Ok(_) => ()
+        }
         match (exchange.selectedReader().getOrThrow().readBody(maximum, waitMillis: wait)) {
             case Result.Err(error) => exchange.fail(error); rememberFailure(); hostPluginServiceAgentError(error)
             case Result.Ok(value) =>
                 match (validate()) { case Result.Err(error) => exchange.fail(error); rememberFailure(); return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
+                match (validateExchangeLifetime(exchange)) { case Result.Err(error) => exchange.fail(error); rememberFailure(); return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
                 exchange.lock.lock(); try { exchange.consumed += value.bytes.size; exchange.bodyEof = value.eof } finally { exchange.lock.unlock() }
                 hostManagedChannelReadResult(value)
         }

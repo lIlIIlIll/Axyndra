@@ -102,7 +102,7 @@ func checkpointOwnedSaveHeader113(host: ProductJavaScriptPluginHost, selection: 
     consume: ProductOwnedCheckpointProjectionConsumer113, requestId: String, cancellation: OwnedCheckpointCancellationToken113,
     failureCapture: CheckpointOwnedFailureCapture113, routeRecipe173: ?AgentValue): Result<Unit> {
     let local: () -> Result<Unit> = { => context.cancellation.check() }
-    let current: () -> Result<Unit> = { => query.check(); Result<Unit>.Ok(()) }
+    let current: () -> Result<Unit> = { => query.checkPinnedData113(); Result<Unit>.Ok(()) }
     let metadata = query.references.checkpointBatchMetadata113()
     try {
         // Keep an initial complete-body witness, not just revision/ordinal.

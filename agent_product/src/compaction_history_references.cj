@@ -80,7 +80,10 @@ class ProductCompactionReferenceQuery {
             action(current)
         })
     }
-    private func checkLocal(): Unit {
+    // Paid SQLite DATA reads neither invoke the provider nor publish a result.
+    // Keep cancellation/configuration/mounted-generation checks local; Native
+    // calls and final consumers retain their full package-byte checks.
+    func checkPinnedData113(): Unit {
         if (closed) { throw IllegalStateException("compaction query closed") }
         compactionDataRequire(checkCancellation113())
         compactionDataRequire(selection.validatePinnedGeneration(host, binding))
@@ -89,7 +92,7 @@ class ProductCompactionReferenceQuery {
     func query(phase: String, fields: Array<ValueField>, policyProvenance193!: ?String = None<String>): AgentValue {
         let diagnosticStarted = MonoTime.now()
         try {
-        checkLocal()
+        checkPinnedData113()
         if (sequence == Int64.Max) { throw IllegalStateException("compaction query sequence exhausted") }
         sequence++
         let input = ArrayList<ValueField>([ValueField("schema", textValue("axyndra.compaction-policy/v1")),
@@ -99,10 +102,10 @@ class ProductCompactionReferenceQuery {
             requestId + "-reference-" + sequence.toString(), policyProvenance193)) {
                 case Result.Ok(value) => value; case Result.Err(error) => throw ProductCompactionDataError(error) }
         try {
-            checkLocal()
+            checkPinnedData113()
             if (response.generation != binding.generation) { throw IllegalStateException("compaction generation changed") }
             let copy = references.copy(response.value)
-            try { checkLocal(); values.add(ProductPolicyValueRecord(sequence, copy)); copy.value }
+            try { checkPinnedData113(); values.add(ProductPolicyValueRecord(sequence, copy)); copy.value }
             catch (error: Exception) { copy.close(); throw error }
         } finally { response.close() }
         } finally { compactionDiagnosticRecord(phase, diagnosticStarted) }
@@ -166,7 +169,7 @@ class ProductCompactionReferenceQuery {
         var offset: Int64 = 0; var carry = nullValue(); var paths = listValue([])
         var previous: ?AgentValue = None
         while (true) {
-            checkLocal()
+            checkPinnedData113()
             let chunk = references.chunk(source, offset)
             let fields = ArrayList<ValueField>([ValueField("source", source), ValueField("sequence", integerValue(sequence + 1)),
                 ValueField("offset", integerValue(offset)), ValueField("total", integerValue(text.size)),
@@ -233,7 +236,7 @@ class ProductCompactionReferenceQuery {
         if (!httpIntentExactFields(output, ["commands"])) { throw IllegalStateException("invalid reference fold") }
         let next = resolveEventCommands(state, event, output.field("commands").getOrThrow())
         // Every returned reference must still name this query's intern data.
-        validateReferences(next); checkLocal(); retained = Some(next); next
+        validateReferences(next); checkPinnedData113(); retained = Some(next); next
         } finally { releaseSince(mark, keep: retained) }
     }
     private func batchEvent(state: AgentValue, event: AgentValue): AgentValue {
@@ -269,14 +272,14 @@ class ProductCompactionReferenceQuery {
         } else if (kind == "commands" && httpIntentExactFields(output, ["kind", "commands"])) {
             resolveEventCommands(state, event, output.field("commands").getOrThrow())
         } else { throw IllegalStateException("invalid reference batch result") }
-        validateReferences(next); checkLocal(); next
+        validateReferences(next); checkPinnedData113(); next
     }
     private func resolveEventCommands(state: AgentValue, event: AgentValue, commands: AgentValue): AgentValue {
         let entries = ArrayList<AgentValue>()
         if (commands.unifiedKind != ValueKind.List || commands.items.size > 256) { throw IllegalStateException("invalid reference recipe count") }
         for (entry in commands.items) {
             if (!httpIntentExactFields(entry, ["target", "recipe"])) { throw IllegalStateException("invalid reference recipe") }
-            checkLocal()
+            checkPinnedData113()
             entries.add(objectValue([ValueField("target", entry.field("target").getOrThrow()),
                 ValueField("value", references.internRecipe(entry.field("recipe").getOrThrow()))]))
         }

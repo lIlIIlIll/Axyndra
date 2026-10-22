@@ -1,8 +1,13 @@
 # Distribution profiles and default artifact
 
 `scripts/package_candidate.sh` defaults to `minimal`. Build the independent
-`agent_minimal` executable first; an explicit `AXYNDRA_SOURCE_BINARY` remains a
-reviewed input and is recorded in provenance. A fresh destination is required.
+`agent_minimal` executable first. A fresh destination is required. An explicit
+`AXYNDRA_SOURCE_BINARY` with a dynamic process-native dependency also requires
+`AXYNDRA_SOURCE_NATIVE_ROOT`, containing the matched `libprocess4cj_native.so`.
+Missing or changed frozen native bytes fail packaging; they never fall back to
+the live checkout library. Static process-consumer inputs need no native DSO.
+Provenance records the selected host hash and native before-copy, copied,
+after-copy and final relocated-library hashes, without recording local paths.
 
 | Selection | Host | Bundled/default-enabled packages | Core-required |
 | --- | --- | --- | --- |
@@ -22,6 +27,20 @@ AXYNDRA_DISTRIBUTION=minimal scripts/package_candidate.sh
 AXYNDRA_DISTRIBUTION=coding scripts/package_candidate.sh
 AXYNDRA_DISTRIBUTION=full scripts/package_candidate.sh
 ```
+
+To package a previously frozen dynamic host/runtime pair, select both inputs:
+
+```sh
+AXYNDRA_DISTRIBUTION=minimal \
+AXYNDRA_SOURCE_BINARY="$PWD/artifacts/agent_minimal" \
+AXYNDRA_SOURCE_NATIVE_ROOT="$PWD/artifacts/native" \
+AXYNDRA_PACKAGE_ROOT="$PWD/dist/frozen-minimal" scripts/package_candidate.sh
+```
+
+The native directory must be real, and its DSO must be a regular file. The
+packager checks the raw copy before applying relative RPATHs, then checks the
+source again before publishing `package-provenance.json`. These hashes establish
+byte custody, not an actual-build or Product-acceptance claim.
 
 Coding/Full require their declared pinned engine/runtime inputs. Existing full
 Product release/regression and process-consumer readiness probes retain Coding

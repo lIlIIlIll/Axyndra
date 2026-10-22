@@ -455,8 +455,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         initialOutputWindowBytes: ?Int64, registryEffect: ?() -> Result<PluginRegistryExecutionFence>,
         managedNamespace: ?HostManagedProcessGrant): Result<ProcessChannel> {
         if (channelOwnerCancelled(owner)) {
-            return Result.Err(hostNativeChannelFactoryError(AgentErrorKind.Cancelled,
-                "process.channel_cancelled", "channel was cancelled before preparation"))
+            return Result.Err(channelOwnerCancellationCause180(owner, "channel was cancelled before preparation"))
         }
         let filesystemRoot = if (request.sandboxMode == ProcessSandboxMode.IsolatedReadOnly) {
             canonicalize(Path(request.filesystemRoot)).toString()
@@ -491,8 +490,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             case None => ()
         }
         if (channelOwnerCancelled(owner)) {
-            return Result.Err(hostNativeChannelFactoryError(AgentErrorKind.Cancelled,
-                "process.channel_cancelled", "channel was cancelled during gateway acquisition"))
+            return Result.Err(channelOwnerCancellationCause180(owner, "channel was cancelled during gateway acquisition"))
         }
         let filesystem = if (request.sandboxMode == ProcessSandboxMode.WorkspaceReadWrite) {
             FilesystemIsolationMode.WorkspaceReadWrite
@@ -522,8 +520,7 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
             case SandboxResult.Ok(_) => ()
         }
         if (channelOwnerCancelled(owner)) {
-            return Result.Err(hostNativeChannelFactoryError(AgentErrorKind.Cancelled,
-                "process.channel_cancelled", "channel was cancelled before launch"))
+            return Result.Err(channelOwnerCancellationCause180(owner, "channel was cancelled before launch"))
         }
         match (modelClaim) { case Some(claim) =>
             match (verifyModelProcessClaim(claim, request.resourceOwner)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
@@ -577,10 +574,10 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         }
         match (modelClaim) { case Some(claim) => if (verifyModelProcessClaim(claim, request.resourceOwner).isError()) { cancelled = true }; case None => () }
         if (cancelled || owner.cancellation.token.isCancelled()) {
+            let cause = channelOwnerCancellationCause180(owner, "channel admission was revoked during launch")
             let _ = owner.cancellation.cancel()
             let _ = channel.close()
-            return Result.Err(hostNativeChannelFactoryError(AgentErrorKind.Cancelled,
-                "process.channel_cancelled", "channel admission was revoked during launch"))
+            return Result.Err(cause)
         }
         Result.Ok(channel)
     }
@@ -591,6 +588,11 @@ public class HostLocalProcessPort <: ProcessPort & HostLifecycleProcessLauncher 
         try { revoked = channelsClosed || owner.cancelled || resourceReservedCancelled(owner.resourceOwner) }
         finally { activeLock.unlock() }
         revoked || owner.cancellation.token.isCancelled()
+    }
+
+    private func channelOwnerCancellationCause180(owner: HostNativeProcessChannelOwner, message: String): AgentError {
+        match (owner.cancellation.token.check()) { case Result.Err(error) => error
+            case Result.Ok(_) => hostNativeChannelFactoryError(AgentErrorKind.Cancelled, "process.channel_cancelled", message) }
     }
 
     private func finishFailedChannelOpen(owner: HostNativeProcessChannelOwner): Unit {

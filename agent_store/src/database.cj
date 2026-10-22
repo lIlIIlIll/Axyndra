@@ -499,6 +499,8 @@ public class SqliteDatabase {
                 executeLocked("PRAGMA query_only=ON")
                 executeLocked("PRAGMA busy_timeout=5000")
             } else {
+                // Refuse an unsupported format before WAL changes the file.
+                let _ = requireSupportedSchemaVersionLocked()
                 configure()
                 migrate()
             }
@@ -1050,6 +1052,17 @@ public class SqliteDatabase {
         }
     }
 
+    private func requireSupportedSchemaVersionLocked(): Int64 {
+        let version = scalarIntLocked("PRAGMA user_version")
+        if (version > 28) {
+            throw IllegalStateException(
+                "Unsupported SQLite schema version " + version.toString() +
+                "; this binary supports up to version 28"
+            )
+        }
+        version
+    }
+
     private func configure(): Unit {
         executeLocked("PRAGMA journal_mode=WAL")
         executeLocked("PRAGMA synchronous=FULL")
@@ -1065,14 +1078,8 @@ public class SqliteDatabase {
     }
 
     private func migrate(): Unit {
-        let version = scalarIntLocked("PRAGMA user_version")
+        let version = requireSupportedSchemaVersionLocked()
         if (version == 28) { return }
-        if (version > 28) {
-            throw IllegalStateException(
-                "Unsupported SQLite schema version " + version.toString() +
-                "; this binary supports up to version 28"
-            )
-        }
         if (version == 0) {
             executeLocked("BEGIN IMMEDIATE")
             try {

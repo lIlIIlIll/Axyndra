@@ -110,7 +110,8 @@ class HostManagedOwnedChannelResource <: HostManagedServiceResource {
             ValueField("instance_identity",textValue(grant.instanceIdentity)),ValueField("endpoint_identity",textValue(endpoint.endpointIdentity)),
             ValueField("launch_digest",textValue(grant.digest)),ValueField("target_thread_id",textValue(grant.targetThread.value)),
             ValueField("permission_domain",plan.field("permission_domain").getOrThrow()),ValueField("workspace_root",plan.field("workspace_root").getOrThrow()),
-            ValueField("workspace_mode",plan.field("workspace_mode").getOrThrow()),ValueField("network",plan.field("network").getOrThrow())])
+            ValueField("workspace_mode",plan.field("workspace_mode").getOrThrow()),ValueField("network",plan.field("network").getOrThrow()),
+            ValueField("lifecycle_policy",plan.field("lifecycle_policy").getOrThrow())])
         lock.lock();try{
             let active=lease.isSome() && !lease.getOrThrow().resourcesReleased()
             fields.add(ValueField("resource_state",textValue(if(active){"active"}else{"planned"})))
@@ -234,6 +235,15 @@ class HostManagedOwnedChannelResource <: HostManagedServiceResource {
             httpIntentText(result.output,"lease_id")!=actual.getOrThrow().leaseId){
             return managedChannelDriverError("managed_channel.actual_spawn_changed")}
         actual.getOrThrow().activateManaged(context,parent,result.output.field("resource_binding").getOrThrow(),port)
+    }
+    func stopFrozen():Result<Unit>{
+        lock.lock();let selected=try{closing=true;lease}finally{lock.unlock()}
+        let _=cancellationSource.cancel()
+        match(selected){case Some(value)=>
+            let auxiliary=owner.revokeManagedAuxiliaries(value)
+            let adapter=value.stopFrozen()
+            match(auxiliary){case Result.Err(error)=>Result.Err(error);case Result.Ok(_)=>adapter}
+            case None=>Result.Ok(())}
     }
     public func revoke():Result<Unit>{
         let _=cancellationSource.cancel()

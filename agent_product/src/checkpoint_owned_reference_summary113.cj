@@ -18,7 +18,7 @@ class CheckpointReferenceState113 {
 func checkpointOwnedReferenceSummary113(query: ProductCompactionReferenceQuery,
     cursor: PaidCanonicalThreadCursor113, thread: ThreadRecord, through: Int64,
     allocate: (Int64) -> LogicalJsonOwnerReservation, localGuard: () -> Result<Unit>): String {
-    let current: () -> Result<Unit> = { => query.check(); Result<Unit>.Ok(()) }
+    let current: () -> Result<Unit> = { => query.checkPinnedData113(); Result<Unit>.Ok(()) }
     let layout = query.query("reference_layout", [])
     query.configureLayout(layout)
     let selectors = layout.field("arguments").getOrThrow()

@@ -8,13 +8,40 @@ import std.sync.*
 // holder cannot mint a Source, a new Run, a Receipt or an unearned data ACK.
 class ProductPluginChildPhysicalWorker111 {
     var worker: ?Future<Unit> = Option<Future<Unit>>.None
+    private let lock = Mutex()
+    private var joined = false
+    private var observers: Int64 = 0
     func returned(): Bool {
-        if (worker.isNone()) { return false }
-        try { worker.getOrThrow().tryGet().isSome() }
-        catch (_: Exception) { false }
+        lock.lock(); try {
+            if (joined) { return true }
+            if (worker.isNone()) { return false }
+            try { worker.getOrThrow().tryGet().isSome() } catch (_: Exception) { false }
+        } finally { lock.unlock() }
     }
-    func collect(): Unit { worker.getOrThrow().get() }
+    func collect(): Unit {
+        lock.lock(); try {
+            if (joined && worker.isNone()) { return }
+            observers++
+        } finally { lock.unlock() }
+        var completed = false
+        try { observeOriginalWholeFutureHelper180(); completed = true }
+        finally {
+            lock.lock(); try {
+                observers--
+                if (completed) { joined = true }
+                if (joined && observers == 0) { worker = None<Future<Unit>> }
+            } finally { lock.unlock() }
+        }
+    }
+    private func observeOriginalWholeFutureHelper180(): Unit {
+        lock.lock(); let actual = try { worker.getOrThrow() } finally { lock.unlock() }
+        actual.get()
+    }
+    func originalFutureAliasesReturned180(): Bool {
+        lock.lock(); try { joined && observers == 0 && worker.isNone() } finally { lock.unlock() }
+    }
 }
+
 
 class ProductPluginChildWorkerResult111<T> {
     let physical = ProductPluginChildPhysicalWorker111()

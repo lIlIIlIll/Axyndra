@@ -18,14 +18,16 @@ class CoreInternalAttemptPort <: ModelPort {
     private let control: CoreRunControl
     private let parent: AgentRunRequest
     private let purpose: InternalModelPurpose
+    private let catalog180: ToolCatalog
     private let lock = Mutex()
     private var activeRequest = ""
     private var cancelled = false
 
     init(provider: ModelPort, runs: RunRepository, decisions: ModelDecisionRuntimePort,
-        control: CoreRunControl, parent: AgentRunRequest, purpose: InternalModelPurpose) {
+        control: CoreRunControl, parent: AgentRunRequest, purpose: InternalModelPurpose, catalog180: ToolCatalog) {
         this.provider = provider; this.runs = runs; this.decisions = decisions
         this.control = control; this.parent = parent; this.purpose = purpose
+        this.catalog180 = catalog180
     }
     public func validatePolicySnapshot(model: String, snapshot: ?ModelExecutionCapabilitiesSnapshot): Result<Unit> {
         provider.validatePolicySnapshot(model, snapshot)
@@ -53,6 +55,49 @@ class CoreInternalAttemptPort <: ModelPort {
                 ValueField("code", textValue(code)), ValueField("attempt_id", textValue(attempt.value)),
                 ValueField("purpose", textValue(internalModelPurposeName(purpose)))]))))
     }
+    private func internalCancelled180(): Bool {
+        lock.lock(); try { cancelled } finally { lock.unlock() }
+    }
+    private func executeOwnedInput180(request: ModelRequest, events: ModelEventSink,
+        epoch: Int64): Result<ModelReply> {
+        let custody = match (catalog180.reserveModelInputData159(request, settings180: Some(parent.toolContext))) {
+            case Some(payment) => let owner = CoreModelInput159(payment, request)
+                control.retainModelInput159(owner); Some(owner)
+            case None => None<CoreModelInput159>
+        }
+        try {
+            let result = executeOwnedInputCallerFrame180(request, events, epoch, custody)
+            match (custody) { case Some(value) => value.returnedCaller159(); case None => () }
+            result
+        } catch (error: Exception) {
+            match (custody) { case Some(value) => value.hold159(error: Some(error)); value.returnedCaller159(); case None => () }
+            throw error
+        }
+    }
+    private func executeOwnedInputCallerFrame180(request: ModelRequest, events: ModelEventSink,
+        epoch: Int64, custody: ?CoreModelInput159): Result<ModelReply> {
+        let admitted = AtomicInt64(0)
+        let action = { =>
+            while (admitted.load() == 0) { sleep(Duration.millisecond) }
+            if (admitted.load() < 0) { return Result<ModelReply>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "model.internal_input_not_admitted", "original internal Model input was not admitted")) }
+            match (check(parent.runId, epoch)) { case Result.Err(error) => return Result<ModelReply>.Err(error); case Result.Ok(_) => () }
+            executeModelInput159(provider, request, events, custody, parent.toolContext.executionSettings180,
+                parent.toolContext.modelFaultCounters180,
+                { => control.source.token.isCancelled() || internalCancelled180() })
+        }
+        let future = match (custody) { case Some(value) => value.start159(action); case None => spawn { action() } }
+        // This original Runtime producer actually gets the physical action
+        // Future. No unrelated completed-flag/Unit task stands in for it.
+        let producer = spawn { let _ = future.get() }
+        match (control.runtime.ownTaskWithJoin("internal-model-" + request.requestId, producer,
+            expectedRunId: Some(parent.runId), expectedEpoch: Some(epoch))) {
+            case Result.Err(error) => admitted.store(-1); return Result.Err(error)
+            case Result.Ok(_) => admitted.store(1)
+        }
+        future.get()
+    }
+
     public func execute(request: ModelRequest, events: ModelEventSink): Result<ModelReply> {
         let active = match (control.runtime.activeRunControl159()) { case Some(value) => value
             case None => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "model.internal_owner_missing", "internal model Run is not active")) }
@@ -84,7 +129,6 @@ class CoreInternalAttemptPort <: ModelPort {
             "model.internal_cancelled", "internal model call is cancelled or already executing")) }; activeRequest = id }
             finally { lock.unlock() }
         control.setActiveRequest(id)
-        let finished = AtomicBool(false)
         let prepared = AtomicBool(false)
         try {
             let boundary = control.serializeEvent({ =>
@@ -102,23 +146,14 @@ class CoreInternalAttemptPort <: ModelPort {
                     case Result.Err(error) => Result.Err(error) }
             })
             match (boundary) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-            // Retain the actual execution future until its callback returns.
-            // The provider's existing resource-cleanup task separately blocks
-            // model boundaries until OS ACK; this join task does not reject its
-            // own first provider gate opening.
-            let joined = spawn { while (!finished.load()) { sleep(Duration.millisecond * 1) }; () }
-            match (control.runtime.ownTaskWithJoin("internal-model-" + id, joined,
-                expectedRunId: Some(parent.runId), expectedEpoch: Some(active[3]))) {
-                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             match (check(parent.runId, active[3])) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let cancellation = control.source.token.onCancel({ _ => let _ = provider.cancel(id) })
             let actualToken = match (control.runtime.childCancellationToken(expectedRunId: Some(parent.runId), expectedEpoch: Some(active[3]))) {
                 case Result.Err(error) => cancellation.dispose(); return Result.Err(error); case Result.Ok(value) => value }
             let runCancellation = actualToken.onCancel({ _ => let _ = provider.cancel(id) })
-            let outcome = try { provider.execute(effective, events) } catch (_: Exception) {
-                Result<ModelReply>.Err(AgentError(AgentErrorKind.RecoveryRequired, "model.internal_provider_threw",
-                    "internal provider ended without a reliable result"))
-            } finally { runCancellation.dispose(); cancellation.dispose() }
+            let outcome = try { executeOwnedInput180(effective, events, active[3]) }
+            catch (failure: OwnedCanonicalDataFailure113) { Result<ModelReply>.Err(failure.error) }
+            finally { runCancellation.dispose(); cancellation.dispose() }
             let usage = match (outcome) {
                 case Result.Ok(reply) => Some(accountedModelAttemptUsage(reply, parent.pricing))
                 case Result.Err(error) => attemptUsageFromError(error, parent.pricing) }
@@ -150,7 +185,6 @@ class CoreInternalAttemptPort <: ModelPort {
             }
             control.clearActiveRequest(id)
             lock.lock(); try { activeRequest = "" } finally { lock.unlock() }
-            finished.store(true)
         }
     }
 }
@@ -186,6 +220,6 @@ func internalModelErrorUsage(error: AgentError, usage: ?ModelUsage): AgentError 
     match (value.evidence) { case None => (); case Some(evidence) =>
         fields.add(ErrorField("usage_protocol", evidence.protocol)); fields.add(ErrorField("usage_event", evidence.eventKind))
         fields.add(ErrorField("usage_response_id", evidence.providerResponseId)) }
-    AgentError(error.kind, error.code, error.message, retryable: false, fallbackAllowed: false,
+    AgentError(error.kind, error.code, error.message, retryable: error.retryable, fallbackAllowed: error.fallbackAllowed,
         fields: fields.toArray(), attemptFailure: error.attemptFailure, observation: error.observation)
 }

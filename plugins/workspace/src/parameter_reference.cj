@@ -56,12 +56,15 @@ func workspacePrepareReferenced(invocation: JsonNode): Unit {
         !workspaceParameterDigest(wsText(reference, "input_sha256")) || workspaceParameterInteger(reference, "input_bytes") > WORKSPACE_WRITE_INPUT_BYTES) {
         throw WorkspaceFailure("workspace.prepare_invalid", "Original input reference has invalid fields") }
     let binding = reference.field("binding").getOrThrow()
+    // The Native wire ID is local to its package; the frozen parameter
+    // binding names the ecosystem-qualified registration in the Host.
+    let namespace = "axyndra:" + wsText(invocation, "extension_id")
     if (!workspaceParameterExact(binding, ["thread_id", "run_id", "epoch", "call_id", "tool_name", "plugin", "contribution",
         "package_digest", "generation", "configuration_digest"]) ||
         wsText(binding, "thread_id") != wsText(invocation, "thread_id") || wsText(binding, "run_id") != wsText(invocation, "run_id") ||
         stringifyUnifiedJson(binding.field("epoch").getOrThrow()) != stringifyUnifiedJson(invocation.field("epoch").getOrThrow()) ||
-        wsText(binding, "call_id") != wsText(invocation, "call_id") || wsText(binding, "plugin") != wsText(invocation, "extension_id") ||
-        wsText(binding, "contribution") != "write" || wsText(binding, "tool_name") != "plugin." + wsText(invocation, "extension_id") + ".write" ||
+        wsText(binding, "call_id") != wsText(invocation, "call_id") || wsText(binding, "plugin") != namespace ||
+        wsText(binding, "contribution") != "write" || wsText(binding, "tool_name") != "plugin." + namespace + ".write" ||
         wsText(binding, "generation") != stringifyUnifiedJson(invocation.field("generation").getOrThrow()) ||
         !httpServicePackageDigest(wsText(binding, "package_digest")) || !workspaceParameterDigest(wsText(binding, "configuration_digest"))) {
         throw WorkspaceFailure("workspace.prepare_invalid", "Parameter reference belongs to another invocation") }

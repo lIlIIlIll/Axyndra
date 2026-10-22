@@ -17,6 +17,8 @@ class ApplicationPluginCommandControl {
     private let lock = Mutex()
     private var closed = false
     private var proposal: ?ProductCommandProposal = None
+    private var originalCommandHelpers180: Int64 = 0
+    private var directCleanupAttempted180 = false
 
     init(product: ProductRuntime, scope: ProductPluginCommandScope, cancellation: CancellationSource,
         accepted: (ProductCommandProposal, ?ProductContinuationOwner) -> Result<Unit>) {
@@ -25,6 +27,34 @@ class ApplicationPluginCommandControl {
         this.accepted = accepted
     }
     func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
+    func enterOriginalCommandHelper180(): Bool {
+        lock.lock()
+        try {
+            // Calls which enter after closure can only observe the existing
+            // closed scalar state; they cannot run a Gateway continuation.
+            if (closed) { return false }
+            if (originalCommandHelpers180 == Int64.Max) { throw IllegalStateException("command helper count overflow") }
+            originalCommandHelpers180++; true
+        } finally { lock.unlock() }
+    }
+    func originalCommandHelperReturned180(entered: Bool): Bool {
+        lock.lock()
+        let (returned, probe) = try {
+            if (entered) {
+                if (originalCommandHelpers180 <= 0) { throw IllegalStateException("command helper returned without entry") }
+                originalCommandHelpers180--
+            }
+            let complete = closed && originalCommandHelpers180 == 0
+            let inspect = complete && !directCleanupAttempted180
+            if (inspect) { directCleanupAttempted180 = true }
+            (complete, inspect)
+        } finally { lock.unlock() }
+        // ApplicationSession calls this only AFTER its original whole invoke,
+        // decide or cancel helper returned. SQL/physical proof is unchanged;
+        // a failed proof keeps the original Gateway DATA frame charged.
+        if (probe) { let _ = owner.closeAcknowledgement() }
+        returned
+    }
     func approval(): ?ApprovalRequest {
         let actual = match (owner.approval()) { case None => return None; case Some(value) => value }
         lock.lock()

@@ -4,11 +4,18 @@ import agent_domain.*
 import logical_json_payload.LogicalJsonCopiedDisplayAllocation as ImportedLogicalJsonCopiedDisplayAllocation
 import std.sync.Mutex
 
+// A Root-only carrier stores its actual serializer owner at construction. The
+// terminal-side constructor leaves it absent; a remote or caller-supplied
+// producer identity cannot manufacture the physical Screen retirement path.
+public interface OwnedTuiSerializerLifetime180 {
+    func rootSerializerReferencesRetired180(actualProducer: Object): Bool
+}
 // DATA copied from the real maintenance response. No tool event, Source,
 // execution capability or new allocation bank is created by this carrier.
 public class OwnedTuiRegistryResponseDisplay167 <: OwnedTuiCardDisplay113 {
     private let lock = Mutex()
     private let producer: Object
+    private let serializerLifetime180: ?OwnedTuiSerializerLifetime180
     private var allocation: ?LogicalJsonCopiedDisplayAllocation
     private var renderer: ?LogicalJsonCopiedDisplayAllocation = None
     private let peaks = Array<Int64>(20, repeat: 0)
@@ -17,8 +24,10 @@ public class OwnedTuiRegistryResponseDisplay167 <: OwnedTuiCardDisplay113 {
     private var cardId = ""
     private var retired = false
 
-    public init(producer: Object, allocation: LogicalJsonCopiedDisplayAllocation, invoice: Int64) {
+    public init(producer: Object, allocation: LogicalJsonCopiedDisplayAllocation, invoice: Int64,
+        serializerLifetime180!: ?OwnedTuiSerializerLifetime180 = None) {
         this.producer = producer; this.allocation = Some(allocation); this.projectionInvoice = invoice
+        this.serializerLifetime180 = serializerLifetime180
     }
     public func prepareQueueAndScreenCopies167(invoice: Int64): Result<Unit> {
         lock.lock()
@@ -72,6 +81,23 @@ public class OwnedTuiRegistryResponseDisplay167 <: OwnedTuiCardDisplay113 {
                     case Result.Err(error) => return Result.Err(error)
                     case Result.Ok(_) => renderer = None }
                 case None => () }
+            match (allocation.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => allocation = None; retired = true; Result<Unit>.Ok(()) }
+        } finally { lock.unlock() }
+    }
+    // Only non-UI serializer copies use this path. Any actual card identity
+    // or renderer share still requires its real bound Screen receipt.
+    public func closeAfterUnprojectedSerialization180(actualProducer: Object): Result<Unit> {
+        if (!refEq(actualProducer, producer)) { return ownedTuiDisplayError("display.registry_producer_mismatch") }
+        match (serializerLifetime180) {
+            case Some(actual) => if (!actual.rootSerializerReferencesRetired180(actualProducer)) {
+                return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+            case None => return ownedTuiDisplayError("display.registry_screen_retirement_required") }
+        lock.lock()
+        try {
+            if (retired) { return Result<Unit>.Ok(()) }
+            if (cardId != "" || renderer.isSome()) { return ownedTuiDisplayError("display.registry_screen_retirement_required") }
             match (allocation.getOrThrow().closeAfterCopiedDisplayRetirement()) {
                 case Result.Err(error) => Result.Err(error)
                 case Result.Ok(_) => allocation = None; retired = true; Result<Unit>.Ok(()) }

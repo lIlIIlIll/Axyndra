@@ -3,6 +3,7 @@ package agent_product
 import agent_domain.*
 import agent_plugin_registry.PluginRegistry
 import std.fs.*
+import std.sync.AtomicBool
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -24,18 +25,18 @@ private func hookCancellationSourceFrame159l(custody: ProductHookProcessCustody1
     first: ProductHookCancellationBatch159g, second: ?ProductHookCancellationBatch159g): Unit {
     let parent = CancellationSource(deadlineMillis: agentUtcMillis() + 60000)
     let source = custody.installParent159j(parent.token)
-    var observed = false
+    let observed = AtomicBool(false)
     let registration = source.token.onCancelReturning159({ reason =>
         @Expect(reason.code, "plugin.hook_snapshot_revoked")
         @Expect(reason.message, "plugin hook generation was disabled or replaced")
         @Expect(match (reason.kind) { case CancellationReasonKind.Failure => true; case _ => false })
-        observed = true
+        observed.store(true)
     })
     try {
         first.addOwnedSource159l(source, Some(custody))
         match (second) { case Some(value) => value.addOwnedSource159l(source, Some(custody)); case None => () }
         first.cancelSources159g()
-        @Expect(observed)
+        @Expect(observed.load())
         let original = source.token.reason().getOrThrow()
         @Expect(original.cancelledAtMillis > 0)
         match (second) { case Some(value) => value.cancelSources159g(); case None => () }

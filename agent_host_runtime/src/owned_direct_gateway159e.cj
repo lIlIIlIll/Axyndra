@@ -71,6 +71,9 @@ class HostDirectGatewayFrame159e {
         lock.lock(); try { ownerReturned = true } finally { lock.unlock() }
         collectReturned159e()
     }
+    func originalInputConsumersDetached180(): Bool {
+        lock.lock(); try { returned && context.isNone() && started.isNone() && payment.isNone() && catalogConsumer204.isNone() } finally { lock.unlock() }
+    }
     private func collectReturned159e(): Unit {
         lock.lock()
         let claimed = try {

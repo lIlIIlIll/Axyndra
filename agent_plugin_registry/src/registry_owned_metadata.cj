@@ -22,7 +22,7 @@ public enum PluginHookText { Event | Matcher | Command }
 public enum PluginContributionText { Name | InputAttachmentField }
 public enum PluginContributionDependencyText { Namespace | VersionRange | Name }
 public enum PluginRegistryErrorText { Message | Source | Field }
-public enum PluginRegistryStaticReason { None | MetadataCapacity | ExecutionNotCurrent | InstalledRecordAbsent | ComponentAliasInvalid }
+public enum PluginRegistryStaticReason { NoStaticReason | MetadataCapacity | ExecutionNotCurrent | InstalledRecordAbsent | ComponentAliasInvalid }
 
 public enum PluginRegistryResult<T> {
     Ok(T) | Err(PluginRegistryOwnedError)
@@ -439,7 +439,7 @@ public class PluginRegistryOwnedError {
         this.code = pluginRegistryStaticCode78(code); this.backing = backing; this.reason = reason
     }
     public prop staticReason: PluginRegistryStaticReason {
-        get() { if (backing.isNone()) { reason } else { PluginRegistryStaticReason.None } }
+        get() { if (backing.isNone()) { reason } else { PluginRegistryStaticReason.NoStaticReason } }
     }
     public func textEquals(field: PluginRegistryErrorText, expected: String): Bool {
         match (backing) {
@@ -451,7 +451,7 @@ public class PluginRegistryOwnedError {
                     case PluginRegistryStaticReason.ExecutionNotCurrent => expected == "installed execution pin is not current"
                     case PluginRegistryStaticReason.InstalledRecordAbsent => expected == "installed record is absent"
                     case PluginRegistryStaticReason.ComponentAliasInvalid => expected == "initial context configuration or its exact installed binding is unavailable"
-                    case PluginRegistryStaticReason.None => false
+                    case PluginRegistryStaticReason.NoStaticReason => false
                 }
         }
     }

@@ -21,6 +21,16 @@ class OwnedTuiDisplayRegistration {
                 case Result.Ok(_) => display = None; Result.Ok(()) }
             case None => Result.Ok(()) }
     }
+    func retireRootSerializedData180(receipt: TuiRootSerializerRetirement180, producer: Object): Result<Unit> {
+        if (!receipt.acknowledges180(producer)) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        match (display) {
+            case Some(value) =>
+                if (value.isAdopted() || value.isProjected()) { return ownedTuiDisplayError("display.screen_retirement_required") }
+                match (value.closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => display = None }
+            case None => () }
+        Result<Unit>.Ok(())
+    }
     func takeMetadataAfterDataRetirement(): LogicalJsonCopiedDisplayAllocation {
         if (display.isSome()) { throw IllegalStateException("display registry data still live") }
         let paid = metadataPayment.getOrThrow(); metadataPayment = None; paid

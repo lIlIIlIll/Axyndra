@@ -1,6 +1,7 @@
 package agent_product
 
 import agent_domain.*
+import agent_plugin_registry.PluginRegistryExecutionFence
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -22,22 +23,42 @@ class LifecycleConfigurationFixture {
     let external: String
     let executable: String
     let namespace = "axyndra:lifecycle-contract"
-    let packageDigest = "sha256:" + modelPolicySha256Text("lifecycle-contract-package")
+    let packageDigest: String
+    private let registryOwners = ProductRegistryTestOwners()
+    private let actualAdmission: () -> Result<PluginRegistryExecutionFence>
 
     init() {
         root = Directory.createTemp("/tmp").toString()
         settings = root + "/settings"
-        packageRoot = root + "/package"
+        let source = nativePluginTestSource(root + "/package-fixture")
         workspace = root + "/workspace"
         external = root + "/external"
-        executable = packageRoot + "/worker"
         Directory.create(settings + "/plugins", recursive: true)
-        Directory.create(packageRoot)
         Directory.create(workspace)
         Directory.create(external)
-        File.writeTo(executable, "#!/bin/sh\nexit 0\n".toArray())
-        let _ = FileInfo(executable).setExecutable(true)
-        if (!FileInfo(executable).canExecute()) { throw IllegalStateException("lifecycle fixture executable permission unavailable") }
+        let worker = source + "/worker"
+        File.writeTo(worker, "#!/bin/sh\nexit 0\n".toArray())
+        let _ = FileInfo(worker).setExecutable(true)
+        if (!FileInfo(worker).canExecute()) { throw IllegalStateException("lifecycle fixture executable permission unavailable") }
+        let manifest = parseUnifiedJson(String.fromUtf8(File.readFrom(source + "/axyndra.plugin.json")))
+        manifest.put("id", textValue("lifecycle-contract"))
+        File.writeTo(source + "/axyndra.plugin.json", stringifyUnifiedJson(manifest).toArray())
+        let registry = registryOwners.openProduct(root + "/installed-settings", workspace)
+        let imported = match (registry.importLocal(source)) {
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+        }
+        imported.close()
+        let enabled = match (registry.setEnabled(namespace, true)) {
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+        }
+        try {
+            packageRoot = productRegistryCopyText83(enabled.descriptor.copyText(PluginDescriptorText.Root))
+            executable = packageRoot + "/worker"
+            packageDigest = productRegistryCopyText83(enabled.descriptor.copyText(PluginDescriptorText.ContentDigest))
+            actualAdmission = registryOwners.admission(registry, enabled)
+        } finally { enabled.close() }
     }
 
     func service(): AgentValue {
@@ -75,9 +96,10 @@ class LifecycleConfigurationFixture {
     func bind(configuration: ProductPluginLifecycleConfiguration,
         limits!: ExecutionResourceLimits = ExecutionResourceLimits()): Result<ProductPluginLifecycleLaunchGrant> {
         configuration.bindService("stdio", ThreadId("target-thread"), "host-minted-instance", workspace, limits,
-            modelPolicySha256Text("fixture-host-permission-domain"))
+            modelPolicySha256Text("fixture-host-permission-domain"), registryAdmission: Some(registryAdmission()))
     }
-    func close(): Unit { remove(root, recursive: true) }
+    func registryAdmission(): () -> Result<PluginRegistryExecutionFence> { actualAdmission }
+    func close(): Unit { registryOwners.close(); remove(root, recursive: true) }
 }
 
 @Test
@@ -107,7 +129,8 @@ class PluginLifecycleConfigurationTests {
             }
             let first = lifecycleTestRequire(fixture.bind(config))
             let second = lifecycleTestRequire(config.bindService("stdio", ThreadId("target-thread"),
-                "host-minted-instance", fixture.workspace, ExecutionResourceLimits(), modelPolicySha256Text("another-domain")))
+                "host-minted-instance", fixture.workspace, ExecutionResourceLimits(), modelPolicySha256Text("another-domain"),
+                registryAdmission: Some(fixture.registryAdmission())))
             @Expect(first.digest != second.digest)
             @Expect(first.launchPlan.field("permission_domain").getOrThrow().text,
                 modelPolicySha256Text("fixture-host-permission-domain"))

@@ -78,9 +78,11 @@ class HostStdioIngressGrant <: HostNativeServiceEndpointGrant {
     private let live = AtomicBool(true)
 
     init(settingsRoot: String, workspaceRoot: String, grantId: String, host: HostJavaScriptPluginHost,
-        catalog: ToolCatalog, hostAncestry: Array<String>, contextForRoot: (String) -> ToolContextDescriptor) {
+        catalog: ToolCatalog, hostAncestry: Array<String>, contextForRoot: (String) -> ToolContextDescriptor, metadata180: LogicalJsonOwnerReservation) {
         file = hostIngressReadConfiguration(settingsRoot); this.settingsRoot = settingsRoot
         this.host = host; this.catalog = catalog; ancestry = hostAncestry.clone()
+        let nodes180 = logicalJsonNodeCount(file.text)
+        metadata180.ensureRetainedPeak(1048576 + file.text.size * 16 + nodes180 * 1024)
         let document = parseUnifiedJson(file.text, maxBytes: 65536)
         hostLifecycleExact(document, ["schema", "grants"])
         hostLifecycleRequire(hostLifecycleText(document, "schema") == "axyndra.stdio-ingress-grants/v1")
@@ -205,15 +207,15 @@ class HostStdioIngressGrant <: HostNativeServiceEndpointGrant {
     // the independent, powerless decoder before owned terminal bytes settle.
     func fixedExportsCurrent(): Result<Unit> {
         try {
-            let snapshot = catalog.toolSetSnapshot("ingress-revalidate", context.capabilities, threadId: Some(targetThread))
-            for (name in exportNames) {
-                let expected = binding.exported(name).getOrThrow(); var found = false
-                for (entry in snapshot.entries where entry.name == name && entry.availableAtSnapshot) {
-                    found = entry.executorVersion == expected.version && entry.implementationFingerprint == expected.fingerprint && entry.schemaDigest == expected.schemaDigest
+            let snapshot = catalog.sharedToolSetSnapshot159("ingress-revalidate", context.capabilities, threadId: Some(targetThread)).getOrThrow()
+            try {
+                for (name in exportNames) {
+                    let expected = binding.exported(name).getOrThrow()
+                    hostLifecycleRequire(snapshot.strictAvailableExport159(name, expected.version, expected.fingerprint, expected.schemaDigest),
+                        "plugin.ingress_export_changed")
                 }
-                hostLifecycleRequire(found, "plugin.ingress_export_changed")
-            }
-            Result.Ok(())
+                Result.Ok(())
+            } finally { snapshot.close159() }
         } catch (_: Exception) {
             hostLifecycleError("plugin.ingress_changed", "fixed export snapshot changed")
         }

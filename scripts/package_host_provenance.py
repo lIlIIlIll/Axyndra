@@ -32,7 +32,8 @@ def digest(path):
     return result.hexdigest()
 
 
-def publish(root, binary, recipe_path, profile, source_sha256, explicit_input=False):
+def publish(root, binary, recipe_path, profile, source_sha256, explicit_input=False,
+            native_source=None, native_before_sha256=None, native_copy_sha256=None):
     root, binary, recipe_path = Path(root), Path(binary), Path(recipe_path)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('host package must be a real fresh directory')
@@ -92,6 +93,18 @@ def publish(root, binary, recipe_path, profile, source_sha256, explicit_input=Fa
         recipe_sha256=digest(recipe_path), distribution_manifest_sha256=digest(manifest_path),
         bundled=selected['bundled'], default_enabled=selected['default_enabled'], core_required=selected['core_required'],
         host_files=dict(sorted(files.items())), proves_actual_build=False)
+    native_inputs = [native_source, native_before_sha256, native_copy_sha256]
+    if any(value is not None for value in native_inputs):
+        if any(value is None for value in native_inputs):
+            raise ValueError('native source and before/copy hashes must be supplied together')
+        native_after_sha256 = digest(native_source)
+        if native_before_sha256 != native_copy_sha256 or native_before_sha256 != native_after_sha256:
+            raise ValueError('native input changed after its packaging bytes were frozen')
+        result['native_input'] = dict(
+            source_binary_sha256=source_sha256,
+            before_sha256=native_before_sha256, copied_sha256=native_copy_sha256,
+            after_sha256=native_after_sha256,
+            packaged_sha256=digest(root / 'lib/libprocess4cj_native.so'))
     if digest(binary) != source_sha256:
         raise ValueError('source binary changed before provenance publication')
     output = root / 'package-provenance.json'
@@ -109,12 +122,16 @@ if __name__ == '__main__':
     parser.add_argument('--profile', choices=['minimal', 'coding', 'full'])
     parser.add_argument('--source-sha256')
     parser.add_argument('--explicit-input', action='store_true')
+    parser.add_argument('--native-source', type=Path)
+    parser.add_argument('--native-before-sha256')
+    parser.add_argument('--native-copy-sha256')
     args = parser.parse_args()
     if args.hash_file is not None:
-        if any(value is not None for value in [args.root, args.binary, args.recipe, args.profile, args.source_sha256]) or args.explicit_input:
+        if any(value is not None for value in [args.root, args.binary, args.recipe, args.profile, args.source_sha256, args.native_source, args.native_before_sha256, args.native_copy_sha256]) or args.explicit_input:
             parser.error('--hash-file must be used alone')
         print(digest(args.hash_file))
     else:
         if any(value is None for value in [args.root, args.binary, args.recipe, args.profile, args.source_sha256]):
             parser.error('root, binary, recipe, profile and source-sha256 are required')
-        publish(args.root, args.binary, args.recipe, args.profile, args.source_sha256, args.explicit_input)
+        publish(args.root, args.binary, args.recipe, args.profile, args.source_sha256, args.explicit_input,
+                args.native_source, args.native_before_sha256, args.native_copy_sha256)

@@ -109,19 +109,27 @@ class Schema27UpgradeEntryTests {
                 schema27EntryMetadata(seed,"future-thread",payload,"")
                 seed.execute("INSERT INTO plugin_documents VALUES('future-thread','main','axyndra:workflow','todo',4,?)",[SqlParameter.Text(payload)])
                 seed.execute("PRAGMA user_version=29")
+                // A DELETE header exposes configuration writes before refusal.
+                seed.execute("PRAGMA journal_mode=DELETE")
             } finally { seed.close() }
+            let original=File.readFrom(path)
             var rejected=false
             try { let unexpected=SqliteDatabase(path); unexpected.close() }
             catch(error:Exception) { rejected=true; @Expect(error.message.contains("Unsupported SQLite schema version 29")) }
             @Expect(rejected)
+            @Expect(File.readFrom(path),original)
+            @Expect(!exists(Path(path+"-wal")))
+            @Expect(!exists(Path(path+"-shm")))
             let history=SqliteDatabase(path,readOnly:true)
             try {
+                @Expect(history.query("PRAGMA journal_mode")[0].required(0),"delete")
                 @Expect(history.scalarInt("PRAGMA user_version"),29)
                 @Expect(history.query("SELECT todo_payload FROM thread_metadata WHERE thread_id='future-thread'")[0].required(0),payload)
                 let row=history.query("SELECT revision,payload FROM plugin_documents WHERE thread_id='future-thread'")[0]
                 @Expect(row.required(0),"4"); @Expect(row.required(1),payload)
                 @Expect(history.scalarInt("SELECT COUNT(*) FROM plugin_documents"),1)
             } finally { history.close() }
+            @Expect(File.readFrom(path),original)
         } finally { remove(root,recursive:true) }
     }
 }

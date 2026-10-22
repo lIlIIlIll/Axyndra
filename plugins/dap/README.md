@@ -28,5 +28,8 @@ data only; it does not construct an approval, Root, Source, plan or Receipt.
 
 Run the pinned unit suite and `scripts/prepare_language_plugin.py --plugin dap
 --output NEW_DIRECTORY`, followed by the installed Product debug contract.
+The independent protocol fixture checks the current exact `debug` Tool and
+`session` Service handshake, including the original 28-action schema and
+closed additional-property grammar; it does not assume a Service-only worker.
 These source changes do not themselves certify current compiled artifacts,
 complete lifecycle parity, clean installation or cross-platform acceptance.

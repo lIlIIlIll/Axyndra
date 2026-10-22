@@ -21,7 +21,7 @@ func workflowText(value: AgentValue, name: String): String {
 }
 func workflowProposal(input: AgentValue, before: AgentValue, after: AgentValue, result: ToolResult): AgentValue {
     objectValue([ValueField("source_digest", textValue(workflowText(input, "source_digest"))),
-        ValueField("changed", boolValue(canonicalAgentValue(before) != canonicalAgentValue(after))),
+        ValueField("changed", boolValue(!canonicalAgentValuesEqual(before, after))),
         ValueField("document", after), ValueField("output", result.output), ValueField("is_error", boolValue(result.isError))])
 }
 func workflowTodo(input: AgentValue): AgentValue {

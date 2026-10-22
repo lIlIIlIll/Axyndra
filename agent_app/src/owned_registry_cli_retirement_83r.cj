@@ -64,66 +64,66 @@ private class AppRegistryCliPrintCopy83r {
 }
 
 private func appRegistryCliPrintRecordFrame83r(actual: AppRegistryCliPrintCopy83r,
-    record: ProductPluginRecord, action: String): Bool {
+    record: ProductPluginRecord, action: String, io!: CliIo180 = consoleCliIo180): Bool {
     try {
         appWriteRegistryLineChecked181(action + " " + actual.copyText(record.descriptor.copyText(PluginDescriptorText.Namespace)) + "@" +
             actual.copyText(record.descriptor.copyText(PluginDescriptorText.Version)) + " (" + pluginCliScope(record.scope) + ", " +
-            (if (record.enabled) { "enabled" } else { "disabled" }) + ").")
-        getStdOut().flush()
+            (if (record.enabled) { "enabled" } else { "disabled" }) + ").", io: io)
+        io.flush()
         true
     } catch (_: Exception) { false }
 }
 
-func appRegistryCliPrintRecord83r(record: ProductPluginRecord, action: String): Int64 {
+func appRegistryCliPrintRecord83r(record: ProductPluginRecord, action: String, io!: CliIo180 = consoleCliIo180): Int64 {
     try {
         let header = record.descriptor.deriveCopiedDataPayment(65536)
         let actual = AppRegistryCliPrintCopy83r(header)
-        let printed = appRegistryCliPrintRecordFrame83r(actual, record, action)
+        let printed = appRegistryCliPrintRecordFrame83r(actual, record, action, io: io)
         if (printed) { actual.closeAfterPrintingFrameReturned() }
         else { appRegistryCliHoldIncompletePrint158(actual) }
-        if (printed) { 0 } else { appRegistryCliPrintCapacity83r() }
-    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r() }
+        if (printed) { 0 } else { appRegistryCliPrintCapacity83r(io: io) }
+    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r(io: io) }
     finally { record.close() }
 }
 
 private func appRegistryCliPrintErrorFrame83r(actual: AppRegistryCliPrintCopy83r,
-    error: PluginRegistryOwnedError, raw: OwnedRegistryUtf8): Bool {
+    error: PluginRegistryOwnedError, raw: OwnedRegistryUtf8, io!: CliIo180 = consoleCliIo180): Bool {
     try {
         appWriteRegistryLineChecked181("error[" + error.code + "]: " +
-            actual.copyText(PluginRegistryResult.Ok(raw)))
-        getStdOut().flush()
+            actual.copyText(PluginRegistryResult.Ok(raw)), io: io)
+        io.flush()
         true
     } catch (_: Exception) { false }
 }
 
-func appRegistryCliPrintError83r(error: PluginRegistryOwnedError): Int64 {
+func appRegistryCliPrintError83r(error: PluginRegistryOwnedError, io!: CliIo180 = consoleCliIo180): Int64 {
     match (error.staticReason) {
-        case PluginRegistryStaticReason.None => ()
+        case PluginRegistryStaticReason.NoStaticReason => ()
         case _ =>
             printError(AgentError(AgentErrorKind.InvalidInput, error.code,
-                appRegistryErrorText83(error, PluginRegistryErrorText.Message)))
+                appRegistryErrorText83(error, PluginRegistryErrorText.Message)), io: io)
             return 1
     }
     let raw = match (error.copyText(PluginRegistryErrorText.Message)) {
         case PluginRegistryResult.Ok(value) => value
-        case PluginRegistryResult.Err(failure) => failure.close(); return appRegistryCliPrintCapacity83r()
+        case PluginRegistryResult.Err(failure) => failure.close(); return appRegistryCliPrintCapacity83r(io: io)
     }
     try {
         let header = raw.deriveCopiedDataPayment(65536)
         let actual = AppRegistryCliPrintCopy83r(header)
-        let printed = appRegistryCliPrintErrorFrame83r(actual, error, raw)
+        let printed = appRegistryCliPrintErrorFrame83r(actual, error, raw, io: io)
         if (printed) { actual.closeAfterPrintingFrameReturned() }
         else { appRegistryCliHoldIncompletePrint158(actual) }
-        if (printed) { 1 } else { appRegistryCliPrintCapacity83r() }
-    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r() }
+        if (printed) { 1 } else { appRegistryCliPrintCapacity83r(io: io) }
+    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r(io: io) }
     finally { raw.close() }
     // The incoming doctor error may be borrowed from its actual owned list.
     // This text-printing consumer retires only its independent copied data.
 }
 
-private func appRegistryCliPrintCapacity83r(): Int64 {
+private func appRegistryCliPrintCapacity83r(io!: CliIo180 = consoleCliIo180): Int64 {
     printError(AgentError(AgentErrorKind.InvalidInput, "plugin.registry_metadata_capacity",
-        "registry metadata cannot fit the original shared capacity"))
+        "registry metadata cannot fit the original shared capacity"), io: io)
     1
 }
 
@@ -150,35 +150,35 @@ private func appRegistryCliRecordValue158(actual: AppRegistryCliPrintCopy83r,
 }
 
 private func appRegistryCliPrintListFrame158(actual: AppRegistryCliPrintCopy83r,
-    records: OwnedPluginRecordList, json: Bool): Bool {
+    records: OwnedPluginRecordList, json: Bool, io!: CliIo180 = consoleCliIo180): Bool {
     try {
         if (json) {
             let values = ArrayList<AgentValue>()
             for (index in 0..records.size) {
                 values.add(appRegistryCliRecordValue158(actual, records.at(index)))
             }
-            appWriteRegistryLineChecked181(stringifyUnifiedJson(listValue(values.toArray())))
+            appWriteRegistryLineChecked181(stringifyUnifiedJson(listValue(values.toArray())), io: io)
         } else {
-            appWriteRegistryLineChecked181("Plugins:")
-            if (records.isEmpty()) { appWriteRegistryLineChecked181("No plugins are imported.") }
+            appWriteRegistryLineChecked181("Plugins:", io: io)
+            if (records.isEmpty()) { appWriteRegistryLineChecked181("No plugins are imported.", io: io) }
             for (index in 0..records.size) {
                 let record = records.at(index)
                 appWriteRegistryLineChecked181((if (record.enabled) { "[on] " } else { "[off] " }) +
                     actual.copyText(record.descriptor.copyText(PluginDescriptorText.Namespace)) + "@" +
                     actual.copyText(record.descriptor.copyText(PluginDescriptorText.Version)) + " · " +
-                    pluginCliScope(record.scope) + " · " + actual.copyText(record.copyText(PluginRecordText.ContentLock)))
+                    pluginCliScope(record.scope) + " · " + actual.copyText(record.copyText(PluginRecordText.ContentLock)), io: io)
             }
         }
-        getStdOut().flush()
+        io.flush()
         true
     } catch (_: Exception) { false }
 }
 
-func appRegistryCliPrintList158(records: OwnedPluginRecordList, json: Bool): Int64 {
+func appRegistryCliPrintList158(records: OwnedPluginRecordList, json: Bool, io!: CliIo180 = consoleCliIo180): Int64 {
     try {
         let count = records.size
         if (count < 0 || count > (134217728 - 65536) / 8192) {
-            return appRegistryCliPrintCapacity83r()
+            return appRegistryCliPrintCapacity83r(io: io)
         }
         // Pay the actual carrier containers, 8-field record DOM/entry arrays,
         // list DOM and simultaneous renderer cells before any such allocation.
@@ -186,11 +186,11 @@ func appRegistryCliPrintList158(records: OwnedPluginRecordList, json: Bool): Int
         // peak, including escaping, using that very Registry owner's bank.
         let header = records.deriveCopiedDataPayment(65536 + count * 8192)
         let actual = AppRegistryCliPrintCopy83r(header)
-        let printed = appRegistryCliPrintListFrame158(actual, records, json)
+        let printed = appRegistryCliPrintListFrame158(actual, records, json, io: io)
         if (printed) { actual.closeAfterPrintingFrameReturned() }
         else { appRegistryCliHoldIncompletePrint158(actual) }
-        if (printed) { 0 } else { appRegistryCliPrintCapacity83r() }
-    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r() }
+        if (printed) { 0 } else { appRegistryCliPrintCapacity83r(io: io) }
+    } catch (_: LogicalJsonPayloadError) { appRegistryCliPrintCapacity83r(io: io) }
     finally { records.close() }
 }
 

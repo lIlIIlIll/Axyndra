@@ -145,7 +145,6 @@ class PluginLspServiceTests {
     func installedLanguageInitializesAndFreezesDocumentBatchInOneRealChild(): Unit {
         let fixture = LspProductFixture()
         try {
-            @Expect(fixture.product.unregisterTool("bash")); @Expect(fixture.product.unregisterTool("bash_readonly"))
             @Expect(!managedCompleted(fixture.start("lsp-direct")).isError)
             @Expect(fixture.methodCount("initialize"), 1); @Expect(fixture.methodCount("initialized"), 1)
             @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM items WHERE kind='user_message'"), 0)

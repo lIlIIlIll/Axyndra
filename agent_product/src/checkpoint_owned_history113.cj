@@ -23,10 +23,6 @@ class CheckpointOwnedHistoryData113 {
     func clear(): Unit { firstCalls.clear(); state = nullValue() }
 }
 
-func checkpointOwnedHistoryCurrent113(query: ProductCompactionReferenceQuery): Result<Unit> {
-    query.check(); Result<Unit>.Ok(())
-}
-
 func checkpointOwnedHistoryEvent113(query: ProductCompactionReferenceQuery,
     index: CheckpointOwnedHistoryData113, item: ThreadItem): AgentValue {
     match (item.content) {
@@ -55,7 +51,7 @@ func checkpointSaveActualOwnedHistory113(query: ProductCompactionReferenceQuery,
     nextOrdinal: Int64, target: String, localGuard: () -> Result<Unit>,
     routeRecipe173!: ?AgentValue = None<AgentValue>): AgentValue {
     if (nextOrdinal < 1) { throw IllegalStateException("checkpoint history boundary is invalid") }
-    let current: () -> Result<Unit> = { => checkpointOwnedHistoryCurrent113(query) }
+    let current: () -> Result<Unit> = { => query.checkPinnedData113(); Result<Unit>.Ok(()) }
     compactionDataRequire(current())
     compactionDataRequire(cursor.requireBoundary(thread, revision, nextOrdinal, localGuard))
     let index = CheckpointOwnedHistoryData113()

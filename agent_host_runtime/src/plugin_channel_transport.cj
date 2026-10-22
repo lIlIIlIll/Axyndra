@@ -99,6 +99,11 @@ class HostManagedChannelResource <: HostManagedServiceResource {
         Result.Ok(prepared.operationPlan.canonicalArguments)
     }
     public func observeRevocation(callback: () -> Unit): CancellationRegistration { actualLease().observeRevocation(callback) }
+    func stopFrozen():Result<Unit>{
+        lock.lock();let selected=try{closing=true;lease}finally{lock.unlock()}
+        match(selected){case Some(value)=>value.stopFrozen();case None=>
+            if(owner.retainsLaunch(grant.digest)){hostLifecycleLeaseError("plugin.lifecycle_cleanup_pending")}else{Result.Ok(())}}
+    }
     public func revoke(): Result<Unit> {
         lock.lock(); let selected = try { closing = true; lease } finally { lock.unlock() }
         match (selected) { case Some(value) => owner.revoke(value); case None =>

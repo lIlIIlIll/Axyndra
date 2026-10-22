@@ -18,6 +18,7 @@ public func hostReadonlyPluginCapabilities(host: HostJavaScriptPluginHost, recor
     for (index in 0..records.size) {
         let record = records.at(index)
         if (!record.enabled || record.explicitlyDisabled || record.descriptor.entryKind != PluginEntryKind.NativeExecutable) { continue }
+        if (!record.descriptor.hasCapability("process.readview") && !record.descriptor.hasCapability("tool.readonly")) { continue }
         let inspected = match (hostRegistryDescriptorCopy81(record.descriptor)) {
             case Result.Err(_) => continue; case Result.Ok(value) => value }
         if (inspected.requestedCapabilities.contains("process.readview")) {

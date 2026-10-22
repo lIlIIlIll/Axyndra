@@ -37,18 +37,18 @@ func nativePluginTestSource(root: String, command!: String = "hello", tool!: Boo
     source
 }
 
-func nativePluginTestRecord(root: String): agent_plugin_registry.ProductPluginRecord {
-        let _registryOwners = ProductRegistryTestOwners()
-        try {
-
+func nativePluginTestRecord(root: String, registry: ProductPluginRuntime): agent_plugin_registry.ProductPluginRecord {
     let source = nativePluginTestSource(root)
-    match (_registryOwners.openProduct(root + "/settings", root).importLocal(source)) {
+    let imported = match (registry.importLocal(source)) {
         case PluginRegistryResult.Ok(value) => value
         case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
     }
-
-        } finally { _registryOwners.close() }
+    imported.close()
+    match (registry.setEnabled("axyndra:native-command-fixture", true)) {
+        case PluginRegistryResult.Ok(value) => value
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
     }
+}
 
 @Test
 class NativePluginContractTests {
@@ -166,8 +166,10 @@ class NativePluginContractTests {
     @TestCase
     func frozenNativeCommandCannotRetargetReinstalledInstance(): Unit {
         let root = pluginContractTemp("native-frozen-instance")
-        let record = nativePluginTestRecord(root)
-        let host = ProductJavaScriptPluginHost()
+        let registry = ProductPluginRuntime(root + "/settings", root)
+        let record = nativePluginTestRecord(root, registry)
+        let host = ProductJavaScriptPluginHost(settingsRoot: root + "/settings")
+        lifecycleTestRequire(host.ownRegistry(registry))
         let cancellation = CancellationSource()
         try {
             @Expect(host.mount(record).isOk(), true)
@@ -189,6 +191,7 @@ class NativePluginContractTests {
         } finally {
             cancellation.close()
             let _ = host.close()
+            registry.close()
             remove(root, recursive: true)
         }
     }
@@ -196,8 +199,10 @@ class NativePluginContractTests {
     @TestCase
     func nativeProcessStateIsSeparatedByAuthorityScope(): Unit {
         let root = pluginContractTemp("native-authority-scope")
-        let record = nativePluginTestRecord(root)
-        let host = ProductJavaScriptPluginHost()
+        let registry = ProductPluginRuntime(root + "/settings", root)
+        let record = nativePluginTestRecord(root, registry)
+        let host = ProductJavaScriptPluginHost(settingsRoot: root + "/settings")
+        lifecycleTestRequire(host.ownRegistry(registry))
         let cancellation = CancellationSource()
         try {
             @Expect(host.mount(record).isOk(), true)
@@ -217,6 +222,7 @@ class NativePluginContractTests {
         } finally {
             cancellation.close()
             let _ = host.close()
+            registry.close()
             remove(root, recursive: true)
         }
     }

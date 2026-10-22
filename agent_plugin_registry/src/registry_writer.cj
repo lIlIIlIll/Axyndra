@@ -23,6 +23,27 @@ func pluginRegistryNativeFailure(value: Int64): Unit {
         else { "plugin.registry_lock_failed" }
     throw PluginRegistryWriteError(code, "registry writer fence refused the operation, errno=" + (-value).toString())
 }
+// Resolve only leading dot-components against the actual physical CWD. Any
+// interior parent or symlink component remains for the original Native fence
+// to reject; normalizing the whole authored path could erase such evidence.
+func pluginRegistryFencePath180(authored: String, cwd: String): String {
+    if (Path(authored).isAbsolute()) { return authored }
+    let raw = unsafe { authored.rawData() }
+    var base = Path(cwd); var offset: Int64 = 0
+    while (offset < raw.size) {
+        var end = offset
+        while (end < raw.size && raw[end] != b'/') { end++ }
+        let size = end - offset
+        if (size == 0 || (size == 1 && raw[offset] == b'.')) { offset = min(raw.size, end + 1); continue }
+        if (size == 2 && raw[offset] == b'.' && raw[offset + 1] == b'.') {
+            base = base.parent; offset = min(raw.size, end + 1); continue
+        }
+        break
+    }
+    if (offset == raw.size) { return base.toString() }
+    base.join(String.fromUtf8(raw[offset..raw.size])).toString()
+}
+
 
 // The only native handles are owned by one synchronous registry mutation.
 // No caller callback runs while these handles or registryLock are held.
@@ -37,8 +58,13 @@ class PluginRegistryWriterFence {
         if (settingsRoot.trimAscii() == "" || settingsRoot.contains("\u{0000}") || workspaceRoot.contains("\u{0000}")) {
             throw PluginRegistryWriteError("plugin.registry_path_invalid", "registry paths must be identified and contain no NUL")
         }
-        let user = settingsRoot + "/plugins"
-        let workspace = if (workspaceRoot.trimAscii() == "") { "" } else { workspaceRoot + "/.axyndra/plugins" }
+        // Logical locators stay unchanged; Native receives their physical
+        // spelling with only CWD-leading parent components resolved.
+        let cwd = canonicalize(Path(".")).toString()
+        let settings = pluginRegistryFencePath180(settingsRoot, cwd)
+        let work = if (workspaceRoot == "") { "" } else { pluginRegistryFencePath180(workspaceRoot, cwd) }
+        let user = settings + "/plugins"
+        let workspace = if (work.trimAscii() == "") { "" } else { work + "/.axyndra/plugins" }
         let directories = if (workspace == "" || workspace == user) { [user] }
             else if (workspace < user) { [workspace, user] } else { [user, workspace] }
         try {
@@ -47,6 +73,13 @@ class PluginRegistryWriterFence {
                     let raw = LibC.mallocCString(directory)
                     try { if (shared) { axyndra_registry_reader_acquire(raw) }
                         else { axyndra_registry_writer_acquire(raw) } } finally { LibC.free(raw) }
+                }
+                // Unsafe storage ancestry is a failed write, even when the
+                // Native fence rejects it before the first mutation. Readers
+                // and execution snapshots retain their own fence errors.
+                if (!shared && (handle == -20 || handle == -40)) {
+                    throw PluginRegistryWriteError("plugin.lock_write_failed",
+                        "registry storage path is not a real directory, errno=" + (-handle).toString())
                 }
                 pluginRegistryNativeFailure(handle)
                 handles.add(handle)

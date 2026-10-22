@@ -105,9 +105,10 @@ class PluginProcessEnvironmentTests {
             let base = fixture.base
             let configuration = lifecycleTestRequire(loadPluginLifecycleConfiguration(base.files.settings,
                 productRegistryCopyText83(base.record.descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(base.record.descriptor.copyText(PluginDescriptorText.ContentDigest)), productRegistryCopyText83(base.record.descriptor.copyText(PluginDescriptorText.Root))))
-            let grant = lifecycleTestRequire(configuration.bindService("stdio", ThreadId("env-lazy"), "host-instance",
-                base.files.workspace, ExecutionResourceLimits(maxOutputBytes: 131072),
-                modelPolicySha256Text("host-permission")))
+            let grant = lifecycleTestRequire(base.product.vnext.javascriptPlugins.bindLifecycleService(configuration, "stdio",
+                ThreadId("env-lazy"), base.files.workspace, ExecutionResourceLimits(maxOutputBytes: 131072),
+                modelPolicySha256Text("host-permission"), base.product.vnext.javascriptPlugins.instanceGeneration(
+                    productRegistryCopyText83(base.record.descriptor.copyText(PluginDescriptorText.Namespace)))))
             @Expect(grant.stillCurrent().isOk())
             @Expect(!stringifyUnifiedJson(grant.launchPlan).contains(fixture.secret))
             @Expect(lifecycleText(grant.launchPlan.field("environment").getOrThrow(), "ORDINARY_LABEL"), PROCESS_ENV_TEST_NORMAL)

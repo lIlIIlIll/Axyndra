@@ -31,7 +31,7 @@ public class AcpOwnedInput113 {
             Result<Unit>.Ok(())
         } finally { lock.unlock() }
     }
-    func prepareParser113(): Bool {
+    public func prepareParser113(): Bool {
         lock.lock()
         try {
             if (retired || !borrowing || source.isNone()) { return false }
@@ -386,6 +386,23 @@ class AcpOwnedResponseRegistry113 {
             active == 0 && frames.isEmpty() && unregistered.isNone()
         } finally { lock.unlock() }
     }
+}
+
+// Native ACP owner acquisition/routing can fail before any workspace server
+// accepted a Source. Reuse its actual owned response registry and serializer;
+// this port creates no Product/Core/Store and no synthetic execution receipt.
+public class AcpOwnerRoutingOutput180 {
+    private let responses: AcpOwnedResponseRegistry113
+    public init(control: AcpOwnedWorkerControl113) {
+        control.ensureFrontendRegistryMetadata113(65536)
+        responses = AcpOwnedResponseRegistry113(control)
+    }
+    public func write180(id: AgentValue, error: AgentError, output: AcpOwnedResponseOutput113): Bool {
+        let frame = responses.prepare113()
+        if (!frame.buildAgentError113(id, error)) { return false }
+        responses.offer113(frame, output)
+    }
+    public func retireAfterFrontendHelpersReturn180(): Bool { responses.collectUnpublished113() }
 }
 
 private func acpResponseRemovePaidSentinel113(source: String): String {

@@ -16,6 +16,7 @@ import program_language.*
 main(): Int64 {
     runContextReadPolicyContract()
     genericInvocationContextContract()
+    frozenOperatorSettingsContract180()
     runPreparedSourceContract()
     runManagedJobToolContract()
     runHttpParentIntentPreparationContract()
@@ -306,6 +307,33 @@ main(): Int64 {
     runNestedSlotDrainingContract()
     println("tool_runtime contract passed")
     0
+}
+
+func frozenOperatorSettingsContract180(): Unit {
+    let supplied = objectValue([ValueField("shell_network_mode", textValue("denied")),
+        ValueField("model_attempt_recovery", objectValue([ValueField("stream_idle_ms", integerValue(25))]))])
+    let expected = canonicalAgentValue(supplied)
+    let descriptor = ToolContextDescriptor(executionSettings180: supplied)
+    let context = ToolInvocationContext(RunId("settings-run"), SessionId("settings-session"), CapabilitySet(),
+        toolContext: descriptor)
+    supplied.put("shell_network_mode", textValue("host"))
+    supplied.field("model_attempt_recovery").getOrThrow().put("stream_idle_ms", integerValue(-1))
+    expect(canonicalAgentValue(descriptor.executionSettings180) == expected &&
+        canonicalAgentValue(context.executionSettings180) == expected,
+        "caller mutation cannot change captured execution settings")
+    let descriptorView = descriptor.executionSettings180
+    descriptorView.put("shell_network_mode", textValue("host"))
+    descriptorView.field("model_attempt_recovery").getOrThrow().put("stream_idle_ms", integerValue(-2))
+    let invocationView = context.executionSettings180
+    invocationView.put("shell_network_mode", textValue("host"))
+    invocationView.field("model_attempt_recovery").getOrThrow().put("stream_idle_ms", integerValue(-3))
+    expect(canonicalAgentValue(descriptor.executionSettings180) == expected &&
+        canonicalAgentValue(context.executionSettings180) == expected,
+        "descriptor and invocation accessors cannot mutate another consumer's frozen policy")
+    context.returnOwnedToolSetFrame159()
+    var rejected = false
+    try { let _ = context.executionSettings180 } catch (_: IllegalStateException) { rejected = true }
+    expect(rejected, "retired invocation cannot reopen a frozen settings view")
 }
 
 func genericInvocationContextContract(): Unit {

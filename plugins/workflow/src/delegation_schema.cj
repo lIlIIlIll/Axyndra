@@ -10,15 +10,37 @@ func workflowProductTaskToolDefinition111(): ModelToolDefinition {
     ModelToolDefinition(
         "task",
         "Spawn typed child agents in durable child sessions. " +
-            "Provide shared context and one or more task items.",
-        workflowObjectSchema111(
-            [
-                workflowSchemaProperty111("context", "string"),
-                workflowTaskItemsSchemaProperty111()
-            ],
-            ["context", "tasks"]
-        )
+            "Provide one task with optional context and agent (default task), " +
+            "or shared context and between one and eight task items.",
+        objectValue([
+            ValueField("type", textValue("object")),
+            ValueField("oneOf", listValue([
+                workflowSingleTaskSchema111(),
+                workflowObjectSchema111([
+                    workflowSchemaProperty111("context", "string"),
+                    workflowTaskItemsSchemaProperty111(),
+                    workflowSchemaNetworkPolicyProperty111()
+                ], ["context", "tasks"])
+            ]))
+        ])
     )
+}
+
+func workflowTaskItemSchemaProperties111(): Array<ValueField> {
+    [workflowSchemaProperty111("name", "string"),
+        workflowSchemaProperty111("agent", "string"),
+        workflowSchemaProperty111("task", "string"),
+        workflowSchemaAnyProperty111("outputSchema"),
+        workflowSchemaEnumProperty111("schemaMode", ["permissive", "strict"])]
+}
+
+func workflowSingleTaskSchema111(): AgentValue {
+    let properties = ArrayList<ValueField>()
+    for (property in workflowTaskItemSchemaProperties111()) { properties.add(property) }
+    properties.add(workflowSchemaProperty111("context", "string"))
+    properties.add(workflowSchemaEnumProperty111("effort", ["lo", "med", "hi"]))
+    properties.add(workflowSchemaNetworkPolicyProperty111())
+    workflowObjectSchema111(properties.toArray(), ["task"])
 }
 
 func workflowProductHubToolDefinition111(): ModelToolDefinition {
@@ -263,6 +285,8 @@ func workflowTaskItemsSchemaProperty111(): ValueField {
         objectValue(
             [
                 ValueField("type", textValue("array")),
+                ValueField("minItems", integerValue(1)),
+                ValueField("maxItems", integerValue(8)),
                 ValueField(
                     "items",
                     objectValue(
@@ -270,18 +294,7 @@ func workflowTaskItemsSchemaProperty111(): ValueField {
                             ValueField("type", textValue("object")),
                             ValueField(
                                 "properties",
-                                objectValue(
-                                    [
-                                        workflowSchemaProperty111("name", "string"),
-                                        workflowSchemaProperty111("agent", "string"),
-                                        workflowSchemaProperty111("task", "string"),
-                                        workflowSchemaAnyProperty111("outputSchema"),
-                                        workflowSchemaEnumProperty111(
-                                            "schemaMode",
-                                            ["permissive", "strict"]
-                                        )
-                                    ]
-                                )
+                                objectValue(workflowTaskItemSchemaProperties111())
                             ),
                             ValueField("required", listValue([textValue("task")])),
                             ValueField("additionalProperties", boolValue(false))
