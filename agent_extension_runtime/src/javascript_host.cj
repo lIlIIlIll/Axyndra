@@ -362,10 +362,12 @@ public class JavaScriptHostLaunchRequest {
             let seen = ArrayList<PluginContributionDefinition>()
             for (contribution in contributions) {
                 if ((contribution.kind != PluginContributionKind.Tool && contribution.kind != PluginContributionKind.Command &&
+                    contribution.kind != PluginContributionKind.View &&
                     contribution.kind != PluginContributionKind.Service && contribution.kind != PluginContributionKind.ModelProvider &&
                     contribution.kind != PluginContributionKind.ContextProvider && contribution.kind != PluginContributionKind.ResourceProvider && contribution.kind != PluginContributionKind.Provider) ||
                     (contribution.kind == PluginContributionKind.Tool && !validToolName(contribution.name)) ||
-                    ((contribution.kind == PluginContributionKind.Command || contribution.kind == PluginContributionKind.Service ||
+                    ((contribution.kind == PluginContributionKind.Command || contribution.kind == PluginContributionKind.View ||
+                        contribution.kind == PluginContributionKind.Service ||
                         contribution.kind == PluginContributionKind.ModelProvider || contribution.kind == PluginContributionKind.ContextProvider ||
                         (contribution.kind == PluginContributionKind.ResourceProvider || contribution.kind == PluginContributionKind.Provider)) &&
                         !validCommandName(contribution.name))) {

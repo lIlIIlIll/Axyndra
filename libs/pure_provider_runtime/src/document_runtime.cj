@@ -156,7 +156,7 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
         let first = input.next().getOrThrow()
         try {
             let hello = first.value
-            documentProtocolReady(hello, id, version, tools, commands, providers, contexts: contextProviders)
+            documentProtocolReady(hello, id, version, tools, commands, providers, contexts: contextProviders, views: views)
             let toolNames = HashSet<String>()
             for (tool in tools.items) {
                 let name = providerText(tool, "name")

@@ -259,6 +259,12 @@ public class PluginRegistryExecutionPin {
             } catch (error: PluginRegistryWriteError) {
                 if (entered) { active-- }; generation.releaseFence()
                 held.close(); revoked = true; releaseSnapshots(); admission.close(); pluginImportError(error.code, error.message)
+            } catch (error: LogicalJsonPayloadError) {
+                // Budget refusal, not a revocation: report the capacity limit the
+                // caller actually hit and leave the generation usable.
+                if (entered) { active-- }; generation.releaseFence()
+                held.close(); releaseSnapshots(); admission.close()
+                pluginImportError("plugin.registry_metadata_capacity", "actual admission metadata cannot fit its shared owner")
             } catch (_: Exception) {
                 if (entered) { active-- }; generation.releaseFence()
                 held.close(); revoked = true; releaseSnapshots(); admission.close(); pluginImportError("plugin.registry_execution_stale", "installed metadata cannot be revalidated")

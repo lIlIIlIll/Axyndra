@@ -767,7 +767,15 @@ public open class HostJavaScriptPluginHost {
         let generation = match (find(namespace)) {
             case Some(value) => value
             case None => return hostPluginResourceError("policy.provider_missing", "policy provider package is not active") }
-        if (generation.isClosing()) { return hostPluginResourceError("policy.provider_revoked", "policy provider was revoked") }
+        match (generation.closingCause()) {
+            case None => ()
+            case Some(code) =>
+                if (code == "plugin.registry_metadata_capacity") {
+                    return hostPluginResourceError("policy.query_limit",
+                        "policy package cannot be inspected within the original aggregate")
+                }
+                return hostPluginResourceError("policy.provider_revoked", "policy provider was revoked")
+        }
         let packageMatches = match (registryPackageMatches81(generation.descriptor.root, namespace: Some(namespace),
             digest: Some(generation.descriptor.contentDigest))) {
             case Result.Err(error) =>
@@ -2181,6 +2189,17 @@ public class HostJavaScriptPluginGeneration {
         let unavailable = synchronized(hostLock) { closing }
         if (unavailable) { return true }
         match (registryPin.current()) { case PluginImportResult.Err(_) => true; case PluginImportResult.Ok(_) => false }
+    }
+    // Distinguishes a genuine revocation from a resource refusal that happens
+    // to make the pin unenterable. `isClosing()` collapses both into `true`,
+    // which downstream maps to "revoked" and hides the real cause.
+    func closingCause(): ?String {
+        let unavailable = synchronized(hostLock) { closing }
+        if (unavailable) { return Some("plugin.instance_closed") }
+        match (registryPin.current()) {
+            case PluginImportResult.Ok(_) => None
+            case PluginImportResult.Err(error) => Some(error.code)
+        }
     }
     func enterRegistryEffect(): Result<PluginRegistryExecutionFence> {
         if (synchronized(hostLock) { closing }) { return hostPluginResourceError("plugin.instance_stale", "plugin instance is closing") }
