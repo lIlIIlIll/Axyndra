@@ -90,7 +90,7 @@ private func contentReceiverPressureFrame209(rejectLarge: Bool): Unit {
                             "actual-content-window209",hostNowMillis()+5000,cancellation.token,
                             physicalFrameBytes:JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES)
                         original.close()
-                    } catch(error: ProcessError){
+                    } catch(error: NativePayloadCapacityError){
                         eagerRejected=true
                         @Expect(error.message,"logical payload aggregate capacity is exhausted") }
                     @Expect(eagerRejected,true)
@@ -107,7 +107,7 @@ private func contentReceiverPressureFrame209(rejectLarge: Bool): Unit {
                             // gate remains strict while this actual input lives.
                             var thirdRejected=false
                             try { let third=budget.acquire(1);third.close() }
-                            catch(error: ProcessError){
+                            catch(error: NativePayloadCapacityError){
                                 thirdRejected=true
                                 @Expect(error.message,"logical payload worker capacity is exhausted") }
                             @Expect(thirdRejected,true)

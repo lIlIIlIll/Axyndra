@@ -763,6 +763,15 @@ public class JavaScriptExtensionHost {
         } catch (error: JavaScriptHostDispatchDenied) {
             closeAfterProtocolFailure()
             return JavaScriptHostResult.Err(error.error)
+        } catch (error: NativePayloadCapacityError) {
+            match (invocationCancellationCause(cancellation, timeoutSource)) {
+                case Some(cause) =>
+                    closeForCancellation(cause)
+                    return hostError(cause.code, cause.message)
+                case None => ()
+            }
+            closeAfterProtocolFailure()
+            return hostError("extension.payload_capacity", error.message)
         } catch (error: ProcessError) {
             match (invocationCancellationCause(cancellation, timeoutSource)) {
                 case Some(cause) =>
@@ -1915,6 +1924,9 @@ func completePluginHostHandshake(request: JavaScriptHostLaunchRequest,
                       }
                 }
         }
+    } catch (error: NativePayloadCapacityError) {
+        host.closeAfterProtocolFailure()
+        hostError("extension.payload_capacity", error.message)
     } catch (error: ProcessError) {
         host.closeAfterProtocolFailure()
         match (error.kind) {

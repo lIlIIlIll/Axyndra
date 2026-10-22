@@ -115,7 +115,12 @@ private func hostQueryPluginPolicyFrame193<T>(host: HostJavaScriptPluginHost, na
         let response = match (host.invoke(namespace, contribution, encoded, identity: identity,
             cancellation: cancellation, expectedInstanceGeneration: binding.generation,
             authorityScope: "pure-policy", timeoutMillis: remaining)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            case Result.Err(error) =>
+                if (error.code == "extension.payload_capacity") {
+                    return hostPluginResourceError("policy.query_limit", error.message)
+                }
+                return Result.Err(error)
+            case Result.Ok(value) => value }
         var retained = false
         try {
             if (response.isError || !httpIntentExactFields(response.value, ["schema", "value"]) ||

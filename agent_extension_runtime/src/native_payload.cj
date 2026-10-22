@@ -15,11 +15,9 @@ let NATIVE_PAYLOAD_CHUNK_BYTES: Int64 = 16384
 // allocation accounting, not an invocation, execution or artifact registry.
 // Eight times the declared wire bytes covers bounded input/UTF8/JSON/hex
 // copies; the 16 MiB floor and lexical node ceiling cover dense small JSON.
-// This bank's 128 MiB aggregate is a contract many pressure cases assert by
-// driving it to saturation and requiring the next allocation to be refused, so
-// it must NOT be widened to make a single contract pass: doing so broke eleven
-// agent_host_runtime, three agent_extension_runtime, an agent_product and an
-// agent_rpc pressure case. See docs/issue-45-draft-status.md E231.
+// The shared host uses the 144 MiB product quota. Saturation tests either
+// express pressure against this capacity or pin their own 128 MiB pool.
+// Changing the product quota does not change charges or refusal semantics.
 let nativePayloadOwnerBudget = LogicalJsonOwnerBudget()
 
 // A bounded host observation writer may reserve its fixed streaming workspace
@@ -66,6 +64,11 @@ public func nativeControlMetadataCapacity113(): Int64 {
     nativePayloadOwnerBudget.capacity()
 }
 
+// A host reservation refusal is not evidence of a malformed wire frame.
+class NativePayloadCapacityError <: Exception {
+    init(message: String) { super(message) }
+}
+
 type NativePayloadProcessReservation = LogicalJsonReservation
 class NativePayloadProcessBudget {
     // The invocation frame/result budget MUST stay on the shared bank: eight
@@ -76,7 +79,7 @@ class NativePayloadProcessBudget {
     let inner = LogicalJsonProcessBudget(nativePayloadOwnerBudget)
     func acquire(bytes: Int64): NativePayloadProcessReservation {
         try { inner.acquire(bytes) }
-        catch (error: LogicalJsonPayloadError) { payloadFailure(error.message) }
+        catch (error: LogicalJsonPayloadError) { throw NativePayloadCapacityError(error.message) }
     }
 }
 

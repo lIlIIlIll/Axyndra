@@ -323,7 +323,8 @@
     "agent_extension_runtime/src/plugin_package_test.cj",
     "agent_extension_runtime/src/policy_provider_test.cj",
     "agent_extension_runtime/src/provider_sequence_test.cj",
-    "agent_extension_runtime/src/service_deadline_test.cj"
+    "agent_extension_runtime/src/service_deadline_test.cj",
+    "agent_extension_runtime/src/view_capacity_cause_test.cj"
   ],
   "axyndra_agent_testkit": [
     "axyndra_agent_testkit/src/testkit_test.cj"
