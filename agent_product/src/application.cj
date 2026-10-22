@@ -682,6 +682,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         product.javascriptPluginCommands()
+
+    public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
+        product.javascriptPluginViews()
+    }
     }
 
     public func invokeJavaScriptPluginCommand(routeName: String, arguments: String,

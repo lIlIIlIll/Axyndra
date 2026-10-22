@@ -32,6 +32,26 @@ public class HostJavaScriptPluginInvocationResult {
     }
     public func releasePayload(): Unit { payloadRelease() }
 }
+// A published view identity. The host decides how (and whether) to render it;
+// a plugin never receives terminal control or an approval surface through it.
+public class HostJavaScriptPluginView {
+    public let extensionId: String
+    public let name: String
+    public let description: String
+    public let instanceGeneration: UInt64
+
+    public init(extensionId: String, name: String, description: String,
+        instanceGeneration!: UInt64 = 0u64) {
+        this.extensionId = extensionId
+        this.name = name
+        this.description = description
+        this.instanceGeneration = instanceGeneration
+    }
+
+    public prop routeName: String {
+        get() { "plugin." + extensionId + "." + name }
+    }
+}
 public class HostJavaScriptPluginCommand {
     public let extensionId: String
     public let name: String
@@ -586,6 +606,7 @@ public open class HostJavaScriptPluginHost {
         }
         let tools = bootstrap.tools
         let commands = bootstrap.commands
+        let views = bootstrap.views
         let hooks = bootstrap.hooks
         let services = bootstrap.services
         let modelProviders = bootstrap.modelProviders
@@ -619,7 +640,7 @@ public open class HostJavaScriptPluginHost {
             }
             match (pin.current()) { case PluginImportResult.Err(error) => return hostRegistryFenceError90(descriptor, error); case PluginImportResult.Ok(_) => () }
             generations.add(HostJavaScriptPluginGeneration(
-                descriptor, pin, installedRegistry.getOrThrow(), tools, commands, hooks, 2u64, nextInstanceGeneration, instanceIdentity, services: services, modelProviders: modelProviders, contextProviders: contextProviders, resourceProviders: resourceProviders, policyProviders: policyProviders
+                descriptor, pin, installedRegistry.getOrThrow(), tools, commands, views, hooks, 2u64, nextInstanceGeneration, instanceIdentity, services: services, modelProviders: modelProviders, contextProviders: contextProviders, resourceProviders: resourceProviders, policyProviders: policyProviders
             ))
             nextInstanceGeneration += 1u64
             Result.Ok(tools)
@@ -1130,6 +1151,24 @@ public open class HostJavaScriptPluginHost {
         }
         endpoint.close(timeoutMillis: timeoutMillis)
     }
+    public func views(): Array<HostJavaScriptPluginView> {
+        lock.lock()
+        try {
+            let output = ArrayList<HostJavaScriptPluginView>()
+            for (generation in generations) {
+                for (view in generation.views) {
+                    output.add(HostJavaScriptPluginView(
+                        generation.extensionId, view.name, view.description,
+                        instanceGeneration: generation.instanceGeneration
+                    ))
+                }
+            }
+            output.toArray()
+        } finally {
+            lock.unlock()
+        }
+    }
+
     public func commands(): Array<HostJavaScriptPluginCommand> {
         lock.lock()
         try {
@@ -1892,6 +1931,7 @@ public class HostJavaScriptPluginGeneration {
     let descriptor: PluginPackageDescriptor
     let tools: Array<JavaScriptToolDescriptor>
     let commands: Array<JavaScriptCommandDescriptor>
+    let views: Array<JavaScriptViewDescriptor>
     let hooks: Array<JavaScriptHookDescriptor>
     let services: Array<PluginServiceDescriptor>
     let modelProviders: Array<PluginModelProviderDescriptor>
@@ -1912,6 +1952,7 @@ public class HostJavaScriptPluginGeneration {
         metadataRegistry81: PluginRegistry,
         tools: Array<JavaScriptToolDescriptor>,
         commands: Array<JavaScriptCommandDescriptor>,
+        views: Array<JavaScriptViewDescriptor>,
         hooks: Array<JavaScriptHookDescriptor>,
         nextGeneration: UInt64,
         instanceGeneration: UInt64,
@@ -1928,6 +1969,7 @@ public class HostJavaScriptPluginGeneration {
         this.descriptor = descriptor
         this.tools = tools
         this.commands = commands
+        this.views = views
         this.hooks = hooks
         this.services = services.clone()
         this.modelProviders = modelProviders.clone()
@@ -1948,6 +1990,7 @@ public class HostJavaScriptPluginGeneration {
     func matchesDeclarations(host: JavaScriptExtensionHost): Bool {
         let actualTools = host.tools
         let actualCommands = host.commands
+        let actualViews = host.views
         let actualHooks = host.hooks
         let actualServices = host.services
         let actualProviders = host.modelProviders
@@ -1955,6 +1998,7 @@ public class HostJavaScriptPluginGeneration {
             !samePluginContentProviders(resourceProviders, host.resourceProviders) ||
             !samePluginContentProviders(policyProviders, host.policyProviders)) { return false }
         if (actualTools.size != tools.size || actualCommands.size != commands.size ||
+            actualViews.size != views.size ||
             actualHooks.size != hooks.size || actualServices.size != services.size || actualProviders.size != modelProviders.size) { return false }
         for (index in 0..tools.size) {
             if (actualTools[index].name != tools[index].name ||
@@ -1967,6 +2011,10 @@ public class HostJavaScriptPluginGeneration {
         for (index in 0..commands.size) {
             if (actualCommands[index].name != commands[index].name ||
                 actualCommands[index].description != commands[index].description) { return false }
+        }
+        for (index in 0..views.size) {
+            if (actualViews[index].name != views[index].name ||
+                actualViews[index].description != views[index].description) { return false }
         }
         for (index in 0..services.size) {
             if (actualServices[index].name != services[index].name ||

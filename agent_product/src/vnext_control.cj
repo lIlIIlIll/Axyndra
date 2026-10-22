@@ -956,6 +956,15 @@ public class ProductVnextControl <: HostServiceToolControl {
             javascriptPluginLifecycleLock.unlock()
         }
     }
+    public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
+        javascriptPluginLifecycleLock.lock()
+        try {
+            javascriptPlugins.views()
+        } finally {
+            javascriptPluginLifecycleLock.unlock()
+        }
+    }
+
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         // Activation publishes tools/hooks and command routes as one product
         // lifecycle boundary. Copy routes while holding the same lock, then

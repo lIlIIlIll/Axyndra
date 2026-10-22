@@ -682,6 +682,10 @@ public class ProductRuntime {
 
     public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
         vnext.javascriptPluginCommands()
+
+    public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
+        vnext.javascriptPluginViews()
+    }
     }
 
     public func invokeJavaScriptPluginCommand(

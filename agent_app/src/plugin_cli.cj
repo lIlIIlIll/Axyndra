@@ -18,6 +18,7 @@ func printPluginHelp(): Unit {
         "axyndra plugin gc\n" +
         "axyndra plugin serve <operator-grant-id>\n" +
         "axyndra plugin commands [--json]\n" +
+        "axyndra plugin views [--json]\n" +
         "axyndra plugin command <route> [one argument string]\n\n" +
         "Local package maintenance does not require a model provider. Import leaves a package disabled.\n" +
         "HTTP capabilities still require explicit operator configuration and normal tool policy.\n" +
@@ -111,6 +112,26 @@ func runPluginCli(session: ApplicationSession, arguments: Array<String>): Int64 
         } else {
             for (command in commands) { println(command.routeName + " · " + command.description) }
             if (commands.isEmpty()) { println("No plugin commands are enabled.") }
+        }
+        return 0
+    }
+    if (action == "views") {
+        if (arguments.size > 2 || (arguments.size == 2 && arguments[1] != "--json")) {
+            return pluginCliUsage("views accepts only --json")
+        }
+        let views = session.javascriptPluginViews()
+        if (arguments.size == 2) {
+            let values = ArrayList<AgentValue>()
+            for (view in views) {
+                values.add(objectValue([
+                    ValueField("route", textValue(view.routeName)),
+                    ValueField("description", textValue(view.description))
+                ]))
+            }
+            println(stringifyUnifiedJson(listValue(values.toArray())))
+        } else {
+            for (view in views) { println(view.routeName + " · " + view.description) }
+            if (views.isEmpty()) { println("No plugin views are enabled.") }
         }
         return 0
     }
