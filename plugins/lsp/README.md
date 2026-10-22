@@ -56,3 +56,14 @@ Eight pure and sixteen process cases are authored in this source graph.
 Resource operations, reverse effects and the remaining behavior matrix remain
 open; this change does not authorize removing the old LSP implementation.
 Semantics reference: https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/types/workspaceEdit.md
+
+Current package-only STS results are recorded in
+[the issue #45 ledger, E477](../../docs/issue-45-draft-status.md).
+The preceding unexecuted notes describe earlier increments, not current
+package validation or completed Product acceptance.
+
+Package preparation builds and tests in its own `package-validation/build-target`
+directory, then packages that exact target's binary. Direct `build-package.sh`
+calls accept `--target-dir DIRECTORY`; without it, the target is
+`NEW_DIRECTORY-build-target`. `--skip-build` requires an explicit target and
+does not select a possibly stale checkout-wide binary.

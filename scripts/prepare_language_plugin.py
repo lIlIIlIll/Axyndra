@@ -79,10 +79,13 @@ def prepare(name, output=None):
         if len(cases) != protocol_expected or len(set(cases)) != protocol_expected:
             raise ValueError('review actual language protocol case inventory')
         record['protocol_cases'] = cases
-        build = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package)], evidence / 'build.log', ROOT)
+        target = evidence / 'build-target'
+        build = run(['bash', str(plugin / 'build-package.sh'), '--output', str(package),
+                     '--target-dir', str(target)], evidence / 'build.log', ROOT)
         if 'cjpm build success' not in build or has_compiler_error(build):
             raise ValueError('actual compiler success is missing')
-        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test'], evidence / 'unit.log', plugin))
+        unit = summary(run([str(ROOT / 'scripts/pinned_cangjie'), 'cjpm', 'test',
+                            '--target-dir', str(target)], evidence / 'unit.log', plugin))
         if unit != dict(total=unit_expected, passed=unit_expected, failed=0, skipped=0, errors=0):
             raise ValueError('every authored plugin unit case must pass without skip')
         record['unit_counts'] = unit

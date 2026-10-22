@@ -33,3 +33,9 @@ The independent protocol fixture checks the current exact `debug` Tool and
 closed additional-property grammar; it does not assume a Service-only worker.
 These source changes do not themselves certify current compiled artifacts,
 complete lifecycle parity, clean installation or cross-platform acceptance.
+
+Package preparation builds and tests in its own `package-validation/build-target`
+directory, then packages that exact target's binary. Direct `build-package.sh`
+calls accept `--target-dir DIRECTORY`; without it, the target is
+`NEW_DIRECTORY-build-target`. `--skip-build` requires an explicit target and
+does not select a possibly stale checkout-wide binary.
