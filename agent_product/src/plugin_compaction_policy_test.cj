@@ -31,7 +31,7 @@ class CompactionPolicyFixture {
             settingsRoot: root + "/settings", stateRoot: root + "/state", fixture: true, asyncEnabled: false,
             compactionOverride: Some(ProductCompactionSettings(keepRecentMessages: 6,
                 summaryStrategy: if (hybrid) { "hybrid" } else { "structured" }, summaryModel: "fixture",
-                summaryTimeoutMillis: 5000, summaryMaxOutputTokens: 200)))))
+                summaryMaxOutputTokens: 200)))))
         let selected: ?agent_plugin_registry.ProductPluginRecord = if (install) {
             let value = match (opened.importLocalPlugin(getVariable("AXYNDRA_COMPACTION_PLUGIN_PACKAGE").getOrThrow())) {
                 case PluginRegistryResult.Ok(value) => value
