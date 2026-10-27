@@ -499,7 +499,7 @@ func closeCompactionTestOverview(result: Result<?ProductCompactionOverview>): Un
     match (result) { case Result.Ok(Some(value)) => value.close(); case _ => () }
 }
 
-private func canonicalCheckpointFixtureGrant173(name: String): AgentValue {
+func canonicalCheckpointFixtureGrant173(name: String): AgentValue {
     objectValue([ValueField("name", textValue(name)), ValueField("provider", textValue("summarize")),
         ValueField("action", textValue("canonical.context.project")), ValueField("capability", textValue("workspace.read")),
         ValueField("effect", textValue("read_only"))])
