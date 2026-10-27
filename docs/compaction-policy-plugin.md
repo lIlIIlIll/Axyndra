@@ -45,6 +45,14 @@ overview non-authoritative. Its legal cut, original canonical items, call/result
 completeness, source digest, and input-token limit remain Host checks. Policy
 output cannot rewrite the cut or replace canonical history.
 
+The summary phase is bounded by `summary_timeout_ms` (also accepted as
+`summaryTimeoutMs`), an operator setting in the range 1..60000 whose default is
+15000. The deadline covers the whole canonical save phase — reference reduction
+plus the summary model call — not one policy query. Raising it is operator
+configuration; it does not relax any verification, freshness, package-byte or
+ownership check. At the default a save whose phase does not finish in time
+fails with `run.deadline_exceeded` rather than publishing a partial checkpoint.
+
 Ordinary model failure retains the existing `fallback_structured` behavior;
 explicit cancellation, exhausted authority/budget, and unresolved resource
 cleanup do not become a successful checkpoint. One cancellation source spans
