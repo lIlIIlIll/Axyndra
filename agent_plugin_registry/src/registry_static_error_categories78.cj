@@ -584,6 +584,7 @@ func pluginRegistryStaticCode78(code: String): String {
         case "extension.not_draining" => "extension.not_draining"
         case "extension.not_mounted" => "extension.not_mounted"
         case "extension.output_truncated" => "extension.output_truncated"
+        case "extension.payload_capacity" => "extension.payload_capacity"
         case "extension.payload_overlap" => "extension.payload_overlap"
         case "extension.payload_result_limit" => "extension.payload_result_limit"
         case "extension.payload_unsupported" => "extension.payload_unsupported"
