@@ -4,7 +4,6 @@ import agent_domain.*
 import agent_runtime.*
 import std.collection.*
 import std.sync.*
-import std.time.*
 import yjson.*
 import yjson_support.*
 
@@ -274,9 +273,7 @@ func preparedApprovalMetadata204(raw: AgentValue, value: AgentValue): ToolApprov
 }
 
 func decodePreparedOperationPlan204(encoded: String): NormalizedOperationPlan {
-    let parseTimer: ?MonoTime = if (encoded.size >= 1048576) { channelWriteMemoDiagnosticStart() } else { None }
-    let value = try { decodeStoredValue(encoded) }
-        finally { channelWriteMemoDiagnosticRecord(9, parseTimer, a: encoded.size) }
+    let value = decodeStoredValue(encoded)
     let capabilities = ArrayList<Capability>()
     for (item in value.field("capabilities").getOrThrow().items) {
         capabilities.add(Capability(

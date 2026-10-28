@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -14,7 +15,7 @@ class LiveKnownStreamCancellation {var calls:Int64=0}
 class PluginLiveKnownStoredStreamTests {
     @TestCase
     func OriginalCodecAndOwnedDomWriterAreBothFullByteOracles():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/stream.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/stream.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         let values=[nullValue(),boolValue(false),numberValue("-0"),textValue("中文😀\u{0000}"),
             listValue([numberValue("1.50e+2"),textValue("\\\"\n")]),
@@ -36,9 +37,9 @@ class PluginLiveKnownStoredStreamTests {
     }
     @TestCase
     func NearEightMiBTextCrossesEveryChunkWithoutAnotherPhysicalSlot():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/near.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/near.sqlite")
         let raw=encodeStoredValue(textValue(String.fromUtf8(Array<Byte>(8388500,repeat:65))))
-        let expected=modelPolicySha256Text(raw);let pool=LogicalJsonOwnerBudget()
+        let expected=modelPolicySha256Text(raw);let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         let output=pool.acquire(8388608);let session=pool.acquire(65536);let registry=pool.acquire(65536)
         let owner=pool.acquire(65536);let observation=pool.acquireFixedBuffer(65536);let control=pool.acquireFixedBuffer(16384)
         try{
@@ -56,7 +57,7 @@ class PluginLiveKnownStoredStreamTests {
     }
     @TestCase
     func Utf8SplitAtTheSqlChunkBoundaryMatchesTheOriginalDecoder():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/unicode.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/unicode.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         try{
             db.transaction<Unit>{tx=>
@@ -73,7 +74,7 @@ class PluginLiveKnownStoredStreamTests {
     }
     @TestCase
     func EofDuplicateDepthCountAndNumberFailuresAgreeWithOriginalCodec():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/invalid.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/invalid.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         try{
             db.transaction<Unit>{tx=>
@@ -104,7 +105,7 @@ class PluginLiveKnownStoredStreamTests {
     }
     @TestCase
     func LargeIgnoredResultStillHasFullGrammarAndItsActualHeader():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         let raw=encodeStoredThreadContent(ThreadItemContent.ToolResult(CanonicalToolCallId("call"),
             OperationId("parent"),"receipt-parent",textValue("whole body"),false))
@@ -123,7 +124,7 @@ class PluginLiveKnownStoredStreamTests {
     }
     @TestCase
     func CancellationAndThrowNeverCloseOrRefundTheBorrowedOwner():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/cancel.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/cancel.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536);let state=LiveKnownStreamCancellation()
         try{
             db.transaction<Unit>{tx=>

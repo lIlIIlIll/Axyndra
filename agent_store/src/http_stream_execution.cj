@@ -47,7 +47,7 @@ func requireHttpStreamInvocationRoot(
                 case OperationRootSource.Direct(value) =>
                     channelStoreRequire(value.operationId.value == operationId.value && value.runId.value == runId.value &&
                         value.threadId.value == threadId.value && value.epoch == epoch && value.turnId.value == row.required(0) &&
-                        canonicalAgentValue(value.call.arguments) == canonicalAgentValue(arguments))
+                        canonicalAgentValuesEqual(value.call.arguments, arguments))
                 case OperationRootSource.Committed(value) =>
                     channelStoreRequire(value.block.callId == id.value && value.block.name == name)
             }
@@ -61,7 +61,8 @@ func requireHttpStreamInvocationRoot(
                     [SqlParameter.Text(operationId.value)]).isEmpty() &&
                 transaction.query("SELECT item_id FROM canonical_decision_items WHERE item_id=?",
                     [SqlParameter.Text(source.itemId().value)]).isEmpty())
-            requireHostServiceOriginBinding(transaction, operationId, runId, source.itemId(), expectedOrigin: Some(value.origin))
+            requireHostServiceOriginBinding(transaction, operationId, runId, source.itemId(),
+                expectedOrigin: Some(value.origin), observedCallPayload: Some(row.required(1)))
         case OperationRootSource.Committed(value) =>
             channelStoreRequire(provenance.source != "direct_tool" && provenance.operationId.isNone())
             let decisions = transaction.query(
@@ -75,7 +76,8 @@ func requireHttpStreamInvocationRoot(
                 [SqlParameter.Text(operationId.value), SqlParameter.Text(value.decisionId.value),
                 SqlParameter.Text(value.scopedToolCallId.value), SqlParameter.Text(source.itemId().value), SqlParameter.Text(runId.value)])
             channelStoreRequire(decisions.size == 1)
-            requireHostServiceOriginBinding(transaction, operationId, runId, source.itemId())
+            requireHostServiceOriginBinding(transaction, operationId, runId, source.itemId(),
+                observedCallPayload: Some(row.required(1)))
     }
     requireHttpStreamStartupReceipt(transaction, binding, plan)
 }

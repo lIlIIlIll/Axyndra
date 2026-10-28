@@ -99,8 +99,12 @@ class HostDirectPreparationFlow {
             case ToolPreparation.Denied(denial) => return rejectParent(denial.reason)
             case ToolPreparation.Completed(_) => return rejectParent(AgentError(AgentErrorKind.PermissionDenied,
                 "command.preparation_failed", "continued Direct preparation was rejected")) }
+        // The parent ToolCall is already committed. Every other failure path in
+        // this flow settles it through rejectParent, which records a terminal
+        // ToolResult; returning a bare Err here left the call pending forever,
+        // so the Turn could not settle even as Failed (thread.incomplete_tool_round).
         match (pipeline.prepareDirectPreparedData204(context, prepared, source, operations)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            case Result.Err(error) => return rejectParent(error); case Result.Ok(_) => () }
         executeStage(context, prepared, source, { value => value })
     }
     func finishPrepared(stageContext: ToolInvocationContext, prepared: PreparedToolInvocation,
@@ -173,8 +177,10 @@ class HostDirectPreparationFlow {
                 case ToolPreparation.Denied(denial) => return rejectParent(denial.reason)
                 case ToolPreparation.Completed(_) => return rejectParent(AgentError(AgentErrorKind.PermissionDenied,
                     "command.preparation_failed", "continued Direct preparation was rejected")) }
+            // Same settlement obligation as the single-read path above: the
+            // parent call must receive a terminal ToolResult on this failure.
             match (pipeline.prepareDirectPreparedData204(context, prepared, source, operations)) {
-                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                case Result.Err(error) => return rejectParent(error); case Result.Ok(_) => () }
             executeStage(context, prepared, source, { value => value })
         } finally { match (result) { case Result.Ok(ToolInvocationResult.Completed(value)) => value.releasePayload(); case _ => () } }
     }
@@ -239,33 +245,48 @@ class HostDirectPreparationFlow {
                     let prepared=match(preparation){case ToolPreparation.Ready(value)=>value;case ToolPreparation.NeedsApproval(value,_)=>value
                         case ToolPreparation.Denied(denial)=>return rejectParent(denial.reason)
                         case ToolPreparation.Completed(_)=>return rejectParent(AgentError(AgentErrorKind.PermissionDenied,"command.preparation_failed","continued Direct preparation rejected"))}
-                    match(pipeline.prepareDirectPreparedData204(context,prepared,source,operations)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+                    // The bounded sequence path carries the same settlement
+                    // obligation: the committed parent must get its terminal
+                    // ToolResult, otherwise the Turn cannot settle at all.
+                    match(pipeline.prepareDirectPreparedData204(context,prepared,source,operations)){case Result.Err(error)=>return rejectParent(error);case Result.Ok(_)=>()}
                     executeStage(context,prepared,source,{value=>value})
             }
         }finally{match(result){case Result.Ok(ToolInvocationResult.Completed(value))=>value.releasePayload();case _=>()}}
     }
     private func rejectParent(cause: AgentError): Result<ToolInvocationResult> {
-        let source = parent.getOrThrow()
-        let plan = match (operations.prepareDirectRejection(source)) {
-            case Result.Err(error) => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
-                "context.read_parent_unsettled", "original Direct call retained its debt: " + error.code))
-            case Result.Ok(value) => value }
-        let result = ToolResult(call.callId, rejectedDirectPreparationOutput(), isError: true,
-            receiptId: "receipt-" + source.operationId.value)
-        let execution = Result<ToolInvocationResult>.Ok(ToolInvocationResult.Completed(result))
-        match (runtime.resolveOperation(ItemId("result-" + source.operationId.value),
-            source.operationId, CanonicalToolCallId(call.callId), plan, OperationAttemptStage.Prepared,
-            execution, result.receiptId, agentUtcMillis(), expectedRunId: Some(context.runId), expectedEpoch: Some(context.epoch))) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) =>
-                // The original cause is the only accurate explanation of why the
-                // Direct call was rejected, so it is preserved instead of being
-                // replaced by a synthetic success result. The rejection itself is
-                // still recorded above (prepareDirectRejection + resolveOperation
-                // at Prepared), so no execution fact is lost, and the caller that
-                // branches on `isError` now also learns the real reason.
-                Result.Err(cause) }
+        settleUnpreparedDirectParent(operations, runtime, context, parent.getOrThrow(), call, cause)
     }
+}
+
+// A Direct parent whose ToolCall is already committed must always receive a
+// terminal ToolResult, even when preparation fails before execution. Without
+// it the Turn can never settle - `settleTurn`/`cancelRun` refuse every outcome
+// (completed, failed, recovery-required, cancelled) while a committed call is
+// pending - so an early `Result.Err` from preparation would strand the Run.
+// Only a canonical UserDirect origin can be rejected this way; any other origin
+// keeps its original recovery debt instead of fabricating a rejection.
+func settleUnpreparedDirectParent(operations: OperationRuntimePort, runtime: AgentThreadRuntime,
+    context: ToolInvocationContext, source: DirectToolCallRef, call: ToolCall,
+    cause: AgentError): Result<ToolInvocationResult> {
+    let plan = match (operations.prepareDirectRejection(source)) {
+        case Result.Err(error) => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "context.read_parent_unsettled", "original Direct call retained its debt: " + error.code))
+        case Result.Ok(value) => value }
+    let result = ToolResult(call.callId, rejectedDirectPreparationOutput(), isError: true,
+        receiptId: "receipt-" + source.operationId.value)
+    let execution = Result<ToolInvocationResult>.Ok(ToolInvocationResult.Completed(result))
+    match (runtime.resolveOperation(ItemId("result-" + source.operationId.value),
+        source.operationId, CanonicalToolCallId(call.callId), plan, OperationAttemptStage.Prepared,
+        execution, result.receiptId, agentUtcMillis(), expectedRunId: Some(context.runId), expectedEpoch: Some(context.epoch))) {
+        case Result.Err(error) => Result.Err(error)
+        case Result.Ok(_) =>
+            // The original cause is the only accurate explanation of why the
+            // Direct call was rejected, so it is preserved instead of being
+            // replaced by a synthetic success result. The rejection itself is
+            // still recorded above (prepareDirectRejection + resolveOperation
+            // at Prepared), so no execution fact is lost, and the caller that
+            // branches on `isError` now also learns the real reason.
+            Result.Err(cause) }
 }
 func requireDirectPreparationOwner(runtime: AgentThreadRuntime, context: ToolInvocationContext, expected: RunState): Result<Unit> {
     let active = match (runtime.activeRunControl159()) { case Some(value) => value

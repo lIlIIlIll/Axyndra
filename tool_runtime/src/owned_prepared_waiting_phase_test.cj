@@ -114,7 +114,7 @@ class OwnedPreparedWaitingFieldsTests {
     }
     @TestCase
     func foreignCustodyAndRealOriginalPoolPressureFailBeforePrivateCapture():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged:134217728);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(33554432)
         let context=ToolInvocationContext(RunId("waiting-pressure-run"),SessionId("waiting-pressure-thread"),CapabilitySet())
         let arguments:JsonObject=JsonObject().put("payload",JsonNode.string(String.fromUtf8(Array<Byte>(1048576,repeat:b'a'))))

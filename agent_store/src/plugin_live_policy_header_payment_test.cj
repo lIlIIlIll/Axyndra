@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -13,7 +14,7 @@ class LiveHeaderPaymentObservation{var copied=false}
 class PluginLivePolicyHeaderPaymentTests{
     @TestCase
     func allNineCopiedColumnsIncludingMalformedLargeStatesArePrepaidBeforeCopy():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
         let pool=LogicalJsonOwnerBudget(maximumCharged:16777216)
         try{
             let huge=String.fromUtf8(Array<Byte>(2097152,repeat:b'x'))+"雪"
@@ -41,7 +42,7 @@ class PluginLivePolicyHeaderPaymentTests{
     }
     @TestCase
     func validStateOutcomeAndDepthStayInTheSameNineColumnExtentAndOriginalPool():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/header.sqlite")
         let pool=LogicalJsonOwnerBudget()
         try{db.readTransaction<Unit>{tx=>
             let lengths=tx.query("SELECT length(CAST('操作' AS BLOB)),1,1,1,1,1,length(CAST('committed' AS BLOB)),length(CAST('completed' AS BLOB)),length(CAST(1 AS BLOB))")

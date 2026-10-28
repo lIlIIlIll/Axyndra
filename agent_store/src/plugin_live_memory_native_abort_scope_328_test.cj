@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -30,7 +31,7 @@ private func nativeAbortActualSeed328(db:SqliteDatabase):Unit{
 class LiveMemoryActualNativeAbortResourceTests328 {
     @TestCase
     func ActualFullEndsOriginalTransactionAndFreshBeginRestoresAllRowsWithoutReplay():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/full.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/full.sqlite")
         let bank=LogicalJsonOwnerBudget();let owner=bank.acquire(65536);let state=NativeAbortActualTestState328()
         try{
             nativeAbortActualSeed328(db);db.execute("CREATE TABLE native_abort_control(mark TEXT NOT NULL)")
@@ -53,7 +54,7 @@ class LiveMemoryActualNativeAbortResourceTests328 {
     }
     @TestCase
     func StillLiveConstraintTransactionCannotEnterNativeAutoabortRecovery():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/constraint.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/constraint.sqlite")
         let bank=LogicalJsonOwnerBudget();let owner=bank.acquire(65536);let state=NativeAbortActualTestState328()
         try{
             db.execute("INSERT INTO memory_events(id,memory_id,revision,operation,payload,created_at_millis) VALUES(1,'before',1,'retain','{}',1)")
@@ -76,7 +77,7 @@ class LiveMemoryActualNativeAbortResourceTests328 {
     }
     @TestCase
     func ActualRecoveryGuardFailureKeepsPaidDebtAndBlocksEveryDatabaseEntryUntilCheckedAck():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/guard.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/guard.sqlite")
         let bank=LogicalJsonOwnerBudget();let owner=bank.acquire(65536);let state=NativeAbortActualTestState328()
         try{
             nativeAbortActualSeed328(db)
@@ -105,7 +106,7 @@ class LiveMemoryActualNativeAbortResourceTests328 {
     }
     @TestCase
     func ActualNativeAbortWitnessRejectsAnotherAllocationReplayAndRetiredTransaction():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/witness.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/witness.sqlite")
         let bank=LogicalJsonOwnerBudget();let owner=bank.acquire(65536);let other=bank.acquire(65536)
         let state=NativeAbortActualTestState328()
         try{

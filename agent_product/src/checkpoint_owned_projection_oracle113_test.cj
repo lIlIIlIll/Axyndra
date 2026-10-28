@@ -83,7 +83,8 @@ private func checkpointSeedOracleFrame113(tx: SqliteTransaction, thread: ThreadI
                 "receipt113-9", boolValue(false), true)
             case 10 => ThreadItemContent.ToolResult(CanonicalToolCallId("adjacent113"), OperationId("op113-10"),
                 "receipt113-10", textValue("adjacent result"), false)
-            case 11 => ThreadItemContent.ToolCall(CanonicalToolCallId("adjacent113"), "adjacent-name113", nullValue())
+            case 11 => ThreadItemContent.ToolCall(CanonicalToolCallId("adjacent113"), "adjacent-name113",
+                objectValue([ValueField("nullable", nullValue())]))
             case 12 => ThreadItemContent.ProviderOpaqueItem(OpaqueProviderState("oracle-provider", "oracle-protocol",
                 "{\"unpaired\":true}", itemId: "tail113"))
             case _ => ThreadItemContent.SystemNote("unprojected note still in original SourceDigest\u{0000}")

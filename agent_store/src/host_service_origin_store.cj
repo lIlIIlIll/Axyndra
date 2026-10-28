@@ -11,16 +11,27 @@ import yjson_support.*
 func requireHostServiceOriginBinding(transaction: SqliteTransaction,
     operationId: OperationId, runId: RunId, itemId: ItemId,
     bindIfMissing!: Bool = false, expectedOrigin!: ?DirectCallOrigin = None,
-    allowCancellingSettlement!: Bool = false): Unit {
+    allowCancellingSettlement!: Bool = false, observedCallPayload!: ?String = None): Unit {
+    // The caller may already own this complete UTF-8 column in this same
+    // transaction. Compare every current byte in SQLite before reusing it;
+    // an observation alone is not origin evidence or execution authority.
+    let payloadColumn = if (observedCallPayload.isSome()) { "NULL" } else { "call.payload" }
+    let parameters = match (observedCallPayload) {
+        case Some(value) => [SqlParameter.Text(itemId.value), SqlParameter.Text(runId.value), SqlParameter.Text(value)]
+        case None => [SqlParameter.Text(itemId.value), SqlParameter.Text(runId.value)]
+    }
     let rows = transaction.query(
-        "SELECT call.provenance,call.payload,runs.thread_id,runs.turn_id,runs.epoch," +
+        "SELECT call.provenance," + payloadColumn + ",runs.thread_id,runs.turn_id,runs.epoch," +
         "runs.state,threads.active_turn_id,initial.kind,initial.provenance,initial.id " +
         "FROM runs JOIN threads ON threads.id=runs.thread_id JOIN turns ON turns.id=runs.turn_id " +
         "JOIN items call ON call.id=? AND call.thread_id=runs.thread_id AND call.turn_id=runs.turn_id " +
         "JOIN items initial ON initial.id=turns.user_item_id AND initial.thread_id=runs.thread_id AND initial.turn_id=runs.turn_id " +
-        "WHERE runs.id=? AND call.kind='tool_call'", [SqlParameter.Text(itemId.value), SqlParameter.Text(runId.value)])
+        "WHERE runs.id=? AND call.kind='tool_call'" +
+        (if (observedCallPayload.isSome()) { " AND CAST(call.payload AS BLOB)=CAST(? AS BLOB)" } else { "" }),
+        parameters)
     if (rows.size != 1) { throw IllegalStateException("Direct origin has no unique canonical enclosure") }
     let row = rows[0]
+    let callPayload = match (observedCallPayload) { case Some(value) => value; case None => row.required(1) }
     let provenance = decodeStoredProvenance(row.required(0))
     let initial = decodeStoredProvenance(row.required(8))
     let origin = effectiveDirectCallOrigin(provenance)
@@ -69,7 +80,7 @@ func requireHostServiceOriginBinding(transaction: SqliteTransaction,
                 value.expiresAtMillis <= DateTime.nowUTC().toUnixTimeStamp().toMilliseconds())) {
                 throw IllegalStateException("external origin Thread or expiry differs from its active enclosure")
             }
-            let call = match (decodeStoredThreadContent(row.required(1))) {
+            let call = match (decodeStoredThreadContent(callPayload)) {
                 case ThreadItemContent.ToolCall(id, name, arguments) => ToolCall(id.value, name, arguments)
                 case _ => throw IllegalStateException("external request is not a canonical ToolCall")
             }
@@ -85,7 +96,7 @@ func requireHostServiceOriginBinding(transaction: SqliteTransaction,
         ValueField("turn_id", textValue(row.required(3))), ValueField("run_id", textValue(runId.value)),
         ValueField("epoch", textValue(row.required(4))), ValueField("initiator_item_id", textValue(row.required(9))),
         ValueField("tool_call_item_id", textValue(itemId.value)), ValueField("operation_id", textValue(operationId.value)),
-        ValueField("call_digest", textValue(modelPolicySha256Text(row.required(1))))
+        ValueField("call_digest", textValue(modelPolicySha256Text(callPayload)))
     ]))
     if (audits.isEmpty() && bindIfMissing) {
         transaction.execute("INSERT INTO audit_events(thread_id,run_id,operation_id,kind,payload,created_at_millis) " +

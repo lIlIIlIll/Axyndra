@@ -3338,9 +3338,7 @@ func storedOperationPlanValue(plan: NormalizedOperationPlan): AgentValue {
 }
 
 public func decodeOperationPlan(encoded: String): NormalizedOperationPlan {
-    let parseTimer: ?MonoTime = if (encoded.size >= 1048576) { channelWriteMemoDiagnosticStart() } else { None }
-    let value = try { decodeStoredValue(encoded) }
-        finally { channelWriteMemoDiagnosticRecord(9, parseTimer, a: encoded.size) }
+    let value = decodeStoredValue(encoded)
     let capabilities = ArrayList<Capability>()
     for (item in value.field("capabilities").getOrThrow().items) {
         capabilities.add(Capability(

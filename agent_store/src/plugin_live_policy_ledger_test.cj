@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -17,7 +18,7 @@ class LiveLedgerPaymentChecks{var value:Int64=0}
 class PluginLivePolicyLedgerPaymentTests{
     @TestCase
     func fullLargeIgnoredReceiptBodyUsesOriginalEofAndReleasesEachPaidPhase():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/ledger-payment.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/ledger-payment.sqlite")
         let pool=LogicalJsonOwnerBudget()
         try{
             let raw=encodeStoredValue(objectValue([ValueField("body",textValue(
@@ -44,7 +45,7 @@ class PluginLivePolicyLedgerPaymentTests{
     }
     @TestCase
     func malformedTrailingBytesAndCurrentCancellationKeepAllFactsAndReleasePayment():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/ledger-payment.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/ledger-payment.sqlite")
         let pool=LogicalJsonOwnerBudget();let checks=LiveLedgerPaymentChecks()
         try{
             let raw=encodeStoredValue(objectValue([ValueField("body",textValue("完整"))]))+" trailing"

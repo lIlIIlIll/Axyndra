@@ -237,11 +237,15 @@ public class HostTrustedControlToolExecutor {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(value) => value
         }
+        // The parent call is already attested, so these two failures must still
+        // record its terminal ToolResult; a bare Err here would leave the call
+        // pending and block every Turn settlement path.
         match (pipeline.prepareDirectPreparedData204(context, prepared, directRoot, operations)) {
-            case Result.Ok(_) => (); case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+            case Result.Err(error) => return settleUnpreparedDirectParent(operations, runtime, context, directRoot, call, error)
         }
         prepared = match (pipeline.bindDirectRoot(context, prepared, directRoot)) {
-            case Result.Err(error) => return Result.Err(error)
+            case Result.Err(error) => return settleUnpreparedDirectParent(operations, runtime, context, directRoot, call, error)
             case Result.Ok(value) => value
         }
         match (effectivePreparationOwner) {

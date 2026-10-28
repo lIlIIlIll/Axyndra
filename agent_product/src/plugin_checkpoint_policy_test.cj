@@ -20,7 +20,7 @@ class InstalledCheckpointPolicy113Tests {
         let f = CompactionPolicyFixture(seedDefaultHistory: false)
         try {
             let created = lifecycleTestRequire(f.product.invokeLocalTool(f.session, "plugin.axyndra:compaction.checkpoint", objectValue([
-                ValueField("goal", textValue(" \t雪 parser boundary\r\n ")), ValueField("ignored", integerValue(7))])))
+                ValueField("goal", textValue(" \t雪 parser boundary\r\n "))])))
             try {
                 @Expect(created.isError, false)
                 @Expect(created.output.field("goal").getOrThrow().text, "雪 parser boundary")

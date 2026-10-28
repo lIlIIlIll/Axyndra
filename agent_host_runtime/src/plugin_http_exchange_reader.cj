@@ -4,6 +4,7 @@ import agent_domain.*
 import agent_ports.*
 import std.collection.*
 import std.sync.*
+import std.time.*
 
 // The constructor accepts an already admitted channel. It is not a launch
 // grant, service handle, executable selector or Operation settlement API.
@@ -77,15 +78,24 @@ public class HostHttpExchangeReader {
         try {
             match (check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             if (head.isNone()) { return invalid() }
-            if (ready.isEmpty() && !bodyEof) {
+            if (ready.size < maxBytes && !bodyEof) {
                 match (discardDiagnostics()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-                if (!pipeEof) {
-                    let received = match (channel.read(ProcessChannelStream.Stdout, 8192, waitMillis)) {
+                // Coalesce only within the consumer's existing byte and total
+                // poll-wait bounds. Each physical read spends the remainder of
+                // one deadline, never another complete wait window.
+                let pollUntil = MonoTime.now() + Duration.millisecond * waitMillis
+                while (!pipeEof && ready.size < maxBytes) {
+                    match (check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    let now = MonoTime.now()
+                    let pollWait = if (now < pollUntil) { (pollUntil - now).toMilliseconds() } else { 0 }
+                    let received = match (channel.read(ProcessChannelStream.Stdout,
+                        min(8192, maxBytes - ready.size), pollWait)) {
                         case Result.Err(error) => return fail(); case Result.Ok(value) => value
                     }
                     match (acceptBody(received.bytes, received.eof)) {
                         case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
                     }
+                    if (received.bytes.isEmpty() && !received.eof) { break }
                 }
                 match (confirmBodyEnd()) {
                     case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()

@@ -86,7 +86,7 @@ class HostHttpServiceGrant <: HostNativeServiceEndpointGrant {
     func enterRegistryEffect(): Result<PluginRegistryExecutionFence> {
         host.enterRegistryEffect(namespace, expectedGeneration)
     }
-    public func stillCurrent(): Result<Unit> {
+    private func currentDescriptor(): Result<PluginPackageDescriptor> {
         if (MonoTime.now() >= expires) { return hostLifecycleLeaseError("plugin.http_service_expired") }
         match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         try {
@@ -94,6 +94,23 @@ class HostHttpServiceGrant <: HostNativeServiceEndpointGrant {
             let descriptor = host.servicePackageData81(namespace, expectedGeneration).value().getOrThrow()
             hostLifecycleRequire(descriptor.contentDigest == configuration.packageDigest && descriptor.entryKind == PluginEntryKind.NativeExecutable &&
                 descriptor.requestedCapabilities.contains("network.http"))
+            Result.Ok(descriptor)
+        } catch (_: Exception) { hostLifecycleLeaseError("plugin.http_service_grant_stale") }
+    }
+    // Inventory and cancellation observe the admitted resource's actual
+    // lifetime. They neither admit another effect nor rehash package bodies.
+    func lifetimeCurrent(): Result<Unit> {
+        match (currentDescriptor()) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => Result.Ok(())
+        }
+    }
+    public func stillCurrent(): Result<Unit> {
+        let descriptor = match (currentDescriptor()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        try {
             match (host.registryPackageMatches81(descriptor.root, digest: Some(configuration.packageDigest), namespace: Some(namespace))) {
                 case Result.Ok(value) => hostLifecycleRequire(value)
                 case Result.Err(_) => throw IllegalArgumentException("HTTP service package changed")

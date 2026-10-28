@@ -1,16 +1,16 @@
 # Native process plugin contract
 
-Native executable packages use the same bounded IPC, process launcher, lifecycle,
-and service broker as the existing Pi adapter. The wire identifier remains
+Native executable packages use bounded IPC, the process launcher, lifecycle
+controls, and host-held service brokers. The wire identifier remains
 `axyndra-js-host-v2`; its historical name does not require Node for a native
 executable. The implementation is
 [javascript_host.cj](../agent_extension_runtime/src/javascript_host.cj), with the
 product sandbox in
-[javascript_plugin_host.cj](../agent_product/src/javascript_plugin_host.cj).
+[javascript_plugin_host.cj](../agent_host_runtime/src/javascript_plugin_host.cj).
 
-This implements native tool and command contributions. It does not complete
-[issue #45's migration](plugin-first-migration.md): native skill, provider, and
-event ports remain unsupported, as do native MCP/LSP/DAP capability plugins.
+Native capability packages, including the MCP client, use this contract.
+[Issue #45's migration](plugin-first-migration.md) records the scope and remaining
+acceptance requirements.
 
 Native Tools that request `network.http` additionally use
 [prepared HTTP intents](plugin-http-services.md). Their endpoint remains
@@ -44,9 +44,11 @@ prove recovery or authorize replay of an unfinished operation.
 
 `entrypoint` must identify an executable regular file inside the package without
 symlinks or path traversal. The parser requires a canonical semantic package
-version and a bounded SDK interval that contains the current SDK. Tool and command
-names must match the existing host name grammar. Duplicate `(kind, name)` entries
-are rejected. `skill`, `provider`, `event`, and unknown kinds fail with
+version and a bounded SDK interval that contains the current SDK. Supported native
+contribution kinds are `tool`, `command`, `view`, `service`, `model_provider`,
+`provider`, `context_provider`, and `resource_provider`. Tool names use the host's
+tool-name grammar; other names use its command-name grammar. Duplicate `(kind, name)`
+entries are rejected. `skill`, `event`, and unknown kinds fail with
 `plugin.contribution_unsupported`. A command-only plugin declares no tool.
 
 Legacy manifests without `entry_kind` remain inspectable as `legacy-process`, but

@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -22,7 +23,7 @@ class LivePolicyInputAbsentFactsFixture {
     let tool="plugin.axyndra:memory.retain"
     let digest=modelPolicySha256Text("descriptive absent read metadata")
     init(){
-        let directory=Directory.createTemp("/tmp").toString()
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         this.root=directory;this.database=SqliteDatabase(directory+"/inputs.sqlite")
     }
     func binding(runName!:String="live-input-run",toolName!:String="plugin.axyndra:memory.retain"):AgentValue{

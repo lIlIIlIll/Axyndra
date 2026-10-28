@@ -89,6 +89,7 @@ class ContextPrivateOutputTests {
     func sameSessionPrivateFileRemainsUnpublishedAndDecodedUntilConsumerAck(): Unit {
         let fixture = ContextPrivateOutputFixture()
         let pressure = reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113() - 67108864)
         let owner = fixture.artifacts.documentDataSession()
         try {
             @Expect(contextPrivateAllocationPossible())
@@ -107,8 +108,8 @@ class ContextPrivateOutputTests {
             @Expect(currentCalls.load() > 0)
             @Expect(Directory.readFrom(fixture.blobs()).size, 0)
             fixture.expectUnpublished()
-            // With the existing 64 MiB pressure, this 32 MiB probe fits before
-            // decoding, and stops fitting while the actual output is retained.
+            // Hold all but the original 64 MiB window. The 32 MiB probe fits
+            // before decoding, but not while the actual output is retained.
             @Expect(!contextPrivateAllocationPossible())
             let unacknowledged = owner.close()
             @Expect(unacknowledged.isError())
@@ -122,7 +123,10 @@ class ContextPrivateOutputTests {
             @Expect(owner.collect())
             @Expect(contextPrivateAllocationPossible())
             fixture.expectUnpublished()
-        } finally { owner.acknowledgeOutput(); contextPrivateRequire(owner.close()); pressure.close(); fixture.close() }
+        } finally {
+            try { owner.acknowledgeOutput(); contextPrivateRequire(owner.close()) }
+            finally { pressure.close(); fixture.close() }
+        }
     }
 
     @TestCase
@@ -244,6 +248,7 @@ class ContextPrivateOutputTests {
     func failedCleanupRetainsUnreturnedDecodedChargeUntilSameOwnerRetry(): Unit {
         let fixture = ContextPrivateOutputFixture()
         let pressure = reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113() - 67108864)
         let owner = fixture.artifacts.documentDataSession()
         let probe = ContextPrivateCleanupProbe()
         try {
@@ -275,6 +280,9 @@ class ContextPrivateOutputTests {
             @Expect(contextPrivateAllocationPossible())
             @Expect(Directory.readFrom(fixture.blobs()).size, 0)
             fixture.expectUnpublished()
-        } finally { probe.restoreActualFile(); contextPrivateRequire(owner.close()); pressure.close(); fixture.close() }
+        } finally {
+            try { probe.restoreActualFile(); contextPrivateRequire(owner.close()) }
+            finally { pressure.close(); fixture.close() }
+        }
     }
 }

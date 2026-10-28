@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -87,7 +88,7 @@ class PluginLivePolicyParentTerminalTests{
     }
     @TestCase
     func EmptyRealSqliteRejectsMetadataBeforeTheContentCallback():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
         let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
         let digest=modelPolicySha256Text("null")
         let payload=parsePluginDocumentPayloadReference(objectValue([
@@ -106,7 +107,7 @@ class PluginLivePolicyParentTerminalTests{
     }
     @TestCase
     func ActualMetadataMutationDuringVerificationRollsBackWithoutTerminalAudit():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/terminal.sqlite")
         let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1);let callbacks=LiveParentTerminalCounter()
         let digest=modelPolicySha256Text("null")
         let payload=parsePluginDocumentPayloadReference(objectValue([

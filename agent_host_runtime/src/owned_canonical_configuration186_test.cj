@@ -30,7 +30,7 @@ private func canonicalConfigurationRecord186(value: PluginRegistryResult<Product
 private func canonicalConfigurationCopyTextFrame199(bytes: OwnedRegistryUtf8,
     payment: LogicalJsonOwnerReservation): String {
     let count = bytes.byteCount
-    if (count < 0 || count > (agent_extension_runtime.nativeControlMetadataCapacity113() - 1048576 - 65536) / 32) {
+    if (count < 0 || count > (nativeControlMetadataCapacity113() - 1048576 - 65536) / 32) {
         throw IllegalStateException("actual Registry text copy exceeds the original aggregate")
     }
     payment.ensureRetainedPeak(1048576 + count * 32 + 65536)

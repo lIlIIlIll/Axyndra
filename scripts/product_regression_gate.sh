@@ -15,6 +15,14 @@ if [[ -z "${AXYNDRA_WORKFLOW_PLUGIN_PACKAGE:-}" ]]; then
   export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
 fi
 python3 support_tests/process_broker_blackbox/check.py --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"
+# Keep public View/Command events and another live frontend on the same owner.
+python3 support_tests/tui_path_coverage/view_lifecycle.py \
+  --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}" \
+  --output "${AXYNDRA_EVIDENCE_DIR:-target/gate-evidence}/view-lifecycle"
+# Malformed authenticated View input must reject, recover and retire its real owner.
+python3 support_tests/tui_path_coverage/view_protocol_faults.py \
+  --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}" \
+  --output "${AXYNDRA_EVIDENCE_DIR:-target/gate-evidence}/view-protocol-faults"
 # Build real base/update packages and exercise no-model maintenance, invocation,
 # durable HTTP authority and the complete local plugin lifecycle.
 bash support_tests/plugin_cli_blackbox/run.sh --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"

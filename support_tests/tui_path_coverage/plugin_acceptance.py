@@ -155,6 +155,9 @@ def execute(case, name, protocol, package, mcp_package):
         if name in ("cancel", "ctrl-c"):
             case.assertions.check("cancelled_late_text_absent", "cancel-late" not in harness.strip_ansi(case.capture("after-recovery")),
                 "cancelled stream does not replay into the subsequent response")
+    if tool:
+        case.send("actual-mcp-stop", b"/plugins service stop axyndra:mcp-client session\r")
+        case.wait_screen(("Service stopped; cleanup acknowledged:",), "mcp-stopped")
     case.normal_exit()
     attempts = harness.model_attempt_rows(case)
     harness.json_dump(case.case_dir / "model-attempts.json", attempts)
@@ -200,6 +203,9 @@ def main():
     for name in names:
         case = harness.CaseRun({'case_id': name, 'variant': {'execution': 'plugin-acceptance'}},
                                candidate.resolve(), args.output / 'cases' / name)
+        # The same home stays reachable without overflowing the Unix socket prefix.
+        case.environment["AXYNDRA_HOME"] = os.path.relpath(case.home, case.workspace)
+        case.tmux_environment["AXYNDRA_HOME"] = case.environment["AXYNDRA_HOME"]
         if native:
             case.environment["LD_LIBRARY_PATH"] = str(native.parent.resolve()) + ":" + case.environment["LD_LIBRARY_PATH"]
             case.tmux_environment["LD_LIBRARY_PATH"] = case.environment["LD_LIBRARY_PATH"]

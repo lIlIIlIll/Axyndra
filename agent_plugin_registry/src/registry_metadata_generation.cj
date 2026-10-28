@@ -318,4 +318,5 @@ class PluginRegistryInspectionMemory <: PluginPackagePrivateDocumentAccounting78
         if (bytes < 0 || bytes > 16777216) { throw LogicalJsonPayloadError("registry package metadata path is outside resource bounds") }
         chargeWork103(bytes * 8 + 1024)
     }
+    public func beforeDigestWork(bytes: Int64): Unit { chargeWork103(bytes) }
 }

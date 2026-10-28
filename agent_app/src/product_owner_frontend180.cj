@@ -36,6 +36,7 @@ private class OwnerApplicationFrontend180 <: ProductOwnerFrontendConsumer180 {
     private var cancellation: ?CancellationSource = None<CancellationSource>
     private var failure: ?AgentError = None<AgentError>
     private var thrown: ?Exception = None<Exception>
+    private var failureConsumed180 = false
     private var operatorOptions180: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>
     private var rpc: ?RpcFrontendShutdown113 = None<RpcFrontendShutdown113>
     private var rpcPayment: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
@@ -116,9 +117,21 @@ private class OwnerApplicationFrontend180 <: ProductOwnerFrontendConsumer180 {
                 "owner.frontend_subscriptions_pending", "frontend callbacks remain attached")
             failure = Some(error); return Result.Err(error) }
         let answer = connection.writeOwnerFrame180(encodeAgentValue(objectValue([
-            ValueField("kind", textValue("exit")), ValueField("status", integerValue(status))])))
+            ValueField("kind", textValue("exit")), ValueField("status", integerValue(status))])), None)
         match (answer) { case Result.Err(error) => failure = Some(error); case Result.Ok(_) => () }
         answer
+    }
+    public func observeOwnerFrontendFailure180(receipt: ProductOwnerFrontendFailureConsumed180): Unit {
+        match (failure) {
+            case Some(error) => if (receipt.matches180(this, error)) { failureConsumed180 = true }
+            case None => ()
+        }
+    }
+    private func clearConsumedFailureReferencesHelper180(): Bool {
+        if (failure.isNone()) { return true }
+        if (!failureConsumed180 || thrown.isSome()) { return false }
+        failure = None<AgentError>
+        true
     }
     public func closeOwnerFrontendConsumer180(): Result<Unit> {
         match (session) {
@@ -129,7 +142,7 @@ private class OwnerApplicationFrontend180 <: ProductOwnerFrontendConsumer180 {
             case Some(reader) => match (reader.stopAndJoinAfterFrontendReturn180()) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             case None => () }
-        match (failure) { case Some(error) => return Result.Err(error); case None => () }
+        if (!clearConsumedFailureReferencesHelper180()) { return Result.Err(failure.getOrThrow()) }
         match (session) {
             case Some(application) => match (io) {
                 case Some(output) => if (!output.retireSubscriptions180(application)) {

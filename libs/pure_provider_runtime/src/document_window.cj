@@ -1,6 +1,7 @@
 package pure_provider_runtime
 
 import logical_json_payload.*
+import agent_sdk.PLUGIN_VIEW_MAX_BYTES
 import std.collection.*
 import std.time.*
 import yjson.*
@@ -13,14 +14,17 @@ class DocumentProtocolWindow {
     let deadline: MonoTime
     private let input: ProviderWireInput
     private let content: Bool
+    private let view: Bool
     private let ordinary: ?OrdinaryToolPayloadLimits
     private let receivers: ArrayList<LogicalJsonReceiver>
     private let frames = ArrayList<ProviderWireFrame>()
     private var closed = false
 
     init(input: ProviderWireInput, hello: JsonNode, first: JsonNode) {
-        let until = MonoTime.now() + Duration.second * (if (providerText(first, "kind") == "tool") { 30 } else { 5 })
-        let isContent = ["provider", "context_provider"].contains(providerText(first, "kind"))
+        let kind = providerText(first, "kind")
+        let until = MonoTime.now() + Duration.second * (if (kind == "tool") { 30 } else { 5 })
+        let isView = kind == "view"
+        let isContent = ["provider", "context_provider", "view"].contains(kind)
         let offeredContent = validContentPayloadLimits(hello.field("content_payload_limits") ?? jsonNull())
         let offeredOrdinary = validOrdinaryToolPayloadOffer(hello.field("ordinary_tool_payload") ?? jsonNull())
         let owners = ArrayList<LogicalJsonReceiver>()
@@ -33,7 +37,8 @@ class DocumentProtocolWindow {
                 providerLogicalOuter(first)
                 let header = first.field("payload").getOrThrow()
                 let key = providerText(header, "window")
-                let maximum = if (isContent) { CONTENT_PAYLOAD_MESSAGE_BYTES } else { ORDINARY_TOOL_PAYLOAD_MESSAGE_MAX }
+                let maximum = if (isView) { PLUGIN_VIEW_MAX_BYTES + 65536 }
+                    else if (isContent) { CONTENT_PAYLOAD_MESSAGE_BYTES } else { ORDINARY_TOOL_PAYLOAD_MESSAGE_MAX }
                 let receiver = LogicalJsonReceiver(providerPayloadBudget, maximum, key, 1, "invoke",
                     { => providerDeadline(until) }, physicalFrameBytes: PROVIDER_FRAME_BYTES)
                 owners.add(receiver)
@@ -62,18 +67,21 @@ class DocumentProtocolWindow {
             let enabled = if (isContent) { offeredContent } else { profile.isSome() }
             if (enabled != (providerText(value, "payload_window") != "") || (!enabled && !owners.isEmpty())) {
                 throw PureProviderError("document.payload_window", "logical window differs from its negotiated profile") }
-            let maximum = if (isContent && offeredContent) { CONTENT_PAYLOAD_INPUT_BYTES }
+            let maximum = if (isView) { PLUGIN_VIEW_MAX_BYTES }
+                else if (isContent && offeredContent) { CONTENT_PAYLOAD_INPUT_BYTES }
                 else { match (profile) { case Some(p) => p.maxInputBytes; case None => PROVIDER_FRAME_BYTES - 8192 } }
             if (stringifyUnifiedJson(value.field("arguments") ?? jsonNull()).size > maximum) {
                 throw PureProviderError("document.input_limit", "input exceeds the actual transport profile") }
             this.input = input; this.invocation = value; this.deadline = until
-            this.content = isContent && offeredContent; this.ordinary = profile; this.receivers = owners
+            this.content = isContent && offeredContent; this.view = isView
+            this.ordinary = profile; this.receivers = owners
             retained = true
         } finally { if (!retained) { for (owner in owners) { owner.close() } } }
     }
 
     func maxResult(): Int64 {
-        if (content) { CONTENT_PAYLOAD_RESULT_BYTES }
+        if (view) { PLUGIN_VIEW_MAX_BYTES }
+        else if (content) { CONTENT_PAYLOAD_RESULT_BYTES }
         else { match (ordinary) { case Some(p) => p.maxResultBytes; case None => PROVIDER_FRAME_BYTES - 8192 } }
     }
     // The runtime already owns the reply reservation before user code runs.

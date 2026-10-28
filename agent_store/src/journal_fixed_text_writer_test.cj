@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -18,7 +19,7 @@ class FixedTextWriterTestGuard {var stale=false}
 class FixedJournalTextWriterTests {
     @TestCase
     func actualTextTypeUtf8AndEmbeddedZerosKeepOriginalBytes():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
         let pool=LogicalJsonOwnerBudget();let value="雪🙂\u{0000}legacy\n";let bytes=value.toArray()
         try {
             fixedTextWriterTestBefore(db)
@@ -36,7 +37,7 @@ class FixedJournalTextWriterTests {
 
     @TestCase
     func swallowedProducerErrorStillPoisonsTheOriginalTransaction():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
         let pool=LogicalJsonOwnerBudget();let bytes="valid".toArray();var rejected=false
         try {
             fixedTextWriterTestBefore(db)
@@ -62,7 +63,7 @@ class FixedJournalTextWriterTests {
 
     @TestCase
     func guardLossAfterPartialWriteRollsBackAndReleasesActualOwner():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
         let pool=LogicalJsonOwnerBudget();let guard=FixedTextWriterTestGuard();let bytes="valid".toArray()
         var rejected=false
         try {
@@ -84,8 +85,8 @@ class FixedJournalTextWriterTests {
 
     @TestCase
     func realPoolRejectsBothSqliteBuffersBeforeSqlAndNearEightMiBRemainsExact():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
-        let pool=LogicalJsonOwnerBudget();let block=Array<Byte>(65536,{index:Int64=>UInt8(32+index%95)})
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/writer.sqlite")
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let block=Array<Byte>(65536,{index:Int64=>UInt8(32+index%95)})
         let count:Int64=1008;let bytes:Int64=count*65536;let expected=SHA256()
         for(_ in 0..count){expected.write(block)}
         let digest=logicalJsonEncodeHex(expected.finish())

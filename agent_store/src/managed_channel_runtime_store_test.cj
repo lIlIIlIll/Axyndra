@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -11,7 +12,7 @@ import yjson_support.*
 class ManagedChannelRuntimeStoreBoundaryTests{
     @TestCase
     func activeLeaseDataWithoutActualStartupCannotAllocateOrChangeTheStore():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/managed-absent.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/managed-absent.sqlite")
         let pool=LogicalJsonOwnerBudget();let held=pool.acquire(1)
         try{
             let binding=objectValue([ValueField("resource_state",textValue("active")),ValueField("startup_operation_id",textValue("absent-startup")),
@@ -26,7 +27,7 @@ class ManagedChannelRuntimeStoreBoundaryTests{
     }
     @TestCase
     func fullStoredMetadataEofAndTrailingCorruptionKeepOriginalPoolAccounting():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/managed-eof.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/managed-eof.sqlite")
         let pool=LogicalJsonOwnerBudget()
         try{
             let raw=encodeStoredValue(objectValue([ValueField("body",textValue(String.fromUtf8(Array<Byte>(1048576,repeat:b'x'))+"雪\u{0}🙂"))]))

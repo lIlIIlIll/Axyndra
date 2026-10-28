@@ -71,6 +71,10 @@ export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
 # child-process environment changes cannot supply their package locations.
 AXYNDRA_MEMORY_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_memory_plugin.py")
 export AXYNDRA_MEMORY_PLUGIN_PACKAGE
+# The latest-journal application cases require their own freshly built
+# latest-context package; no other helper supplies this variable.
+AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_memory_latest_context_plugin.py")
+export AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE
 AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE=$(bash "$root/scripts/prepare_model_provider_plugin.sh")
 export AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE
 python3 scripts/product_unit_gate.py

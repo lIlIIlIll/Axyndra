@@ -13,7 +13,6 @@ import tool_runtime.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
-import std.overflow.*
 import std.process.*
 import std.sync.*
 import stdx.crypto.digest.*
@@ -2051,133 +2050,7 @@ public func hostArtifactHash(reference: String): Result<String> {
 }
 
 public func hostArtifactSha256(bytes: Array<Byte>): String {
-    let roundConstants: Array<UInt32> = [
-        0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32,
-        0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
-        0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32,
-        0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
-        0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32,
-        0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
-        0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32,
-        0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
-        0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32,
-        0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
-        0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32,
-        0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
-        0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32,
-        0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
-        0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32,
-        0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32
-    ]
-    var state0 = 0x6a09e667u32
-    var state1 = 0xbb67ae85u32
-    var state2 = 0x3c6ef372u32
-    var state3 = 0xa54ff53au32
-    var state4 = 0x510e527fu32
-    var state5 = 0x9b05688cu32
-    var state6 = 0x1f83d9abu32
-    var state7 = 0x5be0cd19u32
-    let remainder = bytes.size % 64
-    let zeroPadding = if (remainder <= 55) { 55 - remainder } else { 119 - remainder }
-    let paddedSize = bytes.size + 1 + zeroPadding + 8
-    let bitLength = UInt64(bytes.size).wrappingMul(8u64)
-    var blockStart: Int64 = 0
-    while (blockStart < paddedSize) {
-        let schedule = Array<UInt32>(64, repeat: 0u32)
-        for (index in 0..16) {
-            let start = blockStart + index * 4
-            schedule[index] =
-                (UInt32(hostArtifactShaPaddedByte(bytes, start, paddedSize, bitLength)) << 24) |
-                (UInt32(hostArtifactShaPaddedByte(bytes, start + 1, paddedSize, bitLength)) << 16) |
-                (UInt32(hostArtifactShaPaddedByte(bytes, start + 2, paddedSize, bitLength)) << 8) |
-                UInt32(hostArtifactShaPaddedByte(bytes, start + 3, paddedSize, bitLength))
-        }
-        for (index in 16..64) {
-            let small0 = hostArtifactShaRotateRight(schedule[index - 15], 7u32) ^
-                hostArtifactShaRotateRight(schedule[index - 15], 18u32) ^
-                (schedule[index - 15] >> 3)
-            let small1 = hostArtifactShaRotateRight(schedule[index - 2], 17u32) ^
-                hostArtifactShaRotateRight(schedule[index - 2], 19u32) ^
-                (schedule[index - 2] >> 10)
-            schedule[index] = schedule[index - 16]
-                .wrappingAdd(small0)
-                .wrappingAdd(schedule[index - 7])
-                .wrappingAdd(small1)
-        }
-        var a = state0
-        var b = state1
-        var c = state2
-        var d = state3
-        var e = state4
-        var f = state5
-        var g = state6
-        var h = state7
-        for (index in 0..64) {
-            let big1 = hostArtifactShaRotateRight(e, 6u32) ^
-                hostArtifactShaRotateRight(e, 11u32) ^ hostArtifactShaRotateRight(e, 25u32)
-            let choose = (e & f) ^ ((!e) & g)
-            let temporary1 = h.wrappingAdd(big1)
-                .wrappingAdd(choose)
-                .wrappingAdd(roundConstants[index])
-                .wrappingAdd(schedule[index])
-            let big0 = hostArtifactShaRotateRight(a, 2u32) ^
-                hostArtifactShaRotateRight(a, 13u32) ^ hostArtifactShaRotateRight(a, 22u32)
-            let majority = (a & b) ^ (a & c) ^ (b & c)
-            let temporary2 = big0.wrappingAdd(majority)
-            h = g
-            g = f
-            f = e
-            e = d.wrappingAdd(temporary1)
-            d = c
-            c = b
-            b = a
-            a = temporary1.wrappingAdd(temporary2)
-        }
-        state0 = state0.wrappingAdd(a)
-        state1 = state1.wrappingAdd(b)
-        state2 = state2.wrappingAdd(c)
-        state3 = state3.wrappingAdd(d)
-        state4 = state4.wrappingAdd(e)
-        state5 = state5.wrappingAdd(f)
-        state6 = state6.wrappingAdd(g)
-        state7 = state7.wrappingAdd(h)
-        blockStart += 64
-    }
-    let hex = [
-        "0", "1", "2", "3", "4", "5", "6", "7",
-        "8", "9", "a", "b", "c", "d", "e", "f"
-    ]
-    var result = ""
-    for (word in [state0, state1, state2, state3, state4, state5, state6, state7]) {
-        for (shift in [24u32, 16u32, 8u32, 0u32]) {
-            let value = Int64((word >> shift) & 0xffu32)
-            result += hex[value / 16] + hex[value % 16]
-        }
-    }
-    result
-}
-
-public func hostArtifactShaPaddedByte(
-    bytes: Array<Byte>,
-    index: Int64,
-    paddedSize: Int64,
-    bitLength: UInt64
-): Byte {
-    if (index < bytes.size) {
-        return bytes[index]
-    }
-    if (index == bytes.size) {
-        return 0x80u8
-    }
-    if (index >= paddedSize - 8) {
-        let shift = UInt64((paddedSize - 1 - index) * 8)
-        return UInt8((bitLength >> shift) & 0xffu64)
-    }
-    0u8
-}
-
-public func hostArtifactShaRotateRight(value: UInt32, distance: UInt32): UInt32 {
-    (value >> distance) | (value << (32u32 - distance))
+    modelPolicySha256(bytes)
 }
 
 public func hostArtifactMetadata(artifact: HostArtifact): String {

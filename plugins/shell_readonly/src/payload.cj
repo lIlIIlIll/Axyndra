@@ -151,7 +151,6 @@ class ReadonlyShellPayloadInput {
         try {
             outgoing.ensureDecoded(bound * 2 + 65536, logicalJsonValueNodeCount(result) + 64)
             let resultText = stringifyUnifiedJson(result); srRequire(resultText.size <= maximum)
-            match (selected) { case Some(_) => value.put("payload_window", jsonString(window)); case None => () }
             let source = stringifyUnifiedJson(value)
             outgoing.ensureDecoded(resultText.size + source.size, logicalJsonNodeCount(source))
             if (source.size <= SR_FRAME_BYTES) { srEmit(value); return }

@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.collection.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -79,7 +80,7 @@ class StoredFrameBulkAppendTests {
 
     @TestCase
     func actualThreeMibSqlRowsRetainWholeCanonicalFrameAfterMutation(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/framed.sqlite")
         let text=String.fromUtf8(Array<Byte>(3145728,repeat:b'x'))+
             String.fromUtf8([UInt8(0)])+"雪"

@@ -86,6 +86,13 @@
       "name": "hub_process_read"
     },
     {
+      "kind": "command",
+      "name": "plan_review",
+      "allowed_user_controls": [
+        "plan_review"
+      ]
+    },
+    {
       "kind": "view",
       "name": "plan_review"
     }

@@ -554,6 +554,7 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         ),
         SlashCommandDefinition("plan", "Work modes", "Toggle read-only planning mode", usage: "/plan [request]"),
         SlashCommandDefinition("plan-review", "Work modes", "Review the latest structured plan"),
+        SlashCommandDefinition("view", "Extensions", "Discover or open an installed plugin View", usage: "/view [route]"),
         SlashCommandDefinition("vibe", "Work modes", "Toggle delegated director mode", usage: "/vibe [request]"),
         SlashCommandDefinition("guided-goal", "Work modes", "Turn a rough objective into a goal",
             usage: "/guided-goal [objective]"),

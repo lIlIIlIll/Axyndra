@@ -77,7 +77,8 @@ def dry_run_cases(text):
     return cases
 
 
-def prepare_bundled_plugin(root, output_dir, directory, command, environment_name):
+def prepare_bundled_plugin(root, output_dir, directory, command, environment_name,
+                           manifest_directory=None):
     """Build and check a fresh package; inherited fixture paths are not reused."""
     log = output_dir / f'{directory}-plugin-fixture.log'
     exit_code = run_logged(command, log, root)
@@ -95,7 +96,8 @@ def prepare_bundled_plugin(root, output_dir, directory, command, environment_nam
         raise ValueError(f'{directory} plugin fixture is outside its generated artifact directory')
     manifest_path = package / 'axyndra.plugin.json'
     manifest = json.loads(manifest_path.read_text())
-    expected = json.loads((root / 'plugins' / directory / 'axyndra.plugin.json').read_text())
+    expected = json.loads((root / 'plugins' / (manifest_directory or directory) /
+                           'axyndra.plugin.json').read_text())
     if manifest != expected or manifest.get('entry_kind') != 'native-executable':
         raise ValueError(f'{directory} plugin fixture manifest differs from the current source')
     entrypoint = Path(manifest['entrypoint'])
@@ -243,6 +245,7 @@ def run_isolated_agent_host_runtime(root, output_dir, log):
     command = base + ['--dry-run', '--no-color', '--no-progress']
     record = dict(member=member, command=command, log=log.name, dry_run_log=dry_log.name,
                   exit_code=1, status='FAIL', case_logs=[], runtime_total_seconds=900,
+                  case_timeout_seconds=60, case_process_seconds=90,
                   physical_exit_is_data_consumption_ACK=False)
     deadline = time.monotonic() + 900
     try:
@@ -269,7 +272,7 @@ def run_isolated_agent_host_runtime(root, output_dir, log):
                 not all(isinstance(value, str) and value for value in runtime.values())):
             raise ValueError('Host original launcher runtime is incomplete')
         os.environ.update(runtime)
-        base = [str(Path(runtime['CANGJIE_HOME']) / 'tools/bin/cjpm'), 'test', '-m', member]
+        base = [str(Path(runtime['CANGJIE_HOME']) / 'tools/bin/cjpm'), 'test', '-m', member, '--timeout-each=60s']
         command = base + ['--dry-run', '--no-color', '--no-progress']
         record['command'] = command
         remaining = deadline - time.monotonic()
@@ -303,7 +306,7 @@ def run_isolated_agent_host_runtime(root, output_dir, log):
                                log=case_log.relative_to(output_dir).as_posix(),
                                remaining_module_seconds=remaining, process={}, status='FAIL')
             record['case_logs'].append(observation)
-            process = run_host_case(command, case_log, remaining, cwd=root)
+            process = run_host_case(command, case_log, min(remaining, 90), cwd=root)
             observation['process'] = process
             observation['log_sha256'] = hashlib.sha256(case_log.read_bytes()).hexdigest()
             with log.open('ab') as combined:
@@ -482,7 +485,7 @@ def main():
             result.update(configure_installed_model_fixture_environment(ROOT))
             result.update(configure_ordinary_request_fixture_environment(ROOT))
             result['plugin_fixtures'] = []
-            for directory, command, environment_name in [
+            for directory, command, environment_name, *manifest_override in [
                 ('ast', [sys.executable, str(ROOT / 'scripts/prepare_ast_plugin.py')], 'AXYNDRA_AST_PLUGIN_PACKAGE'),
                 ('web_search', ['bash', str(ROOT / 'scripts/prepare_web_search_plugin.sh')], 'AXYNDRA_WEB_SEARCH_PLUGIN_PACKAGE'),
                 ('mcp', [sys.executable, str(ROOT / 'scripts/prepare_mcp_plugin.py')], 'AXYNDRA_MCP_CLIENT_PLUGIN_PACKAGE'),
@@ -497,11 +500,18 @@ def main():
                 ('skills', [sys.executable, str(ROOT / 'scripts/prepare_skills_plugin.py')], 'AXYNDRA_SKILLS_PLUGIN_PACKAGE'),
                 ('compaction', [sys.executable, str(ROOT / 'scripts/prepare_compaction_plugin.py')], 'AXYNDRA_COMPACTION_PLUGIN_PACKAGE'),
                 ('memory', [sys.executable, str(ROOT / 'scripts/prepare_memory_plugin.py')], 'AXYNDRA_MEMORY_PLUGIN_PACKAGE'),
+                # The latest-journal application cases require a freshly built
+                # latest-context package; without this variable they cannot even
+                # construct their fixture (E703/E704).
+                ('memory_latest_context', [sys.executable, str(ROOT / 'scripts/prepare_memory_latest_context_plugin.py')],
+                 'AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE', 'memory'),
                 ('workflow', [sys.executable, str(ROOT / 'scripts/prepare_workflow_plugin.py')], 'AXYNDRA_WORKFLOW_PLUGIN_PACKAGE'),
                 ('model_providers', ['bash', str(ROOT / 'scripts/prepare_model_provider_plugin.sh')], 'AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE'),
             ]:
+                manifest_directory = manifest_override[0] if manifest_override else None
                 result['plugin_fixtures'].append(prepare_bundled_plugin(
-                    ROOT, args.output_dir, directory, command, environment_name
+                    ROOT, args.output_dir, directory, command, environment_name,
+                    manifest_directory=manifest_directory
                 ))
                 (args.output_dir / 'summary.json').write_text(json.dumps(result, indent=2) + '\n')
             for member in result['scope']['selected_packages']:

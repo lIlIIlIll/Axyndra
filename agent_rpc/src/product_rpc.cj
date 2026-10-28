@@ -9,6 +9,7 @@ import agent_core.*
 import agent_domain.*
 import agent_runtime.*
 import agent_product.*
+import agent_sdk.isPluginViewPlainText
 import std.collection.*
 import std.convert.*
 import std.sync.*
@@ -23,17 +24,24 @@ public class ProductJsonlRpcServer {
     // DATA funding only. Caller keeps the actual bank owner through every
     // worker/consumer lifetime; allocation cannot create execution authority.
     private let allocateWorkerMetadata113: (Int64) -> LogicalJsonOwnerReservation
-    private let ownedDeliveries = ArrayList<OwnedProductRpcEventDelivery>()
+    private let ownedDeliveries = ArrayList<OwnedRpcValueDelivery>()
     private let ownedFailureDeliveries113 = RpcOwnedFailureQueue113()
     private let unadmittedFailure113 = AtomicBool(false)
     private var hostTools: ?RpcHostToolBridge = None
     private var hostUris: ?RpcHostUriBridge = None
     private let lock = Mutex()
     private let frameLock = Mutex()
+    private let viewInputLock = Mutex()
+    private var viewInput: ?RpcPluginViewInput = None
+    private var viewInputClosed = false
     private var running = false
     // One actual prompt/decision Future; never infer retirement from running.
     private var runWorker113: ?Future<Unit> = None<Future<Unit>>
     private var runWorkerStartingFailed113 = false
+    // A terminal callback is not an idle/retired worker. View admission waits
+    // for actual publication/state handoff, then joins the original Future.
+    private var terminalHandoff113: ?SyncCounter = None
+    private var terminalHandoffThread113: Int64 = 0
     // One actual bank loan; concurrent worker and join invoices share its SUM.
     // A frontend lends from its existing Root, without another 16 MiB floor.
     private var workerMetadata113: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
@@ -195,7 +203,8 @@ public class ProductJsonlRpcServer {
                         "supportedProtocolVersions",
                         listValue([integerValue(1), integerValue(2)])
                     ),
-                    ValueField("supportedInteractionProfiles", stringListValue(["basic-v1"])),
+                    ValueField("supportedInteractionProfiles", stringListValue(
+                        if (ownedOutput.isSome()) { ["basic-v1", "views-v1"] } else { ["basic-v1"] })),
                     ValueField("maxFrameBytes", integerValue(1048576)),
                     ValueField(
                         "maxReassembledFrameBytes",
@@ -207,15 +216,14 @@ public class ProductJsonlRpcServer {
     }
 
     public func handle(source: String): String {
-        let logical = handleLogical(source)
-        if (logical == "") {
-            ""
-        } else {
-            outbound(logical)
-        }
+        let input = RpcPluginViewInputRead()
+        try {
+            let logical = handleLogical(source, input)
+            if (logical == "") { "" } else { outbound(logical) }
+        } finally { input.retireAfterWholeHelper() }
     }
 
-    private func handleLogical(source: String): String {
+    private func handleLogical(source: String, input: RpcPluginViewInputRead): String {
         let bytes = unsafe { source.rawData() }
         if (bytes.size > 1048576) {
             return failure("", "parse", "RPC frame exceeds 1 MiB")
@@ -224,6 +232,16 @@ public class ProductJsonlRpcServer {
             case Result.Ok(item) => item
             case Result.Err(error) => return failure("", "parse", error.message)
         }
+        let command = productTextField(value, "type")
+        if (command == "rpc_chunk") { return handlePluginViewChunk(value, input) }
+        if (command == "abort" || command == "plugin_view_close" ||
+            command == "negotiate_protocol" || command == "negotiate_interactions") {
+            discardPartialPluginViewInput(input)
+        }
+        handleDecodedRequest(value, None<RpcPluginViewInput>, input.returned)
+    }
+
+    private func handleDecodedRequest(value: AgentValue, input: ?RpcPluginViewInput, returned: SyncCounter): String {
         let id = productTextField(value, "id")
         let command = productTextField(value, "type")
         if (command == "host_tool_result") {
@@ -382,6 +400,12 @@ public class ProductJsonlRpcServer {
                 id, command, productTextField(value, "routeName"),
                 productTextField(value, "arguments")
             )
+            case "get_plugin_views" => success(id, command, data: pluginViewsValue())
+            case "plugin_view" | "plugin_view_action" | "plugin_view_confirm" =>
+                startPluginViewRequest(id, command, value, returned, input: input)
+            case "plugin_view_close" => match (session.closeJavaScriptPluginView(productTextField(value, "viewId"))) {
+                case Result.Err(error) => failureCode(id, command, error.code, error.message)
+                case Result.Ok(_) => success(id, command) }
             case "set_fast_mode" =>
                 let enabled = productBoolField(value, "enabled")
                 match (session.setFastMode(enabled)) {
@@ -780,6 +804,8 @@ public class ProductJsonlRpcServer {
 
     public func beginRunWorkerShutdown113(): Unit {
         lock.lock(); try { closing = true } finally { lock.unlock() }
+        let input = closePartialPluginViewInputHelper()
+        match (input) { case Some(actual) => actual.retireAfterWholeHelper(); case None => () }
     }
 
     // Nonblocking. The existing Main has no finite exit deadline. A concrete
@@ -890,6 +916,282 @@ public class ProductJsonlRpcServer {
             ]))
         }
         objectValue([ValueField("commands", listValue(commands.toArray()))])
+    }
+
+    private func pluginViewsValue(): AgentValue {
+        let views = ArrayList<AgentValue>()
+        for (view in session.javascriptPluginViews()) {
+            views.add(objectValue([ValueField("routeName", textValue(view.routeName)),
+                ValueField("name", textValue(view.name)), ValueField("description", textValue(view.description))])) }
+        objectValue([ValueField("views", listValue(views.toArray()))])
+    }
+
+    private func handlePluginViewChunk(value: AgentValue, receipt: RpcPluginViewInputRead): String {
+        frameLock.lock(); let version = protocolVersion; frameLock.unlock()
+        lock.lock(); let profile = interactionProfile; let stopped = closing; lock.unlock()
+        if (stopped || version != 2 || profile != "views-v1") {
+            discardPartialPluginViewInput(receipt)
+            return failureCode("", "rpc_chunk", "view.chunk_not_negotiated",
+                "incoming View chunks require protocol 2 and views-v1")
+        }
+        try {
+            let input = match (acceptPluginViewChunk(value, receipt)) {
+                case Some(actual) => actual
+                case None => return ""
+            }
+            let request = input.decode()
+            if (productTextField(request, "type") != "plugin_view_action") {
+                return failureCode(productTextField(request, "id"), "rpc_chunk", "view.chunk_command_unsupported",
+                    "incoming View chunks carry one actual plugin_view_action request")
+            }
+            handleDecodedRequest(request, Some(input), receipt.returned)
+        } catch (error: LogicalJsonPayloadError) {
+            discardPartialPluginViewInput(receipt)
+            failureCode("", "rpc_chunk", "view.input_capacity", error.message)
+        } catch (error: Exception) {
+            discardPartialPluginViewInput(receipt)
+            failureCode("", "rpc_chunk", "view.chunk_invalid", error.message)
+        }
+    }
+    private func acceptPluginViewChunk(value: AgentValue, receipt: RpcPluginViewInputRead): ?RpcPluginViewInput {
+        if (value.unifiedKind != ValueKind.Object || value.fields.size != 6) {
+            throw IllegalArgumentException("chunk envelope requires its exact six fields")
+        }
+        let id = value.field("chunkId").getOrThrow()
+        let data = value.field("data").getOrThrow()
+        if (id.unifiedKind != ValueKind.Text || id.text.size == 0 || id.text.size > 256 ||
+            data.unifiedKind != ValueKind.Text) { throw IllegalArgumentException("chunk identity or data is invalid") }
+        let index = rpcViewChunkInteger(value, "index")
+        let count = rpcViewChunkInteger(value, "count")
+        let bytes = rpcViewChunkInteger(value, "byteLength")
+        if (bytes <= 0 || bytes > 67108864 || count <= 0 || count > bytes || index < 0 || index >= count) {
+            throw IllegalArgumentException("chunk metadata exceeds its declared transport bounds")
+        }
+        viewInputLock.lock()
+        try {
+            if (viewInputClosed) { throw IllegalStateException("View input is closed") }
+            let input = match (viewInput) {
+                case Some(actual) => actual
+                case None =>
+                    if (index != 0) { throw IllegalArgumentException("chunk stream must start at index zero") }
+                    let source = allocateWorkerMetadata113(4096)
+                    let paid = try { source.acquireIndependentDataFrame(bytes) } finally { source.close() }
+                    let actual = try { RpcPluginViewInput(id.text, count, bytes, paid) }
+                        catch (error: Exception) { paid.close(); throw error }
+                    viewInput = Some(actual)
+                    actual
+            }
+            if (!input.matches(id.text, count, bytes)) {
+                throw IllegalArgumentException("chunk stream identity or declared extent changed")
+            }
+            if (input.append(index, data.text)) {
+                viewInput = None; receipt.retiring = Some(input); Some(input)
+            } else { None<RpcPluginViewInput> }
+        } finally { viewInputLock.unlock() }
+    }
+    private func discardPartialPluginViewInput(receipt: RpcPluginViewInputRead): Unit {
+        viewInputLock.lock()
+        try {
+            match (viewInput) {
+                case Some(input) =>
+                    if (receipt.retiring.isSome()) { throw IllegalStateException("View input has two unretired messages") }
+                    viewInput = None; receipt.retiring = Some(input)
+                case None => ()
+            }
+        } finally { viewInputLock.unlock() }
+    }
+    private func closePartialPluginViewInputHelper(): ?RpcPluginViewInput {
+        viewInputLock.lock()
+        try { viewInputClosed = true; let input = viewInput; viewInput = None; input }
+        finally { viewInputLock.unlock() }
+    }
+
+    private func startPluginViewRequest(id: String, command: String, value: AgentValue, returned: SyncCounter,
+        input!: ?RpcPluginViewInput = None): String {
+        if (id.trimAscii() == "") { return failure(id, command, "View request requires an actual request id") }
+        if (ownedOutput.isNone()) {
+            return failureCode(id, command, "view.output_unavailable", "View output requires the actual bounded owned RPC transport") }
+        if (!awaitTerminalHandoffForView113()) {
+            return failure(id, command, "RPC server is busy or another command is active") }
+        joinInactiveWorkersBeforeAdmission180()
+        let peak = try { rpcViewRequestPeak(value) }
+            catch (_: Exception) { return failureCode(id, command, "view.input_limit", "View request exceeds its existing DATA codec") }
+        lock.lock()
+        try {
+            if (closing || running || activePluginCommandRequestId != "" ||
+                session.approval().isSome() || !runWorkerReturnedLocked113()) {
+                return failure(id, command, "RPC server is busy or another command is active") }
+            if (command != "plugin_view" && interactionProfile != "views-v1") {
+                return failureCode(id, command, "view.frontend_unsupported", "views-v1 interactions have not been negotiated") }
+            retireReturnedWorkerMetadataLocked113()
+            // Fund the actual private worker copy from the existing frontend
+            // Root, including its real Future/join carriers. The input keeps
+            // its separate message slot through the complete decode bookend.
+            let headerPeak = rpcViewInvoiceAdd(65536, rpcViewInvoiceAdd(id.size, command.size) * 8)
+            let paid = match (reserveWorkerMetadataLocked113(headerPeak)) {
+                case Some(value) => value
+                case None => return failure(id, command, "RPC View worker DATA custody is exhausted") }
+            let captured = try {
+                match (input) {
+                    case Some(actual) => if (!actual.paysSameBank(paid)) {
+                        throw IllegalStateException("View input belongs to a different actual DATA bank") }
+                    case None => () }
+                let data = paid.deriveRetainedLease()
+                try {
+                    data.ensureRetainedPeak(peak)
+                    RpcPluginViewRequestData(value, data)
+                } catch (error: Exception) { data.close(); throw error }
+            } catch (_: Exception) {
+                paid.close(); return failure(id, command, "RPC View worker DATA capture failed") }
+            let capturedId = productTextField(captured.value.getOrThrow(), "id")
+            let capturedCommand = productTextField(captured.value.getOrThrow(), "type")
+            commandWorkerMetadata113 = Some(paid)
+            activePluginCommandRequestId = capturedId; running = true
+            let profile = if (interactionProfile == "views-v1") { "views-v1" } else { "basic-v1" }
+            pluginCommandStartingFailed113 = true
+            pluginCommandWorker = Some(spawn {
+                runPluginViewRequest(capturedId, capturedCommand, captured, profile, paid, returned)
+            })
+            pluginCommandStartingFailed113 = false
+            success(id, command, data: objectValue([ValueField("accepted", boolValue(true))]))
+        } finally { lock.unlock() }
+    }
+
+    private func runPluginViewRequest(id: String, command: String, data: RpcPluginViewRequestData,
+        profile: String, paid: LogicalJsonOwnerReservation, returned: SyncCounter): Unit {
+        var terminal: ?SyncCounter = None
+        try {
+            // Do not overlap a second full confirmation freeze with the
+            // original raw/DOM input producer. This is an actual helper return,
+            // not a terminal event, invented ACK, quota change or early refund.
+            returned.waitUntilZero()
+            let result = performPluginViewRequest(id, command, data, profile, paid)
+            match (result) {
+                case Result.Err(error) =>
+                    if (!publishOwnedCheckpointFailure113(id, command, error)) {
+                        emitFrame(failureCode(id, command, error.code, error.message)) }
+                case Result.Ok(_) => ()
+            }
+            terminal = Some(beginTerminalHandoff113())
+            emitFrame(encodeAgentValue(objectValue([ValueField("type", textValue("plugin_view_completed")),
+                ValueField("requestId", textValue(id)), ValueField("command", textValue(command)),
+                ValueField("success", boolValue(result.isOk()))])))
+        } finally {
+            lock.lock()
+            try {
+                if (activePluginCommandRequestId == id) {
+                    activePluginCommandRequestId = ""; running = false }
+            } finally { lock.unlock() }
+            match (terminal) { case Some(signal) => finishTerminalHandoff113(signal); case None => () }
+        }
+    }
+
+    private func performPluginViewRequest(id: String, command: String, data: RpcPluginViewRequestData,
+        profile: String, paid: LogicalJsonOwnerReservation): Result<Unit> {
+        if (command == "plugin_view") {
+            let result = queryPluginViewRequestHelper(id, data.value.getOrThrow(), profile, paid)
+            data.clearAfterWholeRequestHelper()
+            return result
+        }
+        let response = invokePluginViewRequestHelper(id, command, data.value.getOrThrow(), paid)
+        // The only complete raw-request consumer has returned. The Future,
+        // result, output buffer and physical ACK retain their own metadata.
+        data.clearAfterWholeRequestHelper()
+        match (response) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(actual) =>
+                match (actual.approval) {
+                    case Some(approval) => emitFrame(encodeAgentValue(productApprovalFrame(approval)))
+                    case None => () }
+                if (actual.text != "") {
+                    match (emitBorrowedViewFrame(objectValue([ValueField("type", textValue("command_output")),
+                        ValueField("id", textValue(id)), ValueField("output", textValue(actual.text))]), paid)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                }
+                match (actual.action) {
+                    case ApplicationAction.NoAction => Result.Ok(())
+                    case ApplicationAction.OpenPluginView(route) => emitPluginViewDocument(id, route, "{}", profile, paid)
+                    case ApplicationAction.ConfirmPluginView(raw) =>
+                        let confirmation = match (decodeAgentValue(raw, maxBytes: 4096)) {
+                            case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+                        emitBorrowedViewFrame(objectValue([ValueField("type", textValue("plugin_view_confirmation")),
+                            ValueField("requestId", textValue(id)), ValueField("confirmation", confirmation)]), paid)
+                    case _ => Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                        "view.frontend_action_unsupported", "this frontend cannot perform the requested Host navigation"))
+                }
+        }
+    }
+
+    private func queryPluginViewRequestHelper(id: String, value: AgentValue,
+        profile: String, paid: LogicalJsonOwnerReservation): Result<Unit> {
+        let input = value.field("input") ?? objectValue([])
+        if (input.unifiedKind != ValueKind.Object) {
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput, "view.query_invalid", "View input must be an object")) }
+        emitPluginViewDocument(id, productTextField(value, "routeName"), encodeAgentValue(input), profile, paid)
+    }
+    private func invokePluginViewRequestHelper(id: String, command: String, value: AgentValue,
+        paid: LogicalJsonOwnerReservation): Result<ApplicationResponse> {
+        if (command == "plugin_view_action") {
+            let fields = value.field("fields") ?? nullValue()
+            if (fields.unifiedKind != ValueKind.Object) {
+                return Result.Err(AgentError(AgentErrorKind.InvalidInput, "view.fields_invalid", "View action requires its actual fields object")) }
+            session.invokeJavaScriptPluginViewAction(productTextField(value, "viewId"),
+                productTextField(value, "revision"), productTextField(value, "actionId"), fields,
+                { kind, message => match (emitBorrowedViewFrame(objectValue([
+                    ValueField("type", textValue("command_output")), ValueField("id", textValue(id)),
+                    ValueField("kind", textValue(kind)), ValueField("output", textValue(message))]), paid)) {
+                    case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
+                    case Result.Ok(_) => () } })
+        } else {
+            let confirmed = value.field("confirmed") ?? nullValue()
+            if (confirmed.unifiedKind != ValueKind.Boolean) {
+                return Result.Err(AgentError(AgentErrorKind.InvalidInput, "view.confirmation_invalid", "Host business confirmation requires a real boolean")) }
+            session.confirmJavaScriptPluginView(productTextField(value, "viewId"),
+                productTextField(value, "revision"), productTextField(value, "requestDigest"), confirmed.asBool(),
+                onClosed: { viewId, reason => emitFrame(encodeAgentValue(objectValue([
+                    ValueField("type", textValue("plugin_view_closed")), ValueField("viewId", textValue(viewId)),
+                    ValueField("reason", textValue(reason))]))) })
+        }
+    }
+
+    private func emitPluginViewDocument(id: String, route: String, input: String, profile: String,
+        paid: LogicalJsonOwnerReservation): Result<Unit> {
+        session.withJavaScriptPluginViewDocument<Unit>(route, input, profile, { metadata, model, primary =>
+            // Wire JSON is escaped by the same bounded writer as raw evidence.
+            // Clients must not interpret source text as terminal instructions.
+            let safe = isPluginViewPlainText(primary)
+            if (profile == "views-v1" && !safe) {
+                session.clearJavaScriptPluginViews()
+                return Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                    "view.source_unrenderable", "Host source contains controls; use its basic/raw evidence entry")) }
+            emitBorrowedViewFrame(objectValue([ValueField("type", textValue("plugin_view_document")),
+                ValueField("requestId", textValue(id)), ValueField("document", objectValue([
+                    ValueField("schema", textValue("axyndra.view-observation/v1")),
+                    ValueField("metadata", metadata), ValueField("model", model),
+                    ValueField("host_status", textValue("query_completed")),
+                    ValueField("primary_content", objectValue([ValueField("encoding", textValue("utf8")),
+                        ValueField("terminal_safe", boolValue(safe)), ValueField("text", textValue(primary))]))]))]), paid)
+        })
+    }
+
+    private func emitBorrowedViewFrame(value: AgentValue, paid: LogicalJsonOwnerReservation): Result<Unit> {
+        frameLock.lock()
+        try {
+            let output = match (ownedOutput) {
+                case Some(actual) => actual
+                case None => return Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                    "view.output_unavailable", "View output has no actual owned transport")) }
+            var index: Int64 = 0
+            while (index < ownedDeliveries.size) {
+                if (ownedDeliveries[index].isAcknowledged() ||
+                    ownedDeliveries[index].closeAfterDeliveryRetirement().isOk()) { ownedDeliveries.remove(at: index) }
+                else { return ownedRpcOutputError("rpc.owned_prior_delivery_pending") }
+            }
+            let delivery = OwnedRpcValueDelivery(output)
+            ownedDeliveries.add(delivery)
+            try { delivery.runBorrowed(value, paid, protocolVersion, { => chunkCounter++; "rpc-" + chunkCounter.toString() }) }
+            finally { let _ = delivery.closeAfterDeliveryRetirement() }
+        } finally { frameLock.unlock() }
     }
 
     private func startPluginCommand(
@@ -1128,10 +1430,42 @@ public class ProductJsonlRpcServer {
             let result = match (prompt.queued113) {
                 case Some(value) => runRpcQueuedInput113(value)
                 case None => session.handle(prompt.message) }
-            if (prompt.publishResult) {
+            if (!prompt.publishResult) { current = takeNext(result); continue }
+            // The existing paid worker carrier owns this bounded handoff cell.
+            // Keep running=true through the callback so already accepted input
+            // still queues and drains. A receiving View waits for this boundary.
+            let returned = beginTerminalHandoff113()
+            try {
                 publishPromptResult(prompt, result)
-            }
-            current = takeNext(result)
+                current = takeNext(result)
+            } finally { finishTerminalHandoff113(returned) }
+        }
+    }
+    private func beginTerminalHandoff113(): SyncCounter {
+        let returned = SyncCounter(1)
+        lock.lock()
+        try { terminalHandoff113 = Some(returned); terminalHandoffThread113 = Thread.currentThread.id }
+        finally { lock.unlock() }
+        returned
+    }
+    private func finishTerminalHandoff113(returned: SyncCounter): Unit {
+        lock.lock()
+        try { terminalHandoff113 = None; terminalHandoffThread113 = 0 }
+        finally { lock.unlock() }
+        returned.dec()
+    }
+    private func awaitTerminalHandoffForView113(): Bool {
+        lock.lock()
+        let returned = terminalHandoff113
+        let producer = terminalHandoffThread113
+        lock.unlock()
+        match (returned) {
+            case None => true
+            case Some(signal) =>
+                // An inline writer callback cannot wait for its own return.
+                if (producer == Thread.currentThread.id) { return false }
+                signal.waitUntilZero()
+                true
         }
     }
 
@@ -1288,7 +1622,26 @@ public class ProductJsonlRpcServer {
                 }
                 match (response.approval) {
                     case Some(approval) => emitFrame(encodeAgentValue(productApprovalFrame(approval)))
-                    case None => ()
+                    case None => match (response.action) {
+                        case ApplicationAction.OpenPluginView(route) =>
+                            if (ownedOutput.isNone()) {
+                                emitFrame(failureCode(prompt.id, prompt.command, "view.output_unavailable",
+                                    "View output requires the actual bounded owned RPC transport"))
+                                return
+                            }
+                            lock.lock()
+                            let view = try {
+                                (runWorkerMetadata113.getOrThrow(),
+                                    if (interactionProfile == "views-v1") { "views-v1" } else { "basic-v1" })
+                            } finally { lock.unlock() }
+                            match (emitPluginViewDocument(prompt.id, route, "{}", view[1], view[0])) {
+                                case Result.Err(error) =>
+                                    emitFrame(failureCode(prompt.id, prompt.command, error.code, error.message))
+                                    return
+                                case Result.Ok(_) => ()
+                            }
+                        case _ => ()
+                    }
                 }
                 emitFrame(
                     encodeAgentValue(
@@ -1423,7 +1776,7 @@ public class ProductJsonlRpcServer {
     private func interactionProfileEnabled(): Bool {
         lock.lock()
         try {
-            interactionProfile == "basic-v1" && !closing
+            (interactionProfile == "basic-v1" || interactionProfile == "views-v1") && !closing
         } finally {
             lock.unlock()
         }
@@ -1436,19 +1789,23 @@ public class ProductJsonlRpcServer {
     ): String {
         let profile = match (rpcInteractionText(value, "profile")) {
             case Some(item) => item
-            case None => return failure(id, command, "profile must be 'basic-v1' or 'none'")
+            case None => return failure(id, command, "profile must be 'basic-v1', 'views-v1' or 'none'")
         }
-        if (profile != "basic-v1" && profile != "none") {
-            return failure(id, command, "profile must be 'basic-v1' or 'none'")
+        if (profile != "basic-v1" && profile != "views-v1" && profile != "none") {
+            return failure(id, command, "profile must be 'basic-v1', 'views-v1' or 'none'")
         }
         lock.lock()
         try {
             if (closing) { return failure(id, command, "RPC server is closing") }
+            if (profile == "views-v1" && (ownedOutput.isNone() || protocolVersion != 2)) {
+                return failureCode(id, command, "view.frontend_unsupported",
+                    "views-v1 requires negotiated protocol v2 and the actual bounded owned output") }
             interactionProfile = profile
         } finally {
             lock.unlock()
         }
-        session.setAskInteractive(profile == "basic-v1")
+        session.setAskInteractive(profile != "none")
+        if (profile != "views-v1") { session.clearJavaScriptPluginViews() }
         success(id, command, data: objectValue([
             ValueField("interactionProfile", textValue(profile))
         ]))
@@ -1712,6 +2069,7 @@ public class ProductJsonlRpcServer {
             }
         } finally { lock.unlock() }
         session.setAskInteractive(false)
+        session.clearJavaScriptPluginViews()
         if (commandActive) { session.cancelJavaScriptPluginCommand() }
         if (cancelBash) { let _ = session.abortBash() }
         // The compatibility close retains its original wait outside the lock.
@@ -2450,7 +2808,7 @@ public class ProductJsonlRpcServer {
                     ownedDeliveries[index].closeAfterDeliveryRetirement().isOk()) { ownedDeliveries.remove(at: index) }
                 else { return ownedRpcOutputError("rpc.owned_prior_delivery_pending") }
             }
-            let delivery = OwnedProductRpcEventDelivery(event, ownedOutput.getOrThrow())
+            let delivery = OwnedRpcValueDelivery(event, ownedOutput.getOrThrow())
             ownedDeliveries.add(delivery)
             let result = try {
                 delivery.run(protocolVersion, { => chunkCounter++; "rpc-" + chunkCounter.toString() })
@@ -2757,6 +3115,11 @@ public func availableRpcCommands(): Array<String> {
         "negotiate_interactions",
         "get_plugin_commands",
         "plugin_command",
+        "get_plugin_views",
+        "plugin_view",
+        "plugin_view_action",
+        "plugin_view_confirm",
+        "plugin_view_close",
         "interaction_response",
         "prompt",
         "steer",

@@ -43,14 +43,22 @@ class HostManagedHttpResource <: HostManagedServiceResource {
         let _ = lifetime.cancel()
         if (resourcesReleased()) { Result.Ok(()) } else { hostLifecycleLeaseError("plugin.http_service_cleanup_pending") }
     }
+    private func activeSnapshot(): Bool {
+        lock.lock(); try { active && !closing } finally { lock.unlock() }
+    }
     public func isActive(): Bool {
-        lock.lock(); let available = try { active && !closing } finally { lock.unlock() }
-        if (!available) { return false }
-        if (grant.stillCurrent().isError()) { let _ = revoke(); return false }
+        if (!activeSnapshot()) { return false }
+        if (grant.lifetimeCurrent().isError()) { let _ = revoke(); return false }
         true
     }
     public func validateActive(context: ToolInvocationContext): Result<Unit> {
-        if (!isActive() || hostManagedChannelCallerCancelled(context) || context.sessionId.value != grant.targetThread.value ||
+        if (!activeSnapshot()) { return hostLifecycleLeaseError("plugin.http_service_scope_stale") }
+        // Every invocation still checks the complete current package. Nested
+        // binding/inventory observations above are not execution authority.
+        if (grant.stillCurrent().isError()) {
+            let _ = revoke(); return hostLifecycleLeaseError("plugin.http_service_scope_stale")
+        }
+        if (hostManagedChannelCallerCancelled(context) || context.sessionId.value != grant.targetThread.value ||
             context.workspaceRoot != hostLifecycleText(grant.launchPlan, "workspace_root") ||
             hostPluginInvocationAuthorityScope(context) != hostLifecycleText(grant.launchPlan, "permission_domain")) {
             return hostLifecycleLeaseError("plugin.http_service_scope_stale")

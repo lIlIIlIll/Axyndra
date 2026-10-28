@@ -660,11 +660,8 @@ func todoHelpText(): String {
     "  /todo rm     [<task|phase>]        Remove task/phase/all"
 }
 
-func localResponse(
-    text: String,
-    planReview!: ?String = None
-): ApplicationResponse {
-    ApplicationResponse(false, text: text, planReview: planReview)
+func localResponse(text: String): ApplicationResponse {
+    ApplicationResponse(false, text: text)
 }
 
 func invalidUsage(expected: String): Result<ApplicationResponse> {

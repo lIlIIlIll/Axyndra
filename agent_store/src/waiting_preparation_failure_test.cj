@@ -3,6 +3,7 @@ package agent_store
 import agent_domain.*
 import agent_ports.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -27,7 +28,7 @@ class WaitingFailureFixture {
     let resultItem: ItemId
     let receiptId: String
     init(waiting!:Bool=true){
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let database=SqliteDatabase(root+"/state.sqlite")
         let sink=SqliteThreadCommitSink(database)
         let thread=ThreadId("waiting-failure-thread");let turn=SemanticTurnId("waiting-failure-turn")

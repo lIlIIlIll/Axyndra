@@ -8,9 +8,16 @@ import yjson.*
 import yjson_support.*
 
 // These are DATA payments for copied maintenance/presentation values. They
-// confer no registration, Source, effect, approval or I/O authority. Existing
-// public response/history strings have no retirement contract, so their real
-// copied backing remains paid rather than being refunded when a frame returns.
+// confer no registration, Source, effect, approval or I/O authority. A copied
+// String has no retirement contract of its own, so its real backing stays paid
+// for the lifetime of the Product that produced it rather than being refunded
+// when the builder frame returns: the actual owner is that Product. This is
+// bank accounting only; retiring a payment never invalidates a returned value.
+//
+// Without an owner lifetime each Product permanently retained a full 16 MiB
+// floor per import cycle, so a second canonical run inside the same process
+// was refused with `policy.query_limit` (measured: 16/32/48 MiB after 1/2/3
+// cycles). Retiring on close is what removes that refusal.
 class ProductRegistryEscapedCopyNode83 {
     private let payment: LogicalJsonOwnerReservation
     private let errors: ?OwnedRegistryErrorList
@@ -18,15 +25,49 @@ class ProductRegistryEscapedCopyNode83 {
     init(payment: LogicalJsonOwnerReservation, previous: ?ProductRegistryEscapedCopyNode83, errors: ?OwnedRegistryErrorList) {
         this.payment = payment; this.previous = previous; this.errors = errors
     }
+    // Only the copied-DATA payment is retired here. A linked error list was
+    // handed to a caller and keeps its own close contract; closing it here
+    // would be a second close of an owner this debt never handed out.
+    func retirePayment(): Unit { payment.close() }
+    func previousNode(): ?ProductRegistryEscapedCopyNode83 { previous }
 }
 
 class ProductRegistryEscapedCopyDebt83 {
     private let lock = Mutex()
     private var head: ?ProductRegistryEscapedCopyNode83 = None<ProductRegistryEscapedCopyNode83>
+    private var products: Int64 = 0
     func adopt(payment: LogicalJsonOwnerReservation, errors!: ?OwnedRegistryErrorList = None): Unit {
         lock.lock()
         try { head = Some(ProductRegistryEscapedCopyNode83(payment, head, errors)) }
         finally { lock.unlock() }
+    }
+    // Records ownership only. No charge, floor, SUM rule or refund timing
+    // changes; this just names who can still reach a copied value.
+    func beginProduct(): Unit { lock.lock(); try { products += 1 } finally { lock.unlock() } }
+    // Called once per Product, only after every frame/callback that could read
+    // a copied value has returned. Nodes retire when the LAST live Product
+    // closes, so one Product's copy stays paid while another could still read
+    // it: this can over-retain a floor but never under-counts. A copy adopted
+    // after the last Product closed keeps its charge.
+    func endProduct(): Unit {
+        lock.lock()
+        var retire = false
+        try {
+            if (products > 0) {
+                products -= 1
+                if (products == 0 && head.isSome()) { retire = true }
+            }
+        } finally { lock.unlock() }
+        if (!retire) { return }
+        lock.lock()
+        let first = try { let value = head; head = None<ProductRegistryEscapedCopyNode83>; value }
+            finally { lock.unlock() }
+        var node = first
+        while (true) {
+            match (node) {
+                case Some(actual) => let next = actual.previousNode(); actual.retirePayment(); node = next
+                case None => return }
+        }
     }
 }
 

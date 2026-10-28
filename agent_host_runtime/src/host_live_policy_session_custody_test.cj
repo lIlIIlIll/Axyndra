@@ -72,6 +72,7 @@ class HostLivePolicySessionCustodyTests {
     @TestCase
     func actualPrivateWriterPhysicalAckPrecedesCustodyWhileOutputPaymentRemains():Unit{
         let fixture=LiveSessionFixture();let pressure=reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113()-67108864)
         let session=fixture.artifacts.documentDataSession()
         try{
             @Expect(liveSessionProbe(),true)
@@ -92,11 +93,15 @@ class HostLivePolicySessionCustodyTests {
                 @Expect(session.collect(),true)
                 fixture.emptyFacts()
             }finally{liveSessionRequire(custody.close())}
-        }finally{session.acknowledgeOutput();liveSessionRequire(session.closeExecutionDataOwner());pressure.close();fixture.close()}
+        }finally{
+            try{session.acknowledgeOutput();liveSessionRequire(session.closeExecutionDataOwner())}
+            finally{pressure.close();fixture.close()}
+        }
     }
     @TestCase
     func failedRealWriterRemovalNeverReturnsCustodyOrFabricatesPhysicalAck():Unit{
         let fixture=LiveSessionFixture();let pressure=reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113()-67108864)
         let session=fixture.artifacts.documentDataSession();let blocker=LiveSessionCleanupBlocker()
         try{
             let result=hostRunLivePolicyPaidSession(session,{actual=>
@@ -117,7 +122,10 @@ class HostLivePolicySessionCustodyTests {
             @Expect(session.collect(),true)
             @Expect(liveSessionProbe(),true)
             fixture.emptyFacts()
-        }finally{blocker.restore();liveSessionRequire(session.closeExecutionDataOwner());pressure.close();fixture.close()}
+        }finally{
+            try{blocker.restore();liveSessionRequire(session.closeExecutionDataOwner())}
+            finally{pressure.close();fixture.close()}
+        }
     }
     @TestCase
     func pendingWorkerCleanupRemainsSameOriginalCollectorDebtUntilActualRetry():Unit{

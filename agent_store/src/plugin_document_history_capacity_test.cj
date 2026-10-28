@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import yjson.*
 import yjson_support.*
@@ -12,7 +13,7 @@ import std.unittest.testmacro.*
 class PluginDocumentHistoryCapacityTests {
     @TestCase
     func twoActualEightMibStoredResultsUseSequentialLeases(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/history.sqlite")
         let budget=LogicalJsonOwnerBudget(maximumCharged:100663296)
         let scope=ContinuationDocumentReadScope({bytes=>budget.acquire(bytes)})
@@ -35,7 +36,7 @@ class PluginDocumentHistoryCapacityTests {
     }
     @TestCase
     func metadataCapacityRefusesInvalidUtf8BeforeConsumerRuns(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/history.sqlite")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864)
         let scope=ContinuationDocumentReadScope({bytes=>budget.acquire(bytes)})
@@ -51,7 +52,7 @@ class PluginDocumentHistoryCapacityTests {
     }
     @TestCase
     func originalScopeCurrentAndCloseCannotBeBypassedByTransientRead(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/history.sqlite")
         let budget=LogicalJsonOwnerBudget()
         let expired=AtomicBool(false);let called=AtomicBool(false);var refused=false

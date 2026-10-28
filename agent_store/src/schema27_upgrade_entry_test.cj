@@ -1,5 +1,6 @@
 package agent_store
 
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -45,7 +46,7 @@ private func schema27EntryAssertMigrated(database: SqliteDatabase, todo: String,
 class Schema27UpgradeEntryTests {
     @TestCase
     func actualSchema27ReopenPreservesMalformedUnicodeNulAndEmptyHistoricalBytes(): Unit {
-        let root=Directory.createTemp("/tmp").toString(); let path=root+"/upgrade.db"
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString(); let path=root+"/upgrade.db"
         let todo="[{\"phase\":\"雪\",\"tasks\":[]}]"
         let goal="malformed-goal:\u{0000}雪\noriginal-tail"
         try {
@@ -69,7 +70,7 @@ class Schema27UpgradeEntryTests {
 
     @TestCase
     func actualFailureAfterTodoCopyRollsBackSchemaAndRowsThenColdRetrySucceeds(): Unit {
-        let root=Directory.createTemp("/tmp").toString(); let path=root+"/rollback.db"
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString(); let path=root+"/rollback.db"
         let todo="first-copy-must-roll-back"; let goal="original-goal:\u{0000}雪"
         try {
             let keeper=SqliteDatabase(path)
@@ -101,7 +102,7 @@ class Schema27UpgradeEntryTests {
 
     @TestCase
     func futureSchemaStillRejectsBeforeMigrationAndReadonlyHistoryRemainsIntact(): Unit {
-        let root=Directory.createTemp("/tmp").toString(); let path=root+"/future.db"
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString(); let path=root+"/future.db"
         let payload="future-data:\u{0000}雪"
         try {
             let seed=SqliteDatabase(path)

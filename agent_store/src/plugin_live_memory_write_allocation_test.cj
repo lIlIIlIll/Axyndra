@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -11,7 +12,7 @@ import std.unittest.testmacro.*
 class LiveMemoryActualWriteAllocationTests309 {
     @TestCase
     func DeletedHighestEventPreservesOriginalAutoincrementHighWater():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/actual-write.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/actual-write.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{
             db.transaction<Unit>({tx=>
@@ -33,7 +34,7 @@ class LiveMemoryActualWriteAllocationTests309 {
     }
     @TestCase
     func SignedMaximumNeverWrapsOrReusesAnEventId():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/full-write.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/full-write.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{
             // The baseline is already committed. SQLITE_FULL may end the
@@ -55,7 +56,7 @@ class LiveMemoryActualWriteAllocationTests309 {
     }
     @TestCase
     func EmptyNegativeSequenceAndHigherTableIdUseActualSqliteAllocator():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/numeric-write.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/numeric-write.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{db.transaction<Unit>({tx=>
             let empty=liveMemoryActualWriteAllocation309(tx,1,owner,65536,{=>Result<Unit>.Ok(())})
@@ -72,7 +73,7 @@ class LiveMemoryActualWriteAllocationTests309 {
     }
     @TestCase
     func GroupCrossingSignedMaximumRaisesRealSqliteFullAndRollsBack():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/group-full.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/group-full.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{
             db.execute("INSERT INTO memory_events(id,memory_id,revision,operation,payload,created_at_millis) VALUES(?,'before',1,'retain','{}',1)",[SqlParameter.Int64Value(Int64.Max-1)])

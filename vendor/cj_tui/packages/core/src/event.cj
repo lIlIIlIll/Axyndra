@@ -397,6 +397,8 @@ public class EventParser {
     private var lastReadByteCount: Int64 = 0
     private var pendingEscPolls: Int64 = 0
     private var inputDrainPending = false
+    // Resume scanning with the five-byte overlap that can start a split paste terminator.
+    private var pasteScanOffset: Int64 = 6
 
     public init(inputSource!: InputSource = StdinInputSource()) {
         this.inputSource = inputSource
@@ -699,8 +701,8 @@ public class EventParser {
 
     private func parseBracketedPaste(events: ArrayList<Event>): Bool {
         if (!startsWith("\u{1B}[200~")) { return false }
-        let end = indexOf("\u{1B}[201~", 6)
-        if (end < 0) { return false }
+        let end = indexOf("\u{1B}[201~", pasteScanOffset)
+        if (end < 0) { pasteScanOffset = max(6, pending.size - 5); return false }
         let data = pending.toArray()
         let content = unsafe { String.fromUtf8Unchecked(data[6..end]) }
         drop(end + 6)
@@ -743,6 +745,7 @@ public class EventParser {
     private func drop(n: Int64): Unit {
         let count = min(max(0, n), pending.size)
         if (count == 0) { return }
+        pasteScanOffset = 6
         if (count == pending.size) {
             pending = ArrayList<Byte>()
             return

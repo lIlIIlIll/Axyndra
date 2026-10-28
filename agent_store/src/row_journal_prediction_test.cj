@@ -2,6 +2,7 @@ package agent_store
 import agent_domain.*
 import std.collection.*
 import std.convert.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -10,7 +11,7 @@ import std.unittest.testmacro.*
 class OpaqueJournalAppendPredictionTests{
     @TestCase
     func PredictsOriginalCompleteFutureStateFor129EventsBeforeAnyMutation():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/predict.db");let owner=LogicalJsonOwnerBudget()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/predict.db");let owner=LogicalJsonOwnerBudget()
         try{
             database.transaction<Unit>({tx=>
                 let before=streamOpaqueRowJournalFence(tx,{bytes=>owner.acquire(bytes)},{=>Result<Unit>.Ok(())})

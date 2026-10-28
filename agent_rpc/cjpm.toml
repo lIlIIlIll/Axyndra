@@ -20,6 +20,7 @@
   "agent_product" = { path = "../agent_product", output-type = "static" }
   "agent_domain" = { path = "../agent_domain", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }
+  "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
 
 # Test-only edge. acp_owned_lifecycle113_test.cj and rpc_queued_canonical113_test.cj
 # build real Store transactions for their oracles, while agent_rpc itself must

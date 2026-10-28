@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -32,7 +33,7 @@ class OwnedCanonicalReadbackFixture {
     prop reader: SqliteOwnedCanonicalThreadReadback { get() { readback.getOrThrow() } }
     let count: Int64
     init(count: Int64) {
-        path = Directory.createTemp("/tmp").toString()
+        path = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         db = SqliteDatabase(path + "/whole-readback.sqlite")
         let sink = SqliteThreadCommitSink(db); let _ = sink.createThread(thread, "workspace")
         db.execute("INSERT INTO turns (id,thread_id,ordinal,state,user_item_id,active_run_id) VALUES (?,?,1,'completed',?,NULL)",

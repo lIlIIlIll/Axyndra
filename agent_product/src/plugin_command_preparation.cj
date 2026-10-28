@@ -64,7 +64,7 @@ class ProductCommandPreparationParticipant <: HostDocumentPreparationParticipant
             return commandControlError("plugin.command_control_changed") }
         let control = if (early.isSome()) { early } else { proposed }
         match (control) { case Some(value) =>
-            if (!original.binding.allowsControl()) { return commandControlError("plugin.command_control_not_declared") }
+            if (!original.binding.allowsControl("continuation")) { return commandControlError("plugin.command_control_not_declared") }
             match (validateCommandContinuationControl(value)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let intents = arguments.field("host_plan").getOrThrow().field("intents").getOrThrow()
             // A user control accompanies one exact document mutation; it is

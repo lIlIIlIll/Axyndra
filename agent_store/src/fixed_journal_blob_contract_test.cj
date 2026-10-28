@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.collection.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -27,7 +28,7 @@ func blobContractFails(body:()->Unit):Bool{try{body();false}catch(_:Exception){t
 class FixedJournalBlobContractTests{
     @TestCase
     func SameActualTransactionStreamsTextBytesAndNulWithoutWholeColumnConversion():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             let raw=String.fromUtf8(Array<Byte>(65535,repeat:b'x'))+"音楽\u{0000}🐈end"
@@ -49,7 +50,7 @@ class FixedJournalBlobContractTests{
     }
     @TestCase
     func SixtyThreeMiBStoredTextNeedsOnlyOneBoundedReadReservation():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             // Real sole SQLite storage seed, transport-only: TEXT has NUL
@@ -72,7 +73,7 @@ class FixedJournalBlobContractTests{
     }
     @TestCase
     func FixedMappingTypeLengthAndIdentityChangesCannotReadAnotherColumn():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             blobContractSeed(database,"original","original text")
@@ -93,7 +94,7 @@ class FixedJournalBlobContractTests{
     }
     @TestCase
     func CancellationAndConsumerFailureCloseActualBlobAndReleaseBudgetBeforeRetry():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             let raw=String.fromUtf8(Array<Byte>(131072,repeat:b'x'));blobContractSeed(database,"cancel",raw)
@@ -117,7 +118,7 @@ class FixedJournalBlobContractTests{
     }
     @TestCase
     func ChangingActualRowExpiresBlobAndRollsBackSameTransaction():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             let raw=String.fromUtf8(Array<Byte>(131072,repeat:b'x'));blobContractSeed(database,"changed",raw)
@@ -132,7 +133,7 @@ class FixedJournalBlobContractTests{
     }
     @TestCase
     func EscapedTransactionAndPublicUnownedConstructorCannotUseInternalBlobReader():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/blob.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             blobContractSeed(database,"owned","original text");let progress=FixedJournalBlobTestProgress()

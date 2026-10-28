@@ -266,10 +266,20 @@ plugins/mcp/build-package.sh --output /absolute/new/mcp-package
 python3 plugins/mcp/check.py --binary /absolute/new/mcp-package/bin/mcp-client-plugin
 ```
 
-Packaging copies the actual runtime closure, sets relative rpaths, records file
-digests, checks dependencies without `LD_LIBRARY_PATH`, and refuses to overwrite
-an existing artifact. Running the checker needs Python and Linux; the plugin
-itself does not launch the Python fixture or require Python in its package.
+Packaging records the compiled-source and packaged-executable digests separately,
+retains the complete runtime and license inventories, and refuses to overwrite
+an existing artifact.
+
+The Linux executable uses a transitive `$ORIGIN/../lib` ELF RPATH. Copied runtime
+libraries have existing search-path metadata removed instead of receiving a new
+per-library RPATH. This avoids ELF layout growth without omitting runtime files
+or changing the host's required current-byte package verification.
+
+The packager checks the executable's complete dependency closure with loader
+overrides removed. It also checks each library with the package's `lib` directory
+as the modeled executable search context. That inspection-only environment is not
+passed to the plugin. Running the checker needs Python and Linux; the plugin
+does not launch the Python fixture or require Python in its package.
 
 
 ## HTTP broker transport

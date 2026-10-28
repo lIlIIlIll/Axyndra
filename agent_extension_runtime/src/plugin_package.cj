@@ -329,6 +329,9 @@ func pluginNamespaceComponents(
 public interface PluginPackageMetadataAccounting {
     func beforeDocument(source: String): Unit
     func beforeTreePath(bytes: Int64): Unit
+    // Prepay additional work before allocation; retain custody until inspection
+    // returns, including all digest workers on every success and failure path.
+    func beforeDigestWork(bytes: Int64): Unit
 }
 
 func pluginInspectJson(document: String, accounting: ?PluginPackageMetadataAccounting): JsonNode {
@@ -1042,6 +1045,8 @@ class PluginTreeDigestState {
     let paths: ArrayList<String> = ArrayList<String>()
     var fileCount: Int64 = 0
     var totalBytes: Int64 = 0
+    var largestPath: String = ""
+    var largestBytes: Int64 = 0
     var error: ?PluginPackageError = None
 }
 
@@ -1092,6 +1097,9 @@ func pluginCollectTreePaths(
             } else {
                 state.fileCount += 1
                 state.totalBytes += info.size
+                if (info.size > state.largestBytes) {
+                    state.largestBytes = info.size; state.largestPath = relativePath
+                }
                 state.paths.add(relativePath)
                 true
             }
@@ -1119,6 +1127,12 @@ func pluginContentDigest(root: String,
         case None => ()
     }
     sort(state.paths)
+    if (state.largestBytes >= 1048576 && state.totalBytes - state.largestBytes >= 1048576) {
+        match (metadataAccounting) {
+            case Some(value) => return pluginParallelContentDigest(root, state.paths, state.largestPath, value)
+            case None => ()
+        }
+    }
     let payload = StringBuilder()
     payload.append("axyndra-package-tree-v2\n")
     var verifiedBytes: Int64 = 0
@@ -1152,19 +1166,11 @@ func pluginContentDigest(root: String,
         if (!after.isRegular() || after.isSymbolicLink() || after.size != info.size || after.canExecute() != info.canExecute()) {
             return pluginPackageError("plugin.package_tree_changed", "package file metadata changed during verification", source: root, field: relativePath)
         }
-        payload.append(relativePath.size.toString())
-        payload.append(":")
-        payload.append(relativePath)
-        payload.append(":")
-        payload.append(info.canExecute().toString())
-        payload.append(":")
-        payload.append(info.size.toString())
-        payload.append(":")
-        payload.append(fileDigest)
-        payload.append("\n")
+        pluginAppendTreeDigestEntry(payload, relativePath, info.canExecute(), info.size, fileDigest)
     }
     PluginPackageResult.Ok("sha256:" + modelPolicySha256Text(payload.toString()))
 }
+
 
 // The caller supplies the size from its bounded file inspection. Contents are
 // still re-read on every inspection; this is neither a cache nor an mtime trust
@@ -1182,7 +1188,8 @@ func pluginPackageFileDigest(path: Path, expectedSize: Int64, root: String, scra
             let read = file.read(scratch)
             if (read == 0) { break }
             if (read > expectedSize - count) { throw IllegalArgumentException("package file grew during verification") }
-            hash.write(scratch[..read]); count += read
+            if (read == scratch.size) { hash.write(scratch) } else { hash.write(scratch[..read]) }
+            count += read
         }
     } finally { file.close() }
     pluginPackageDigestPath(path, root)
@@ -1778,9 +1785,9 @@ func parseNativePluginContributions(value: JsonNode, source: String): PluginPack
                         case None => return pluginPackageError("plugin.contribution_invalid", "unknown contribution field", source: source, field: "contributions") }
                     if (kind != PluginContributionKind.Command || declaredControls.unifiedKind != UnifiedJsonKind.List ||
                         declaredControls.items.size != 1 || declaredControls.items[0].unifiedKind != UnifiedJsonKind.Text ||
-                        declaredControls.items[0].text != "continuation") {
-                        return pluginPackageError("plugin.contribution_invalid", "allowed_user_controls is Command-only and contains exactly continuation", source: source, field: "contributions") }
-                    controls = ["continuation"]
+                        !["continuation", "plan_review"].contains(declaredControls.items[0].text)) {
+                        return pluginPackageError("plugin.contribution_invalid", "allowed_user_controls is Command-only and contains exactly one supported control", source: source, field: "contributions") }
+                    controls = [declaredControls.items[0].text]
             }
         }
         if (attachment[0] != "" && (kind != PluginContributionKind.Tool || profile != PluginToolExecutionProfile.Brokered)) {

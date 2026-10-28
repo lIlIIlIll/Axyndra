@@ -25,6 +25,8 @@ public enum ApplicationAction {
     | OpenProviderSetup
     | OpenModelSelector
     | OpenBranchSelector
+    | OpenPluginView(String)
+    | ConfirmPluginView(String)
 }
 
 public enum PlanApprovalOutcome {
@@ -44,7 +46,6 @@ public class ApplicationResponse {
     public let snapshot: ?RunSnapshot
     public let approval: ?ApprovalRequest
     public let action: ApplicationAction
-    public let planReview: ?String
 
     public init(
         agentInvoked: Bool,
@@ -52,8 +53,7 @@ public class ApplicationResponse {
         text!: String = "",
         snapshot!: ?RunSnapshot = None,
         approval!: ?ApprovalRequest = None,
-        action!: ApplicationAction = ApplicationAction.NoAction,
-        planReview!: ?String = None
+        action!: ApplicationAction = ApplicationAction.NoAction
     ) {
         this.agentInvoked = agentInvoked
         this.exitRequested = exitRequested
@@ -61,7 +61,6 @@ public class ApplicationResponse {
         this.snapshot = snapshot
         this.approval = approval
         this.action = action
-        this.planReview = planReview
     }
 }
 
@@ -150,6 +149,10 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private var nextPluginCommandId: Int64 = 1
     private var activePluginCommandCancellation: ?CancellationSource = None
     private var activePluginCommandControl: ?ApplicationPluginCommandControl = None
+    private var activePluginViewQuery: ?CancellationSource = None
+    private var activePluginView: ?ProductPluginViewState = None
+    private var activePluginViewEvent: ?ProductPluginViewState = None
+    private var activePluginCommandView: ?ProductPluginViewState = None
     private var todoEditorSnapshot: ?ProductTodoEditorSnapshot = None
     private var todoEditorInvocation: ?ProductTodoInvocation = None
     private var todoEditorAction = ""
@@ -210,7 +213,6 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     private var planWriteBaseline: Int64 = 0
     private var planCorrectionAttempted = false
     private var currentPlanTool = ""
-    private var currentPlanVersion = ""
     private var currentPlanFingerprint = ""
     private var vibeModeEnabled = false
     private var loopModeEnabled = false
@@ -697,6 +699,336 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
         product.javascriptPluginViews()
     }
+    public func withJavaScriptPluginViewDocument<T>(route: String, inputJson: String, frontend: String,
+        consume: (AgentValue, AgentValue, String) -> Result<T>): Result<T> {
+        if (frontend != "basic-v1" && frontend != "views-v1") {
+            return pluginViewObservationError("view.frontend_unsupported", "frontend does not negotiate a supported View profile") }
+        let input = match (decodeAgentValue(inputJson, maxBytes: 196608)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (input.unifiedKind != ValueKind.Object) {
+            return pluginViewObservationError("view.query_invalid", "View input must be a bounded object") }
+        match (frontendCancellation180) { case Some(token) => match (token.check()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
+        let cancellation = CancellationSource()
+        lock.lock()
+        let target = try {
+            if (activePluginViewQuery.isSome() || activePluginViewEvent.isSome() || activePluginCommandCancellation.isSome() ||
+                activeTodoInvocation.isSome() || currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome()) {
+                cancellation.close()
+                return pluginViewObservationError("view.session_busy", "View observation requires an idle actual session") }
+            activePluginViewQuery = Some(cancellation)
+            sessionId
+        } finally { lock.unlock() }
+        if (frontend == "views-v1") { revokePluginView() }
+        try {
+            let mode = workMode()
+            var primary = ""; var primaryHash = ""; var planBound = false
+            if (mode == "plan") {
+                match (loadProductPolicySelection(product.settingsRoot, "workflow")) {
+                    case Result.Err(_) => ()
+                    case Result.Ok(selection) =>
+                        if (route == "plugin." + selection.namespace + ".plan_review") {
+                            planBound = true
+                            match (latestPlanReview(true)) {
+                                case Result.Err(error) => return Result.Err(error)
+                                case Result.Ok(Some(value)) => primary = value; primaryHash = planReviewHash(value)
+                                case Result.Ok(None) => ()
+                            }
+                        }
+                }
+            }
+            let source = objectValue([ValueField("available", boolValue(primary != "")),
+                ValueField("kind", textValue(if (planBound) { "plan" } else { "" })),
+                ValueField("sha256", textValue(primaryHash))])
+            let context = objectValue([ValueField("work_mode", textValue(mode)), ValueField("primary", source),
+                ValueField("frontend", objectValue([ValueField("profile", textValue(frontend)),
+                    ValueField("supports_input", boolValue(frontend == "views-v1"))]))])
+            let rendered = match (queryProductPluginView(product, route, context, input,
+                ThreadId(target.value), cancellation.token, "view-" + takePluginCommandId())) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            try {
+                lock.lock()
+                let current = try { sessionId.value == target.value && activePluginViewQuery.isSome() &&
+                    refEq(activePluginViewQuery.getOrThrow(), cancellation) } finally { lock.unlock() }
+                if (!current || workMode() != mode) {
+                    return pluginViewObservationError("view.session_changed", "actual View session changed before presentation") }
+                if (planBound) {
+                    let currentPlan = match (latestPlanReview(true)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                    let hash = match (currentPlan) { case Some(value) => planReviewHash(value); case None => "" }
+                    if (hash != primaryHash) {
+                        return pluginViewObservationError("view.source_changed", "canonical plan changed during View observation") }
+                }
+                match (cancellation.token.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                let viewId = if (frontend == "views-v1") { "view-" + product.ids.nextOperationId().value } else { "" }
+                let metadata = objectValue([ValueField("namespace", textValue(rendered.binding.namespace)),
+                    ValueField("name", textValue(rendered.binding.contribution)),
+                    ValueField("generation", textValue(rendered.binding.generation.toString())),
+                    ValueField("package_digest", textValue(rendered.binding.digest)),
+                    ValueField("session_id", textValue(target.value)), ValueField("frontend", textValue(frontend)),
+                    ValueField("view_id", textValue(viewId)), ValueField("revision", textValue(if (viewId == "") { "0" } else { "1" })),
+                    ValueField("primary", source)])
+                if (frontend == "views-v1") {
+                    let state = match (freezeProductPluginViewState(product, rendered.binding, metadata, rendered.value, mode)) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                    lock.lock()
+                    try { activePluginView = Some(state) } finally { lock.unlock() }
+                    try {
+                        let result = consumeProductPluginView(rendered, metadata, primary, consume)
+                        if (result.isError() || cancellation.token.isCancelled()) { revokePluginView() }
+                        result
+                    } catch (error: Exception) {
+                        revokePluginView()
+                        throw error
+                    }
+                } else { consumeProductPluginView(rendered, metadata, primary, consume) }
+            } finally { rendered.close() }
+        } finally {
+            lock.lock()
+            try {
+                if (activePluginViewQuery.isSome() && refEq(activePluginViewQuery.getOrThrow(), cancellation)) {
+                    activePluginViewQuery = None }
+            } finally { lock.unlock() }
+            cancellation.close()
+        }
+    }
+
+    private func cancelPluginViewQuery(): Unit {
+        lock.lock(); let active = try { activePluginViewQuery } finally { lock.unlock() }
+        match (active) { case Some(value) => let _ = value.cancel(); case None => () }
+    }
+
+    private func revokePluginView(): Unit {
+        lock.lock()
+        let previous = try {
+            let value = activePluginView
+            activePluginView = None
+            value
+        } finally { lock.unlock() }
+        match (previous) {
+            case Some(value) =>
+                value.close()
+                lock.lock()
+                let command = try { activePluginCommandView.isSome() &&
+                    refEq(activePluginCommandView.getOrThrow(), value) } finally { lock.unlock() }
+                if (command) { let _ = cancelPluginCommandControl() }
+            case None => ()
+        }
+    }
+
+    public func clearJavaScriptPluginViews(): Unit {
+        cancelPluginViewQuery()
+        revokePluginView()
+    }
+
+    public func closeJavaScriptPluginView(viewId: String): Result<Unit> {
+        lock.lock()
+        let selected = try { activePluginView } finally { lock.unlock() }
+        match (selected) {
+            case Some(value) =>
+                if (!value.matchesId(viewId)) {
+                    return pluginViewObservationError("view.stale_event", "close does not identify the displayed View") }
+                revokePluginView()
+                Result.Ok(())
+            case None => pluginViewObservationError("view.closed", "View is already closed")
+        }
+    }
+
+    private func beginPluginViewEvent(viewId: String, revision: String,
+        confirmation!: Bool = false): Result<ProductPluginViewState> {
+        lock.lock()
+        try {
+            if (activePluginViewQuery.isSome() || activePluginViewEvent.isSome() ||
+                activePluginCommandCancellation.isSome() || activeTodoInvocation.isSome() ||
+                currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome()) {
+                return pluginViewObservationError("view.session_busy", "actual session is busy") }
+            let state = match (activePluginView) {
+                case Some(value) => value
+                case None => return pluginViewObservationError("view.closed", "there is no displayed View") }
+            match (state.enter(viewId, revision, confirmation: confirmation)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            activePluginViewEvent = Some(state)
+            Result.Ok(state)
+        } finally { lock.unlock() }
+    }
+
+    private func pluginViewConsumerReturned(state: ProductPluginViewState): Unit {
+        lock.lock()
+        try {
+            if (activePluginViewEvent.isSome() && refEq(activePluginViewEvent.getOrThrow(), state)) {
+                activePluginViewEvent = None }
+        } finally { lock.unlock() }
+        state.wholeConsumerReturned()
+    }
+
+    private func ensurePluginViewCurrent(state: ProductPluginViewState): Result<Unit> {
+        match (frontendCancellation180) { case Some(token) => match (token.check()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }; case None => () }
+        match (state.current(product, id(), workMode())) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let primary = state.metadata().field("primary").getOrThrow()
+        if (httpIntentText(primary, "kind") == "plan" && httpIntentText(primary, "sha256") != "") {
+            let current = match (latestPlanReview(true)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(Some(value)) => planReviewHash(value)
+                case Result.Ok(None) => "" }
+            if (current != httpIntentText(primary, "sha256")) {
+                return pluginViewObservationError("view.source_changed", "canonical source changed after the View was displayed") }
+        }
+        Result.Ok(())
+    }
+
+    public func invokeJavaScriptPluginViewAction(viewId: String, revision: String, actionId: String,
+        fields: AgentValue, noticeSink: ProductJavaScriptPluginNoticeSink): Result<ApplicationResponse> {
+        let state = match (beginPluginViewEvent(viewId, revision)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        // Every borrowed form/descriptor/Command helper returns before this
+        // outer boundary can retire the presentation index or pending fields.
+        try { invokePluginViewActionHelper(state, actionId, fields, noticeSink) }
+        finally { pluginViewConsumerReturned(state) }
+    }
+
+    private func invokePluginViewActionHelper(state: ProductPluginViewState, actionId: String,
+        fields: AgentValue, noticeSink: ProductJavaScriptPluginNoticeSink): Result<ApplicationResponse> {
+        match (ensurePluginViewCurrent(state)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (state.validateFields(fields)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let action = match (state.action(actionId)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let metadata = state.metadata()
+        var route = ""
+        for (command in javascriptPluginCommands() where
+            command.extensionId == httpIntentText(metadata, "namespace") &&
+            command.name == httpIntentText(action, "command") &&
+            command.instanceGeneration.toString() == httpIntentText(metadata, "generation")) {
+            route = command.routeName
+        }
+        if (route == "") {
+            return pluginViewObservationError("view.command_missing", "View action has no current local Command") }
+        let inlineFields = ArrayList<ValueField>()
+        let sourceFields = ArrayList<ValueField>()
+        for (node in state.data().field("nodes").getOrThrow().items) {
+            let id = httpIntentText(node, "id")
+            if (httpIntentText(node, "kind") == "input" && httpIntentText(node, "source") == "primary") {
+                sourceFields.add(ValueField(id, objectValue([ValueField("source", textValue("primary")),
+                    ValueField("sha256", metadata.field("primary").getOrThrow().field("sha256").getOrThrow())])))
+            } else { inlineFields.add(ValueField(id, fields.field(id).getOrThrow())) }
+        }
+        let envelope = objectValue([ValueField("schema", textValue("axyndra.view-command/v1")),
+            ValueField("view", objectValue([ValueField("id", metadata.field("view_id").getOrThrow()),
+                ValueField("revision", metadata.field("revision").getOrThrow()),
+                ValueField("name", metadata.field("name").getOrThrow()),
+                ValueField("primary_hash", state.metadata().field("primary").getOrThrow().field("sha256").getOrThrow())])),
+            ValueField("input", action.field("input").getOrThrow()),
+            ValueField("event", objectValue([ValueField("kind", textValue("action")),
+                ValueField("id", textValue("view-event-" + product.ids.nextOperationId().value)),
+                ValueField("action_id", textValue(actionId)),
+                ValueField("fields", objectValue(inlineFields.toArray())),
+                ValueField("field_refs", objectValue(sourceFields.toArray()))]))])
+        let _ = try { logicalJsonWriteReservationBytes(envelope, 65536) }
+            catch (_: Exception) { return pluginViewObservationError("view.command_input_limit", "View Command envelope exceeds its existing argument bound") }
+        // Declared inline user fields are Command input. Large Host source
+        // remains an authenticated field reference, never a plugin payload.
+        invokeOwnedPluginCommand(route, encodeAgentValue(envelope), noticeSink,
+            viewEvent: Some(state), viewControl: { control => stagePluginViewControl(state, control, fields) })
+    }
+
+    private func stagePluginViewControl(state: ProductPluginViewState, control: ProductPluginViewControl,
+        fields: AgentValue): Result<ApplicationResponse> {
+        match (ensurePluginViewCurrent(state)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (state.validateControl(control, fields)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let pending = match (freezeProductPluginViewPending(product, control, fields)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        var retained = false
+        try {
+            match (state.stage(pending)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            retained = true
+            let confirmation = objectValue([ValueField("schema", textValue("axyndra.view-confirmation/v1")),
+                ValueField("view_id", state.metadata().field("view_id").getOrThrow()),
+                ValueField("revision", textValue("2")), ValueField("request_digest", textValue(control.sourceDigest)),
+                ValueField("action", textValue(control.action)),
+                ValueField("description", textValue(productPluginViewControlDescription(control.action)))])
+            Result.Ok(ApplicationResponse(false, text: "Host confirmation required; no business control has executed.",
+                action: ApplicationAction.ConfirmPluginView(encodeAgentValue(confirmation))))
+        } finally { if (!retained) { pending.close() } }
+    }
+
+    public func confirmJavaScriptPluginView(viewId: String, revision: String, requestDigest: String, confirmed: Bool,
+        onClosed!: (String, String) -> Unit = { _, _ => () }): Result<ApplicationResponse> {
+        let state = match (beginPluginViewEvent(viewId, revision, confirmation: true)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let transition = try { preparePluginViewTransition(state, requestDigest, confirmed) }
+            finally { pluginViewConsumerReturned(state) }
+        let selected = match (transition) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        // The complete mutation helper has returned. Drop the large user-event
+        // DATA before admitting a subsequent Run through the normal machinery.
+        revokePluginView()
+        onClosed(viewId, if (confirmed) { "consumed" } else { "cancelled" })
+        match (selected) {
+            case None => Result.Ok(localResponse("View business request cancelled; no control executed."))
+            case Some(value) => try { dispatchPluginViewTransition(value) } finally { value.close() }
+        }
+    }
+
+    private func preparePluginViewTransition(state: ProductPluginViewState, requestDigest: String,
+        confirmed: Bool): Result<?ProductPluginViewTransition> {
+        match (ensurePluginViewCurrent(state)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let request = state.confirmation().data()
+        if (requestDigest != httpIntentText(request, "request_digest")) {
+            return pluginViewObservationError("view.confirmation_mismatch", "confirmation does not identify the actual frozen business request") }
+        if (!confirmed) { return Result.Ok(Option<ProductPluginViewTransition>.None) }
+        let fields = request.field("fields").getOrThrow()
+        let plan = httpIntentText(fields, httpIntentText(request, "plan_field"))
+        let previousHash = httpIntentText(request, "content_hash")
+        let hash = planReviewHash(plan.trimAscii())
+        let transition = match (freezeProductPluginViewTransition(product, state.metadata(), httpIntentText(request, "action"),
+            hash, httpIntentText(fields, httpIntentText(request, "feedback_field")))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        var retained = false
+        try {
+            // Acquire all follow-on DATA before committing an actual user edit.
+            if (httpIntentText(request, "action") == "save" || hash != previousHash) {
+                let edited = match (updateLatestPlan(previousHash, plan)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                if (planReviewHash(edited) != hash) {
+                    return pluginViewObservationError("view.source_changed", "committed plan does not match the confirmed edit") }
+            }
+            retained = true
+            Result.Ok(Some(transition))
+        } finally { if (!retained) { transition.close() } }
+    }
+
+    private func dispatchPluginViewTransition(transition: ProductPluginViewTransition): Result<ApplicationResponse> {
+        let value = transition.data()
+        let action = httpIntentText(value, "action")
+        let hash = httpIntentText(value, "content_hash")
+        let feedback = httpIntentText(value, "feedback").trimAscii()
+        if (action == "save") {
+            return Result.Ok(ApplicationResponse(false, text: "Reviewed plan saved as actual user input.",
+                action: ApplicationAction.OpenPluginView(httpIntentText(value, "route")))) }
+        if (["approve_fresh", "approve_compact", "approve_keep"].contains(action)) {
+            return flattenPlanApprovalOutcome(approveLatestPlanForReview(expectedHash: hash, feedback: feedback,
+                contextMode: if (action == "approve_fresh") { "fresh" } else if (action == "approve_compact") { "compact" } else { "keep" }))
+        }
+        let prompt = if (action == "refine") {
+            "[plan-review refine hash=" + hash + "] Revise the structured plan without executing it." +
+                if (feedback == "") { " Ask for refinement feedback before changing the plan." } else { "\n\n" + feedback }
+        } else if (action == "continue") {
+            "[plan-review continue hash=" + hash + "] Continue planning without executing." +
+                if (feedback == "") { "" } else { " Feedback: " + feedback }
+        } else {
+            "[plan-review rejected hash=" + hash + "] The plan was rejected. Preserve its history and revise it before execution." +
+                if (feedback == "") { "" } else { " Reason: " + feedback }
+        }
+        handle(prompt)
+    }
+
 
     public func invokeJavaScriptPluginCommand(routeName: String, arguments: String,
         noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
@@ -708,12 +1040,17 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     private func invokeOwnedPluginCommand(routeName: String, arguments: String,
-        noticeSink: ProductJavaScriptPluginNoticeSink, todoSelection!: ?ProductTodoSelection = None): Result<ApplicationResponse> {
+        noticeSink: ProductJavaScriptPluginNoticeSink, todoSelection!: ?ProductTodoSelection = None,
+        viewEvent!: ?ProductPluginViewState = None,
+        viewControl!: (ProductPluginViewControl) -> Result<ApplicationResponse> = { _ => commandControlError("view.user_scope_required") }): Result<ApplicationResponse> {
         let cancellation = CancellationSource()
         let commandId = takePluginCommandId()
         lock.lock()
         let target = try {
-            if (activeTodoInvocation.isSome() || activePluginCommandCancellation.isSome() || currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome()) {
+            if (activeTodoInvocation.isSome() || activePluginViewQuery.isSome() || activePluginCommandCancellation.isSome() ||
+                currentRequest.isSome() || pendingApproval.isSome() || pendingRecovery.isSome() ||
+                (activePluginViewEvent.isSome() && (viewEvent.isNone() ||
+                    !refEq(activePluginViewEvent.getOrThrow(), viewEvent.getOrThrow())))) {
                 cancellation.close()
                 return commandControlError("plugin.command_session_busy") }
             match(todoSelection){
@@ -722,6 +1059,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 case None=>()}
             todoEditorCompletion=None<ProductTodoEditorCompletion>
             activePluginCommandCancellation = Some(cancellation)
+            activePluginCommandView = viewEvent
             sessionId
         } finally { lock.unlock() }
         let scope = ProductPluginCommandScope(target, commandId, routeName, arguments, cancellation.token,
@@ -738,9 +1076,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         lock.lock()
         try { activePluginCommandControl = Some(control) } finally { lock.unlock() }
         let entered180 = control.enterOriginalCommandHelper180()
-        let result = control.invoke(routeName, arguments, noticeSink)
-        finishPluginCommandControl(control, entered180)
-        result
+        try { control.invoke(routeName, arguments, noticeSink, viewControl: viewControl) }
+        finally { finishPluginCommandControl(control, entered180) }
     }
 
     private func invokeOwnedGoalCommand(routeName: String, arguments: String,
@@ -876,7 +1213,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         lock.lock()
         try {
             if (activePluginCommandControl.isSome() && refEq(activePluginCommandControl.getOrThrow(), control)) {
-                activePluginCommandControl = None; activePluginCommandCancellation = None }
+                activePluginCommandControl = None; activePluginCommandCancellation = None; activePluginCommandView = None }
         } finally { lock.unlock() }
     }
     private func pluginCommandControl(): ?ApplicationPluginCommandControl {
@@ -969,6 +1306,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func setPluginEnabled(id: String, enabled: Bool): PluginRegistryResult<ProductPluginRecord> {
+        if (!enabled) { revokePluginView() }
         product.setPluginEnabled(id, enabled)
     }
 
@@ -977,6 +1315,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         enabled: Bool,
         scope: PluginInstallScope
     ): PluginRegistryResult<ProductPluginRecord> {
+        if (!enabled) { revokePluginView() }
         product.setPluginEnabled(id, enabled, scope)
     }
 
@@ -1265,6 +1604,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func switchSession(value: SessionId): Result<Unit> {
+        revokePluginView()
         if (currentRequestSnapshot().isSome() || pendingApproval.isSome()) {
             return Result.Err(
                 AgentError(
@@ -3002,7 +3342,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         PlanApprovalOutcome.Consumed(
             submit(
                 "[plan-review approved hash=" + actualHash + " source=" + source + "] " +
-                    "Execute the approved plan now.\n\n<approved-plan>\n" + stripPlanReviewPrefix(review) +
+                    "Execute the approved plan now.\n\n<approved-plan>\n" + review +
                     "\n</approved-plan>" + if (note == "") {
                         ""
                     } else {
@@ -3066,7 +3406,9 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
-        match(activeWorkflowGuidance()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
+        // A canonical user edit needs the current plan contribution identity,
+        // not rendered workflow guidance or a fresh Native message owner.
+        match(refreshCurrentPlanBinding()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
         if(completedPlanCount(values,currentBinding:true)==0){return Result.Err(AgentError(
             AgentErrorKind.Conflict,"application.plan_approval_missing","No current completed native plan is available for editing."))}
         var targetIndex: Int64 = -1
@@ -3087,7 +3429,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 )
             )
         }
-        let current = "Latest plan:\n\n" + planReviewContent(values[targetIndex], values,descriptiveHistory:false,currentBinding:true)
+        let current = planReviewContent(values[targetIndex], values,descriptiveHistory:false,currentBinding:true)
         if (expectedHash != "" && planReviewHash(current) != expectedHash) {
             return Result.Err(
                 AgentError(
@@ -3110,7 +3452,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             )]),
             source: "plan_review"
         )) {
-            case Result.Ok(_) => Result.Ok("Latest plan:\n\n" + updatedContent)
+            case Result.Ok(_) => Result.Ok(updatedContent)
             case Result.Err(error) => Result.Err(error)
         }
     }
@@ -3278,6 +3620,8 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     public func cancel(): Result<Unit> {
+        cancelPluginViewQuery()
+        revokePluginView()
         lock.lock();try{todoEditorCompletion=None<ProductTodoEditorCompletion>}finally{lock.unlock()}
         match(todoDocumentInvocation()){
             case Some(invocation)=>match(clearTodoTransfer(invocation)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
@@ -3689,6 +4033,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 }
             case "plan" => planCommand(arguments)
             case "plan-review" => planReviewCommand(arguments)
+            case "view" => viewCommand(arguments)
             case "vibe" => vibeCommand(arguments)
             case "guided-goal" => guidedGoalCommand(arguments)
             case "loop" => loopCommand(arguments)
@@ -3764,7 +4109,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         match(queryProductWorkflowGuidance(product,sessionId,"plan",product.toolsFor(
             CapabilitySet(values:[Capability(CapabilityKind.WorkspaceRead)]),threadId:Some(ThreadId(sessionId.value))))){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>
-                currentPlanTool=value.planTool;currentPlanVersion=value.planVersion;currentPlanFingerprint=value.planFingerprint}
+                currentPlanTool=value.planTool;currentPlanFingerprint=value.planFingerprint}
         match (setWorkMode("plan")) {
             case Result.Ok(_) => ()
             case Result.Err(error) => return Result.Err(error)
@@ -3776,6 +4121,20 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         Result.Ok(
             localResponse(
                 "Plan mode enabled. The agent is restricted to read-only " + "capabilities until plan mode is disabled."))
+    }
+
+    private func viewCommand(arguments: Array<String>): Result<ApplicationResponse> {
+        let views = javascriptPluginViews()
+        if (arguments.isEmpty()) {
+            return Result.Ok(localResponse(if (views.isEmpty()) { "No installed plugin Views." } else {
+                String.join(Array<String>(views.size, { i => views[i].routeName }), delimiter: "\n")
+            }))
+        }
+        if (arguments.size != 1) { return invalidUsage("/view [route]") }
+        for (view in views where view.routeName == arguments[0]) {
+            return Result.Ok(ApplicationResponse(false, action: ApplicationAction.OpenPluginView(view.routeName)))
+        }
+        pluginViewObservationError("view.missing", "no current installed View has that route")
     }
 
     private func planReviewCommand(arguments: Array<String>): Result<ApplicationResponse> {
@@ -3792,11 +4151,23 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             )
         }
         match (latestPlanReview(false)) {
-            case Result.Ok(Some(value)) => Result.Ok(localResponse(value, planReview: Some(value)))
+            case Result.Ok(Some(_)) => match (currentPlanReviewViewAction()) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(action) => Result.Ok(ApplicationResponse(false, action: action)) }
             case Result.Ok(None) => Result.Ok(localResponse("No plan to review yet — ask the agent to write one first."))
             case Result.Err(error) => Result.Err(error)
         }
     }
+    private func currentPlanReviewViewAction(): Result<ApplicationAction> {
+        let selection = match (loadProductPolicySelection(product.settingsRoot, "workflow")) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let binding = match (product.vnext.javascriptPlugins.viewBinding(selection.namespace, "plan_review")) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (binding.digest != selection.digest) {
+            return pluginViewObservationError("view.changed", "selected Workflow package does not match its current View") }
+        Result.Ok(ApplicationAction.OpenPluginView("plugin." + binding.namespace + "." + binding.contribution))
+    }
+
 
     private func latestPlanReview(requireStructured: Bool): Result<?String> {
         let values = match (messages()) {
@@ -3814,7 +4185,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             index -= 1
             let written = planReviewContent(values[index], values,descriptiveHistory:!requireStructured,currentBinding:requireStructured)
             if (written != "") {
-                return Result.Ok(Some("Latest plan:\n\n" + written))
+                return Result.Ok(Some(written))
             }
         }
         if (requireStructured) {
@@ -3826,7 +4197,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
             if (isAssistantMessage(values[index])) {
                 let plan = messageText(values[index])
                 if (plan.trimAscii() != "") {
-                    return Result.Ok(Some("Latest plan:\n\n" + plan))
+                    return Result.Ok(Some(plan))
                 }
             }
         }
@@ -5055,7 +5426,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         agentInvoked: Bool
     ): Result<ApplicationResponse> {
         var snapshot = initial
-        var completedPlanReview: ?String = None
+        var completedPlanAction = ApplicationAction.NoAction
         if (planModeEnabled) {
             let messages = match (product.messages(sessionId)) {
                 case Result.Ok(values) => values
@@ -5102,9 +5473,11 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                     return Result.Err(missingPlanError())
                 }
             }
-            completedPlanReview = match (latestPlanReview(true)) {
-                case Result.Ok(value) => value
+            match (latestPlanReview(true)) {
                 case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(Some(_)) => completedPlanAction = match (currentPlanReviewViewAction()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(action) => action }
+                case Result.Ok(None) => ()
             }
         }
         while (true) {
@@ -5157,7 +5530,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                     product.messages(sessionId)
                 ),
                 snapshot: Some(snapshot),
-                planReview: completedPlanReview
+                action: completedPlanAction
             )
         )
     }
@@ -5176,8 +5549,11 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
                 for(result in messages){
                     for(reply in result.blocks where reply.kind==ModelBlockKind.ToolResult &&
                         reply.callId==block.callId && reply.receiptId!="" && !reply.isError){
+                        // A completed historical root is presentation DATA.
+                        // Its package must still be selected and published;
+                        // its old executor instance is never reauthorized.
                         match(product.vnext.completedDataToolHistoryArguments(ThreadId(sessionId.value),
-                            reply.receiptId,block.callId,block.name,version:if(currentBinding){currentPlanVersion}else{""},
+                            reply.receiptId,block.callId,block.name,
                             fingerprint:if(currentBinding){currentPlanFingerprint}else{""})){
                             case Result.Ok(args)=>found=httpIntentText(args,"content").trimAscii()
                             case Result.Err(_)=>()
@@ -5209,7 +5585,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         let value=match(queryProductWorkflowGuidance(product,sessionId,workMode(),activeTools())){
             case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
         match(value.validateCurrent()){case Result.Err(error)=>return Result.Err(error);case Result.Ok(_)=>()}
-        if(planModeEnabled){currentPlanTool=value.planTool;currentPlanVersion=value.planVersion;currentPlanFingerprint=value.planFingerprint}
+        if(planModeEnabled){currentPlanTool=value.planTool;currentPlanFingerprint=value.planFingerprint}
         Result.Ok(value)
     }
 
@@ -5217,7 +5593,6 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
         let current = match (queryProductWorkflowPlanBinding(product, sessionId, activeTools())) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
         currentPlanTool = current[0]
-        currentPlanVersion = current[1]
         currentPlanFingerprint = current[2]
         Result.Ok(())
     }
@@ -5231,6 +5606,7 @@ public class ApplicationSession <: AgentInteractionSource & OwnedAgentEventSourc
     }
 
     private func setWorkMode(mode: String): Result<Unit> {
+        revokePluginView()
         match (product.setSessionWorkMode(sessionId, mode)) {
             case Result.Ok(_) =>
                 planModeEnabled = mode == "plan"
@@ -5573,14 +5949,6 @@ func planReviewEditPrefix(): String { "[Plan edited in review]\n\n" }
 
 func planReviewEditText(content: String): String { planReviewEditPrefix() + content }
 
-func stripPlanReviewPrefix(value: String): String {
-    let prefix = "Latest plan:\n\n"
-    if (value.startsWith(prefix)) {
-        value[prefix.size..]
-    } else {
-        value
-    }
-}
 
 func isPlanApprovalPhrase(value: String): Bool {
     let trimmed = value.trimAscii().toAsciiLower()
@@ -5724,11 +6092,8 @@ func handoffContext(document: String): String {
         "The above is a handoff document from a previous session. " + "Use this context to continue the work seamlessly."
 }
 
-func localResponse(
-    text: String,
-    planReview!: ?String = None
-): ApplicationResponse {
-    ApplicationResponse(false, text: text, planReview: planReview)
+func localResponse(text: String): ApplicationResponse {
+    ApplicationResponse(false, text: text)
 }
 
 func optionalApplicationInteger(value: ?Int64): String {

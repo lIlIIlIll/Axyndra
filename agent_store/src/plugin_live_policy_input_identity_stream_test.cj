@@ -70,7 +70,7 @@ class PluginLivePolicyInputIdentityStreamTests{
     }
     @TestCase
     func CancellationDepthAndAggregateRefusalReleaseOnlyTemporaryOwners():Unit{
-        let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let counter=InputIdentityStreamCounter()
+        let budget=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let held=budget.acquire(1);let counter=InputIdentityStreamCounter()
         try{
             let value=textValue(String.fromUtf8(Array<Byte>(262144,repeat:b'x')));var cancelled=false
             try{let _=livePolicyInputStoredDigestStreamed(value,{bytes=>budget.acquire(bytes)},{=>

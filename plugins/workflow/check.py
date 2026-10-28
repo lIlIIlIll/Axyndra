@@ -18,6 +18,25 @@ def result(response):
     return response['result']['value']
 def call(p,q):return result(p.invoke(q))
 
+def view(p, context):
+    frame = p.invocation({})
+    frame.update(kind='view', tool='plan_review', arguments=dict(
+        schema='axyndra.view-query/v1', context=context, input={}))
+    p.send(frame)
+    response = p.receive_result(frame)
+    assert response['type'] == 'result', 'View renderer must not call Host services'
+    assert response['ok'], response
+    return response['result']
+
+def view_command(p, request):
+    frame = p.invocation({})
+    frame.update(kind='command', tool='plan_review', command_id=frame['id'], call_id='',
+                 arguments=dict(command_args=json.dumps(request, separators=(',', ':'))))
+    p.send(frame)
+    response = p.next()
+    assert response['type'] == 'result', 'pure Command must only return its typed request'
+    return response
+
 class WorkflowNativeTests(unittest.TestCase):
     def test_packaged_manifest_matches_actual_bootstrap_contributions(self):
         descriptor = json.loads((BINARY.parent.parent / 'axyndra.plugin.json').read_text())
@@ -36,8 +55,45 @@ class WorkflowNativeTests(unittest.TestCase):
             self.assertEqual(p.ready['capabilities'],[])
             self.assertEqual(p.ready['hooks'],[])
             self.assertEqual([t['name'] for t in p.ready['tools']],['goal','plan_write','todo','task','hub','yield','hub_peers','hub_messages','hub_jobs','hub_cancel','hub_process','hub_process_read'])
-            self.assertEqual([c['name'] for c in p.ready['commands']],['todo','goal'])
+            self.assertEqual([c['name'] for c in p.ready['commands']],['todo','goal','plan_review'])
             self.assertEqual([(v['name'],v['protocol']) for v in p.ready['providers']],[('propose','axyndra.policy-provider/v1'),('prepare_document','axyndra.policy-provider/v1'),('prepare_child','axyndra.policy-provider/v1')])
+    def test_plan_review_is_source_bound_editable_view_not_tool_output(self):
+        with peer(payload=True) as p:
+            model = view(p, dict(work_mode='plan', primary=dict(available=True, kind='plan', sha256='a'*64)))
+            self.assertEqual(model['schema'], 'axyndra.view/v1')
+            self.assertEqual(model['status'], 'input_required')
+            self.assertEqual(model['interaction'], 'required')
+            fields = {node['id']: node for node in model['nodes'] if node['kind'] == 'input'}
+            self.assertEqual(fields['plan']['source'], 'primary')
+            self.assertNotIn('text', fields['plan'])
+            self.assertTrue(fields['plan']['multiline'])
+            self.assertEqual(fields['feedback']['text'], '')
+            self.assertEqual({action['input']['action'] for action in model['actions']},
+                             {'approve_fresh','approve_compact','approve_keep','save','refine','continue','reject'})
+            self.assertEqual({action['command'] for action in model['actions']}, {'plan_review'})
+    def test_plan_review_cannot_offer_actions_without_current_plan_mode_and_source(self):
+        contexts = [dict(work_mode='plan', primary=dict(available=False)),
+                    dict(work_mode='execute', primary=dict(available=True, kind='plan', sha256='a'*64))]
+        with peer(payload=True) as p:
+            for context in contexts:
+                with self.subTest(context=context):
+                    model = view(p, context)
+                    self.assertEqual(model['status'], 'input_required')
+                    self.assertEqual(model['interaction'], 'optional')
+                    self.assertEqual(model['actions'], [])
+    def test_plan_review_command_returns_field_references_not_tool_or_approval(self):
+        with peer() as p:
+            self.assertFalse(view_command(p, dict(schema='foreign'))['ok'])
+            request = dict(schema='axyndra.view-command/v1',
+                view=dict(name='plan_review', primary_hash='a'*64),
+                input=dict(action='approve_keep'), event=dict(action_id='approve_keep'))
+            response = view_command(p, request)
+            self.assertTrue(response['ok'], response)
+            self.assertEqual(response['result'], dict(schema='axyndra.user-control-request/v1',
+                control=dict(kind='plan_review', action='approve_keep', content_hash='a'*64,
+                             plan_field='plan', feedback_field='feedback')))
+            request['input']['action'] = 'approve_tool'
+            self.assertFalse(view_command(p, request)['ok'])
     def test_todo_init_progress_completion_and_original_result_shape(self):
         with peer() as p:
             value=call(p,todo(op='init',items=['first','second']))

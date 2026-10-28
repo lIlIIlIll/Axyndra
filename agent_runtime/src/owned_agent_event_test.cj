@@ -1,6 +1,7 @@
 package agent_runtime
 
 import agent_domain.*
+import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*
 import stdx.crypto.digest.SHA256
@@ -63,7 +64,7 @@ class OwnedAgentEventTests {
     }
     @TestCase
     func Original128MiBPressureFailsBeforeActualObserverAllocation(): Unit {
-        let pool = LogicalJsonOwnerBudget()
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let event = ownedEventFixture(pool); let calls = OwnedEventCalls()
         @Expect(event.withEvent(50331648, { _ => calls.value++; Result.Ok(()) }).isOk(), false)
@@ -71,6 +72,31 @@ class OwnedAgentEventTests {
         @Expect(event.closeAfterEventRetirement().isOk(), true)
         for (owner in pressure) { owner.close() }
         @Expect(pool.usage()[0], 0); @Expect(pool.usage()[1], 0)
+    }
+    @TestCase
+    func Product144MiBBankRejectsTenthFloorAndReusesOnlyActualRelease(): Unit {
+        let pool = LogicalJsonOwnerBudget()
+        let owners = ArrayList<LogicalJsonOwnerReservation>()
+        try {
+            for (_ in 0..9) { owners.add(pool.acquire(1)) }
+            @Expect(pool.usage()[0], 9)
+            @Expect(pool.usage()[1], 150994944)
+            var refused = false
+            try { let extra = pool.acquire(1); extra.close() }
+            catch (_: LogicalJsonPayloadError) { refused = true }
+            @Expect(refused)
+            owners[0].close()
+            owners.add(pool.acquire(1))
+            owners[0].close()
+            @Expect(pool.usage()[0], 9)
+            @Expect(pool.usage()[1], 150994944)
+            refused = false
+            try { let extra = pool.acquire(1); extra.close() }
+            catch (_: LogicalJsonPayloadError) { refused = true }
+            @Expect(refused)
+        } finally { for (owner in owners) { owner.close() } }
+        @Expect(pool.usage()[0], 0)
+        @Expect(pool.usage()[1], 0)
     }
     @TestCase
     func BorrowedEventCannotAcknowledgeBeforeItsActualFrameReferencesRetire(): Unit {

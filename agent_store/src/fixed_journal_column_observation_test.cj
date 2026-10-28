@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -10,7 +11,7 @@ import stdx.crypto.digest.SHA256
 class FixedJournalColumnObservationTests {
     @TestCase
     func ActualBlobMeasureAndHashAreCompleteAndThenPinTheSecondBoundedPass():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{let raw=String.fromUtf8(Array<Byte>(65535,repeat:b'x'))+"音楽\u{0000}🐈end"
             blobContractSeed(database,"original",raw)
@@ -31,7 +32,7 @@ class FixedJournalColumnObservationTests {
     }
     @TestCase
     func SixtyThreeMiBObservedCodecTextDoesNotNeedLengthCastOrAWholePayloadString():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         let prefix="{\"version\":3,\"operation\":\"retain\",\"record\":{\"id\":\"large\",\"kind\":\"project_fact\",\"scopeKind\":\"global\",\"scopeKey\":\"\",\"content\":\""
         let suffix="\",\"status\":\"active\"}}"
@@ -53,7 +54,7 @@ class FixedJournalColumnObservationTests {
     }
     @TestCase
     func ClosedUnownedWrongTypeAndCancellationNeverReturnAnObservedColumn():Unit{
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/observed.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{blobContractSeed(database,"original","private original")
             database.execute("INSERT INTO memories(id,thread_id,kind,payload,revision) VALUES('binary',NULL,'project_fact',zeroblob(13),1)")

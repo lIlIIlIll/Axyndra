@@ -40,6 +40,7 @@ class HostLivePolicyCapturedMetadataTests{
     @TestCase
     func sameMetadataOwnerDropsTheOriginalPrivateResultChargeBeforeAnotherPhase(){
         let f=Metadata264Fixture();let pressure=reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113()-67108864)
         let session=f.artifacts.documentDataSession()
         let raw=encodeAgentValue(objectValue([ValueField("original",textValue("完整雪"+String.fromUtf8(Array<Byte>(1,repeat:0))))]))
         let custody=metadata264Custody(session,raw)
@@ -55,7 +56,10 @@ class HostLivePolicyCapturedMetadataTests{
             @Expect(custody.capturePaidMetadata({_=>Result<Unit>.Ok(())}).isError(),true)
             metadata264Require(custody.close())
             @Expect(session.collect(),true);f.noAuthority()
-        }finally{metadata264Require(custody.close());session.acknowledgeOutput();metadata264Require(session.closeExecutionDataOwner());pressure.close();f.close()}
+        }finally{
+            try{metadata264Require(custody.close());session.acknowledgeOutput();metadata264Require(session.closeExecutionDataOwner())}
+            finally{pressure.close();f.close()}
+        }
     }
     @TestCase
     func failedAndThrownMetadataCaptureKeepsTheActualOriginalOutputUnacknowledged(){

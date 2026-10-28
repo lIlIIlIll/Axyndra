@@ -3,6 +3,7 @@ package agent_store
 import agent_domain.*
 import std.collection.*
 import std.convert.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -42,7 +43,7 @@ func latestViewTestOkay():Result<Unit>{Result<Unit>.Ok(())}
 class JournalLatestViewTests {
     @TestCase
     func WholeEventOrderUsesDecodedPayloadKeyAndRecoversBadCacheWithoutReadingIt():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864,maximumMessage:65536)
         let policy=latestViewTestPolicies();let storage=JournalLatestViewStorage(policy[0],policy[1],"/actual",{bytes=>budget.acquire(bytes)})
         try{
@@ -62,7 +63,7 @@ class JournalLatestViewTests {
     }
     @TestCase
     func LatestPrivateOverwriteNeverFallsBackToItsEarlierReadableEvent():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864,maximumMessage:65536);let policy=latestViewTestPolicies()
         let storage=JournalLatestViewStorage(policy[0],policy[1],"/actual",{bytes=>budget.acquire(bytes)})
         try{
@@ -89,7 +90,7 @@ class JournalLatestViewTests {
     }
     @TestCase
     func PrivateEqualityComparesDecodedUnicodeAndEveryByteWithoutTrimmingOrTrustingHash():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864,maximumMessage:65536);let policy=latestViewTestPolicies()
         let storage=JournalLatestViewStorage(policy[0],policy[1],"/actual",{bytes=>budget.acquire(bytes)})
         try{
@@ -112,7 +113,7 @@ class JournalLatestViewTests {
     }
     @TestCase
     func IgnoredMetadataChangesOnlyThePrivateFenceAndCancellationNeverReturnsAView():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/latest.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864,maximumMessage:65536);let policy=latestViewTestPolicies()
         let stream=JournalLatestStreamStorage(policy[0],policy[1],"/actual",{bytes=>budget.acquire(bytes)})
         let storage=JournalLatestViewStorage(policy[0],policy[1],"/actual",{bytes=>budget.acquire(bytes)})

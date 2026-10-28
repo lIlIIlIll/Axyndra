@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "repository": "git@github-liliilill:lIlIIlIll/cjtui.git",
+  "repository": "https://github.com/lIlIIlIll/cjtui.git",
   "commit": "ab76bc1b39ed3a9261487beb71b4d1967accc2a2",
   "root_tree": "169d78a775b7f2035c345625ca543aa214fed19f",
   "package_trees": {
@@ -9,7 +9,7 @@
     "cj_markdown": "2872f43dbf51d212464343481073788b0605498d"
   },
   "api_contract_blob": "0f68c4f3845152400ee9bf9032f7a58369317a6e",
-  "vendored_manifest_sha256": "bc0110456c3a6cbb4507f021b93efc26bac11b18210535dcd13ae4afa8192c08",
+  "vendored_manifest_sha256": "3477f8cd24c1ae130e8747d59e46d979518b29ae1583a5fd955fcf39b52d3829",
   "vendored_files": 76,
   "license_status": "upstream repository contains no LICENSE, COPYING, or NOTICE file",
   "alignment_target": {
@@ -24,6 +24,9 @@
       "packages/core/src/terminal.cj",
       "packages/core/src/app.cj",
       "packages/core/src/text_area.cj",
+      "packages/core/src/event.cj",
+      "packages/core/src/text.cj",
+      "packages/core/src/boundary_extreme_test.cj",
       "packages/core/src/presentation_backend_test.cj",
       "packages/core/cjpm.toml",
       "packages/core/native/build.sh",
@@ -41,13 +44,17 @@
       "POSIX signal restoration uses native immutable termios storage and lock-free scalar mode publication without entering the Cangjie runtime",
       "static target-specific terminal FFI is rebuilt from source in isolated profiles and adds no runtime DSO",
       "normal close restores original signal dispositions; raw Ctrl-C remains input; signal exits retain 128 plus signal",
-      "native terminal smoke evidence covers Linux PTY only; Windows retains its console fallback and macOS is not execution-validated"
+      "native terminal smoke evidence covers Linux PTY only; Windows retains its console fallback and macOS is not execution-validated",
+      "bracketed paste scanning preserves a split terminator, the next paste and following controls without rescanning the complete prefix",
+      "monotonic grapheme traversal and viewport-clipped cursor measurement preserve the complete Unicode document and byte cursor",
+      "plain undecorated editor lines retain their original source span instead of rebuilding every grapheme"
     ],
     "consumer_files": [
       "agent_tui/src/tui.cj",
       "agent_tui/src/tui_presentation.cj",
       "agent_tui/src/tui_surfaces.cj",
-      "agent_tui/src/tui_transcript.cj"
+      "agent_tui/src/tui_transcript.cj",
+      "agent_tui/src/plugin_view_controller.cj"
     ]
   }
 }

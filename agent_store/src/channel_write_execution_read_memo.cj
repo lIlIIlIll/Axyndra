@@ -54,7 +54,6 @@ class ChannelWriteExecutionReadMemo {
             // AgentValue is mutable. Compare every current value/frame byte
             // against the successful frozen encoding on every reuse. A miss
             // still encodes and validates exact detached copies as before.
-            let keyTimer = channelWriteMemoDiagnosticStart()
             let nextIdentity = encodeStoredValue(listValue([
                 textValue(operation.value), textValue(parent.value), textValue(run.value),
                 textValue(thread.value), integerValue(epoch), textValue(requestKey),
@@ -65,30 +64,14 @@ class ChannelWriteExecutionReadMemo {
                 identity == nextIdentity && currentStoredValueMatches(storedOperationPlanValue(plan), planText) &&
                 currentStoredValueMatches(binding, bindingText) &&
                 currentStoredValueMatches(direct.call.arguments, argumentsText)
-            channelWriteMemoDiagnosticRecord(1, keyTimer,
-                a: nextIdentity.size + planText.size + bindingText.size + argumentsText.size, b: reads.size)
             if (sameInput) {
-                let queryTimer = channelWriteMemoDiagnosticStart()
                 var unchanged = true
-                var actualQueryMilliseconds: Int64 = 0
-                var exactMatchMilliseconds: Int64 = 0
-                var checkedReads: Int64 = 0
                 for (read in reads) {
-                    let actualQueryTimer = channelWriteMemoDiagnosticStart()
                     // The actual DB owner compares every current column byte
                     // before stepping. Custom/mismatch paths query normally.
                     let exactMatch = transaction.matchesChannelWriteMemoRows(read)
-                    actualQueryMilliseconds = min(3600000,
-                        actualQueryMilliseconds + channelWriteMemoDiagnosticMilliseconds(actualQueryTimer))
-                    checkedReads++
                     if (!exactMatch) { unchanged = false; break }
                 }
-                channelWriteMemoDiagnosticRecord(2, queryTimer,
-                    a: if (unchanged) { 1 } else { 0 }, b: reads.size)
-                channelWriteMemoDiagnosticDuration(14, actualQueryMilliseconds,
-                    a: checkedReads, b: reads.size)
-                channelWriteMemoDiagnosticDuration(15, exactMatchMilliseconds,
-                    a: checkedReads, b: reads.size)
                 if (unchanged) { return }
             }
             clear()
@@ -105,17 +88,8 @@ class ChannelWriteExecutionReadMemo {
                 { sql => recording.record(sql, [], transaction.query(sql)) },
                 { _: String, _: Array<SqlParameter> => throw IllegalStateException("channel write proof must remain read-only") },
                 { sql, parameters => recording.record(sql, parameters, transaction.query(sql, parameters)) }, backendOwner:Some(transaction))
-            let fullTimer = channelWriteMemoDiagnosticStart()
-            try {
-                validateFull(observed, decodeOperationPlan(nextPlan), decodeStoredValue(nextBinding),
-                    Some(decodeStoredValue(nextArguments)))
-            } finally { channelWriteMemoDiagnosticRecord(3, fullTimer) }
-            channelWriteMemoDiagnosticRecord(4, channelWriteMemoDiagnosticStart(),
-                a: if (recording.reusable()) { 1 } else { 0 },
-                b: recording.diagnosticReadCount(), c: recording.diagnosticLogicalBytes())
-            channelWriteMemoDiagnosticRecord(7, channelWriteMemoDiagnosticStart(),
-                a: recording.retainedBytes(), b: recording.diagnosticUniqueCount(),
-                c: recording.diagnosticUniqueBytes())
+            validateFull(observed, decodeOperationPlan(nextPlan), decodeStoredValue(nextBinding),
+                Some(decodeStoredValue(nextArguments)))
             if (recording.reusable()) {
                 this.rootReadProof = rootReadProof
                 identity = nextIdentity; planText = nextPlan; bindingText = nextBinding

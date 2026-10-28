@@ -1,5 +1,6 @@
 package agent_store
 
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -8,7 +9,7 @@ import std.unittest.testmacro.*
 class SqliteColumnCopyTests {
     @TestCase
     func nullEmptyAndNumericValuesRemainDistinct(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/copy.sqlite")
         try {
             let rows=db.query("SELECT NULL, '', 0, -9223372036854775808, 1.25")
@@ -22,7 +23,7 @@ class SqliteColumnCopyTests {
 
     @TestCase
     func embeddedZerosAndMultibyteTextKeepEveryByte(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/copy.sqlite")
         let value=String.fromUtf8([UInt8(0)])+"雪🙂e"+
             String.fromUtf8([UInt8(204),UInt8(129),UInt8(0)])+"tail"+
@@ -39,7 +40,7 @@ class SqliteColumnCopyTests {
 
     @TestCase
     func copiedRowsSurviveNextStepFinalizationAndConnectionClose(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/copy.sqlite")
         try {
             db.execute("CREATE TABLE text_copy(ordinal INTEGER, value TEXT)")
@@ -64,7 +65,7 @@ class SqliteColumnCopyTests {
 
     @TestCase
     func threeMibColumnsAreCompleteAcrossRepeatedSqlQueries(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/copy.sqlite")
         let value=String.fromUtf8(Array<UInt8>(3145728,repeat:b'x'))+
             String.fromUtf8([UInt8(0)])+"雪"
@@ -80,17 +81,59 @@ class SqliteColumnCopyTests {
     }
 
     @TestCase
+    func largeNulFreeColumnRemainsOwnedAndPreservesTheCompleteUtf8Tail(): Unit {
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
+        let db=SqliteDatabase(root+"/copy.sqlite")
+        let value=String.fromUtf8(Array<UInt8>(3145728,repeat:b'x'))+"雪🙂whole-tail"
+        try {
+            db.execute("CREATE TABLE text_copy(value TEXT)")
+            db.execute("INSERT INTO text_copy VALUES(?)",[SqlParameter.Text(value)])
+            let rows=db.query("SELECT value FROM text_copy")
+            db.execute("UPDATE text_copy SET value='replacement'")
+            db.close()
+            @Expect(rows.size,1);@Expect(rows[0].required(0),value)
+        } finally {db.close();remove(root,recursive:true)}
+    }
+
+    @TestCase
+    func boundTextKeepsSubstringBytesEmptyTypeAndNullDistinctAfterBindFailure(): Unit {
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
+        let db=SqliteDatabase(root+"/copy.sqlite")
+        let source="prefix雪\u{0}ésuffix"
+        let value=source[6..12]
+        try {
+            db.execute("CREATE TABLE text_copy(value TEXT, empty_value TEXT, null_value TEXT)")
+            db.execute("INSERT INTO text_copy VALUES(?,?,?)",[
+                SqlParameter.Text(value),SqlParameter.Text(""),SqlParameter.Null])
+            var rejected=false
+            try {
+                db.execute("INSERT INTO text_copy(value) VALUES(?)",[
+                    SqlParameter.Text("must not be inserted"),SqlParameter.Text(value)])
+            } catch(_:IllegalStateException) {rejected=true}
+            @Expect(rejected)
+            let rows=db.query("SELECT value,hex(value),typeof(empty_value),empty_value,null_value FROM text_copy")
+            @Expect(rows.size,1);@Expect(rows[0].required(0),value)
+            @Expect(rows[0].required(1),"E99BAA00C3A9")
+            @Expect(rows[0].required(2),"text");@Expect(rows[0].required(3),"")
+            @Expect(rows[0][4].isNone());@Expect(source,"prefix雪\u{0}ésuffix")
+        } finally {db.close();remove(root,recursive:true)}
+    }
+
+    @TestCase
     func invalidUtf8StillRejectsAndStatementCleanupKeepsConnectionUsable(): Unit {
-        let root=Directory.createTemp("/tmp").toString()
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(root+"/copy.sqlite")
         var rejected=false
         try {
-            try {let _=db.query("SELECT CAST(X'FF' AS TEXT)")}
-            catch(_:Exception){rejected=true}
-            @Expect(rejected)
-            let rows=db.query("SELECT 'valid after rejected conversion', NULL, ''")
-            @Expect(rows.size,1);@Expect(rows[0].required(0),"valid after rejected conversion")
-            @Expect(rows[0][1].isNone());@Expect(rows[0].required(2),"")
+            for (sql in ["SELECT CAST(X'FF' AS TEXT)", "SELECT CAST(X'6100FF' AS TEXT)"]) {
+                rejected=false
+                try {let _=db.query(sql)}
+                catch(_:Exception){rejected=true}
+                @Expect(rejected)
+                let rows=db.query("SELECT 'valid after rejected conversion', NULL, ''")
+                @Expect(rows.size,1);@Expect(rows[0].required(0),"valid after rejected conversion")
+                @Expect(rows[0][1].isNone());@Expect(rows[0].required(2),"")
+            }
         } finally {db.close();remove(root,recursive:true)}
     }
 }

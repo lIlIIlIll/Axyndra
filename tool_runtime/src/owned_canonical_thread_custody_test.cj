@@ -40,7 +40,7 @@ class OwnedCanonicalThreadCustodyTests {
     }
     @TestCase
     func SerializationPrepaymentUsesReal128MiBPoolAndFailsBeforeConsumerAllocation(): Unit {
-        let pool = LogicalJsonOwnerBudget()
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let root = ownedCustodyCase(pool)
         let held = root.retainAliasCustody().value().getOrThrow()

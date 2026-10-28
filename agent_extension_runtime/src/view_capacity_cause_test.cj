@@ -5,6 +5,8 @@ import std.convert.*
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
+import yjson.*
+import yjson_support.*
 
 @Test
 class ViewHandshakeCapacityCauseTests {
@@ -57,5 +59,73 @@ class ViewHandshakeCapacityCauseTests {
             }
             @Expect(nativePayloadUsageEqual(nativeControlMetadataUsage113(), baseline))
         } finally { remove(root, recursive: true) }
+    }
+}
+
+func viewOnlyNativeFixture(mode: String): String {
+    let root = contentPayloadRoot(mode)
+    let worker = contentPayloadWorker()
+        .replace("tools=[dict(name='echo',description='',input_schema={})]", "tools=[]")
+        .replace("context_providers=[dict(name='context',description='',protocol='axyndra.context-provider/v1')]",
+            "views=[dict(name='plan_review',description='View without a Tool or Provider')]")
+        .replace("result=f['arguments']",
+            "result=dict(schema='axyndra.view/v1',title='View only',summary='Business data',status='ready',interaction='optional',nodes=[dict(id='text',kind='text',text='Actual pure View')],actions=[])")
+    File.writeTo(root + "/worker", worker.toArray())
+    root
+}
+
+func viewOnlyNativeHost(root: String): JavaScriptExtensionHost {
+    match (startJavaScriptExtensionHostWithLauncher(JavaScriptHostLaunchRequest(root, "worker",
+        extensionId: "content-payload", extensionVersion: "1.0.0",
+        profile: JavaScriptHostLaunchProfile.NativeExecutable, contentPayload: true,
+        contributions: [PluginContributionDefinition("plan_review", PluginContributionKind.View)]),
+        ServiceQuotaFixtureLauncher())) {
+        case JavaScriptHostResult.Ok(value) => value
+        case JavaScriptHostResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+    }
+}
+
+@Test
+class ViewOnlyNativeBoundaryTests {
+    @TestCase
+    func actualViewNeedsNeitherFakeToolNorProviderAndCannotAcquireServiceQuota(): Unit {
+        let root = viewOnlyNativeFixture("echo")
+        let host = viewOnlyNativeHost(root)
+        let identity = JavaScriptHostInvocationIdentity(threadId: "actual-view-thread", runId: "", epoch: 0,
+            operationId: "", callId: "actual-view-query", kind: "view")
+        let query = "{\"schema\":\"axyndra.view-query/v1\",\"context\":{},\"input\":{}}"
+        try {
+            @Expect(host.tools.isEmpty() && host.policyProviders.isEmpty() && host.contextProviders.isEmpty())
+            @Expect(host.views[0].name, "plan_review")
+            @Expect(quotaCode(host.invoke("plan_review", query, identity: identity, serviceRequestLimit: 1)),
+                "extension.content_provider_not_registered")
+            @Expect(!exists(Path(root + "/invoked")))
+            let result = match (host.invoke("plan_review", query, identity: identity, serviceRequestLimit: 0)) {
+                case JavaScriptHostResult.Ok(value) => value
+                case JavaScriptHostResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            }
+            try {
+                @Expect(!result.isError)
+                match (validatePluginViewDocument(parseUnifiedJson(result.resultJson))) {
+                    case SdkResult.Ok(_) => ()
+                    case SdkResult.Err(error) => @Fail(error.code)
+                }
+            } finally { result.releasePayload() }
+        } finally { @Expect(host.awaitCleanup(timeoutMillis: 2000).isOk()); remove(root, recursive: true) }
+    }
+
+    @TestCase
+    func actualViewProcessCannotEmitServiceRequestsOrProgressAsAuthority(): Unit {
+        for (mode in ["service", "progress"]) {
+            let root = viewOnlyNativeFixture(mode); let host = viewOnlyNativeHost(root)
+            let identity = JavaScriptHostInvocationIdentity(threadId: "actual-view-thread", runId: "", epoch: 0,
+                operationId: "", callId: "actual-view-query", kind: "view")
+            try {
+                @Expect(quotaCode(host.invoke("plan_review",
+                    "{\"schema\":\"axyndra.view-query/v1\",\"context\":{},\"input\":{}}",
+                    identity: identity, serviceRequestLimit: 0)), "extension.prepare_effect_forbidden")
+                @Expect(host.isClosed)
+            } finally { @Expect(host.awaitCleanup(timeoutMillis: 2000).isOk()); remove(root, recursive: true) }
+        }
     }
 }

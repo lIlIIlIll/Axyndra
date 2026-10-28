@@ -176,6 +176,13 @@ public open class PluginRegistry {
     private var stateMemory: ?PluginRegistryStateMemory = None
     private var stateGeneration: ?PluginRegistryMetadataGeneration = None
     private var activeInspection: ?PluginRegistryStateMemory = None
+    // Per-writer-fence reuse of one current-byte verification. The fence
+    // excludes every other writer, so a tree that verified inside it still
+    // holds those bytes; a first call outside the fence re-hashes.
+    private var fenceVerifiedPackages: ?HashMap<String, PluginPackageDescriptor> = None
+    // True only while a batch import builds its records; the batch publishes
+    // the whole lock once instead of once per record.
+    private var deferLockWrite: Bool = false
     private let ownedBackings = ArrayList<PluginRegistryOwnedBacking>()
     private let ownedLists = ArrayList<OwnedPluginRecordList>()
     private let ownedTextLists = ArrayList<OwnedRegistryTextList>()
@@ -519,6 +526,24 @@ public open class PluginRegistry {
     private func inspectLocked(root: String): PluginPackageResult<PluginPackageDescriptor> {
         inspectPluginPackage(root, metadataAccounting: inspectionAccounting())
     }
+    // One verified immutable descriptor per package root, reused only inside
+    // one writer fence. The fence excludes every other writer, so the bytes
+    // that produced this descriptor are still the bytes on disk; the first
+    // call outside the fence re-verifies from scratch. Callers keep comparing
+    // every field they compared before.
+    private func inspectVerifiedInFenceLocked(root: String): PluginPackageResult<PluginPackageDescriptor> {
+        match (fenceVerifiedPackages) {
+            case Some(values) => match (values.get(root)) {
+                case Some(value) => return PluginPackageResult.Ok(value)
+                case None => () }
+            case None => () }
+        let result = inspectPluginPackage(root, metadataAccounting: inspectionAccounting())
+        match (result) {
+            case PluginPackageResult.Ok(value) =>
+                match (fenceVerifiedPackages) { case Some(values) => values[root] = value; case None => () }
+                PluginPackageResult.Ok(value)
+            case PluginPackageResult.Err(error) => PluginPackageResult.Err(error) }
+    }
 
     public func importLocal(root: String): PluginRegistryResult<ProductPluginRecord> {
         registryLock.lock()
@@ -571,6 +596,40 @@ public open class PluginRegistry {
             scope: scope
         )
         persist(record)
+    }
+
+    /// Imports several local roots inside ONE writer fence and publishes the
+    /// resulting lock exactly once. Every root still passes the same
+    /// materialisation and content checks as a single import; a failure
+    /// restores the record list the fence loaded.
+    public func importLocalBatch(
+        roots: Array<String>,
+        scope: PluginInstallScope
+    ): PluginRegistryResult<Unit> {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            return withWriterFence<Unit, Unit>({ =>
+                let loaded = records.clone()
+                deferLockWrite = true
+                try {
+                    for (root in roots) {
+                        match (importLocalLocked(root, scope)) {
+                            case PluginImportResult.Ok(_) => ()
+                            case PluginImportResult.Err(error) =>
+                                records.clear(); for (value in loaded) { records.add(value) }
+                                return pluginImportError<Unit>(error.code, error.message)
+                        }
+                    }
+                } finally { deferLockWrite = false }
+                match (writeLock(scope)) {
+                    case PluginImportResult.Ok(_) => PluginImportResult.Ok(())
+                    case PluginImportResult.Err(error) =>
+                        records.clear(); for (value in loaded) { records.add(value) }
+                        PluginImportResult.Err(error)
+                }
+            }, { result: PluginImportResult<Unit> => ownValueResult78(result) })
+        } finally { registryLock.unlock() }
     }
 
     public func cachedSource(
@@ -1228,7 +1287,7 @@ public open class PluginRegistry {
                     case Some(value) => value
                     case None => return pluginImportError("plugin.component_dependency_missing", descriptor.namespace)
                 } }
-                let actual = match (inspectPluginPackage(descriptor.root, metadataAccounting: inspectionAccounting())) {
+                let actual = match (inspectVerifiedInFenceLocked(descriptor.root)) {
                     case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
                     case PluginPackageResult.Ok(value) => value
                 }
@@ -1329,7 +1388,7 @@ public open class PluginRegistry {
                 case PluginImportResult.Err(error) => return PluginImportResult.Err(error)
                 case PluginImportResult.Ok(_) => ()
             }
-            let actual = match (inspectPluginPackage(current.descriptor.root, metadataAccounting: inspectionAccounting())) {
+            let actual = match (inspectVerifiedInFenceLocked(current.descriptor.root)) {
                 case PluginPackageResult.Ok(value) => value.contentDigest
                 case PluginPackageResult.Err(error) => return pluginImportError(error.code, error.message)
             }
@@ -1362,6 +1421,40 @@ public open class PluginRegistry {
                 records[index] = current
                 PluginImportResult.Err(error)
         }
+    }
+
+    /// Enables several already-imported plugins inside ONE writer fence.
+    /// Each plugin still passes its own dependency check and its own content
+    /// verification against its own lock; only the fence acquisition and the
+    /// full lock rewrite are shared. Any failure rolls the whole batch back
+    /// to the state the fence loaded.
+    public func setEnabledBatch(
+        namespaces: Array<String>,
+        enabled: Bool,
+        scope: PluginInstallScope
+    ): PluginRegistryResult<Unit> {
+        registryLock.lock()
+        try {
+            requireOpenLocked()
+            withWriterFence<Unit, Unit>({ =>
+                let loaded = records.clone()
+                for (namespace in namespaces) {
+                    match (setEnabledInScope(namespace, enabled, Some(scope))) {
+                        case PluginImportResult.Err(error) =>
+                            records.clear(); for (value in loaded) { records.add(value) }
+                            return pluginImportError<Unit>(error.code, error.message)
+                        case PluginImportResult.Ok(_) => ()
+                    }
+                }
+                // One publication for the whole batch instead of one per plugin.
+                match (writeLock(scope)) {
+                    case PluginImportResult.Ok(_) => PluginImportResult.Ok(())
+                    case PluginImportResult.Err(error) =>
+                        records.clear(); for (value in loaded) { records.add(value) }
+                        PluginImportResult.Err(error)
+                }
+            }, { result: PluginImportResult<Unit> => ownValueResult78(result) })
+        } finally { registryLock.unlock() }
     }
 
     public func restoreRecord(record: ProductPluginRecord): PluginRegistryResult<ProductPluginRecord> {
@@ -1453,6 +1546,7 @@ public open class PluginRegistry {
             }
         }
         records.add(record)
+        if (deferLockWrite) { return PluginImportResult.Ok(record) }
         match (writeLock(record.scope)) {
             case PluginImportResult.Ok(_) => PluginImportResult.Ok(record)
             case PluginImportResult.Err(error) =>
@@ -1474,6 +1568,7 @@ public open class PluginRegistry {
             // All partial raw state and action/error frames have RETURNED;
             // the returned owned result already has its independent payment.
             writerFence = None
+            fenceVerifiedPackages = None
             let pending = phase.pendingMemory; phase.pendingMemory = None<PluginRegistryStateMemory>
             match (pending) { case Some(value) => value.close(); case None => () }
             fence.close()
@@ -1501,6 +1596,7 @@ public open class PluginRegistry {
             fence.validate()
             publishState(initial, Some(memory), None); phase.pendingMemory = None
             writerFence = Some(fence)
+            fenceVerifiedPackages = Some(HashMap<String, PluginPackageDescriptor>())
             let result = action()
             fence.validate()
             pluginRequireRegistryPublicationComplete(settingsRoot, workspaceRoot)

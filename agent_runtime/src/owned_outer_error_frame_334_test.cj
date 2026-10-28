@@ -23,7 +23,7 @@ class OwnedOuterErrorFrame334Tests {
     }
     @TestCase
     func throwDoesNotPublishReturnedWitnessAndPressureRejectsBeforeFrameCreation():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged:134217728);let ancestor=bank.acquire(1)
         // Fill the already-paid floor declaration before applying pressure.
         // An unclaimed floor can correctly fund another child without growth.
         ancestor.ensureRetainedPeak(16777216)

@@ -185,12 +185,24 @@ for package, dependencies in sorted(graph.items()):
             + ", ".join(sorted(forbidden))
         )
 
-# The TUI consumes the narrow command/client/domain surface and the data-only
-# allocation ticket for independently paid display copies, never Core/Store.
+# The Native SDK and JSON adapter contain presentation declarations and
+# validation only. Keep their complete local closure data-only before allowing
+# the TUI to share the exact plugin View validator instead of copying it.
+presentation_dependencies = {"agent_sdk": {"yjson_support"}, "yjson_support": set()}
+for package, allowed in sorted(presentation_dependencies.items()):
+    unexpected = graph.get(package, set()).difference(allowed)
+    if unexpected:
+        raise SystemExit(
+            "architecture gate failed: presentation contract crosses the data-only boundary: "
+            + package + " -> " + ", ".join(sorted(unexpected))
+        )
+
+# The TUI consumes the narrow client/domain surface, shared presentation data
+# and the allocation ticket for independently paid copies, never Core/Store.
 # cjtui rendering dependencies are outside the local-package graph.
 tui_dependencies = graph.get("agent_tui", set())
 unexpected_tui_dependencies = tui_dependencies.difference(
-    {"agent_cli", "agent_client", "agent_domain", "logical_json_payload"}
+    {"agent_cli", "agent_client", "agent_domain", "logical_json_payload", "agent_sdk", "yjson_support"}
 )
 if unexpected_tui_dependencies:
     raise SystemExit(

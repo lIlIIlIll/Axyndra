@@ -89,6 +89,7 @@ func workflowDocumentExecute(name: String, arguments: AgentValue, broker: Docume
 }
 
 func workflowDocumentCommand(name: String, input: AgentValue): AgentValue {
+    if (name == "plan_review") { return workflowPlanReviewCommand(input) }
     if (name == "goal") { return workflowGoalCommand(input) }
     if (name != "todo") { throw PureProviderError("workflow.command_unknown", "no exact document command implementation") }
     workflowTodoCommand(input)

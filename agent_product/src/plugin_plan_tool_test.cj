@@ -112,6 +112,8 @@ class InstalledPlanToolTests {
                     result.receiptId,"different-actual-call",name).isError())
                 @Expect(f.product.vnext.completedDataToolHistoryArguments(ThreadId("plan-direct"),
                     result.receiptId,"actual-plan",name,version:"wrong-instance",fingerprint:"wrong-package").isError())
+                @Expect(f.product.vnext.completedDataToolHistoryArguments(ThreadId("plan-direct"),
+                    result.receiptId,"actual-plan",name,fingerprint:"wrong-package").isError())
             } finally {result.releasePayload()}
             @Expect(budget.snapshot().toolCalls,1);@Expect(budget.snapshot().activeTools,0)
         } finally {f.close()}
@@ -124,7 +126,15 @@ class InstalledPlanToolTests {
         session.subscribe({event=>events.add(event)})
         try {
             let result=lifecycleTestRequire(session.handle("/plan fixture plan write"))
-            @Expect(result.planReview.isSome());@Expect(result.planReview.getOrThrow().contains("Goal: ship a plan"))
+            let route = match (result.action) {
+                case ApplicationAction.OpenPluginView(value) => value
+                case _ => throw IllegalStateException("plan completion did not open its declared public View") }
+            @Expect(route, "plugin." + productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)) + ".plan_review")
+            let _ = lifecycleTestRequire(session.withJavaScriptPluginViewDocument<Unit>(route, "{}", "basic-v1",
+                { metadata, _, primary =>
+                    @Expect(primary.contains("Goal: ship a plan")); @Expect(primary.contains("Acceptance: contract passes"))
+                    @Expect(httpIntentText(metadata.field("primary").getOrThrow(), "sha256"), modelPolicySha256Text(primary))
+                    Result.Ok(()) }))
             @Expect(session.workMode(),"plan");@Expect(session.allSubagents().isEmpty());@Expect(session.approval().isNone())
             var actualPlanUpdate=false
             for(event in events where httpIntentText(event.detail,"code")=="plan.updated"){
@@ -133,18 +143,23 @@ class InstalledPlanToolTests {
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operation_effect_records WHERE tool_id="+sqliteText(name)),1)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM plugin_documents"),0)
             let review=lifecycleTestRequire(session.handle("/plan-review"))
-            @Expect(review.text,result.planReview.getOrThrow())
+            @Expect(match (review.action) { case ApplicationAction.OpenPluginView(value) => value == route; case _ => false })
             let edited=lifecycleTestRequire(session.updateLatestPlan("","# Goal\n\nActual human edited plan"))
-            @Expect(lifecycleTestRequire(session.handle("/plan-review")).text,edited)
+            let _ = workflowViewTestOpen(session, productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)), edited)
             @Expect(session.updateLatestPlan("wrong-stale-hash","must fail").isError())
             let reopened=f.product.applicationSession(sessionId:Some(session.id()))
-            @Expect(lifecycleTestRequire(reopened.handle("/plan-review")).text,edited)
+            @Expect(match (lifecycleTestRequire(reopened.handle("/plan-review")).action) {
+                case ApplicationAction.OpenPluginView(value) => value == route; case _ => false })
+            let _ = workflowViewTestOpen(reopened, productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)), edited)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM approvals"),0)
             let before=f.database.scalarInt("SELECT COUNT(*) FROM operations")
             match(f.product.setPluginEnabled(productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)),false,f.record.scope)){
                 case PluginRegistryResult.Err(error)=>throw IllegalStateException(error.code);case PluginRegistryResult.Ok(_)=>()}
             @Expect(session.approveLatestPlan().isError());@Expect(session.workMode(),"plan")
-            @Expect(lifecycleTestRequire(session.handle("/plan-review")).text,edited)
+            @Expect(session.handle("/plan-review").isError())
+            match(f.product.setPluginEnabled(productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)),true,f.record.scope)){
+                case PluginRegistryResult.Err(error)=>throw IllegalStateException(error.code);case PluginRegistryResult.Ok(_)=>()}
+            let _ = workflowViewTestOpen(reopened, productRegistryCopyText83(f.record.descriptor.copyText(PluginDescriptorText.Namespace)), edited)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations"),before)
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')"),0)
         } finally {session.cancel();f.close()}

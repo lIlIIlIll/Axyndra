@@ -70,8 +70,8 @@ public class OwnedRpcOutputFrame {
 // Registered in the actual server BEFORE run performs a fallible allocation.
 // A failed/unacknowledged frame remains here with its real original-bank
 // payment. No ephemeral callback or GC finalizer is used as cleanup evidence.
-class OwnedProductRpcEventDelivery {
-    private let event: OwnedAgentEvent
+class OwnedRpcValueDelivery {
+    private let event: ?OwnedAgentEvent
     private let output: OwnedRpcFrameOutput
     private var allocation: ?LogicalJsonOwnerReservation = None
     private var unframed: ?LogicalJsonOwnerReservation = None
@@ -89,7 +89,8 @@ class OwnedProductRpcEventDelivery {
     private var running = false
     private var completed = false
     private var closed = false
-    init(event: OwnedAgentEvent, output: OwnedRpcFrameOutput) { this.event = event; this.output = output }
+    init(event: OwnedAgentEvent, output: OwnedRpcFrameOutput) { this.event = Some(event); this.output = output }
+    init(output: OwnedRpcFrameOutput) { this.event = None; this.output = output }
     func run(protocolVersion: Int64, nextChunkId: () -> String): Result<Unit> {
         if (started) { return ownedRpcOutputError("rpc.owned_delivery_already_started") }
         started = true
@@ -97,14 +98,33 @@ class OwnedProductRpcEventDelivery {
         try { runOnce(protocolVersion, nextChunkId) }
         finally { running = false }
     }
+    // Borrowed DATA is consumed entirely inside the caller's whole synchronous
+    // source helper. It is never retained in this delivery or a synthetic
+    // AgentEvent. Only independently paid encoded frames can outlive it.
+    func runBorrowed(value: AgentValue, source: LogicalJsonOwnerReservation,
+        protocolVersion: Int64, nextChunkId: () -> String): Result<Unit> {
+        if (started) { return ownedRpcOutputError("rpc.owned_delivery_already_started") }
+        started = true; running = true
+        try {
+            allocation = Some(source.deriveRetainedLease())
+            allocation.getOrThrow().ensureRetainedPeak(2097152)
+            buffer = Some(Array<Byte>(1048575, repeat: 0))
+            match (writeValue(value, protocolVersion, nextChunkId)) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => completed = true; Result.Ok(()) }
+        } catch (_: LogicalJsonPayloadError) {
+            ownedRpcOutputError("rpc.owned_frame_pressure")
+        } finally { running = false }
+    }
     private func runOnce(protocolVersion: Int64, nextChunkId: () -> String): Result<Unit> {
-        match (event.deriveRetainedAllocation(2097152)) {
+        let actualEvent = event.getOrThrow()
+        match (actualEvent.deriveRetainedAllocation(2097152)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(value) => allocation = Some(value) }
         // The original event ledger pays this 1 MiB buffer and fixed writer
         // graph before construction; each live frame prepays a distinct share.
         buffer = Some(Array<Byte>(1048575, repeat: 0))
-        let result = event.withEvent(1048576, { actual =>
+        let result = actualEvent.withEvent(1048576, { actual =>
             match (actual.payload) {
                 case AgentEventPayload.Extension(kind, detail) =>
                     if (kind != AgentEventKind.Tool) { return ownedRpcOutputError("rpc.owned_event_unexpected") }
@@ -115,25 +135,7 @@ class OwnedProductRpcEventDelivery {
                             ValueField("sequence", integerValue(actual.sequence)),
                             ValueField("runId", textValue(actual.runId.value)),
                             ValueField("event", detail)]))
-                        let measured = writeOwnedUnredactedAgentValue(value.getOrThrow(),
-                            { part => count(part) }, { => Result.Ok(()) })
-                        match (measured) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-                        if (total + 1 > 1048576 && protocolVersion != 2) {
-                            return failureFrame("RPC output exceeds the v1 frame limit; negotiate protocol v2") }
-                        if (total > 67108864) { return failureFrame("RPC output exceeds the reassembly limit") }
-                        if (total + 1 > 1048576) {
-                            chunked = true; chunkBytes = 262144
-                            chunkCount = (total + chunkBytes - 1) / chunkBytes
-                            chunkId = nextChunkId()
-                        }
-                        match (writeOwnedUnredactedAgentValue(value.getOrThrow(),
-                            { part => append(part) }, { => Result.Ok(()) })) {
-                            case Result.Err(error) => return Result.Err(error)
-                            case Result.Ok(_) => () }
-                        match (flush()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-                        if (emitted != total || chunkIndex != chunkCount) {
-                            return ownedRpcOutputError("rpc.owned_stream_extent_changed") }
-                        Result.Ok(())
+                        writeValue(value.getOrThrow(), protocolVersion, nextChunkId)
                     } finally {
                         match (value) { case Some(held) => let _ = held.asObject().remove("event"); case None => () }
                         value = None
@@ -144,6 +146,27 @@ class OwnedProductRpcEventDelivery {
         match (result) {
             case Result.Err(error) => Result.Err(error)
             case Result.Ok(_) => completed = true; Result.Ok(()) }
+    }
+    private func writeValue(value: AgentValue, protocolVersion: Int64, nextChunkId: () -> String): Result<Unit> {
+        let measured = writeOwnedUnredactedAgentValue(value,
+            { part => count(part) }, { => Result.Ok(()) })
+        match (measured) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (total + 1 > 1048576 && protocolVersion != 2) {
+            return failureFrame("RPC output exceeds the v1 frame limit; negotiate protocol v2") }
+        if (total > 67108864) { return failureFrame("RPC output exceeds the reassembly limit") }
+        if (total + 1 > 1048576) {
+            chunked = true; chunkBytes = 262144
+            chunkCount = (total + chunkBytes - 1) / chunkBytes
+            chunkId = nextChunkId()
+        }
+        match (writeOwnedUnredactedAgentValue(value,
+            { part => append(part) }, { => Result.Ok(()) })) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => () }
+        match (flush()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (emitted != total || chunkIndex != chunkCount) {
+            return ownedRpcOutputError("rpc.owned_stream_extent_changed") }
+        Result.Ok(())
     }
     private func count(value: String): Result<Unit> {
         if (value.size > Int64.Max - total - 1) { return ownedRpcOutputError("rpc.owned_extent_overflow") }
@@ -235,9 +258,11 @@ class OwnedProductRpcEventDelivery {
         unframed = None
         match (allocation) { case Some(value) => value.close(); case None => () }
         allocation = None
-        match (event.closeAfterEventRetirement()) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) => closed = true; Result.Ok(()) }
+        match (event) {
+            case Some(value) => match (value.closeAfterEventRetirement()) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(_) => closed = true; Result.Ok(()) }
+            case None => closed = true; Result.Ok(()) }
     }
     func isAcknowledged(): Bool { closed }
 }

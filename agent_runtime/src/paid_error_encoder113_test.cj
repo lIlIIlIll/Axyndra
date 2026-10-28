@@ -132,7 +132,7 @@ class PaidErrorRuntimeEncoder11319Tests{
     }
     @TestCase
     func realSameBankPressureReturnsBeforeOutputAndNeverAcknowledges11319():Unit{
-        let pool=LogicalJsonOwnerBudget();let consumer=failureEncoderSeed113(pool,AgentErrorKind.Internal,"{}")
+        let pool=LogicalJsonOwnerBudget(maximumCharged:134217728);let consumer=failureEncoderSeed113(pool,AgentErrorKind.Internal,"{}")
         consumer.withError({error,fund=>
             fund(133169152).value().getOrThrow()
             @Expect(encodeOwnedFailureError113(error,fund).isError(),true)

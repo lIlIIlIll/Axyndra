@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -29,7 +30,7 @@ private func liveStepTestSeed(tx:SqliteTransaction,payload:PluginDocumentPayload
 class PluginLivePolicyStepMetadataTests{
     @TestCase
     func MissingActualMetadataRejectsBeforeCopyAllocation():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
         let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let counter=LiveStepMetadataCounter()
         try{
             var rejected=false
@@ -43,7 +44,7 @@ class PluginLivePolicyStepMetadataTests{
     }
     @TestCase
     func OriginalActualMetadataPassesAndScopeDoesNotReleaseOtherOwner():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
         let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let counter=LiveStepMetadataCounter();let payload=liveStepTestPayload()
         try{
             db.transaction<Unit>{tx=>liveStepTestSeed(tx,payload)}
@@ -57,7 +58,7 @@ class PluginLivePolicyStepMetadataTests{
     }
     @TestCase
     func EveryFreshMetadataExtentPrecedesCopyAndMutationRollsBack():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
         let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let counter=LiveStepMetadataCounter();let payload=liveStepTestPayload()
         try{
             db.transaction<Unit>{tx=>liveStepTestSeed(tx,payload)}
@@ -78,7 +79,7 @@ class PluginLivePolicyStepMetadataTests{
     }
     @TestCase
     func CancelBeforeLookupAndThrowAfterPaidCopyRetainOriginalOwners():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/step.sqlite")
         let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let allocations=LiveStepMetadataCounter();let checks=LiveStepMetadataCounter()
         let payload=liveStepTestPayload()
         try{

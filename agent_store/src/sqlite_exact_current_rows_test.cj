@@ -1,5 +1,6 @@
 package agent_store
 
+import std.env.getVariable
 import std.fs.*
 import std.sync.*
 import std.unittest.*
@@ -17,7 +18,7 @@ private func sqliteExactRecordedRead(transaction: SqliteTransaction, sql: String
 class SqliteExactCurrentRowsTests {
     @TestCase
     func actualNullEmptyNumericAndBlobConversionsMatchTheOriginalRows(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         try {
             db.readTransaction { transaction =>
@@ -36,7 +37,7 @@ class SqliteExactCurrentRowsTests {
 
     @TestCase
     func embeddedNulUtf8AndChangedSuffixUseCompleteCurrentBytes(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         let nul = String.fromUtf8([UInt8(0)])
         let original = "雪🙂" + nul + "before" + nul
@@ -58,7 +59,7 @@ class SqliteExactCurrentRowsTests {
 
     @TestCase
     func absenceColumnCountRowCountOrderAndFreshTransactionsRemainExact(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         try {
             db.execute("CREATE TABLE exact_value(ordinal INTEGER, value TEXT)")
@@ -91,7 +92,7 @@ class SqliteExactCurrentRowsTests {
 
     @TestCase
     func invalidUtf8FallsBackToOriginalThrowAndReleasesEveryStatement(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         try {
             db.execute("CREATE TABLE exact_value(ordinal INTEGER, value TEXT)")
@@ -134,7 +135,7 @@ class SqliteExactCurrentRowsTests {
             })
         @Expect(custom.matchesChannelWriteMemoRows(expected))
         @Expect(calls.load(), 1)
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         try {
             db.readTransaction { transaction =>
@@ -150,7 +151,7 @@ class SqliteExactCurrentRowsTests {
 
     @TestCase
     func threeMibCurrentColumnsAndPrepareErrorsKeepExactResults(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/exact.sqlite")
         let original = String.fromUtf8(Array<UInt8>(3145728, repeat: b'x')) + String.fromUtf8([UInt8(0)]) + "雪"
         let changed = String.fromUtf8(Array<UInt8>(3145728, repeat: b'x')) + String.fromUtf8([UInt8(0)]) + "雨"

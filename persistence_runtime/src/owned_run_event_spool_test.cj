@@ -181,7 +181,7 @@ class OwnedRunEventSpoolTests {
     }
     @TestCase
     func RealOriginalPoolPressureBlocksBeforeFirstMutationThenSameCompleteSpoolRetries(): Unit {
-        let fixture = OwnedEventRunFixture(); let pool = LogicalJsonOwnerBudget()
+        let fixture = OwnedEventRunFixture(); let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728)
         let event = ownedSpoolTestEvent(pool, 8388608)
         let write = fixture.repository.stageOwned(event.fanout().value().getOrThrow()).value().getOrThrow()
         event.closeAfterEventRetirement().value().getOrThrow()
@@ -199,7 +199,7 @@ class OwnedRunEventSpoolTests {
 }
 
 // These additional controls use the original SQLite schema and a local
-// default 128 MiB / 32-slot DATA bank. They create no execution permission.
+// 32-slot DATA bank. Capacity-specific tests select their aggregate explicitly.
 private class PersistenceNumericData204 <: PreparedPlanUtf8Owner204 {
     private let payment: LogicalJsonOwnerReservation
     private var bytes: ?Array<UInt8>

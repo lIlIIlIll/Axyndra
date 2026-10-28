@@ -6,19 +6,15 @@ import yjson.*
 
 import std.collection.*
 import std.convert.*
-import std.time.MonoTime
 import agent_domain.*
 
 // SQLite payloads use a byte-length-framed canonical value encoding. It is
 // deliberately independent from provider and App Protocol JSON so durable
 // recovery never needs a model adapter or transport package.
 public func encodeStoredValue(value: AgentValue): String {
-    let encodeTimer = channelWriteMemoDiagnosticStart()
     let output = ArrayList<Byte>()
     appendStoredValue(output, value)
-    let encoded = String.fromUtf8(output.toArray())
-    if (encoded.size >= 1048576) { channelWriteMemoDiagnosticRecord(10, encodeTimer, a: encoded.size) }
-    encoded
+    String.fromUtf8(output.toArray())
 }
 
 func appendStoredValue(output: ArrayList<Byte>, value: AgentValue): Unit {
@@ -53,9 +49,7 @@ func appendStoredFrame(output: ArrayList<Byte>, value: String): Unit {
 }
 
 public func decodeStoredValue(source: String): AgentValue {
-    let parseTimer: ?MonoTime = if (source.size >= 1048576) { channelWriteMemoDiagnosticStart() } else { None }
-    try { StoredValueParser(source).parse() }
-    finally { channelWriteMemoDiagnosticRecord(8, parseTimer, a: source.size) }
+    StoredValueParser(source).parse()
 }
 
 public func encodeStoredThreadContent(content: ThreadItemContent): String {

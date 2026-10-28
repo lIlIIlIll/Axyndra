@@ -154,6 +154,28 @@ def reap_adopted(owned, exclude=None):
     return reaped, uncertain
 
 
+def _only_kernel_exiting(items):
+    """Permit waiting, never return: PF_EXITING tasks still need actual reaping."""
+    uncertain = []
+    for item in items:
+        try:
+            raw = Path(f"/proc/{item['pid']}/stat").read_text()
+            current = _cell(raw)
+            flags = int(raw[raw.rindex(')') + 2:].split()[6])
+            if flags < 0:
+                raise ValueError('invalid process flags')
+            if current['start'] != item['start'] or current['state'] in ('Z', 'X', 'x'):
+                continue
+            if not flags & 0x00000004:  # Linux PF_EXITING, not task run-state.
+                return False, uncertain
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ESRCH):
+                uncertain.append(dict(pid=item['pid'], reason='kernel_exit_unobservable', errno=error.errno))
+        except (ValueError, IndexError, UnicodeError):
+            uncertain.append(dict(pid=item['pid'], reason='kernel_exit_identity_malformed', errno=None))
+    return not uncertain, uncertain
+
+
 def _cleanup(process, owned, root_pid=None, root_start=None):
     cleanup, unknown, reaped = [], [], []
     deadline = time.monotonic() + CLEANUP_SECONDS
@@ -206,6 +228,7 @@ def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='ca
     if uncertainty or any(value['parent'] == os.getpid() for value in initial.values()):
         raise ValueError('fresh watcher has unknown or preexisting children')
     owned, process, survivors, unknown = {}, None, [], []
+    naturally_reaped = []
     code, timed_out, fault = 1, False, None
     cleanup = dict(cleanup_exact_pids=[], reaped_adopted_pids=[], remaining_after_cleanup=[], unreaped_owned_processes=[], unknown=[])
     changed = False; restored = False
@@ -224,12 +247,33 @@ def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='ca
             while True:
                 observed = discover(owned); unknown.extend(observed['unknown'])
                 actual = process.poll()
+                # A namespace init can be inside irreversible kernel exit while
+                # awaiting zombies adopted by this very watcher. Discharge our
+                # real wait ownership before judging its physical return.
+                if any(item['parent'] == os.getpid() and item['pid'] != process.pid for item in observed['returned']):
+                    harvested, failed = reap_adopted(owned, exclude=process.pid)
+                    naturally_reaped.extend(harvested); unknown.extend(failed)
                 # A late observation cannot certify that the physical case
                 # returned within its original execution window.
                 if time.monotonic() >= deadline:
                     timed_out = True; code = 124; break
                 if actual is not None:
-                    code = actual; break
+                    code = actual
+                    pending = discover(owned); unknown.extend(pending['unknown'])
+                    if unknown:
+                        fault = 'unobservable_process_identity'; break
+                    if pending['live'] or pending['returned']:
+                        exiting, failed = _only_kernel_exiting(pending['live'])
+                        unknown.extend(failed)
+                        if failed:
+                            fault = 'unobservable_process_identity'; break
+                        if exiting:
+                            # No added grace: only already exiting tasks may
+                            # finish, within the original absolute deadline.
+                            # A genuinely live descendant still fails at once.
+                            time.sleep(min(.005, max(0, deadline - time.monotonic())))
+                            continue
+                    break
                 if unknown:
                     fault = 'unobservable_process_identity'; break
                 if time.monotonic() >= deadline:
@@ -262,7 +306,8 @@ def _run_worker(command, log, seconds, execution_deadline, cwd=None, purpose='ca
     return dict(exit_code=code, timed_out=timed_out, observed_processes=len(owned),
         surviving_owned_processes=survivors, remaining_after_cleanup=cleanup['remaining_after_cleanup'],
         unreaped_owned_processes=cleanup['unreaped_owned_processes'],
-        cleanup_exact_pids=cleanup['cleanup_exact_pids'], reaped_adopted_pids=cleanup['reaped_adopted_pids'],
+        cleanup_exact_pids=cleanup['cleanup_exact_pids'],
+        reaped_adopted_pids=sorted(set(naturally_reaped + cleanup['reaped_adopted_pids'])),
         unknown_process_observations=unknown, watcher_fault=fault, subreaper_restored=restored,
         physical_leader_returned=returned, case_process_seconds=seconds, wall_seconds=time.monotonic()-started,
         execution_deadline_monotonic=execution_deadline, effective_execution_deadline_monotonic=deadline,

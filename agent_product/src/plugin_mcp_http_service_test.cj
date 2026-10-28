@@ -115,6 +115,29 @@ class McpHttpProductFixture {
             throw error
         }
     }
+    func installCompactionPolicy(): Unit {
+        let policy = match (product.importLocalPlugin(getVariable("AXYNDRA_COMPACTION_PLUGIN_PACKAGE").getOrThrow())) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+        }
+        try {
+            let namespace = productRegistryCopyText83(policy.descriptor.copyText(PluginDescriptorText.Namespace))
+            let digest = productRegistryCopyText83(policy.descriptor.copyText(PluginDescriptorText.ContentDigest))
+            File.writeTo(root + "/settings/plugins/policies.json", stringifyUnifiedJson(objectValue([
+                ValueField("version", integerValue(1)), ValueField("bindings", objectValue([ValueField("compaction", objectValue([
+                    ValueField("namespace", textValue(namespace)), ValueField("provider", textValue("summarize")),
+                    ValueField("package_digest", textValue(digest))]))]))])).toArray())
+            File.writeTo(root + "/settings/plugins/canonical-data.json", encodeAgentValue(objectValue([
+                ValueField("version", integerValue(1)), ValueField("plugins", listValue([objectValue([
+                    ValueField("namespace", textValue(namespace)), ValueField("package_digest", textValue(digest)),
+                    ValueField("tools", listValue([canonicalCheckpointFixtureGrant173("checkpoint"),
+                        canonicalCheckpointFixtureGrant173("rewind")]))])]))])).toArray())
+            match (product.setPluginEnabled(namespace, true)) {
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+            }
+        } finally { policy.close() }
+    }
     func toolName(remote: String): String { "plugin." + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + ".service.session.t_" + modelPolicySha256Text(remote) }
     func command(): String { "/plugins service start " + productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) + " session session" }
     func start(thread: String): Result<ToolInvocationResult> {
@@ -516,6 +539,27 @@ class PluginMcpHttpServiceTests {
                 [SqlParameter.Text(pending.operationId.value)])[0].required(0), frozen)
             @Expect(lifecycleText(fixture.status("http-stale-prepared"), "state"), "ready")
             @Expect(fixture.visible("http-stale-prepared", selected: fixture.toolName("remote.updated:雪")))
+            fixture.assertNoSecrets()
+        } finally { fixture.close() }
+    }
+
+    @TestCase
+    func installedPackageMutationCannotAuthorizeHttpFromAnUnchangedDescriptor(): Unit {
+        let fixture = McpHttpProductFixture()
+        try {
+            @Expect(!managedCompleted(fixture.start("http-changed-package")).isError)
+            let packageRoot = productRegistryCopyText83(fixture.record.descriptor.copyText(PluginDescriptorText.Root))
+            if (!packageRoot.startsWith(fixture.root + "/")) {
+                throw IllegalStateException("tamper fixture must own the installed package")
+            }
+            let completed = fixture.childReceipts("completed")
+            let manifest = packageRoot + "/axyndra.plugin.json"
+            // Same parsed manifest and pinned descriptor; different installed bytes.
+            File.writeTo(manifest, (String.fromUtf8(File.readFrom(manifest)) + "\n").toArray())
+            let denied = fixture.call("http-changed-package", "must-not-send")
+            @Expect(denied.isError())
+            @Expect(fixture.calls(), 0)
+            @Expect(fixture.childReceipts("completed"), completed)
             fixture.assertNoSecrets()
         } finally { fixture.close() }
     }

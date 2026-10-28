@@ -150,13 +150,8 @@ class HostManagedChannelInvocation <: HostManagedServiceInvocation {
     }
     private func binding(): AgentValue { parseUnifiedJson(bindingText, maxBytes: 196608) }
     private func validate(): Result<Unit> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         if (!gate.isOpen() || context.cancellation.isCancelled()) { return hostLifecycleLeaseError("channel.invocation_closed") }
         service.validateInvocation(context, prepared, binding())
-    
-        } finally { hostChannelIoDiagnosticRecord(0, diagnosticStarted) }
     }
 
     func writeChild(childContext: ToolInvocationContext, child: PreparedToolInvocation): Result<ToolResult> {
@@ -195,9 +190,6 @@ class HostManagedChannelInvocation <: HostManagedServiceInvocation {
 
     public func onServiceRequest(invocationId: String, requestId: String, name: String,
         argumentsJson: String): JavaScriptHostResult<String> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         if (!gate.accept(invocationId, requestId)) {
             return hostPluginServiceError("channel.request_invalid", "channel request identity is closed, repeated or over budget")
         }
@@ -257,8 +249,6 @@ class HostManagedChannelInvocation <: HostManagedServiceInvocation {
         } else {
             hostPluginServiceError("channel.service_unsupported", "active channel invocation supports exact writes, bounded reads and read-only file proposals")
         }
-    
-        } finally { hostChannelIoDiagnosticRecord(6, diagnosticStarted) }
     }
 }
 
@@ -297,9 +287,6 @@ public func hostManagedChannelReadArguments(args: AgentValue): Result<(ProcessCh
 }
 
 public func hostManagedChannelReadResult(value: ProcessChannelRead, encoding!: String = "hex"): JavaScriptHostResult<String> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
     // Encoding is only a representation of bytes already returned through
     // the original current/SQL/lease/filter/meter path. HTTP callers retain
     // the default hex shape. Both representations remain below the same IPC
@@ -308,7 +295,6 @@ public func hostManagedChannelReadResult(value: ProcessChannelRead, encoding!: S
     let representationLimit: Int64 = if (encoding == "base64") { 32768 } else { 16384 }
     if (!["hex", "base64"].contains(encoding) || bytes.size > representationLimit) {
         return hostPluginServiceError("channel.read_result_invalid", "read result exceeds its selected representation or decoded bound") }
-    hostChannelIoDiagnosticReadBytes(bytes.size)
     if (encoding == "base64") {
         return JavaScriptHostResult.Ok(stringifyUnifiedJson(objectValue([
             ValueField("bytes_base64", textValue(hostBase64Bytes(bytes))), ValueField("eof", boolValue(value.eof))]))) }
@@ -320,9 +306,7 @@ public func hostManagedChannelReadResult(value: ProcessChannelRead, encoding!: S
     }
     JavaScriptHostResult.Ok(stringifyUnifiedJson(objectValue([
         ValueField("bytes_hex", textValue(String.fromUtf8(encoded))), ValueField("eof", boolValue(value.eof))])))
-
-        } finally { hostChannelIoDiagnosticRecord(3, diagnosticStarted) }
-    }
+}
 
 public class HostManagedStartupObserver <: JavaScriptHostObserver {
     private let lease: HostPluginLifecycleLease

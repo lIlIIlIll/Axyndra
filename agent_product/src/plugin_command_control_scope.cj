@@ -30,7 +30,7 @@ class ProductPluginCommandScope {
     private let prepareControl: (ProductCommandProposal) -> Result<String>
     private let lock = Mutex()
     private var binding: ?ProductCommandBinding = None
-    private var captured: ?ProductCommandProposal = None
+    private var captured: ?ProductPluginCommandRequest = None
     private var consumed = false
     private var closed = false
     private var participant: ?ProductCommandPreparationParticipant = None
@@ -86,15 +86,15 @@ class ProductPluginCommandScope {
             if (closed || captured.isSome() || consumed || binding.isNone()) { return commandControlError("plugin.command_scope_consumed") }
             binding.getOrThrow()
         } finally { lock.unlock() }
-        let proposal = match (parseProductCommandProposal(frozen, actual, sessionId, commandId, argumentsDigest)) {
+        let request = match (parseProductPluginCommandRequest(frozen, actual, sessionId, commandId, argumentsDigest)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
         lock.lock()
         try {
             if (closed || captured.isSome() || consumed) { return commandControlError("plugin.command_scope_consumed") }
-            captured = Some(proposal); Result.Ok(())
+            captured = Some(request); Result.Ok(())
         } finally { lock.unlock() }
     }
-    func take(): Result<?ProductCommandProposal> {
+    func take(): Result<?ProductPluginCommandRequest> {
         match (current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         lock.lock()
         try {
@@ -148,7 +148,7 @@ class ProductCommandBinding {
         for (item in productRegistryContributions83(descriptor) where item.kind == PluginContributionKind.Tool) { names.add(productRegistryCopyText83(item.copyText(PluginContributionText.Name))) }
         this.tools = names.toArray()
     }
-    func allowsControl(): Bool { controls.contains("continuation") }
+    func allowsControl(kind: String): Bool { controls.contains(kind) }
     func allowsTool(name: String): Bool { tools.contains(name) }
     func verify(): Result<Unit> {
         let actual = match (host.servicePackage(namespace, generation)) {
@@ -208,16 +208,11 @@ func parseProductCommandProposal(value: AgentValue, binding: ProductCommandBindi
         return commandControlError("plugin.command_proposal_invalid") }
     let control = value.field("user_control")
     if (control.isSome()) {
-        if (!binding.allowsControl()) { return commandControlError("plugin.command_control_not_declared") }
+        if (!binding.allowsControl("continuation")) { return commandControlError("plugin.command_control_not_declared") }
         match (validateCommandContinuationControl(control.getOrThrow())) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
     }
-    let source = modelPolicySha256Text(canonicalAgentValue(objectValue([
-        ValueField("thread_id", textValue(sessionId.value)),
-        ValueField("namespace", textValue(binding.namespace)), ValueField("contribution", textValue(binding.contribution)),
-        ValueField("generation", textValue(binding.generation.toString())), ValueField("package_digest", textValue(binding.digest)),
-        ValueField("command_id", textValue(commandId)), ValueField("arguments_digest", textValue(argumentsDigest)),
-        ValueField("proposal", value)])))
+    let source = productCommandRequestDigest(value, binding, sessionId, commandId, argumentsDigest)
     Result.Ok(ProductCommandProposal(binding, "command-tool-" + commandId, httpIntentText(value, "local_tool"),
         encodeAgentValue(value.field("input").getOrThrow()), match (control) { case Some(item) => Some(encodeAgentValue(item)); case None => Option<String>.None }, source))
 }

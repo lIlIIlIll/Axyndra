@@ -25,6 +25,26 @@ import std.fs.*
 import std.process.*
 import std.time.*
 
+func contractPlanReviewView(application: ApplicationSession, response: ApplicationResponse,
+    expectedSource!: ?String = None): Bool {
+    let route = match (response.action) {
+        case ApplicationAction.OpenPluginView(value) => value
+        case _ => return false
+    }
+    let observed = application.withJavaScriptPluginViewDocument<Bool>(route, "{}", "views-v1",
+        { metadata, model, primary =>
+            var boundInput = false
+            for (node in model.field("nodes").getOrThrow().items) {
+                if (httpIntentText(node, "id") == "plan" && httpIntentText(node, "kind") == "input") {
+                    boundInput = httpIntentText(node, "source") == "primary" && node.field("text").isNone()
+                }
+            }
+            let matches = match (expectedSource) { case Some(value) => primary == value; case None => true }
+            Result.Ok(boundInput && httpIntentText(metadata.field("primary").getOrThrow(), "kind") == "plan" && matches)
+        })
+    match (observed) { case Result.Ok(value) => value; case Result.Err(error) => throw IllegalStateException(error.describe()) }
+}
+
 main(): Int64 {
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
@@ -4885,21 +4905,20 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     let vibeRun = modeApplication.handle("/vibe inspect this workspace").value().getOrThrow()
     let vibeDisabled = modeApplication.handle("/vibe").value().getOrThrow()
     let guided = modeApplication.handle("/guided-goal ship a reliable release").value().getOrThrow()
-    // Plan mode must let the agent write the plan through plan_write and
-    // /plan-review must surface the tool payload (the structured plan).
+    // Both automatic completion and /plan-review open the declared public
+    // View. Its bounded model refers to the actual Host-owned plan source.
     let planEvents = ArrayList<AgentEvent>()
     modeApplication.subscribe({event => planEvents.add(event)})
     let planWriteRun = modeApplication.handle("/plan fixture plan write").value().getOrThrow()
     let planWriteReview = modeApplication.handle("/plan-review").value().getOrThrow()
-    let automaticPlanReview = match (planWriteRun.planReview) {
-        case Some(value) => value
-        case None => ""
-    }
     expect(
-        planWriteRun.agentInvoked && automaticPlanReview.contains("Goal: ship a plan") &&
-            automaticPlanReview.contains("Acceptance: contract passes") && planWriteReview.planReview.isSome() &&
-            planWriteReview.text == automaticPlanReview,
-        "plan_write completion automatically carries the same authoritative plan that /plan-review reopens"
+        planWriteRun.agentInvoked && contractPlanReviewView(modeApplication, planWriteRun) &&
+            contractPlanReviewView(modeApplication, planWriteReview) &&
+            match ((planWriteRun.action, planWriteReview.action)) {
+                case (ApplicationAction.OpenPluginView(first), ApplicationAction.OpenPluginView(second)) => first == second
+                case _ => false
+            },
+        "plan_write completion and explicit review expose the current source through the same public View"
     )
     let editedPlan = modeApplication.updateLatestPlan(
         "",
@@ -4907,7 +4926,7 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     ).value().getOrThrow()
     let editedPlanReview = modeApplication.handle("/plan-review").value().getOrThrow()
     expect(
-        editedPlan.contains("Ship the edited plan") && editedPlanReview.text == editedPlan &&
+        contractPlanReviewView(modeApplication, editedPlanReview, expectedSource: Some(editedPlan)) &&
             modeApplication.updateLatestPlan("stale-review-hash", "# Goal\n\nStale edit").isError(),
         "plan review edits persist through the structured plan payload and reject stale writers"
     )
@@ -4934,8 +4953,8 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
         }
     }
     expect(
-        recoveredPlanRun.agentInvoked && recoveredPlanReview.text.contains("Goal: ship a plan") && planUpdatedCount >= 2 &&
-            latestPlanEventBody.contains("Acceptance: contract passes") && latestPlanEventId != "",
+        recoveredPlanRun.agentInvoked && planUpdatedCount >= 2 && latestPlanEventId != "" &&
+            contractPlanReviewView(modeApplication, recoveredPlanReview, expectedSource: Some(latestPlanEventBody)),
         "plan mode corrects an omitted plan_write and publishes plan.updated"
     )
     expect(
@@ -4943,7 +4962,7 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
             !planEnabled.text.contains("end_turn") && modeApplication.allSubagents().isEmpty() &&
             planTools.text.contains(" read") && planTools.text.contains("plugin.axyndra:shell-readonly.exec") && !planTools.text.contains(" write") && !planTools
             .text
-            .contains(" task") && !planReview.agentInvoked && planReview.text.contains("Latest plan:") &&
+            .contains(" task") && !planReview.agentInvoked &&
             planRequest.field("thinkingLevel").getOrThrow().text == "xhigh" && planRequest
             .field("workMode")
             .getOrThrow()

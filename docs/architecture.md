@@ -68,6 +68,12 @@ agent_tui       → agent_cli + vendored cjtui packages
 `agent_rpc`、`agent_tui` 直接依赖或 import `agent_store`。`agent_app` 保留既有
 Core 边供入口层 Model Attempt/history 映射和内部 reviewer dry-run；`agent_rpc`
 保留既有 Core 边映射 `QueueDeliveryMode` 与 `RunInterruptMode`。本次不新增这些边。
+
+TUI 共用 `agent_sdk` 的 View 数据校验，不复制 schema 或放弃输入检查。
+SDK 的本地依赖仅有 `yjson_support`，后者只依赖锁定的 `yjson`。
+架构门禁检查这两个数据契约包的完整本地依赖闭包；它们引入 Core、Store、
+Runtime 或其他本地执行包时仍然失败。共享数据校验不授予执行或审批权限。
+
 完整依赖 pin、native/link 和 stdx 传递闭包见 [依赖与 stdx 审计](dependencies.md)；候选切换合同见
 [stdx 迁移执行规格](stdx-migration.md)。
 

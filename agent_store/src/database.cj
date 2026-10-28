@@ -1586,6 +1586,13 @@ public class SqliteDatabase {
                         values.add(None)
                     } else {
                         let size = unsafe { sqlite3_column_bytes(statement, Int32(index)) }
+                        // SQLite terminates text, but its complete bytes may include NUL.
+                        // Only a NUL-free column can use the SDK's validated owned copy.
+                        let ctext = unsafe { CString(text) }
+                        if (ctext.size() == Int64(size)) {
+                            values.add(Some(ctext.toString()))
+                            continue
+                        }
                         let bytes = Array<UInt8>(Int64(size), repeat: 0)
                         if (size > 0) {
                             let copyBytes = UIntNative(size)

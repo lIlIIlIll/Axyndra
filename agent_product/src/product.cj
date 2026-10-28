@@ -238,6 +238,8 @@ public class ProductRuntime {
     private let managedPluginServiceLock = Mutex()
     private var managedPluginServices: ?ProductPluginLifecycleManager = None
     private var managedPluginServicesStopping = false
+    private let escapedCopyDebtLock = Mutex()
+    private var escapedCopyDebtClosed = false
     private var fixtureManagedCleanupObserver:?agent_host_runtime.HostManagedChannelCleanupObserver=None
     private let compactionSummarizer: CompactionSummarizer
     private let approvalReviewer: ApprovalReviewer
@@ -358,6 +360,7 @@ public class ProductRuntime {
         this.installedModelInputOwner159 = installedModelInputOwner159
         this.vnext = vnext
         this.fixtureProbe = fixtureProbe
+        productRegistryEscapedCopies83.beginProduct()
     }
 
     func activateStartupPlugins(): Result<Unit> {
@@ -743,7 +746,7 @@ public class ProductRuntime {
     }
 
     func pluginCommandParticipant(scope: ProductPluginCommandScope, proposal: ProductCommandProposal): Result<?PluginDocumentCommitParticipant> {
-        if (proposal.control().isNone() && !proposal.binding.allowsControl()) { return Result.Ok(Option<PluginDocumentCommitParticipant>.None) }
+        if (proposal.control().isNone() && !proposal.binding.allowsControl("continuation")) { return Result.Ok(Option<PluginDocumentCommitParticipant>.None) }
         // An explicit early proposal is still validated before creating a Run.
         // A deferred proposal is selected only after the canonical document read.
         if (proposal.control().isSome()) {
@@ -1082,6 +1085,24 @@ public class ProductRuntime {
         )
     }
 
+    /// First-install distribution assembly only. Publishing each import with
+    /// its own writer fence rewrites the whole lock N times; this registers
+    /// every default under ONE fence while keeping the same materialisation
+    /// and content checks per package. Any failure rolls the batch back.
+    public func importDistributionPluginsInFirstAssembly(
+        roots: Array<String>,
+        emptyRegistryBeforeImport: Bool
+    ): PluginRegistryResult<Unit> {
+        if (!emptyRegistryBeforeImport) {
+            return productRegistryFailure83(pluginRuntime, "plugin.distribution_assembly_not_first",
+                "distribution assembly requires an empty registry")
+        }
+        match (pluginRuntime.importLocalBatch(roots, PluginInstallScope.User)) {
+            case PluginRegistryResult.Err(error) => PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(_) => PluginRegistryResult.Ok(())
+        }
+    }
+
 
     public func importPluginSource(
         sessionId: SessionId,
@@ -1219,18 +1240,74 @@ public class ProductRuntime {
     }
 
     private func activateProductPlugin(record: ProductPluginRecord): PluginRegistryResult<Unit> {
-        match (pluginRuntime.checkComponentDependencies(record)) {
+        return activateProductPluginVerified(record, verifyContent: true)
+    }
+
+    // First-install assembly just verified every default package under one
+    // writer fence, so re-hashing each dependency here would repeat the same
+    // known-current bytes N times. Every other check still runs.
+    private func activateProductPluginVerified(record: ProductPluginRecord,
+        verifyContent!: Bool, serialize!: Bool = true): PluginRegistryResult<Unit> {
+        match (pluginRuntime.checkComponentDependencies(record, verifyContent: verifyContent)) {
             // Keep the complete paid error, including source/field bytes. The
             // Registry result must not round-trip through an unowned Raw error.
             case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
             case PluginRegistryResult.Ok(_) => ()
         }
-        match (vnext.activateImportedPlugin(record)) {
+        match (vnext.activateImportedPluginWithLock(record, serialize: serialize)) {
             case Result.Err(error) => productRegistryFailure83(pluginRuntime, error.code, error.message)
             case Result.Ok(_) =>
                 codexHookRuntime.activatePlugin(record)
                 PluginRegistryResult.Ok(())
         }
+    }
+
+    // First-install distribution assembly only. Enabling each default one at a
+    // time re-mounts every previously enabled plugin and repeats its handshake,
+    // so N defaults cost O(N^2) resident generations. Publish every enable to
+    // the Registry first, then mount each plugin exactly once through the same
+    // activation path.
+    public func enableDistributionPluginsInFirstAssembly(
+        namespaces: Array<String>,
+        emptyRegistryBeforeImport: Bool
+    ): PluginRegistryResult<Unit> {
+        // The caller observes emptiness BEFORE its own imports; re-checking
+        // here would always see the just-registered defaults.
+        if (!emptyRegistryBeforeImport) {
+            return productRegistryFailure83(pluginRuntime, "plugin.distribution_assembly_not_first",
+                "distribution assembly requires an empty registry")
+        }
+        // One writer fence for the whole batch: each plugin still verifies its
+        // own dependencies and content against its own lock, but the fence
+        // acquisition and full lock rewrite happen once instead of N times.
+        match (pluginRuntime.setEnabledBatch(namespaces, true, PluginInstallScope.User)) {
+            case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+            case PluginRegistryResult.Ok(_) => ()
+        }
+        // No concurrent reader exists here: the Product is not published yet
+        // and the broker answers only `ping` until `frontend180` waits on this
+        // assembly. Mounting independent packages can therefore overlap; any
+        // failure still aborts the whole assembly and rolls the batch back.
+        let records = productRegistryRecords83(pluginRuntime.startupEffectiveRecords())
+        let width: Int64 = 3
+        var index: Int64 = 0
+        while (index < records.size) {
+            var end = index + width
+            if (end > records.size) { end = records.size }
+            let futures = ArrayList<Future<PluginRegistryResult<Unit>>>()
+            for (position in index..end) {
+                let record = records[position]
+                futures.add(spawn { => activateProductPluginVerified(record, verifyContent: false, serialize: false) })
+            }
+            for (future in futures) {
+                match (future.get()) {
+                    case PluginRegistryResult.Err(error) => return PluginRegistryResult.Err(error)
+                    case PluginRegistryResult.Ok(_) => ()
+                }
+            }
+            index = end
+        }
+        PluginRegistryResult.Ok(())
     }
 
     private func importProductPlugin(
@@ -1854,7 +1931,19 @@ public class ProductRuntime {
                 case Result.Ok(_) => Result.Ok(())
             }
         }
-        } finally { pluginRuntime.close() }
+        } finally {
+            // Every frame/callback of this Product has returned, so the copies
+            // it made can no longer be read and their DATA debt retires. These
+            // copied payments are children of the Registry metadata custody, so
+            // they retire before that parent closes. A retried close() is not a
+            // second retirement.
+            escapedCopyDebtLock.lock()
+            let retireDebt = try {
+                if (escapedCopyDebtClosed) { false } else { escapedCopyDebtClosed = true; true }
+            } finally { escapedCopyDebtLock.unlock() }
+            if (retireDebt) { productRegistryEscapedCopies83.endProduct() }
+            pluginRuntime.close()
+        }
     }
 
 
@@ -3254,7 +3343,7 @@ public class ProductRuntime {
     }
     private func compactSessionWithScope(sessionId: SessionId, force: Bool, cancellation: domain.CancellationToken, operatorOptions180: ?ProductOperatorOptions180): Result<Int64> {
         match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
-        let messages = match (modelContext(sessionId)) {
+        let messages = match (compactionContextMessages(sessionId)) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
         }
@@ -3413,38 +3502,41 @@ public class ProductRuntime {
         }
     }
 
-    private func compactionTokenEstimate(sessionId: SessionId): Int64 {
+    // Maintenance and its token report consume one checked checkpoint
+    // projection, not modelContext's intentionally raw diagnostic history.
+    private func compactionContextMessages(sessionId: SessionId): Result<Array<ModelMessage>> {
         let snapshot = match (canonicalThreadSnapshot(sessionId)) {
             case Result.Ok(value) => value
-            case Result.Err(_) => return 0
+            case Result.Err(error) =>
+                if (error.code == "product.thread_not_found") { return Result.Ok([]) }
+                return Result.Err(error)
         }
-        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
         let checkpoint = SqliteContextCheckpointStore(vnextDatabase).loadLatest(
             snapshot, "agent-product-v1", "agent-core"
         )
-        match (checkpoint) {
+        let messages = match (checkpoint) {
             case Some(value) =>
                 let recent = ArrayList<ThreadItem>()
                 for (item in snapshot.items where
                     item.ordinal > value.coversThroughItemOrdinal) {
                     recent.add(item)
                 }
-                estimateContextTokens(
-                    modelMessagesFromProjection(ModelContextProjection(
-                        snapshot.thread.revision,
-                        Some(value),
-                        recent.toArray(),
-                        objectValue([]),
-                        0,
-                        false
-                    )),
-                    tools: tools
-                )
-            case None => estimateContextTokens(
-                modelMessagesFromCanonicalItems(snapshot.items),
-                tools: tools
-            )
+                modelMessagesFromProjection(ModelContextProjection(
+                    snapshot.thread.revision, Some(value), recent.toArray(),
+                    objectValue([]), 0, false
+                ))
+            case None => modelMessagesFromCanonicalItems(snapshot.items)
         }
+        Result.Ok(messages)
+    }
+
+    private func compactionTokenEstimate(sessionId: SessionId): Int64 {
+        let messages = match (compactionContextMessages(sessionId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => return 0
+        }
+        let tools = catalog.definitionsFor(productCapabilities(), threadId: Some(ThreadId(sessionId.value)))
+        estimateContextTokens(messages, tools: tools)
     }
     private func saveCanonicalCheckpoint(
         sessionId: SessionId,

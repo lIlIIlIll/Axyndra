@@ -6,7 +6,7 @@ import agent_ports.*
 
 import agent_domain.*
 import agent_extension_runtime.*
-import agent_sdk.{PluginContributionKind, PluginToolExecutionProfile}
+import agent_sdk.{PluginContributionKind, PluginToolExecutionProfile, PLUGIN_VIEW_MAX_BYTES}
 import yjson.*
 import yjson_support.*
 import tool_runtime.*
@@ -31,6 +31,7 @@ public class HostJavaScriptPluginInvocationResult {
         this.payloadRelease = releasePayload
     }
     public func releasePayload(): Unit { payloadRelease() }
+    func payloadRetirementCallback(): () -> Unit { payloadRelease }
 }
 // A published view identity. The host decides how (and whether) to render it;
 // a plugin never receives terminal control or an approval surface through it.
@@ -798,6 +799,34 @@ public open class HostJavaScriptPluginHost {
         hostPluginResourceError("policy.provider_missing", "installed package has no exact pure policy contribution")
         } finally { hostCompactionDiagnosticRecord("binding", diagnosticStarted) }
     }
+    public func viewBinding(namespace: String, contribution: String): Result<HostPluginViewBinding> {
+        let generation = match (find(namespace)) {
+            case Some(value) => value
+            case None => return hostPluginResourceError("view.missing", "View package is not active")
+        }
+        match (generation.closingCause()) {
+            case None => ()
+            case Some(code) =>
+                return hostPluginResourceError(
+                    if (code == "plugin.registry_metadata_capacity") { "view.query_limit" } else { "view.revoked" },
+                    "View package is no longer available")
+        }
+        let unchanged = match (registryPackageMatches81(generation.descriptor.root, namespace: Some(namespace),
+            digest: Some(generation.descriptor.contentDigest))) {
+            case Result.Err(error) =>
+                return hostPluginResourceError(
+                    if (error.code == "plugin.registry_metadata_capacity") { "view.query_limit" } else { "view.changed" },
+                    "View package cannot be verified")
+            case Result.Ok(value) => value
+        }
+        if (!unchanged) { return hostPluginResourceError("view.changed", "View package differs from its installed snapshot") }
+        for (item in generation.views where item.name == contribution) {
+            return Result.Ok(HostPluginViewBinding(namespace, contribution,
+                generation.descriptor.contentDigest, generation.instanceGeneration))
+        }
+        hostPluginResourceError("view.missing", "package has no exact View contribution")
+    }
+
 
     // Synchronous data consumption only; this fence grants no Source,
     // capability, operation or cut. The action may enter the canonical DB,
@@ -1754,7 +1783,7 @@ public open class HostJavaScriptPluginHost {
                 cancellation: processCancellation.token,
                 timeoutMillis: if (finiteReadViewWindow.isSome()) { finiteCallMillis } else { timeoutMillis },
                 toolPayloadLimits: toolPayloadLimits, inputAttachment: inputAttachment,
-                serviceRequestLimit: if (identity.kind == "prepare" || identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") { 0 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS },
+                serviceRequestLimit: if (identity.kind == "prepare" || identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider" || identity.kind == "view") { 0 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS },
                 observer: observer
             )
             match (response) {
@@ -1779,6 +1808,7 @@ public open class HostJavaScriptPluginHost {
                                 "extension.cancelled", "plugin query was cancelled or its generation was revoked")
                         }
                         let maximum = if (toolPayloadLimits.isSome()) { toolPayloadLimits.getOrThrow().maxResultBytes }
+                        else if (identity.kind == "view") { PLUGIN_VIEW_MAX_BYTES }
                         else if (identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider") {
                             CONTENT_PAYLOAD_RESULT_BYTES
                         } else { JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES }
@@ -2716,7 +2746,8 @@ public func hostStartJavaScriptHost(
     var contentPayload = false
     if (descriptor.entryKind == PluginEntryKind.NativeExecutable) {
         for (item in descriptor.contributions where item.kind == PluginContributionKind.ContextProvider ||
-            (item.kind == PluginContributionKind.ResourceProvider || item.kind == PluginContributionKind.Provider)) { contentPayload = true }
+            item.kind == PluginContributionKind.ResourceProvider || item.kind == PluginContributionKind.Provider ||
+            item.kind == PluginContributionKind.View) { contentPayload = true }
     }
     startJavaScriptExtensionHostWithLauncher(JavaScriptHostLaunchRequest(
         descriptor.root,

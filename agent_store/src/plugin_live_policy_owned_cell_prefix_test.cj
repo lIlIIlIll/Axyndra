@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -14,8 +15,8 @@ class LiveOwnedCellChecks {var calls:Int64=0}
 class PluginLivePolicyOwnedCellPrefixTests {
     @TestCase
     func FixedBuffersStayChargedWhileSmallCompleteCellUsesTheCallerOwner():Unit {
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/owned.sqlite")
-        let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608)
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/owned.sqlite")
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let output=pool.acquire(8388608)
         let session=pool.acquire(65536);let registry=pool.acquire(65536);let owner=pool.acquire(65536)
         let observation=pool.acquireFixedBuffer(65536);let control=pool.acquireFixedBuffer(16384)
         let raw=encodeStoredValue(textValue("complete 中文😀\u{0000}"))
@@ -36,7 +37,7 @@ class PluginLivePolicyOwnedCellPrefixTests {
     }
     @TestCase
     func NestedBorrowedCellInvoicesIncludeTheStillLiveOuterRawAndDom():Unit {
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/nested.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/nested.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         let raw=encodeStoredValue(textValue(String.fromUtf8(Array<Byte>(1048576,repeat:65))))
         try {
@@ -58,7 +59,7 @@ class PluginLivePolicyOwnedCellPrefixTests {
     }
     @TestCase
     func OriginalEofDuplicateAndUtf8FailuresCannotAcknowledgeTheBorrower():Unit {
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/invalid.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/invalid.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         try {
             database.transaction<Unit>{tx=>
@@ -81,7 +82,7 @@ class PluginLivePolicyOwnedCellPrefixTests {
     }
     @TestCase
     func MidScanCancellationLeavesCallerAndAllDatabaseCellsOwned():Unit {
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/cancel.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/cancel.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536);let checks=LiveOwnedCellChecks()
         let raw=encodeStoredValue(textValue("original complete"))
         try {
@@ -100,7 +101,7 @@ class PluginLivePolicyOwnedCellPrefixTests {
     }
     @TestCase
     func RawNumberSpellingAndFieldOrderMatchTheOriginalStoredWriter():Unit {
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/original.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/original.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         let value=objectValue([ValueField("z",JsonNode.number("1e0")),ValueField("a",textValue("中文"))])
         let raw=encodeStoredValue(value)

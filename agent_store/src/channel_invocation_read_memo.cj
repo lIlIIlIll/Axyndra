@@ -30,7 +30,6 @@ class ChannelInvocationReadMemo {
             // These fields are immutable lets. AgentValue arguments/plan/binding
             // are mutable, so encode each once and validate decoded copies of
             // those exact bytes. No first-validation/key aliasing is possible.
-            let keyTimer = channelWriteMemoDiagnosticStart()
             let planText = encodeOperationPlan(plan)
             let bindingText = encodeStoredValue(binding)
             let argumentsText = encodeStoredValue(direct.call.arguments)
@@ -40,14 +39,11 @@ class ChannelInvocationReadMemo {
                 textValue(direct.threadId.value), textValue(direct.turnId.value), textValue(direct.runId.value),
                 integerValue(direct.epoch), textValue(direct.call.callId), textValue(direct.call.name),
                 textValue(planText), textValue(bindingText), textValue(argumentsText)]))
-            channelWriteMemoDiagnosticRecord(11, keyTimer, a: nextKey.size, b: reads.size)
             if (!reads.isEmpty() && key == nextKey) {
-                let queryTimer = channelWriteMemoDiagnosticStart()
                 var unchanged = true
                 for (read in reads) {
                     if (!read.matches(transaction.query(read.sql, read.parameters))) { unchanged = false; break }
                 }
-                channelWriteMemoDiagnosticRecord(12, queryTimer, a: if (unchanged) { 1 } else { 0 }, b: reads.size)
                 if (unchanged) { return }
             }
             clear()
@@ -59,13 +55,9 @@ class ChannelInvocationReadMemo {
                 { sql, parameters => recording.record(sql, parameters, transaction.query(sql, parameters)) }, backendOwner:Some(transaction))
             // Deliberately do not nest the startup memo: record its full SQL
             // transcript along with the current root proof on this validation.
-            let fullTimer = channelWriteMemoDiagnosticStart()
-            try {
-                requireChannelInvocationRoot(observed, operation, run, thread, epoch, source,
-                    decodeOperationPlan(planText), decodeStoredValue(bindingText),
-                    frozenDirectArguments: Some(decodeStoredValue(argumentsText)))
-            } finally { channelWriteMemoDiagnosticRecord(13, fullTimer,
-                a: if (recording.reusable()) { 1 } else { 0 }, b: nextKey.size) }
+            requireChannelInvocationRoot(observed, operation, run, thread, epoch, source,
+                decodeOperationPlan(planText), decodeStoredValue(bindingText),
+                frozenDirectArguments: Some(decodeStoredValue(argumentsText)))
             if (recording.reusable()) { key = nextKey; reads = recording.takeReads() }
         } catch (error: Exception) { clear(); throw error }
     }

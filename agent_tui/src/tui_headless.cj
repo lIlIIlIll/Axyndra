@@ -78,10 +78,6 @@ func runHeadless(screen: AgentScreen): Int64 {
         println("headless cjtui session transcript restore assertion failed")
         return 1
     }
-    if (!screen.planReviewInteractionObserved()) {
-        println("headless cjtui plan review interaction assertion failed")
-        return 1
-    }
     if (!setupMode && !cardMode && !askMode && !todoMode && !screen.composerHistoryNavigationObserved()) {
         println("headless cjtui composer history navigation assertion failed")
         return 1
@@ -957,31 +953,6 @@ func snapshotHasSize(
 
 func agentOverlayChromeObserved(): Bool {
     let theme = axyndraTheme()
-    let plan = planReviewDocument(
-        "Latest plan:\n\n# Goal\n\nShip the event-card migration.",
-        1,
-        theme
-    )
-    let unicodeBackend = TestBackend(area: Rect(0, 0, 60, 18))
-    let unicodeTerminal = Terminal(unicodeBackend, renderMode: RenderMode.Diff)
-    _ = unicodeTerminal.draw({
-        frame => renderAgentOverlay(
-            frame,
-            frame.area,
-            "Plan review",
-            plan,
-            0,
-            "↑↓ choose · Enter confirm · Esc cancel",
-            theme,
-            true,
-            document: true
-        )
-    })
-    let unicodeSnapshot = unicodeBackend.snapshot()
-    if (!unicodeSnapshot.contains("╭─ Plan review") || !unicodeSnapshot.contains("› 2. Keep planning") ||
-        !unicodeSnapshot.contains("╰─") || unicodeSnapshot.contains("+-- Plan review")) {
-        return false
-    }
 
     let asciiBackend = TestBackend(area: Rect(0, 0, 40, 12))
     let asciiTerminal = Terminal(asciiBackend, renderMode: RenderMode.Diff)

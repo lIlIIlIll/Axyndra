@@ -80,6 +80,7 @@ class PluginHttpPayloadTests {
         let fixture = McpHttpProductFixture(mode: "payload", approval: ApprovalMode.AlwaysAsk, payloadProfile: true)
         try {
             let thread = "http-payload-approval"; let text = httpPayloadText(98304)
+            fixture.installCompactionPolicy()
             @Expect(!managedCompleted(fixture.start(thread)).isError)
             let session = fixture.product.applicationSession(sessionId: Some(SessionId(thread)))
             fixture.product.fixtureProbe.getOrThrow().enqueueToolCallReply("reject", fixture.name, objectValue([ValueField("input", textValue(text))]))

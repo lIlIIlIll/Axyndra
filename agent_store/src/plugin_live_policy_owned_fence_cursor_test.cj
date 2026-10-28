@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.convert.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -14,7 +15,7 @@ class LiveOwnedCursorState {var cancelled=false;var cursor:?JournalOpaqueCellCur
 class PluginLivePolicyOwnedFenceCursorTests {
     @TestCase
     func WholePrivateFenceMatchesOriginalAcrossAllInt64RowsAndSqliteTypes():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/whole.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/whole.sqlite")
         let policy=latestViewTestPolicies();let oraclePool=LogicalJsonOwnerBudget(maximumCharged:67108864)
         let oracle=JournalLatestStreamStorage(policy[0],policy[1],"/actual",{bytes=>oraclePool.acquire(bytes)})
         let pool=LogicalJsonOwnerBudget();let actual=JournalLatestStreamStorage(policy[0],policy[1],"/actual",{bytes=>pool.acquire(bytes)})
@@ -38,7 +39,7 @@ class PluginLivePolicyOwnedFenceCursorTests {
     }
     @TestCase
     func SixtyThreeMiBOpaqueBodyUsesActualFixedCursorAndKeepsBorrowerCharged():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/large.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/large.sqlite")
         let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let registry=pool.acquire(65536);let owner=pool.acquire(65536);let fixed=pool.acquireFixedBuffer(65536)
         try {
@@ -58,7 +59,7 @@ class PluginLivePolicyOwnedFenceCursorTests {
     }
     @TestCase
     func ExpectedWholeHashAndPrematureEofRefuseWithoutRefundingBorrower():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/hash.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/hash.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         try {
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(-1,'known',NULL,'opaque','whole',1)")
@@ -77,7 +78,7 @@ class PluginLivePolicyOwnedFenceCursorTests {
     }
     @TestCase
     func ActualCurrentCancellationClosesPhysicalCursorButNotCallerOwner():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/cancel.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/cancel.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536);let state=LiveOwnedCursorState()
         try {
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(1,'known',NULL,'opaque','whole',1)")
@@ -93,7 +94,7 @@ class PluginLivePolicyOwnedFenceCursorTests {
     }
     @TestCase
     func SameOriginalRegistryRefusesLiveBorrowedCursorAndInvalidatesStaleTx():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/debt.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/debt.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536);let state=LiveOwnedCursorState()
         try {
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(1,'known',NULL,'opaque','whole',1)")
@@ -112,7 +113,7 @@ class PluginLivePolicyOwnedFenceCursorTests {
     }
     @TestCase
     func CompleteModelBlockComparisonKeepsExpectedAndActualInOneChargedPhase():Unit {
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/model.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/model.sqlite")
         let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let registry=pool.acquire(65536);let owner=pool.acquire(65536);let fixed=pool.acquireFixedBuffer(65536)
         let raw=encodeStoredValue(objectValue([ValueField("kind",textValue("tool_call")),ValueField("arguments",textValue("complete unchanged"))]))

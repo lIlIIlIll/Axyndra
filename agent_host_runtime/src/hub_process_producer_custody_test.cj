@@ -77,7 +77,7 @@ class ActualHubProcessProducerCustodyTests {
             // Fill its actual remaining aggregate capacity exactly, including
             // the already installed caller/registry share and 1KiB overhead.
             let before=nativeControlMetadataUsage113()
-            let available=agent_extension_runtime.nativeControlMetadataCapacity113()-before[1]
+            let available=nativeControlMetadataCapacity113()-before[1]
             let own=root.retainedCustodyUsage113()
             pressure.ensureRetainedPeak(available+own[1]-own[0])
             let calls=AtomicInt64(0)

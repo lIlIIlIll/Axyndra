@@ -43,19 +43,15 @@ class ChannelWriteMemoRecording {
     private var bounded=true
     private let maximumBytes: Int64
     private let maximumReads: Int64
-    private var diagnosticLogical: Int64 = 0
-    private var diagnosticQueries: Int64 = 0
-    private var diagnosticUnique: Int64 = 0
 
     init(planBytes: Int64,bindingBytes: Int64,maximumBytes!: Int64=33554432,maximumReads!: Int64=128){
         this.maximumBytes=maximumBytes;this.maximumReads=maximumReads
         this.bounded=planBytes>=0 && bindingBytes>=0 && maximumBytes>0 && maximumReads>0 &&
             planBytes<=maximumBytes && bindingBytes<=maximumBytes-planBytes
         if(bounded){retained=planBytes+bindingBytes}
-        if (channelWriteMemoDiagnosticEnabled()) { diagnosticAddBytes(planBytes); diagnosticAddBytes(bindingBytes) }
     }
 
-    private func invalidate(): Unit {bounded=false;reads.clear();texts.clear();diagnosticUnique=0}
+    private func invalidate(): Unit {bounded=false;reads.clear();texts.clear()}
     private func charge(bytes: Int64): Unit {
         if(!bounded){return}
         if(bytes<0 || bytes>maximumBytes-retained){invalidate()}
@@ -68,13 +64,11 @@ class ChannelWriteMemoRecording {
         // Both map slots and each memo cell refer to the same immutable String.
         charge(128)
         charge(value.size)
-        if(bounded){texts[value]=value
-            if (channelWriteMemoDiagnosticEnabled()) { diagnosticUnique = min(1073741824, diagnosticUnique + min(1073741824, value.size)) }}
+        if(bounded){texts[value]=value}
         value
     }
 
     func record(sql: String,parameters: Array<SqlParameter>,rows: Array<SqliteRow>): Array<SqliteRow> {
-        if (channelWriteMemoDiagnosticEnabled()) { diagnosticRecordSizes(sql, parameters, rows) }
         if(!bounded){return rows}
         if(reads.size>=maximumReads || parameters.size>32 || rows.size>256){invalidate();return rows}
         for(row in rows){if(row.size>32){invalidate();return rows}}
@@ -98,31 +92,6 @@ class ChannelWriteMemoRecording {
         // Return the current actual SQLite result without mutation or filtering.
         rows
     }
-
-
-    // Diagnostic totals never affect retention, SQL reads or returned rows.
-    private func diagnosticAddBytes(value: Int64): Unit {
-        if (value > 0) { diagnosticLogical = min(1073741824, diagnosticLogical + min(1073741824, value)) }
-    }
-    private func diagnosticRecordSizes(sql: String, parameters: Array<SqlParameter>, rows: Array<SqliteRow>): Unit {
-        diagnosticQueries = min(4096, diagnosticQueries + 1)
-        diagnosticAddBytes(256); diagnosticAddBytes(sql.size)
-        for (parameter in parameters) {
-            diagnosticAddBytes(64)
-            match (parameter) { case SqlParameter.Text(value) => diagnosticAddBytes(value.size); case _ => () }
-        }
-        for (row in rows) {
-            diagnosticAddBytes(64)
-            for (column in 0..row.size) {
-                diagnosticAddBytes(32)
-                match (row[column]) { case Some(value) => diagnosticAddBytes(value.size); case None => () }
-            }
-        }
-    }
-    func diagnosticLogicalBytes(): Int64 { diagnosticLogical }
-    func diagnosticReadCount(): Int64 { diagnosticQueries }
-    func diagnosticUniqueCount(): Int64 { texts.size }
-    func diagnosticUniqueBytes(): Int64 { diagnosticUnique }
 
     func reusable(): Bool {bounded && !reads.isEmpty()}
     func takeReads(): Array<ChannelWriteMemoRead> {reads.toArray()}

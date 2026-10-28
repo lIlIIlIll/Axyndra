@@ -12,6 +12,8 @@ import std.convert.*
 import agent_product.*
 import agent_runtime.*
 
+import std.sync.*
+import std.time.MonoTime
 // Raw transport bytes and decoder/DOM overlap have distinct, simultaneous
 // shares from the same actual peer bank. Enclosing real read/consumer helpers
 // retain the exact cell until all their transferred references have ended.
@@ -20,14 +22,19 @@ class TuiOwnerReadFrame180 {
     private var codecPaid: ?LogicalJsonOwnerReservation = None
     private var rawData180: ?String = None<String>
     private var decodedData180: ?AgentValue = None<AgentValue>
+    private let lock = Mutex()
+    private var viewTransfer = false
+    private var readReturned = false
+    private var deliveryReturned = false
+    private var decoderReturned = false
     var next180: ?TuiOwnerReadFrame180 = None
     init(rawPaid: LogicalJsonOwnerReservation) { this.rawPaid = Some(rawPaid) }
     func initializeCodec180(peer: ProductOwnerPeer180): Unit {
         if (codecPaid.isSome()) { throw IllegalStateException("owner codec is already registered") }
         codecPaid = Some(peer.deriveOwnerFrameData180(4096))
     }
-    func readAndDecode180(peer: ProductOwnerPeer180, maxBytes: Int64): AgentValue {
-        let raw = match (peer.readOwnerFrame180(rawPaid.getOrThrow())) {
+    func readAndDecode180(peer: ProductOwnerPeer180, maxBytes: Int64, deadline!: ?MonoTime = None): AgentValue {
+        let raw = match (peer.readOwnerFrame180(rawPaid.getOrThrow(), deadline)) {
             case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
             case Result.Ok(value) => value }
         rawData180 = Some(raw)
@@ -40,6 +47,39 @@ class TuiOwnerReadFrame180 {
     }
     func newCopiedAllocation180(invoice: Int64): LogicalJsonCopiedDisplayAllocation {
         codecPaid.getOrThrow().acquireCopiedDisplayAllocation(invoice).value().getOrThrow()
+    }
+    func copyViewDocument180(value: AgentValue): TuiPluginViewDocument {
+        tuiOwnerShape180(value, 3)
+        let paid = codecPaid.getOrThrow().acquireIndependentDataFrame(65536)
+        var retained = false
+        try {
+            paid.ensureRetainedPeak(tuiOwnerInvoiceAdd180(2097152, tuiOwnerDataInvoice180(value)))
+            let document = TuiPluginViewDocument(tuiOwnerText180(value.items[0]), tuiOwnerText180(value.items[1]),
+                tuiOwnerText180(value.items[2]), { bytes => paid.ensureRetainedPeak(bytes) }, { => paid.close() })
+            retained = true
+            document
+        } finally { if (!retained) { paid.close() } }
+    }
+    func transferView180(): Unit {
+        lock.lock()
+        try {
+            if (viewTransfer) { throw IllegalStateException("owner View frame was already transferred") }
+            viewTransfer = true
+        } finally { lock.unlock() }
+    }
+    func viewReadReturned180(): Unit {
+        lock.lock(); try { readReturned = true; retireViewIfReturned180() } finally { lock.unlock() }
+    }
+    func viewDeliveryReturned180(): Unit {
+        lock.lock(); try { deliveryReturned = true; retireViewIfReturned180() } finally { lock.unlock() }
+    }
+    func viewDecoderReturned180(): Unit {
+        lock.lock(); try { decoderReturned = true; retireViewIfReturned180() } finally { lock.unlock() }
+    }
+    private func retireViewIfReturned180(): Unit {
+        if (viewTransfer && readReturned && deliveryReturned && decoderReturned) {
+            retireAfterWholeReadConsumer180()
+        }
     }
     func retireAfterWholeReadConsumer180(): Unit {
         rawData180 = None<String>; decodedData180 = None<AgentValue>
@@ -278,12 +318,14 @@ func tuiOwnerInvoice180(value: SlashCommandDefinition): Int64 {
     total
 }
 
-func tuiOwnerInvoice180(value: TuiPlanReviewDisposition): Int64 {
-    match (value) {
-        case TuiPlanReviewDisposition.NotApplicable => 512
-        case TuiPlanReviewDisposition.Retain => 512
-        case TuiPlanReviewDisposition.Consumed => 512
-    }
+func tuiOwnerInvoice180(value: TuiPluginViewField): Int64 {
+    tuiOwnerInvoiceAdd180(512, tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(value.id), tuiOwnerInvoice180(value.value)))
+}
+func tuiOwnerInvoice180(value: TuiPluginViewDocument): Int64 {
+    value.withPresentation({ metadata, model, primary =>
+        tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(metadata),
+            tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(model), tuiOwnerInvoice180(primary)))
+    })
 }
 
 func tuiOwnerInvoice180(value: TuiApprovalDecision): Int64 {
@@ -294,18 +336,6 @@ func tuiOwnerInvoice180(value: TuiApprovalDecision): Int64 {
     }
 }
 
-func tuiOwnerInvoice180(value: TuiPlanReviewDecision): Int64 {
-    match (value) {
-        case TuiPlanReviewDecision.ApproveAndExecute => 512
-        case TuiPlanReviewDecision.ApproveFresh => 512
-        case TuiPlanReviewDecision.ApproveCompact => 512
-        case TuiPlanReviewDecision.ApproveKeep => 512
-        case TuiPlanReviewDecision.Refine => 512
-        case TuiPlanReviewDecision.UpdatePlan => 512
-        case TuiPlanReviewDecision.KeepPlanning => 512
-        case TuiPlanReviewDecision.Reject => 512
-    }
-}
 
 func tuiOwnerInvoice180(value: TuiQueueWithdrawal): Int64 {
     match (value) {
@@ -354,7 +384,9 @@ func tuiOwnerInvoice180(value: TuiTurnAction): Int64 {
         case TuiTurnAction.OpenProviderSetup => 512
         case TuiTurnAction.OpenModelSelector => 512
         case TuiTurnAction.OpenBranchSelector => 512
-        case TuiTurnAction.OpenPlanReview(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
+        case TuiTurnAction.OpenPluginView(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
+        case TuiTurnAction.PluginViewLoaded(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
+        case TuiTurnAction.ConfirmPluginView(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
         case TuiTurnAction.OpenDocument(v0, v1) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1))
         case TuiTurnAction.ModelsLoaded(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoiceArray180(v0, { item => tuiOwnerInvoice180(item) }))
         case TuiTurnAction.ThemeSelected(v0, v1, v2) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1)), tuiOwnerInvoiceArray180(v2, { item => tuiOwnerInvoice180(item) }))
@@ -401,7 +433,7 @@ func tuiOwnerInvoice180(value: TuiAgentEvent): Int64 {
         case TuiAgentEvent.Approval(v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1)), tuiOwnerInvoice180(v2)), tuiOwnerInvoice180(v3)), tuiOwnerInvoice180(v4)), tuiOwnerInvoice180(v5)), tuiOwnerInvoice180(v6)), tuiOwnerInvoice180(v7)), tuiOwnerInvoice180(v8)), tuiOwnerInvoice180(v9)), tuiOwnerInvoice180(v10)), tuiOwnerInvoice180(v11)), tuiOwnerInvoice180(v12))
         case TuiAgentEvent.ApprovalReview(v0, v1, v2, v3, v4, v5, v6, v7, v8) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1)), tuiOwnerInvoice180(v2)), tuiOwnerInvoice180(v3)), tuiOwnerInvoice180(v4)), tuiOwnerInvoice180(v5)), tuiOwnerInvoice180(v6)), tuiOwnerInvoice180(v7)), tuiOwnerInvoice180(v8))
         case TuiAgentEvent.Ask(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
-        case TuiAgentEvent.PlanReviewConsumed(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
+        case TuiAgentEvent.PluginViewClosed(v0, v1) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(v0), tuiOwnerInvoice180(v1)))
         case TuiAgentEvent.Usage(v0, v1) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1))
         case TuiAgentEvent.Setup(v0) => tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0))
         case TuiAgentEvent.Plan(v0, v1) => tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(512, tuiOwnerInvoice180(v0)), tuiOwnerInvoice180(v1))
@@ -603,21 +635,17 @@ func tuiOwnerDecodeSlashCommandDefinition180(value: AgentValue): SlashCommandDef
     SlashCommandDefinition(tuiOwnerText180(value.items[0]), tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]), usage: tuiOwnerText180(value.items[3]), aliases: tuiOwnerDecodeArray180<String>(value.items[4], { item => tuiOwnerText180(item) }), source: tuiOwnerText180(value.items[5]), subcommands: tuiOwnerDecodeArray180<String>(value.items[6], { item => tuiOwnerText180(item) }), pathArgumentPrefixes: tuiOwnerDecodeArray180<Array<String>>(value.items[7], { item => tuiOwnerDecodeArray180<String>(item, { item => tuiOwnerText180(item) }) }))
 }
 
-func tuiOwnerEncode180(value: TuiPlanReviewDisposition): AgentValue {
-    match (value) {
-        case TuiPlanReviewDisposition.NotApplicable => listValue([textValue("NotApplicable")])
-        case TuiPlanReviewDisposition.Retain => listValue([textValue("Retain")])
-        case TuiPlanReviewDisposition.Consumed => listValue([textValue("Consumed")])
-    }
+func tuiOwnerEncode180(value: TuiPluginViewField): AgentValue {
+    listValue([textValue(value.id), textValue(value.value)])
 }
-func tuiOwnerDecodeTuiPlanReviewDisposition180(value: AgentValue): TuiPlanReviewDisposition {
-    if (value.unifiedKind != ValueKind.List || value.items.size < 1) { throw IllegalArgumentException("tui.owner_invalid_tagged_value") }
-    match (tuiOwnerText180(value.items[0])) {
-        case "NotApplicable" => tuiOwnerShape180(value, 1); TuiPlanReviewDisposition.NotApplicable
-        case "Retain" => tuiOwnerShape180(value, 1); TuiPlanReviewDisposition.Retain
-        case "Consumed" => tuiOwnerShape180(value, 1); TuiPlanReviewDisposition.Consumed
-        case _ => throw IllegalArgumentException("tui.owner_unknown_TuiPlanReviewDisposition")
-    }
+func tuiOwnerDecodeTuiPluginViewField180(value: AgentValue): TuiPluginViewField {
+    tuiOwnerShape180(value, 2)
+    TuiPluginViewField(tuiOwnerText180(value.items[0]), tuiOwnerText180(value.items[1]))
+}
+func tuiOwnerEncode180(value: TuiPluginViewDocument): AgentValue {
+    value.withPresentation({ metadata, model, primary =>
+        listValue([textValue(metadata), textValue(model), textValue(primary)])
+    })
 }
 
 func tuiOwnerEncode180(value: TuiApprovalDecision): AgentValue {
@@ -637,32 +665,6 @@ func tuiOwnerDecodeTuiApprovalDecision180(value: AgentValue): TuiApprovalDecisio
     }
 }
 
-func tuiOwnerEncode180(value: TuiPlanReviewDecision): AgentValue {
-    match (value) {
-        case TuiPlanReviewDecision.ApproveAndExecute => listValue([textValue("ApproveAndExecute")])
-        case TuiPlanReviewDecision.ApproveFresh => listValue([textValue("ApproveFresh")])
-        case TuiPlanReviewDecision.ApproveCompact => listValue([textValue("ApproveCompact")])
-        case TuiPlanReviewDecision.ApproveKeep => listValue([textValue("ApproveKeep")])
-        case TuiPlanReviewDecision.Refine => listValue([textValue("Refine")])
-        case TuiPlanReviewDecision.UpdatePlan => listValue([textValue("UpdatePlan")])
-        case TuiPlanReviewDecision.KeepPlanning => listValue([textValue("KeepPlanning")])
-        case TuiPlanReviewDecision.Reject => listValue([textValue("Reject")])
-    }
-}
-func tuiOwnerDecodeTuiPlanReviewDecision180(value: AgentValue): TuiPlanReviewDecision {
-    if (value.unifiedKind != ValueKind.List || value.items.size < 1) { throw IllegalArgumentException("tui.owner_invalid_tagged_value") }
-    match (tuiOwnerText180(value.items[0])) {
-        case "ApproveAndExecute" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.ApproveAndExecute
-        case "ApproveFresh" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.ApproveFresh
-        case "ApproveCompact" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.ApproveCompact
-        case "ApproveKeep" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.ApproveKeep
-        case "Refine" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.Refine
-        case "UpdatePlan" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.UpdatePlan
-        case "KeepPlanning" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.KeepPlanning
-        case "Reject" => tuiOwnerShape180(value, 1); TuiPlanReviewDecision.Reject
-        case _ => throw IllegalArgumentException("tui.owner_unknown_TuiPlanReviewDecision")
-    }
-}
 
 func tuiOwnerEncode180(value: TuiQueueWithdrawal): AgentValue {
     match (value) {
@@ -754,7 +756,9 @@ func tuiOwnerEncode180(value: TuiTurnAction): AgentValue {
         case TuiTurnAction.OpenProviderSetup => listValue([textValue("OpenProviderSetup")])
         case TuiTurnAction.OpenModelSelector => listValue([textValue("OpenModelSelector")])
         case TuiTurnAction.OpenBranchSelector => listValue([textValue("OpenBranchSelector")])
-        case TuiTurnAction.OpenPlanReview(v0) => listValue([textValue("OpenPlanReview"), textValue(v0)])
+        case TuiTurnAction.OpenPluginView(v0) => listValue([textValue("OpenPluginView"), textValue(v0)])
+        case TuiTurnAction.PluginViewLoaded(v0) => listValue([textValue("PluginViewLoaded"), tuiOwnerEncode180(v0)])
+        case TuiTurnAction.ConfirmPluginView(v0) => listValue([textValue("ConfirmPluginView"), textValue(v0)])
         case TuiTurnAction.OpenDocument(v0, v1) => listValue([textValue("OpenDocument"), textValue(v0), textValue(v1)])
         case TuiTurnAction.ModelsLoaded(v0) => listValue([textValue("ModelsLoaded"), tuiOwnerEncodeArray180(v0, { item => textValue(item) })])
         case TuiTurnAction.ThemeSelected(v0, v1, v2) => listValue([textValue("ThemeSelected"), textValue(v0), boolValue(v1), tuiOwnerEncodeArray180(v2, { item => tuiOwnerEncode180(item) })])
@@ -774,7 +778,7 @@ func tuiOwnerEncode180(value: TuiTurnAction): AgentValue {
         case TuiTurnAction.UiStatus(v0) => listValue([textValue("UiStatus"), textValue(v0)])
     }
 }
-func tuiOwnerDecodeTuiTurnAction180(value: AgentValue): TuiTurnAction {
+func tuiOwnerDecodeTuiTurnAction180(value: AgentValue, viewSource!: ?TuiOwnerReadFrame180 = None): TuiTurnAction {
     if (value.unifiedKind != ValueKind.List || value.items.size < 1) { throw IllegalArgumentException("tui.owner_invalid_tagged_value") }
     match (tuiOwnerText180(value.items[0])) {
         case "NoAction" => tuiOwnerShape180(value, 1); TuiTurnAction.NoAction
@@ -782,7 +786,11 @@ func tuiOwnerDecodeTuiTurnAction180(value: AgentValue): TuiTurnAction {
         case "OpenProviderSetup" => tuiOwnerShape180(value, 1); TuiTurnAction.OpenProviderSetup
         case "OpenModelSelector" => tuiOwnerShape180(value, 1); TuiTurnAction.OpenModelSelector
         case "OpenBranchSelector" => tuiOwnerShape180(value, 1); TuiTurnAction.OpenBranchSelector
-        case "OpenPlanReview" => tuiOwnerShape180(value, 2); TuiTurnAction.OpenPlanReview(tuiOwnerText180(value.items[1]))
+        case "OpenPluginView" => tuiOwnerShape180(value, 2); TuiTurnAction.OpenPluginView(tuiOwnerText180(value.items[1]))
+        case "PluginViewLoaded" =>
+            tuiOwnerShape180(value, 2)
+            TuiTurnAction.PluginViewLoaded(viewSource.getOrThrow().copyViewDocument180(value.items[1]))
+        case "ConfirmPluginView" => tuiOwnerShape180(value, 2); TuiTurnAction.ConfirmPluginView(tuiOwnerText180(value.items[1]))
         case "OpenDocument" => tuiOwnerShape180(value, 3); TuiTurnAction.OpenDocument(tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]))
         case "ModelsLoaded" => tuiOwnerShape180(value, 2); TuiTurnAction.ModelsLoaded(tuiOwnerDecodeArray180<String>(value.items[1], { item => tuiOwnerText180(item) }))
         case "ThemeSelected" => tuiOwnerShape180(value, 4); TuiTurnAction.ThemeSelected(tuiOwnerText180(value.items[1]), tuiOwnerBoolean180(value.items[2]), tuiOwnerDecodeArray180<TuiThemeDefinition>(value.items[3], { item => tuiOwnerDecodeTuiThemeDefinition180(item) }))
@@ -830,7 +838,7 @@ func tuiOwnerEncode180(value: TuiAgentEvent): AgentValue {
         case TuiAgentEvent.Approval(v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) => listValue([textValue("Approval"), textValue(v0), textValue(v1), textValue(v2), textValue(v3), textValue(v4), textValue(v5), textValue(v6), textValue(v7), textValue(v8), textValue(v9), textValue(v10), boolValue(v11), textValue(v12)])
         case TuiAgentEvent.ApprovalReview(v0, v1, v2, v3, v4, v5, v6, v7, v8) => listValue([textValue("ApprovalReview"), textValue(v0), textValue(v1), textValue(v2), textValue(v3), textValue(v4), textValue(v5), textValue(v6), integerValue(v7), textValue(v8)])
         case TuiAgentEvent.Ask(v0) => listValue([textValue("Ask"), tuiOwnerEncode180(v0)])
-        case TuiAgentEvent.PlanReviewConsumed(v0) => listValue([textValue("PlanReviewConsumed"), textValue(v0)])
+        case TuiAgentEvent.PluginViewClosed(v0, v1) => listValue([textValue("PluginViewClosed"), textValue(v0), textValue(v1)])
         case TuiAgentEvent.Usage(v0, v1) => listValue([textValue("Usage"), integerValue(v0), integerValue(v1)])
         case TuiAgentEvent.Setup(v0) => listValue([textValue("Setup"), textValue(v0)])
         case TuiAgentEvent.Plan(v0, v1) => listValue([textValue("Plan"), textValue(v0), textValue(v1)])
@@ -869,7 +877,7 @@ func tuiOwnerDecodeTuiAgentEvent180(value: AgentValue): TuiAgentEvent {
         case "Approval" => tuiOwnerShape180(value, 14); TuiAgentEvent.Approval(tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]), tuiOwnerText180(value.items[3]), tuiOwnerText180(value.items[4]), tuiOwnerText180(value.items[5]), tuiOwnerText180(value.items[6]), tuiOwnerText180(value.items[7]), tuiOwnerText180(value.items[8]), tuiOwnerText180(value.items[9]), tuiOwnerText180(value.items[10]), tuiOwnerText180(value.items[11]), tuiOwnerBoolean180(value.items[12]), tuiOwnerText180(value.items[13]))
         case "ApprovalReview" => tuiOwnerShape180(value, 10); TuiAgentEvent.ApprovalReview(tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]), tuiOwnerText180(value.items[3]), tuiOwnerText180(value.items[4]), tuiOwnerText180(value.items[5]), tuiOwnerText180(value.items[6]), tuiOwnerText180(value.items[7]), tuiOwnerInteger180(value.items[8]), tuiOwnerText180(value.items[9]))
         case "Ask" => tuiOwnerShape180(value, 2); TuiAgentEvent.Ask(tuiOwnerDecodeTuiAskRequest180(value.items[1]))
-        case "PlanReviewConsumed" => tuiOwnerShape180(value, 2); TuiAgentEvent.PlanReviewConsumed(tuiOwnerText180(value.items[1]))
+        case "PluginViewClosed" => tuiOwnerShape180(value, 3); TuiAgentEvent.PluginViewClosed(tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]))
         case "Usage" => tuiOwnerShape180(value, 3); TuiAgentEvent.Usage(tuiOwnerInteger180(value.items[1]), tuiOwnerInteger180(value.items[2]))
         case "Setup" => tuiOwnerShape180(value, 2); TuiAgentEvent.Setup(tuiOwnerText180(value.items[1]))
         case "Plan" => tuiOwnerShape180(value, 3); TuiAgentEvent.Plan(tuiOwnerText180(value.items[1]), tuiOwnerText180(value.items[2]))

@@ -60,7 +60,7 @@ class PluginLivePolicyInputStreamedOwnerTests{
     }
     @TestCase
     func FailedStreamDoesNotCloseBorrowedPinOrPhysicalCleanupDebt():Unit{
-        let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let output=pool.acquire(8388608)
         let session=pool.acquire(65536);let cleanupDebt=pool.acquire(4194304);let pin=pool.acquire(65536)
         try{
             @Expect(pool.usage()[1],134217728)

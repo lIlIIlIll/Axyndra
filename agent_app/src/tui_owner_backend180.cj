@@ -63,6 +63,13 @@ private class TuiOwnerPending180 {
     var value: ?AgentValue = None
     var error: ?String = None
     var events: ?TuiAgentEventSink
+    private var viewFrame: ?TuiOwnerReadFrame180 = None
+    func attachViewFrame180(frame: TuiOwnerReadFrame180): Unit {
+        synchronized (monitor) { viewFrame = Some(frame) }
+    }
+    func takeViewFrame180(): ?TuiOwnerReadFrame180 {
+        synchronized (monitor) { let frame = viewFrame; viewFrame = None; frame }
+    }
     init(id: Int64, events: ?TuiAgentEventSink) { this.id = id; this.events = events }
     func await180(): AgentValue {
         synchronized (monitor) {
@@ -78,7 +85,14 @@ private class TuiOwnerPending180 {
         // EOF cannot replace an already published terminal response.
         // The reader retains its independent original exception separately.
         if(value.isNone() && error.isNone()){error = Some(message); monitor.notifyAll()} } }
-    func clear180(): Unit { synchronized (monitor) { value = None; events = None; error = None } }
+    func clear180(): Unit { synchronized (monitor) { value = None; events = None; error = None; viewFrame = None } }
+}
+private class TuiOwnerTurnRead180 {
+    var frame: ?TuiOwnerReadFrame180 = None
+    func decoderWholeHelperReturned180(): Unit {
+        let source = frame; frame = None
+        match (source) { case Some(actual) => actual.viewDecoderReturned180(); case None => () }
+    }
 }
 private class TuiOwnerAdmission180 {
     private let lock = Mutex()
@@ -101,6 +115,7 @@ private class TuiOwnerDelivery180 {
     var slot: ?TuiOwnerPending180 = None
     var value: ?AgentValue = None
     var error: ?String = None
+    var viewFrame: ?TuiOwnerReadFrame180 = None
 }
 class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailureAgentTuiBackend113 {
     private var peerValue: ?ProductOwnerPeer180
@@ -116,6 +131,7 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
     private var toolOutput: ?OwnedTuiToolDisplayOutput = None
     private var failureOutput: ?OwnedTuiFailureDisplayOutput113 = None
     private var nextId: Int64 = 0
+    private var nextViewInputSequence180: Int64 = 0
     private var activeTurn: Int64 = 0
     private var closing = false
     private var readerJoined = false
@@ -179,13 +195,33 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
         } finally { lock.unlock() }
     }
     private func call180(method: String, invoice: Int64, build: () -> AgentValue,
-        events!: ?TuiAgentEventSink = None, turn!: Bool = false, allowClosing!: Bool = false): AgentValue {
+        events!: ?TuiAgentEventSink = None, turn!: Bool = false, allowClosing!: Bool = false,
+        receipt!: ?TuiOwnerTurnRead180 = None): AgentValue {
         let paid = peer.deriveOwnerFrameData180(4096); paid.ensureRetainedPeak(invoice)
         let slot = try { registerCall180(events, turn, allowClosing) } catch (error: Exception) { paid.close(); throw error }
         try {
             try { writeCallFrame180(method, slot.id, build) } finally { paid.close() }
-            slot.await180()
+            let value = slot.await180()
+            match (slot.takeViewFrame180()) {
+                case Some(frame) => match (receipt) {
+                    case Some(actual) => actual.frame = Some(frame)
+                    case None =>
+                        retainReadFrame180(frame)
+                        throw IllegalStateException("tui.owner_unexpected_view_transfer") }
+                case None => () }
+            value
         } finally { removeCall180(slot, turn) }
+    }
+    private func callTurn180(method: String, invoice: Int64, build: () -> AgentValue,
+        events!: ?TuiAgentEventSink = None): TuiTurnResult {
+        let receipt = TuiOwnerTurnRead180()
+        try { callAndDecodeTurnHelper180(method, invoice, build, events, receipt) }
+        finally { receipt.decoderWholeHelperReturned180() }
+    }
+    private func callAndDecodeTurnHelper180(method: String, invoice: Int64, build: () -> AgentValue,
+        events: ?TuiAgentEventSink, receipt: TuiOwnerTurnRead180): TuiTurnResult {
+        let value = call180(method, invoice, build, events: events, turn: true, receipt: Some(receipt))
+        decodeTurn180(value, receipt.frame)
     }
     private func registerCall180(events: ?TuiAgentEventSink, turn: Bool, allowClosing: Bool): TuiOwnerPending180 {
         lock.lock()
@@ -213,8 +249,25 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
     private func writeCallFrame180(method: String, id: Int64, build: () -> AgentValue): Unit {
         writer.lock()
         try {
+            let deadline = MonoTime.now() + Duration.second * 5
             let frame = encodeAgentValue(listValue([textValue("call"), integerValue(id), textValue(method), build()]))
-            match (peer.writeOwnerFrame180(frame)) { case Result.Err(error) => throw Exception(error.describe()); case Result.Ok(_) => () }
+            if (frame.size <= 1048576 || method != "pluginViewAction") {
+                match (peer.writeOwnerFrame180(frame, Some(deadline))) {
+                    case Result.Err(error) => throw Exception(error.describe()); case Result.Ok(_) => () }
+                return
+            }
+            if (nextViewInputSequence180 == Int64.Max) { throw Exception("tui.owner_view_sequence_exhausted") }
+            nextViewInputSequence180++
+            let sequence = nextViewInputSequence180
+            writeLogicalJsonPayload(TUI_OWNER_VIEW_INPUT_WINDOW180, sequence, "pluginViewAction",
+                frame, TUI_OWNER_VIEW_INPUT_BYTES180, { =>
+                    if (MonoTime.now() >= deadline) { throw Exception("tui.owner_view_input_timeout") }
+                }, { kind, header =>
+                    let part = encodeAgentValue(listValue([textValue("view_call_chunk"),
+                        integerValue(sequence), textValue(kind), header]))
+                    match (peer.writeOwnerFrame180(part, Some(deadline))) {
+                        case Result.Err(error) => throw Exception(error.describe()); case Result.Ok(_) => () }
+                })
         } finally { writer.unlock() }
     }
     private func readLoop180(): Unit {
@@ -239,6 +292,7 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
         lock.lock()
         try {
             if (!readerPaymentRetained180) { match (readerPayment180) { case Some(frame) => frame.retireAfterWholeReadConsumer180(); case None => () } }
+            match (readerPayment180) { case Some(frame) => frame.viewReadReturned180(); case None => () }
             readerPayment180 = None; readerPaymentRetained180 = false
         } finally { lock.unlock() }
     }
@@ -253,10 +307,26 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
             case "result" =>
                 let data = value.items[2]
                 let dynamic = data.unifiedKind != ValueKind.Null && data.unifiedKind != ValueKind.Boolean && data.unifiedKind != ValueKind.Number
-                if (dynamic) { retainReadFrame180(paid) }; resolveThroughDelivery180(slot, Some(data), None<String>); dynamic
-            case "failure" => retainReadFrame180(paid); resolveThroughDelivery180(slot, None<AgentValue>, Some(tuiOwnerText180(value.items[2]))); true
+                if (isViewTurn180(data)) {
+                    paid.transferView180()
+                    lock.lock(); readerPaymentRetained180 = true; lock.unlock()
+                    slot.attachViewFrame180(paid)
+                    if (!resolveThroughDelivery180(slot, Some(data), None<String>, viewFrame: Some(paid))) {
+                        paid.viewDeliveryReturned180() }
+                } else {
+                    if (dynamic) { retainReadFrame180(paid) }
+                    let _ = resolveThroughDelivery180(slot, Some(data), None<String>)
+                }
+                dynamic
+            case "failure" => retainReadFrame180(paid); let _ = resolveThroughDelivery180(slot, None<AgentValue>, Some(tuiOwnerText180(value.items[2]))); true
             case _ => throw Exception("tui.owner_unknown_envelope")
         }
+    }
+    private func isViewTurn180(value: AgentValue): Bool {
+        if (value.unifiedKind != ValueKind.List || value.items.size != 4) { return false }
+        let action = value.items[2]
+        action.unifiedKind == ValueKind.List && action.items.size == 2 &&
+            action.items[0].unifiedKind == ValueKind.Text && action.items[0].text == "PluginViewLoaded"
     }
     private func findPending180(id: Int64): TuiOwnerPending180 {
         lock.lock()
@@ -349,13 +419,17 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
         }
     }
     private func wakeDelivery180(): Unit { synchronized (deliveryMonitor180) { deliveryWake180++; deliveryMonitor180.notifyAll() } }
-    private func resolveThroughDelivery180(slot: TuiOwnerPending180, value: ?AgentValue, error: ?String): Unit {
+    private func resolveThroughDelivery180(slot: TuiOwnerPending180, value: ?AgentValue, error: ?String,
+        viewFrame!: ?TuiOwnerReadFrame180 = None): Bool {
         lock.lock(); let stopped = closing; lock.unlock()
         if (slot.events.isNone() || stopped) {
-            match (error) { case Some(message) => slot.fail180(message); case None => slot.resolve180(value.getOrThrow()) }; return
+            match (error) { case Some(message) => slot.fail180(message); case None => slot.resolve180(value.getOrThrow()) }
+            return false
         }
         let node = TuiOwnerDelivery180(); node.slot = Some(slot); node.value = value; node.error = error
+        node.viewFrame = viewFrame
         enqueueDelivery180(node)
+        true
     }
     private func takeDelivery180(): ?TuiOwnerDelivery180 {
         synchronized (deliveryMonitor180) {
@@ -403,7 +477,9 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
         match (target) { case Some(actual) => actual(node.event.getOrThrow()); true; case None => false }
     }
     private func clearDeliveredNode180(node: TuiOwnerDelivery180): Unit {
+        let frame = node.viewFrame; node.viewFrame = None
         node.event = None; node.sink = None; node.slot = None; node.value = None; node.error = None; node.next = None
+        match (frame) { case Some(actual) => actual.viewDeliveryReturned180(); case None => () }
     }
     private func stopDelivery180(): Unit {
         synchronized (deliveryMonitor180) { deliveryClosing180 = true; deliveryWake180++; deliveryMonitor180.notifyAll() }
@@ -442,15 +518,19 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
                 throw Exception(error.describe())
         }
     }
-    private func decodeTurn180(value: AgentValue): TuiTurnResult {
-        tuiOwnerShape180(value, 5)
+    private func decodeTurn180(value: AgentValue, viewSource: ?TuiOwnerReadFrame180): TuiTurnResult {
+        tuiOwnerShape180(value, 4)
+        if (viewSource.isSome()) {
+            metadata.getOrThrow().ensureRetainedPeak(tuiOwnerInvoiceAdd180(65536,
+                tuiOwnerInvoiceAdd180(tuiOwnerDataInvoice180(value.items[0]), tuiOwnerDataInvoice180(value.items[1]))))
+        }
         let text = tuiOwnerText180(value.items[0]); let status = tuiOwnerText180(value.items[1])
-        let display = if (tuiOwnerBoolean180(value.items[4])) {
+        let display = if (tuiOwnerBoolean180(value.items[3])) {
             let paid = peer.deriveOwnerFrameData180(4096); retainPayment180(paid)
             Some(registryDisplay180(paid, tuiOwnerDataInvoice180(value)))
         } else { None<OwnedTuiRegistryResponseDisplay167> }
-        TuiTurnResult(text, status, action: tuiOwnerDecodeTuiTurnAction180(value.items[2]),
-            planReviewDisposition: tuiOwnerDecodeTuiPlanReviewDisposition180(value.items[3]), ownedRegistryDisplay167: display)
+        TuiTurnResult(text, status, action: tuiOwnerDecodeTuiTurnAction180(value.items[2], viewSource: viewSource),
+            ownedRegistryDisplay167: display)
     }
     public func cancel(): Unit {
         lock.lock(); let current = activeTurn; let stopped = closing; lock.unlock()
@@ -462,7 +542,7 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
     }
 
     public func submit(prompt: String, events: TuiAgentEventSink): TuiTurnResult {
-        decodeTurn180(call180("submit", tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(prompt)), { => listValue([textValue(prompt)]) }, events: Some(events), turn: true))
+        callTurn180("submit", tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(prompt)), { => listValue([textValue(prompt)]) }, events: Some(events))
     }
 
     public func steer(correlationId: String, prompt: String): Bool {
@@ -478,11 +558,31 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
     }
 
     public func decide(operationId: String, decision: TuiApprovalDecision, events: TuiAgentEventSink): TuiTurnResult {
-        decodeTurn180(call180("decide", tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(operationId)), tuiOwnerInvoice180(decision)), { => listValue([textValue(operationId), tuiOwnerEncode180(decision)]) }, events: Some(events), turn: true))
+        callTurn180("decide", tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(operationId)), tuiOwnerInvoice180(decision)), { => listValue([textValue(operationId), tuiOwnerEncode180(decision)]) }, events: Some(events))
     }
 
-    public func reviewPlan(contentHash: String, decision: TuiPlanReviewDecision, feedback: String, events: TuiAgentEventSink): TuiTurnResult {
-        decodeTurn180(call180("reviewPlan", tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(contentHash)), tuiOwnerInvoice180(decision)), tuiOwnerInvoice180(feedback)), { => listValue([textValue(contentHash), tuiOwnerEncode180(decision), textValue(feedback)]) }, events: Some(events), turn: true))
+    public func loadPluginView(routeName: String): TuiTurnResult {
+        callTurn180("loadPluginView", tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(routeName)),
+            { => listValue([textValue(routeName)]) })
+    }
+    public func pluginViewAction(viewId: String, revision: String, actionId: String,
+        fields: Array<TuiPluginViewField>, events: TuiAgentEventSink): TuiTurnResult {
+        let invoice = tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(viewId),
+            tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(revision), tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(actionId),
+                tuiOwnerInvoiceArray180(fields, { field => tuiOwnerInvoice180(field) })))))
+        callTurn180("pluginViewAction", invoice, { => listValue([textValue(viewId), textValue(revision),
+            textValue(actionId), tuiOwnerEncodeArray180(fields, { field => tuiOwnerEncode180(field) })]) }, events: Some(events))
+    }
+    public func confirmPluginView(viewId: String, revision: String, requestDigest: String, confirmed: Bool,
+        events: TuiAgentEventSink): TuiTurnResult {
+        let invoice = tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(viewId),
+            tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(revision), tuiOwnerInvoice180(requestDigest))))
+        callTurn180("confirmPluginView", invoice, { => listValue([textValue(viewId), textValue(revision),
+            textValue(requestDigest), boolValue(confirmed)]) }, events: Some(events))
+    }
+    public func closePluginView(viewId: String): Bool {
+        tuiOwnerBoolean180(call180("closePluginView", tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(viewId)),
+            { => listValue([textValue(viewId)]) }))
     }
 
     public func answerAsk(requestId: String, resolution: TuiAskResolution): Bool {
@@ -494,7 +594,7 @@ class OwnerProductTuiBackend180 <: AgentTuiBackend & OwnedAgentTuiBackend & Owne
     }
 
     public func runPluginCommand(routeName: String, arguments: String, events: TuiAgentEventSink): TuiTurnResult {
-        decodeTurn180(call180("runPluginCommand", tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(routeName)), tuiOwnerInvoice180(arguments)), { => listValue([textValue(routeName), textValue(arguments)]) }, events: Some(events), turn: true))
+        callTurn180("runPluginCommand", tuiOwnerInvoiceAdd180(tuiOwnerInvoiceAdd180(4096, tuiOwnerInvoice180(routeName)), tuiOwnerInvoice180(arguments)), { => listValue([textValue(routeName), textValue(arguments)]) }, events: Some(events))
     }
 
     public func currentModel(): String {

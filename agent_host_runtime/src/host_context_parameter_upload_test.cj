@@ -46,15 +46,17 @@ class HostContextParameterUploadTests {
     @TestCase
     func actualSharedPoolExhaustionPrecedesSerializationAndCleanupReleasesEveryOwner():Unit{
         let occupied=reserveNativeDocumentPayload(1)
-        occupied.ensureRetainedPeak(100663296)
-        let session=HostDocumentDataSession(HostArtifactStore("/never-opened-context-upload-pool"))
         try{
-            @Expect(session.contextParameterUploadBytes(contextUploadFixture(CONTENT_PAYLOAD_MESSAGE_BYTES)).error().getOrThrow().code,
-                "plugin.document_query_capacity")
-        }finally{@Expect(session.close().isOk(),true);occupied.close()}
-        // The full original pool can now be reserved by one real owner.
+            let session=HostDocumentDataSession(HostArtifactStore("/never-opened-context-upload-pool"))
+            try{
+                occupied.ensureRetainedPeak(nativeControlMetadataCapacity113()-33554432)
+                @Expect(session.contextParameterUploadBytes(contextUploadFixture(CONTENT_PAYLOAD_MESSAGE_BYTES)).error().getOrThrow().code,
+                    "plugin.document_query_capacity")
+            }finally{@Expect(session.close().isOk(),true)}
+        }finally{occupied.close()}
+        // The complete current bank can now be reserved by one real owner.
         let all=reserveNativeDocumentPayload(1)
-        try{all.ensureRetainedPeak(134217728)}finally{all.close()}
+        try{all.ensureRetainedPeak(nativeControlMetadataCapacity113())}finally{all.close()}
         let fresh=HostDocumentDataSession(HostArtifactStore("/never-opened-context-upload-retry"))
         try{@Expect(fresh.contextParameterUploadBytes(contextUploadFixture(CONTENT_PAYLOAD_MESSAGE_BYTES)).isOk(),true)}
         finally{@Expect(fresh.close().isOk(),true)}

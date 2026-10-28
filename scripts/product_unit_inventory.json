@@ -1,6 +1,10 @@
 {
+  "agent_cli": [
+    "agent_cli/src/plan_review_test.cj"
+  ],
   "agent_plugin_registry": [
     "agent_plugin_registry/src/registry_closed_contribution205_test.cj",
+    "agent_plugin_registry/src/registry_digest_work_test.cj",
     "agent_plugin_registry/src/registry_execution_pin_test.cj",
     "agent_plugin_registry/src/registry_metadata_generation_test.cj",
     "agent_plugin_registry/src/registry_state_custody_test.cj",
@@ -66,6 +70,7 @@
     "agent_domain/src/json_private_text_stream_test.cj",
     "agent_domain/src/logical_json_copied_display_growth_test.cj",
     "agent_domain/src/logical_json_copied_display_test.cj",
+    "agent_domain/src/logical_json_independent_frame_test.cj",
     "agent_domain/src/logical_json_paid_phase_328_test.cj",
     "agent_domain/src/logical_json_payload_test.cj",
     "agent_domain/src/logical_json_retained_peak_test.cj",
@@ -194,6 +199,7 @@
     "agent_core/src/owned_canonical_tool_start_test.cj"
   ],
   "agent_host_runtime": [
+    "agent_host_runtime/src/artifact_digest_test.cj",
     "agent_host_runtime/src/canonical_projection_transfer173a_test.cj",
     "agent_host_runtime/src/context_private_output_test.cj",
     "agent_host_runtime/src/explicit_workspace_capabilities_test.cj",
@@ -302,7 +308,8 @@
   "agent_sdk": [
     "agent_sdk/src/native_contract_test.cj",
     "agent_sdk/src/plugin_command_control_test.cj",
-    "agent_sdk/src/plugin_tool_profile_test.cj"
+    "agent_sdk/src/plugin_tool_profile_test.cj",
+    "agent_sdk/src/view_test.cj"
   ],
   "agent_extension_runtime": [
     "agent_extension_runtime/src/buffered_reader_test.cj",
@@ -515,6 +522,7 @@
     "agent_product/src/plugin_skills_provider_test.cj",
     "agent_product/src/plugin_task_projection151_test.cj",
     "agent_product/src/plugin_transport_budget_test.cj",
+    "agent_product/src/plugin_view_interaction_test.cj",
     "agent_product/src/plugin_workflow_document_test.cj",
     "agent_product/src/plugin_workflow_roles_test.cj",
     "agent_product/src/plugin_workspace_test.cj",
@@ -549,6 +557,7 @@
     "agent_rpc/src/acp_owned_lifecycle113_test.cj",
     "agent_rpc/src/owned_event_output_test.cj",
     "agent_rpc/src/owned_failure_output113_test.cj",
+    "agent_rpc/src/plugin_view_input_test.cj",
     "agent_rpc/src/rpc_queued_canonical113_test.cj",
     "agent_rpc/src/worker_concurrent_join113_test.cj",
     "agent_rpc/src/worker_metadata113_test.cj",
@@ -565,7 +574,6 @@
     "agent_tui/src/owned_tui_physical_retirement_test.cj",
     "agent_tui/src/owned_tui_render_payment_test.cj",
     "agent_tui/src/perf_trace_test.cj",
-    "agent_tui/src/plan_review_controller_test.cj",
     "agent_tui/src/retired_document_window_copies_test.cj",
     "agent_tui/src/streaming_transcript_test.cj",
     "agent_tui/src/todo_controller_test.cj",

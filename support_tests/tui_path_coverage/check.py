@@ -863,6 +863,8 @@ class CaseRun:
         self.tmux(
             [
                 "new-session",
+                "-c",
+                str(self.workspace),
                 "-d",
                 "-x",
                 str(self.width),

@@ -13,6 +13,7 @@ class HttpExchangeReaderFixtureChannel <: ProcessChannel {
     private let chunks: Array<Array<Byte>>
     private let keepOpen: Bool
     private var index: Int64 = 0
+    private var offset: Int64 = 0
     var aborted: Int64 = 0
     var closes: Int64 = 0
     var pendingClose = false
@@ -27,9 +28,12 @@ class HttpExchangeReaderFixtureChannel <: ProcessChannel {
             !keepOpen && index >= chunks.size)); case _ => () }
         if (aborted > 0) { return Result.Err(httpExchangeReadFailure()) }
         if (index >= chunks.size) { return Result.Ok(ProcessChannelRead([], !keepOpen)) }
-        let value = chunks[index].clone(); index += 1
-        if (value.size > maxBytes) { throw IllegalStateException("fixture chunk exceeds requested limit") }
-        Result.Ok(ProcessChannelRead(value, !keepOpen && index == chunks.size))
+        let value = chunks[index]
+        let count = min(maxBytes, value.size - offset)
+        let bytes = value[offset..offset + count].clone()
+        offset += count
+        if (offset == value.size) { index += 1; offset = 0 }
+        Result.Ok(ProcessChannelRead(bytes, !keepOpen && index >= chunks.size))
     }
     public func write(_: Array<Byte>): Result<Unit> { throw IllegalStateException("response reader cannot write") }
     public func abort(): Result<Unit> { aborted += 1; Result.Ok(()) }
@@ -99,8 +103,14 @@ class PluginHttpExchangeReaderTests {
             try {
                 let error = if (metadata) { owner.pollHead().error().getOrThrow() } else {
                     @Expect(lifecycleTestRequire(owner.pollHead()).isSome())
-                    @Expect(lifecycleTestRequire(owner.readBody(16384)).bytes.isEmpty())
-                    owner.readBody(16384).error().getOrThrow()
+                    var rejected: ?AgentError = None
+                    for (_ in 0..3) {
+                        match (owner.readBody(16384)) {
+                            case Result.Err(failure) => rejected = Some(failure); break
+                            case Result.Ok(value) => @Expect(value.bytes.isEmpty())
+                        }
+                    }
+                    rejected.getOrThrow()
                 }
                 @Expect(error.kind, AgentErrorKind.RecoveryRequired)
                 @Expect(!error.describe().contains("secret-value"))

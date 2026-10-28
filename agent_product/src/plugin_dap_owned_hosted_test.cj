@@ -19,6 +19,9 @@ import yjson_support.*
 // Compose the original real package/Product fixture. No Prepared, Root,
 // ModelDecision, installed worker, channel, permission or Receipt is forged.
 // The independent owned wire peer leaves all original fixture bytes intact.
+let OWNED_DAP_PRIMARY_ENV = "AXYNDRA_OWNED_DAP_PRIMARY_ADAPTER"
+let OWNED_DAP_SECONDARY_ENV = "AXYNDRA_OWNED_DAP_SECONDARY_ADAPTER"
+
 class OwnedDapProductFixture {
     let actual:DapProductFixture
     init(approval!:ApprovalMode=ApprovalMode.Yolo,multiple!:Bool=false,payload!:Bool=false,mode!:String="normal",selectedMaximum!:Int64=0){
@@ -30,14 +33,22 @@ class OwnedDapProductFixture {
             let plugin=configuration.field("plugins").getOrThrow().items[0]
             let service=plugin.field("services").getOrThrow().items[0]
             service.put("arguments",listValue([textValue("-u"),textValue(opened.files.external+"/dap-peer.py"),textValue(opened.transcript),textValue("primary"),textValue(mode)]))
-            service.put("environment",objectValue([ValueField("DAP_SELECTED_ADAPTER",textValue("primary"))]))
+            // `environment` binds a process variable to the NAME of a host
+            // variable whose value is resolved at launch, not to a literal
+            // (see plugin_process_environment_test). Declaring the literal
+            // here made every owned DAP case fail inside bindService with an
+            // empty-message lookup error, reported only as
+            // plugin.lifecycle_configuration_invalid.
+            setVariable(OWNED_DAP_PRIMARY_ENV, "primary")
+            service.put("environment",objectValue([ValueField("DAP_SELECTED_ADAPTER",textValue(OWNED_DAP_PRIMARY_ENV))]))
             let business=objectValue([ValueField("transport",textValue("managed_channel_owned")),
                 ValueField("adapter",textValue("fixture")),ValueField("launch",objectValue([])),ValueField("attach",objectValue([]))])
             if(multiple){
                 let secondary=parseUnifiedJson(stringifyUnifiedJson(service))
                 secondary.put("id",textValue("secondary"))
                 secondary.put("arguments",listValue([textValue("-u"),textValue(opened.files.external+"/dap-peer.py"),textValue(opened.transcript),textValue("secondary"),textValue(mode)]))
-                secondary.put("environment",objectValue([ValueField("DAP_SELECTED_ADAPTER",textValue("secondary"))]))
+                setVariable(OWNED_DAP_SECONDARY_ENV, "secondary")
+                secondary.put("environment",objectValue([ValueField("DAP_SELECTED_ADAPTER",textValue(OWNED_DAP_SECONDARY_ENV))]))
                 if(selectedMaximum>0){secondary.put("max_instances",integerValue(selectedMaximum))}
                 plugin.put("services",listValue([service,secondary]))
                 business.put("managed_process_services",listValue([textValue("stdio"),textValue("secondary")]))

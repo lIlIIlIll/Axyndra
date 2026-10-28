@@ -8,6 +8,7 @@ import agent_extension_runtime.*
 import std.collection.*
 import std.fs.*
 import std.io.*
+import std.time.*
 import yjson.*
 import yjson_support.*
 
@@ -130,6 +131,18 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             template = Some(value)
         }
+        // A first install must not enable defaults one at a time: each enable
+        // re-mounts every previously enabled plugin and repeats its handshake,
+        // so N defaults cost O(N^2) resident generations. Register every
+        // default first, then mount each one once through the same activation
+        // path. An existing operator record keeps the original per-plugin path.
+        let existingRecords = product.pluginSnapshots()
+        let registryEmpty = existingRecords.size == 0
+        existingRecords.close()
+        let enabledNamespaces = ArrayList<String>()
+        let firstAssemblyRoots = ArrayList<String>()
+        let firstAssemblyDescriptors = ArrayList<OwnedPluginPackageDescriptor>()
+        let firstAssemblyEnabled = ArrayList<Bool>()
         for (index in 0..descriptors.size) {
             let descriptor = descriptors[index]; let entry = entries.items[index]
             var existing: ?ProductPluginRecord = None
@@ -137,18 +150,63 @@ public func applyProductDistributionDefaults(product: ProductRuntime, directory:
                 if (existing.isNone() || distributionPluginScopeRank(record) > distributionPluginScopeRank(existing.getOrThrow())) { existing = Some(record) }
             }
             match (existing) {
-                case Some(_) => () // Never update, re-enable or shadow an operator's record.
-                case None =>
-                    let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
-                        case PluginRegistryResult.Ok(value) => value
-                        case PluginRegistryResult.Err(error) => return distributionError(error.code) }
-                    if (productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) || productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
-                        return distributionError("distribution.package_changed") }
+                case Some(_) =>
+                    // Never update, re-enable or shadow an operator's record.
                     if (entry.field("enabled").getOrThrow().asBool()) {
-                        match (product.setPluginEnabled(productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Namespace)), true, PluginInstallScope.User)) {
+                        match (product.setPluginEnabled(productRegistryCopyText83(existing.getOrThrow().descriptor.copyText(PluginDescriptorText.Namespace)), true, PluginInstallScope.User)) {
                             case PluginRegistryResult.Err(error) => return distributionError(error.code)
                             case PluginRegistryResult.Ok(_) => () }
                     }
+                case None =>
+                    if (registryEmpty) {
+                        // Deferred: the whole tail is imported by one batch
+                        // once every missing root is known.
+                        firstAssemblyRoots.add(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)))
+                        firstAssemblyDescriptors.add(descriptor)
+                        firstAssemblyEnabled.add(entry.field("enabled").getOrThrow().asBool())
+                    } else {
+                        let installed = match (product.importLocalPlugin(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)), PluginInstallScope.User)) {
+                            case PluginRegistryResult.Ok(value) => value
+                            case PluginRegistryResult.Err(error) => return distributionError(error.code) }
+                        if (productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) || productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
+                            return distributionError("distribution.package_changed") }
+                        if (entry.field("enabled").getOrThrow().asBool()) {
+                            enabledNamespaces.add(productRegistryCopyText83(installed.descriptor.copyText(PluginDescriptorText.Namespace)))
+                        }
+                    }
+            }
+        }
+        if (!firstAssemblyRoots.isEmpty()) {
+            match (product.importDistributionPluginsInFirstAssembly(firstAssemblyRoots.toArray(), registryEmpty)) {
+                case PluginRegistryResult.Err(error) => return distributionError(error.code)
+                case PluginRegistryResult.Ok(_) => () }
+            let installedRecords = productRegistryRecords83(product.pluginSnapshots())
+            for (index in 0..firstAssemblyDescriptors.size) {
+                let descriptor = firstAssemblyDescriptors[index]
+                var installedMatches = false
+                for (record in installedRecords where productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))) {
+                    if (productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.ContentDigest)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)) ||
+                        productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) != productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version))) {
+                        return distributionError("distribution.package_changed") }
+                    installedMatches = true
+                    if (firstAssemblyEnabled[index]) {
+                        enabledNamespaces.add(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)))
+                    }
+                }
+                if (!installedMatches) { return distributionError("distribution.package_invalid") }
+            }
+        }
+        if (!enabledNamespaces.isEmpty()) {
+            if (registryEmpty) {
+                match (product.enableDistributionPluginsInFirstAssembly(enabledNamespaces.toArray(), registryEmpty)) {
+                    case PluginRegistryResult.Err(error) => return distributionError(error.code)
+                    case PluginRegistryResult.Ok(_) => () }
+            } else {
+                for (namespace in enabledNamespaces) {
+                    match (product.setPluginEnabled(namespace, true, PluginInstallScope.User)) {
+                        case PluginRegistryResult.Err(error) => return distributionError(error.code)
+                        case PluginRegistryResult.Ok(_) => () }
+                }
             }
         }
         match(workspaceDefault){case Some(value)=>

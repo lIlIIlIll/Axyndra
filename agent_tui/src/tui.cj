@@ -1028,7 +1028,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var mainTranscriptHasMore = false
     private var runningSubagentIds = ArrayList<String>()
     private let surfaces = SurfaceHost()
-    private var planReview = PlanReviewController()
+    private var pluginView = PluginViewController()
     private var ask = AskController()
     private var todos = TodoController()
     private var setupDraft: ?SetupDraft = None
@@ -1103,7 +1103,6 @@ class AgentScreen <: TerminalFrameProvider {
         this.themeName = backend.currentTheme()
         this.customThemeDefinitions = backend.customThemes()
         this.terminalUnicode = !asciiRailRequested()
-        planReview.setTheme(themeName, customThemeDefinitions)
         let source = AgentTranscriptSource(ui, {
             item, width, section => renderTranscriptBodyDocument(
                 item,
@@ -1260,7 +1259,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         if (altRune(key, r'l')) {
             status = "terminal display reset"
-            return syncPlanReviewStatus(UpdateResult.withCommand(Command.ResetTerminal))
+            return syncPluginViewStatus(UpdateResult.withCommand(Command.ResetTerminal))
         }
         if (ctrlRune(key, r'z')) {
             status = if (working) {
@@ -1268,16 +1267,16 @@ class AgentScreen <: TerminalFrameProvider {
             } else {
                 "ready"
             }
-            return syncPlanReviewStatus(UpdateResult.withCommand(Command.Suspend))
+            return syncPluginViewStatus(UpdateResult.withCommand(Command.Suspend))
         }
         if (ctrlRune(key, r'o')) {
-            return syncPlanReviewStatus(toggleToolOutputVisibility())
+            return syncPluginViewStatus(toggleToolOutputVisibility())
         }
         if (ctrlRune(key, r't')) {
-            return syncPlanReviewStatus(toggleThinkingVisibility())
+            return syncPluginViewStatus(toggleThinkingVisibility())
         }
-        if (planReview.isActive()) {
-            return applyPlanReviewTransition(planReview.updateKey(key, working))
+        if (pluginViewForeground()) {
+            return applyPluginViewTransition(pluginView.updateKey(key))
         }
         if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.updateKey(key))
@@ -1562,8 +1561,10 @@ class AgentScreen <: TerminalFrameProvider {
 
     private func handlePaste(text: String): UpdateResult {
         idleCtrlCArmed = false
-        if (planReview.isActive()) {
-            return planReview.paste(text)
+        if (pluginViewForeground()) {
+            pluginView.paste(text)
+            status = pluginView.statusText()
+            return UpdateResult.dirty(viewportArea)
         } else if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.paste(text))
         } else if (ask.editorActive()) {
@@ -1583,57 +1584,39 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
-    private func applyPlanReviewTransition(step: PlanReviewTransition): UpdateResult {
-        status = planReview.statusText()
-        match (step.effect) {
-            case None => step.update
-            case Some(PlanReviewEffect.Close) =>
-                planReview.close()
-                status = "ready"
-                if (viewportArea.width > 0 && viewportArea.height > 0) {
-                    UpdateResult.dirty(viewportArea)
-                } else {
-                    UpdateResult.next()
-                }
-            case Some(PlanReviewEffect.CopyText(text)) =>
-                status = backend.copyTextToClipboard(text)
-                _ = planReview.setStatusText(status)
-                step.update
-            case Some(PlanReviewEffect.ReviewPlan(hash, decision, feedback)) =>
-                if (decision == TuiPlanReviewDecision.UpdatePlan) {
-                    return startBackground(
-                        "updating plan",
-                        {
-                            => backend.reviewPlan(
-                                hash,
-                                decision,
-                                feedback,
-                                {event => mailbox.push(event)}
-                            )
-                        }
-                    )
-                }
-                turnOwnerSubagentId = focusedSubagentId
-                if (focusedSubagentId == "") {
-                    mainWorking = true
-                }
-                working = true
-                UiReducer.reduce(ui, UiEvent.SetWorking(true))
-                status = "reviewing plan"
-                startAgentTurn(
-                    {
-                        =>
-                            let result = backend.reviewPlan(
-                                hash,
-                                decision,
-                                feedback,
-                                {event => mailbox.push(event)}
-                            )
-                            mailbox.complete(result)
-                            Event.Message("agent-turn")
-                    }
-                )
+    private func applyPluginViewTransition(step: PluginViewTransition): UpdateResult {
+        status = pluginView.statusText()
+        match (step) {
+            case PluginViewTransition.None => UpdateResult.dirty(viewportArea)
+            case PluginViewTransition.Close(id) =>
+                if (working) { backend.cancel() }
+                let _ = backend.closePluginView(id)
+                pluginView.close()
+                status = "View closed"
+                UpdateResult.dirty(viewportArea)
+            case PluginViewTransition.Action(id, revision, action, fields) =>
+                startPluginViewTurn({ =>
+                    try {
+                        fields.withFields({ actual => backend.pluginViewAction(id, revision, action, actual,
+                            { event => mailbox.push(event) }) })
+                    } finally { fields.close() }
+                })
+            case PluginViewTransition.Confirm(id, revision, digest, confirmed) =>
+                startPluginViewTurn({ => backend.confirmPluginView(id, revision, digest, confirmed,
+                    { event => mailbox.push(event) }) })
         }
+    }
+    private func startPluginViewTurn(invoke: () -> TuiTurnResult): UpdateResult {
+        turnOwnerSubagentId = focusedSubagentId
+        if (focusedSubagentId == "") { mainWorking = true }
+        working = true
+        UiReducer.reduce(ui, UiEvent.SetWorking(true))
+        status = "Host: processing View user event"
+        startAgentTurn({ =>
+            let result = invoke()
+            mailbox.complete(result)
+            Event.Message("agent-turn")
+        })
     }
 
     private func applyTodoTransition(step: TodoTransition): UpdateResult {
@@ -1664,11 +1647,16 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
-    private func syncPlanReviewStatus(result: UpdateResult): UpdateResult {
-        if (!planReview.isActive()) {
-            return result
-        }
-        mergeDirty(planReview.setStatusText(status), result)
+    private func syncPluginViewStatus(result: UpdateResult): UpdateResult {
+        if (!pluginViewForeground()) { return result }
+        pluginView.noteHostStatus(status)
+        result.withDirty(viewportArea)
+    }
+    private func pluginViewForeground(): Bool {
+        // A plugin's presentation cannot cover or consume keys intended for
+        // the Host's actual security approval. Retain its paid data while the
+        // existing canonical Command/Tool approval continuation is pending.
+        pluginView.isActive() && ui.approvalId.isNone()
     }
 
     private func submitComposer(delivery: String): UpdateResult {
@@ -1693,8 +1681,8 @@ class AgentScreen <: TerminalFrameProvider {
         match (event) {
             case Event.KeyDown(key) => handleKeyDown(key)
             case Event.Mouse(mouse) =>
-                if (planReview.isActive()) {
-                    planReview.updateMouse(mouse)
+                if (pluginViewForeground()) {
+                    applyPluginViewTransition(pluginView.updateMouse(mouse))
                 } else if (todos.editorVisible(ui.approvalId.isSome())) {
                     applyTodoTransition(todos.updateMouse(mouse))
                 } else if (ask.editorActive()) {
@@ -1792,7 +1780,12 @@ class AgentScreen <: TerminalFrameProvider {
                         // A modal-local input must not hide the background
                         // redraw required by the concurrently applied action.
                         modalRefreshOnly = false
-                        return consumeMailboxViewportRefresh(mergeDirty(actionResult, interactiveResult))
+                        let merged = mergeDirty(actionResult, interactiveResult)
+                        return consumeMailboxViewportRefresh(UpdateResult(
+                            flow: merged.flow,
+                            command: Command.Batch([actionResult.command, merged.command]),
+                            dirtyRects: merged.dirtyRects
+                        ))
                     case _ =>
                         var result = applyTurnAction(action)
                         if (mailboxChanged) {
@@ -1892,18 +1885,11 @@ class AgentScreen <: TerminalFrameProvider {
             case Event.AsyncCancelled("agent-turn") => settleStreamingCards("cancelled")
             case _ => ()
         }
-        if (planReview.hasPending()) {
+        if (pluginView.hasPending()) {
             match (event) {
-                case Event.AsyncCompleted("agent-turn", _) => if (pendingAction.isNone()) {
-                    _ = planReview.completeWithoutResult()
-                    status = planReview.statusText()
-                }
-                case Event.AsyncFailed("agent-turn", _) =>
-                    _ = planReview.failAgentTurn()
-                    status = planReview.statusText()
-                case Event.AsyncCancelled("agent-turn") =>
-                    _ = planReview.cancelAgentTurn()
-                    status = planReview.statusText()
+                case Event.AsyncCompleted("agent-turn", _) => pluginView.completeTurn()
+                case Event.AsyncFailed("agent-turn", message) => pluginView.failTurn(message)
+                case Event.AsyncCancelled("agent-turn") => pluginView.cancelPending()
                 case _ => ()
             }
         }
@@ -2010,7 +1996,7 @@ class AgentScreen <: TerminalFrameProvider {
                 // selected. Redraw the mailbox mutations now instead of
                 // waiting for an unrelated key press.
                 if (mailboxChanged) {
-                    result = mergeDirty(result, dirtyTranscriptAndActivity())
+                    result = mergeDirty(dirtyTranscriptAndActivity(), result)
                 }
                 if (todoChanged) {
                     result = invalidateTodoLayout(result)
@@ -3956,7 +3942,7 @@ class AgentScreen <: TerminalFrameProvider {
 
     private func closeModal(keepStatus!: Bool = false): Unit {
         resetGenericModal()
-        planReview.close(keepStatus: keepStatus)
+        pluginView.close()
         if (!keepStatus) {
             status = "ready"
         }
@@ -4002,28 +3988,19 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     )
                 }
-                if (planReview.hasPending()) {
-                    match (planReview.acceptTurnResult(
-                        result.status.trimAscii(),
-                        result.action,
-                        disposition: result.planReviewDisposition
-                    )) {
-                        case Some(action) =>
-                            status = planReview.statusText()
-                            return Some(action)
-                        case None => status = planReview.statusText()
-                    }
-                } else {
-                    let resultStatus = compactRunStatus(result.status)
-                    status = if (resultStatus == "completed" && status.startsWith("tokens ")) {
-                        status
-                    } else {
-                        resultStatus
-                    }
-                    match (result.action) {
-                        case TuiTurnAction.NoAction => ()
-                        case action => return Some(action)
-                    }
+                if (pluginView.hasPending()) {
+                    pluginView.completeTurn()
+                    if (result.status.startsWith("error")) { pluginView.failTurn(result.status) }
+                }
+                let resultStatus = compactRunStatus(result.status)
+                status = if (resultStatus == "completed" && status.startsWith("tokens ")) { status } else { resultStatus }
+                match (result.action) {
+                    case TuiTurnAction.NoAction =>
+                        if (pluginView.isActive() && ui.approvalId.isNone() && !result.status.startsWith("error")) {
+                            let _ = backend.closePluginView(pluginView.viewId())
+                            pluginView.close()
+                        }
+                    case action => return Some(action)
                 }
             case None => ()
         }
@@ -4050,13 +4027,24 @@ class AgentScreen <: TerminalFrameProvider {
             case TuiTurnAction.OpenBranchSelector => applyTurnAction(
                 TuiTurnAction.BranchesLoaded(backend.branchMessages())
             )
-            case TuiTurnAction.OpenPlanReview(body) =>
+            case TuiTurnAction.OpenPluginView(route) =>
                 resetGenericModal()
-                let update = planReview.open(body)
-                status = planReview.statusText()
-                update
+                startBackground("loading plugin View", { => backend.loadPluginView(route) })
+            case TuiTurnAction.PluginViewLoaded(document) =>
+                resetGenericModal()
+                try { pluginView.open(document); status = pluginView.statusText() }
+                catch (error: Exception) {
+                    backend.cancel()
+                    status = "Host View render failed: " + error.message
+                    addCard(UiCardKind.Error, "Host View error", status)
+                }
+                UpdateResult.dirty(viewportArea)
+            case TuiTurnAction.ConfirmPluginView(confirmation) =>
+                pluginView.confirm(confirmation)
+                status = pluginView.statusText()
+                UpdateResult.dirty(viewportArea)
             case TuiTurnAction.OpenDocument(title, body) =>
-                planReview.close()
+                pluginView.close()
                 documentTitle = title
                 documentBody = body
                 documentRevision++
@@ -4079,7 +4067,6 @@ class AgentScreen <: TerminalFrameProvider {
                         case None => ()
                     }
                     documentRevision++
-                    planReview.setTheme(name, definitions)
                     status = "theme: " + name
                 } else {
                     status = "theme selection failed: " + name
@@ -4918,9 +4905,10 @@ class AgentScreen <: TerminalFrameProvider {
                     )
                 )
             case TuiAgentEvent.Ask(request) => beginAsk(request)
-            case TuiAgentEvent.PlanReviewConsumed(contentHash) =>
-                if (planReview.acceptConsumed(contentHash)) {
-                    status = planReview.statusText()
+            case TuiAgentEvent.PluginViewClosed(id, reason) =>
+                if (pluginView.viewId() == id) {
+                    pluginView.close()
+                    status = "Host: View " + reason
                     mailboxViewportRefresh = true
                 }
             case TuiAgentEvent.Usage(input, output) =>
@@ -5025,7 +5013,7 @@ class AgentScreen <: TerminalFrameProvider {
             case TuiAgentEvent.ToolOutput(_, chunk, _) => max(1, chunk.split("\n").size - 1)
             case TuiAgentEvent.InputInjected(_, _, text) => max(1, text.split("\n").size)
             case TuiAgentEvent.Usage(_, _) => 0
-            case TuiAgentEvent.PlanReviewConsumed(_) => 0
+            case TuiAgentEvent.PluginViewClosed(_, _) => 0
             case _ => 1
         }
         if (changedLines > 0) {
@@ -6036,7 +6024,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         let editorFullscreen = todos.editorVisible(ui.approvalId.isSome()) || (ask.editorActive() && !ask.inlineEditorActive())
         surfaces.presentationMode(
-            fullscreen: agentHubActive || planReview.isActive() || modalFullscreen || editorFullscreen
+            fullscreen: agentHubActive || pluginViewForeground() || modalFullscreen || editorFullscreen
         )
     }
     private func mouseCaptureFor(mode: PresentationMode): Bool {
@@ -6094,7 +6082,7 @@ class AgentScreen <: TerminalFrameProvider {
         match (RetiredDirectStdOutDisplayReferences.retire(actualNativeOutput.getOrThrow())) {
             case Some(output) => if (!output.physicallyFlushed() || !output.acknowledges(actualNativeOutput.getOrThrow())) { return false }
             case None => return false }
-        if (!planReview.tryRetireRetainedReferences()) { return false }
+        if (!pluginView.tryRetireRetainedReferences()) { return false }
         clearActualCopiedScreenReferencesFrame()
         // Clear the actual inherited Screen fields in their own helper. An
         // external prompt/node/backing/callback remains its own live owner;
@@ -6181,7 +6169,7 @@ class AgentScreen <: TerminalFrameProvider {
         focusedCardId = ""; approvalToolCardId = ""; approvalInspectBody = ""; approvalInspectTitle = ""
         documentTitle = ""; documentBody = ""; documentModalCacheKey = ""; documentModalCache = Document([])
         modal = None; modalItems = []; setupDraft = None
-        planReview = PlanReviewController()
+        pluginView = PluginViewController()
         ask = AskController(); todos = TodoController(); composer = Composer(slashHints: productSlashHints())
         attemptProjection = AttemptProjection()
     }
@@ -6306,10 +6294,10 @@ class AgentScreen <: TerminalFrameProvider {
                 Style(bg: theme.background)
             )
         }
-        if (planReview.isActive()) {
+        if (pluginViewForeground()) {
             let surface = surfaces.fullscreenArea(margin: 1)
-            surfaces.activate(SurfaceOwner.PlanReview, SurfacePlacement.Fullscreen, surface)
-            surfaces.focus(SurfaceOwner.PlanReview)
+            surfaces.activate(SurfaceOwner.PluginView, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.PluginView)
             activeModalArea = surface
             canvas.fillRect(surface, Style(bg: theme.background))
             match (performanceTrace) {
@@ -6319,7 +6307,7 @@ class AgentScreen <: TerminalFrameProvider {
                     trace.overlayStarted()
                 case None => ()
             }
-            planReview.render(frame, theme, terminalUnicode, area: Some(surface))
+            pluginView.render(frame, theme, terminalUnicode, area: Some(surface))
             match (performanceTrace) {
                 case Some(trace) =>
                     trace.overlayCompleted()
@@ -7105,315 +7093,6 @@ class AgentScreen <: TerminalFrameProvider {
         terminalUnicode
     }
 
-    func planReviewInteractionObserved(): Bool {
-        let previousModal = modal
-        let previousItems = modalItems
-        let previousSelected = modalSelected
-        let previousTitle = documentTitle
-        let previousBody = documentBody
-        let previousScroll = documentScroll
-        let previousRevision = documentRevision
-        let previousPlanState = planReview.beginProbe()
-        let previousStatus = status
-        let previousViewportArea = viewportArea
-        let previousViewportHeight = viewportHeight
-        let previousActiveModalArea = activeModalArea
-        let previousMailboxChanged = mailboxChanged
-        let previousMailboxViewportRefresh = mailboxViewportRefresh
-        let previousWorking = working
-        let previousMainWorking = mainWorking
-        let previousTurnOwner = turnOwnerSubagentId
-        let previousUiWorking = ui.working
-        let previousWorkingElapsedMillis = workingElapsedMillis
-        let previousModalRefreshOnly = modalRefreshOnly
-
-        // This is a self-contained controller probe. Ask fixtures deliberately
-        // keep their real turn alive while waiting for input, but that state
-        // must not make Plan Review's edit interactions look busy.
-        working = false
-        mainWorking = false
-        UiReducer.reduce(ui, UiEvent.SetWorking(false))
-
-        var body = "Latest plan:\n\n# Goal\n\n"
-        for (index in 0..32) {
-            body += "- Step " + (index + 1).toString() + " · deterministic cached plan row\n"
-        }
-        body += "\n# Verification\n\nRun the TUI gate.\nEND-SENTINEL"
-        _ = applyTurnAction(TuiTurnAction.OpenPlanReview(body))
-        planReview.probeSetNavigation(2, PlanReviewFocus.Body, 1, 3)
-        planReview.probeAddAnnotation("Goal", "Step 1", "stale annotation")
-        let replacementBody = body + "\n\n# Replacement"
-        _ = planReview.open(replacementBody)
-        let resetState = planReview.probeSnapshot()
-        let newPlanStateReset = resetState.contentHash == planContentHash(replacementBody) &&
-            resetState.selected == 0 && resetState.focus == PlanReviewFocus.Actions &&
-            resetState.tocSelected == 0 && resetState.scroll == 0 && resetState.annotationCount == 0
-
-        planReview.probeSetNavigation(1, PlanReviewFocus.Body, 0, 2)
-        planReview.probeAddAnnotation("Goal", "Step 2", "keep annotation")
-        planReview.probeSetPending(false, true)
-        let updatedBody = body + "\n\nUpdated after review."
-        let updateResultAction = planReview.acceptTurnResult(
-            "plan updated",
-            TuiTurnAction.OpenPlanReview(updatedBody)
-        )
-        let preservedState = planReview.probeSnapshot()
-        let updateResultPreservedState = updateResultAction.isNone() &&
-            preservedState.contentHash == planContentHash(updatedBody) && preservedState.selected == 1 &&
-            preservedState.focus == PlanReviewFocus.Body && preservedState.scroll == 2 &&
-            preservedState.annotationCount == 1
-        _ = planReview.open(body)
-        status = planReview.statusText()
-        let openedState = planReview.probeSnapshot()
-        let opened = planReview.isActive() && openedState.contentHash == planContentHash(body) &&
-            openedState.selected == 0 && openedState.focus == PlanReviewFocus.Actions &&
-            status == "plan review · actions"
-        let resetDisplay = handleKeyDown(
-            KeyEvent(KeyCode.Char(r'l'), modifiers: KeyModifier(alt: true))
-        )
-        let resetCommandObserved = match (resetDisplay.command) {
-            case Command.ResetTerminal => true
-            case _ => false
-        }
-        let globalShortcutStatusSynced = resetCommandObserved && status == "terminal display reset" &&
-            planReview.statusText() == status
-        status = planReviewFocusStatus(planReview.probeSnapshot().focus)
-        _ = planReview.setStatusText(status)
-
-        let beforeRender = planReview.probeSnapshot()
-        let layoutsBefore = beforeRender.layoutCount
-        let parsesBefore = beforeRender.parseCount
-        let wideBackend = TestBackend(area: Rect(0, 0, 80, 24))
-        let wideTerminal = Terminal(wideBackend, renderMode: RenderMode.Diff)
-        _ = wideTerminal.draw({frame => render(frame)})
-        let wideVisual = wideBackend.snapshot()
-        let afterFirstRender = planReview.probeSnapshot()
-        let layoutsAfterFirst = afterFirstRender.layoutCount
-        let parsesAfterFirst = afterFirstRender.parseCount
-        let cachePrimed = afterFirstRender.cacheEntries == 1 && layoutsAfterFirst > layoutsBefore &&
-            parsesAfterFirst == parsesBefore + 1
-        let fullScreen = wideVisual.contains("Plan Review") &&
-            wideVisual.contains("Approve and execute · fresh context") &&
-            wideVisual.contains("Approve and compact context") &&
-            wideVisual.contains("Approve and keep context") && wideVisual.contains("Refine plan")
-
-        _ = wideTerminal.draw({frame => render(frame)})
-        let unchangedRenderState = planReview.probeSnapshot()
-        let unchangedFrameReused = unchangedRenderState.layoutCount == layoutsAfterFirst &&
-            unchangedRenderState.parseCount == parsesAfterFirst
-        let actionTopPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageUp), working))
-        let actionTopBoundary = !actionTopPage.renderRequested && planReview.probeSnapshot().scroll == 0
-        let downUpdate = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let downSelected = downUpdate.renderRequested && planReview.probeSnapshot().selected == 1
-        _ = wideTerminal.draw({frame => render(frame)})
-        let selectionRenderState = planReview.probeSnapshot()
-        let actionSelectionReused = selectionRenderState.layoutCount == layoutsAfterFirst &&
-            selectionRenderState.parseCount == parsesAfterFirst
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'j')), working))
-        let jSelected = planReview.probeSnapshot().selected == 2
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Up), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'k')), working))
-        let backAtFirst = planReview.probeSnapshot().selected == 0
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let wideBodyFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Body
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let wideTocFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Toc
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Enter), working))
-        _ = wideTerminal.draw({frame => render(frame)})
-        let tocJumpedToRenderedHeading = planReview.probeSnapshot().focus == PlanReviewFocus.Body &&
-            wideBackend.snapshot().contains("Verification")
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Home), working))
-        let bodyTopUp = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Up), working))
-        let bodyTopPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageUp), working))
-        let bodyTopBoundary = !bodyTopUp.renderRequested && !bodyTopPage.renderRequested &&
-            planReview.probeSnapshot().scroll == 0
-        let firstScroll = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let firstScrollChanged = firstScroll.renderRequested && planReview.probeSnapshot().scroll == 1
-        _ = wideTerminal.draw({frame => render(frame)})
-        let bodyScrollState = planReview.probeSnapshot()
-        let bodyScrollReused = bodyScrollState.layoutCount == layoutsAfterFirst &&
-            bodyScrollState.parseCount == parsesAfterFirst
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.End), working))
-        let bottom = planReview.probeSnapshot().scroll
-        _ = wideTerminal.draw({frame => render(frame)})
-        let endVisible = wideBackend.snapshot().contains("END-SENTINEL")
-        let bodyBottomDown = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let bodyBottomPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageDown), working))
-        let bodyBottomBoundary = !bodyBottomDown.renderRequested && !bodyBottomPage.renderRequested &&
-            planReview.probeSnapshot().scroll == bottom
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Right), working))
-        let actionBottomPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageDown), working))
-        let actionBottomBoundary = !actionBottomPage.renderRequested && planReview.probeSnapshot().scroll == bottom
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Home), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Right), working))
-        let narrowBackend = TestBackend(area: Rect(0, 0, 60, 18))
-        let narrowTerminal = Terminal(narrowBackend, renderMode: RenderMode.Diff)
-        _ = narrowTerminal.draw({frame => render(frame)})
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let narrowBodyFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Body
-        let narrowDocumentArea = planReview.probeSnapshot().documentArea
-        let mouseScroll = update(
-            Event.Mouse(
-                MouseEvent(
-                    MouseKind.Scroll,
-                    MouseButton.WheelDown,
-                    narrowDocumentArea.x,
-                    narrowDocumentArea.y
-                )
-            )
-        )
-        let mouseUsedPlanGeometry = mouseScroll.renderRequested && planReview.probeSnapshot().scroll > 0
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let narrowSkippedHiddenToc = planReview.probeSnapshot().focus == PlanReviewFocus.Actions
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'e')), working))
-        let editorOpenedState = planReview.probeSnapshot()
-        let editOpened = editorOpenedState.mode == "edit" &&
-            editorOpenedState.editorValue == stripPlanReviewLabel(body)
-        planReview.probeSetEditor("edit", "")
-        _ = applyPlanReviewTransition(
-            planReview.updateKey(KeyEvent(KeyCode.Char(r's'), modifiers: KeyModifier(ctrl: true)), working)
-        )
-        _ = narrowTerminal.draw({frame => render(frame)})
-        let emptyEditErrorVisible = narrowBackend.snapshot().contains("plan must not be empty")
-        planReview.probeSetEditor("edit", stripPlanReviewLabel(body))
-        let editorBeforePaste = planReview.probeSnapshot().editorValue
-        let composerBeforePaste = composer.area.value
-        let pasted = "\n\n## Pasted section\n\nPASTE-SENTINEL"
-        let pasteUpdate = update(Event.Paste(pasted))
-        let pasteRouted = pasteUpdate.renderRequested &&
-            planReview.probeSnapshot().editorValue == editorBeforePaste + pasted && composer.area.value == composerBeforePaste
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Esc), working))
-        let editCancelledState = planReview.probeSnapshot()
-        let editCancelled = editCancelledState.mode == "" && planReview.isActive() &&
-            editCancelledState.contentHash == planContentHash(body)
-
-        planReview.probeSetEditor("edit", "pending draft")
-        planReview.probeSetPending(false, true)
-        let pendingKeyUpdate = planReview.updateKey(KeyEvent(KeyCode.Char(r'x')), false).update
-        let pendingPasteUpdate = planReview.paste("-mutated")
-        let updatePendingInputFrozen = !pendingKeyUpdate.renderRequested && !pendingPasteUpdate.renderRequested &&
-            planReview.probeSnapshot().editorValue == "pending draft"
-        planReview.probeSetPending(false, false)
-        planReview.probeSetEditor("", "pending draft")
-
-        planReview.probeSetNavigation(0, PlanReviewFocus.Actions, 0, planReview.probeSnapshot().scroll)
-        planReview.probeSetPending(true, false)
-        let pendingActionsArea = planReview.probeSnapshot().actionsArea
-        let pendingMouseUpdate = planReview.updateMouse(
-            MouseEvent(
-                MouseKind.Down,
-                MouseButton.Left,
-                pendingActionsArea.x,
-                pendingActionsArea.y + 2
-            )
-        )
-        let decisionPendingMouseFrozen = !pendingMouseUpdate.renderRequested && planReview.probeSnapshot().selected == 0
-        planReview.probeSetPending(false, false)
-
-        // Consumption is delivered before approved-plan execution finishes.
-        // A timer-driven mailbox refresh must retire the full-screen overlay
-        // immediately without stopping the still-running main turn.
-        planReview.probeSetPending(true, false)
-        working = true
-        mainWorking = true
-        turnOwnerSubagentId = ""
-        UiReducer.reduce(ui, UiEvent.SetWorking(true))
-        mailbox.push(TuiAgentEvent.PlanReviewConsumed(planContentHash(body)))
-        let consumedUpdate = update(
-            Event.Timer(
-                TimerEvent(
-                    AGENT_STREAM_TIMER,
-                    elapsedMillis: 80
-                )
-            )
-        )
-        _ = narrowTerminal.draw({frame => render(frame)})
-        let consumedVisual = narrowBackend.snapshot()
-        let consumedBeforeResult = !planReview.isActive() && !planReview.hasPending() &&
-            status == "executing approved plan" && working && mainWorking &&
-            updateInvalidates(consumedUpdate, viewportArea) &&
-            !consumedVisual.contains("Approve and execute · fresh context") &&
-            !consumedVisual.contains("reviewing plan")
-
-        working = previousWorking
-        mainWorking = previousMainWorking
-        turnOwnerSubagentId = previousTurnOwner
-        workingElapsedMillis = previousWorkingElapsedMillis
-        modalRefreshOnly = previousModalRefreshOnly
-        UiReducer.reduce(ui, UiEvent.SetWorking(previousUiWorking))
-        _ = planReview.open(body)
-        status = planReview.statusText()
-
-        planReview.probeSetPending(true, false)
-        mailbox.complete(TuiTurnResult(
-            "",
-            "plan review failed: stale plan",
-            planReviewDisposition: TuiPlanReviewDisposition.Retain
-        ))
-        let failedDecisionAction = drainMailbox()
-        let failedDecisionState = planReview.probeSnapshot()
-        let failedDecisionPreserved = failedDecisionAction.isNone() && !failedDecisionState.decisionPending &&
-            planReview.isActive() && failedDecisionState.contentHash == planContentHash(body) &&
-            failedDecisionState.body == body
-
-        planReview.probeSetPending(true, false)
-        mailbox.complete(
-            TuiTurnResult(
-                "",
-                "error: fixture approved-plan execution failed",
-                planReviewDisposition: TuiPlanReviewDisposition.Consumed
-            )
-        )
-        let acceptedDecisionAction = drainMailbox()
-        match (acceptedDecisionAction) {
-            case Some(action) => _ = applyTurnAction(action)
-            case None => ()
-        }
-        let acceptedDecisionClosed = !planReview.isActive() && !planReview.probeSnapshot().decisionPending &&
-            status == "error: fixture approved-plan execution failed"
-
-        _ = openModal(TuiModalKind.Model, ["model-a", "model-b"])
-        _ = updateModal(KeyEvent(KeyCode.Char(r'j')))
-        let genericJSelected = modalSelected == 1
-        _ = updateModal(KeyEvent(KeyCode.Esc))
-        let genericClosed = modal.isNone()
-
-        modal = previousModal
-        modalItems = previousItems
-        modalSelected = previousSelected
-        documentTitle = previousTitle
-        documentBody = previousBody
-        documentScroll = previousScroll
-        documentRevision = previousRevision
-        planReview.restoreProbe(previousPlanState)
-        status = previousStatus
-        viewportArea = previousViewportArea
-        viewportHeight = previousViewportHeight
-        activeModalArea = previousActiveModalArea
-        mailboxChanged = previousMailboxChanged
-        mailboxViewportRefresh = previousMailboxViewportRefresh
-        working = previousWorking
-        mainWorking = previousMainWorking
-        turnOwnerSubagentId = previousTurnOwner
-        UiReducer.reduce(ui, UiEvent.SetWorking(previousUiWorking))
-
-        newPlanStateReset && updateResultPreservedState && opened && globalShortcutStatusSynced && fullScreen &&
-            cachePrimed &&
-            unchangedFrameReused && actionTopBoundary && downSelected &&
-            actionSelectionReused && jSelected && backAtFirst && wideBodyFocused && wideTocFocused &&
-            tocJumpedToRenderedHeading && bodyTopBoundary && firstScrollChanged && bodyScrollReused && endVisible &&
-            bodyBottomBoundary && actionBottomBoundary && narrowBodyFocused && mouseUsedPlanGeometry &&
-            narrowSkippedHiddenToc && editOpened && emptyEditErrorVisible && pasteRouted && editCancelled &&
-            updatePendingInputFrozen && decisionPendingMouseFrozen && consumedBeforeResult &&
-            failedDecisionPreserved && acceptedDecisionClosed && genericJSelected && genericClosed
-    }
 
     func composerHistoryNavigationObserved(): Bool {
         let previousValue = composer.area.value
@@ -9912,7 +9591,6 @@ class AgentScreen <: TerminalFrameProvider {
 
     func todoEditorMouseCaptureObserved(): Bool {
         let previousTodoState = todos.captureProbeState()
-        let previousPlanState = planReview.beginProbe()
         let previousArea = transcriptArea
         let previousTotal = transcriptTotalLines
         let previousVisible = transcriptVisibleLines
@@ -9922,8 +9600,6 @@ class AgentScreen <: TerminalFrameProvider {
         // Plan review owns mouse routing ahead of the Todo editor. Isolate the
         // probe from the screen's current modal state, then restore that state
         // exactly as the Ask editor isolation probe does below.
-        let _ = planReview.open("# Competing plan review\n")
-        planReview.close()
         let _ = todos.open(TuiTodoLoadResult(true, "- [ ] mouse capture\n", "fixture"))
         let frameArea = Rect(0, 0, 80, 24)
         todos.renderEditor(Frame(frameArea, Buffer(frameArea)), axyndraTheme())
@@ -9946,7 +9622,6 @@ class AgentScreen <: TerminalFrameProvider {
         let directCaptured = scrollOffset == 0 && todos.editorVisible(ui.approvalId.isSome())
 
         todos.restoreProbeState(previousTodoState)
-        planReview.restoreProbe(previousPlanState)
         transcriptArea = previousArea
         transcriptTotalLines = previousTotal
         transcriptVisibleLines = previousVisible
@@ -9957,7 +9632,6 @@ class AgentScreen <: TerminalFrameProvider {
 
     func askEditorIsolationObserved(): Bool {
         let previousAskState = ask.captureProbeState()
-        let previousPlanState = planReview.beginProbe()
         let previousTodoEditing = todos.suspendEditorForProbe()
         let previousUi = ui
         let previousStatus = status
@@ -9967,7 +9641,7 @@ class AgentScreen <: TerminalFrameProvider {
         let previousStart = transcriptStartLine
         let previousOffset = scrollOffset
 
-        planReview.close()
+        pluginView.close()
         ui = UiSnapshot()
         let request = TuiAskRequest(
             "ask-editor-isolation",
@@ -10016,7 +9690,6 @@ class AgentScreen <: TerminalFrameProvider {
             revisionAfterSave > revisionAfterType
 
         ask.restoreProbeState(previousAskState)
-        planReview.restoreProbe(previousPlanState)
         todos.restoreEditorForProbe(previousTodoEditing)
         ui = previousUi
         match (virtualTranscriptSource) {

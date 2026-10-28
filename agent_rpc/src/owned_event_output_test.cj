@@ -85,12 +85,34 @@ private func ownedRpcTestBase64(value: String): Array<Byte> {
     result
 }
 
+private func ownedRpcBorrowedSourceProducer(source: LogicalJsonOwnerReservation,
+    delivery: OwnedRpcValueDelivery): Array<UInt8> {
+    source.ensureRetainedPeak(3145728 * 8 + 1048576)
+    let suffix = "雪🙂"
+    let text = String.fromUtf8(Array<Byte>(3145728 - suffix.size, repeat: b'x')) + suffix
+    let value = objectValue([ValueField("schema", textValue("axyndra.view-observation/v1")),
+        ValueField("primary_content", objectValue([ValueField("encoding", textValue("utf8")),
+            ValueField("text", textValue(text))]))])
+    let expected = SHA256()
+    expected.write("{\"schema\":\"axyndra.view-observation/v1\",\"primary_content\":{\"encoding\":\"utf8\",\"text\":\"".toArray())
+    expected.write(text.toArray()); expected.write("\"}}".toArray())
+    @Expect(delivery.runBorrowed(value, source, 2, { => "rpc-owned-test" }).isOk())
+    expected.finish()
+}
+
+private func ownedRpcBorrowedUnacknowledgedProducer(source: LogicalJsonOwnerReservation,
+    delivery: OwnedRpcValueDelivery): Result<Unit> {
+    delivery.runBorrowed(objectValue([ValueField("type", textValue("plugin_view_document")),
+        ValueField("schema", textValue("axyndra.view-observation/v1")),
+        ValueField("host_status", textValue("unknown"))]), source, 2, { => "rpc-owned-test" })
+}
+
 @Test
 class OwnedProductRpcEventOutputTests {
     @TestCase
     func CompleteSmallRawEventMatchesOriginalVocabularyAndOnlyActualFrameAckRetires(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
-        let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
+        let output = OwnedRpcTestOutput(); let delivery = OwnedRpcValueDelivery(event, output)
         @Expect(delivery.run(1, { => "rpc-owned-test" }).isOk(), true)
         @Expect(event.isAcknowledged(), false)
         @Expect(output.small, "{\"type\":\"agent_event\",\"sequence\":1,\"runId\":\"owned-rpc-run\",\"event\":{\"code\":\"tool.execution_completed\",\"output\":\"xxxxxxxx雪🙂\"}}")
@@ -100,7 +122,7 @@ class OwnedProductRpcEventOutputTests {
     @TestCase
     func OriginalV2Base64ChunksReassembleCompleteNulAndUnicodeWithoutLogicalAggregateString(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, true)
-        let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
+        let output = OwnedRpcTestOutput(); let delivery = OwnedRpcValueDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), true)
         let expected = SHA256()
         expected.write("{\"type\":\"agent_event\",\"sequence\":1,\"runId\":\"owned-rpc-run\",\"event\":{\"code\":\"tool.execution_completed\",\"output\":\"".toArray())
@@ -115,7 +137,7 @@ class OwnedProductRpcEventOutputTests {
     @TestCase
     func OriginalV1OversizeFailureStillHasNoEmptyIdAndFullDataAliasRetiresAfterPhysicalFrameAck(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, false)
-        let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
+        let output = OwnedRpcTestOutput(); let delivery = OwnedRpcValueDelivery(event, output)
         @Expect(delivery.run(1, { => "rpc-owned-test" }).isOk(), true)
         @Expect(output.small, failure("", "frame", "RPC output exceeds the v1 frame limit; negotiate protocol v2"))
         @Expect(output.frames, 1)
@@ -125,7 +147,7 @@ class OwnedProductRpcEventOutputTests {
     func TypedCallbackReturningOkWithoutActualAckKeepsOriginalAndFramePaidUntilLaterRetirement(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
         let output = OwnedRpcTestOutput(); output.acknowledge = false
-        let delivery = OwnedProductRpcEventDelivery(event, output)
+        let delivery = OwnedRpcValueDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), false)
         @Expect(delivery.closeAfterDeliveryRetirement().isOk(), false)
         @Expect(event.isAcknowledged(), false); @Expect(pool.usage()[1] > 0, true)
@@ -137,7 +159,7 @@ class OwnedProductRpcEventOutputTests {
     func ActualWriteErrorCanBePhysicallyCleanedAfterLaterAckWithoutReplayingOrChangingFailure(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 8, false)
         let output = OwnedRpcTestOutput(); output.fail = true
-        let delivery = OwnedProductRpcEventDelivery(event, output)
+        let delivery = OwnedRpcValueDelivery(event, output)
         let failed = delivery.run(2, { => "rpc-owned-test" })
         @Expect(failed.isOk(), false)
         @Expect(delivery.closeAfterDeliveryRetirement().isOk(), false)
@@ -150,7 +172,7 @@ class OwnedProductRpcEventOutputTests {
     func OriginalBankPressureRejectsBeforeFrameConstructionAndErrorCleanupClosesOnlyActualProducerData(): Unit {
         let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY); let event = ownedRpcTestFixture(pool, 1048576, false)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1), pool.acquire(1)]
-        let output = OwnedRpcTestOutput(); let delivery = OwnedProductRpcEventDelivery(event, output)
+        let output = OwnedRpcTestOutput(); let delivery = OwnedRpcValueDelivery(event, output)
         @Expect(delivery.run(2, { => "rpc-owned-test" }).isOk(), false)
         @Expect(output.frames, 0)
         @Expect(delivery.closeAfterDeliveryRetirement().isOk(), true)
@@ -163,5 +185,33 @@ class OwnedProductRpcEventOutputTests {
         @Expect(event.withEvent(65536, { actual => @Expect(acpUpdateFromEvent(actual).isNone(), true); Result.Ok(()) }).isOk(), true)
         @Expect(ignoreOwnedAcpToolExtension(event).isOk(), true)
         @Expect(event.isAcknowledged(), true); @Expect(pool.usage()[1], 0)
+    }
+    @TestCase
+    func BorrowedThreeMiBSourceStreamsExactOriginalV2ChunksWithoutAnAggregateCopy(): Unit {
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
+        let source = pool.acquire(1)
+        let output = OwnedRpcTestOutput(); let delivery = OwnedRpcValueDelivery(output)
+        let expected = ownedRpcBorrowedSourceProducer(source, delivery)
+        @Expect(output.hash.finish(), expected)
+        @Expect(output.maximum <= 1048576)
+        @Expect(delivery.closeAfterDeliveryRetirement().isOk())
+        source.close()
+        @Expect(pool.usage()[0], 0); @Expect(pool.usage()[1], 0)
+    }
+
+    @TestCase
+    func BorrowedSourceReturnCannotRefundAnUnacknowledgedEncodedFrame(): Unit {
+        let pool = LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
+        let source = pool.acquire(1)
+        let output = OwnedRpcTestOutput(); output.acknowledge = false
+        let delivery = OwnedRpcValueDelivery(output)
+        let result = ownedRpcBorrowedUnacknowledgedProducer(source, delivery)
+        @Expect(result.error().getOrThrow().code, "rpc.owned_frame_ack_pending")
+        source.close()
+        @Expect(delivery.closeAfterDeliveryRetirement().isOk(), false)
+        @Expect(pool.usage()[1] > 0)
+        @Expect(output.last.getOrThrow().closeAfterFrameRetirement().isOk())
+        @Expect(delivery.closeAfterDeliveryRetirement().isOk())
+        @Expect(pool.usage()[0], 0); @Expect(pool.usage()[1], 0)
     }
 }

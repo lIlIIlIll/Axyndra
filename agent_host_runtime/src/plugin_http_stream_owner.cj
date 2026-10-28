@@ -369,7 +369,10 @@ class HostManagedHttpInvocation <: HostManagedServiceInvocation {
     }
     public func onServiceRequest(invocationId: String, requestId: String, name: String, argumentsJson: String): JavaScriptHostResult<String> {
         if (!gate.accept(invocationId, requestId)) { return hostPluginServiceError("http.stream_request_invalid", "HTTP request identity is closed or repeated") }
-        match (validate()) { case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
+        // Read only dequeues an admitted pump. The complete current authority
+        // check in readExchange still precedes every returned body publication.
+        let current = if (name == "network.http.stream.read") { validateLifetime() } else { validate() }
+        match (current) { case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(_) => () }
         let args = match (hostJavascriptPluginDecodeValue(argumentsJson, maxBytes: 196608)) {
             case Result.Err(error) => return hostPluginServiceAgentError(error); case Result.Ok(value) => value
         }

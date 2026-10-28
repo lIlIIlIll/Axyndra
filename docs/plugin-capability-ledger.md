@@ -11,8 +11,9 @@ Rebuild the machine-checkable form with `python3 scripts/plugin_capability_ledge
 
 - `plugin` — a package under `plugins/` that builds on its own.
 - `host` — the capability lives in the host (`agent_product` and friends).
-- A row is **externalized** only when a plugin package exists; existing host
-  code is not evidence that migration happened.
+- `externalized` records the presence of a mapped plugin package. It does not
+  prove that every entrypoint or lifecycle requirement is accepted. F19 maps
+  the shipped `workflow.plan_review` component, not every UI feature.
 - Coverage is counted from **both** suites a plugin may own: Cangjie unit tests
   (`src/*_test.cj`) and/or the black-box Python harness (`check.py`). Several
   plugins carry only the harness, so counting one form alone reports false gaps.
@@ -39,7 +40,7 @@ Rebuild the machine-checkable form with `python3 scripts/plugin_capability_ledge
 | F16 | Model providers | `plugins/model_providers` | externalized | 0 | 1 |
 | F17 | Model selection policy | — | **host only** | — | — |
 | F18 | Ask / forms | — | **host only** | — | — |
-| F19 | Result / diff / workflow views | — | **host only** | — | — |
+| F19 | Result, diff and workflow views | `plugins/workflow` | externalized plan-review component | 8 | 1 |
 | F20 | Run insights / status | — | **host only** | — | — |
 | F21 | Checkpoint / undo entry | — | **host only** | — | — |
 | F22 | Extra guard / transform / observer | — | **host only** | — | — |
@@ -67,32 +68,33 @@ Shared general-purpose libraries remain host dependencies by design
 | `coding` | 9 |
 | `full` | 17 |
 
-## Open gaps (not achievements)
+## Inventory limits and remaining gaps
 
-1. **F15, F17–F22 have no plugin package.** Subagent/review policy, model
-   selection policy, ask/forms, views, insights, checkpoint-undo entry and
-   guard/transform/observer contributions remain in `agent_product`
-   (`approval_reviewer.cj`, `config.cj`, `application.cj`). Issue #48's
-   completion definition requires all of F01–F22 to have an owner and target
-   component, so these rows are the outstanding work.
-2. Every externalized capability carries at least one suite: eight have a
-   Cangjie unit suite, twelve have a Python black-box harness (F12 memory is the
-   one with a unit suite and no harness). This counter reports *presence*, not
-   adequacy - a harness existing is not evidence that its cases cover the
-   capability's exit conditions, and no row here is claimed as accepted.
-3. **No plugin provides a Tool-free contribution.** Issue #48 §3.1 requires at
-   least one UI/command plugin with no Tool to prove the host protocol is not
-   simply "an MCP wrapper" (T1-03).
+1. **F15, F17, F18 and F20–F22 have no mapped plugin package.** Subagent and
+   review policy, model selection policy, ask/forms, insights, checkpoint-undo
+   entry and guard/transform/observer contributions remain in the host.
+   F19 now has the declared Native `plan_review` View and Command in
+   `plugins/workflow/axyndra.plugin.json`. Its business logic lives in
+   `plugins/workflow/src/plan_view.cj`. This component does not establish that
+   all result, diff and workflow surfaces have migrated.
+2. Every mapped package carries a Cangjie unit file, a Python harness, or both.
+   These counts measure file presence, not scenario coverage or passing tests.
+   A shared package's suite counts appear in each mapped row. Do not sum the
+   rows to count distinct tests.
+3. **Tool-free View and Command fixtures now execute through the real host.**
+   `support_tests/view_form_fixture` declares no Tool. The permanent public
+   and authenticated-input matrices and the actual PTY lifecycle checks
+   preserve zero execution and model facts. The shipped Workflow package
+   separately provides plan review alongside its Tools. Artifact-specific
+   results and remaining acceptance work are recorded only in the
+   [Issue #45 acceptance ledger](issue-45-draft-status.md).
 4. This ledger records **ownership and packaging state only**. It is not
    evidence for the enforcement, lifecycle, recovery or fault-matrix rows of
    issue #48 §9, none of which are claimed here.
 5. **Declared input bounds are reported per package, not per row.**
-   `plugin_packages_without_declared_input_bound` lists packages whose sources
-   never reference the host's bounded-payload channel
-   (`ordinaryToolPayloadLimitsFromValue` / `OrdinaryToolPayloadLimits` /
-   `tool_payload_limits` / `maxInputBytes`); on the current tree it is 14 of 17,
-   with `program`, `shell_readonly` and `workspace` the only three that declare
-   one. This measures the **declaration**, not enforcement, and it is
-   deliberately REPORT-ONLY and not enforced by `--check`: issue #48 requires a
-   bounded protocol as a target and the tree is non-conforming, so enforcing it
-   today would fail the gate on a known, decision-pending gap.
+   `plugin_packages_without_declared_input_bound` reports the absence of this
+   probe's recognized API tokens. The current result is 14 of 17 packages.
+   This legacy declaration heuristic does not prove that input is unbounded.
+   For example, MCP's current `Limits` class handles `payload_limits` and bounds
+   HTTP reads separately. The report remains outside `--check`. Current protocol
+   and consumer-boundary verification remains required.

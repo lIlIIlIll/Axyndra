@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -13,7 +14,7 @@ import yjson_support.*
 class PluginLivePolicyParentSourceStreamedTests{
     @TestCase
     func OnePaidCellPhaseKeepsOutputAndSessionOwnersUntilActualFullComparison():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/phase.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/phase.sqlite")
         let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let expected=encodeStoredValue(objectValue([ValueField("unicode",textValue("中文😀\u{0000}")),ValueField("number",JsonNode.number("1e0"))]))
         try{
@@ -33,7 +34,7 @@ class PluginLivePolicyParentSourceStreamedTests{
     }
     @TestCase
     func ChangedCompleteCellFailsAndCallerReservationRemainsLive():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/changed.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/changed.sqlite")
         let pool=LogicalJsonOwnerBudget();let owner=pool.acquire(65536)
         let expected=encodeStoredValue(textValue("whole expected"));let changed=encodeStoredValue(textValue("whole changed!"))
         try{
@@ -50,7 +51,7 @@ class PluginLivePolicyParentSourceStreamedTests{
     }
     @TestCase
     func TrailingStoredBytesCannotPassTheOriginalEofMeasurement():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/eof.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/eof.sqlite")
         let pool=LogicalJsonOwnerBudget();let held=pool.acquire(65536)
         try{
             db.transaction<Unit>{tx=>

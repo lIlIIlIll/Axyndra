@@ -35,8 +35,8 @@ public class PluginContributionDefinition {
             throw IllegalArgumentException("only a Service may declare preparation references")
         }
         if (!allowedUserControls.isEmpty() && (kind != PluginContributionKind.Command ||
-            allowedUserControls.size != 1 || allowedUserControls[0] != "continuation")) {
-            throw IllegalArgumentException("only a Command may request the bounded continuation user control")
+            allowedUserControls.size != 1 || !["continuation", "plan_review"].contains(allowedUserControls[0]))) {
+            throw IllegalArgumentException("only a Command may request exactly one supported user control")
         }
         if (executionProfile != PluginToolExecutionProfile.Brokered && kind != PluginContributionKind.Tool) {
             throw IllegalArgumentException("only a Tool may request the data-only execution restriction")

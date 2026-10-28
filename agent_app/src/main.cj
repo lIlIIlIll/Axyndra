@@ -2103,7 +2103,10 @@ func runPrint(product: ProductRuntime, prompt: String, failures: CliFailureOutpu
                 case Some(approval) =>
                     io.println("approval required: " + approval.operationId.value)
                     3
-                case None => 0
+                case None => match (response.action) {
+                    case ApplicationAction.OpenPluginView(route) => runPluginCli(session, ["view", route], io: io)
+                    case _ => 0
+                }
             }
     }
 }
@@ -2169,6 +2172,12 @@ func runJsonStream(product: ProductRuntime, prompt: String, failures: CliFailure
             1
         case Result.Ok(response) =>
             stream.finish()
+            let viewStatus = if (response.approval.isNone()) {
+                match (response.action) {
+                    case ApplicationAction.OpenPluginView(route) => runPluginCli(session, ["view", route, "--json"], io: io)
+                    case _ => 0
+                }
+            } else { 0 }
             let fields = ArrayList<ValueField>()
             fields.add(ValueField("type", textValue("result")))
             fields.add(
@@ -2247,7 +2256,7 @@ func runJsonStream(product: ProductRuntime, prompt: String, failures: CliFailure
             if (response.approval.isSome()) {
                 3
             } else {
-                0
+                viewStatus
             }
     }
 }
@@ -3008,7 +3017,6 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
                 emitApproval(result); finish()
                 let original = tuiTurnData113(result, prompt, false)
                 TuiTurnResult(original.text, original.status, action: original.action,
-                    planReviewDisposition: original.planReviewDisposition,
                     ownedRegistryDisplay167: Some(display))
         }
     }
@@ -3174,138 +3182,52 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
         }
     }
 
-    public func reviewPlan(
-        contentHash: String,
-        decision: TuiPlanReviewDecision,
-        feedback: String,
-        events: TuiAgentEventSink
-    ): TuiTurnResult {
-        match (decision) {
-            case TuiPlanReviewDecision.UpdatePlan => return match (session.updateLatestPlan(contentHash, feedback)) {
-                case Result.Ok(updated) => TuiTurnResult(
-                    "",
-                    "plan updated",
-                    action: TuiTurnAction.OpenPlanReview(updated),
-                    planReviewDisposition: TuiPlanReviewDisposition.Retain
-                )
-                case Result.Err(error) => TuiTurnResult(
-                    "",
-                    "plan update failed: " + error.message,
-                    planReviewDisposition: planReviewFailureDisposition(error)
-                )
+    public func loadPluginView(routeName: String): TuiTurnResult {
+        let allocate = match (ownerAllocation180) {
+            case Some(value) => value
+            case None => return TuiTurnResult("", "error: view.frontend_owner_missing") }
+        let source = allocate(65536)
+        let paid = try { source.acquireIndependentDataFrame(65536) } finally { source.close() }
+        var retained = false
+        try {
+            let observed = session.withJavaScriptPluginViewDocument<TuiPluginViewDocument>(
+                routeName, "{}", "views-v1", { metadata, model, primary =>
+                    let modelBytes = logicalJsonWriteReservationBytes(model, 196608)
+                    let metadataBytes = logicalJsonWriteReservationBytes(metadata, 4096)
+                    paid.ensureRetainedPeak(2097152 + primary.size * 8 + modelBytes * 16 + metadataBytes * 16)
+                    let document = TuiPluginViewDocument(encodeAgentValue(metadata), encodeAgentValue(model),
+                        String.fromUtf8(primary.toArray()), { bytes => paid.ensureRetainedPeak(bytes) }, { => paid.close() })
+                    Result.Ok(document)
+                })
+            match (observed) {
+                case Result.Err(error) => TuiTurnResult("", "error: " + error.describe())
+                case Result.Ok(document) =>
+                    retained = true
+                    TuiTurnResult("", "Host View loaded", action: TuiTurnAction.PluginViewLoaded(document))
             }
-            case _ => ()
-        }
-        let current = match (session.handle("/plan-review")) {
-            case Result.Ok(value) => value.text
-            case Result.Err(error) => return TuiTurnResult(
-                "",
-                "plan review failed: " + error.message,
-                planReviewDisposition: planReviewFailureDisposition(error)
-            )
-        }
-        if (planContentHash(current) != contentHash) {
-            return TuiTurnResult(
-                "",
-                "plan changed since review opened; refreshed latest plan",
-                action: TuiTurnAction.OpenPlanReview(current),
-                planReviewDisposition: TuiPlanReviewDisposition.Retain
-            )
-        }
+        } finally { if (!retained) { paid.close() } }
+    }
+
+    public func pluginViewAction(viewId: String, revision: String, actionId: String,
+        fields: Array<TuiPluginViewField>, events: TuiAgentEventSink): TuiTurnResult {
         begin(events)
-        let note = feedback.trimAscii()
-        var disposition = TuiPlanReviewDisposition.Retain
-        var result: Result<ApplicationResponse> = match (decision) {
-            case TuiPlanReviewDecision.ApproveAndExecute => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "keep",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveFresh => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "fresh",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveCompact => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "compact",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveKeep => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "keep",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.Refine => session.handle(
-                "[plan-review refine hash=" + contentHash + "] Revise the structured plan without executing it." +
-                    if (note == "") {
-                        " Ask for refinement feedback before changing the plan."
-                    } else {
-                        "\n\n" + note
-                    }
-            )
-            case TuiPlanReviewDecision.KeepPlanning => session.handle(
-                "[plan-review continue hash=" + contentHash + "] Continue planning without executing." + if (note == "") {
-                    ""
-                } else {
-                    " Feedback: " + note
-                })
-            case TuiPlanReviewDecision.Reject => session.handle(
-                "[plan-review rejected hash=" + contentHash + "] The plan was rejected. Preserve its history and " +
-                    "revise it before execution." + if (note == "") {
-                    ""
-                } else {
-                    " Reason: " + note
-                })
-            case TuiPlanReviewDecision.UpdatePlan => Result.Err(
-                AgentError(
-                    AgentErrorKind.Internal,
-                    "plan_review.update_unreachable",
-                    "plan update should complete before starting an agent turn"
-                )
-            )
-        }
-        match (decision) {
-            case TuiPlanReviewDecision.ApproveAndExecute | TuiPlanReviewDecision.ApproveFresh |
-                TuiPlanReviewDecision.ApproveCompact | TuiPlanReviewDecision.ApproveKeep => ()
-            case _ => disposition = if (result.isOk()) {
-                TuiPlanReviewDisposition.Consumed
-            } else {
-                TuiPlanReviewDisposition.Retain
-            }
-        }
+        let result = try {
+            session.invokeJavaScriptPluginViewAction(viewId, revision, actionId,
+                objectValue(fields.map { field => ValueField(field.id, textValue(field.value)) }),
+                { kind, message => events(TuiAgentEvent.PluginNotice(kind, message)) })
+        } catch (error: Exception) { finish(); throw error }
+        let paidFailure = emitTuiTurnFailure113(result, events)
+        emitApproval(result); finish()
+        tuiTurnData113(result, "", paidFailure)
+    }
+
+    public func confirmPluginView(viewId: String, revision: String, requestDigest: String,
+        confirmed: Bool, events: TuiAgentEventSink): TuiTurnResult {
+        begin(events)
+        var result = try {
+            session.confirmJavaScriptPluginView(viewId, revision, requestDigest, confirmed,
+                onClosed: { id, reason => events(TuiAgentEvent.PluginViewClosed(id, reason)) })
+        } catch (error: Exception) { finish(); throw error }
         if (result.isOk()) {
             while (true) {
                 match (session.takeQueuedAtSafeBoundary(result)) {
@@ -3314,16 +3236,13 @@ class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailure
                 }
             }
         }
-        let paidFailure113 = emitTuiTurnFailure113(result, events)
-        emitApproval(result)
-        finish()
-        let tui = tuiTurnData113(result, "", paidFailure113)
-        TuiTurnResult(
-            tui.text,
-            tui.status,
-            action: tui.action,
-            planReviewDisposition: disposition
-        )
+        let paidFailure = emitTuiTurnFailure113(result, events)
+        emitApproval(result); finish()
+        tuiTurnData113(result, "", paidFailure)
+    }
+
+    public func closePluginView(viewId: String): Bool {
+        session.closeJavaScriptPluginView(viewId).isOk()
     }
 
     public func answerAsk(
@@ -4294,13 +4213,6 @@ func tuiByteSize(value: Int64): String {
     (value / 1048576).toString() + "." + ((value % 1048576) * 10 / 1048576).toString() + " MiB"
 }
 
-func planReviewFailureDisposition(error: AgentError): TuiPlanReviewDisposition {
-    if (error.code == "application.plan_mode_inactive") {
-        TuiPlanReviewDisposition.Consumed
-    } else {
-        TuiPlanReviewDisposition.Retain
-    }
-}
 
 func emitTurnError(
     result: Result<ApplicationResponse>,
@@ -4324,7 +4236,6 @@ func tuiResult(
                 "approval required · " + approval.toolName + " · " + approval.operationId.value
             )
             case None =>
-                let planReview = response.planReview
                 let documentTitle = localDocumentTitle(prompt)
                 TuiTurnResult(
                     if (documentTitle.isSome()) {
@@ -4338,12 +4249,9 @@ func tuiResult(
                         case Some(snapshot) => runStatusName(snapshot.status)
                         case None => "ready"
                     },
-                    action: match (planReview) {
-                        case Some(body) => TuiTurnAction.OpenPlanReview(body)
-                        case None => match (documentTitle) {
-                            case Some(title) => TuiTurnAction.OpenDocument(title, response.text)
-                            case None => applicationTuiAction(response)
-                        }
+                    action: match (documentTitle) {
+                        case Some(title) => TuiTurnAction.OpenDocument(title, response.text)
+                        case None => applicationTuiAction(response)
                     }
                 )
         }
@@ -4511,6 +4419,8 @@ func applicationTuiAction(response: ApplicationResponse): TuiTurnAction {
         case ApplicationAction.OpenProviderSetup => TuiTurnAction.OpenProviderSetup
         case ApplicationAction.OpenModelSelector => TuiTurnAction.OpenModelSelector
         case ApplicationAction.OpenBranchSelector => TuiTurnAction.OpenBranchSelector
+        case ApplicationAction.OpenPluginView(route) => TuiTurnAction.OpenPluginView(route)
+        case ApplicationAction.ConfirmPluginView(value) => TuiTurnAction.ConfirmPluginView(value)
     }
 }
 

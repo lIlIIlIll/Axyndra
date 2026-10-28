@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_CASES = 169
+EXPECTED_CASES = 172
 
 
 def digest(path):
@@ -61,7 +61,7 @@ def prepare(output=None):
     evidence = package.parent / (package.name + '-validation')
     evidence.mkdir(parents=True, exist_ok=False)
     record = {'status': 'FAIL', 'package': str(package), 'expected_cases': EXPECTED_CASES,
-              'scope': 'All 169 packaged native Workflow Provider/Tool/Command cases: all original 163 plus six Native Hub family controls, including exact read-only observation placeholders and unchanged full output oracles. Actual Product canonical authority and SQLite tests run separately.'}
+              'scope': 'All 172 packaged native Workflow Provider/Tool/Command/View cases: all original 163, six Native Hub family controls, and three source-bound plan-review View cases. Exact read-only observation placeholders and full output oracles remain unchanged. Actual Product canonical authority and SQLite tests run separately.'}
     try:
         source = ast.parse((plugin / 'check.py').read_text(encoding='utf-8'))
         cases = [node.name for node in ast.walk(source)

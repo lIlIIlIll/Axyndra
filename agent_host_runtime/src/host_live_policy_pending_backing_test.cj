@@ -16,6 +16,7 @@ class LivePolicyActualPendingBacking315Tests {
     @TestCase
     func OriginalCapturedMetadataBackingSurvivesOriginalPhysicalClose():Unit{
         let pressure=reserveNativeDocumentPayload(8388608)
+        pressure.ensureRetainedPeak(nativeControlMetadataCapacity113()-67108864)
         let root=Directory.createTemp("/tmp").toString()
         let session=HostDocumentDataSession(HostArtifactStore(root))
         var retained:?HostLivePolicySessionCustody=None<HostLivePolicySessionCustody>

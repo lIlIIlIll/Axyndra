@@ -31,7 +31,7 @@ class ActualPeerWaitBorrowCustody171Tests {
             let retirementRefused = AtomicBool(false); let pressureRefused = AtomicBool(false)
             projection.withValue151({ actual =>
                 try { projection.closeUnpublished151() } catch (_: Exception) { retirementRefused.store(true) }
-                try { projection.fundAdditional151(agent_extension_runtime.nativeControlMetadataCapacity113(), 8) } catch (_: Exception) { pressureRefused.store(true) }
+                try { projection.fundAdditional151(nativeControlMetadataCapacity113(), 8) } catch (_: Exception) { pressureRefused.store(true) }
                 @Expect(retirementRefused.load()); @Expect(pressureRefused.load())
                 @Expect(encodeAgentValue(actual), expected)
                 @Expect(actual.field("waited").getOrThrow().field("created_at").getOrThrow().asInt64(), Int64.Min)

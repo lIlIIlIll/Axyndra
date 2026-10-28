@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -9,7 +10,7 @@ import std.unittest.testmacro.*
 class ContinuationDocumentReadScopeTests {
     @TestCase
     func exactSqliteMetadataCountsUtf8NulAndNullBeforeReturningData(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/scope.sqlite")
         let budget = LogicalJsonOwnerBudget(maximumCharged: 67108864)
         let scope = ContinuationDocumentReadScope({ bytes => budget.acquire(bytes) })
@@ -27,7 +28,7 @@ class ContinuationDocumentReadScopeTests {
 
     @TestCase
     func capacityFailurePrecedesInvalidUtf8FfiCopyAndFinallyReleases(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db = SqliteDatabase(root + "/scope.sqlite")
         let budget = LogicalJsonOwnerBudget(maximumCharged: 16777216)
         let scope = ContinuationDocumentReadScope({ bytes => budget.acquire(bytes) })

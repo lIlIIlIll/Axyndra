@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "repository": "git@github-liliilill:lIlIIlIll/cjtui.git",
+  "repository": "https://github.com/lIlIIlIll/cjtui.git",
   "baseline_commit": "ab76bc1b39ed3a9261487beb71b4d1967accc2a2",
   "api_contract": "docs/api-contract-v1.txt",
   "api_contract_sha256": "ac19052c705ca0460d7f39e8f48e876a146014c6e0bd5e91a4a01812d5630494",

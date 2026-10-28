@@ -905,6 +905,19 @@ class NativeProcessInput <: InputStream & Resource & ProcessReadOnlyIoCustodyBor
     }
 }
 
+// The supervisor writes one atomic four-byte command status. Wait for that
+// record cooperatively instead of occupying a scheduler worker for the entire
+// lifetime of a persistent child. The existing readers still own consumption,
+// errors and (in owned mode) the separate physical tree-reap receipt.
+func nativeProcessAwaitStatus(fd: Int32): Int32 {
+    while (true) {
+        let ready = unsafe { process4cj_wait_readable(fd, 10) }
+        if (ready != 0) { return ready }
+        sleep(Duration.millisecond)
+    }
+    0
+}
+
 class LinuxNativeProcess <: ProcessPlatformProcess {
     private let nativePid: Int64
     private let nativeStartTime: Int64
@@ -1003,7 +1016,8 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
                 if(ownedStatusWaitAttempted180){throw ProcessError(ProcessErrorKind.Io,"actual native status reader was already entered")}
                 ownedStatusWaitAttempted180=true
             }finally{ownedReturnLock180.unlock()}
-            let result=unsafe{process4cj_wait_status_owned180(statusFd)}
+            let ready = nativeProcessAwaitStatus(statusFd)
+            let result = if (ready < 0) { Int64(ready) } else { unsafe { process4cj_wait_status_owned180(statusFd) } }
             if(result<0){throw ProcessError(ProcessErrorKind.Io,"actual native status read failed errno="+(-result).toString())}
             ownedReturnLock180.lock();try{ownedCommandStatus180=result;ownedStatusReturned180=true}
             finally{ownedReturnLock180.unlock()}
@@ -1013,6 +1027,11 @@ class LinuxNativeProcess <: ProcessPlatformProcess {
         }
         let fd = statusFd
         statusFd = -1
+        let ready = nativeProcessAwaitStatus(fd)
+        if (ready < 0) {
+            let _ = unsafe { process4cj_close(fd) }
+            return Int64(ready)
+        }
         unsafe { process4cj_wait_status(fd) }
     }
     public func terminate(force: Bool, processTree: Bool): Bool {

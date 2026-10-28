@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -61,7 +62,7 @@ class ManagedActualParentPrepareFixture{
     let plan:NormalizedOperationPlan
     let approval:ApprovalRequest
     init(){
-        let path=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(path+"/managed-parent.sqlite")
+        let path=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(path+"/managed-parent.sqlite")
         let sink=SqliteThreadCommitSink(db);let thread=ThreadId("managed-actual-thread")
         let run=RunId("managed-actual-run");let parent=OperationId("managed-actual-parent")
         let turn=SemanticTurnId("managed-actual-turn")

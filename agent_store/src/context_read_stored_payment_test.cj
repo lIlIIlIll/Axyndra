@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.collection.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -43,7 +44,7 @@ class StoredPaymentRowsFixture {
     let root:String
     let database:SqliteDatabase
     init(){
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/payment.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/payment.sqlite")
         database.execute("INSERT INTO threads(id,revision,workspace_id,status,next_item_ordinal) VALUES ('payment-thread',0,'payment-workspace','active',1)")
         database.execute("INSERT INTO turns(id,thread_id,ordinal,state,user_item_id) VALUES ('payment-turn','payment-thread',1,'active','payment-user')")
         this.root=root;this.database=database

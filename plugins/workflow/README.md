@@ -1,19 +1,27 @@
-# Workflow policy candidate
+# Native Workflow
 
-This independently packaged native executable owns the Todo validation,
-mutation, Markdown and Goal state policy algorithms. Its only currently
-implemented contribution is a pure data provider. It cannot read a database,
-admit a Run, approve an Operation or commit a document.
+This independently packaged native executable implements workflow policy,
+declared Tools and Commands, and the `plan_review` View. Policy queries return
+data. Tools use the Host's canonical preparation, execution and service
+boundaries; the package cannot mint a Run, approve an Operation or replace
+the Host's document commit authority.
 
-The complete tool, command, role and routing migration is still in progress.
-This package alone does not complete A5-03. Source-digest echoes are data and
-are not grants. Host integration must bind the actual package generation,
-configuration, canonical source, cancellation and expected document revision.
+Source-digest echoes are data, not grants. Host integration binds the actual
+package generation, configuration, canonical source, cancellation and expected
+document revision. Package checks alone do not establish complete Product or
+release acceptance; see the [acceptance ledger](../../docs/issue-45-draft-status.md).
 
-The 24 black-box cases in check.py must be run against the packaged binary.
-They are authored, not executed. Build with build-package.sh, then invoke
-check.py --package <output-directory>. Pure policy state is query-local.
-Large documents exceeding the existing generic content profile remain open.
+From the repository root, build and run the complete 172-case packaged-protocol
+gate against a new output directory:
+
+```sh
+python3 scripts/prepare_workflow_plugin.py --output <new-package-directory>
+```
+
+The gate uses `build-package.sh` and `check.py --package` with the selected SDK.
+Policy state is query-local. The Host still enforces configured content and
+protocol limits; large primary documents remain Host-owned rather than being
+duplicated inside the bounded View model.
 
 Packaging uses the explicitly selected SDK and StdX roots. Dependency lookup
 starts with the repository Native library directory, then the selected SDK
@@ -48,6 +56,40 @@ Host rejects the unknown manifest field rather than silently granting an effect.
 `check_plan_tool.py` separately checks the actual native pure prepare/execute
 route with the original fixed five-second peer deadline. Host service rejection
 and canonical/UI behavior are exercised by `InstalledPlanToolTests`.
+
+## First-party plan review
+
+After `/plan <request>` records a plan through the actual selected `plan_write`
+Tool, Product opens the installed `plan_review` View. `/plan-review` reopens the
+current recorded plan. The View declares its inputs and actions; the Host does
+not infer business decisions from labels or widget positions.
+
+Edits stage locally. Selecting an action invokes the declared local Command,
+which returns a typed control request, not an execution grant. The Host
+revalidates the displayed plan and asks for separate confirmation, initially
+**No**, before applying that request.
+
+| Action | Host control after explicit confirmation |
+| --- | --- |
+| `approve_fresh` | Start execution in a fresh session. |
+| `approve_compact` | Request context compaction, then start execution. |
+| `approve_keep` | Start execution with the current context. |
+| `save` | Record the user edit without executing the plan. |
+| `refine` | Submit feedback and request a revised plan without execution. |
+| `continue` | Continue planning without execution. |
+| `reject` | Preserve plan history and request revision before execution. |
+
+Compact mode needs the actual installed Compaction policy selection. A plan
+decision never approves a Tool operation; ordinary capabilities, approval,
+budget and cancellation rules still apply. A stale package, replaced View or
+disabled generation cannot consume an old event or confirmation.
+
+The `plan_review` Command requires an actual frontend View event. Calling it
+directly cannot manufacture user scope. Plaintext/JSON headless presentation
+does not submit actions and returns `input_required` with exit code 3 when
+supported interaction is required. See the [SDK View contract](../../agent_sdk/README.md#bounded-view-documents)
+for generic TUI/RPC input and framing.
+
 
 
 ## Explicit Hub service families

@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -35,7 +36,7 @@ private class PeerResumeStoreFixture111 {
     let parentPlan:NormalizedOperationPlan
     let childPlan:NormalizedOperationPlan
     init(){
-        root=Directory.createTemp("/tmp").toString();database=SqliteDatabase(root+"/resume.sqlite")
+        root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();database=SqliteDatabase(root+"/resume.sqlite")
         let sink=SqliteThreadCommitSink(database);let turn=SemanticTurnId("resume-turn")
         runtime=AgentThreadRuntime(ThreadCoordinator(sink.createThread(thread,"workspace"),sink),
             ContextProjector("resume",PeerResumeStoreEstimator111()),{=>10})

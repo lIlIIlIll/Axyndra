@@ -12,6 +12,12 @@ private func ownedBindingApproval(hash!:String="original-hash",resource!:String=
 @Test
 class OwnedApprovalValueBindingTests{
     @TestCase
+    func ApprovalDigestPreservesUtf8SubstringBoundariesAndEmbeddedZero():Unit{
+        let source="prefix雪\u{0}ésuffix";let value=source[6..12]
+        @Expect(approvalHash(value),"12967170585085956425")
+        @Expect(value,"雪\u{0}é");@Expect(source,"prefix雪\u{0}ésuffix")
+    }
+    @TestCase
     func ReloadedEqualApprovalDoesNotNeedObjectIdentity():Unit{
         let retained=ownedBindingApproval();let reloaded=ownedBindingApproval()
         @Expect(refEq(retained,reloaded),false)

@@ -4,6 +4,7 @@ name = "mcp_client_plugin"
 version = "1.0.0"
 description = "Independent MCP client service using host-authorized byte channels"
 output-type = "executable"
+override-compile-option = "-O2"
 
 [dependencies]
 "process4cj" = { path = "../../libs/process4cj", output-type = "static" }

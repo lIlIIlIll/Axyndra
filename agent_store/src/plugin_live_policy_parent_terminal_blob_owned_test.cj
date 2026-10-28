@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -9,7 +10,7 @@ import yjson_support.*
 
 class LiveTerminalOwnedBlobCounter {var value:Int64=0}
 class LiveTerminalOwnedBlobFixture {
-    let root:String=Directory.createTemp("/tmp").toString()
+    let root:String=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
     let database:SqliteDatabase
     let digest:String=modelPolicySha256Text("null")
     let payload:PluginDocumentPayloadReference
@@ -37,7 +38,7 @@ class LiveTerminalOwnedBlobFixture {
 class PluginLivePolicyParentTerminalOwnedBlobTests {
     @TestCase
     func OriginalExtraOwnerIsRefusedButCompleteBlobMetadataBorrowsTheStillLivePrefix():Unit {
-        let fixture=LiveTerminalOwnedBlobFixture();let pool=LogicalJsonOwnerBudget()
+        let fixture=LiveTerminalOwnedBlobFixture();let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let registry=pool.acquire(65536);let prefix=pool.acquire(65536)
         let observation=pool.acquireFixedBuffer(65536);let control=pool.acquireFixedBuffer(16384)

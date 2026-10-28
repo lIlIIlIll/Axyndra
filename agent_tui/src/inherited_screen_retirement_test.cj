@@ -21,12 +21,14 @@ class ActualInheritedScreenOrdinaryBackend <: AgentTuiBackend {
         decision: TuiApprovalDecision,
         events: TuiAgentEventSink
     ): TuiTurnResult { throw Exception("unused ordinary Screen control method") }
-    public func reviewPlan(
-        contentHash: String,
-        decision: TuiPlanReviewDecision,
-        feedback: String,
-        events: TuiAgentEventSink
-    ): TuiTurnResult { throw Exception("unused ordinary Screen control method") }
+    public func loadPluginView(routeName: String): TuiTurnResult { throw Exception("unused ordinary Screen control method") }
+    public func pluginViewAction(viewId: String, revision: String, actionId: String,
+        fields: Array<TuiPluginViewField>, events: TuiAgentEventSink): TuiTurnResult {
+        throw Exception("unused ordinary Screen control method")
+    }
+    public func confirmPluginView(viewId: String, revision: String, requestDigest: String, confirmed: Bool,
+        events: TuiAgentEventSink): TuiTurnResult { throw Exception("unused ordinary Screen control method") }
+    public func closePluginView(viewId: String): Bool { throw Exception("unused ordinary Screen control method") }
     public func answerAsk(
         requestId: String,
         resolution: TuiAskResolution

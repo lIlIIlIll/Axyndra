@@ -95,7 +95,6 @@ class PluginTransportBudgetTests {
     @TestCase
     func realShellSixteenMibAsciiAndEscapedNulKeepExactArtifactsAndReceipts(): Unit {
         for (value in [b'x', 0u8]) {
-            channelIoDiagnosticCounters.reset()
             let fixture = ShellServiceProductFixture(streamOutput: true, transportOutputBytes: 134217728)
             try {
                 @Expect(!managedCompleted(fixture.start("shell-full-capacity")).isError)
@@ -122,9 +121,7 @@ class PluginTransportBudgetTests {
                 @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM model_decisions"), 0)
                 @Expect(fixture.database.scalarInt("SELECT COUNT(*) FROM operations WHERE state IN ('prepared','waiting_approval','executing')"), 0)
                 @Expect(lifecycleText(shellServiceOutput(fixture.call("shell-full-capacity", "next", fixture.input("printf next"))), "stdout"), "next")
-            } finally {
-                try { fixture.close() } finally { channelIoDiagnosticCounters.dump() }
-            }
+            } finally { fixture.close() }
         }
     }
 }

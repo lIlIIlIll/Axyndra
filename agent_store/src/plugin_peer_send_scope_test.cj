@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -33,7 +34,7 @@ private class PeerSendStoreFixture111 {
     let parentPlan: NormalizedOperationPlan
     let childPlan: NormalizedOperationPlan
     init() {
-        directory = Directory.createTemp("/tmp").toString()
+        directory = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         database = SqliteDatabase(directory + "/child.sqlite")
         let sink = SqliteThreadCommitSink(database)
         let coordinator = ThreadCoordinator(sink.createThread(thread, "/workspace"), sink)

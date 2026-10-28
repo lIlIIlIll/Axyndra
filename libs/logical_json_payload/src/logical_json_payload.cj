@@ -146,6 +146,30 @@ public class LogicalJsonOwnerReservation {
             logicalJsonAcquireCopiedDisplay(owner, totalInvoice)
         } finally { lock.unlock() }
     }
+    // A separately frozen DATA graph can have a shorter lifetime than its
+    // source metadata. Give it its own real message slot and 16 MiB floor in
+    // the SAME bank, instead of extending a long-lived source high-water
+    // ledger. Its own derived leases still use SUM and all-or-nothing refund.
+    // This witnesses allocation ownership only; it grants no source authority.
+    public func acquireIndependentDataFrame(bytes: Int64): LogicalJsonOwnerReservation {
+        lock.lock()
+        try {
+            if (closed) { throw LogicalJsonPayloadError("logical JSON source reservation is closed") }
+            owner.acquire(bytes)
+        } finally { lock.unlock() }
+    }
+    // A bounded transport receiver owns a real independent DATA message in
+    // this same private bank. No allocator or execution authority escapes.
+    public func acquireLogicalReceiverData(maximumBytes: Int64, window: String,
+        sequence: Int64, messageType: String, check: () -> Unit): LogicalJsonReceiver {
+        lock.lock()
+        try {
+            if (closed) { throw LogicalJsonPayloadError("logical JSON source reservation is closed") }
+            owner.requireDataPhaseMessageExtent328(maximumBytes)
+            LogicalJsonReceiver(LogicalJsonProcessBudget(owner), maximumBytes, window,
+                sequence, messageType, check, reserveMaximum: false)
+        } finally { lock.unlock() }
+    }
     // Numeric DATA only. These are the exact original custody totals;
     // no reservation, allocator, input, Source or callback escapes this read.
     public func retainedCustodyUsage113(): (Int64, Int64, Int64) {

@@ -11,7 +11,7 @@ import yjson_support.*
 class ApplicationPluginCommandControl {
     let scope: ProductPluginCommandScope
     let cancellation: CancellationSource
-    private let owner: ProductDirectPreparationOwner
+    private var owner: ?ProductDirectPreparationOwner = None
     private let product: ProductRuntime
     private let accepted: (ProductCommandProposal, ?ProductContinuationOwner) -> Result<Unit>
     private let lock = Mutex()
@@ -23,10 +23,12 @@ class ApplicationPluginCommandControl {
     init(product: ProductRuntime, scope: ProductPluginCommandScope, cancellation: CancellationSource,
         accepted: (ProductCommandProposal, ?ProductContinuationOwner) -> Result<Unit>) {
         this.product = product; this.scope = scope; this.cancellation = cancellation
-        this.owner = ProductDirectPreparationOwner({ => scope.current() })
         this.accepted = accepted
     }
     func isClosed(): Bool { lock.lock(); try { closed } finally { lock.unlock() } }
+    private func directOwner(): ?ProductDirectPreparationOwner {
+        lock.lock(); try { owner } finally { lock.unlock() }
+    }
     func enterOriginalCommandHelper180(): Bool {
         lock.lock()
         try {
@@ -52,17 +54,18 @@ class ApplicationPluginCommandControl {
         // ApplicationSession calls this only AFTER its original whole invoke,
         // decide or cancel helper returned. SQL/physical proof is unchanged;
         // a failed proof keeps the original Gateway DATA frame charged.
-        if (probe) { let _ = owner.closeAcknowledgement() }
+        if (probe) { match (directOwner()) { case Some(actual) => let _ = actual.closeAcknowledgement(); case None => () } }
         returned
     }
     func approval(): ?ApprovalRequest {
-        let actual = match (owner.approval()) { case None => return None; case Some(value) => value }
+        let actualOwner = match (directOwner()) { case None => return None; case Some(value) => value }
+        let actual = match (actualOwner.approval()) { case None => return None; case Some(value) => value }
         lock.lock()
         let selected: ?ProductCommandProposal = try { match (proposal) { case Some(value) => Some(scope.resolvedProposal(value)); case None => None } } finally { lock.unlock() }
         let control: ?AgentValue = match (selected) { case Some(value) => value.control(); case None => None }
         match (control) {
             case None => match (selected) {
-                case Some(value) => if (value.binding.allowsControl()) {
+                case Some(value) => if (value.binding.allowsControl("continuation")) {
                     Some(ApprovalRequest(actual.operationId, actual.callId, actual.toolName, actual.capability,
                         preview: objectValue([ValueField("operation", actual.preview),
                             ValueField(if (scope.preparationResolved()) { "host_user_control_status" } else { "host_user_control_pending" },
@@ -86,30 +89,43 @@ class ApplicationPluginCommandControl {
                     sessionApprovalAllowed: false))
         }
     }
-    func invoke(route: String, arguments: String, noticeSink: ProductJavaScriptPluginNoticeSink): Result<ApplicationResponse> {
+    func invoke(route: String, arguments: String, noticeSink: ProductJavaScriptPluginNoticeSink,
+        viewControl!: (ProductPluginViewControl) -> Result<ApplicationResponse> = { _ => commandControlError("view.user_scope_required") }): Result<ApplicationResponse> {
         match (product.invokeScopedPluginCommand(route, arguments, scope, noticeSink)) {
             case Result.Err(error) => close(); return Result.Err(error); case Result.Ok(_) => () }
-        let selected = match (scope.take()) {
+        let request = match (scope.take()) {
             case Result.Err(error) => close(); return Result.Err(error)
             case Result.Ok(None) => close(); return Result.Ok(ApplicationResponse(false))
             case Result.Ok(Some(value)) => value }
+        let selected = match (request) {
+            case ProductPluginCommandRequest.ToolProposal(value) => value
+            case ProductPluginCommandRequest.UserControl(value) =>
+                try { return viewControl(value) } finally { close() }
+        }
         lock.lock(); try { proposal = Some(selected) } finally { lock.unlock() }
+        // A pure message or business-control request creates no Direct owner.
+        // This callback is call-scoped; a retained Tool approval cannot keep
+        // borrowed frontend form fields alive through a captured closure.
+        let actualOwner = ProductDirectPreparationOwner({ => scope.current() })
+        lock.lock(); try { owner = Some(actualOwner) } finally { lock.unlock() }
         // The participant is a host-held actual-user capability. The plugin's
         // control object alone is merely a proposal and cannot construct one.
         let participant = match (product.pluginCommandParticipant(scope, selected)) {
             case Result.Err(error) => close(); return Result.Err(error); case Result.Ok(value) => value }
-        consume(product.executePluginCommandProposal(scope, selected, owner, participant: participant))
+        consume(product.executePluginCommandProposal(scope, selected, actualOwner, participant: participant))
     }
     func decide(operationId: String, decision: ApprovalDecision): Result<ApplicationResponse> {
         if (isClosed()) { return commandControlError("plugin.command_scope_closed") }
+        let actualOwner = match (directOwner()) {
+            case Some(value) => value; case None => return commandControlError("plugin.command_scope_closed") }
         lock.lock()
-        let hasControl = try { match (proposal) { case Some(value) => value.binding.allowsControl(); case None => false } }
+        let hasControl = try { match (proposal) { case Some(value) => value.binding.allowsControl("continuation"); case None => false } }
             finally { lock.unlock() }
         if (hasControl && match (decision) { case ApprovalDecision.ApproveSession => true; case _ => false }) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied, "approval.session_scope_forbidden",
                 "a frozen user continuation control requires its own one-time approval")) }
-        let result = owner.decide(operationId, decision)
-        if (result.isError() && owner.approval().isSome()) {
+        let result = actualOwner.decide(operationId, decision)
+        if (result.isError() && actualOwner.approval().isSome()) {
             // A pure invalid-choice/mismatched-id error has not consumed the
             // retained review. Keep both the actual user scope and its token.
             return Result.Err(result.error().getOrThrow()) }
@@ -120,8 +136,9 @@ class ApplicationPluginCommandControl {
         // During actual execution the same token immediately reaches the Run;
         // its executor owns settlement. At a retained review we must explicitly
         // settle that exact Prepared and the original parent before closing.
-        if (owner.approval().isNone()) { return Result.Ok(()) }
-        let cancelled = owner.cancel()
+        let actualOwner = match (directOwner()) { case Some(value) => value; case None => return Result.Ok(()) }
+        if (actualOwner.approval().isNone()) { return Result.Ok(()) }
+        let cancelled = actualOwner.cancel()
         let rejected = match (cancelled) { case Result.Ok(ToolInvocationResult.Denied(_)) => true; case _ => false }
         match (consume(cancelled)) {
             case Result.Err(error) => if (error.kind == AgentErrorKind.Cancelled || rejected) { Result.Ok(()) } else { Result.Err(error) }
@@ -133,7 +150,7 @@ class ApplicationPluginCommandControl {
                 // Cancellation can race publication after the executor's last
                 // check. Never publish an approval backed by a cancelled caller.
                 if (cancellation.token.isCancelled()) {
-                    return consume(owner.cancel()) }
+                    return consume(directOwner().getOrThrow().cancel()) }
                 Result.Ok(ApplicationResponse(false, approval: this.approval()))
             case Result.Ok(ToolInvocationResult.Completed(value)) =>
                 try {

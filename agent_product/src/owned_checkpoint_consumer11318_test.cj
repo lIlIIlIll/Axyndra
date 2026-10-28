@@ -259,20 +259,23 @@ class OwnedCheckpointConsumer11318Tests {
                     case OwnedFailureDataOutcome113.Value(_) => @Expect(storage.isAcknowledged())
                     case _ => throw IllegalStateException("real SQLite independent consumer did not store") }
                 @Expect(!caller.isAcknowledged())
-                // Original 128 MiB pool: 64+32+32 fits only AFTER the paid
-                // failure's last consumer retires. No new bank or raised cap.
-                let first = reserveNativeDocumentPayload(8388608)
+                // Keep the original 64+32+32 MiB payload reservations. One
+                // additional product floor stays held across the caller ACK.
+                let extraFloor = reserveNativeDocumentPayload(1)
                 try {
-                    let second = reserveNativeDocumentPayload(4194304)
+                    let first = reserveNativeDocumentPayload(8388608)
                     try {
-                        var rejected = false
-                        try { let unexpected = reserveNativeDocumentPayload(4194304); unexpected.close() }
-                        catch (_: LogicalJsonPayloadError) { rejected = true }
-                        @Expect(rejected)
-                        @Expect(caller.acknowledgeAfterConsumption().isOk())
-                        let restored = reserveNativeDocumentPayload(4194304); restored.close()
-                    } finally { second.close() }
-                } finally { first.close() }
+                        let second = reserveNativeDocumentPayload(4194304)
+                        try {
+                            var rejected = false
+                            try { let unexpected = reserveNativeDocumentPayload(4194304); unexpected.close() }
+                            catch (_: LogicalJsonPayloadError) { rejected = true }
+                            @Expect(rejected)
+                            @Expect(caller.acknowledgeAfterConsumption().isOk())
+                            let restored = reserveNativeDocumentPayload(4194304); restored.close()
+                        } finally { second.close() }
+                    } finally { first.close() }
+                } finally { extraFloor.close() }
                 f.expectCanonical()
             } finally { let _ = caller.acknowledgeAfterConsumption() }
         } finally { f.close() }
@@ -407,18 +410,21 @@ class OwnedCheckpointConsumer11318Tests {
                 @Expect(caller.withError({ error, fund => fund(65536).value().getOrThrow()
                     expectCheckpointConsumerError11318(error, f.observer.kind, f.observer.lastReceipt)
                     Result<Unit>.Ok(()) }).isOk())
-                let first = reserveNativeDocumentPayload(8388608)
+                let extraFloor = reserveNativeDocumentPayload(1)
                 try {
-                    let second = reserveNativeDocumentPayload(4194304)
+                    let first = reserveNativeDocumentPayload(8388608)
                     try {
-                        var rejected = false
-                        try { let unexpected = reserveNativeDocumentPayload(4194304); unexpected.close() }
-                        catch (_: LogicalJsonPayloadError) { rejected = true }
-                        @Expect(rejected)
-                        @Expect(caller.acknowledgeAfterConsumption().isOk())
-                        let restored = reserveNativeDocumentPayload(4194304); restored.close()
-                    } finally { second.close() }
-                } finally { first.close() }
+                        let second = reserveNativeDocumentPayload(4194304)
+                        try {
+                            var rejected = false
+                            try { let unexpected = reserveNativeDocumentPayload(4194304); unexpected.close() }
+                            catch (_: LogicalJsonPayloadError) { rejected = true }
+                            @Expect(rejected)
+                            @Expect(caller.acknowledgeAfterConsumption().isOk())
+                            let restored = reserveNativeDocumentPayload(4194304); restored.close()
+                        } finally { second.close() }
+                    } finally { first.close() }
+                } finally { extraFloor.close() }
                 f.expectCanonical()
             } finally { let _ = caller.acknowledgeAfterConsumption() }
         } finally { f.close() }

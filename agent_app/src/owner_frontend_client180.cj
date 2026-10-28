@@ -74,7 +74,7 @@ private func sendOwnerFrontendInputHelper180(peer: ProductOwnerPeer180, line: St
         let frame = encodeAgentValue(objectValue([
             ValueField("kind", textValue("input_chunk")), ValueField("line", textValue(part)),
             ValueField("final", boolValue(end == bytes.size))]))
-        match (peer.writeOwnerFrame180(frame)) {
+        match (peer.writeOwnerFrame180(frame, None)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(_) => ()
         }
@@ -119,7 +119,7 @@ private func pumpOwnerFrontendStdinHelper180(peer: ProductOwnerPeer180,
             case None => ()
         }
         if (eof) { return peer.writeOwnerFrame180(encodeAgentValue(objectValue([
-            ValueField("kind", textValue("eof"))]))) }
+            ValueField("kind", textValue("eof"))])), None) }
     }
     Result.Ok(())
 }
@@ -204,7 +204,7 @@ private class OwnerNativeClientFrontend180 <: ProductOwnerClientFrontend180 {
     }
     private func readFrameHelper180(actual: ProductOwnerPeer180,
         raw: LogicalJsonOwnerReservation, codec: LogicalJsonOwnerReservation): ?Int64 {
-        let text = match (actual.readOwnerFrame180(raw)) {
+        let text = match (actual.readOwnerFrame180(raw, None)) {
             case Result.Ok(value) => value
             case Result.Err(error) => consoleCliIo180.eprintln(error.describe()); return Some(1) }
         codec.ensureRetainedPeak(ownerFrontendDecodeInvoice180(text))
@@ -227,7 +227,7 @@ private class OwnerNativeClientFrontend180 <: ProductOwnerClientFrontend180 {
                         case Result.Ok(_) => None<Int64>
                         case Result.Err(error) => consoleCliIo180.eprintln(error.describe()); Some(1) }
                     case None => match (actual.writeOwnerFrame180(encodeAgentValue(objectValue([
-                        ValueField("kind", textValue("eof"))])))) {
+                        ValueField("kind", textValue("eof"))])), None)) {
                         case Result.Ok(_) => None<Int64>
                         case Result.Err(error) => consoleCliIo180.eprintln(error.describe()); Some(1) }
                 }
@@ -327,7 +327,7 @@ func writeOwnerFrontendOutput180(peer: ProductOwnerPeer180, value: AgentValue,
         throw failure
     }
     match (peer.writeOwnerFrame180(encodeAgentValue(objectValue([
-        ValueField("kind", textValue("output_returned")), ValueField("frame", integerValue(sequence))])))) {
+        ValueField("kind", textValue("output_returned")), ValueField("frame", integerValue(sequence))])), None)) {
         case Result.Ok(_) => None<Int64>
         case Result.Err(error) => printError(error); Some(1)
     }
@@ -341,5 +341,5 @@ private func reportOwnerFrontendOutputFailureHelper180(peer: ProductOwnerPeer180
     failure: Exception): Result<Unit> {
     peer.writeOwnerFrame180(encodeAgentValue(objectValue([
         ValueField("kind", textValue("output_failed")), ValueField("frame", integerValue(sequence)),
-        ValueField("message", textValue(failure.message))])))
+        ValueField("message", textValue(failure.message))])), None)
 }

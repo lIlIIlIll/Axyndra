@@ -310,9 +310,6 @@ public class HostPluginLifecycleLaunchGrant <: HostNativeServiceEndpointGrant & 
     }
     public func stillCurrent(): Result<Unit> {
         let current = match (enterRegistryEffect()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }; current.close()
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         match (configuration.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         match (environment.stillCurrent()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         try {
@@ -327,8 +324,6 @@ public class HostPluginLifecycleLaunchGrant <: HostNativeServiceEndpointGrant & 
                 "plugin.lifecycle_executable_changed")
             Result.Ok(())
         } catch (error: Exception) { hostLifecycleCaught(error) }
-    
-        } finally { hostChannelIoDiagnosticRecord(5, diagnosticStarted) }
     }
     // Only the host-private launcher calls this after the owning Runtime/Store
     // has verified the actual operation handoff. Preparation never resolves it.
@@ -521,9 +516,6 @@ func hostLifecycleReadConfiguration(settingsRoot: String): HostPluginLifecycleCo
 }
 
 public func hostLifecycleExecutable(authored: String, maximumBytes!: Int64 = HOST_PLUGIN_LIFECYCLE_EXECUTABLE_BYTES): HostPluginLifecycleExecutable {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
     hostLifecycleRequire(maximumBytes > 0 && maximumBytes <= HOST_PLUGIN_LIFECYCLE_EXECUTABLE_BYTES,
         "plugin.lifecycle_executable_limit")
     hostLifecyclePath(authored)
@@ -550,8 +542,6 @@ public func hostLifecycleExecutable(authored: String, maximumBytes!: Int64 = HOS
     let encoded = ArrayList<Byte>()
     for (byte in hash.finish()) { encoded.add(hex[Int64(byte) / 16]); encoded.add(hex[Int64(byte) % 16]) }
     HostPluginLifecycleExecutable(authored, resolved, String.fromUtf8(encoded.toArray()), total)
-
-        } finally { hostChannelIoDiagnosticRecord(4, diagnosticStarted) }
     }
 
 // Match the sandbox's cwd-first/fixed-system lookup without consulting the

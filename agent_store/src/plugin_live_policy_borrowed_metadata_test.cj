@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -18,7 +19,7 @@ func liveBorrowedMissingReference():ContextReadFactLink{
 class PluginLivePolicyBorrowedMetadataTests{
     @TestCase
     func MissingCompletedMetadataCannotRefundBorrowedPhysicalCleanupDebt():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/borrowed.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/borrowed.sqlite")
         let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let debt=pool.acquire(4194304);let phase=pool.acquire(65536)
         try{
@@ -34,7 +35,7 @@ class PluginLivePolicyBorrowedMetadataTests{
     }
     @TestCase
     func DefaultFailedMetadataClosesOnlyItsOriginalInternalOwner():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/default.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/default.sqlite")
         let pool=LogicalJsonOwnerBudget();let unrelated=pool.acquire(65536)
         try{
             db.readTransaction<Unit>({tx=>
@@ -47,7 +48,7 @@ class PluginLivePolicyBorrowedMetadataTests{
     }
     @TestCase
     func CancelledBorrowedMetadataDoesNotAcknowledgeCallerReservation():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/cancel.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/cancel.sqlite")
         let pool=LogicalJsonOwnerBudget();let phase=pool.acquire(65536)
         try{
             db.readTransaction<Unit>({tx=>
@@ -61,7 +62,7 @@ class PluginLivePolicyBorrowedMetadataTests{
     }
     @TestCase
     func NestedActualSqliteCellsPayTheSumOfAllRetainedRawAndDomPhases():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(directory+"/nested.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(directory+"/nested.sqlite")
         let pool=LogicalJsonOwnerBudget();let output=pool.acquire(8388608);let session=pool.acquire(65536)
         let owner=pool.acquire(65536)
         let raw=encodeStoredValue(textValue(String.fromUtf8(Array<Byte>(2097152,repeat:65))))

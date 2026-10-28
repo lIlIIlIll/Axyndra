@@ -155,12 +155,14 @@ class InstalledCompletedThreadFork173dTests {
     @TestCase
     func actualCoreCanonicalCheckpointForkAndReopenMatchEveryOriginalSeedCodecByte173d(): Unit {
         let f = CompactionPolicyFixture(hybrid: false, seedDefaultHistory: false)
-        // The original Native process bank prepays the FULL small legacy
-        // oracle snapshot/container/codec before these test-only copies.
-        let oracle = reserveNativeControlMetadata(8388608)
+        // Prepay the FULL legacy snapshot/container/codec oracle before its
+        // copies, but only after the unrelated genuine Core history completes.
+        let oracle = try {
+            coreCompletedCheckpoint173d(f)
+            reserveNativeControlMetadata(8388608)
+        } catch (error: Exception) { f.close(); throw error }
         try {
             @Expect(f.database.scalarInt("SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name='continuation'"), 0)
-            coreCompletedCheckpoint173d(f)
             let before = completedForkExecutionCount173d(f.database)
             let original = SqliteThreadCommitSink(f.database).loadThread(ThreadId(f.session.value))
             let target = SessionId("genuine-fork173d")
@@ -201,10 +203,12 @@ class InstalledCompletedThreadFork173dTests {
             let target = SessionId("trigger-fork173d")
             let session = f.product.applicationSession(sessionId: Some(f.session))
             let capture = CompletedForkErrorCapture173d()
-            let oracle = reserveNativeControlMetadata(4194304)
+            let oracle = try {
+                coreCompletedCheckpoint173d(f)
+                reserveNativeControlMetadata(4194304)
+            } catch (error: Exception) { f.close(); throw error }
             var marker: ?AgentError = None<AgentError>
             try {
-                coreCompletedCheckpoint173d(f)
                 let before = completedForkExecutionCount173d(f.database)
                 let replacement = if (change == "run") { encodeStoredValue(objectValue([ValueField("forged", boolValue(true))])) }
                     else { encodeStoredThreadContent(ThreadItemContent.UserMessage([ThreadMessagePart.Text("changed historical user")])) }

@@ -58,9 +58,6 @@ class HostServiceArtifactSession {
         hostLifecycleLeaseError("artifact.stream_protocol_invalid")
     }
     func handle(args: AgentValue): Result<AgentValue> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         lock.lock()
         try {
             if (closed || hostManagedChannelCallerCancelled(context)) { return fail() }
@@ -109,8 +106,6 @@ class HostServiceArtifactSession {
             result
         } catch (_: Exception) { fail() }
         finally { lock.unlock() }
-    
-        } finally { hostChannelIoDiagnosticRecord(7, diagnosticStarted) }
     }
 }
 

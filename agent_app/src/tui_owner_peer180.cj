@@ -8,6 +8,7 @@ import yjson.*
 import yjson_support.*
 import std.collection.*
 import std.sync.*
+import std.time.MonoTime
 
 func serveOwnedProductTui180(product: ProductRuntime, request: AgentValue, peer: ProductOwnerPeer180): Result<Unit> {
     let owner = OwnedProductTuiPeer180(product, request, peer)
@@ -38,7 +39,7 @@ private class TuiRootWriteFrame180 {
     func write180(peer: ProductOwnerPeer180, kind: String, id: Int64, build: () -> AgentValue): Result<Unit> {
         data = Some(listValue([textValue(kind), integerValue(id), build()]))
         encoded = Some(encodeAgentValue(data.getOrThrow()))
-        result = Some(peer.writeOwnerFrame180(encoded.getOrThrow()))
+        result = Some(peer.writeOwnerFrame180(encoded.getOrThrow(), None))
         result.getOrThrow()
     }
     func clearAfterWholeWriterHelper180(): Unit { data = None; encoded = None; result = None }
@@ -64,6 +65,9 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
     private var turn: ?Future<Unit> = None
     private var turnData: ?AgentValue = None
     private var turnPaid: ?TuiOwnerReadFrame180 = None
+    private var turnViewData180: ?TuiOwnerViewCallData180 = None
+    private var viewInput180: ?TuiOwnerViewInput180 = None
+    private var lastViewInputSequence180: Int64 = 0
     private var readFrame180: ?TuiOwnerReadFrame180 = None
     private var readRawPending180: ?LogicalJsonOwnerReservation = None
     private var turnSpawnFailure180: ?Exception = None
@@ -74,21 +78,30 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
     private var originalRequest180: ?AgentValue
     private var serveFailure180: ?Exception = None<Exception>
     private var cleanupFailure180: ?Exception = None<Exception>
+    private var returnedFailure180: ?AgentError = None<AgentError>
+    private var failureConsumed180 = false
     init(product: ProductRuntime, request: AgentValue, peer: ProductOwnerPeer180) {
         this.peerValue = Some(peer)
         this.originalProduct180 = Some(product); this.originalRequest180 = Some(request)
     }
     private func preservePrimary180(error: Exception): AgentError {
+        match (returnedFailure180) { case Some(value) => return value; case None => () }
         if (serveFailure180.isNone()) { serveFailure180 = Some(error) }
-        match (error as OwnedCanonicalDataFailure113) {
+        let value = match (error as OwnedCanonicalDataFailure113) {
             case Some(original) => original.error
             case None => AgentError(AgentErrorKind.Transport, "tui.owner_transport_failed", error.message)
         }
+        returnedFailure180 = Some(value)
+        value
     }
     func serve180(): Result<Unit> {
         let result = try { serveWholeHelper180() }
             catch (error: Exception) { Result<Unit>.Err(preservePrimary180(error)) }
-        try { closeRootProducer180() }
+        match (result) {
+            case Result.Err(_) => match (cancellationValue180) { case Some(value) => value.cancel(); case None => () }
+            case Result.Ok(_) => ()
+        }
+        try { retireViewInputAfterReader180(false); closeRootProducer180() }
         catch (error: Exception) {
             cleanupFailure180 = Some(error)
             match (result) { case Result.Err(primary) => return Result.Err(primary)
@@ -118,16 +131,26 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
             let frame = TuiOwnerReadFrame180(rawPaid)
             readFrame180 = Some(frame); readRawPending180 = None
             frame.initializeCodec180(peer)
-            if (!readCall180(frame)) { break }
+            let keepReading = readCall180(frame)
+            collectReadPayments180()
+            retireViewInputAfterReader180(true)
+            if (!keepReading) { break }
         }
         collectReadPayments180()
         Result<Unit>.Ok(())
     }
 
     private func readCall180(paid: TuiOwnerReadFrame180): Bool {
-        let data = paid.readAndDecode180(peer, 1048576)
+        let deadline = match (viewInput180) { case Some(input) => Some(input.deadline180); case None => None<MonoTime> }
+        let data = paid.readAndDecode180(peer, 1048576, deadline: deadline)
         tuiOwnerShape180(data, 4)
-        if (tuiOwnerText180(data.items[0]) != "call") { throw Exception("tui.owner_expected_call") }
+        let kind = tuiOwnerText180(data.items[0])
+        if (kind == "view_call_chunk") {
+            acceptViewCallChunk180(data)
+            finishReadFrame180(paid)
+            return true
+        }
+        if (kind != "call" || viewInput180.isSome()) { throw Exception("tui.owner_expected_complete_call") }
         let id = tuiOwnerInteger180(data.items[1]); let method = tuiOwnerText180(data.items[2]); let args = data.items[3]
         if (id < 1) { throw Exception("tui.owner_invalid_request_id") }
         if (method == "close") {
@@ -137,7 +160,7 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
             finishReadFrame180(paid)
             return false
         }
-        if (method == "submit" || method == "decide" || method == "reviewPlan" || method == "runPluginCommand") {
+        if (["submit", "decide", "loadPluginView", "pluginViewAction", "confirmPluginView", "runPluginCommand"].contains(method)) {
             beginTurn180(id, method, args, paid)
             return true
         }
@@ -146,6 +169,54 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
         // readCall180's raw/DOM/helper must end before payment retirement.
         finishReadFrame180(paid)
         true
+    }
+    private func acceptViewCallChunk180(data: AgentValue): Unit {
+        let sequence = tuiOwnerInteger180(data.items[1]); let kind = tuiOwnerText180(data.items[2])
+        if (viewInput180.isNone()) {
+            if (kind != "payload_begin" || lastViewInputSequence180 == Int64.Max ||
+                sequence != lastViewInputSequence180 + 1) { throw Exception("tui.owner_view_input_sequence") }
+            viewInput180 = Some(TuiOwnerViewInput180(metadata.getOrThrow(), sequence))
+        }
+        let input = viewInput180.getOrThrow()
+        if (sequence != input.sequence) { throw Exception("tui.owner_view_input_sequence") }
+        match (input.accept(kind, data.items[3])) {
+            case None => ()
+            case Some(call) =>
+                tuiOwnerShape180(call, 4)
+                let id = tuiOwnerInteger180(call.items[1])
+                if (tuiOwnerText180(call.items[0]) != "call" || id < 1 ||
+                    tuiOwnerText180(call.items[2]) != "pluginViewAction") {
+                    throw Exception("tui.owner_view_input_command") }
+                beginCopiedViewTurn180(id, call, input)
+                lastViewInputSequence180 = sequence
+        }
+    }
+    private func retireViewInputAfterReader180(completeOnly: Bool): Unit {
+        match (viewInput180) {
+            case Some(input) =>
+                if (completeOnly && !input.complete) { return }
+                viewInput180 = None
+                input.retireAfterWholeReaderHelper180()
+            case None => ()
+        }
+    }
+    private func copyViewCallAfterFullInvoice180(call: AgentValue): TuiOwnerViewCallData180 {
+        let paid = peer.deriveOwnerFrameData180(4096)
+        try {
+            paid.ensureRetainedPeak(tuiOwnerInvoiceAdd180(65536, tuiOwnerDataInvoice180(call)))
+            TuiOwnerViewCallData180(call, paid)
+        } catch (error: Exception) { paid.close(); throw error }
+    }
+    private func beginCopiedViewTurn180(id: Int64, call: AgentValue, input: TuiOwnerViewInput180): Unit {
+        collectTurn180(false)
+        if (turn.isSome()) {
+            send180("failure", id, 4096, { => textValue("tui.owner_turn_already_running") }); return }
+        let copied = copyViewCallAfterFullInvoice180(call)
+        turnViewData180 = Some(copied)
+        input.bindCopiedData(copied)
+        turnId = id; turnMethod = "pluginViewAction"
+        try { turn = Some(spawn { runTurn180() }) }
+        catch (error: Exception) { turnSpawnFailure180 = Some(error); throw error }
     }
     private func finishReadFrame180(paid: TuiOwnerReadFrame180): Unit {
         // The enclosing helper still owns its DOM; retire at the next actual
@@ -165,18 +236,62 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
         catch (error: Exception) { turnSpawnFailure180 = Some(error); throw error }
     }
     private func runTurn180(): Unit {
-        try { dispatch180(turnId, turnMethod, turnData.getOrThrow()) }
-        catch (error: Exception) { send180("failure", turnId, tuiOwnerInvoice180(error.message), { => textValue(error.message) }) }
+        try {
+            let result = invokeTurnDataHelper180()
+            match (turnViewData180) {
+                case Some(data) => data.retireAfterWholeInvocationHelper180()
+                case None => () }
+            sendTurn180(turnId, result)
+        } catch (error: Exception) { send180("failure", turnId, tuiOwnerInvoice180(error.message), { => textValue(error.message) }) }
         finally { backend.pollOwnedFailureDisplays113() }
     }
+    private func invokeTurnDataHelper180(): TuiTurnResult {
+        match (turnViewData180) {
+            case Some(data) =>
+                data.readerReturned180.waitUntilZero()
+                data.withArguments180({ args => invokeTurn180(turnId, turnMethod, args) })
+            case None => invokeTurn180(turnId, turnMethod, turnData.getOrThrow())
+        }
+    }
+    private func invokeTurn180(id: Int64, method: String, args: AgentValue): TuiTurnResult {
+        match (method) {
+            case "submit" =>
+                tuiOwnerShape180(args, 1)
+                backend.submit(tuiOwnerText180(args.items[0]), { event => emitEvent180(id, event) })
+            case "decide" =>
+                tuiOwnerShape180(args, 2)
+                backend.decide(tuiOwnerText180(args.items[0]), tuiOwnerDecodeTuiApprovalDecision180(args.items[1]), { event => emitEvent180(id, event) })
+            case "loadPluginView" =>
+                tuiOwnerShape180(args, 1)
+                backend.loadPluginView(tuiOwnerText180(args.items[0]))
+            case "pluginViewAction" =>
+                tuiOwnerShape180(args, 4)
+                backend.pluginViewAction(tuiOwnerText180(args.items[0]), tuiOwnerText180(args.items[1]),
+                    tuiOwnerText180(args.items[2]), tuiOwnerDecodeArray180<TuiPluginViewField>(args.items[3],
+                        { field => tuiOwnerDecodeTuiPluginViewField180(field) }), { event => emitEvent180(id, event) })
+            case "confirmPluginView" =>
+                tuiOwnerShape180(args, 4)
+                backend.confirmPluginView(tuiOwnerText180(args.items[0]), tuiOwnerText180(args.items[1]),
+                    tuiOwnerText180(args.items[2]), tuiOwnerBoolean180(args.items[3]), { event => emitEvent180(id, event) })
+            case "runPluginCommand" =>
+                tuiOwnerShape180(args, 2)
+                backend.runPluginCommand(tuiOwnerText180(args.items[0]), tuiOwnerText180(args.items[1]), { event => emitEvent180(id, event) })
+            case _ => throw Exception("tui.owner_unknown_turn_method")
+        }
+    }
     private func getTurnWholeHelper180(): Unit { turn.getOrThrow().get() }
-    private func clearTurnReferences180(): Unit { turn = None; turnData = None; turnMethod = ""; turnId = 0 }
+    private func clearTurnReferences180(): ?TuiOwnerViewCallData180 {
+        let data = turnViewData180; turnViewData180 = None
+        turn = None; turnData = None; turnMethod = ""; turnId = 0
+        data
+    }
     private func collectTurn180(wait: Bool): Unit {
         if (turnSpawnFailure180.isSome()) { throw turnSpawnFailure180.getOrThrow() }
         collectReadPayments180()
         if (turn.isNone() || (!wait && turn.getOrThrow().tryGet().isNone())) { return }
         getTurnWholeHelper180()
-        clearTurnReferences180()
+        let data = clearTurnReferences180()
+        match (data) { case Some(actual) => actual.retireAfterWholeInvocationHelper180(); case None => () }
         match (turnPaid) { case Some(paid) => paid.retireAfterWholeReadConsumer180(); turnPaid = None; case None => () }
     }
     private func send180(kind: String, id: Int64, invoice: Int64, build: () -> AgentValue): Unit {
@@ -223,9 +338,18 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
         send180("state", 0, invoice, { => tuiOwnerEncodeArray180(values, { item => textValue(item) }) })
     }
     private func sendTurn180(id: Int64, value: TuiTurnResult): Unit {
+        try { sendTurnHelper180(id, value) }
+        finally {
+            // The concrete serializer helper returned. A failed socket write
+            // keeps its own complete, independently paid writer frame; this
+            // retires only the producer's copied presentation, not that frame.
+            match (value.action) { case TuiTurnAction.PluginViewLoaded(document) => document.close(); case _ => () }
+        }
+    }
+    private func sendTurnHelper180(id: Int64, value: TuiTurnResult): Unit {
         let invoice = tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(value.text), tuiOwnerInvoiceAdd180(tuiOwnerInvoice180(value.status), tuiOwnerInvoice180(value.action)))
         sendResult180(id, invoice, { => listValue([textValue(value.text), textValue(value.status), tuiOwnerEncode180(value.action),
-            tuiOwnerEncode180(value.planReviewDisposition), boolValue(value.ownedRegistryDisplay167.isSome())]) })
+            boolValue(value.ownedRegistryDisplay167.isSome())]) })
     }
     private func sendResult180(id: Int64, invoice: Int64, build: () -> AgentValue): Unit {
         if (!closing) { sendState180() }
@@ -242,10 +366,6 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
                 tuiOwnerShape180(args, 0)
                 let value = backend.welcome()
                 sendResult180(id, tuiOwnerInvoiceArray180(value, { item => tuiOwnerInvoice180(item) }), { => tuiOwnerEncodeArray180(value, { item => tuiOwnerEncode180(item) }) })
-            case "submit" =>
-                tuiOwnerShape180(args, 1)
-                let value = backend.submit(tuiOwnerText180(args.items[0]), { event => emitEvent180(id, event) })
-                sendTurn180(id, value)
             case "steer" =>
                 tuiOwnerShape180(args, 2)
                 let value = backend.steer(tuiOwnerText180(args.items[0]), tuiOwnerText180(args.items[1]))
@@ -258,14 +378,10 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
                 tuiOwnerShape180(args, 1)
                 let value = backend.withdrawQueued(tuiOwnerText180(args.items[0]))
                 sendResult180(id, tuiOwnerInvoice180(value), { => tuiOwnerEncode180(value) })
-            case "decide" =>
-                tuiOwnerShape180(args, 2)
-                let value = backend.decide(tuiOwnerText180(args.items[0]), tuiOwnerDecodeTuiApprovalDecision180(args.items[1]), { event => emitEvent180(id, event) })
-                sendTurn180(id, value)
-            case "reviewPlan" =>
-                tuiOwnerShape180(args, 3)
-                let value = backend.reviewPlan(tuiOwnerText180(args.items[0]), tuiOwnerDecodeTuiPlanReviewDecision180(args.items[1]), tuiOwnerText180(args.items[2]), { event => emitEvent180(id, event) })
-                sendTurn180(id, value)
+            case "closePluginView" =>
+                tuiOwnerShape180(args, 1)
+                let value = backend.closePluginView(tuiOwnerText180(args.items[0]))
+                sendResult180(id, tuiOwnerInvoice180(value), { => boolValue(value) })
             case "answerAsk" =>
                 tuiOwnerShape180(args, 2)
                 let value = backend.answerAsk(tuiOwnerText180(args.items[0]), tuiOwnerDecodeTuiAskResolution180(args.items[1]))
@@ -274,10 +390,6 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
                 tuiOwnerShape180(args, 0)
                 let value = backend.pluginCommands()
                 sendResult180(id, tuiOwnerInvoiceArray180(value, { item => tuiOwnerInvoice180(item) }), { => tuiOwnerEncodeArray180(value, { item => textValue(item) }) })
-            case "runPluginCommand" =>
-                tuiOwnerShape180(args, 2)
-                let value = backend.runPluginCommand(tuiOwnerText180(args.items[0]), tuiOwnerText180(args.items[1]), { event => emitEvent180(id, event) })
-                sendTurn180(id, value)
             case "currentModel" =>
                 tuiOwnerShape180(args, 0)
                 let value = backend.currentModel()
@@ -439,14 +551,41 @@ class OwnedProductTuiPeer180 <: OwnedTuiToolDisplayOutput & OwnedTuiFailureDispl
         collectReadPayments180()
         closed = true
     }
+    public func observeOwnerFrontendFailure180(receipt: ProductOwnerFrontendFailureConsumed180): Unit {
+        match (returnedFailure180) {
+            case Some(error) => if (receipt.matches180(this, error)) { failureConsumed180 = true }
+            case None => ()
+        }
+    }
+    private func clearConsumedReadFailureReferencesHelper180(): Result<Bool> {
+        if (serveFailure180.isNone()) { return Result.Ok(false) }
+        if (!failureConsumed180 || cleanupFailure180.isSome() || !closed ||
+            readFrame180.isNone() || readRawPending180.isSome()) {
+            return Result.Err(returnedFailure180.getOrThrow())
+        }
+        // This helper returns before any payment is retired: even its
+        // temporary original Exception/error aliases must no longer be live.
+        serveFailure180 = None<Exception>; returnedFailure180 = None<AgentError>
+        Result.Ok(true)
+    }
     public func closeOwnerFrontendConsumer180(): Result<Unit> {
-        match (serveFailure180) { case Some(error) => return Result.Err(preservePrimary180(error)); case None => () }
-        try { closeRootProducer180(); retireAfterServe180(); Result<Unit>.Ok(()) }
+        let rejected = match (clearConsumedReadFailureReferencesHelper180()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(value) => value
+        }
+        try {
+            if (rejected) {
+                let paid = readFrame180.getOrThrow()
+                paid.retireAfterWholeReadConsumer180(); readFrame180 = None<TuiOwnerReadFrame180>
+            }
+            closeRootProducer180(); retireAfterServe180(); Result<Unit>.Ok(())
+        }
         catch (error: Exception) { cleanupFailure180 = Some(error); Result<Unit>.Err(preservePrimary180(error)) }
     }
     private func retireAfterServe180(): Unit {
         if (!closed || !serializerReferencesRetired180(retiredScope) || readFrame180.isSome() ||
-            readRawPending180.isSome() || turnPaid.isSome() || turnData.isSome() || turn.isSome()) {
+            readRawPending180.isSome() || turnPaid.isSome() || turnData.isSome() || turn.isSome() ||
+            turnViewData180.isSome() || viewInput180.isSome()) {
             throw Exception("tui.owner_retirement_pending") }
         backendValue = None
         originalProduct180 = None<ProductRuntime>; originalRequest180 = None<AgentValue>

@@ -92,7 +92,8 @@ func agentValueFrame(value: String): String {
 }
 
 public func modelPolicySha256Text(value: String): String {
-    modelPolicySha256(value.toArray())
+    let bytes = unsafe { value.rawData() }
+    modelPolicySha256(bytes)
 }
 
 public func httpIntentExactFields(value: AgentValue, names: Array<String>): Bool {

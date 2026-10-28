@@ -7,6 +7,7 @@ output-type = "executable"
 
 [dependencies]
 "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+"agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
 "pure_provider_runtime" = { path = "../../libs/pure_provider_runtime", output-type = "static" }
 "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
 "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

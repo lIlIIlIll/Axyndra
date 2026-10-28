@@ -9,6 +9,16 @@ import stdx.crypto.digest.SHA256
 @Test
 class ModelCanonicalDigestStreamTests {
     @TestCase
+    func textDigestPreservesUtf8SubstringBoundariesAndEmbeddedZero(): Unit {
+        let source = "prefix雪\u{0}ésuffix"
+        let value = source[6..12]
+        @Expect(modelPolicySha256Text(value),
+            "91de0d63324cc7178d87ef351826d58f4afc6a8bfe35df26ea49d3ee22860a94")
+        @Expect(value, "雪\u{0}é")
+        @Expect(source, "prefix雪\u{0}ésuffix")
+    }
+
+    @TestCase
     func everyCanonicalTypeOrderingUnicodeAndFramingMatchesOriginal(): Unit {
         let values = [nullValue(), boolValue(false), boolValue(true), numberValue("-123.5"),
             textValue("雪🙂\u{0}\n:"), listValue([]), objectValue([]),

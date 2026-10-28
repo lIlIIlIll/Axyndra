@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -21,7 +22,7 @@ private class LiveMemoryRollbackTestState317 {
 class LiveMemoryActualRollbackScopeTests317 {
     @TestCase
     func ActualConstraintRollbackRestoresWholeRowsAndAllocatorInSameWriteTransaction():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/rollback.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/rollback.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{
             db.execute("INSERT INTO memory_events(id,memory_id,revision,operation,payload,created_at_millis) VALUES(1,'before',1,'retain','{}',1)")
@@ -47,7 +48,7 @@ class LiveMemoryActualRollbackScopeTests317 {
     }
     @TestCase
     func ActualSqliteFullCanNeverAcknowledgeAnEndedOrUnrestoredTransaction():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/full.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/full.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         try{
             db.execute("INSERT INTO memory_events(id,memory_id,revision,operation,payload,created_at_millis) VALUES(?,'before',1,'retain','{}',1)",[SqlParameter.Int64Value(Int64.Max-1)])
@@ -85,7 +86,7 @@ class LiveMemoryActualRollbackScopeTests317 {
     }
     @TestCase
     func OrdinaryActualReadAndWriteTransactionsCannotEnterOptInScope():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/ordinary.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/ordinary.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         let state=LiveMemoryRollbackTestState317()
         let attempt:(SqliteTransaction)->Unit={tx=>
@@ -99,7 +100,7 @@ class LiveMemoryActualRollbackScopeTests317 {
     }
     @TestCase
     func SameActualScopeIsOneShotAndRetiredActualTransactionCannotAcknowledge():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/oneshot.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/oneshot.db")
         let budget=LogicalJsonOwnerBudget();let owner=budget.acquire(65536)
         let state=LiveMemoryRollbackTestState317()
         let other=budget.acquire(65536)

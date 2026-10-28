@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.collection.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -113,7 +114,7 @@ class PluginLivePolicyChildTerminalTests{
     }
     @TestCase
     func EmptyRealSqliteCannotTurnALeasedDescriptorIntoAnActualTerminal():Unit{
-        let directory=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(directory+"/terminal.sqlite")
+        let directory=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(directory+"/terminal.sqlite")
         let budget=LogicalJsonOwnerBudget();let held=budget.acquire(1);let probes=LiveTerminalCounter()
         try{
             for(_ in 0..8){

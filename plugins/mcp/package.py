@@ -37,6 +37,35 @@ def system_library(path):
     return any(path.is_relative_to(prefix) for prefix in [Path('/lib'), Path('/lib64'), Path('/usr/lib'), Path('/usr/lib64')])
 
 
+def verify_runtime_closure(package):
+    library_directory = package / 'lib'
+    clean = os.environ.copy()
+    for name in ['LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT']:
+        clean.pop(name, None)
+    system = set()
+    bundled = set()
+    for name, resolved in dependencies(package / 'bin/mcp-client-plugin', clean):
+        if resolved.is_relative_to(library_directory):
+            bundled.add(name)
+        elif system_library(resolved):
+            system.add(name)
+        else:
+            raise ValueError(f'packaged dependency escapes the independent package: {name}')
+    if bundled != {path.name for path in library_directory.iterdir()}:
+        raise ValueError('packaged executable has a different complete runtime closure')
+    # A standalone ldd on a DSO has no executable RPATH. Model the bundled
+    # main's search directory only for this separate per-library inspection.
+    inspection = dict(clean, LD_LIBRARY_PATH=str(library_directory))
+    for library in library_directory.iterdir():
+        for name, resolved in dependencies(library, inspection):
+            if resolved.is_relative_to(library_directory):
+                continue
+            if not system_library(resolved):
+                raise ValueError(f'packaged library dependency escapes the independent package: {name}')
+            system.add(name)
+    return system
+
+
 def stdx_notices(library_directory):
     if library_directory is None or not library_directory.is_dir():
         raise ValueError('the resolved StdX runtime library directory is required')
@@ -100,17 +129,7 @@ def verify_clone_source(source):
             expected.add(directory + '/' + name)
     if {str(path.relative_to(source)) for path in files} != expected:
         raise ValueError('clone source contains undeclared or missing package files')
-    clean = os.environ.copy()
-    for name in ['LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT']:
-        clean.pop(name, None)
-    system = set()
-    for binary in [plugin, *(source / 'lib').iterdir()]:
-        for name, resolved in dependencies(binary, clean):
-            if system_library(resolved):
-                system.add(name)
-            elif not resolved.is_relative_to(source):
-                raise ValueError('clone source runtime closure escapes the independent package')
-    if provenance.get('required_system_libraries') != sorted(system):
+    if provenance.get('required_system_libraries') != sorted(verify_runtime_closure(source)):
         raise ValueError('clone source system runtime inventory differs from its provenance')
     return provenance
 
@@ -172,15 +191,15 @@ def package(arguments):
                 shutil.copy2(source, destination)
                 copied[name] = source
                 queue.append(destination)
-        subprocess.run(['patchelf', '--set-rpath', '$ORIGIN/../lib', str(plugin)], check=True)
+        # One transitive executable RPATH resolves the complete bundled
+        # closure. Rewriting every SDK DSO grows its ELF layout and makes
+        # every mandatory current-byte package inspection hash that padding.
+        subprocess.run(['patchelf', '--force-rpath', '--set-rpath', '$ORIGIN/../lib', str(plugin)], check=True)
         for library in (stage / 'lib').iterdir():
-            subprocess.run(['patchelf', '--set-rpath', '$ORIGIN', str(library)], check=True)
-        clean = os.environ.copy()
-        clean.pop('LD_LIBRARY_PATH', None)
-        for binary in [plugin, *(stage / 'lib').iterdir()]:
-            for name, resolved in dependencies(binary, clean):
-                if not system_library(resolved) and not resolved.is_relative_to(stage):
-                    raise ValueError(f'packaged dependency still escapes package: {name}')
+            if subprocess.check_output(['patchelf', '--print-rpath', str(library)], text=True).strip():
+                subprocess.run(['patchelf', '--remove-rpath', str(library)], check=True)
+        if verify_runtime_closure(stage) != required_system:
+            raise ValueError('packaged system runtime inventory differs from the compiled closure')
         provenance = {
             'schema_version': 1, 'platform': 'linux-x86_64', 'version': '1.0.0',
             'source_binary_sha256': digest(arguments.binary), 'plugin_sha256': digest(plugin),

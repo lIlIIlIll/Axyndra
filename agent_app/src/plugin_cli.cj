@@ -1,8 +1,10 @@
 package agent_app
 
 import agent_cli.*
+import agent_domain
 import agent_domain.*
 import agent_product.*
+import agent_sdk.isPluginViewPlainText
 import std.collection.*
 import std.env.*
 import yjson.*
@@ -19,6 +21,7 @@ func printPluginHelp(io!: CliIo180 = consoleCliIo180): Unit {
         "axyndra plugin serve <operator-grant-id>\n" +
         "axyndra plugin commands [--json]\n" +
         "axyndra plugin views [--json]\n" +
+        "axyndra plugin view <route> [--json] [--input <json>]\n" +
         "axyndra plugin command <route> [one argument string]\n\n" +
         "Local package maintenance does not require a model provider. Import leaves a package disabled.\n" +
         "HTTP capabilities still require explicit operator configuration and normal tool policy.\n" +
@@ -134,6 +137,30 @@ func runPluginCli(session: ApplicationSession, arguments: Array<String>, io!: Cl
             if (views.isEmpty()) { io.println("No plugin views are enabled.") }
         }
         return 0
+    }
+    if (action == "view") {
+        if (arguments.size < 2 || arguments[1].startsWith("-") || arguments[1].size > 512) {
+            return pluginCliUsage("view requires one registered route", io: io) }
+        var json = false; var input = "{}"; var hasInput = false; var index: Int64 = 2
+        while (index < arguments.size) {
+            if (arguments[index] == "--json" && !json) { json = true; index++ }
+            else if (arguments[index] == "--input" && !hasInput && index + 1 < arguments.size) {
+                hasInput = true; input = arguments[index + 1]; index += 2
+            } else { return pluginCliUsage("view accepts --json and one --input object", io: io) }
+        }
+        let asJson = json
+        match (session.withJavaScriptPluginViewDocument<Int64>(arguments[1], input, "basic-v1",
+            { metadata, model, primary =>
+                let status = agent_domain.httpIntentText(model, "status")
+                let required = agent_domain.httpIntentText(model, "interaction") == "required" ||
+                    status == "input_required" || status == "unsupported"
+                let code: Int64 = if (required) { 3 } else if (["error", "unknown", "cancelled", "timeout"].contains(status)) { 1 } else { 0 }
+                printPluginViewCli(metadata, model, primary, asJson, required, io)
+                Result.Ok(code)
+            })) {
+            case Result.Err(error) => printError(error, io: io); return 1
+            case Result.Ok(code) => return code
+        }
     }
     if (action == "command") {
         if ((arguments.size != 2 && arguments.size != 3) || arguments[1].startsWith("-") ||
@@ -283,4 +310,45 @@ func pluginCliReviewCommand(session: ApplicationSession, io!: CliIo180 = console
             case Result.Ok(response) => if (response.text != "") { io.println(response.text) } }
     }
     0
+}
+
+func printPluginViewCli(metadata: AgentValue, model: AgentValue, primary: String,
+    json: Bool, required: Bool, io: CliIo180): Unit {
+    if (json) {
+        let source = if (isPluginViewPlainText(primary)) {
+            objectValue([ValueField("encoding", textValue("utf8")), ValueField("text", textValue(primary))])
+        } else {
+            objectValue([ValueField("encoding", textValue("hex")),
+                ValueField("bytes_hex", textValue(agent_domain.logicalJsonEncodeHex(primary.toArray())))])
+        }
+        io.println(stringifyUnifiedJson(objectValue([
+            ValueField("schema", textValue("axyndra.view-observation/v1")), ValueField("metadata", metadata),
+            ValueField("status", textValue(if (required) { "input_required" } else { agent_domain.httpIntentText(model, "status") })),
+            ValueField("model", model), ValueField("primary_content", source)])))
+        return
+    }
+    io.println(agent_domain.httpIntentText(model, "title") + " · plugin." +
+        agent_domain.httpIntentText(metadata, "namespace") + "." + agent_domain.httpIntentText(metadata, "name"))
+    io.println(agent_domain.httpIntentText(model, "summary"))
+    for (node in model.field("nodes").getOrThrow().items) {
+        let kind = agent_domain.httpIntentText(node, "kind")
+        if (["text", "status", "tool_result", "code", "diff"].contains(kind)) {
+            io.println(agent_domain.httpIntentText(node, "text"))
+        } else if (kind == "input" || kind == "document") {
+            io.println(agent_domain.httpIntentText(node, "label") + ":")
+            if (node.field("source").isSome()) {
+                if (agent_domain.httpIntentText(node, "source") != "primary") { io.println("[Host source unavailable]") }
+                else if (isPluginViewPlainText(primary)) { io.println(primary) }
+                else { io.println("[Source contains terminal controls; --json preserves its exact bytes as hex.]") }
+            } else { io.println(agent_domain.httpIntentText(node, "text")) }
+        } else if (kind == "list") {
+            for (item in node.field("items").getOrThrow().items) {
+                io.println("[" + agent_domain.httpIntentText(item, "id") + "] " + agent_domain.httpIntentText(item, "text"))
+            }
+        } else if (kind == "table") {
+            io.println(stringifyUnifiedJson(node.field("columns").getOrThrow()))
+            for (row in node.field("rows").getOrThrow().items) { io.println(stringifyUnifiedJson(row.field("cells").getOrThrow())) }
+        }
+    }
+    if (required) { io.println("input_required: this View needs supported interaction; no Command or Tool was executed.") }
 }

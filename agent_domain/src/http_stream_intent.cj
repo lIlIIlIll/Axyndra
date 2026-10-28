@@ -94,7 +94,7 @@ public func httpStreamServiceChildArguments(parent: AgentValue, id: String): Res
     if (usesPayload != payload.isSome()) { return httpIntentError("http.stream_parent_invalid", "HTTP payload version and approved profile differ") }
     let maximum = match (payload) { case Some(value) => value.maxWriteBytes; case None => HOST_HTTP_STREAM_REQUEST_MAX_BYTES }
     let canonicalLimit = httpStreamPayloadCanonicalBytes(binding)
-    if (stringifyUnifiedJson(parent).size > canonicalLimit) { return httpIntentError("http.stream_parent_invalid", "frozen parent exceeds the approved profile") }
+    if (channelParentJsonByteSize(parent) > canonicalLimit) { return httpIntentError("http.stream_parent_invalid", "frozen parent exceeds the approved profile") }
     let ceiling = parseNetworkPolicy(binding.field("network").getOrThrow()).value().getOrThrow()
     let intents = host.field("intents").getOrThrow()
     if (intents.unifiedKind != ValueKind.List || intents.items.isEmpty() || intents.items.size > 4) {

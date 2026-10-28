@@ -1,6 +1,7 @@
 package agent_host_runtime
 
 import agent_domain.*
+import agent_extension_runtime.nativeControlMetadataCapacity113
 import tool_runtime.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -56,12 +57,14 @@ class HostLiveInitialPreparedBacking332Tests {
         let physical=initialPreparedRequire332(session.retainExecutionCustody())
         let custody=InitialPreparedProbeCustody332()
         try{
-            @Expect(session.retainLivePolicyInitialPreparedBacking332(custody,physical,134217728).error().getOrThrow().code,
-                "plugin.live_initial_prepared_unpaid")
+            match(session.retainLivePolicyInitialPreparedBacking332(custody,physical,nativeControlMetadataCapacity113())){
+                case Result.Err(error)=>@Expect(error.code,"plugin.live_initial_prepared_unpaid")
+                case Result.Ok(value)=>value.close();@Expect(false)
+            }
             @Expect(session.collect(),false)
-            // The existing 128MiB/32slot bank and initial16MiB floor stay
-            // unchanged. Failed wrapper growth neither starts IO nor closes
-            // the original execution custody to manufacture more capacity.
+            // A full-bank child cannot coexist with the original 16 MiB
+            // floor. Failed growth neither starts IO nor closes the original
+            // execution custody to manufacture more capacity.
             @Expect(session.livePolicyTransientResourcesReleased(),false)
             @Expect(session.livePolicyPrivateOutputRetained(),false)
             let loan=initialPreparedRequire332(session.retainLivePolicyInitialPreparedBacking332(custody,physical,8192))

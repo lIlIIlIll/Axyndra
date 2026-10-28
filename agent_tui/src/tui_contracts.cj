@@ -3,30 +3,21 @@ package agent_tui
 import agent_cli.*
 import std.deriving.*
 
-public enum TuiPlanReviewDisposition {
-    NotApplicable
-    | Retain
-    | Consumed
-}
-
 public class TuiTurnResult {
     public let text: String
     public let status: String
     public let action: TuiTurnAction
-    public let planReviewDisposition: TuiPlanReviewDisposition
     public let ownedRegistryDisplay167: ?OwnedTuiRegistryResponseDisplay167
 
     public init(
         text: String,
         status: String,
         action!: TuiTurnAction = TuiTurnAction.NoAction,
-        planReviewDisposition!: TuiPlanReviewDisposition = TuiPlanReviewDisposition.NotApplicable,
         ownedRegistryDisplay167!: ?OwnedTuiRegistryResponseDisplay167 = None
     ) {
         this.text = text
         this.status = status
         this.action = action
-        this.planReviewDisposition = planReviewDisposition
         this.ownedRegistryDisplay167 = ownedRegistryDisplay167
     }
 }
@@ -37,7 +28,9 @@ public enum TuiTurnAction {
     | OpenProviderSetup
     | OpenModelSelector
     | OpenBranchSelector
-    | OpenPlanReview(String)
+    | OpenPluginView(String)
+    | PluginViewLoaded(TuiPluginViewDocument)
+    | ConfirmPluginView(String)
     | OpenDocument(String, String)
     | ModelsLoaded(Array<String>)
     | ThemeSelected(String, Bool, Array<TuiThemeDefinition>)
@@ -109,7 +102,7 @@ public enum TuiAgentEvent {
         String
     )
     | Ask(TuiAskRequest)
-    | PlanReviewConsumed(String)
+    | PluginViewClosed(String, String)
     | Usage(Int64, Int64)
     | Setup(String)
     | Plan(String, String)
@@ -199,66 +192,10 @@ public enum TuiApprovalDecision {
     AllowOnce | AllowSession | Reject(String)
 }
 
-@Derive[Equatable]
-public enum TuiPlanReviewDecision {
-    // Keep the original variants for source compatibility. The dedicated
-    // Plan Review surface uses the context-explicit variants below.
-    ApproveAndExecute
-    | ApproveFresh
-    | ApproveCompact
-    | ApproveKeep
-    | Refine
-    | UpdatePlan
-    | KeepPlanning
-    | Reject
-}
-
-@Derive[Equatable]
-enum PlanReviewFocus {
-    Toc | Body | Actions
-}
-
-class PlanReviewSection {
-    let title: String
-    let level: Int64
-    let sourceOffset: Int64
-    var renderedLine: Int64
-
-    init(title: String, level: Int64, sourceOffset: Int64) {
-        this.title = title
-        this.level = level
-        this.sourceOffset = sourceOffset
-        this.renderedLine = 0
-    }
-}
-
-class PlanReviewAnnotation {
-    let section: String
-    let line: String
-    let note: String
-    let removeSection: Bool
-
-    init(
-        section: String,
-        line: String,
-        note: String,
-        removeSection!: Bool = false
-    ) {
-        this.section = section
-        this.line = line
-        this.note = note
-        this.removeSection = removeSection
-    }
-}
-
 public enum TuiQueueWithdrawal {
     | Withdrawn(String, String)
     | AlreadyDelivered
     | Failed(String)
-}
-
-public func planContentHash(value: String): String {
-    planReviewHash(value)
 }
 
 public class TuiAskOption {
@@ -588,12 +525,22 @@ public interface AgentTuiBackend {
         decision: TuiApprovalDecision,
         events: TuiAgentEventSink
     ): TuiTurnResult
-    func reviewPlan(
-        contentHash: String,
-        decision: TuiPlanReviewDecision,
-        feedback: String,
+    func loadPluginView(routeName: String): TuiTurnResult
+    func pluginViewAction(
+        viewId: String,
+        revision: String,
+        actionId: String,
+        fields: Array<TuiPluginViewField>,
         events: TuiAgentEventSink
     ): TuiTurnResult
+    func confirmPluginView(
+        viewId: String,
+        revision: String,
+        requestDigest: String,
+        confirmed: Bool,
+        events: TuiAgentEventSink
+    ): TuiTurnResult
+    func closePluginView(viewId: String): Bool
     func answerAsk(
         requestId: String,
         resolution: TuiAskResolution

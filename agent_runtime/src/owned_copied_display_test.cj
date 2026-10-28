@@ -61,7 +61,7 @@ class OwnedCopiedDisplayTests {
     }
     @TestCase
     func OriginalBankPressureBlocksDisplayConstructionBeforeTheCopyCallback(): Unit {
-        let pool = LogicalJsonOwnerBudget(); let event = copiedDisplayActualEvent(pool)
+        let pool = LogicalJsonOwnerBudget(maximumCharged: 134217728); let event = copiedDisplayActualEvent(pool)
         let pressure = [pool.acquire(1), pool.acquire(1), pool.acquire(1)]
         let observed = OwnedCopiedDisplayValue(); let before = pool.usage()
         @Expect(event.acquireCopiedDisplayAllocation(16777216).isOk(), false)

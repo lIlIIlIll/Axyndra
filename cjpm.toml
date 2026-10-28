@@ -1,4 +1,6 @@
 [workspace]
+  compile-option = "-O2"
+  override-compile-option = "-O2"
   members = [
     "agent_plugin_registry",
     "agent_history",
@@ -124,3 +126,6 @@
     "agent_tui",
     "agent_app"
   ]
+
+[profile.test.build]
+  compile-option = "-O2"

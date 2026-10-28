@@ -64,7 +64,7 @@ private class OwnerAcpClientPeer180 {
     private func write180(frame: String): Result<Unit> {
         connectionLock.lock()
         try { match (connection) {
-            case Some(peer) => peer.writeOwnerFrame180(frame)
+            case Some(peer) => peer.writeOwnerFrame180(frame, None)
             case None => Result.Err(AgentError(AgentErrorKind.Transport,
                 "owner.acp_peer_ended", "ACP workspace peer is not connected")) }
         } finally { connectionLock.unlock() }
@@ -262,7 +262,7 @@ private class OwnerAcpClient180 {
         } finally { lock.unlock() }
         channel.peer180().writeOwnerFrame180(encodeAgentValue(objectValue([
             ValueField("kind", textValue("acp_request_id_returned")),
-            ValueField("sequence", value.field("sequence").getOrThrow()), ValueField("id", integerValue(id))])))
+            ValueField("sequence", value.field("sequence").getOrThrow()), ValueField("id", integerValue(id))])), None)
     }
     private func permissionChannel180(value: AgentValue): ?OwnerAcpClientPeer180 {
         let id = match (value.field("id")) {
@@ -376,7 +376,7 @@ private class OwnerAcpClient180 {
     }
     private func readOneFrameHelper180(channel: OwnerAcpClientPeer180, connection: ProductOwnerPeer180,
         raw: LogicalJsonOwnerReservation, codec: LogicalJsonOwnerReservation): Result<?Int64> {
-        let frame = match (connection.readOwnerFrame180(raw)) {
+        let frame = match (connection.readOwnerFrame180(raw, None)) {
             case Result.Err(error) => return Result.Err(error)
             case Result.Ok(actual) => actual }
         codec.ensureRetainedPeak(ownerFrontendDecodeInvoice180(frame))

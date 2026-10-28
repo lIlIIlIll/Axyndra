@@ -379,8 +379,8 @@ public class ProductVnextControl <: HostServiceToolControl {
                 case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
             if(callId=="" || actualCall.callId!=callId || actualCall.name!=name ||
                 canonicalAgentValue(actualCall.arguments)!=canonicalAgentValue(plan.canonicalArguments) ||
-                (version!="" && (plan.implementation.toolVersion!=version ||
-                    plan.implementation.implementationFingerprint!=fingerprint))){
+                (version!="" && plan.implementation.toolVersion!=version) ||
+                (fingerprint!="" && plan.implementation.implementationFingerprint!=fingerprint)){
                 return Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_changed",
                     "plan presentation requires the same actual canonical call and selected implementation"))}
             let result=match(operations.loadCommittedToolResult(operation,run)){
@@ -808,6 +808,15 @@ public class ProductVnextControl <: HostServiceToolControl {
     }
 
     public func activateImportedPlugin(record: ProductPluginRecord): Result<Unit> {
+        activateImportedPluginWithLock(record, serialize: true)
+    }
+
+    /// `serialize: false` is only for the first-install assembly, where the
+    /// Product is not published yet and no reader can observe a partially
+    /// mounted host/catalog. Every other caller keeps the global lifecycle
+    /// lock so activation stays one product lifecycle boundary.
+    public func activateImportedPluginWithLock(record: ProductPluginRecord,
+        serialize!: Bool = true): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.ecosystem == PluginEcosystem.Pi ||
             descriptor.ecosystem == PluginEcosystem.Codex) {
@@ -845,7 +854,7 @@ public class ProductVnextControl <: HostServiceToolControl {
                 }
             }
             if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint)).trimAscii() == "") { return Result.Ok(()) }
-            javascriptPluginLifecycleLock.lock()
+            if (serialize) { javascriptPluginLifecycleLock.lock() }
             try {
                 match (mountAndRegisterJavaScriptPlugin(
                     record,
@@ -860,7 +869,7 @@ public class ProductVnextControl <: HostServiceToolControl {
                         return Result.Err(error)
                 }
             } finally {
-                javascriptPluginLifecycleLock.unlock()
+                if (serialize) { javascriptPluginLifecycleLock.unlock() }
             }
         }
         if (descriptor.ecosystem != PluginEcosystem.Axyndra) {

@@ -15,6 +15,11 @@ func srEnvelope(frame: JsonNode, kind: String): ArrayList<JsonObjectEntry> {
 }
 func srReply(frame: JsonNode, value: JsonNode, ok: Bool, transport!:?ReadonlyShellPayloadInput=None): Unit {
     let result=srEnvelope(frame,"result");result.add(JsonObjectEntry("ok",jsonBool(ok)));result.add(JsonObjectEntry("result",value))
+    // The host compares the window against the TOP-LEVEL result frame, so it
+    // must be echoed there (workspace does the same). Echoing it inside the
+    // inner result is what produced `profile result differs from its
+    // invocation window`.
+    match (frame.field("payload_window")) { case Some(window) => result.add(JsonObjectEntry("payload_window", window)); case None => () }
     match(transport){case Some(input)=>input.reply(jsonObject(result.toArray()));case None=>srEmit(jsonObject(result.toArray()))} }
 func srError(frame: JsonNode, code: String, transport!:?ReadonlyShellPayloadInput=None): Unit {
     srReply(frame,jsonObject([JsonObjectEntry("error",jsonString(code)),JsonObjectEntry("message",jsonString("Readonly Shell operation failed"))]),false,transport:transport) }
@@ -33,12 +38,16 @@ func srValidInvocation(frame: JsonNode, hello: JsonNode): Bool {
 func srReady(hello: JsonNode): Unit {
     srRequire(srText(hello, "extension_id") == "shell-readonly" && srText(hello, "extension_version") == "1.0.0" &&
         srText(hello, "protocol") == "axyndra-js-host-v2" && srInteger(hello, "generation") > 0)
+    match (hello.field("ordinary_tool_payload")) { case Some(value) =>
+        if (!validOrdinaryToolPayloadOffer(value)) { srRequire(false) }
+        case None => () }
     let result = srEnvelope(hello, "ready")
     result.add(JsonObjectEntry("capabilities", srField(hello, "capabilities")))
     result.add(JsonObjectEntry("tools", parseUnifiedJson("""
 [{"name":"exec","description":"Run a bounded readonly shell in the exact admitted workspace resource view. Long timeouts require the operator finite read-view deadline profile; no writes or network.","input_schema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":131072},"timeout":{"type":"integer","minimum":0,"maximum":600},"timeout_ms":{"type":"integer","minimum":1,"maximum":600000},"cwd":{"type":"string"},"env":{"type":"object","additionalProperties":{"type":"string"}},"title":{"type":"string"}},"required":["command"],"additionalProperties":false}}]
 """)))
     for (name in ["commands", "hooks"]) { result.add(JsonObjectEntry(name, jsonArray([]))) }
+    match (hello.field("ordinary_tool_payload")) { case Some(value) => result.add(JsonObjectEntry("ordinary_tool_payload", value)); case None => () }
     srEmit(jsonObject(result.toArray()))
 }
 func srPrepare(frame: JsonNode): Unit {

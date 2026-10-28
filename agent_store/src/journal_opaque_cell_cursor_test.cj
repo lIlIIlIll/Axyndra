@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import std.convert.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -21,7 +22,7 @@ class OpaqueCellTestState {
 class JournalOpaqueCellCursorTests {
     @TestCase
     func GenericTypeAndRawBytesKeepNullTextBlobIntegerAndExactRealDistinct():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:67108864,maximumMessage:65536)
         try{
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(0,'zero',NULL,'opaque',X'610062',1.25)")
@@ -48,7 +49,7 @@ class JournalOpaqueCellCursorTests {
     }
     @TestCase
     func CompleteInt64RowidsAndIgnoredMetadataDoNotAcquireNewCodecRestrictions():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             for(id in [Int64.Min,Int64(-1),Int64(0),Int64.Max]){
@@ -69,7 +70,7 @@ class JournalOpaqueCellCursorTests {
     }
     @TestCase
     func SixtyThreeMiBOpaqueTextUsesOnlyFixedWindowsAndCompleteActualBytes():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536)
         try{
             // Trusted seed only; no large managed String and no fake Source.
@@ -90,7 +91,7 @@ class JournalOpaqueCellCursorTests {
     }
     @TestCase
     func ExpectedWholeTypeHashAndCurrentCancellationFailWithoutAnAcknowledgedRead():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:33554432,maximumMessage:65536)
         try{
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(-1,'known',NULL,'opaque','body',1)")
@@ -113,7 +114,7 @@ class JournalOpaqueCellCursorTests {
     }
     @TestCase
     func TransactionRefusesALiveCursorAndCleanupInvalidatesEveryEscapedHandle():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/opaque.db")
         let budget=LogicalJsonOwnerBudget(maximumCharged:16777216,maximumMessage:65536);let state=OpaqueCellTestState()
         try{
             db.execute("INSERT INTO memories(rowid,id,thread_id,kind,payload,revision) VALUES(1,'known',NULL,'opaque','body',1)")

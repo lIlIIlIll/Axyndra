@@ -53,7 +53,7 @@ class PluginLivePolicyRejectedErrorDetailOwnedTests {
     }
     @TestCase
     func AggregatePressureRejectsBeforeNewDomAndDoesNotRefundBorrowedOwner():Unit{
-        let pool=LogicalJsonOwnerBudget();let result=pool.acquire(8388608)
+        let pool=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let result=pool.acquire(8388608)
         let session=pool.acquire(65536);let registry=pool.acquire(65536);let owner=pool.acquire(65536)
         // Actual complete typed data, not a forged transport invoice. The
         // retained error must be cloned only after the joint pool admits it.

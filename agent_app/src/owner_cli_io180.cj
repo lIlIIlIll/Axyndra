@@ -130,7 +130,7 @@ class OwnerCliIo180 <: CliIo180 {
                 ValueField("frame", integerValue(outputFrame)),
                 ValueField("kind", textValue(kind)), ValueField("text", textValue(part)),
                 ValueField("final", boolValue(end == bytes.size))]))
-            match (peer.writeOwnerFrame180(frame)) {
+            match (peer.writeOwnerFrame180(frame, None)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
             }
@@ -151,7 +151,7 @@ class OwnerCliIo180 <: CliIo180 {
     }
     public func readln(): ?String {
         match (peer.writeOwnerFrame180(encodeAgentValue(objectValue([
-            ValueField("kind", textValue("read"))])))) {
+            ValueField("kind", textValue("read"))])), None)) {
             case Result.Ok(_) => input.nextLine180()
             case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
         }

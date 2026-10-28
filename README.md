@@ -312,6 +312,13 @@ Coding/Full 默认绑定实际安装的 Workflow `plan_tool: "plan_write"` 贡�
 `package_digest` 和 `plan_tool`。贡献必须声明 `execution_profile: "data_only"`，
 只使用 WorkspaceRead，并由原 canonical pipeline 持久化 ToolCall、ToolResult 和 Receipt。
 缺失或变更的安装/绑定在启用模式或批准前失败；旧计划仅供历史查看，不恢复执行或审批权威。
+
+`/plan-review` 使用已安装 Workflow 的 `plan_review` View。View 中的计划决策需经过
+宿主单独确认，默认选择 **No**；暂存编辑不提交 Command，计划批准也不批准任何 Tool。
+可选择新会话、压缩上下文或保留上下文后执行，也可仅保存、请求修改、继续规划或拒绝。
+非交互输出需要用户操作时返回 `input_required` 和退出码 3，不自动提交动作。
+具体契约见 [Workflow 计划审阅](plugins/workflow/README.md#first-party-plan-review)。
+
 在存在最新已完成的当前 native 计划时，也可用独立短句直接批准并开始新的执行运行：
 `执行吧`、`开始执行`、`执行计划`、`按计划执行`、`批准并执行`、`继续执行`，
 以及 `execute`、`execute it`、`execute the plan`、`start execution`、

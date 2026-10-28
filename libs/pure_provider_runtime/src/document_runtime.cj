@@ -6,6 +6,7 @@ import std.convert.*
 import std.env.*
 import yjson.*
 import yjson_support.*
+import agent_sdk.{validatePluginViewDocument, SdkResult}
 
 class PureDocumentCancelled <: Exception { init() { super("document invocation cancelled") } }
 
@@ -46,7 +47,7 @@ public class DocumentPolicyBroker {
     }
 }
 
-func documentProtocolIdentity(frame: JsonNode, hello: JsonNode, contextEnabled!: Bool = false): Bool {
+func documentProtocolIdentity(frame: JsonNode, hello: JsonNode, contextEnabled!: Bool = false, viewEnabled!: Bool = false): Bool {
     for (name in ["protocol", "extension_id", "extension_version", "generation"]) {
         if (stringifyUnifiedJson(frame.field(name) ?? jsonNull()) != stringifyUnifiedJson(hello.field(name) ?? jsonNull())) { return false } }
     for (name in ["id", "thread_id", "tool"]) {
@@ -54,8 +55,8 @@ func documentProtocolIdentity(frame: JsonNode, hello: JsonNode, contextEnabled!:
         if (value.unifiedKind != UnifiedJsonKind.Text || value.text == "" || value.text.size > 1024 || value.text.contains("\u{0000}")) { return false } }
     let kind = providerText(frame, "kind")
     if (kind == "provider") { return providerValidInvocation(frame, hello) }
-    if (kind == "context_provider") {
-        if (!contextEnabled) { return false }
+    if (kind == "context_provider" || kind == "view") {
+        if ((kind == "context_provider" && !contextEnabled) || (kind == "view" && !viewEnabled)) { return false }
         for (name in ["call_id", "run_id", "operation_id", "command_id"]) {
             let value=frame.field(name) ?? jsonNull()
             if (value.unifiedKind != UnifiedJsonKind.Text || value.text.contains("\u{0000}") || value.text.size>1024) { return false }
@@ -79,7 +80,8 @@ func documentProtocolReady(hello: JsonNode, id: String, version: String,
     views!: Array<String> = []): Unit {
     if (providerText(hello, "type") != "hello" || providerInteger(hello, "generation") < 1 ||
         providerText(hello, "protocol") != "axyndra-js-host-v2" || providerText(hello, "extension_id") != id ||
-        providerText(hello, "extension_version") != version || tools.unifiedKind != UnifiedJsonKind.List || tools.items.isEmpty()) {
+        providerText(hello, "extension_version") != version || tools.unifiedKind != UnifiedJsonKind.List ||
+        (tools.items.isEmpty() && commands.isEmpty() && providers.isEmpty() && contexts.isEmpty() && views.isEmpty())) {
         throw PureProviderError("document.identity", "unsupported combined native handshake") }
     let caps = hello.field("capabilities") ?? jsonNull()
     if (caps.unifiedKind != UnifiedJsonKind.List || !caps.items.isEmpty()) {
@@ -131,11 +133,13 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
     execute: (String, JsonNode, DocumentPolicyBroker) -> DocumentPolicyToolResult,
     command: (String, JsonNode) -> JsonNode,
     contextProviders!: Array<String> = [], contextHandler!: ?(String, JsonNode) -> JsonNode = None,
-    views!: Array<String> = [],
+    views!: Array<String> = [], viewHandler!: ?(String, JsonNode) -> JsonNode = None,
     primitiveTools!: Array<String> = [],
     primitiveExecute!: ?(String, JsonNode, FrozenPrimitiveBroker111) -> DocumentPolicyToolResult = None): Int64 {
-    if (getCommandLine().size != 1 || providers.isEmpty() || providers.size > 32 || commands.size > 32 ||
-        tools.unifiedKind != UnifiedJsonKind.List || tools.items.isEmpty() || tools.items.size > 32) { return 2 }
+    if (getCommandLine().size != 1 || providers.size > 32 || commands.size > 32 || views.size > 64 ||
+        tools.unifiedKind != UnifiedJsonKind.List || tools.items.size > 32 ||
+        (tools.items.isEmpty() && providers.isEmpty() && commands.isEmpty() && contextProviders.isEmpty() && views.isEmpty()) ||
+        (!views.isEmpty() && viewHandler.isNone())) { return 2 }
     if (contextProviders.size>32 || (!contextProviders.isEmpty() && contextHandler.isNone())) { return 2 }
     let viewNames=HashSet<String>()
     for (name in views) { if (!httpIntentIdentifier(name) || viewNames.contains(name)) { return 2 }; viewNames.add(name) }
@@ -171,7 +175,8 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
                 try {
                     let raw = incoming.value
                     if (["shutdown", "close"].contains(providerText(raw, "type"))) { return 0 }
-                    if (!["invoke", "payload_begin"].contains(providerText(raw, "type")) || !documentProtocolIdentity(raw, hello, contextEnabled: !contextProviders.isEmpty())) { return 3 }
+                    if (!["invoke", "payload_begin"].contains(providerText(raw, "type")) || !documentProtocolIdentity(raw, hello,
+                        contextEnabled: !contextProviders.isEmpty(), viewEnabled: !views.isEmpty())) { return 3 }
                     if(contextSequenced){
                         if(providerText(raw,"kind")!="context_provider" || !contextCounter.accept(providerText(raw,"id"))){return 3}
                     } else if (sequenced) {
@@ -190,11 +195,12 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
                     let kind = providerText(raw, "kind"); let name = providerText(raw, "tool")
                     if ((kind == "context_provider" && !contexts.contains(name)) ||
                         (kind == "provider" && !providers.contains(name)) || (kind == "command" && !commands.contains(name)) ||
+                        (kind == "view" && !viewNames.contains(name)) ||
                         ((kind == "prepare" || kind == "tool") && !toolNames.contains(name))) { return 3 }
                     let window = DocumentProtocolWindow(input, hello, raw)
                     try {
                         let frame = window.invocation
-                        if (!documentProtocolIdentity(frame, hello, contextEnabled: !contextProviders.isEmpty())) { return 3 }
+                        if (!documentProtocolIdentity(frame, hello, contextEnabled: !contextProviders.isEmpty(), viewEnabled: !views.isEmpty())) { return 3 }
                         let args = frame.field("arguments") ?? jsonNull()
                         let charge = providerPayloadBudget.acquire(window.maxResult() + 65536)
                         try {
@@ -207,6 +213,18 @@ public func runDocumentPolicyProvider(id: String, version: String, providers: Ar
                                         throw PureProviderError("policy.query_invalid", "expected a pure policy data envelope") }
                                     result = DocumentPolicyToolResult(jsonObject([JsonObjectEntry("schema", jsonString("axyndra.policy-result/v1")),
                                         JsonObjectEntry("value", policy(name, args.field("input").getOrThrow()))]))
+                                } else if (kind == "view") {
+                                    if (!httpIntentExactFields(args, ["schema", "context", "input"]) ||
+                                        providerText(args, "schema") != "axyndra.view-query/v1" ||
+                                        args.field("context").getOrThrow().unifiedKind != UnifiedJsonKind.Object ||
+                                        args.field("input").getOrThrow().unifiedKind != UnifiedJsonKind.Object) {
+                                        throw PureProviderError("view.query_invalid", "expected the pure versioned View query") }
+                                    let document = viewHandler.getOrThrow()(name, args)
+                                    match (validatePluginViewDocument(document)) {
+                                        case SdkResult.Err(error) => throw PureProviderError(error.code, error.message)
+                                        case SdkResult.Ok(_) => ()
+                                    }
+                                    result = DocumentPolicyToolResult(document)
                                 } else if (kind == "context_provider") {
                                     result = DocumentPolicyToolResult(contextHandler.getOrThrow()(name, args))
                                 } else if (kind == "prepare") { result = DocumentPolicyToolResult(prepare(name, args)) }

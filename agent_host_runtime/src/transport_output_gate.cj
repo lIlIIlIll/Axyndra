@@ -27,6 +27,8 @@ class HostOutputSecretMatcher {
         }
     }
     func push(byte: Byte, source: Int64): Bool {
+        // With no live prefix, this byte cannot contribute a retained offset.
+        if (matched == 0 && pattern[0] != byte) { return false }
         positions[cursor % pattern.size] = source; cursor += 1
         while (matched > 0 && pattern[matched] != byte) { matched = fallback[matched - 1] }
         if (pattern[matched] == byte) { matched += 1 }
@@ -37,6 +39,15 @@ class HostOutputSecretMatcher {
         if (matched == 0) { limit } else { positions[(cursor - matched) % pattern.size] }
     }
 }
+private func hostOutputAnyMatch(matchers: ArrayList<HostOutputSecretMatcher>, byte: Byte, source: Int64): Bool {
+    var index: Int64 = 0
+    while (index < matchers.size) {
+        if (matchers[index].push(byte, source)) { return true }
+        index += 1
+    }
+    false
+}
+
 
 public class HostOutputByte {
     public let value: Byte
@@ -188,30 +199,30 @@ public class HostTransportOutputGate {
         pending = all.toArray()
         for (byte in bytes) {
             let source = received; received += 1
-            for (matcher in raw where matcher.push(byte, source)) { return reject() }
+            if (hostOutputAnyMatch(raw, byte, source)) { return reject() }
             if (!json.isEmpty()) {
                 if (jsonDecoder.mayPassLiteral(byte)) {
-                    for (matcher in json where matcher.push(byte, source)) { return reject() }
+                    if (hostOutputAnyMatch(json, byte, source)) { return reject() }
                 } else {
                     for (value in jsonDecoder.push(byte, source)) {
-                        for (matcher in json where matcher.push(value.value, value.source)) { return reject() }
+                        if (hostOutputAnyMatch(json, value.value, value.source)) { return reject() }
                     }
                 }
                 if (percentDecoder.mayPassLiteral(byte)) {
-                    for (matcher in percent where matcher.push(byte, source)) { return reject() }
+                    if (hostOutputAnyMatch(percent, byte, source)) { return reject() }
                 } else {
                     for (value in percentDecoder.push(byte, source)) {
-                        for (matcher in percent where matcher.push(value.value, value.source)) { return reject() }
+                        if (hostOutputAnyMatch(percent, value.value, value.source)) { return reject() }
                     }
                 }
             }
         }
         if (eof && !json.isEmpty()) {
             for (value in jsonDecoder.finish()) {
-                for (matcher in json where matcher.push(value.value, value.source)) { return reject() }
+                if (hostOutputAnyMatch(json, value.value, value.source)) { return reject() }
             }
             for (value in percentDecoder.finish()) {
-                for (matcher in percent where matcher.push(value.value, value.source)) { return reject() }
+                if (hostOutputAnyMatch(percent, value.value, value.source)) { return reject() }
             }
         }
         var safe = received

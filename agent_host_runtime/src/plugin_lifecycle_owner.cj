@@ -703,9 +703,6 @@ public class HostPluginLifecycleLease {
 
     func verifyInvocationRoot(context: ToolInvocationContext, root: PreparedToolInvocation,
         binding: AgentValue): Result<Unit> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         if (managedGrant.isSome()) { return hostLifecycleLeaseError("managed_channel.typed_entry_required") }
         if (root.source.kind == PreparedInvocationSourceKind.Derived || root.source.operationRoot.isNone() ||
             root.source.parentOperationId.isSome() || root.source.requestKey != "" ||
@@ -716,16 +713,11 @@ public class HostPluginLifecycleLease {
         match (checkInvocation(context, binding, root.source.operationRoot)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         invocationStore.verifyChannelInvocationRoot(root.operationId, context.runId,
             ThreadId(context.sessionId.value), context.epoch, root.source.operationRoot.getOrThrow(), root.operationPlan, binding)
-    
-        } finally { hostChannelIoDiagnosticRecord(1, diagnosticStarted) }
     }
 
     func invocationRead(actualContext: ToolInvocationContext, rootPrepared: PreparedToolInvocation,
         expectedBinding: AgentValue, stream: ProcessChannelStream, maxBytes: Int64, waitMillis: Int64
     ): Result<ProcessChannelRead> {
-        let diagnosticStarted = hostChannelIoDiagnosticStart()
-        try {
-
         if (maxBytes < 1 || maxBytes > 65536 || waitMillis < 0 || waitMillis > 1000) {
             return hostLifecycleLeaseError("plugin.lifecycle_read_bounds")
         }
@@ -758,8 +750,6 @@ public class HostPluginLifecycleLease {
             }
             hostLifecycleIoCancelled()
         } finally { let _ = finishInvocationScope(scope) }
-    
-        } finally { hostChannelIoDiagnosticRecord(2, diagnosticStarted) }
     }
 
     // This binding is descriptive; the complete current Source/receipt proof
@@ -1087,18 +1077,12 @@ public class HostPluginLifecycleLease {
             !childContext.capabilities.allows(capability.kind, resource: capability.resource)) {
             return hostLifecycleLeaseError("plugin.lifecycle_child_capability_denied")
         }
-        let contextTimer = channelWriteMemoDiagnosticStart()
-        try {
-            match (checkInvocation(rootContext, binding, child.source.operationRoot)) {
-                case Result.Err(error) => hostManagedJobIoDiagnostic(child.source.operationRoot, "child-scope", error); return Result.Err(error)
-                case Result.Ok(_) => () }
-        } finally { channelWriteMemoDiagnosticRecord(5, contextTimer) }
-        let storeTimer = channelWriteMemoDiagnosticStart()
-        let result = try {
-            invocationStore.verifyChannelWriteExecution(child.operationId,
-                child.source.parentOperationId.getOrThrow(), childContext.runId, ThreadId(childContext.sessionId.value),
-                childContext.epoch, child.source.operationRoot.getOrThrow(), child.source.requestKey, child.operationPlan, binding)
-        } finally { channelWriteMemoDiagnosticRecord(6, storeTimer) }
+        match (checkInvocation(rootContext, binding, child.source.operationRoot)) {
+            case Result.Err(error) => hostManagedJobIoDiagnostic(child.source.operationRoot, "child-scope", error); return Result.Err(error)
+            case Result.Ok(_) => () }
+        let result = invocationStore.verifyChannelWriteExecution(child.operationId,
+            child.source.parentOperationId.getOrThrow(), childContext.runId, ThreadId(childContext.sessionId.value),
+            childContext.epoch, child.source.operationRoot.getOrThrow(), child.source.requestKey, child.operationPlan, binding)
         match (result) { case Result.Err(error) => hostManagedJobIoDiagnostic(child.source.operationRoot, "child-store", error); case _ => () }
         result
     }

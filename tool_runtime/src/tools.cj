@@ -2837,7 +2837,7 @@ public class ToolPipeline {
             if((registration.executor as ManagedChannelOwnedExecutor).isNone()){return livePolicyPreparationError("managed_channel.parent_executor_missing")}
         }else if((registration.executor as ManagedChannelOwnedEffectExecutor).isNone()){
             return livePolicyPreparationError("managed_channel.child_executor_missing")}
-        let call=match(registration.descriptor.canonicalizedCall(context,prepared.call)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
         let current=normalizedToolOperationPlan(context,call,registration.descriptor.resolved(call),contextReadFacts:prepared.borrowOperationPlanFrame204().contextReadFacts)
         if(!sameNormalizedOperationPlan(current,prepared.borrowOperationPlanFrame204())){return livePolicyPreparationError("tool.live_prepared_descriptor_changed")}
         match(missingRequiredCapability(context,prepared.borrowOperationPlanFrame204().requiredCapabilities)){
@@ -3627,7 +3627,9 @@ public class ToolPipeline {
             return livePolicyPreparationError("tool.live_prepared_enclosure_changed")}
         let registration=match(registrationForRun(context,prepared.call.name,allowHostService:hostServiceSourceAllowed(source,prepared.call.name))){
             case Some(value)=>value;case None=>return livePolicyPreparationError("tool.live_prepared_registration_missing")}
-        let call=match(registration.descriptor.canonicalizedCall(context,prepared.call)){case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+        // Approval preflight revalidates the frozen invocation, never Native preparation.
+        // A waiting Run cannot stage a fresh payload or adapt its approved plan.
+        let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
         let current=normalizedToolOperationPlan(context,call,registration.descriptor.resolved(call),contextReadFacts:prepared.borrowOperationPlanFrame204().contextReadFacts)
         if(!sameNormalizedOperationPlan(current,prepared.borrowOperationPlanFrame204())){return livePolicyPreparationError("tool.live_prepared_descriptor_changed")}
         match(missingRequiredCapability(context,prepared.borrowOperationPlanFrame204().requiredCapabilities)){
@@ -3919,8 +3921,7 @@ public class ToolPipeline {
                 case Some(actual)=>actual
                 case None=>return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,"tool.live_pending_registration_missing",
                     "pending execution lost its current registered contribution"))}
-            let canonicalCall=match(registration.descriptor.canonicalizedCall(context,prepared.call)){
-                case Result.Err(error)=>return Result.Err(error);case Result.Ok(actual)=>actual}
+            let canonicalCall=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
             let resolved=registration.descriptor.resolved(canonicalCall)
             let current=normalizedToolOperationPlan(context,canonicalCall,resolved,contextReadFacts:prepared.borrowOperationPlanFrame204().contextReadFacts)
             if(!sameNormalizedOperationPlan(current,prepared.borrowOperationPlanFrame204())){
@@ -4311,8 +4312,7 @@ public class ToolPipeline {
         let executor = match (registration.executor as Object) { case Some(value) => value
             case None => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "tool.direct_projection_executor_not_reference", "Direct observer requires its actual reference executor")) }
-        let canonical = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let canonical=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
         let plan = normalizedToolOperationPlan(context, canonical, registration.descriptor.resolved(canonical),
             contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
         if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4358,8 +4358,7 @@ public class ToolPipeline {
             let executor = match (registration.executor as Object) { case Some(value) => value
                 case None => return directPostCanonicalObserverFailure("tool.direct_projection_executor_changed") }
             if (!refEq(executor, captured.executor)) { return directPostCanonicalObserverFailure("tool.direct_projection_executor_changed") }
-            let call = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
             let plan = normalizedToolOperationPlan(context, call, registration.descriptor.resolved(call),
                 contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
             if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4475,9 +4474,7 @@ public class ToolPipeline {
             if (!refEq(executor, captured.executor)) {
                 return OwnedPostCanonicalObserverDispatch113.Existing(
                     directPostCanonicalObserverFailure("tool.direct_projection_executor_changed")) }
-            let call = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-                case Result.Err(error) => return OwnedPostCanonicalObserverDispatch113.Existing(Result<Unit>.Err(error))
-                case Result.Ok(value) => value }
+            let call=ToolCall(prepared.call.callId,prepared.call.name,prepared.borrowOperationPlanFrame204().canonicalArguments)
             let plan = normalizedToolOperationPlan(context, call, registration.descriptor.resolved(call),
                 contextReadFacts: prepared.borrowOperationPlanFrame204().contextReadFacts)
             if (!sameNormalizedOperationPlan(plan, prepared.borrowOperationPlanFrame204())) {
@@ -4671,10 +4668,7 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", prepared.call.name)]
             ))
         }
-        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
+        let canonicalCall=ToolCall(prepared.call.callId,prepared.call.name,plan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
         let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts)
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
@@ -5065,8 +5059,7 @@ public class ToolPipeline {
         let registration = match (registrationForRun(context, prepared.call.name, allowHostService: true)) {
             case Some(value) => value; case None => return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
                 "context.read_registration_missing", "read implementation is no longer registered")) }
-        let canonical = match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) }
+        let canonical=ToolCall(prepared.call.callId,prepared.call.name,plan.canonicalArguments)
         if (!sameNormalizedOperationPlan(plan, normalizedToolOperationPlan(context, canonical, registration.descriptor.resolved(canonical)))) {
             return Result.Err(AgentError(AgentErrorKind.Conflict, "context.read_approval_changed", "read target or authority changed while approval was pending")) }
         Result.Ok(())
@@ -5174,10 +5167,8 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", call.name)]
             ))
         }
-        let canonicalCall = match (registration.descriptor.canonicalizedCall(context, call)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
+        // Reload approval from its persisted plan, without staging a new payload.
+        let canonicalCall=ToolCall(call.callId,call.name,plan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
         let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: plan.contextReadFacts)
         if (!sameNormalizedOperationPlan(plan, currentPlan)) {
@@ -5490,10 +5481,9 @@ public class ToolPipeline {
                 fields: [ErrorField("tool", prepared.call.name)]
             ))
         }
-        let canonicalCall = if (retainedJob.isSome()) {
-            ToolCall(prepared.call.callId, prepared.call.name, storedPlan.canonicalArguments)
-        } else { match (registration.descriptor.canonicalizedCall(context, prepared.call)) {
-            case Result.Ok(value) => value; case Result.Err(error) => return Result.Err(error) } }
+        // Preparation is frozen. Recheck the current descriptor against that
+        // exact plan without running its input resolver or staging payloads again.
+        let canonicalCall = ToolCall(prepared.call.callId, prepared.call.name, storedPlan.canonicalArguments)
         let current = registration.descriptor.resolved(canonicalCall)
         let currentPlan = normalizedToolOperationPlan(context, canonicalCall, current, contextReadFacts: storedPlan.contextReadFacts)
         if (!sameNormalizedOperationPlan(currentPlan, storedPlan)) {
@@ -6362,8 +6352,11 @@ func containsAny(source: String, values: Array<String>): Bool {
 
 func approvalHash(source: String): String {
     var hash: UInt64 = 1469598103934665603
-    for (byte in source.toArray()) {
-        hash = (hash ^ UInt64(byte)).wrappingMul(1099511628211)
+    let bytes = unsafe { source.rawData() }
+    var index: Int64 = 0
+    while (index < bytes.size) {
+        hash = (hash ^ UInt64(bytes[index])).wrappingMul(1099511628211)
+        index += 1
     }
     hash.toString()
 }

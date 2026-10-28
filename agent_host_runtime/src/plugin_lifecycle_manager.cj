@@ -105,8 +105,15 @@ public class HostPluginLifecycleManager {
                         case HostServiceEndpointSelection.Rejected(error)=>return Result<AgentValue>.Err(error)
                         case HostServiceEndpointSelection.CleanupRequired(value,original,_)=>managed.captureEndpoint(value);return Result<AgentValue>.Err(original)}
                     let response=match(host.prepareService(endpoint,stringifyUnifiedJson(objectValue([ValueField("action",textValue("channel_directory"))])),
+                        // A preparation frame is not an admitted operation: the
+                        // identity contract requires an EMPTY operation id for
+                        // `prepare`/`service_prepare`, exactly as the other two
+                        // service_prepare sites in this file do. Passing the
+                        // parent operation id made every owned lifecycle start
+                        // throw "invalid JavaScript invocation identity", which
+                        // surfaced only as plugin.lifecycle_start_unknown.
                         JavaScriptHostInvocationIdentity(threadId:context.sessionId.value,runId:context.runId.value,
-                            epoch:context.epoch,operationId:prepared.operationId.value,callId:prepared.call.callId,kind:"service_prepare"),context)){
+                            epoch:context.epoch,operationId:"",callId:prepared.call.callId,kind:"service_prepare"),context)){
                         case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
                     try{if(response.isError){return managedChannelDriverError<AgentValue>("managed_channel.pure_directory_rejected")}
                         managed.freezeDirectory(response.value)}finally{response.releasePayload()}

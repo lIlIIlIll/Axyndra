@@ -97,7 +97,7 @@ class OwnedPreparedReferencePhaseTests {
 
     @TestCase
     func originalAggregatePressureRejectsWholeChildBeforeCaptureAndKeepsParentDebt():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged:134217728);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(33554432)
         let arguments=objectValue([ValueField("payload",textValue(String.fromUtf8(Array<Byte>(1048576,repeat:b'a'))))])
         let context=ToolInvocationContext(RunId("reference-pressure-run"),SessionId("reference-pressure-thread"),CapabilitySet())

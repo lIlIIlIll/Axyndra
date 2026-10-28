@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -18,7 +19,7 @@ private func backendPhaseTestJournal(owner:LogicalJsonOwnerBudget):SqliteOpaqueR
 class BackendAllocationPhaseTests {
     @TestCase
     func sequentialCompleteBackendReadsReleaseOnlyAtUnitPhaseExit():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/phase.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/phase.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let hostMetadata=owner.acquire(65536)
         let fixed=owner.acquireFixedBuffer(65536);let backend=backendPhaseTestJournal(owner)
         try{
@@ -39,7 +40,7 @@ class BackendAllocationPhaseTests {
 
     @TestCase
     func defaultEscapingSnapshotStillHoldsFullPaymentUntilTransactionEnd():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/default.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/default.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let backend=backendPhaseTestJournal(owner)
         try{
             db.readTransaction<Unit>({tx=>
@@ -54,7 +55,7 @@ class BackendAllocationPhaseTests {
 
     @TestCase
     func nestedPhaseFailureReleasesInnerPaymentAndPreservesOuterAndDefaultOwners():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/nested.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/nested.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY)
         try{
             db.readTransaction<Unit>({tx=>
@@ -77,7 +78,7 @@ class BackendAllocationPhaseTests {
 
     @TestCase
     func delegatedTransactionSharesActualPhaseAndCannotCloseAnUnrelatedLiveOwner():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/delegated.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/delegated.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let unrelated=owner.acquire(1)
         try{
             db.readTransaction<Unit>({tx=>
@@ -100,7 +101,7 @@ class BackendAllocationPhaseTests {
 
     @TestCase
     func cancelledPhaseAndFailingFinalCheckStillRollbackSqlAndReleaseOnlyBackendCopies():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/rollback.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/rollback.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let unrelated=owner.acquireFixedBuffer(65536)
         try{
             db.execute("CREATE TABLE phase_fixture(id INTEGER PRIMARY KEY,value TEXT NOT NULL)")
@@ -130,7 +131,7 @@ class BackendAllocationPhaseTests {
 
     @TestCase
     func fullQuotaRefusalLeavesOtherOwnersChargedAndPostChecksRunSequentially():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/limits.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/limits.db")
         let owner=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let backend=backendPhaseTestJournal(owner);let witness=BackendPhaseTestWitness()
         let first=owner.acquire(8388608);let second=owner.acquire(8388608)
         try{

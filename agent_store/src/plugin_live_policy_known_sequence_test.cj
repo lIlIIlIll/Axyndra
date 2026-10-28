@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -29,7 +30,7 @@ class KnownSequenceAbsentFixture {
     let run=RunId("known-sequence-run")
     let parent=OperationId("known-sequence-parent")
     init(){
-        let path=Directory.createTemp("/tmp").toString()
+        let path=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let db=SqliteDatabase(path+"/known.sqlite")
         let sink=SqliteThreadCommitSink(db)
         let thread=ThreadId("known-sequence-thread")

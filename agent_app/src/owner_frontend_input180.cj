@@ -65,7 +65,7 @@ class OwnerFrontendInput180 {
             lock.lock()
             let sequence = try { acpAllocationSequence++; acpAllocationSequence } finally { lock.unlock() }
             match (peer.writeOwnerFrame180(encodeAgentValue(objectValue([
-                ValueField("kind", textValue("acp_request_id")), ValueField("sequence", integerValue(sequence))])))) {
+                ValueField("kind", textValue("acp_request_id")), ValueField("sequence", integerValue(sequence))])), None)) {
                 case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
                 case Result.Ok(_) => ()
             }
@@ -112,7 +112,7 @@ class OwnerFrontendInput180 {
     }
     private func readFrameHelper180(raw: LogicalJsonOwnerReservation,
         codec: LogicalJsonOwnerReservation): Int64 {
-        let frame = match (peer.readOwnerFrame180(raw)) {
+        let frame = match (peer.readOwnerFrame180(raw, None)) {
             case Result.Ok(value) => value
             case Result.Err(error) =>
                 lock.lock(); try { eof = true; readerError = Some(error) } finally { lock.unlock() }
@@ -155,7 +155,7 @@ class OwnerFrontendInput180 {
             return peer.writeOwnerFrame180(encodeAgentValue(objectValue([
                 ValueField("kind", textValue("acp_session_workspace_result")),
                 ValueField("sequence", value.field("sequence").getOrThrow()),
-                ValueField("workspace", textValue(workspace))])))
+                ValueField("workspace", textValue(workspace))])), None)
         }
         if (kind == "output_returned" || kind == "output_failed") {
             let sequence = Int64.parse(value.field("frame").getOrThrow().asNumberText())
@@ -214,7 +214,7 @@ class OwnerFrontendInput180 {
         } finally { lock.unlock() }
     }
     private func sendInputCredit180(): Result<Unit> {
-        peer.writeOwnerFrame180(encodeAgentValue(objectValue([ValueField("kind", textValue("input_credit"))])))
+        peer.writeOwnerFrame180(encodeAgentValue(objectValue([ValueField("kind", textValue("input_credit"))])), None)
     }
     func expectOutput180(sequence: Int64, until: MonoTime): Unit {
         lock.lock()

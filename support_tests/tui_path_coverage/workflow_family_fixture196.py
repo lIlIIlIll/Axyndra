@@ -36,7 +36,7 @@ def _run196(case, label, arguments):
     # Record admission before entering a function which may fail or throw.
     case.record('workflow196_maintenance_pending', label=label, log=str(log),
                 seconds=case.timeout, arguments=arguments)
-    result = custody.run_case(command, log, case.timeout, cwd=ROOT)
+    result = custody.run_case(command, log, case.timeout, cwd=case.workspace)
     (case.case_dir / ('workflow196-' + label + '.custody.json')).write_text(
         json.dumps(result, indent=2) + '\n', encoding='utf-8')
     case.record('workflow196_maintenance_returned', label=label, result=result)

@@ -4,6 +4,7 @@ import agent_domain.*
 import agent_sdk.*
 import process4cj.*
 import process4cj as content_process
+import std.env.*
 import std.fs.*
 import std.time.*
 import std.unittest.*
@@ -22,7 +23,7 @@ func contentPayloadHost(root: String): JavaScriptHostResult<JavaScriptExtensionH
             PluginContributionDefinition("echo", PluginContributionKind.Tool)]), ServiceQuotaFixtureLauncher())
 }
 func contentPayloadRoot(mode: String): String {
-    let root = Directory.createTemp("/tmp").toString()
+    let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
     File.writeTo(root + "/worker", contentPayloadWorker().toArray())
     File.writeTo(root + "/mode", mode.toArray())
     let _ = FileInfo(root + "/worker").setExecutable(true)

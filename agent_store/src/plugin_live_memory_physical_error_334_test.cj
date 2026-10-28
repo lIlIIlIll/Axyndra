@@ -2,6 +2,7 @@ package agent_store
 
 import agent_domain.*
 import agent_runtime.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -33,7 +34,7 @@ private func actualPhysicalErrorInvocation334(db:SqliteDatabase,ancestor:Logical
 class LiveMemoryPhysicalError334Tests {
     @TestCase
     func actualSqliteFrameMustReturnBeforeRollbackAckAndCopiedErrorStaysPaid():Unit{
-        let root=Directory.createTemp("/tmp").toString();let db=SqliteDatabase(root+"/actual.sqlite")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let db=SqliteDatabase(root+"/actual.sqlite")
         let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
         let frame=PluginLivePolicyOuterErrorFrame334.retain(ancestor);let state=ActualPhysicalErrorState334()
         try{
@@ -86,7 +87,7 @@ class LiveMemoryPhysicalError334Tests {
     }
     @TestCase
     func cleanupCopyPressureNeverFallsBackToUnpaidMappedMessage():Unit{
-        let bank=LogicalJsonOwnerBudget();let ancestor=bank.acquire(1)
+        let bank=LogicalJsonOwnerBudget(maximumCharged: LOGICAL_JSON_SATURATION_CAPACITY);let ancestor=bank.acquire(1)
         ancestor.ensureRetainedPeak(16777216)
         let primary=copyLiveMemoryMappedOuterError331(IllegalStateException("primary"),OperationId("primary"),ancestor)
         let pressure=bank.acquire(1);pressure.ensureRetainedPeak(134217728-bank.usage()[1]+16777216)

@@ -220,6 +220,7 @@ class PluginRegistryStateMemory <: PluginPackagePrivateDocumentAccounting78 {
         if (bytes < 0 || bytes > 16777216) { throw LogicalJsonPayloadError("registry tree path is outside metadata bounds") }
         charge(bytes * 8 + 1024)
     }
+    public func beforeDigestWork(bytes: Int64): Unit { charge(bytes) }
     // The restore API adopts caller data rather than a freshly inspected
     // descriptor. Pay that actual graph before records/history retain it.
     // No stringify/DOM or unbounded array copy is needed for this traversal.

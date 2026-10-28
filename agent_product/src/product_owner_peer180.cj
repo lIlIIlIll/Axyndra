@@ -10,10 +10,30 @@ import std.time.*
 // Connection DATA, never a Source or execution ticket. The actual enclosing
 // controller retains this payment until its original consumer helpers return.
 class ActualProductOwnerWriteFrame180 {
-    let bytes: Array<Byte>
-    init(frame: String) { bytes = frame.toArray() }
-    func writePhysicalWholeHelper180(stream: UnixSocket, newline: Array<Byte>): Unit {
-        stream.write(bytes); stream.write(newline)
+    private let chunks: Array<Array<Byte>>
+    init(frame: String) {
+        let bytes = unsafe { frame.rawData() }
+        let width: Int64 = 16384
+        // One owned copy per byte; do not first allocate a complete array and
+        // then copy it again into socket-sized writes. These are I/O pieces,
+        // not smaller protocol frames or a changed logical payload limit.
+        chunks = Array<Array<Byte>>((bytes.size + width - 1) / width, { index =>
+            let start = index * width
+            Array<Byte>(min(width, bytes.size - start), { offset => bytes[start + offset] })
+        })
+    }
+    func writePhysicalWholeHelper180(stream: UnixSocket, newline: Array<Byte>, until: MonoTime): Unit {
+        for (chunk in chunks) { writePiece180(stream, chunk, until) }
+        writePiece180(stream, newline, until)
+    }
+    private func writePiece180(stream: UnixSocket, bytes: Array<Byte>, until: MonoTime): Unit {
+        let now = MonoTime.now()
+        if (now >= until) {
+            throw OwnedCanonicalDataFailure113(AgentError(AgentErrorKind.Timeout,
+                "owner.peer_write_timeout", "owner frame write exceeded its bounded deadline"))
+        }
+        stream.writeTimeout = Some(until - now)
+        stream.write(bytes)
     }
 }
 
@@ -38,6 +58,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
     private var activeWrite180: ?ActualProductOwnerWriteFrame180 = None<ActualProductOwnerWriteFrame180>
     private var originalFailure180: ?Exception = None<Exception>
     private var activeReadBytes180:?ArrayList<Byte>=None<ArrayList<Byte>>
+    private var rejectedInputConsumed180 = false
     init(stream: UnixSocket, data: ActualProcessBrokerData180, configuration: ProductConfig,
         readLimit: Int64, writeLimit: Int64) {
         this.stream = stream; this.data = data; this.configuration = configuration
@@ -62,7 +83,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             consumer180 = Some(consumer); Result.Ok(())
         } finally { state.unlock() }
     }
-    public func readOwnerFrame180(framePaid: LogicalJsonOwnerReservation): Result<String> {
+    public func readOwnerFrame180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime): Result<String> {
         if (!data.ownsOriginalFramePayment180(framePaid)) { return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
             "owner.peer_frame_bank_mismatch", "actual original peer bank must pay its reader")) }
         state.lock(); try {
@@ -76,7 +97,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             reading = true
         } finally { state.unlock() }
         try {
-            let result=readWholeFrameHelper180(framePaid)
+            let result=readWholeFrameHelper180(framePaid,deadline)
             state.lock();try{
                 match(activeReadBytes180){case Some(bytes)=>
                     if(result.isOk() || bytes.isEmpty()){activeReadBytes180=None<ArrayList<Byte>>}
@@ -88,15 +109,28 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
         catch (failure: Exception) { retainOriginalPhysicalFailure180(failure); Result.Err(AgentError(AgentErrorKind.Transport, "owner.peer_read_failed", failure.message)) }
         finally { state.lock(); try { reading = false } finally { state.unlock() } }
     }
-    private func readWholeFrameHelper180(framePaid: LogicalJsonOwnerReservation): Result<String> {
+    private func readWholeFrameHelper180(framePaid: LogicalJsonOwnerReservation, deadline: ?MonoTime): Result<String> {
         framePaid.ensureRetainedPeak(16384)
         let bytes = ArrayList<Byte>()
         state.lock();try{activeReadBytes180=Some(bytes)}finally{state.unlock()}
         while (true) {
+            var timeout = Duration.second * 5
+            match (deadline) {
+                case Some(until) =>
+                    let now = MonoTime.now()
+                    if (now >= until) { return Result.Err(AgentError(AgentErrorKind.Timeout,
+                        "owner.peer_frame_timeout", "owner frame exceeded its enclosing input deadline")) }
+                    if (until - now < timeout) { timeout = until - now }
+                case None => ()
+            }
             if (begin == end) {
-                let count = try { stream.read(buffer.getOrThrow()) }
+                let count = try {
+                    // The timeout setter can itself race physical close.
+                    stream.readTimeout = Some(timeout)
+                    stream.read(buffer.getOrThrow())
+                }
                 catch (_: SocketTimeoutException) {
-                    state.lock(); let continueIdle = try { idle && !closing && bytes.isEmpty() } finally { state.unlock() }
+                    state.lock(); let continueIdle = try { idle && !closing && bytes.isEmpty() && deadline.isNone() } finally { state.unlock() }
                     if (continueIdle) { continue }
                     return Result.Err(AgentError(AgentErrorKind.Timeout, "owner.peer_frame_timeout", "owner physical frame read timed out"))
                 }
@@ -122,7 +156,7 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             framePaid.ensureRetainedPeak((bytes.size + end - begin) * 8 + 16384)
             while (begin < end) {
                 let byte = buffer.getOrThrow()[begin]; begin++
-                if (byte == b'\n') { return Result.Ok(String.fromUtf8(bytes.toArray())) }
+                if (byte == b'\n') { return decodeOriginalReadFrame180(bytes) }
                 if (bytes.size >= readLimit) { return Result.Err(AgentError(AgentErrorKind.Protocol,
                     "owner.peer_frame_too_large", "owner physical frame exceeds its original limit")) }
                 bytes.add(byte)
@@ -130,16 +164,31 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
         }
         Result.Err(AgentError(AgentErrorKind.Internal, "owner.peer_reader_stopped", "owner frame reader stopped"))
     }
-    public func writeOwnerFrame180(frame: String): Result<Unit> {
+    private func decodeOriginalReadFrame180(bytes: ArrayList<Byte>): Result<String> {
+        try { Result.Ok(String.fromUtf8(bytes.toArray())) }
+        catch (failure: IllegalArgumentException) {
+            // Checked UTF-8 rejection is a completed pure decoder, not an
+            // unknown socket producer. Its bytes stay paid until full error
+            // consumption and the original enclosing helper return.
+            Result.Err(AgentError(AgentErrorKind.Transport, "owner.peer_read_failed", failure.message))
+        }
+    }
+    public func writeOwnerFrame180(frame: String, deadline: ?MonoTime): Result<Unit> {
         writer.lock(); try {
             state.lock(); let unavailable = try { closing } finally { state.unlock() }
             if (unavailable || activeWritePaid180.isSome()) { return Result.Err(AgentError(AgentErrorKind.Transport,
                 "owner.peer_closed", "owner peer is closed or still owns uncertain output")) }
             if (frame.size > writeLimit) { return Result.Err(AgentError(AgentErrorKind.Protocol,
                 "owner.peer_frame_too_large", "owner physical frame exceeds its original limit")) }
+            let now = MonoTime.now(); let ordinary = now + Duration.second * 5
+            let until = match (deadline) {
+                case Some(value) => if (value < ordinary) { value } else { ordinary }
+                case None => ordinary }
+            if (now >= until) { return Result.Err(AgentError(AgentErrorKind.Timeout,
+                "owner.peer_write_timeout", "owner frame write exceeded its enclosing deadline")) }
             let paid = data.derive(frame.size * 2 + 16384)
             activeWritePaid180 = Some(paid)
-            let result = writeWholeFrameHelper180(frame)
+            let result = writeWholeFrameHelper180(frame, until)
             if (result.isOk()) {
                 // The entire concrete conversion/write helper has returned;
                 // no original byte-array alias survives in this connection.
@@ -149,10 +198,10 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
             result
         } finally { writer.unlock() }
     }
-    private func writeWholeFrameHelper180(frame: String): Result<Unit> {
+    private func writeWholeFrameHelper180(frame: String, until: MonoTime): Result<Unit> {
         try {
             let actual = ActualProductOwnerWriteFrame180(frame); activeWrite180 = Some(actual)
-            actual.writePhysicalWholeHelper180(stream, newline.getOrThrow()); Result.Ok(())
+            actual.writePhysicalWholeHelper180(stream, newline.getOrThrow(), until); Result.Ok(())
         } catch (failure: OwnedCanonicalDataFailure113) { retainOriginalPhysicalFailure180(failure); Result.Err(failure.error) }
         catch (failure: Exception) { retainOriginalPhysicalFailure180(failure); Result.Err(AgentError(AgentErrorKind.Transport, "owner.peer_write_failed", failure.message)) }
     }
@@ -162,7 +211,36 @@ class ActualProductOwnerPeer180 <: ProductOwnerPeer180 {
         catch (failure: Exception) { retainOriginalPhysicalFailure180(failure); Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "owner.peer_close_failed", failure.message)) }
     }
     private func closePhysicalPeerHelper180(): Unit { stream.close() }
+    func observeFrontendFailureConsumed180(error: AgentError): Unit {
+        state.lock(); let actual = try { consumer180 } finally { state.unlock() }
+        match (actual) {
+            case Some(value) => value.observeOwnerFrontendFailure180(ProductOwnerFrontendFailureConsumed180(value, error))
+            case None => ()
+        }
+        state.lock(); try { rejectedInputConsumed180 = true } finally { state.unlock() }
+    }
+    private func retireRejectedInputAfterWholeHandlerHelper180(): Result<Unit> {
+        writer.lock(); try {
+            state.lock(); try {
+                if (!rejectedInputConsumed180) { return Result.Ok(()) }
+                if (originalFailure180.isSome() || !physicalCloseReturned180 || reading ||
+                    activeWritePaid180.isSome() || activeWrite180.isSome()) {
+                    return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                        "owner.peer_cleanup_pending", "original physical producer has not retired"))
+                }
+                // The actual controller joined the whole handler/Future.
+                // Drop its independent physical bytes before the concrete
+                // consumer can close its raw/DOM payment.
+                activeReadBytes180 = None<ArrayList<Byte>>; begin = end
+                Result.Ok(())
+            } finally { state.unlock() }
+        } finally { writer.unlock() }
+    }
     func closeConcreteFrontendHelper180(): Result<Unit> {
+        match (retireRejectedInputAfterWholeHandlerHelper180()) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
         let result = invokeConcreteFrontendCleanup180()
         if (result.isOk()) { state.lock(); try { consumer180 = None<ProductOwnerFrontendConsumer180> } finally { state.unlock() } }
         result

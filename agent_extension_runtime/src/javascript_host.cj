@@ -100,9 +100,9 @@ public class JavaScriptCommandDescriptor {
         this.description = description
     }
 }
-// A view is a declarative presentation identity. It carries no rendering
-// authority, no terminal control and no approval surface: the host chooses
-// what to draw and falls back to its own basic presentation on failure.
+// A pure presentation contribution returns bounded data, never terminal
+// control or an approval. The frontend negotiates the View document version;
+// indispensable interaction must not silently degrade into execution.
 public class JavaScriptViewDescriptor {
     public let name: String
     public let description: String
@@ -238,7 +238,7 @@ public class JavaScriptHostInvocationIdentity {
             (run == "" || operation != "" || call == "" || epoch < 1 || command == "")
         let prepareIdentityInvalid = (normalizedKind == "prepare" || normalizedKind == "service_prepare") &&
             (run == "" || operation != "" || call == "" || epoch < 1 || command != "")
-        let contentKind = normalizedKind == "context_provider" || normalizedKind == "resource_provider" || normalizedKind == "provider"
+        let contentKind = normalizedKind == "context_provider" || normalizedKind == "resource_provider" || normalizedKind == "provider" || normalizedKind == "view"
         let contentIdentityInvalid = contentKind &&
             (run != "" || operation != "" || call == "" || epoch != 0 || command != "")
         if (thread == "" ||
@@ -400,7 +400,8 @@ public class JavaScriptHostLaunchRequest {
         if (contentPayload) {
             var declared = false
             for (entry in contributions where entry.kind == PluginContributionKind.ContextProvider ||
-                (entry.kind == PluginContributionKind.ResourceProvider || entry.kind == PluginContributionKind.Provider)) { declared = true }
+                entry.kind == PluginContributionKind.ResourceProvider || entry.kind == PluginContributionKind.Provider ||
+                entry.kind == PluginContributionKind.View) { declared = true }
             if (!isNativeExecutableHostProfile(profile) || !declared) {
                 throw IllegalArgumentException("content payloads require an inspected native content contribution") }
         }
@@ -576,7 +577,8 @@ public class JavaScriptExtensionHost {
         let name = tool.trimAscii()
         let isCommand = identity.kind == "command"
         let isHook = identity.kind == "hook"
-        let isContent = identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider"
+        let isView = identity.kind == "view"
+        let isContent = identity.kind == "context_provider" || identity.kind == "resource_provider" || identity.kind == "provider" || isView
         let isPrepare = identity.kind == "prepare" || identity.kind == "service_prepare" || isContent
         let isService = identity.kind == "service" || identity.kind == "service_prepare"
         let payloadLimits: ?ServicePayloadLimits = if (isService && isNativeExecutableHostProfile(request.profile)) { request.payloadLimits } else { None }
@@ -599,13 +601,16 @@ public class JavaScriptExtensionHost {
             serviceRequestLimit > (if (mayRaiseServiceLimit) { 8192 } else { JAVASCRIPT_HOST_MAX_SERVICE_CALLS })) {
             return hostError("extension.service_limit_invalid", "service request quota is outside the host-selected profile limit")
         }
-        let descriptor = findTool(name)
+        let descriptor: ?JavaScriptToolDescriptor = if (isView) { None } else { findTool(name) }
         if (isContent) {
             var declared = false
-            let providers = if (identity.kind == "provider") { policyProvidersValue }
-                else if (identity.kind == "context_provider") { contextProvidersValue } else { resourceProvidersValue }
-            for (provider in providers where provider.name == name) { declared = true }
-            if (!isNativeExecutableHostProfile(request.profile) || !declared || serviceRequestLimit != 0) {
+            if (isView) { declared = hasView(name) }
+            else {
+                let providers = if (identity.kind == "provider") { policyProvidersValue }
+                    else if (identity.kind == "context_provider") { contextProvidersValue } else { resourceProvidersValue }
+                for (provider in providers where provider.name == name) { declared = true }
+            }
+            if (!isNativeExecutableHostProfile(request.profile) || !declared || serviceRequestLimit != 0 || (isView && observer.isSome())) {
                 return hostError("extension.content_provider_not_registered", "pure content query requires its exact typed declaration and zero services")
             }
         }
@@ -642,12 +647,14 @@ public class JavaScriptExtensionHost {
                 readonlyDelegationInteger(value.field("profile").getOrThrow(), "max_bytes") != descriptor.getOrThrow().inputAttachmentMaxBytes) {
                 return hostError("extension.input_attachment_invalid", "input attachment does not belong to the actual declared ordinary Tool") }
             case None => () }
-        let prepareInputLimit = if (isContent) { if (contentPayload) { CONTENT_PAYLOAD_INPUT_BYTES } else { min(196608, request.maxFrameBytes - 4096) } } else if (identity.kind == "service_prepare" && payloadLimits.isSome()) {
+        let prepareInputLimit = if (isView) { min(PLUGIN_VIEW_MAX_BYTES, request.maxFrameBytes - 4096) }
+        else if (isContent) { if (contentPayload) { CONTENT_PAYLOAD_INPUT_BYTES } else { min(196608, request.maxFrameBytes - 4096) } } else if (identity.kind == "service_prepare" && payloadLimits.isSome()) {
             payloadLimits.getOrThrow().maxInputBytes + 65536
         } else if (identity.kind == "service_prepare" && request.serviceLimits.isSome()) {
             request.serviceLimits.getOrThrow().prepareInputBytes
         } else { NATIVE_PLUGIN_PREPARE_MAX_INPUT_BYTES }
-        let prepareOutputLimit = if (isContent) { if (contentPayload) { CONTENT_PAYLOAD_RESULT_BYTES } else { min(196608, request.maxFrameBytes - 4096) } } else if (identity.kind == "service_prepare" && payloadLimits.isSome()) {
+        let prepareOutputLimit = if (isView) { min(PLUGIN_VIEW_MAX_BYTES, request.maxFrameBytes - 4096) }
+        else if (isContent) { if (contentPayload) { CONTENT_PAYLOAD_RESULT_BYTES } else { min(196608, request.maxFrameBytes - 4096) } } else if (identity.kind == "service_prepare" && payloadLimits.isSome()) {
             payloadLimits.getOrThrow().maxPrepareBytes
         } else if (identity.kind == "service_prepare" && request.serviceLimits.isSome()) {
             request.serviceLimits.getOrThrow().maxPrepareBytes
@@ -1406,6 +1413,12 @@ public class JavaScriptExtensionHost {
         }
         false
     }
+    func hasView(name: String): Bool {
+        for (view in viewsValue) {
+            if (view.name == name) { return true }
+        }
+        false
+    }
     func hasHook(reference: String): Bool {
         for (hook in hooksValue) {
             if (hook.reference == reference) { return true }
@@ -2128,6 +2141,9 @@ func parseViews(
                 }
                 node.text
             case None => ""
+        }
+        if (!isPluginViewPlainText(description)) {
+            return hostError("extension.view_invalid", "extension view description contains terminal or directional controls")
         }
         output.add(JavaScriptViewDescriptor(name, description: description))
     }

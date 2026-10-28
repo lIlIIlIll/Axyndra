@@ -8,6 +8,7 @@ import std.collection.*
 
 import std.convert.*
 
+import std.env.getVariable
 import std.fs.*
 
 import std.unittest.*
@@ -59,7 +60,7 @@ class OpaqueRowJournalStreamingFenceTests{
 
     func StreamingFencePreservesEveryOriginalCanonicalByteAndUnicodeChunkBoundary():Unit{
 
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/stream.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/stream.db")
 
         let owner=LogicalJsonOwnerBudget()
 
@@ -97,7 +98,7 @@ class OpaqueRowJournalStreamingFenceTests{
 
     func CurrentBoundaryFailureInterruptsTheScanWithoutChangingAnySqliteFact():Unit{
 
-        let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/stream.db")
+        let root=Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString();let database=SqliteDatabase(root+"/stream.db")
 
         let owner=LogicalJsonOwnerBudget();let checks=JournalStreamTestChecks()
 

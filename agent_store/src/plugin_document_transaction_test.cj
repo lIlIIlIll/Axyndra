@@ -1,6 +1,7 @@
 package agent_store
 
 import agent_domain.*
+import std.env.getVariable
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -13,7 +14,7 @@ import yjson_support.*
 class PluginDocumentTransactionTests {
     @TestCase
     func receiptStageFailureRollsBackTheDocumentInTheSameSqliteTransaction(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let database = SqliteDatabase(root + "/documents.sqlite")
         try {
             let repository = SqlitePluginDocumentRepository(database)
@@ -37,7 +38,7 @@ class PluginDocumentTransactionTests {
     }
     @TestCase
     func sameBytesAtANewerRevisionAndForgedRawBytesCannotPassCas(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let database = SqliteDatabase(root + "/documents.sqlite")
         try {
             let repository = SqlitePluginDocumentRepository(database)
@@ -56,7 +57,7 @@ class PluginDocumentTransactionTests {
     }
     @TestCase
     func guardCannotSwapTheInspectedRowBeforeTheFinalCas(): Unit {
-        let root = Directory.createTemp("/tmp").toString()
+        let root = Directory.createTemp(getVariable("TMPDIR") ?? "/tmp").toString()
         let database = SqliteDatabase(root + "/documents.sqlite")
         try {
             let repository = SqlitePluginDocumentRepository(database)
