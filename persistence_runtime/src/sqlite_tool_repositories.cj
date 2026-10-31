@@ -7,13 +7,22 @@ import yjson.*
 import agent_domain.*
 import agent_ports.*
 import agent_store.*
-import model_adapters.*
 
 
-public class SqliteAuditRepository <: AuditPort {
+public class SqliteAuditRepository <: AuditPort & CatalogAuditEventDataPort204 {
     private let database: SqliteDatabase
 
     public init(database: SqliteDatabase) { this.database = database }
+
+    public func appendCatalogAuditOwnedUtf8204(value: PreparedPlanUtf8Owner204): Result<Unit> {
+        let phase = openCatalogPersistenceCopy204(value)
+        let answer = phase.appendAuditFrame204(database, value)
+        match (answer) {
+            case Result.Ok(_) => returnCatalogPersistenceCopy204(phase)
+            case Result.Err(error) => phase.holdError204(error)
+        }
+        answer
+    }
 
     public func append(event: AgentEvent): Result<Unit> {
         try {
@@ -37,10 +46,32 @@ public class SqliteAuditRepository <: AuditPort {
     }
 }
 
-public class SqlitePermissionRepository <: PermissionRepository {
+public class SqlitePermissionRepository <: PermissionRepository & CatalogPermissionGrantDataPort204 {
     private let database: SqliteDatabase
 
     public init(database: SqliteDatabase) { this.database = database }
+
+    public func allowsCatalogGrantOwnedUtf8204(sessionId: SessionId,
+        value: PreparedPlanUtf8Owner204): Result<Bool> {
+        let phase = openCatalogPersistenceCopy204(value)
+        let answer = phase.allowsFrame204(database, sessionId, value)
+        match (answer) {
+            case Result.Ok(_) => returnCatalogPersistenceCopy204(phase)
+            case Result.Err(error) => phase.holdError204(error)
+        }
+        answer
+    }
+
+    public func grantCatalogGrantOwnedUtf8204(sessionId: SessionId,
+        value: PreparedPlanUtf8Owner204): Result<Unit> {
+        let phase = openCatalogPersistenceCopy204(value)
+        let answer = phase.grantFrame204(this, sessionId, value)
+        match (answer) {
+            case Result.Ok(_) => returnCatalogPersistenceCopy204(phase)
+            case Result.Err(error) => phase.holdError204(error)
+        }
+        answer
+    }
 
     public func allows(sessionId: SessionId, scope: ApprovalGrantScope): Result<Bool> {
         try {

@@ -1,14 +1,9 @@
 package agent_cli
 
-import std.overflow.*
+import agent_domain.modelPolicySha256Text
 
-// Stable digest shared by plan-review clients and the product session.
+// The exact UTF-8 source digest shared by Host and frontend. Display labels
+// are not source content; callers must pass the canonical body itself.
 public func planReviewHash(value: String): String {
-    // FNV-1a intentionally wraps on overflow; checked UInt64 arithmetic
-    // would throw OverflowException on any non-trivial content.
-    var hash: UInt64 = 1469598103934665603
-    for (byte in value.toArray()) {
-        hash = (hash ^ UInt64(byte)).wrappingMul(1099511628211)
-    }
-    hash.toString()
+    modelPolicySha256Text(value)
 }

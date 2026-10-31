@@ -1,0 +1,363 @@
+{
+  "format": 1,
+  "package": "agent_sdk",
+  "contract": "native-authoring-v3",
+  "api_version": "4.0.0",
+  "symbols": [
+    {
+      "key": "class:InvocationDeadline",
+      "stability": "STABLE",
+      "signature": "public class InvocationDeadline"
+    },
+    {
+      "key": "class:InvocationDeadline.func:exceeded",
+      "stability": "STABLE",
+      "signature": "public func exceeded(nowMillis: Int64): Bool"
+    },
+    {
+      "key": "class:InvocationDeadline.func:isSet",
+      "stability": "STABLE",
+      "signature": "public func isSet(): Bool"
+    },
+    {
+      "key": "class:InvocationDeadline.init",
+      "stability": "STABLE",
+      "signature": "public init(expiresAtMillis!: Int64 = 0)"
+    },
+    {
+      "key": "class:InvocationDeadline.let:expiresAtMillis",
+      "stability": "STABLE",
+      "signature": "public let expiresAtMillis: Int64"
+    },
+    {
+      "key": "class:NativePluginDefinition",
+      "stability": "STABLE",
+      "signature": "public class NativePluginDefinition"
+    },
+    {
+      "key": "class:NativePluginDefinition.init",
+      "stability": "STABLE",
+      "signature": "public init(id: String, version: String, contributions: Array<PluginContributionDefinition>, capabilities!: Array<String> = [])"
+    },
+    {
+      "key": "class:NativePluginDefinition.let:capabilities",
+      "stability": "STABLE",
+      "signature": "public let capabilities: Array<String>"
+    },
+    {
+      "key": "class:NativePluginDefinition.let:contributions",
+      "stability": "STABLE",
+      "signature": "public let contributions: Array<PluginContributionDefinition>"
+    },
+    {
+      "key": "class:NativePluginDefinition.let:id",
+      "stability": "STABLE",
+      "signature": "public let id: String"
+    },
+    {
+      "key": "class:NativePluginDefinition.let:version",
+      "stability": "STABLE",
+      "signature": "public let version: String"
+    },
+    {
+      "key": "class:NativePluginInvocation",
+      "stability": "STABLE",
+      "signature": "public class NativePluginInvocation"
+    },
+    {
+      "key": "class:NativePluginInvocation.init",
+      "stability": "STABLE",
+      "signature": "public init(callId: String, contribution: String, input: JsonNode, contributionKind!: PluginContributionKind = PluginContributionKind.Provider, cancellation!: InvocationCancellation = NeverCancelled(), deadline!: InvocationDeadline = InvocationDeadline())"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:callId",
+      "stability": "STABLE",
+      "signature": "public let callId: String"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:cancellation",
+      "stability": "STABLE",
+      "signature": "public let cancellation: InvocationCancellation"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:contribution",
+      "stability": "STABLE",
+      "signature": "public let contribution: String"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:contributionKind",
+      "stability": "STABLE",
+      "signature": "public let contributionKind: PluginContributionKind"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:deadline",
+      "stability": "STABLE",
+      "signature": "public let deadline: InvocationDeadline"
+    },
+    {
+      "key": "class:NativePluginInvocation.let:input",
+      "stability": "STABLE",
+      "signature": "public let input: JsonNode"
+    },
+    {
+      "key": "class:NeverCancelled",
+      "stability": "STABLE",
+      "signature": "public class NeverCancelled <: InvocationCancellation"
+    },
+    {
+      "key": "class:NeverCancelled.func:isCancelled",
+      "stability": "STABLE",
+      "signature": "public func isCancelled(): Bool"
+    },
+    {
+      "key": "class:NeverCancelled.func:reason",
+      "stability": "STABLE",
+      "signature": "public func reason(): String"
+    },
+    {
+      "key": "class:NeverCancelled.init",
+      "stability": "STABLE",
+      "signature": "public init()"
+    },
+    {
+      "key": "class:PluginContributionDefinition",
+      "stability": "STABLE",
+      "signature": "public class PluginContributionDefinition"
+    },
+    {
+      "key": "class:PluginContributionDefinition.func:allowedUserControls",
+      "stability": "STABLE",
+      "signature": "public func allowedUserControls(): Array<String>"
+    },
+    {
+      "key": "class:PluginContributionDefinition.init",
+      "stability": "STABLE",
+      "signature": "public init(name: String, kind: PluginContributionKind, supportsPreparationReference!: Bool = false, allowedUserControls!: Array<String> = [], executionProfile!: PluginToolExecutionProfile = PluginToolExecutionProfile.Brokered, inputAttachmentField!: String = \"\", inputAttachmentMaxBytes!: Int64 = 0)"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:executionProfile",
+      "stability": "STABLE",
+      "signature": "public let executionProfile: PluginToolExecutionProfile"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:inputAttachmentField",
+      "stability": "STABLE",
+      "signature": "public let inputAttachmentField: String"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:inputAttachmentMaxBytes",
+      "stability": "STABLE",
+      "signature": "public let inputAttachmentMaxBytes: Int64"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:kind",
+      "stability": "STABLE",
+      "signature": "public let kind: PluginContributionKind"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:name",
+      "stability": "STABLE",
+      "signature": "public let name: String"
+    },
+    {
+      "key": "class:PluginContributionDefinition.let:supportsPreparationReference",
+      "stability": "STABLE",
+      "signature": "public let supportsPreparationReference: Bool"
+    },
+    {
+      "key": "class:SdkError",
+      "stability": "STABLE",
+      "signature": "public class SdkError <: Exception"
+    },
+    {
+      "key": "class:SdkError.init",
+      "stability": "STABLE",
+      "signature": "public init( kind: SdkErrorKind, code: String, message: String, details!: JsonNode = jsonObject([]) )"
+    },
+    {
+      "key": "class:SdkError.let:code",
+      "stability": "STABLE",
+      "signature": "public let code: String"
+    },
+    {
+      "key": "class:SdkError.let:details",
+      "stability": "STABLE",
+      "signature": "public let details: JsonNode"
+    },
+    {
+      "key": "class:SdkError.let:kind",
+      "stability": "STABLE",
+      "signature": "public let kind: SdkErrorKind"
+    },
+    {
+      "key": "enum:PluginContributionKind",
+      "stability": "STABLE",
+      "signature": "public enum PluginContributionKind"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Command",
+      "stability": "STABLE",
+      "signature": "Command"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:ContextProvider",
+      "stability": "STABLE",
+      "signature": "ContextProvider"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Event",
+      "stability": "STABLE",
+      "signature": "Event"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:ModelProvider",
+      "stability": "STABLE",
+      "signature": "ModelProvider"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Provider",
+      "stability": "STABLE",
+      "signature": "Provider"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:ResourceProvider",
+      "stability": "STABLE",
+      "signature": "ResourceProvider"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Service",
+      "stability": "STABLE",
+      "signature": "Service"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Skill",
+      "stability": "STABLE",
+      "signature": "Skill"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:Tool",
+      "stability": "STABLE",
+      "signature": "Tool"
+    },
+    {
+      "key": "enum:PluginContributionKind.variant:View",
+      "stability": "STABLE",
+      "signature": "View"
+    },
+    {
+      "key": "enum:PluginToolExecutionProfile",
+      "stability": "STABLE",
+      "signature": "public enum PluginToolExecutionProfile"
+    },
+    {
+      "key": "enum:PluginToolExecutionProfile.variant:Brokered",
+      "stability": "STABLE",
+      "signature": "Brokered"
+    },
+    {
+      "key": "enum:PluginToolExecutionProfile.variant:DataOnly",
+      "stability": "STABLE",
+      "signature": "DataOnly"
+    },
+    {
+      "key": "enum:SdkErrorKind",
+      "stability": "STABLE",
+      "signature": "public enum SdkErrorKind"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Cancelled",
+      "stability": "STABLE",
+      "signature": "Cancelled"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Deadline",
+      "stability": "STABLE",
+      "signature": "Deadline"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Decode",
+      "stability": "STABLE",
+      "signature": "Decode"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Preparation",
+      "stability": "STABLE",
+      "signature": "Preparation"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Unsupported",
+      "stability": "STABLE",
+      "signature": "Unsupported"
+    },
+    {
+      "key": "enum:SdkErrorKind.variant:Validation",
+      "stability": "STABLE",
+      "signature": "Validation"
+    },
+    {
+      "key": "enum:SdkResult",
+      "stability": "STABLE",
+      "signature": "public enum SdkResult<T>"
+    },
+    {
+      "key": "enum:SdkResult.func:isOk",
+      "stability": "STABLE",
+      "signature": "public func isOk(): Bool"
+    },
+    {
+      "key": "enum:SdkResult.variant:Err",
+      "stability": "STABLE",
+      "signature": "Err(SdkError)"
+    },
+    {
+      "key": "enum:SdkResult.variant:Ok",
+      "stability": "STABLE",
+      "signature": "Ok(T)"
+    },
+    {
+      "key": "func:validPluginInputAttachmentDeclaration",
+      "stability": "STABLE",
+      "signature": "public func validPluginInputAttachmentDeclaration(field: String, maximum: Int64): Bool"
+    },
+    {
+      "key": "interface:InvocationCancellation",
+      "stability": "STABLE",
+      "signature": "public interface InvocationCancellation"
+    },
+    {
+      "key": "interface:InvocationCancellation.func:isCancelled",
+      "stability": "STABLE",
+      "signature": "public func isCancelled(): Bool"
+    },
+    {
+      "key": "interface:InvocationCancellation.func:reason",
+      "stability": "STABLE",
+      "signature": "public func reason(): String"
+    },
+    {
+      "key": "interface:NativePluginHandler",
+      "stability": "STABLE",
+      "signature": "public interface NativePluginHandler"
+    },
+    {
+      "key": "interface:NativePluginHandler.func:definition",
+      "stability": "STABLE",
+      "signature": "public func definition(): NativePluginDefinition"
+    },
+    {
+      "key": "interface:NativePluginHandler.func:invoke",
+      "stability": "STABLE",
+      "signature": "public func invoke(invocation: NativePluginInvocation): SdkResult<JsonNode>"
+    },
+    {
+      "key": "interface:NativePluginHandler.func:validate",
+      "stability": "STABLE",
+      "signature": "public func validate(kind: PluginContributionKind, contribution: String, input: JsonNode): SdkResult<JsonNode>"
+    },
+    {
+      "key": "let:AGENT_SDK_VERSION",
+      "stability": "STABLE",
+      "signature": "public let AGENT_SDK_VERSION"
+    }
+  ]
+}

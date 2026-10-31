@@ -1,10 +1,17 @@
 # axyndra-agent-testkit
 
-面向 `agent_sdk` consumer 的最小、确定性测试包。它只依赖 `agent_sdk`、
-`yjson` 与 Axyndra JSON 集成层，不包含 Agent 产品装配、ToolPipeline executor、
-持久化或恢复权限。
+Version 3.0.0 is the public deterministic testing companion for Native plugin
+data handlers. It depends only on `agent_sdk`, yjson and the JSON seam.
 
-稳定面包括 `ManualClock`、`SequenceIds`、`ManualCancellation`、
-`ExtensionContractHarness` 与 capability assertions。`FaultPlan` 当前为实验性原语。
+`NativePluginContractHarness` validates a contribution and invokes the actual
+pure handler. `PreparedNativePluginCase` is untrusted fixture data, not Kernel
+Prepared, approval, Source, or execution authority. `ManualClock`, `SequenceIds`,
+`ManualCancellation` and capability assertions remain available. `FaultPlan`
+and `FaultRule` remain experimental.
 
-完整边界和示例见 [`docs/agent-testkit.md`](../docs/agent-testkit.md)。
+The real public source consumer is `support_tests/testkit_consumer`. Complete
+cooperative v2 harness oracles are retained separately in test-only Support
+packages and cannot become a production dependency.
+
+See [agent-testkit](../docs/agent-testkit.md) and
+[compatibility](../docs/compatibility.md).

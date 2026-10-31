@@ -56,6 +56,10 @@ def verify_vendored_provenance(contract: dict[str, object]) -> None:
         if path == provenance_path:
             continue
         relative = path.relative_to(CJ_TUI_ROOT).as_posix()
+        # Only the native build output and fixture's generated lock are omitted.
+        if (relative.startswith("packages/core/native/target/") or
+                relative == "packages/core/tests/terminal_signal/cjpm.lock"):
+            continue
         payload = path.read_bytes()
         rows.append(f"{relative}\t{hashlib.sha256(payload).hexdigest()}\t{len(payload)}")
     manifest = ("\n".join(rows) + "\n").encode("utf-8")

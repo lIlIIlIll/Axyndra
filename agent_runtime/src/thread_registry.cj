@@ -87,7 +87,7 @@ public class InMemoryThreadRuntimeRegistry <: ThreadRuntimeRegistry {
             var index: Int64 = 0
             while (index < entries.size) {
                 if (entries[index].threadId.value == threadId.value) {
-                    if (entries[index].runtime.activeRun().isSome()) {
+                    if (entries[index].runtime.hasActiveRun159()) {
                         return Result.Err(AgentError(
                             AgentErrorKind.Conflict,
                             "thread.registry_discard_active",
@@ -109,8 +109,15 @@ public class InMemoryThreadRuntimeRegistry <: ThreadRuntimeRegistry {
 
 // Deterministic conservative fallback for product and fake-model lanes. A
 // provider-calibrated estimator can replace it without changing Thread truth.
-public class ConservativeThreadTokenEstimator <: ThreadTokenEstimator {
+public class ConservativeThreadTokenEstimator <: ThreadTokenEstimator & OwnedThreadTokenEstimator {
     public init() {}
+
+    public func estimateOwnedItem(item: ThreadItem, custody: OwnedCanonicalThreadItemCustody): Result<Int64> {
+        // This concrete estimator consumes only within this synchronous frame.
+        // It stores neither the item nor an extracted value/custody callback.
+        let _ = custody
+        Result.Ok(estimateItem(item))
+    }
 
     public func estimateSystemInstructions(version: String): Int64 {
         estimateTextTokens(version) + 16

@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "workspace_plugin"
+  organization = ""
+  description = "Independent native workspace reads, search and hashline file plans"
+  version = "1.0.0"
+  output-type = "executable"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "process4cj" = { path = "../../libs/process4cj", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

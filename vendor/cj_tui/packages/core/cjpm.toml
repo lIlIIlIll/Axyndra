@@ -13,3 +13,17 @@
   package-configuration = {}
 
 [dependencies]
+
+# Native terminal cleanup is statically embedded by cjpm in every consumer.
+# Target-specific FFI leaves the Windows console implementation unchanged.
+[target.x86_64-unknown-linux-gnu.ffi.c]
+  cjtui_terminal = { path = "native/target" }
+
+[target.aarch64-unknown-linux-gnu.ffi.c]
+  cjtui_terminal = { path = "native/target" }
+
+[target.x86_64-apple-darwin.ffi.c]
+  cjtui_terminal = { path = "native/target" }
+
+[target.aarch64-apple-darwin.ffi.c]
+  cjtui_terminal = { path = "native/target" }

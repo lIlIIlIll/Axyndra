@@ -7,6 +7,7 @@ import yjson.*
 import agent_domain.*
 import agent_ports.*
 import agent_product.*
+import agent_store.*
 import agent_runtime.*
 import agent_testkit.*
 import std.collection.*
@@ -20,7 +21,8 @@ main(): Int64 {
     let root = Directory.createTemp("target").toString()
     try {
         verifySchema(root)
-        verifyRealCommandMapping(root)
+        verifyLegacyCommandMapping(root)
+        println("legacy GitHub schema/argv oracle and actual absent-default contract passed")
         println("github contract passed")
         0
     } finally {
@@ -29,15 +31,9 @@ main(): Int64 {
 }
 
 func verifySchema(root: String): Unit {
-    let product = openProduct(config: ProductConfig(
-        settingsRoot: root + "/settings",
-        stateRoot: root + "/state",
-        workspaceRoot: root,
-        fixture: true,
-        approvalMode: ApprovalMode.Yolo,
-        asyncEnabled: false
-    )).value().getOrThrow()
-    let definition = toolDefinition(product, "github")
+    verifyRetiredProductDefault(root)
+    // The original schema union is a historical oracle, not a live registration.
+    let definition = legacyGithubToolDefinition()
     expect(
         sameStringSet(propertyNames(definition.inputSchema), [
             "op", "repo", "branch", "path", "pr", "force",
@@ -65,10 +61,10 @@ func verifySchema(root: String): Unit {
     )
 }
 
-func verifyRealCommandMapping(root: String): Unit {
+func verifyLegacyCommandMapping(root: String): Unit {
     let workspace = LocalWorkspace(root)
     let processes = RecordingGithubProcessPort()
-    let runtime = ProductGithubRuntime(
+    let runtime = LegacyGithubRuntime(
         processes,
         ghExecutable: "/bin/echo",
         gitExecutable: "/bin/echo"
@@ -234,7 +230,7 @@ func verifyRealCommandMapping(root: String): Unit {
             requestsScopeGithubSecrets(processes.requests.toArray()),
         "GitHub process requests always use network, scope auth secrets, and grant writes only to checkout/push"
     )
-    let failing = ProductGithubRuntime(
+    let failing = LegacyGithubRuntime(
         RecordingGithubProcessPort(exitCode: 1),
         ghExecutable: "/bin/false",
         gitExecutable: "/bin/false"
@@ -325,7 +321,7 @@ func containsArgument(values: Array<String>, expected: String): Bool {
 }
 
 func invoke(
-    runtime: ProductGithubRuntime,
+    runtime: LegacyGithubRuntime,
     context: ToolInvocationContext,
     call: ToolCall
 ): ToolResult {
@@ -333,7 +329,7 @@ func invoke(
 }
 
 func invocationFailed(
-    runtime: ProductGithubRuntime,
+    runtime: LegacyGithubRuntime,
     context: ToolInvocationContext,
     call: ToolCall
 ): Bool {
@@ -344,7 +340,7 @@ func invocationFailed(
 }
 
 func invokeResult(
-    runtime: ProductGithubRuntime,
+    runtime: LegacyGithubRuntime,
     context: ToolInvocationContext,
     call: ToolCall
 ): Result<ToolResult> {
@@ -395,9 +391,9 @@ func invokeResult(
 }
 
 class GithubContractExecutor <: ToolExecutor {
-    private let runtime: ProductGithubRuntime
+    private let runtime: LegacyGithubRuntime
 
-    init(runtime: ProductGithubRuntime) {
+    init(runtime: LegacyGithubRuntime) {
         this.runtime = runtime
     }
 
@@ -507,4 +503,52 @@ func sameStringSet(left: Array<String>, right: Array<String>): Bool {
 
 func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
+}
+
+// A real Product with fresh settings has no GitHub executor or package. The
+// ordinary missing-tool route keeps its existing durable canonical failure.
+func verifyRetiredProductDefault(root: String): Unit {
+    let product = openProduct(config: ProductConfig(
+        settingsRoot: root + "/settings", stateRoot: root + "/state", workspaceRoot: root,
+        fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false
+    )).value().getOrThrow()
+    try {
+        for (definition in product.tools()) {
+            expect(definition.name != "github" &&
+                !definition.name.startsWith("plugin.axyndra:github.service."),
+                "GitHub business tools require an installed and started native service")
+        }
+        let missing = product.vnext.executeCanonicalTool(SessionId("github-contract-missing"),
+            CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess),
+                Capability(CapabilityKind.WorkspaceWrite)]),
+            ToolCall("missing-github", "github", objectValue([ValueField("op", textValue("repo_view"))])))
+        let result = match (missing.value().getOrThrow()) {
+            case ToolInvocationResult.Completed(value) => value
+            case _ => throw IllegalStateException("missing GitHub must retain the original canonical failure")
+        }
+        expect(result.isError && result.output.field("error").getOrThrow().text == "tool.not_found",
+            "missing GitHub uses the real canonical rejection")
+        let missingService = product.startPluginService(SessionId("github-service-missing"),
+            "axyndra:github", "stdio", "session", approvalDecision: ApprovalDecision.Approve,
+            budget: ExecutionBudget(maxToolCalls: 1, maxConcurrentTools: 1))
+        expect(missingService.isError() && missingService.error().getOrThrow().code == "plugin.not_found",
+            "a missing package cannot manufacture a service origin")
+        let database = SqliteDatabase(root + "/state/state.db")
+        try {
+            expect(database.scalarInt("SELECT COUNT(*) FROM runs WHERE thread_id='github-contract-missing' AND state='failed'") == 1,
+                "missing GitHub persists exactly one failed Run")
+            expect(database.scalarInt("SELECT COUNT(*) FROM items WHERE thread_id='github-contract-missing' AND kind='user_message'") == 1,
+                "missing GitHub persists the real user request")
+            expect(database.scalarInt("SELECT COUNT(*) FROM items WHERE thread_id='github-contract-missing' AND kind='tool_call'") == 0,
+                "unknown GitHub does not mint a ToolCall")
+            expect(database.scalarInt("SELECT COUNT(*) FROM operations operation JOIN runs run ON run.id=operation.run_id WHERE run.thread_id='github-contract-missing'") == 0,
+                "unknown GitHub does not acquire an Operation")
+            expect(database.scalarInt("SELECT COUNT(*) FROM operation_receipts receipt JOIN operations operation ON operation.id=receipt.operation_id JOIN runs run ON run.id=operation.run_id WHERE run.thread_id='github-contract-missing'") == 0,
+                "unknown GitHub does not mint a Receipt")
+            expect(database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE thread_id='github-contract-missing' AND kind='operation_execution_handoff'") == 0,
+                "unknown GitHub never crosses a native handoff")
+            expect(database.scalarInt("SELECT COUNT(*) FROM runs WHERE thread_id='github-service-missing'") == 0,
+                "missing package rejection does not create an authorized service Run")
+        } finally { database.close() }
+    } finally { expect(product.close().isOk(), "actual Product owner must acknowledge cleanup") }
 }

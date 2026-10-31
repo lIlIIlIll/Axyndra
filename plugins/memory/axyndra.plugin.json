@@ -1,0 +1,65 @@
+{
+  "id": "memory",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/memory-plugin",
+  "sdk_range": "[2.1.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "document.store"
+  ],
+  "contributions": [
+    {
+      "kind": "provider",
+      "name": "memory"
+    },
+    {
+      "kind": "provider",
+      "name": "prepare_document"
+    },
+    {
+      "kind": "provider",
+      "name": "prepare_window_document"
+    },
+    {
+      "kind": "provider",
+      "name": "memory_live"
+    },
+    {
+      "kind": "tool",
+      "name": "retain"
+    },
+    {
+      "kind": "tool",
+      "name": "recall"
+    },
+    {
+      "kind": "tool",
+      "name": "reflect"
+    },
+    {
+      "kind": "tool",
+      "name": "memory_edit"
+    },
+    {
+      "kind": "tool",
+      "name": "learn"
+    },
+    {
+      "kind": "tool",
+      "name": "manage_skill"
+    },
+    {
+      "kind": "tool",
+      "name": "memory_context"
+    },
+    {
+      "kind": "context_provider",
+      "name": "memory_context"
+    },
+    {
+      "kind": "context_provider",
+      "name": "prepare_window_context"
+    }
+  ]
+}

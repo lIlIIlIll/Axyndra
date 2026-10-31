@@ -5,18 +5,18 @@ import agent_cli.*
 import agent_product.*
 import std.collection.*
 
-func runCompletionsCli(arguments: Array<String>): Int64 {
+func runCompletionsCli(arguments: Array<String>, io!: CliIo180 = consoleCliIo180): Int64 {
     if (arguments.size != 1 ||
         (arguments[0] != "bash" &&
         arguments[0] != "zsh" &&
         arguments[0] != "fish")) {
-        println("Usage: axyndra completions <bash|zsh|fish>")
+        io.println("Usage: axyndra completions <bash|zsh|fish>")
         return 1
     }
     match (arguments[0]) {
-        case "bash" => print(bashCompletion())
-        case "zsh" => print(zshCompletion())
-        case "fish" => print(fishCompletion())
+        case "bash" => io.print(bashCompletion())
+        case "zsh" => io.print(zshCompletion())
+        case "fish" => io.print(fishCompletion())
         case _ => ()
     }
     0
@@ -25,7 +25,7 @@ func runCompletionsCli(arguments: Array<String>): Int64 {
 func runDynamicCompletionCli(
     product: ProductRuntime,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180, session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
     let values = ArrayList<String>()
     for (argument in arguments where argument != "--") {
         values.add(argument)
@@ -39,7 +39,7 @@ func runDynamicCompletionCli(
     }
     if (kind == "models") {
         let candidates = ArrayList<CompletionCandidate>()
-        let session = product.applicationSession()
+        let session = session180 ?? product.applicationSession()
         for (model in session.models()) {
             let provider = session.modelProvider(model)
             candidates.add(CompletionCandidate(model, detail: cleanCompletionDescription(provider)))
@@ -54,7 +54,7 @@ func runDynamicCompletionCli(
                 prefix,
                 mode: CompletionMatchMode.Contains
             )
-        )
+        , io: io)
     } else if (kind == "sessions") {
         let candidates = ArrayList<CompletionCandidate>()
         match (product.sessions()) {
@@ -68,19 +68,19 @@ func runDynamicCompletionCli(
                     candidates.add(CompletionCandidate(sessionId.value, detail: title))
                 }
             case Result.Err(error) =>
-                println(error.code + ": " + error.message)
+                io.println(error.code + ": " + error.message)
                 return 1
         }
-        printCompletionCandidates(filterCompletionCandidates(candidates.toArray(), prefix))
+        printCompletionCandidates(filterCompletionCandidates(candidates.toArray(), prefix), io: io)
     } else if (kind == "commands") {
-        printCompletionCandidates(completionCommandCandidates(prefix))
+        printCompletionCandidates(completionCommandCandidates(prefix), io: io)
     }
     0
 }
 
-func printCompletionCandidates(candidates: Array<CompletionCandidate>): Unit {
+func printCompletionCandidates(candidates: Array<CompletionCandidate>, io!: CliIo180 = consoleCliIo180): Unit {
     for (candidate in candidates) {
-        println(candidate.value + "\t" + candidate.detail)
+        io.println(candidate.value + "\t" + candidate.detail)
     }
 }
 

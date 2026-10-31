@@ -1,14 +1,20 @@
 package agent_product
 
+import yjson.*
+
+import agent_plugin_registry
+import agent_plugin_registry.PluginComponentText
+import agent_plugin_registry.pluginSnapshotPackageRoot
+
 import agent_core.*
 import agent_extension_runtime.*
 import agent_domain.*
 import agent_runtime.*
-import agent_skills.*
 import tool_runtime.*
 import yjson_support.*
 import std.fs.*
 import std.collection.*
+import std.convert.*
 import std.unittest.*
 import std.unittest.testmacro.*
 import std.time.*
@@ -133,6 +139,9 @@ class CodexHookToolRecorder <: ToolExecutor {
 class PluginRuntimeContractTests {
     @TestCase
     func localImportWritesPinnedStaticSnapshotWithoutExecutingPackage(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("local")
         let settings = pluginContractTemp("local-settings")
         Directory.create(root + "/skills/demo/references", recursive: true)
@@ -148,26 +157,26 @@ class PluginRuntimeContractTests {
         File.writeTo(root + "/extensions/index.js", sideEffect.toArray())
         File.writeTo(root + "/hooks/index.js", sideEffect.toArray())
         File.writeTo(root + "/package.json", "{\"name\":\"local-plugin\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"],\"extensions\":[\"extensions/index.js\"],\"hooks\":[\"hooks/index.js\"]},\"scripts\":{\"postinstall\":\"touch marker\"}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
+        let runtime = _registryOwners.openProduct(settings, root)
         let imported = runtime.importLocal(root)
         @Expect(imported.isOk(), true)
         @Expect(exists(Path(settings + "/plugins/lock.jsonl")), true)
         let record = match (imported) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(record.descriptor.root != root, true)
-        @Expect(exists(Path(record.descriptor.root + "/package.json")), true)
-        @Expect(exists(Path(record.descriptor.root + "/skills/demo/references/context.md")), true)
-        @Expect(exists(Path(record.descriptor.root + "/skills/demo/scripts/check.sh")), true)
-        @Expect(exists(Path(record.descriptor.root + "/skills/demo/assets/fixture.txt")), true)
+        @Expect(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) != root, true)
+        @Expect(exists(Path(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) + "/package.json")), true)
+        @Expect(exists(Path(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) + "/skills/demo/references/context.md")), true)
+        @Expect(exists(Path(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) + "/skills/demo/scripts/check.sh")), true)
+        @Expect(exists(Path(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) + "/skills/demo/assets/fixture.txt")), true)
         @Expect(exists(Path(root + "/marker")), false)
         @Expect(exists(Path(executionMarker)), false)
         var hasDeclaredExtension = false
         var hasBlockedHook = false
-        for (component in record.descriptor.components) {
+        for (component in productRegistryComponents83(record.descriptor)) {
             if (component.kind == PluginComponentKind.Extension &&
-                component.relativePath == "extensions/index.js") { hasDeclaredExtension = true }
+                productRegistryCopyText83(component.copyText(PluginComponentText.RelativePath)) == "extensions/index.js") { hasDeclaredExtension = true }
             if (component.kind == PluginComponentKind.Hook &&
                 component.status == PluginComponentStatus.Blocked) { hasBlockedHook = true }
         }
@@ -179,121 +188,88 @@ class PluginRuntimeContractTests {
         @Expect(lock.contains("content_digest"), true)
 
         File.writeTo(root + "/skills/demo/references/context.md", "Reference v2".toArray())
-        @Expect(String.fromUtf8(File.readFrom(Path(record.descriptor.root + "/skills/demo/references/context.md"))), "Reference v1")
+        @Expect(String.fromUtf8(File.readFrom(Path(productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Root)) + "/skills/demo/references/context.md"))), "Reference v1")
         File.writeTo(root + "/package.json", "{\"name\":\"local-plugin\",\"version\":\"2.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
-        @Expect(runtime.list()[0].descriptor.version, "1.0.0")
-        let reloaded = ProductPluginRuntime(settings, root)
-        @Expect(reloaded.list().size, 1)
-        @Expect(reloaded.list()[0].descriptor.id, "local-plugin")
-        @Expect(reloaded.list()[0].descriptor.version, "1.0.0")
+        @Expect(productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Version)), "1.0.0")
+        let reloaded = _registryOwners.openProduct(settings, root)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 1)
+        @Expect(productRegistryCopyText83(productRegistryRecords83(reloaded.list())[0].descriptor.copyText(PluginDescriptorText.Id)), "local-plugin")
+        @Expect(productRegistryCopyText83(productRegistryRecords83(reloaded.list())[0].descriptor.copyText(PluginDescriptorText.Version)), "1.0.0")
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
-    func enabledPluginSkillsJoinExistingSkillRuntime(): Unit {
+    func enabledPluginSkillsJoinInstalledContextProvider(): Unit {
         let root = pluginContractTemp("plugin-skill")
         let settings = pluginContractTemp("plugin-skill-settings")
-        Directory.create(root + "/skills/demo", recursive: true)
         Directory.create(root + "/skills/demo/references", recursive: true)
         Directory.create(root + "/skills/private", recursive: true)
         Directory.create(root + "/skills/team/reviewer", recursive: true)
         File.writeTo(root + "/package.json",
             "{\"name\":\"plugin-skill\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills/d*\",\"skills/?emo\",\"skills/team/**\",\"!skills/private\"]}}".toArray())
         File.writeTo(root + "/skills/demo/SKILL.md",
-            "---\nname: Demo skill\ndescription: Imported demo skill\ntriggers: demo\n---\nUse the demo skill. Read [guide](references/guide.md).\n".toArray())
+            "---\nname: Demo skill\ndescription: Imported demo skill\ntriggers: demo\n---\nUse the demo skill.\n".toArray())
         File.writeTo(root + "/skills/demo/references/guide.md", "Reference content from the imported package.".toArray())
-        File.writeTo(root + "/skills/private/SKILL.md",
-            "---\nname: Private skill\ndescription: Must stay excluded\n---\nPrivate instructions.\n".toArray())
-        File.writeTo(root + "/skills/team/reviewer/SKILL.md",
-            "---\nname: Reviewer skill\ndescription: Nested imported skill\n---\nReview carefully.\n".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let disabledSkills = ProductSkillRuntime(settings, root, pluginRuntime: Some(runtime))
-        @Expect(disabledSkills.metadata().isEmpty(), true)
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let selectedRoots = runtime.enabledSkillRoots()
-        var includesDemoRoot = false
-        var includesReviewerRoot = false
-        for (selectedRoot in selectedRoots) {
-            if (selectedRoot.endsWith("/skills/demo")) { includesDemoRoot = true }
-            if (selectedRoot.endsWith("/skills/team/reviewer")) { includesReviewerRoot = true }
-        }
-        @Expect(selectedRoots.size, 2)
-        @Expect(includesDemoRoot, true)
-        @Expect(includesReviewerRoot, true)
-        let enabledSkills = ProductSkillRuntime(settings, root, pluginRuntime: Some(runtime))
-        @Expect(enabledSkills.metadata().size, 2)
-        var includesDemoSkill = false
-        var includesReviewerSkill = false
-        for (skill in enabledSkills.metadata()) {
-            if (skill.id == "demo") { includesDemoSkill = true }
-            if (skill.id == "reviewer") { includesReviewerSkill = true }
-        }
-        @Expect(includesDemoSkill, true)
-        @Expect(includesReviewerSkill, true)
-        let skillSnapshot = enabledSkills.resolve("please use demo", SkillStackSnapshot([], []))
-        @Expect(skillSnapshot.active.size, 1)
-        let referenceContent = match (enabledSkills.readReference(skillSnapshot, "demo", "guide.md")) {
-            case Result.Ok(value) => value.content
-            case Result.Err(error) => "error:" + error.code
-        }
-        @Expect(referenceContent, "Reference content from the imported package.")
+        File.writeTo(root + "/skills/private/SKILL.md", "---\nname: Private skill\ndescription: Must stay excluded\n---\nPrivate instructions.\n".toArray())
+        File.writeTo(root + "/skills/team/reviewer/SKILL.md", "---\nname: Reviewer skill\ndescription: Nested imported skill\n---\nReview carefully.\n".toArray())
+        let f = InstalledSkillsMigrationHost(settings, root)
+        try {
+            let imported = match (f.product.importLocalPlugin(root)) { case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code) }
+            @Expect(!migrationHasContribution(f.select("$demo"), "demo"))
+            @Expect(f.product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)), true).isOk())
+            let snapshot = f.select("$demo")
+            @Expect(migrationContribution(snapshot, "demo").content.contains("Use the demo skill."))
+            let system = f.product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().system
+            @Expect(system.contains("id=reviewer; name=Reviewer skill")); @Expect(!system.contains("Private instructions."))
+            @Expect(f.reference(snapshot, "demo", "guide.md"), "Reference content from the imported package.")
+        } finally { f.close() }
     }
     @TestCase
-    func standaloneSkillImportsIntoExistingSkillRuntime(): Unit {
+    func standaloneSkillImportsIntoInstalledContextProvider(): Unit {
         let root = pluginContractTemp("standalone-skill")
         let settings = pluginContractTemp("standalone-skill-settings")
         Directory.create(root + "/references", recursive: true)
-        File.writeTo(root + "/SKILL.md",
-            "---\nname: Standalone skill\ndescription: Imported standalone Skill\ntriggers: standalone\n---\nUse the standalone skill. Read [guide](references/guide.md).\n".toArray())
+        File.writeTo(root + "/SKILL.md", "---\nname: Standalone skill\ndescription: Imported standalone Skill\ntriggers: standalone\n---\nUse the standalone skill.\n".toArray())
         File.writeTo(root + "/references/guide.md", "Standalone reference content.".toArray())
-
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        @Expect(imported.descriptor.compatibilityProfile, "pi-skill-file-v1")
-        @Expect(imported.descriptor.components.size, 1)
-        @Expect(imported.descriptor.components[0].relativePath, "SKILL.md")
-        @Expect(exists(Path(imported.descriptor.root + "/references/guide.md")), true)
-        let disabledSkills = ProductSkillRuntime(settings, root, pluginRuntime: Some(runtime))
-        @Expect(disabledSkills.metadata().isEmpty(), true)
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let enabledRoots = runtime.enabledSkillRoots()
-        @Expect(enabledRoots.size, 1)
-        let skills = ProductSkillRuntime(settings, root, pluginRuntime: Some(runtime))
-        let metadata = skills.metadata()
-        @Expect(metadata.size, 1)
-        let snapshot = skills.resolve("please use standalone", SkillStackSnapshot([], []))
-        @Expect(snapshot.active.size, 1)
-        let reference = match (skills.readReference(snapshot, metadata[0].id, "guide.md")) {
-            case Result.Ok(value) => value.content
-            case Result.Err(error) => "error:" + error.code
-        }
-        @Expect(reference, "Standalone reference content.")
+        let f = InstalledSkillsMigrationHost(settings, root)
+        try {
+            let imported = match (f.product.importLocalPlugin(root)) { case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code) }
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.CompatibilityProfile)), "pi-skill-file-v1")
+            @Expect(productRegistryComponents83(imported.descriptor).size, 1); @Expect(productRegistryCopyText83(productRegistryComponents83(imported.descriptor)[0].copyText(PluginComponentText.RelativePath)), "SKILL.md")
+            @Expect(exists(Path(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)) + "/references/guide.md")))
+            @Expect(!f.product.fixtureProbe.getOrThrow().lastRequest.isSome())
+            @Expect(f.product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)), true).isOk())
+            let snapshot = f.select("$Standalone skill")
+            var selected = ""
+            for (entry in snapshot.contributions() where entry.content.contains("Use the standalone skill.")) { selected = entry.id }
+            @Expect(selected != "")
+            @Expect(f.reference(snapshot, selected, "guide.md"), "Standalone reference content.")
+        } finally { f.close() }
     }
     @TestCase
     func localImporterRejectsArchiveFilesBeforeUnpacking(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let archivePath = pluginContractTemp("unsupported-archive") + ".zip"
         File.writeTo(archivePath, "archive traversal candidate: ../outside".toArray())
-        let runtime = ProductPluginRuntime(pluginContractTemp("unsupported-archive-settings"), pluginContractTemp("workspace"))
+        let runtime = _registryOwners.openProduct(pluginContractTemp("unsupported-archive-settings"), pluginContractTemp("workspace"))
         let result = runtime.importLocal(archivePath)
         @Expect(match (result) {
-            case PluginImportResult.Err(error) => error.code == "plugin.root_invalid"
-            case PluginImportResult.Ok(_) => false
+            case PluginRegistryResult.Err(error) => error.code == "plugin.root_invalid"
+            case PluginRegistryResult.Ok(_) => false
         })
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func enabledPiPromptTemplatesRenderAsUntrustedUserInput(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("plugin-prompt")
         let settings = pluginContractTemp("plugin-prompt-settings")
         Directory.create(root + "/prompts/deep", recursive: true)
@@ -304,22 +280,22 @@ class PluginRuntimeContractTests {
         File.writeTo(root + "/prompts/deep/review.md",
             "---\ndescription: Review\nargument-hint: <task>\n---\nReview $ARGUMENTS only.\n".toArray())
         File.writeTo(root + "/prompts/private/hidden.md", "Hidden prompt.\n".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
+        let runtime = _registryOwners.openProduct(settings, root)
         let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(runtime.promptTemplateNames().isEmpty(), true)
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+        match (runtime.setEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        let identity = imported.descriptor.namespace + "/prompts/deep/review.md"
-        let hiddenIdentity = imported.descriptor.namespace + "/prompts/private/hidden.md"
+        let identity = productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + "/prompts/deep/review.md"
+        let hiddenIdentity = productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + "/prompts/private/hidden.md"
         @Expect(runtime.promptTemplateNames(), [identity])
         var hasSupportedPrompt = false
         var hasBlockedTheme = false
-        for (component in imported.descriptor.components) {
+        for (component in productRegistryComponents83(imported.descriptor)) {
             if (component.kind == PluginComponentKind.Prompt &&
                 component.status == PluginComponentStatus.Supported) { hasSupportedPrompt = true }
             if (component.kind == PluginComponentKind.Theme &&
@@ -328,8 +304,8 @@ class PluginRuntimeContractTests {
         @Expect(hasSupportedPrompt, true)
         @Expect(hasBlockedTheme, true)
         var reportsBlockedTheme = false
-        for (error in runtime.diagnostics()) {
-            if (error.code == "plugin.component_blocked" && error.message.contains("themes")) {
+        for (error in productRuntimeRegistryErrors87(runtime.diagnostics())) {
+            if (error.code == "plugin.component_blocked" && productRegistryErrorText83(error, PluginRegistryErrorText.Message).contains("themes")) {
                 reportsBlockedTheme = true
             }
         }
@@ -352,293 +328,81 @@ class PluginRuntimeContractTests {
         @Expect(shellRendered, "Review " + shellArgument + " only.\n")
         @Expect(exists(Path(marker)), false)
         let traversal = runtime.renderPromptTemplate(
-            imported.descriptor.namespace + "/prompts/../package.json", [])
+            productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + "/prompts/../package.json", [])
         @Expect(match (traversal) {
             case PluginImportResult.Err(error) => error.code == "plugin.prompt_path_invalid"
             case PluginImportResult.Ok(_) => false
         })
-        match (runtime.setEnabled(imported.descriptor.id, false)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+        match (runtime.setEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), false)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(runtime.promptTemplateNames().isEmpty(), true)
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
-    func enabledPortableCodexMcpUsesDeclaredManifestComponent(): Unit {
-        let root = pluginContractTemp("plugin-mcp")
-        let settings = pluginContractTemp("plugin-mcp-settings")
-        Directory.create(root)
-        File.writeTo(root + "/plugin.json",
-            "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"plugin-mcp\",\"version\":\"1.0.0\",\"description\":\"MCP fixture\"}".toArray())
-        File.writeTo(root + "/mcp.json",
-            "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json\",\"mcpServers\":{\"fixture\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"server.js\"]},\"http-fixture\":{\"type\":\"streamable-http\",\"url\":\"https://mcp.example.test\",\"origin\":\"https://client.example.test\"}}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let configs = match (loadProductMcpConfig(settings, pluginRuntime: Some(runtime))) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => throw IllegalStateException(error.code)
-        }
-        @Expect(configs.size, 2)
-        @Expect(configs[0].id, "plugin-" + modelPolicySha256Text("codex:plugin-mcp") + "-fixture")
-        @Expect(configs[0].transport, ProductMcpTransportKind.Stdio)
-        @Expect(configs[0].packageRoot, imported.descriptor.root)
-        match (configs[0].stdio) {
-            case Some(value) =>
-                @Expect(value.command, "node")
-                @Expect(value.arguments, ["server.js"])
-                @Expect(value.cwd, imported.descriptor.root)
-            case None => throw IllegalStateException("adapted MCP stdio transport is missing")
-        }
-        @Expect(configs[1].transport, ProductMcpTransportKind.StreamableHttp)
-        @Expect(configs[1].networkPolicy.mode, NetworkPolicyMode.Mediated)
-        @Expect(configs[1].networkPolicy.egress.size, 1)
-        @Expect(configs[1].networkPolicy.egress[0].host, "mcp.example.test")
-        @Expect(configs[1].networkPolicy.egress[0].port, 443u16)
-        match (configs[1].http) {
-            case Some(value) =>
-                @Expect(value.url, "https://mcp.example.test")
-                @Expect(value.bearerTokenEnvironment, "")
-                @Expect(value.origin, "https://client.example.test")
-                @Expect(value.headers.isEmpty(), true)
-            case None => throw IllegalStateException("adapted MCP HTTP transport is missing")
-        }
-    }
-    @TestCase
-    func unavailablePluginMcpIsDisabledWithoutBlockingProductStartup(): Unit {
-        let root = pluginContractTemp("plugin-mcp-startup-isolation")
-        let settings = root + "/settings"
-        let state = root + "/state"
-        let workspace = root + "/workspace"
-        let source = root + "/source"
-        for (path in [settings, state, workspace, source]) {
-            Directory.create(path, recursive: true)
-        }
-        File.writeTo(source + "/plugin.json",
-            "{\"name\":\"broken-mcp-plugin\",\"version\":\"1.0.0\"}".toArray())
-        File.writeTo(source + "/mcp.json",
-            "{\"mcpServers\":{\"broken\":{\"type\":\"stdio\",\"command\":\"./missing-server\"}}}".toArray())
-        let pluginRuntime = ProductPluginRuntime(settings, workspace)
-        let imported = match (pluginRuntime.importLocal(source)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-        }
-        match (pluginRuntime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-        }
-        let product = match (openProduct(config: ProductConfig(
-            settingsRoot: settings,
-            stateRoot: state,
-            workspaceRoot: workspace,
-            fixture: true
-        ))) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-        }
+    func historicalConnectionFilesRemainOpaqueAndNeverLaunch(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
         try {
-            var foundDisabled = false
-            for (record in product.pluginSnapshots() where
-                record.descriptor.namespace == imported.descriptor.namespace) {
-                foundDisabled = !record.enabled
-            }
-            @Expect(foundDisabled, true)
+
+        let root = pluginContractTemp("retired-connection-config")
+        let settings = root + "/settings"
+        let source = root + "/source"
+        let workspace = root + "/workspace"
+        for (path in [settings, source, workspace]) { Directory.create(path, recursive: true) }
+        let inline = "{\"name\":\"historical\",\"version\":\"1.0.0\",\"mcpServers\":{\"legacy\":{\"command\":\"/missing/server\",\"env\":{\"TOKEN\":\"HOST_SECRET\"}}}}"
+        let opaque = "This historical connection file is opaque, not a host configuration."
+        File.writeTo(source + "/plugin.json", inline.toArray())
+        File.writeTo(source + "/mcp.json", opaque.toArray())
+        File.writeTo(settings + "/mcp.yml", "malformed: [legacy bytes preserved".toArray())
+        let runtime = _registryOwners.openProduct(settings, workspace)
+        let imported = match (runtime.importLocal(source)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+        }
+        @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Entrypoint)), "")
+        @Expect(productRegistryContributions83(imported.descriptor).isEmpty())
+        @Expect(productRegistryCapabilities83(imported.descriptor).isEmpty())
+        @Expect(productRegistryComponents83(imported.descriptor).size, 1)
+        @Expect(productRegistryComponents83(imported.descriptor)[0].status, PluginComponentStatus.Blocked)
+        @Expect(String.fromUtf8(File.readFrom(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)) + "/plugin.json")), inline)
+        @Expect(String.fromUtf8(File.readFrom(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)) + "/mcp.json")), opaque)
+        let product = openProduct(config: ProductConfig(settingsRoot: settings, stateRoot: root + "/state", workspaceRoot: workspace, fixture: true)).value().getOrThrow()
+        try {
+            @Expect(product.pluginServiceStatuses().isEmpty())
+            let capabilities = CapabilitySet(values: [Capability(CapabilityKind.WorkspaceRead), Capability(CapabilityKind.WorkspaceWrite),
+                Capability(CapabilityKind.ProcessSpawn), Capability(CapabilityKind.NetworkAccess), Capability(CapabilityKind.ExtensionInvoke),
+                Capability(CapabilityKind.PeerMessage), Capability(CapabilityKind.Delegate)])
+            @Expect(product.toolsFor(capabilities).filter{definition => definition.name == "mcp__legacy__echo"}.isEmpty())
+            @Expect(String.fromUtf8(File.readFrom(settings + "/mcp.yml")), "malformed: [legacy bytes preserved")
         } finally {
             let _ = product.close()
             remove(root, recursive: true)
         }
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
-    func startupFailsWhenBrokenPluginQuarantineCannotPersist(): Unit {
-        let root = pluginContractTemp("plugin-startup-quarantine-failure")
-        let settings = root + "/settings"
-        let state = root + "/state"
-        let workspace = root + "/workspace"
-        let source = root + "/source"
-        for (path in [settings, state, workspace, source]) {
-            Directory.create(path, recursive: true)
-        }
-        File.writeTo(source + "/plugin.json",
-            "{\"name\":\"broken-quarantine-plugin\",\"version\":\"1.0.0\"}".toArray())
-        File.writeTo(source + "/mcp.json",
-            "{\"mcpServers\":{\"broken\":{\"type\":\"stdio\",\"command\":\"./missing-server\"}}}".toArray())
-        let pluginRuntime = ProductPluginRuntime(settings, workspace)
-        let imported = match (pluginRuntime.importLocal(source)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (pluginRuntime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let pluginsInfo = FileInfo(Path(settings + "/plugins"))
-        let _ = pluginsInfo.setWritable(false)
-        try {
-            @Expect(match (openProduct(config: ProductConfig(
-                settingsRoot: settings,
-                stateRoot: state,
-                workspaceRoot: workspace,
-                fixture: true
-            ))) {
-                case Result.Err(error) => error.code == "plugin.startup_disable_failed"
-                case Result.Ok(product) =>
-                    let _ = product.close()
-                    false
-            }, true)
-        } finally {
-            let _ = pluginsInfo.setWritable(true)
-            remove(root, recursive: true)
-        }
-    }
-
-    @TestCase
-    func portablePluginMcpRejectsPackageCredentialBindings(): Unit {
-        let root = pluginContractTemp("plugin-mcp-credentials")
-        let settings = pluginContractTemp("plugin-mcp-credentials-settings")
-        Directory.create(root)
-        File.writeTo(root + "/plugin.json",
-            "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"plugin-mcp-credentials\",\"version\":\"1.0.0\"}".toArray())
-        File.writeTo(root + "/mcp.json",
-            "{\"mcpServers\":{\"remote\":{\"type\":\"streamable-http\",\"url\":\"https://mcp.example.test\",\"bearer_token_env\":\"OPENAI_API_KEY\",\"headers\":{\"X-Api-Key\":\"MCP_API_KEY\"}}}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        @Expect(match (loadProductMcpConfig(settings, pluginRuntime: Some(runtime))) {
-            case Result.Err(error) => error.code == "mcp.plugin_config_invalid" &&
-                error.message.contains("operator-owned mcp.yml")
-            case Result.Ok(_) => false
-        }, true)
-    }
-    @TestCase
-    func portablePluginMcpRejectsPrivateHttpEndpoints(): Unit {
-        let root = pluginContractTemp("plugin-mcp-private-http")
-        let settings = pluginContractTemp("plugin-mcp-private-http-settings")
-        Directory.create(root)
-        File.writeTo(root + "/plugin.json",
-            "{\"name\":\"plugin-mcp-private-http\",\"version\":\"1.0.0\"}".toArray())
-        File.writeTo(root + "/mcp.json",
-            "{\"mcpServers\":{\"private\":{\"type\":\"streamable-http\",\"url\":\"https://127.0.0.1/mcp\"}}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (runtime.setEnabled(imported.descriptor.id, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        @Expect(match (loadProductMcpConfig(settings, pluginRuntime: Some(runtime))) {
-            case Result.Err(error) => error.code == "mcp.plugin_config_invalid" &&
-                error.message.contains("operator-owned mcp.yml")
-            case Result.Ok(_) => false
-        }, true)
-    }
-    @TestCase
-    func legacyCodexInlineMcpServersReachProductConfiguration(): Unit {
-        let root = pluginContractTemp("legacy-inline-mcp")
-        let settings = pluginContractTemp("legacy-inline-mcp-settings")
-        Directory.create(root + "/.codex-plugin", recursive: true)
-        File.writeTo(root + "/.codex-plugin/plugin.json",
-            "{\"name\":\"legacy-inline-mcp\",\"version\":\"1.0.0\",\"mcpServers\":{\"fixture\":{\"command\":\"local-mcp\",\"args\":[\"--fixture\"]}}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (runtime.setEnabled(imported.descriptor.namespace, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let configs = match (loadProductMcpConfig(settings, pluginRuntime: Some(runtime))) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-        }
-        @Expect(configs.size, 1)
-        @Expect(configs[0].id, "plugin-" + modelPolicySha256Text("codex:legacy-inline-mcp") + "-fixture")
-        @Expect(configs[0].transport, ProductMcpTransportKind.Stdio)
-        match (configs[0].stdio) {
-            case Some(value) =>
-                @Expect(value.command, "local-mcp")
-                @Expect(value.arguments, ["--fixture"])
-            case None => throw IllegalStateException("adapted legacy MCP stdio transport is missing")
-        }
-    }
-    @TestCase
-    func legacyCodexMcpCompanionFileReachesProductConfiguration(): Unit {
-        let root = pluginContractTemp("legacy-companion-mcp")
-        let settings = pluginContractTemp("legacy-companion-mcp-settings")
-        Directory.create(root + "/.codex-plugin", recursive: true)
-        File.writeTo(root + "/.codex-plugin/plugin.json",
-            "{\"name\":\"legacy-companion-mcp\",\"version\":\"1.0.0\",\"mcpServers\":\"./mcp-servers.json\"}".toArray())
-        File.writeTo(root + "/mcp-servers.json",
-            "{\"mcpServers\":{\"companion\":{\"type\":\"stdio\",\"command\":\"local-mcp\",\"args\":[\"--companion\"]}}}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        match (runtime.setEnabled(imported.descriptor.namespace, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let configs = match (loadProductMcpConfig(settings, pluginRuntime: Some(runtime))) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
-        }
-        @Expect(configs.size, 1)
-        @Expect(configs[0].id, "plugin-" + modelPolicySha256Text(imported.descriptor.namespace) + "-companion")
-        match (configs[0].stdio) {
-            case Some(value) =>
-                @Expect(value.command, "local-mcp")
-                @Expect(value.arguments, ["--companion"])
-            case None => throw IllegalStateException("adapted legacy companion MCP transport is missing")
-        }
-    }
-    @TestCase
-    func importedPortableCodexSkillsUseExistingSkillRuntime(): Unit {
+    func importedPortableCodexSkillsUseInstalledContextProvider(): Unit {
         let root = pluginContractTemp("codex-skill")
         let settings = pluginContractTemp("codex-skill-settings")
         Directory.create(root + "/skills/research/references", recursive: true)
-        File.writeTo(root + "/plugin.json",
-            "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"codex-skill\",\"version\":\"1.0.0\"}".toArray())
-        File.writeTo(root + "/skills/research/SKILL.md",
-            "---\nname: Codex research\ndescription: Imported Codex Skill\ntriggers: codex research\n---\nUse this Codex Skill. Read [guide](references/guide.md).\n".toArray())
-        File.writeTo(root + "/skills/research/references/guide.md",
-            "Reference preserved in the Codex package snapshot.".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
-        let imported = match (runtime.importLocal(root)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        @Expect(imported.descriptor.ecosystem, PluginEcosystem.Codex)
-        match (runtime.setEnabled(imported.descriptor.namespace, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
-        }
-        let skills = ProductSkillRuntime(settings, root, pluginRuntime: Some(runtime))
-        let metadata = skills.metadata()
-        @Expect(metadata.size, 1)
-        let snapshot = skills.resolve("please use codex research", SkillStackSnapshot([], []))
-        @Expect(snapshot.active.size, 1)
-        let reference = match (skills.readReference(snapshot, metadata[0].id, "guide.md")) {
-            case Result.Ok(value) => value.content
-            case Result.Err(error) => "error:" + error.code
-        }
-        @Expect(reference, "Reference preserved in the Codex package snapshot.")
+        File.writeTo(root + "/plugin.json", "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"codex-skill\",\"version\":\"1.0.0\"}".toArray())
+        File.writeTo(root + "/skills/research/SKILL.md", "---\nname: Codex research\ndescription: Imported Codex Skill\ntriggers: codex research\n---\nUse this Codex Skill.\n".toArray())
+        File.writeTo(root + "/skills/research/references/guide.md", "Reference preserved in the Codex package snapshot.".toArray())
+        let f = InstalledSkillsMigrationHost(settings, root)
+        try {
+            let imported = match (f.product.importLocalPlugin(root)) { case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code) }
+            @Expect(imported.descriptor.ecosystem, PluginEcosystem.Codex)
+            @Expect(f.product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)), true).isOk())
+            let snapshot = f.select("$research")
+            @Expect(migrationContribution(snapshot, "research").content.contains("Use this Codex Skill."))
+            @Expect(f.reference(snapshot, "research", "guide.md"), "Reference preserved in the Codex package snapshot.")
+        } finally { f.close() }
     }
     @TestCase
     func codexCommandHooksWithoutCapabilityGrantsRemainInactive(): Unit {
@@ -695,13 +459,13 @@ class PluginRuntimeContractTests {
         }
         try {
             let imported = match (product.importLocalPlugin(source)) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
-            @Expect(imported.descriptor.root.startsWith(settings + "/plugins/packages/"), true)
-            match (product.setPluginEnabled(imported.descriptor.id, true)) {
-                case PluginImportResult.Ok(_) => ()
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)).startsWith(settings + "/plugins/packages/"), true)
+            match (product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true)) {
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
 
             let schema = objectSchema([schemaProperty("text", "string")], ["text"])
@@ -808,13 +572,13 @@ class PluginRuntimeContractTests {
         }
         try {
             let imported = match (product.importLocalPlugin(source)) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
-            @Expect(imported.descriptor.root.startsWith(settings + "/plugins/packages/"), true)
-            match (product.setPluginEnabled(imported.descriptor.id, true)) {
-                case PluginImportResult.Ok(_) => ()
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)).startsWith(settings + "/plugins/packages/"), true)
+            match (product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true)) {
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             let recorder = CodexHookToolRecorder()
             let schema = objectSchema([schemaProperty("text", "string")], ["text"])
@@ -953,95 +717,123 @@ class PluginRuntimeContractTests {
 
     @TestCase
     func packageInspectionReportsOnlyUninstalledRequiredDependencies(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("plugin-dependencies")
         Directory.create(root, recursive: true)
         File.writeTo(root + "/package.json",
             "{\"name\":\"dependency-plugin\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]},\"dependencies\":{\"required-dep\":\"^1.0.0\"},\"optionalDependencies\":{\"optional-dep\":\"^1.0.0\"},\"devDependencies\":{\"dev-dep\":\"^1.0.0\"}}".toArray())
-        let runtime = ProductPluginRuntime(root + "/settings", root)
+        let runtime = _registryOwners.openProduct(root + "/settings", root)
         let beforeInstall = match (runtime.inspect(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(beforeInstall.missingDependencies, ["required-dep"])
-        @Expect(beforeInstall.dependencies.size, 3)
+        @Expect(productRegistryMissingDependencies83(beforeInstall), ["required-dep"])
+        @Expect(productRegistryDependencies83(beforeInstall).size, 3)
 
         Directory.create(root + "/node_modules/required-dep", recursive: true)
         let afterInstall = match (runtime.inspect(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(afterInstall.missingDependencies.isEmpty(), true)
+        @Expect(productRegistryMissingDependencies83(afterInstall).isEmpty(), true)
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func portableCodexManifestKeepsIdentityAndReadsCompatOverlay(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("codex-precedence")
         Directory.create(root + "/.codex-plugin", recursive: true)
         File.writeTo(root + "/plugin.json",
             "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"portable-id\",\"version\":\"2.0.0\"}".toArray())
         File.writeTo(root + "/.codex-plugin/plugin.json",
             "{\"name\":\"compat-id\",\"version\":\"1.0.0\",\"extensions\":{\"com.openai\":{\"skills\":[]}}}".toArray())
-        let runtime = ProductPluginRuntime(root + "/settings", root)
+        let runtime = _registryOwners.openProduct(root + "/settings", root)
         let descriptor = match (runtime.inspect(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(descriptor.id, "portable-id")
-        @Expect(descriptor.version, "2.0.0")
-        @Expect(descriptor.manifestPath, "plugin.json")
-        @Expect(descriptor.overlayPath, ".codex-plugin/plugin.json")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)), "portable-id")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)), "2.0.0")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ManifestPath)), "plugin.json")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.OverlayPath)), ".codex-plugin/plugin.json")
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func piManifestFieldOverridesOnlyItsConventionalResourceType(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("pi-precedence")
         Directory.create(root + "/skills", recursive: true)
         Directory.create(root + "/prompts", recursive: true)
         Directory.create(root + "/extensions", recursive: true)
         File.writeTo(root + "/package.json",
             "{\"name\":\"pi-defaults\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[]}}".toArray())
-        let runtime = ProductPluginRuntime(root + "/settings", root)
+        let runtime = _registryOwners.openProduct(root + "/settings", root)
         let descriptor = match (runtime.inspect(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(descriptor.components.size, 2)
-        @Expect(descriptor.components[0].kind, PluginComponentKind.Prompt)
-        @Expect(descriptor.components[0].relativePath, "prompts")
-        @Expect(descriptor.components[1].kind, PluginComponentKind.Extension)
-        @Expect(descriptor.components[1].relativePath, "extensions")
+        @Expect(productRegistryComponents83(descriptor).size, 2)
+        @Expect(productRegistryComponents83(descriptor)[0].kind, PluginComponentKind.Prompt)
+        @Expect(productRegistryCopyText83(productRegistryComponents83(descriptor)[0].copyText(PluginComponentText.RelativePath)), "prompts")
+        @Expect(productRegistryComponents83(descriptor)[1].kind, PluginComponentKind.Extension)
+        @Expect(productRegistryCopyText83(productRegistryComponents83(descriptor)[1].copyText(PluginComponentText.RelativePath)), "extensions")
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func conventionalPiResourcesConflictWithCodexPackageIdentity(): Unit {
+        let inspection87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-codex-conflict")
         Directory.create(root + "/skills", recursive: true)
         File.writeTo(root + "/package.json",
             "{\"name\":\"pi-conventions\",\"version\":\"1.0.0\"}".toArray())
         File.writeTo(root + "/plugin.json",
             "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"codex-portable\",\"version\":\"1.0.0\"}".toArray())
-        let result = inspectPluginPackage(root)
+        let result = inspection87.inspect(root)
         @Expect(match (result) {
-            case PluginPackageResult.Err(error) => error.code == "plugin.manifest_conflict"
-            case PluginPackageResult.Ok(_) => false
+            case PluginRegistryResult.Err(error) => error.code == "plugin.manifest_conflict"
+            case PluginRegistryResult.Ok(_) => false
         })
+    
+        } finally { inspection87.close() }
     }
 
     @TestCase
     func unrelatedRootPluginJsonDoesNotHideLegacyCodexManifest(): Unit {
+        let inspection87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("codex-legacy-fallback")
         Directory.create(root + "/.codex-plugin", recursive: true)
         File.writeTo(root + "/plugin.json",
             "{\"$schema\":\"https://example.test/unrelated.schema.json\",\"name\":\"unrelated\",\"version\":\"9.0.0\"}".toArray())
         File.writeTo(root + "/.codex-plugin/plugin.json",
             "{\"name\":\"legacy-id\",\"version\":\"1.0.0\"}".toArray())
-        let descriptor = match (inspectPluginPackage(root)) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+        let descriptor = match (inspection87.inspect(root)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(descriptor.id, "legacy-id")
-        @Expect(descriptor.manifestPath, ".codex-plugin/plugin.json")
-        @Expect(descriptor.compatibilityProfile, "codex-compat-v1")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)), "legacy-id")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ManifestPath)), ".codex-plugin/plugin.json")
+        @Expect(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.CompatibilityProfile)), "codex-compat-v1")
+    
+        } finally { inspection87.close() }
     }
     @TestCase
     func packageNamespacesAllowSameIdAcrossEcosystems(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("plugin-namespaces")
         let settings = pluginContractTemp("plugin-namespaces-settings")
         let piRoot = root + "/pi"
@@ -1053,38 +845,38 @@ class PluginRuntimeContractTests {
             "{\"name\":\"same-name\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
         File.writeTo(codexRoot + "/plugin.json",
             "{\"$schema\":\"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json\",\"name\":\"same-name\",\"version\":\"1.0.0\",\"description\":\"Fixture\"}".toArray())
-        let runtime = ProductPluginRuntime(settings, root)
+        let runtime = _registryOwners.openProduct(settings, root)
         let piNamespace = match (runtime.importLocal(piRoot)) {
-            case PluginImportResult.Ok(record) => record.descriptor.namespace
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(record) => productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let codexNamespace = match (runtime.importLocal(codexRoot)) {
-            case PluginImportResult.Ok(record) => record.descriptor.namespace
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(record) => productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace))
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(piNamespace != codexNamespace, true)
-        @Expect(runtime.list().size, 2)
+        @Expect(productRegistryRecords83(runtime.list()).size, 2)
         @Expect(match (runtime.get("same-name")) {
             case None => true
             case Some(_) => false
         }, true)
         let ambiguous = match (runtime.setEnabled("same-name", true)) {
-            case PluginImportResult.Ok(_) => "ok"
-            case PluginImportResult.Err(error) => error.code
+            case PluginRegistryResult.Ok(_) => "ok"
+            case PluginRegistryResult.Err(error) => error.code
         }
         @Expect(ambiguous, "plugin.ambiguous_id")
         match (runtime.setEnabled(piNamespace, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         match (runtime.setEnabled(codexNamespace, true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(runtime.updateLocal(piNamespace, piRoot).isOk(), true)
 
-        let reloaded = ProductPluginRuntime(settings, root)
-        @Expect(reloaded.list().size, 2)
+        let reloaded = _registryOwners.openProduct(settings, root)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 2)
         @Expect(match (reloaded.get(piNamespace)) {
             case Some(record) => record.enabled
             case None => false
@@ -1095,15 +887,20 @@ class PluginRuntimeContractTests {
         }, true)
         @Expect(reloaded.rollback(piNamespace).isOk(), true)
         @Expect(reloaded.uninstall(piNamespace).isOk(), true)
-        @Expect(reloaded.list().size, 1)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 1)
         @Expect(match (reloaded.get(codexNamespace)) {
             case Some(_) => true
             case None => false
         }, true)
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func piExtensionApiHostRejectsCodexExecution(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("host-namespaces")
         let piRoot = root + "/pi"
         let codexRoot = root + "/codex"
@@ -1117,25 +914,13 @@ class PluginRuntimeContractTests {
             "    execute: async () => ({ content: [{ type: 'text', text: 'Pi probe' }], details: {} }) });\n" +
             "}\n"
         File.writeTo(piRoot + "/probe.js", script.toArray())
-        let piDescriptor = PluginPackageDescriptor(
-            "same-name", "1.0.0", PluginEcosystem.Pi, PluginManifestFamily.Pi, "fixture",
-            root: piRoot,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let codexDescriptor = PluginPackageDescriptor(
-            "same-name", "1.0.0", PluginEcosystem.Codex, PluginManifestFamily.Codex, "fixture",
-            root: codexRoot,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let piRecord = ProductPluginRecord(
-            piDescriptor, PluginSourceKind.Local, piRoot, "1.0.0", "", "", "", false, 0
-        )
-        let codexRecord = ProductPluginRecord(
-            codexDescriptor, PluginSourceKind.Local, codexRoot, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let piRecord = installed87.install(piRoot, "same-name", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let piDescriptor = piRecord.descriptor
+        let codexRecord = installed87.install(codexRoot, "same-name", "1.0.0", PluginEcosystem.Codex, capabilities: [], update: false)
+        let codexDescriptor = codexRecord.descriptor
+        
+        
+        let host = installed87.host()
         try {
             match (host.mount(piRecord)) {
                 case Result.Ok(_) => ()
@@ -1147,7 +932,7 @@ class PluginRuntimeContractTests {
             }, true)
             let cancellation = CancellationSource()
             let piResult = match (host.invoke(
-                piDescriptor.namespace, "probe", "{}",
+                productRegistryCopyText83(piDescriptor.copyText(PluginDescriptorText.Namespace)), "probe", "{}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-host", runId: "run-pi-host", epoch: 1,
                     operationId: "operation-pi-host", callId: "call-pi-host"
@@ -1160,20 +945,25 @@ class PluginRuntimeContractTests {
             }
             cancellation.close()
             @Expect(!piResult.isError && stringifyUnifiedJson(piResult.value).contains("Pi probe"), true)
-            @Expect(host.toolNames(piDescriptor.namespace), ["probe"])
-            @Expect(host.toolNames(codexDescriptor.namespace).isEmpty(), true)
-            let _ = host.unmount(piDescriptor.namespace)
-            @Expect(host.toolNames(piDescriptor.namespace).isEmpty(), true)
-            @Expect(host.toolNames(codexDescriptor.namespace).isEmpty(), true)
+            @Expect(host.toolNames(productRegistryCopyText83(piDescriptor.copyText(PluginDescriptorText.Namespace))), ["probe"])
+            @Expect(host.toolNames(productRegistryCopyText83(codexDescriptor.copyText(PluginDescriptorText.Namespace))).isEmpty(), true)
+            let _ = host.unmount(productRegistryCopyText83(piDescriptor.copyText(PluginDescriptorText.Namespace)))
+            @Expect(host.toolNames(productRegistryCopyText83(piDescriptor.copyText(PluginDescriptorText.Namespace))).isEmpty(), true)
+            @Expect(host.toolNames(productRegistryCopyText83(codexDescriptor.copyText(PluginDescriptorText.Namespace))).isEmpty(), true)
         } finally {
-            let _ = host.unmount(piDescriptor.namespace)
-            let _ = host.unmount(codexDescriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(piDescriptor.copyText(PluginDescriptorText.Namespace)))
+            let _ = host.unmount(productRegistryCopyText83(codexDescriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionUiRequestFailsWithoutFrontendResponder(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-ui-no-frontend")
         Directory.create(root, recursive: true)
         let script =
@@ -1187,21 +977,15 @@ class PluginRuntimeContractTests {
             "    } });\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-ui-no-frontend", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-ui-no-frontend", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         try {
             @Expect(host.mount(record).isOk(), true)
             let cancellation = CancellationSource()
             let result = match (host.invoke(
-                descriptor.namespace, "ask", "{}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "ask", "{}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-ui", runId: "run-pi-ui", epoch: 1,
                     operationId: "operation-pi-ui", callId: "call-pi-ui"
@@ -1218,13 +1002,18 @@ class PluginRuntimeContractTests {
             @Expect(stringifyUnifiedJson(result.value).contains("no frontend responder"), true)
             @Expect(stringifyUnifiedJson(result.value).contains("unexpected confirmation"), false)
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionUiInteractionsReachResponder(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-ui-responder")
         Directory.create(root, recursive: true)
         let markerPath = root + "/services.log"
@@ -1241,21 +1030,15 @@ class PluginRuntimeContractTests {
             "    } });\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-ui-responder", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-ui-responder", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         try {
             @Expect(host.mount(record).isOk(), true)
             let cancellation = CancellationSource()
             let result = match (host.invoke(
-                descriptor.namespace, "interact", "{}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "interact", "{}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-ui", runId: "run-pi-ui", epoch: 1,
                     operationId: "operation-pi-ui", callId: "call-pi-ui"
@@ -1278,13 +1061,18 @@ class PluginRuntimeContractTests {
                 services.contains("\"options\":[\"A\",\"B\"]") &&
                 services.contains("\"message\":\"Apply choice?\""), true)
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionCommandsUseCorrelatedFrontendInteractions() : Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-command-ui")
         Directory.create(root, recursive: true)
         let script =
@@ -1296,16 +1084,10 @@ class PluginRuntimeContractTests {
             "  }});\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-command-ui", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-command-ui", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let askRuntime = AskRuntime()
         let sessionId = SessionId("session-pi-command")
         askRuntime.setInteractive(sessionId, true)
@@ -1323,7 +1105,7 @@ class PluginRuntimeContractTests {
             )
             let pending = spawn {
                 host.invoke(
-                    descriptor.namespace, "choose", "{\"command_args\":\"from terminal\"}",
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "choose", "{\"command_args\":\"from terminal\"}",
                     identity: JavaScriptHostInvocationIdentity(
                         threadId: sessionId.value, runId: "", epoch: 0,
                         operationId: "", callId: "", kind: "command", commandId: "command-1"
@@ -1382,7 +1164,7 @@ class PluginRuntimeContractTests {
             askRuntime.setInteractive(sessionId, false)
             let headlessCancellation = CancellationSource()
             let headless = host.invoke(
-                descriptor.namespace, "choose", "{\"command_args\":\"headless\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "choose", "{\"command_args\":\"headless\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: sessionId.value, runId: "", epoch: 0,
                     operationId: "", callId: "", kind: "command", commandId: "command-2"
@@ -1404,13 +1186,15 @@ class PluginRuntimeContractTests {
             ), true)
             headlessCancellation.close()
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
-    func userScopedAxyndraSnapshotActivatesFromManagedStorage(): Unit {
+    func legacyAxyndraSnapshotRejectsExecutionAndPreservesInstalledData(): Unit {
         let root = pluginContractTemp("managed-axyndra-user-plugin")
         let settings = root + "/home"
         let state = root + "/state"
@@ -1436,16 +1220,21 @@ class PluginRuntimeContractTests {
         }
         try {
             let imported = match (product.importLocalPlugin(source)) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
-            @Expect(imported.descriptor.root.startsWith(settings + "/plugins/packages/"), true)
-            match (product.setPluginEnabled(imported.descriptor.id, true)) {
-                case PluginImportResult.Ok(record) => @Expect(record.enabled, true)
-                case PluginImportResult.Err(error) =>
-                    throw IllegalStateException(error.code + ": " + error.message)
-            }
-            let toolName = "plugin." + imported.descriptor.namespace + ".invoke"
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)).startsWith(settings + "/plugins/packages/"), true)
+            @Expect(imported.descriptor.entryKind, PluginEntryKind.LegacyProcess)
+            @Expect(productRegistryCapabilities83(imported.descriptor),
+                ["workspace.read", "network.access:api.example.test:443"])
+            @Expect(match (product.setPluginEnabled(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true)) {
+                case PluginRegistryResult.Ok(_) => false
+                case PluginRegistryResult.Err(error) => error.code == "plugin.entry_kind_migration_required"
+            }, true)
+            @Expect(productRegistryRecords83(product.pluginSnapshots())[0].enabled, false)
+            @Expect(exists(Path(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)) + "/plugin.sh")), true)
+            @Expect(exists(Path(source + "/axyndra.plugin.json")), true)
+            let toolName = "plugin." + productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + ".invoke"
             var underGrantedVisible = false
             for (definition in product.toolsFor(CapabilitySet(values: [
                 Capability(CapabilityKind.ExtensionInvoke)
@@ -1464,7 +1253,7 @@ class PluginRuntimeContractTests {
             ])) where definition.name == toolName) {
                 fullyGrantedVisible = true
             }
-            @Expect(fullyGrantedVisible, true)
+            @Expect(fullyGrantedVisible, false)
         } finally {
             let _ = product.close()
             remove(root, recursive: true)
@@ -1538,53 +1327,84 @@ class PluginRuntimeContractTests {
             "{\"name\":\"command-only\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"extensions/index.js\"]}}".toArray())
         File.writeTo(source + "/extensions/index.js", (
             "export default function (pi) {\n" +
-            "  pi.registerCommand('inspect', { description: 'Inspect state', handler: async () => {} });\n" +
+            "  pi.registerCommand('inspect', { description: 'Inspect state', handler: async (args, ctx) => {\n" +
+            "    if (ctx.cwd !== args || ctx.signal.aborted || ctx.hasUI !== false) throw new Error('command context mismatch');\n" +
+            "  } });\n" +
             "}\n"
         ).toArray())
         let product = match (openProduct(config: ProductConfig(
-            settingsRoot: settings, stateRoot: state, workspaceRoot: workspace, fixture: true
+            settingsRoot: settings, stateRoot: state, workspaceRoot: workspace, fixture: true,
+            approvalMode: ApprovalMode.Yolo
         ))) {
             case Result.Ok(value) => value
             case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
         }
         try {
             let imported = match (product.importLocalPlugin(source, PluginInstallScope.Workspace)) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
-            @Expect(imported.descriptor.root.startsWith(settings + "/plugins/packages/"), true)
-            @Expect(imported.descriptor.root.startsWith(workspace + "/"), false)
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)).startsWith(settings + "/plugins/packages/"), true)
+            @Expect(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)).startsWith(workspace + "/"), false)
             @Expect(exists(Path(workspace + "/.axyndra/plugins/lock.jsonl")), true)
             @Expect(exists(Path(workspace + "/.axyndra/plugins/packages")), false)
             @Expect(imported.enabled, false)
             let enabled = match (product.setPluginEnabled(
-                imported.descriptor.id, true, PluginInstallScope.Workspace
+                productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true, PluginInstallScope.Workspace
             )) {
-                case PluginImportResult.Ok(_) => true
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(_) => true
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             @Expect(enabled, true)
             let commands = product.applicationSession().javascriptPluginCommands()
             @Expect(commands.size, 1)
             if (commands.size == 1) {
-                @Expect(commands[0].routeName, "plugin." + imported.descriptor.namespace + ".inspect")
+                @Expect(commands[0].routeName, "plugin." + productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)) + ".inspect")
                 @Expect(commands[0].description, "Inspect state")
+                @Expect(product.applicationSession().invokeJavaScriptPluginCommand(commands[0].routeName, workspace, { _, _ => () }).isOk(), true)
             }
             let disabled = match (product.setPluginEnabled(
-                imported.descriptor.id, false, PluginInstallScope.Workspace
+                productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), false, PluginInstallScope.Workspace
             )) {
-                case PluginImportResult.Ok(_) => true
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(_) => true
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             @Expect(disabled, true)
             let revokedCommands = product.applicationSession().javascriptPluginCommands()
             @Expect(revokedCommands.size, 0)
             match (product.setPluginEnabled(
-                imported.descriptor.id, true, PluginInstallScope.Workspace
+                productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Id)), true, PluginInstallScope.Workspace
             )) {
-                case PluginImportResult.Ok(_) => ()
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
+            @Expect(product.applicationSession().javascriptPluginCommands().size, 1)
+            let unsupportedSource = workspace + "/unsupported-plugin"
+            Directory.create(unsupportedSource, recursive: true)
+            File.writeTo(unsupportedSource + "/package.json", (
+                "{\"name\":\"unsupported-type\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"index.js\"]}}"
+            ).toArray())
+            File.writeTo(unsupportedSource + "/index.js", (
+                "import { Type } from 'typebox';\n" +
+                "export default function (pi) { Type.Number(); }\n"
+            ).toArray())
+            let unsupported = match (product.importLocalPlugin(unsupportedSource, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
+            }
+            let unsupportedNamespace = productRegistryCopyText83(unsupported.descriptor.copyText(PluginDescriptorText.Namespace))
+            @Expect(match (product.setPluginEnabled(unsupportedNamespace, true, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Err(error) => error.code == "extension.pi_type_unsupported"
+                case PluginRegistryResult.Ok(_) => false
+            }, true)
+            var unsupportedFound = false
+            for (record in productRegistryRecords83(product.pluginSnapshots())) {
+                if (productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Namespace)) == unsupportedNamespace) {
+                    unsupportedFound = true
+                    @Expect(record.enabled, false)
+                }
+            }
+            @Expect(unsupportedFound, true)
             @Expect(product.applicationSession().javascriptPluginCommands().size, 1)
             let closeResult = product.close()
             @Expect(closeResult.isOk(), true)
@@ -1596,7 +1416,51 @@ class PluginRuntimeContractTests {
     }
 
     @TestCase
+    func publicPiToolPreservesUnsupportedContextDiagnostic(): Unit {
+        let root = pluginContractTemp("pi-unsupported-context")
+        let settings = root + "/home"
+        let workspace = root + "/workspace"
+        let source = workspace + "/plugin"
+        Directory.create(source, recursive: true)
+        File.writeTo(source + "/package.json", (
+            "{\"name\":\"unsupported-context\",\"version\":\"1.0.0\",\"pi\":{\"extensions\":[\"index.js\"]}}"
+        ).toArray())
+        File.writeTo(source + "/index.js", (
+            "import { Type } from 'typebox';\n" +
+            "export default function (pi) { pi.registerTool({\n" +
+            "name: 'probe', label: 'Probe', description: 'Unsupported context probe',\n" +
+            "parameters: Type.Object({}), execute: async (_id, _args, _signal, _update, ctx) => ctx.sessionManager\n" +
+            "}); }\n"
+        ).toArray())
+        let product = match (openProduct(config: ProductConfig(
+            settingsRoot: settings, stateRoot: root + "/state", workspaceRoot: workspace,
+            fixture: true, approvalMode: ApprovalMode.Yolo
+        ))) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        }
+        try {
+            let imported = match (product.importLocalPlugin(source, PluginInstallScope.Workspace)) {
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
+            }
+            let namespace = productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace))
+            @Expect(product.setPluginEnabled(namespace, true, PluginInstallScope.Workspace).isOk(), true)
+            @Expect(match (product.applicationSession().invokeLocalTool("plugin." + namespace + ".probe", objectValue([]))) {
+                case Result.Err(error) => error.code == "extension.pi_context_unsupported" && error.message.contains("sessionManager")
+                case Result.Ok(value) => value.releasePayload(); false
+            }, true)
+        } finally {
+            let _ = product.close()
+            remove(root, recursive: true)
+        }
+    }
+
+    @TestCase
     func scopedImportRevokesPreviouslyEffectivePlugin(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("scoped-import-reconciliation")
         let settings = root + "/home"
         let state = root + "/state"
@@ -1621,14 +1485,14 @@ class PluginRuntimeContractTests {
             "}\n"
         ).toArray())
 
-        let bootstrap = ProductPluginRuntime(settings, workspace)
+        let bootstrap = _registryOwners.openProduct(settings, workspace)
         let user = match (bootstrap.importLocal(userSource, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
-        match (bootstrap.setEnabled(user.descriptor.id, true, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        match (bootstrap.setEnabled(productRegistryCopyText83(user.descriptor.copyText(PluginDescriptorText.Id)), true, PluginInstallScope.User)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
         let product = match (openProduct(config: ProductConfig(
             settingsRoot: settings, stateRoot: state, workspaceRoot: workspace, fixture: true
@@ -1640,11 +1504,11 @@ class PluginRuntimeContractTests {
             let before = product.applicationSession().javascriptPluginCommands()
             @Expect(before.size, 1)
             if (before.size == 1) {
-                @Expect(before[0].routeName, "plugin." + user.descriptor.namespace + ".user")
+                @Expect(before[0].routeName, "plugin." + productRegistryCopyText83(user.descriptor.copyText(PluginDescriptorText.Namespace)) + ".user")
             }
             let imported = match (product.importLocalPlugin(workspaceSource, PluginInstallScope.Workspace)) {
-                case PluginImportResult.Ok(value) => value
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                case PluginRegistryResult.Ok(value) => value
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             @Expect(imported.enabled, false)
             @Expect(product.applicationSession().javascriptPluginCommands().size, 0)
@@ -1652,10 +1516,15 @@ class PluginRuntimeContractTests {
             let _ = product.close()
             remove(root, recursive: true)
         }
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func workspaceGrantWriteFailurePreservesPreviousLock(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("workspace-plugin-transaction")
         let settings = root + "/home"
         let workspace = root + "/workspace"
@@ -1668,10 +1537,10 @@ class PluginRuntimeContractTests {
             "{\"name\":\"transaction-first\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
         File.writeTo(secondSource + "/package.json",
             "{\"name\":\"transaction-second\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
-        let runtime = ProductPluginRuntime(settings, workspace)
+        let runtime = _registryOwners.openProduct(settings, workspace)
         let first = match (runtime.importLocal(firstSource, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
         let lockPath = workspace + "/.axyndra/plugins/lock.jsonl"
         let previousLock = String.fromUtf8(File.readFrom(Path(lockPath)))
@@ -1681,16 +1550,21 @@ class PluginRuntimeContractTests {
 
         @Expect(runtime.importLocal(secondSource, PluginInstallScope.Workspace).isOk(), false)
         @Expect(String.fromUtf8(File.readFrom(Path(lockPath))), previousLock)
-        @Expect(runtime.list().size, 1)
-        let reloaded = ProductPluginRuntime(settings, workspace)
-        @Expect(reloaded.list().size, 1)
-        if (reloaded.list().size == 1) {
-            @Expect(reloaded.list()[0].descriptor.namespace, first.descriptor.namespace)
+        @Expect(productRegistryRecords83(runtime.list()).size, 1)
+        let reloaded = _registryOwners.openProduct(settings, workspace)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 1)
+        if (productRegistryRecords83(reloaded.list()).size == 1) {
+            @Expect(productRegistryCopyText83(productRegistryRecords83(reloaded.list())[0].descriptor.copyText(PluginDescriptorText.Namespace)), productRegistryCopyText83(first.descriptor.copyText(PluginDescriptorText.Namespace)))
         }
         remove(root, recursive: true)
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func startupUnscopedEnableAndUninstallHonorEffectivePluginScope(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("scoped-startup-activation")
         let settings = root + "/home"
         let state = root + "/state"
@@ -1716,26 +1590,26 @@ class PluginRuntimeContractTests {
             "}\n"
         ).toArray())
 
-        let bootstrap = ProductPluginRuntime(settings, workspace)
+        let bootstrap = _registryOwners.openProduct(settings, workspace)
         let user = match (bootstrap.importLocal(userSource, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
         let scoped = match (bootstrap.importLocal(workspaceSource, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
-        match (bootstrap.setEnabled(user.descriptor.id, true, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        match (bootstrap.setEnabled(productRegistryCopyText83(user.descriptor.copyText(PluginDescriptorText.Id)), true, PluginInstallScope.User)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
-        match (bootstrap.setEnabled(scoped.descriptor.id, true, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        match (bootstrap.setEnabled(productRegistryCopyText83(scoped.descriptor.copyText(PluginDescriptorText.Id)), true, PluginInstallScope.Workspace)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
-        match (bootstrap.setEnabled(user.descriptor.id, false, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+        match (bootstrap.setEnabled(productRegistryCopyText83(user.descriptor.copyText(PluginDescriptorText.Id)), false, PluginInstallScope.User)) {
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
         }
 
         let product = match (openProduct(config: ProductConfig(
@@ -1745,12 +1619,12 @@ class PluginRuntimeContractTests {
             case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
         }
         try {
-            let namespace = scoped.descriptor.namespace
+            let namespace = productRegistryCopyText83(scoped.descriptor.copyText(PluginDescriptorText.Namespace))
             let startupCommands = product.applicationSession().javascriptPluginCommands()
             @Expect(startupCommands.size, 0)
-            match (product.setPluginEnabled(scoped.descriptor.id, true)) {
-                case PluginImportResult.Ok(_) => ()
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            match (product.setPluginEnabled(productRegistryCopyText83(scoped.descriptor.copyText(PluginDescriptorText.Id)), true)) {
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             let enabledCommands = product.applicationSession().javascriptPluginCommands()
             @Expect(enabledCommands.size, 1)
@@ -1758,9 +1632,9 @@ class PluginRuntimeContractTests {
                 @Expect(enabledCommands[0].routeName, "plugin." + namespace + ".workspace")
             }
 
-            match (product.uninstallPlugin(scoped.descriptor.id)) {
-                case PluginImportResult.Ok(_) => ()
-                case PluginImportResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            match (product.uninstallPlugin(productRegistryCopyText83(scoped.descriptor.copyText(PluginDescriptorText.Id)))) {
+                case PluginRegistryResult.Ok(_) => ()
+                case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + productRegistryErrorText83(error, PluginRegistryErrorText.Message))
             }
             let exposedCommands = product.applicationSession().javascriptPluginCommands()
             @Expect(exposedCommands.size, 1)
@@ -1771,88 +1645,105 @@ class PluginRuntimeContractTests {
             let _ = product.close()
             remove(root, recursive: true)
         }
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func piExtensionApiHostDeniesDirectSystemAccess(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let cacheRoot = homeDirectory() + "/.cache/agent-tmp"
         if (!exists(Path(cacheRoot))) { Directory.create(cacheRoot, recursive: true) }
         let root = cacheRoot + "/axyndra-pi-isolation-" +
             DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()
         Directory.create(root, recursive: true)
-        let port = 40000 + DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() % 20000
         let serverSource =
             "const fs=require('node:fs');const net=require('node:net');" +
             "const server=net.createServer(socket=>socket.end('reachable'));" +
-            "server.once('error',()=>process.exit(2));" +
-            "server.listen(" + port.toString() + ",'127.0.0.1',()=>" +
-            "fs.writeFileSync('server-ready','ready'));"
+            "server.once('error',error=>{const detail=String(error.code||'unknown')+': '+String(error.message).slice(0,2048);" +
+            "try{fs.writeFileSync('server-error',detail);}catch(_){};console.error(detail);process.exit(2);});" +
+            "server.listen(0,'127.0.0.1',()=>" +
+            "fs.writeFileSync('server-ready',String(server.address().port)));"
         let server = process.startProcess(process.ProcessCommand(
             "node",
             arguments: ["-e", serverSource],
             workingDirectory: root,
             maxOutputBytes: 4096
         ))
-        let script =
-            "import { Type } from 'typebox';\n" +
-            "export default function (pi) {\n" +
-            "  pi.registerTool({ name: 'probe', label: 'Probe', description: 'Probe host isolation', parameters: Type.Object({}),\n" +
-            "    execute: async () => {\n" +
-            "      const denied = { fsReadDenied: false, fsWriteDenied: false, processDenied: false, networkDenied: false };\n" +
-            "      try { const fs = await import('node:fs'); fs.readFileSync('/etc/passwd'); } catch (error) { denied.fsReadDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
-            "      try { const fs = await import('node:fs'); fs.writeFileSync(process.cwd() + '/direct-write-probe', 'unsafe'); } catch (error) { denied.fsWriteDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
-            "      try { const child = await import('node:child_process'); child.execFileSync(process.execPath, ['-e', '']); } catch (error) { denied.processDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
-            "      const net = await import('node:net');\n" +
-            "      denied.networkDenied = await new Promise(resolve => { const client = net.createConnection({ host: '127.0.0.1', port: " + port.toString() + " }); let settled = false; const finish = denied => { if (settled) return; settled = true; client.destroy(); resolve(denied); }; client.once('connect', () => finish(false)); client.once('error', () => finish(true)); client.setTimeout(1000, () => finish(true)); });\n" +
-            "      return { content: [{ type: 'text', text: JSON.stringify(denied) }], details: denied };\n" +
-            "    }\n" +
-            "  });\n" +
-            "}\n"
-        File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-direct-access", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
         try {
             let readyDeadline = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() + 5000
             while (!exists(Path(root + "/server-ready")) &&
                 DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() < readyDeadline) {}
-            @Expect(exists(Path(root + "/server-ready")), true)
-            @Expect(host.mount(record).isOk(), true)
-            let cancellation = CancellationSource()
-            let result = match (host.invoke(
-                descriptor.namespace, "probe", "{}",
-                identity: JavaScriptHostInvocationIdentity(
-                    threadId: "thread-pi-access", runId: "run-pi-access", epoch: 1,
-                    operationId: "operation-pi-access", callId: "call-pi-access"
-                ),
-                cancellation: cancellation.token,
-                cwd: root
-            )) {
-                case Result.Ok(value) => value
-                case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+            if (!exists(Path(root + "/server-ready"))) {
+                let exit = match (server.tryExit()) { case Some(value) => value.code.toString(); case None => "not-exited" }
+                let detail = if (exists(Path(root + "/server-error"))) {
+                    String.fromUtf8(File.readFrom(root + "/server-error"))
+                } else { "no listener error diagnostic" }
+                throw IllegalStateException("Pi isolation origin not ready within 5000ms; exit=" + exit + "; " + detail)
             }
-            cancellation.close()
-            let json = stringifyUnifiedJson(result.value)
-            @Expect(!result.isError && json.contains("\"fsReadDenied\":true"), true)
-            @Expect(json.contains("\"fsWriteDenied\":true"), true)
-            @Expect(json.contains("\"processDenied\":true"), true)
-            @Expect(json.contains("\"networkDenied\":true"), true)
-            @Expect(exists(Path(root + "/direct-write-probe")), false)
+            let port = Int64.parse(String.fromUtf8(File.readFrom(root + "/server-ready")))
+            @Expect(port > 0 && port <= 65535, true)
+            @Expect(server.isAlive(), true)
+            let script =
+                "import { Type } from 'typebox';\n" +
+                "export default function (pi) {\n" +
+                "  pi.registerTool({ name: 'probe', label: 'Probe', description: 'Probe host isolation', parameters: Type.Object({}),\n" +
+                "    execute: async () => {\n" +
+                "      const denied = { fsReadDenied: false, fsWriteDenied: false, processDenied: false, networkDenied: false };\n" +
+                "      try { const fs = await import('node:fs'); fs.readFileSync('/etc/passwd'); } catch (error) { denied.fsReadDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
+                "      try { const fs = await import('node:fs'); fs.writeFileSync(process.cwd() + '/direct-write-probe', 'unsafe'); } catch (error) { denied.fsWriteDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
+                "      try { const child = await import('node:child_process'); child.execFileSync(process.execPath, ['-e', '']); } catch (error) { denied.processDenied = error.code === 'ERR_ACCESS_DENIED'; }\n" +
+                "      const net = await import('node:net');\n" +
+                "      denied.networkDenied = await new Promise(resolve => { const client = net.createConnection({ host: '127.0.0.1', port: " + port.toString() + " }); let settled = false; const finish = denied => { if (settled) return; settled = true; client.destroy(); resolve(denied); }; client.once('connect', () => finish(false)); client.once('error', () => finish(true)); client.setTimeout(1000, () => finish(true)); });\n" +
+                "      return { content: [{ type: 'text', text: JSON.stringify(denied) }], details: denied };\n" +
+                "    }\n" +
+                "  });\n" +
+                "}\n"
+            File.writeTo(root + "/probe.js", script.toArray())
+            let record = installed87.install(root, "pi-direct-access", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+            let descriptor = record.descriptor
+            
+            let host = installed87.host()
+            try {
+                @Expect(host.mount(record).isOk(), true)
+                let cancellation = CancellationSource()
+                let result = match (host.invoke(
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "probe", "{}",
+                    identity: JavaScriptHostInvocationIdentity(
+                        threadId: "thread-pi-access", runId: "run-pi-access", epoch: 1,
+                        operationId: "operation-pi-access", callId: "call-pi-access"
+                    ),
+                    cancellation: cancellation.token,
+                    cwd: root
+                )) {
+                    case Result.Ok(value) => value
+                    case Result.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+                }
+                cancellation.close()
+                let json = stringifyUnifiedJson(result.value)
+                @Expect(!result.isError && json.contains("\"fsReadDenied\":true"), true)
+                @Expect(json.contains("\"fsWriteDenied\":true"), true)
+                @Expect(json.contains("\"processDenied\":true"), true)
+                @Expect(json.contains("\"networkDenied\":true"), true)
+                @Expect(exists(Path(root + "/direct-write-probe")), false)
+                @Expect(server.isAlive(), true)
+            } finally {
+                let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
+            }
         } finally {
-            let _ = host.unmount(descriptor.namespace)
             server.close()
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
     @TestCase
     func piExtensionApiHostRestartsAfterPluginCrash(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-crash-restart")
         Directory.create(root, recursive: true)
         let script =
@@ -1869,21 +1760,15 @@ class PluginRuntimeContractTests {
             "  });\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-crash-restart", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-crash-restart", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         try {
             @Expect(host.mount(record).isOk(), true)
             let cancellation = CancellationSource()
             let crashed = host.invoke(
-                descriptor.namespace, "recover", "{\"action\":\"crash\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "recover", "{\"action\":\"crash\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-restart", runId: "run-pi-restart", epoch: 1,
                     operationId: "operation-pi-crash", callId: "call-pi-crash"
@@ -1893,7 +1778,7 @@ class PluginRuntimeContractTests {
             )
             @Expect(crashed.isOk(), false)
             let recovered = match (host.invoke(
-                descriptor.namespace, "recover", "{\"action\":\"continue\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "recover", "{\"action\":\"continue\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-restart", runId: "run-pi-restart", epoch: 1,
                     operationId: "operation-pi-recover", callId: "call-pi-recover"
@@ -1914,7 +1799,7 @@ class PluginRuntimeContractTests {
             }, true)
             let afterCloseCancellation = CancellationSource()
             let afterClose = host.invoke(
-                descriptor.namespace, "recover", "{\"action\":\"continue\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "recover", "{\"action\":\"continue\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-restart", runId: "run-pi-restart", epoch: 1,
                     operationId: "operation-pi-after-close", callId: "call-pi-after-close"
@@ -1931,10 +1816,15 @@ class PluginRuntimeContractTests {
             let _ = host.close()
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionApiHostCancellationAndRevocationAreTerminal(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-cancel-restart")
         Directory.create(root, recursive: true)
         let markerPath = root + "/service-requested"
@@ -1950,16 +1840,10 @@ class PluginRuntimeContractTests {
             "  });\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-cancel-restart", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-cancel-restart", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let observer = DelayedPiServiceObserver(markerPath)
         try {
             @Expect(host.mount(record).isOk(), true)
@@ -1967,7 +1851,7 @@ class PluginRuntimeContractTests {
             let startedAt = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
             let pending = spawn {
                 host.invoke(
-                    descriptor.namespace, "wait", "{\"action\":\"wait\"}",
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "wait", "{\"action\":\"wait\"}",
                     identity: JavaScriptHostInvocationIdentity(
                         threadId: "thread-pi-cancel", runId: "run-pi-cancel", epoch: 1,
                         operationId: "operation-pi-wait", callId: "call-pi-wait"
@@ -1993,7 +1877,7 @@ class PluginRuntimeContractTests {
 
             let nextCancellation = CancellationSource()
             let next = match (host.invoke(
-                descriptor.namespace, "wait", "{\"action\":\"continue\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "wait", "{\"action\":\"continue\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-cancel", runId: "run-pi-cancel", epoch: 1,
                     operationId: "operation-pi-after-cancel", callId: "call-pi-after-cancel"
@@ -2013,7 +1897,7 @@ class PluginRuntimeContractTests {
             let revocationStartedAt = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
             let revoking = spawn {
                 host.invoke(
-                    descriptor.namespace, "wait", "{\"action\":\"wait\"}",
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "wait", "{\"action\":\"wait\"}",
                     identity: JavaScriptHostInvocationIdentity(
                         threadId: "thread-pi-revoke", runId: "run-pi-revoke", epoch: 1,
                         operationId: "operation-pi-revoke", callId: "call-pi-revoke"
@@ -2029,7 +1913,7 @@ class PluginRuntimeContractTests {
                 sleep(Duration.millisecond * 5)
             }
             let invocationObserved = exists(Path(revocationMarker))
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             let revoked = revoking.get()
             let revocationElapsed = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() - revocationStartedAt
             @Expect(invocationObserved, true)
@@ -2042,7 +1926,7 @@ class PluginRuntimeContractTests {
 
             let afterRevocationCancellation = CancellationSource()
             let afterRevocation = host.invoke(
-                descriptor.namespace, "wait", "{\"action\":\"continue\"}",
+                productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "wait", "{\"action\":\"continue\"}",
                 identity: JavaScriptHostInvocationIdentity(
                     threadId: "thread-pi-revoke", runId: "run-pi-revoke", epoch: 1,
                     operationId: "operation-pi-after-revoke", callId: "call-pi-after-revoke"
@@ -2056,13 +1940,18 @@ class PluginRuntimeContractTests {
             }, true)
             afterRevocationCancellation.close()
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionHostRestartsQueuedCallAfterCancellation(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-queued-restart")
         Directory.create(root, recursive: true)
         let markerPath = root + "/first-progress"
@@ -2078,16 +1967,10 @@ class PluginRuntimeContractTests {
             "    } });\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-serialized-calls", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-serialized-calls", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let observer = PiProgressMarkerObserver(markerPath)
         let firstCancellation = CancellationSource()
         let secondCancellation = CancellationSource()
@@ -2095,7 +1978,7 @@ class PluginRuntimeContractTests {
             @Expect(host.mount(record).isOk(), true)
             let first = spawn {
                 host.invoke(
-                    descriptor.namespace, "serial", "{\"token\":\"first\"}",
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "serial", "{\"token\":\"first\"}",
                     identity: JavaScriptHostInvocationIdentity(
                         threadId: "thread-pi-serial", runId: "run-pi-serial", epoch: 1,
                         operationId: "operation-pi-serial-first", callId: "call-pi-serial-first"
@@ -2113,7 +1996,7 @@ class PluginRuntimeContractTests {
             @Expect(exists(Path(markerPath)), true)
             let second = spawn {
                 host.invoke(
-                    descriptor.namespace, "serial", "{\"token\":\"second\"}",
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "serial", "{\"token\":\"second\"}",
                     identity: JavaScriptHostInvocationIdentity(
                         threadId: "thread-pi-serial", runId: "run-pi-serial", epoch: 1,
                         operationId: "operation-pi-serial-second", callId: "call-pi-serial-second"
@@ -2140,27 +2023,26 @@ class PluginRuntimeContractTests {
         } finally {
             firstCancellation.close()
             secondCancellation.close()
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piExtensionInitializationDiagnosticRedactsPackagePath(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("pi-error-redaction")
         Directory.create(root, recursive: true)
         File.writeTo(root + "/probe.js",
             "throw new Error(process.cwd() + '/redaction-sentinel');\n".toArray())
-        let descriptor = PluginPackageDescriptor(
-            "pi-error-redaction", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "pi-error-redaction", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         try {
             let mounted = host.mount(record)
             @Expect(mounted.isOk(), false)
@@ -2170,15 +2052,20 @@ class PluginRuntimeContractTests {
             }
             @Expect(message.contains(root), false)
             @Expect(message.contains("<plugin>/redaction-sentinel"), true)
-            @Expect(host.toolNames(descriptor.namespace).isEmpty(), true)
+            @Expect(host.toolNames(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))).isEmpty(), true)
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func javascriptPluginToolsCommitAsOneFrozenCatalogBatch(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("transactional-registry")
         Directory.create(root, recursive: true)
         let script =
@@ -2190,17 +2077,10 @@ class PluginRuntimeContractTests {
             "  }\n" +
             "}\n"
         File.writeTo(root + "/probe.js", script.toArray())
-        let descriptor = PluginPackageDescriptor(
-            "transactional-extension", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js", requestedCapabilities: ["workspace.read"],
-            contentDigest: "fixture-digest-v1"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "transactional-extension", "1.0.0", PluginEcosystem.Pi, capabilities: ["workspace.read"], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let catalog = ToolCatalog()
         let runCapabilities = CapabilitySet(values: [
             Capability(CapabilityKind.ExtensionInvoke),
@@ -2208,8 +2088,8 @@ class PluginRuntimeContractTests {
         ])
         let noReadCapabilities = CapabilitySet(values: [Capability(CapabilityKind.ExtensionInvoke)])
         let frozenBeforeActivation = catalog.toolSetSnapshot("active-run-before-plugin", runCapabilities)
-        let firstName = "plugin." + descriptor.namespace + ".first"
-        let secondName = "plugin." + descriptor.namespace + ".second"
+        let firstName = "plugin." + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) + ".first"
+        let secondName = "plugin." + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) + ".second"
         try {
             match (mountAndRegisterJavaScriptPlugin(record, host, catalog)) {
                 case Result.Ok(_) => ()
@@ -2219,7 +2099,7 @@ class PluginRuntimeContractTests {
             @Expect(definitions.size, 2)
             @Expect(definitions[0].name, firstName)
             @Expect(definitions[1].name, secondName)
-            @Expect(host.toolNames(descriptor.namespace), ["first", "second"])
+            @Expect(host.toolNames(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))), ["first", "second"])
             @Expect(frozenBeforeActivation.entries.isEmpty(), true)
             let nextRun = catalog.toolSetSnapshot("next-run-after-plugin", runCapabilities)
             let restrictedSnapshot = catalog.toolSetSnapshot(
@@ -2238,7 +2118,7 @@ class PluginRuntimeContractTests {
                 case None => false
             }, true)
 
-            let conflictHost = ProductJavaScriptPluginHost()
+            let conflictHost = installed87.host()
             let conflictCatalog = ToolCatalog()
             let existing = ToolDescriptor(
                 ModelToolDefinition(secondName, "Existing collision",
@@ -2248,7 +2128,7 @@ class PluginRuntimeContractTests {
             )
             @Expect(conflictCatalog.register(
                 existing, ProductJavaScriptPluginToolExecutor(
-                    ProductJavaScriptPluginHost(), descriptor.namespace, "second"
+                    installed87.host(), productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), "second"
                 )
             ).isOk(), true)
             let rejected = mountAndRegisterJavaScriptPlugin(record, conflictHost, conflictCatalog)
@@ -2258,16 +2138,49 @@ class PluginRuntimeContractTests {
             }, true)
             @Expect(conflictCatalog.definitions().size, 1)
             @Expect(conflictCatalog.definitions()[0].name, secondName)
-            @Expect(conflictHost.toolNames(descriptor.namespace).isEmpty(), true)
-            let _ = conflictHost.unmount(descriptor.namespace)
+            @Expect(conflictHost.toolNames(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))).isEmpty(), true)
+            let _ = conflictHost.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
+
+            // Same bytes and tool name must not make a revoked snapshot refer
+            // to a newly created mutable plugin instance.
+            let oldGeneration = host.instanceGeneration(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
+            let oldVersion = nextRun.entries[0].executorVersion
+            for (name in [firstName, secondName]) { @Expect(catalog.unregister(name), true) }
+            @Expect(host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))).isOk(), true)
+            @Expect(host.instanceExecutorVersion(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), oldGeneration).isOk(), false)
+            @Expect(mountAndRegisterJavaScriptPlugin(record, host, catalog).isOk(), true)
+            let remounted = catalog.toolSetSnapshot("remounted-plugin", runCapabilities)
+            @Expect(remounted.entries.size, 2)
+            @Expect(remounted.entries[0].executorVersion != oldVersion, true)
+            @Expect(remounted.entries[0].implementationFingerprint, nextRun.entries[0].implementationFingerprint)
+            @Expect(remounted.entries[0].schemaDigest, nextRun.entries[0].schemaDigest)
+            @Expect(host.instanceExecutorVersion(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), oldGeneration).isOk(), false)
+
+            // A fresh host resets its local generation counter. The frozen
+            // executor identity must nevertheless differ, including across
+            // a real process restart where no old executor can be restored.
+            let freshHost = installed87.host()
+            let freshCatalog = ToolCatalog()
+            try {
+                @Expect(mountAndRegisterJavaScriptPlugin(record, freshHost, freshCatalog).isOk(), true)
+                @Expect(freshHost.instanceGeneration(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))), oldGeneration)
+                let fresh = freshCatalog.toolSetSnapshot("fresh-host-plugin", runCapabilities)
+                @Expect(fresh.entries[0].executorVersion != oldVersion, true)
+                @Expect(fresh.entries[0].executorVersion != remounted.entries[0].executorVersion, true)
+            } finally { let _ = freshHost.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace))) }
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func diagnosticsReportBrokenRootsAndFloatingLocks(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("diagnostics")
         let settings = root + "/settings"
         Directory.create(root)
@@ -2275,9 +2188,9 @@ class PluginRuntimeContractTests {
         File.writeTo(root + "/package.json", "{\"name\":\"diagnostic-plugin\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
         let floatingLock = "{\"id\":\"diagnostic-plugin\",\"version\":\"1.0.0\",\"source_kind\":\"git\",\"locator\":\"https://example.test/plugin.git\",\"root\":\"" + root + "\",\"version_lock\":\"\",\"revision\":\"\",\"integrity\":\"\",\"enabled\":false}"
         File.writeTo(settings + "/plugins/lock.jsonl", floatingLock.toArray())
-        let runtime = ProductPluginRuntime(settings, root)
+        let runtime = _registryOwners.openProduct(settings, root)
         var hasUnpinned = false
-        for (error in runtime.doctor()) {
+        for (error in productRuntimeRegistryErrors87(runtime.doctor())) {
             if (error.code == "plugin.source_unpinned") { hasUnpinned = true }
         }
         @Expect(hasUnpinned, true)
@@ -2286,15 +2199,20 @@ class PluginRuntimeContractTests {
         Directory.create(root + "/missing-settings/plugins", recursive: true)
         let missingLock = "{\"id\":\"missing-plugin\",\"version\":\"1.0.0\",\"source_kind\":\"local\",\"locator\":\"" + missingRoot + "\",\"root\":\"" + missingRoot + "\",\"enabled\":false}"
         File.writeTo(root + "/missing-settings/plugins/lock.jsonl", missingLock.toArray())
-        let reloadedMissing = ProductPluginRuntime(root + "/missing-settings", root)
+        let reloadedMissing = _registryOwners.openProduct(root + "/missing-settings", root)
         var hasMissing = false
-        for (error in reloadedMissing.diagnostics()) {
+        for (error in productRuntimeRegistryErrors87(reloadedMissing.diagnostics())) {
             if (error.code == "plugin.root_missing" || error.code == "plugin.package_missing") { hasMissing = true }
         }
         @Expect(hasMissing, true)
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func workspacePluginScopeOverridesUserAndExplicitDisableWins(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let workspace = pluginContractTemp("scope-workspace")
         let settings = pluginContractTemp("scope-settings")
         let userPackage = pluginContractTemp("scope-user-plugin")
@@ -2308,41 +2226,41 @@ class PluginRuntimeContractTests {
         }
         File.writeTo(workspacePackage + "/package.json",
             "{\"name\":\"scoped-plugin\",\"version\":\"2.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
-        let runtime = ProductPluginRuntime(settings, workspace)
+        let runtime = _registryOwners.openProduct(settings, workspace)
         let user = match (runtime.importLocal(userPackage)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let project = match (runtime.importLocal(workspacePackage, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(exists(Path(settings + "/plugins/lock.jsonl")), true)
         @Expect(exists(Path(workspace + "/.axyndra/plugins/lock.jsonl")), true)
-        @Expect(user.descriptor.root != project.descriptor.root, true)
-        @Expect(runtime.list().size, 2)
+        @Expect(productRegistryCopyText83(user.descriptor.copyText(PluginDescriptorText.Root)) != productRegistryCopyText83(project.descriptor.copyText(PluginDescriptorText.Root)), true)
+        @Expect(productRegistryRecords83(runtime.list()).size, 2)
         @Expect(match (runtime.get("scoped-plugin")) {
-            case Some(value) => value.descriptor.version == "2.0.0"
+            case Some(value) => productRegistryCopyText83(value.descriptor.copyText(PluginDescriptorText.Version)) == "2.0.0"
             case None => false
         }, true)
         var reportsShadow = false
-        for (error in runtime.diagnostics()) {
+        for (error in productRuntimeRegistryErrors87(runtime.diagnostics())) {
             if (error.code == "plugin.scope_shadowed") { reportsShadow = true }
         }
         @Expect(reportsShadow, true)
 
         match (runtime.setEnabled("scoped-plugin", true, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(runtime.enabledSkillRoots().size, 1)
+        @Expect(productRegistryCopyJson83(runtime.contextComponentSnapshot(["skill"]).copyValueJson()).items.size, 1)
         match (runtime.setEnabled("scoped-plugin", false, PluginInstallScope.User)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(runtime.enabledSkillRoots().isEmpty(), true)
-        let reloaded = ProductPluginRuntime(settings, workspace)
-        @Expect(reloaded.list().size, 2)
+        @Expect(productRegistryCopyJson83(runtime.contextComponentSnapshot(["skill"]).copyValueJson()).items.size == 0, true)
+        let reloaded = _registryOwners.openProduct(settings, workspace)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 2)
         @Expect(match (reloaded.get("scoped-plugin")) {
             case Some(value) => match (value.scope) {
                 case PluginInstallScope.User => value.explicitlyDisabled
@@ -2350,10 +2268,15 @@ class PluginRuntimeContractTests {
             }
             case None => false
         }, true)
-        @Expect(reloaded.enabledSkillRoots().isEmpty(), true)
+        @Expect(productRegistryCopyJson83(reloaded.contextComponentSnapshot(["skill"]).copyValueJson()).items.size == 0, true)
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func updateRollbackUninstallAndGarbageCollectionAreTransactional(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let firstRoot = pluginContractTemp("update-first")
         let secondRoot = pluginContractTemp("update-second")
         let settings = pluginContractTemp("update-settings")
@@ -2370,26 +2293,25 @@ class PluginRuntimeContractTests {
                 "---\nname: Lifecycle demo\ndescription: Lifecycle fixture\ntriggers: lifecycle\n---\nRead [guide](references/guide.md).\n".toArray())
             File.writeTo(root + "/skills/demo/references/guide.md", version.toArray())
         }
-        let runtime = ProductPluginRuntime(settings, firstRoot)
+        let runtime = _registryOwners.openProduct(settings, firstRoot)
         @Expect(runtime.importLocal(firstRoot).isOk(), true)
-        let firstSnapshot = runtime.list()[0].descriptor.root
+        let firstSnapshot = productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Root))
         match (runtime.setEnabled("lifecycle-plugin", true)) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        let skills = ProductSkillRuntime(settings, firstRoot, pluginRuntime: Some(runtime))
-        let frozenSkillSnapshot = skills.resolve("use lifecycle", SkillStackSnapshot([], []))
-        @Expect(frozenSkillSnapshot.active.size, 1)
+        let frozenComponent = runtime.contextComponentSnapshot(["skill"])
+        @Expect(productRegistryCopyJson83(frozenComponent.copyValueJson()).items.size, 1)
         @Expect(match (runtime.updateLocal("lifecycle-plugin", secondRoot)) {
-            case PluginImportResult.Ok(record) => record.descriptor.version == "2.0.0"
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(record) => productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) == "2.0.0"
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        let secondSnapshot = runtime.list()[0].descriptor.root
-        @Expect(runtime.list()[0].descriptor.version, "2.0.0")
-        @Expect(match (skills.readReference(frozenSkillSnapshot, "demo", "guide.md")) {
-            case Result.Ok(reference) => reference.content == "v1"
-            case Result.Err(_) => false
-        }, true)
+        let secondSnapshot = productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Root))
+        @Expect(productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Version)), "2.0.0")
+        @Expect(String.fromUtf8(File.readFrom(firstSnapshot + "/skills/demo/references/guide.md")), "v1")
+        // The canonical lazy-reference behavior across update/uninstall is
+        // exercised separately by SkillsHostRetirementTests with actual Run facts.
+        @Expect(frozenComponent.validate(runtime, ["skill"]).isError())
 
         let stale = pluginSnapshotPackageRoot(
             settings, firstRoot, PluginInstallScope.User
@@ -2397,42 +2319,47 @@ class PluginRuntimeContractTests {
         Directory.create(stale, recursive: true)
         File.writeTo(stale + "/marker", "stale".toArray())
         @Expect(match (runtime.garbageCollect()) {
-            case PluginImportResult.Ok(paths) => paths.size == 1 && !exists(Path(stale))
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(paths) => paths.size == 1 && !exists(Path(stale))
+            case PluginRegistryResult.Err(_) => false
         }, true)
         @Expect(exists(Path(firstSnapshot)), true)
         @Expect(exists(Path(secondSnapshot)), true)
 
         @Expect(match (runtime.updateLocal("lifecycle-plugin", firstRoot + "/missing")) {
-            case PluginImportResult.Err(_) => true
-            case PluginImportResult.Ok(_) => false
+            case PluginRegistryResult.Err(_) => true
+            case PluginRegistryResult.Ok(_) => false
         }, true)
-        @Expect(runtime.list()[0].descriptor.version, "2.0.0")
+        @Expect(productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Version)), "2.0.0")
         @Expect(match (runtime.rollback("lifecycle-plugin")) {
-            case PluginImportResult.Ok(record) => record.descriptor.version == "1.0.0"
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(record) => productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) == "1.0.0"
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        @Expect(runtime.list()[0].descriptor.version, "1.0.0")
-        @Expect(runtime.list()[0].descriptor.root, firstSnapshot)
+        @Expect(productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Version)), "1.0.0")
+        @Expect(productRegistryCopyText83(productRegistryRecords83(runtime.list())[0].descriptor.copyText(PluginDescriptorText.Root)), firstSnapshot)
         @Expect(exists(Path(secondSnapshot)), true)
 
         @Expect(match (runtime.uninstall("lifecycle-plugin")) {
-            case PluginImportResult.Ok(_) => true
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(_) => true
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        @Expect(runtime.list().isEmpty(), true)
+        @Expect(productRegistryRecords83(runtime.list()).isEmpty(), true)
         @Expect(match (runtime.garbageCollect()) {
-            case PluginImportResult.Ok(paths) => paths.isEmpty() &&
+            case PluginRegistryResult.Ok(paths) => paths.isEmpty() &&
                 exists(Path(firstSnapshot)) && exists(Path(secondSnapshot))
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        @Expect(match (skills.readReference(frozenSkillSnapshot, "demo", "guide.md")) {
-            case Result.Ok(reference) => reference.content == "v1"
-            case Result.Err(_) => false
-        }, true)
+        @Expect(String.fromUtf8(File.readFrom(firstSnapshot + "/skills/demo/references/guide.md")), "v1")
+        // The canonical lazy-reference behavior across update/uninstall is
+        // exercised separately by SkillsHostRetirementTests with actual Run facts.
+        @Expect(frozenComponent.validate(runtime, ["skill"]).isError())
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func workspaceGarbageCollectionDoesNotCrossWorkspaceCaches(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let settings = pluginContractTemp("shared-gc-settings")
         let workspaceA = pluginContractTemp("shared-gc-workspace-a")
         let workspaceB = pluginContractTemp("shared-gc-workspace-b")
@@ -2445,15 +2372,15 @@ class PluginRuntimeContractTests {
             "{\"name\":\"gc-workspace-a\",\"version\":\"1.0.0\",\"pi\":{}}".toArray())
         File.writeTo(sourceB + "/package.json",
             "{\"name\":\"gc-workspace-b\",\"version\":\"1.0.0\",\"pi\":{}}".toArray())
-        let runtimeA = ProductPluginRuntime(settings, workspaceA)
-        let runtimeB = ProductPluginRuntime(settings, workspaceB)
+        let runtimeA = _registryOwners.openProduct(settings, workspaceA)
+        let runtimeB = _registryOwners.openProduct(settings, workspaceB)
         let importedA = match (runtimeA.importLocal(sourceA, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let importedB = match (runtimeB.importLocal(sourceB, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let staleA = pluginSnapshotPackageRoot(
             settings, workspaceA, PluginInstallScope.Workspace
@@ -2461,16 +2388,21 @@ class PluginRuntimeContractTests {
         Directory.create(staleA, recursive: true)
         File.writeTo(staleA + "/marker", "stale".toArray())
         @Expect(match (runtimeA.garbageCollect()) {
-            case PluginImportResult.Ok(paths) => paths.size == 1 && !exists(Path(staleA))
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(paths) => paths.size == 1 && !exists(Path(staleA))
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        @Expect(exists(Path(importedA.descriptor.root)), true)
-        @Expect(exists(Path(importedB.descriptor.root)), true)
-        @Expect(ProductPluginRuntime(settings, workspaceB).list().size, 1)
+        @Expect(exists(Path(productRegistryCopyText83(importedA.descriptor.copyText(PluginDescriptorText.Root)))), true)
+        @Expect(exists(Path(productRegistryCopyText83(importedB.descriptor.copyText(PluginDescriptorText.Root)))), true)
+        @Expect(productRegistryRecords83(_registryOwners.openProduct(settings, workspaceB).list()).size, 1)
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func rollbackHistorySurvivesRuntimeRestart(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let firstRoot = pluginContractTemp("restart-first")
         let secondRoot = pluginContractTemp("restart-second")
         let settings = pluginContractTemp("restart-settings")
@@ -2480,19 +2412,21 @@ class PluginRuntimeContractTests {
             "{\"name\":\"restart-plugin\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
         File.writeTo(secondRoot + "/package.json",
             "{\"name\":\"restart-plugin\",\"version\":\"2.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
-        let runtime = ProductPluginRuntime(settings, firstRoot)
+        let runtime = _registryOwners.openProduct(settings, firstRoot)
         @Expect(runtime.importLocal(firstRoot).isOk(), true)
         @Expect(runtime.updateLocal("restart-plugin", secondRoot).isOk(), true)
         remove(Path(firstRoot), recursive: true)
 
-        let restarted = ProductPluginRuntime(settings, secondRoot)
+        let restarted = _registryOwners.openProduct(settings, secondRoot)
         @Expect(match (restarted.rollback("restart-plugin")) {
-            case PluginImportResult.Ok(record) => record.descriptor.version == "1.0.0"
-            case PluginImportResult.Err(_) => false
+            case PluginRegistryResult.Ok(record) => productRegistryCopyText83(record.descriptor.copyText(PluginDescriptorText.Version)) == "1.0.0"
+            case PluginRegistryResult.Err(_) => false
         }, true)
-        let restoredRoot = restarted.list()[0].descriptor.root
+        let restoredRoot = productRegistryCopyText83(productRegistryRecords83(restarted.list())[0].descriptor.copyText(PluginDescriptorText.Root))
         @Expect(restoredRoot != firstRoot, true)
         @Expect(exists(Path(restoredRoot + "/package.json")), true)
+    
+        } finally { _registryOwners.close() }
     }
     @TestCase
     func persistentJavaScriptHostRejectsUnenforceablePerCallResourceLimits(): Unit {
@@ -2534,13 +2468,13 @@ class PluginRuntimeContractTests {
         let root = cacheRoot + "/axyndra-plugin-os-sandbox-" +
             DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()
         Directory.create(root, recursive: true)
-        let port = 40000 + DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() % 20000
         let serverSource =
             "const fs=require('node:fs');const net=require('node:net');" +
             "const server=net.createServer(socket=>socket.end('reachable'));" +
-            "server.once('error',()=>process.exit(2));" +
-            "server.listen(" + port.toString() + ",'127.0.0.1',()=>" +
-            "fs.writeFileSync('server-ready','ready'));"
+            "server.once('error',error=>{const detail=String(error.code||'unknown')+': '+String(error.message).slice(0,2048);" +
+            "try{fs.writeFileSync('server-error',detail);}catch(_){};console.error(detail);process.exit(2);});" +
+            "server.listen(0,'127.0.0.1',()=>" +
+            "fs.writeFileSync('server-ready',String(server.address().port)));"
         let server = process.startProcess(process.ProcessCommand(
             "node",
             arguments: ["-e", serverSource],
@@ -2551,7 +2485,16 @@ class PluginRuntimeContractTests {
             let readyDeadline = DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() + 5000
             while (!exists(Path(root + "/server-ready")) &&
                 DateTime.nowUTC().toUnixTimeStamp().toMilliseconds() < readyDeadline) {}
-            @Expect(exists(Path(root + "/server-ready")), true)
+            if (!exists(Path(root + "/server-ready"))) {
+                let exit = match (server.tryExit()) { case Some(value) => value.code.toString(); case None => "not-exited" }
+                let detail = if (exists(Path(root + "/server-error"))) {
+                    String.fromUtf8(File.readFrom(root + "/server-error"))
+                } else { "no listener error diagnostic" }
+                throw IllegalStateException("OS sandbox origin not ready within 5000ms; exit=" + exit + "; " + detail)
+            }
+            let port = Int64.parse(String.fromUtf8(File.readFrom(root + "/server-ready")))
+            @Expect(port > 0 && port <= 65535, true)
+            @Expect(server.isAlive(), true)
 
             let script =
                 "const fs=require('node:fs');const net=require('node:net');" +
@@ -2609,6 +2552,7 @@ class PluginRuntimeContractTests {
                 }
                 @Expect(result.resultJson.contains("\"filesystemDenied\":true"), true)
                 @Expect(result.resultJson.contains("\"networkDenied\":true"), true)
+                @Expect(server.isAlive(), true)
                 @Expect(exists(Path(root + "/os-sandbox-write-probe")), false)
             } finally {
                 host.close()
@@ -2620,6 +2564,12 @@ class PluginRuntimeContractTests {
     }
     @TestCase
     func pluginSnapshotsPreserveAndDigestExecutablePermission(): Unit {
+        let inspection87 = PluginRuntimeInstalledFixture87()
+        try {
+
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let source = pluginContractTemp("snapshot-mode-source")
         let settings = pluginContractTemp("snapshot-mode-settings")
         Directory.create(source, recursive: true)
@@ -2628,26 +2578,33 @@ class PluginRuntimeContractTests {
         File.writeTo(source + "/run.sh", "#!/bin/sh\nexit 0\n".toArray())
         let sourceInfo = FileInfo(Path(source + "/run.sh"))
         let _ = sourceInfo.setExecutable(true)
-        let executableDigest = match (inspectPluginPackage(source)) {
-            case PluginPackageResult.Ok(value) => value.contentDigest
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+        let executableDigest = match (inspection87.inspect(source)) {
+            case PluginRegistryResult.Ok(value) => productRegistryCopyText83(value.copyText(PluginDescriptorText.ContentDigest))
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let _ = sourceInfo.setExecutable(false)
-        let nonExecutableDigest = match (inspectPluginPackage(source)) {
-            case PluginPackageResult.Ok(value) => value.contentDigest
-            case PluginPackageResult.Err(error) => throw IllegalStateException(error.code)
+        let nonExecutableDigest = match (inspection87.inspect(source)) {
+            case PluginRegistryResult.Ok(value) => productRegistryCopyText83(value.copyText(PluginDescriptorText.ContentDigest))
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         @Expect(executableDigest != nonExecutableDigest, true)
         let _ = sourceInfo.setExecutable(true)
-        let imported = match (ProductPluginRuntime(settings, source).importLocal(source)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+        let imported = match (_registryOwners.openProduct(settings, source).importLocal(source)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        @Expect(FileInfo(Path(imported.descriptor.root + "/run.sh")).canExecute(), true)
+        @Expect(FileInfo(Path(productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Root)) + "/run.sh")).canExecute(), true)
+    
+        } finally { _registryOwners.close() }
+    
+        } finally { inspection87.close() }
     }
 
     @TestCase
     func localPluginImportRejectsSymlinkedSourceAncestor(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let root = pluginContractTemp("plugin-source-symlink-ancestor")
         let settings = root + "/settings"
         let workspace = root + "/workspace"
@@ -2660,19 +2617,24 @@ class PluginRuntimeContractTests {
             "{\"name\":\"source-link-plugin\",\"version\":\"1.0.0\"}".toArray())
         SymbolicLink.create(root + "/source-link", to: external)
         try {
-            @Expect(match (ProductPluginRuntime(settings, workspace).importLocal(
+            @Expect(match (_registryOwners.openProduct(settings, workspace).importLocal(
                 root + "/source-link/package"
             )) {
-                case PluginImportResult.Err(_) => true
-                case PluginImportResult.Ok(_) => false
+                case PluginRegistryResult.Err(_) => true
+                case PluginRegistryResult.Ok(_) => false
             }, true)
         } finally {
             remove(root, recursive: true)
         }
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func workspacePluginStorageRejectsSymlinkedMetadataAncestor(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let workspace = pluginContractTemp("symlink-workspace")
         let settings = pluginContractTemp("symlink-settings")
         let external = pluginContractTemp("symlink-external")
@@ -2683,31 +2645,38 @@ class PluginRuntimeContractTests {
         File.writeTo(source + "/package.json",
             "{\"name\":\"symlink-cache\",\"version\":\"1.0.0\",\"pi\":{}}".toArray())
         SymbolicLink.create(workspace + "/.axyndra", to: external)
-        let result = ProductPluginRuntime(settings, workspace).importLocal(
+        let result = _registryOwners.openProduct(settings, workspace).importLocal(
             source, PluginInstallScope.Workspace
         )
         @Expect(match (result) {
-            case PluginImportResult.Err(error) => error.code == "plugin.lock_write_failed"
-            case PluginImportResult.Ok(_) => false
+            case PluginRegistryResult.Err(error) => error.code == "plugin.lock_write_failed"
+            case PluginRegistryResult.Ok(_) => false
         }, true)
         @Expect(exists(Path(external + "/plugins")), false)
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func pluginLockSerializationEscapesControlCharacters(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let base = pluginContractTemp("lock-controls")
         let settings = pluginContractTemp("lock-controls-settings")
         let source = base + "/source\twith\rcontrols"
         Directory.create(source, recursive: true)
         File.writeTo(source + "/package.json",
             "{\"name\":\"lock-controls\",\"version\":\"1.0.0\",\"pi\":{}}".toArray())
-        let imported = ProductPluginRuntime(settings, base).importLocal(source)
+        let imported = _registryOwners.openProduct(settings, base).importLocal(source)
         @Expect(imported.isOk(), true)
-        let reloaded = ProductPluginRuntime(settings, base)
-        @Expect(reloaded.list().size, 1)
-        if (reloaded.list().size == 1) {
-            @Expect(reloaded.list()[0].locator, source)
+        let reloaded = _registryOwners.openProduct(settings, base)
+        @Expect(productRegistryRecords83(reloaded.list()).size, 1)
+        if (productRegistryRecords83(reloaded.list()).size == 1) {
+            @Expect(productRegistryCopyText83(productRegistryRecords83(reloaded.list())[0].copyText(PluginRecordText.Locator)), source)
         }
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
@@ -2755,6 +2724,9 @@ class PluginRuntimeContractTests {
 
     @TestCase
     func workspaceLockCannotSelfAuthorizePluginActivation(): Unit {
+        let _registryOwners = ProductRegistryTestOwners()
+        try {
+
         let workspace = pluginContractTemp("workspace-consent")
         let settings = pluginContractTemp("workspace-consent-settings")
         let source = workspace + "/plugin"
@@ -2763,31 +2735,36 @@ class PluginRuntimeContractTests {
             "---\nname: Consent demo\ndescription: Consent fixture\n---\nInstructions.\n".toArray())
         File.writeTo(source + "/package.json",
             "{\"name\":\"workspace-consent\",\"version\":\"1.0.0\",\"pi\":{\"skills\":[\"skills\"]}}".toArray())
-        let runtime = ProductPluginRuntime(settings, workspace)
+        let runtime = _registryOwners.openProduct(settings, workspace)
         let imported = match (runtime.importLocal(source, PluginInstallScope.Workspace)) {
-            case PluginImportResult.Ok(value) => value
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
         let lockPath = workspace + "/.axyndra/plugins/lock.jsonl"
         let attackerLock = String.fromUtf8(File.readFrom(Path(lockPath))).replace(
             "\"enabled\":false", "\"enabled\":true"
         )
         File.writeTo(lockPath, attackerLock.toArray())
-        let untrusted = ProductPluginRuntime(settings, workspace)
-        @Expect(untrusted.list()[0].enabled, false)
+        let untrusted = _registryOwners.openProduct(settings, workspace)
+        @Expect(productRegistryRecords83(untrusted.list())[0].enabled, false)
         match (untrusted.setEnabled(
-            imported.descriptor.namespace, true, PluginInstallScope.Workspace
+            productRegistryCopyText83(imported.descriptor.copyText(PluginDescriptorText.Namespace)), true, PluginInstallScope.Workspace
         )) {
-            case PluginImportResult.Ok(_) => ()
-            case PluginImportResult.Err(error) => throw IllegalStateException(error.code)
+            case PluginRegistryResult.Ok(_) => ()
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
         }
-        let trusted = ProductPluginRuntime(settings, workspace)
-        @Expect(trusted.list()[0].enabled, true)
-        @Expect(trusted.enabledSkillRoots().size, 1)
+        let trusted = _registryOwners.openProduct(settings, workspace)
+        @Expect(productRegistryRecords83(trusted.list())[0].enabled, true)
+        @Expect(productRegistryCopyJson83(trusted.contextComponentSnapshot(["skill"]).copyValueJson()).items.size, 1)
+    
+        } finally { _registryOwners.close() }
     }
 
     @TestCase
     func piToolHooksRequireWorkspaceReadCapability(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("hook-read-grant")
         Directory.create(root, recursive: true)
         File.writeTo(root + "/probe.js", (
@@ -2795,16 +2772,10 @@ class PluginRuntimeContractTests {
             "  pi.on('tool_result', () => ({ observed: true }));\n" +
             "}\n"
         ).toArray())
-        let descriptor = PluginPackageDescriptor(
-            "hook-read-grant", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js", contentDigest: "fixture-hook-read-grant"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "hook-read-grant", "1.0.0", PluginEcosystem.Pi, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let catalog = ToolCatalog()
         try {
             match (mountAndRegisterJavaScriptPlugin(record, host, catalog)) {
@@ -2816,13 +2787,18 @@ class PluginRuntimeContractTests {
             )
             @Expect(snapshot.hookHandlers.isEmpty(), true)
         } finally {
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
     func piToolCallHooksRequireWorkspaceWriteCapability(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("hook-write-grant")
         Directory.create(root, recursive: true)
         File.writeTo(root + "/probe.js", (
@@ -2831,17 +2807,10 @@ class PluginRuntimeContractTests {
             "  pi.on('tool_result', () => ({ observed: true }));\n" +
             "}\n"
         ).toArray())
-        let descriptor = PluginPackageDescriptor(
-            "hook-write-grant", "1.0.0", PluginEcosystem.Pi,
-            PluginManifestFamily.Pi, "fixture", root: root,
-            components: [PluginComponent(PluginComponentKind.Extension, "probe.js")],
-            entrypoint: "probe.js", requestedCapabilities: ["workspace.read"],
-            contentDigest: "fixture-hook-write-grant"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "", "", false, 0
-        )
-        let host = ProductJavaScriptPluginHost()
+        let record = installed87.install(root, "hook-write-grant", "1.0.0", PluginEcosystem.Pi, capabilities: ["workspace.read"], update: false)
+        let descriptor = record.descriptor
+        
+        let host = installed87.host()
         let catalog = ToolCatalog()
         let cancellation = CancellationSource()
         try {
@@ -2894,9 +2863,11 @@ class PluginRuntimeContractTests {
             }
         } finally {
             cancellation.close()
-            let _ = host.unmount(descriptor.namespace)
+            let _ = host.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
@@ -2919,30 +2890,27 @@ class PluginRuntimeContractTests {
 
     @TestCase
     func codexHookRevocationRejectsSnapshotsAndCancelsActiveHandlers(): Unit {
+        let installed87 = PluginRuntimeInstalledFixture87()
+        try {
+
         let root = pluginContractTemp("hook-revocation")
         Directory.create(root, recursive: true)
-        let descriptor = PluginPackageDescriptor(
-            "hook-revocation", "1.0.0", PluginEcosystem.Codex,
-            PluginManifestFamily.Codex, "fixture", root: root,
-            contentDigest: "hook-revocation-digest"
-        )
-        let record = ProductPluginRecord(
-            descriptor, PluginSourceKind.Local, root, "1.0.0", "", "",
-            descriptor.contentDigest, true, 0
-        )
+        let record = installed87.install(root, "hook-revocation", "1.0.0", PluginEcosystem.Codex, capabilities: [], update: false)
+        let descriptor = record.descriptor
+        
         let handler = ToolHookHandlerSnapshot(
             "PreToolUse",
-            descriptor.namespace,
-            descriptor.version,
-            descriptor.contentDigest,
-            descriptor.root,
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)),
             "*",
             "true",
             5000
         )
         let processes = LocalProcessPort(LocalWorkspace(root))
         let runtime = ProductCodexHookRuntime(
-            processes, ProductJavaScriptPluginHost()
+            processes, installed87.host()
         )
         let parent = CancellationSource()
         try {
@@ -2958,21 +2926,15 @@ class PluginRuntimeContractTests {
             let restored = runtime.beginHook(handler, parent.token).getOrThrow()
             @Expect(restored.source.token.isCancelled(), false)
 
-            let updatedDescriptor = PluginPackageDescriptor(
-                "hook-revocation", "2.0.0", PluginEcosystem.Codex,
-                PluginManifestFamily.Codex, "fixture", root: root,
-                contentDigest: "hook-revocation-digest-v2"
-            )
-            let updatedRecord = ProductPluginRecord(
-                updatedDescriptor, PluginSourceKind.Local, root, "2.0.0", "", "",
-                updatedDescriptor.contentDigest, true, 0
-            )
+            let updatedRecord = installed87.install(root, "hook-revocation", "2.0.0", PluginEcosystem.Codex, capabilities: [], update: true)
+            let updatedDescriptor = updatedRecord.descriptor
+            
             let updatedHandler = ToolHookHandlerSnapshot(
                 "PreToolUse",
-                updatedDescriptor.namespace,
-                updatedDescriptor.version,
-                updatedDescriptor.contentDigest,
-                updatedDescriptor.root,
+                productRegistryCopyText83(updatedDescriptor.copyText(PluginDescriptorText.Namespace)),
+                productRegistryCopyText83(updatedDescriptor.copyText(PluginDescriptorText.Version)),
+                productRegistryCopyText83(updatedDescriptor.copyText(PluginDescriptorText.ContentDigest)),
+                productRegistryCopyText83(updatedDescriptor.copyText(PluginDescriptorText.Root)),
                 "*",
                 "true",
                 5000
@@ -2994,6 +2956,8 @@ class PluginRuntimeContractTests {
             let _ = processes.close()
             remove(root, recursive: true)
         }
+    
+        } finally { installed87.close() }
     }
 
     @TestCase
@@ -3075,4 +3039,76 @@ func pluginContractTemp(label: String): String {
     if (!exists(Path(base))) { Directory.create(base, recursive: true) }
     base + "/plugin-contract-" + label + "-" +
         DateTime.nowUTC().toUnixTimeStamp().toMilliseconds().toString()
+}
+
+
+// Fixture input travels through the real manifest parser, snapshot import,
+// enable publication and the exact Registry that the actual Host owns. No
+// public owned metadata constructor or caller DTO creates execution authority.
+class PluginRuntimeInstalledFixture87 {
+    private let settings = pluginContractTemp("owned-installed-settings-87")
+    private var registry: ?ProductPluginRuntime = None<ProductPluginRuntime>
+    private func actual(root: String): ProductPluginRuntime {
+        match (registry) {
+            case Some(value) => value
+            case None =>
+                let value = ProductPluginRuntime(settings, root)
+                registry = Some(value); value
+        }
+    }
+    func install(root: String, id: String, version: String, ecosystem: PluginEcosystem,
+        capabilities!: Array<String> = [], update!: Bool = false): ProductPluginRecord {
+        let runtime = actual(root)
+        let manifest = match (ecosystem) {
+            case PluginEcosystem.Pi => jsonObject([
+                JsonObjectEntry("name", jsonString(id)),
+                JsonObjectEntry("version", jsonString(version)),
+                JsonObjectEntry("pi", jsonObject([
+                    JsonObjectEntry("extensions", jsonArray([jsonString("probe.js")])),
+                    JsonObjectEntry("axyndra", jsonObject([
+                        JsonObjectEntry("capabilities", jsonArray(capabilities.map({ value => jsonString(value) })))
+                    ]))
+                ]))
+            ])
+            case PluginEcosystem.Codex => jsonObject([
+                JsonObjectEntry("$schema", jsonString("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")),
+                JsonObjectEntry("name", jsonString(id)),
+                JsonObjectEntry("version", jsonString(version))
+            ])
+            case PluginEcosystem.Axyndra => throw IllegalStateException("installed fixture requires its original Pi or Codex manifest")
+        }
+        let path = match (ecosystem) { case PluginEcosystem.Pi => "package.json"; case _ => "plugin.json" }
+        File.writeTo(root + "/" + path, manifest.stringify().toArray())
+        let namespace = match (ecosystem) { case PluginEcosystem.Pi => "pi:" + id; case _ => "codex:" + id }
+        let result = if (update) { runtime.updateLocal(namespace, root) } else { runtime.importLocal(root) }
+        let imported = match (result) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+        }
+        imported.close()
+        match (runtime.setEnabled(namespace, true)) {
+            case PluginRegistryResult.Ok(value) => value
+            case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code)
+        }
+    }
+    func inspect(root: String): PluginRegistryResult<OwnedPluginPackageDescriptor> { actual(root).inspect(root) }
+    func host(): ProductJavaScriptPluginHost {
+        let host = ProductJavaScriptPluginHost(settingsRoot: settings)
+        match (host.ownRegistry(registry.getOrThrow())) {
+            case Result.Ok(_) => host
+            case Result.Err(error) => throw IllegalStateException(error.code)
+        }
+    }
+    func close(): Unit {
+        match (registry) { case Some(value) => registry = None; value.close(); case None => () }
+    }
+}
+
+func productRuntimeRegistryErrors87(list: OwnedRegistryErrorList): Array<PluginRegistryOwnedError> {
+    let size = list.size
+    if (size == 0) { list.close(); return [] }
+    if (size > (134217728 - 8192) / 256) { throw LogicalJsonPayloadError("registry fixture error views cannot fit the original shared capacity") }
+    let payment = list.deriveCopiedDataPayment(size * 256 + 8192)
+    productRegistryEscapedCopies83.adopt(payment, errors: Some(list))
+    Array<PluginRegistryOwnedError>(size, { index => list.at(index) })
 }

@@ -1,0 +1,12 @@
+[package]
+cjc-version = "1.1.0"
+name = "native_sdk_fixture"
+version = "1.0.0"
+output-type = "executable"
+description = "Independent Native SDK provider executable"
+
+[dependencies]
+"agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
+"sdk_fixture_extension" = { path = "../sdk_fixture_extension", output-type = "static" }
+"pure_provider_runtime" = { path = "../../libs/pure_provider_runtime", output-type = "static" }
+"yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }

@@ -5,9 +5,10 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import agent_runtime.*
+import std.sync.*
 import agent_ports.*
 import agent_store.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 
@@ -27,16 +28,82 @@ public class SqliteRunRecord {
 // SQLite transaction domain as the canonical Thread/Turn/Run lifecycle. The
 // canonical run row is created by ThreadCoordinator; this adapter may enrich
 // it, but can never create an ownerless Run.
-public class SqliteRunRepository <: RunRepository {
+public class SqliteRunRepository <: RunRepository & OwnedRunEventRepository & OwnedOuterErrorRunRepository333 & OwnedFailureRunRepository113 & ReturningModelAttemptRepository159 {
     private let database: SqliteDatabase
     private let eventCapacity: Int64
+    private let ownedEventSpoolRoot: ?String
+    private let ownedSpoolLock = Mutex()
+    private let ownedSpools = ArrayList<OwnedSqliteRunEventWrite>()
 
-    public init(database: SqliteDatabase, eventCapacity!: Int64 = 4096) {
+    public init(database: SqliteDatabase, eventCapacity!: Int64 = 4096,
+        ownedEventSpoolRoot!: ?String = None) {
         if (eventCapacity < 1) {
             throw IllegalArgumentException("event capacity must be positive")
         }
         this.database = database
         this.eventCapacity = eventCapacity
+        this.ownedEventSpoolRoot = ownedEventSpoolRoot
+    }
+
+    public func saveOwnedOuterError333(value:OwnedOuterErrorFailure333):Result<Unit>{
+        saveSqliteOwnedOuterError333(database,value)
+    }
+    public func appendOwnedOuterError333(value:OwnedOuterErrorFailure333):Result<Unit>{
+        appendSqliteOwnedOuterError333(database,eventCapacity,value)
+    }
+
+    public func saveOwnedFailure113(value: OwnedFailureRunPublication113): Result<Unit> {
+        let saved = saveSqlitePaidFailure113(database, value)
+        match (saved) { case Result.Err(error) => Result<Unit>.Err(error)
+            case Result.Ok(_) => value.acknowledgeAfterConsumption() }
+    }
+    public func appendOwnedFailure113(value: OwnedFailureRunPublication113): Result<Unit> {
+        let appended = appendSqlitePaidFailure113(database, eventCapacity, value)
+        match (appended) { case Result.Err(error) => Result<Unit>.Err(error)
+            case Result.Ok(_) => value.acknowledgeAfterConsumption() }
+    }
+    public func saveOwnedFailureOutcome113(value: OwnedFailureRunPublication113): OwnedFailureDataOutcome113<Unit> {
+        acknowledgePaidFailurePort113(value,saveSqlitePaidFailureOutcome113(database,value))
+    }
+    public func appendOwnedFailureOutcome113(value: OwnedFailureRunPublication113): OwnedFailureDataOutcome113<Unit> {
+        acknowledgePaidFailurePort113(value,appendSqlitePaidFailureOutcome113(database,eventCapacity,value))
+    }
+    public func withOwnedFailureSnapshot113(run: RunId, event: EventMeta,
+        allocate: (Int64) -> LogicalJsonOwnerReservation,
+        consume: (OwnedFailureRunPublication113) -> Unit): OwnedFailureDataOutcome113<Unit> {
+        readSqlitePaidFailureSnapshot113(database, run, event, allocate, consume)
+    }
+
+    // Trusted actual assembly opts into private spool storage. The ordinary
+    // Run repository and its existing event/telemetry paths are unchanged.
+    public func stageOwned(event: OwnedAgentEvent): Result<OwnedRunEventWrite> {
+        ownedSpoolLock.lock()
+        try {
+            var index: Int64 = 0
+            while (index < ownedSpools.size) {
+                if (ownedSpools[index].isAcknowledged()) { ownedSpools.remove(at: index) }
+                else { index++ }
+            }
+            if (ownedEventSpoolRoot.isNone()) { return ownedRunEventDataError("event.spool_not_configured") }
+            if (!ownedSpools.isEmpty()) { return ownedRunEventDataError("event.spool_previous_cleanup_pending") }
+            let retirement = match (event.retirementWitness()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(value) => value }
+            let root = ownedEventSpoolRoot.getOrThrow()
+            let payment = match (event.deriveRetainedAllocation(262144 + root.size * 4)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(value) => value }
+            let write = OwnedSqliteRunEventWrite(database, eventCapacity, event, payment, retirement)
+            // Adopt before native open/write. A failed physical close keeps the
+            // actual owner/payment here even when stage returns an error.
+            ownedSpools.add(write)
+            match (write.stage(root)) {
+                case Result.Ok(_) => Result<OwnedRunEventWrite>.Ok(write)
+                case Result.Err(error) =>
+                    let _ = write.closeAfterStorageRetirement()
+                    if (write.isAcknowledged()) { ownedSpools.remove(at: ownedSpools.size - 1) }
+                    Result<OwnedRunEventWrite>.Err(error) }
+        } finally { ownedSpoolLock.unlock() }
     }
 
     private func consumeLegacyContinuationImports(): Result<Unit> {
@@ -206,6 +273,16 @@ public class SqliteRunRepository <: RunRepository {
         }
     }
 
+    public func bindAcceptedContextRequest(run: RunId, thread: SessionId, epoch: Int64,
+        initiator: ThreadItemContent, request: AgentValue, observedAtMillis: Int64): Result<Unit> {
+        try {
+            database.transaction { tx =>
+                bindAcceptedContextRequestInTransaction(tx, run, thread, epoch, initiator, request, observedAtMillis)
+            }
+            Result.Ok(())
+        } catch (_: Exception) { sqliteRunConflict<Unit>("initial context request lost its canonical Accepted binding") }
+    }
+
     public func saveContinuation(value: RunContinuation): Result<Unit> {
         match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
@@ -350,6 +427,77 @@ public class SqliteRunRepository <: RunRepository {
         }
     }
 
+    public func contextBoundaryPressureItem(runId: RunId): Result<Bool> {
+        try { database.transaction<Result<Bool>>({ tx =>
+            let rows = tx.query("SELECT payload FROM run_continuations WHERE run_id=?", [SqlParameter.Text(runId.value)])
+            if (rows.size != 1) { throw IllegalStateException("pressure recovery has no context boundary") }
+            let boundary = requireContextBoundaryCurrent(tx, RunContextBoundary(decodeDurableRunContinuation(rows[0].required(0))))
+            let items = tx.query("SELECT payload,provenance FROM items WHERE id=? AND thread_id=? AND turn_id=? AND kind='user_message'",
+                [SqlParameter.Text("budget-pressure-" + runId.value), SqlParameter.Text(contextBoundaryText(boundary.data(), "thread_id")),
+                    SqlParameter.Text(boundary.continuation.turnId.value)])
+            if (items.isEmpty()) { return Result.Ok(false) }
+            let expected = encodeStoredThreadContent(ThreadItemContent.UserMessage(textMessageParts(
+                "[budget pressure] The work-turn budget is nearly exhausted. " +
+                    "Finish the current goal now, avoid starting optional " +
+                    "exploration, and converge the current work into a " +
+                    "deliverable state.")))
+            if (items.size != 1 || items[0].required(0) != expected || items[0].required(1) !=
+                encodeStoredProvenance(ItemProvenance("budget", runId: Some(runId)))) {
+                throw IllegalStateException("canonical budget pressure item changed") }
+            Result.Ok(true)
+        }) } catch (error: Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "context.boundary_pressure_item_invalid", error.message)) }
+    }
+
+    public func contextBoundary(runId: RunId): Result<?RunContextBoundary> {
+        try { database.transaction<Result<?RunContextBoundary>>({ tx =>
+            let rows = tx.query("SELECT payload FROM run_continuations WHERE run_id=?", [SqlParameter.Text(runId.value)])
+            if (rows.isEmpty()) { return Result.Ok(None) }
+            if (rows.size != 1) { throw IllegalStateException("multiple context boundaries") }
+            let value = decodeDurableRunContinuation(rows[0].required(0))
+            if (contextBoundaryData(value).isNone()) { return Result.Ok(None) }
+            Result.Ok(Some(requireContextBoundaryCurrent(tx, RunContextBoundary(value))))
+        }) } catch (error: Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "context.boundary_recovery_required", error.message)) }
+    }
+    public func pendingContextBoundary(sessionId: SessionId): Result<?RunContextBoundary> {
+        try { database.transaction<Result<?RunContextBoundary>>({ tx =>
+            let rows = tx.query("SELECT c.payload FROM run_continuations c JOIN runs r ON r.id=c.run_id " +
+                "WHERE r.thread_id=? AND r.state IN ('running','waiting_approval','cancelling','recovery_required')",
+                [SqlParameter.Text(sessionId.value)])
+            var pending: ?RunContextBoundary = None
+            for (row in rows) {
+                let value = decodeDurableRunContinuation(row.required(0))
+                if (contextBoundaryData(value).isNone()) { continue }
+                if (pending.isSome()) { throw IllegalStateException("multiple pending context boundaries") }
+                pending = Some(requireContextBoundaryCurrent(tx, RunContextBoundary(value)))
+            }
+            Result.Ok(pending)
+        }) } catch (error: Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "context.boundary_recovery_required", error.message)) }
+    }
+    public func reserveContextBoundaryTurn(expected: RunContextBoundary, event: AgentEvent,
+        replacement: AgentValue): Result<Unit> {
+        try { database.transaction { tx =>
+            if (event.runId.value != expected.continuation.runId.value || runEventDisposition(tx, event) != 1) {
+                throw IllegalStateException("context boundary accounting event is not fresh") }
+            let charged = match (event.payload) { case AgentEventPayload.BudgetUpdated(value) => value
+                case _ => throw IllegalArgumentException("context boundary reservation requires original BudgetUpdated") }
+            if (canonicalAgentValue(contextBoundaryUsageValue(charged)) !=
+                canonicalAgentValue(contextBoundaryField(replacement, "usage"))) {
+                throw IllegalStateException("context boundary event and paid snapshot disagree") }
+            let next = advanceContextBoundaryTurn(tx, expected, replacement, event.meta.occurredAtMillis)
+            match (appendRunEventInTransaction(tx, event, eventCapacity, false)) {
+                case Result.Err(error) => throw IllegalStateException(error.describe()); case Result.Ok(_) => () }
+            let _ = requireContextBoundaryCurrent(tx, next)
+        }; Result.Ok(()) } catch (error: Exception) { Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+            "context.boundary_reservation_conflict", error.message)) }
+    }
+    public func prepareContextBoundaryModelAttempt(expected: RunContextBoundary, attempt: DurableModelAttempt,
+        event: AgentEvent, continuation: RunContinuation): Result<Unit> {
+        prepareModelAttemptWithBoundary(attempt, event, continuation, Some(expected))
+    }
+
     public func pendingRecoveryContinuation(sessionId: SessionId): Result<?RunContinuation> {
         match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
@@ -360,11 +508,22 @@ public class SqliteRunRepository <: RunRepository {
                 "SELECT runs.id,run_continuations.payload FROM runs " +
                     "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.thread_id=" +
                     sqliteText(sessionId.value) +
+                    " AND runs.state IN ('running','waiting_approval','cancelling','recovery_required')" +
                     " AND run_continuations.payload IS NOT NULL"
             )
             var pending: ?RunContinuation = None
             for (row in rows) {
                 let rowRunId = RunId(row.required(0))
+                let durable = decodeDurableRunContinuation(row.required(1))
+                match (optionalRunRequestSnapshotFromDurableContinuation(durable)) {
+                    case Some(initial) => if (isInitialContextRequest(initial) && contextBoundaryData(durable).isNone() &&
+                        database.query("SELECT id FROM runs WHERE id=? AND state IN ('running','waiting_approval','cancelling','recovery_required')",
+                            [SqlParameter.Text(rowRunId.value)]).size == 1) {
+                        return Result.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                            "context.initial_preparation_interrupted",
+                            "initial context data is retained; its live host preparation cannot be replayed after restart",
+                            retryable: false, fields: [ErrorField("run_id", rowRunId.value)])) }
+                    case None => () }
                 let value = match (canonicalContinuationFromRow(row, rowRunId, 1)) {
                     case Result.Ok(Some(item)) => item
                     case Result.Ok(None) => continue
@@ -427,10 +586,67 @@ public class SqliteRunRepository <: RunRepository {
         }
     }
 
-    public func prepareModelAttempt(
+    public func prepareInternalModelAttempt(attempt: DurableModelAttempt, event: AgentEvent,
+        input: InternalModelAttemptInput): Result<Unit> {
+        try {
+            database.transaction<Result<Unit>>({ transaction =>
+                if (event.runId.value != input.runId.value || event.meta.attemptId.isNone() ||
+                    event.meta.attemptId.getOrThrow().value != attempt.id.value || runEventDisposition(transaction, event) != 1) {
+                    return sqliteRunConflict<Unit>("internal model prepare event binding changed")
+                }
+                prepareInternalModelAttemptInTransaction(transaction, attempt, input)
+                appendRunEventInTransaction(transaction, event, eventCapacity, true)
+            })
+        } catch (_: Exception) { sqliteRunConflict<Unit>("internal model Attempt preparation rejected") }
+    }
+
+    public func settleInternalModelAttempt(attempt: ModelAttemptId, input: InternalModelAttemptInput,
+        outcome: Result<ModelReply>, completedAtMillis: Int64): Result<Unit> {
+        try {
+            database.transaction { transaction =>
+                settleInternalModelAttemptInTransaction(transaction, attempt, input, outcome, completedAtMillis)
+            }
+            Result.Ok(())
+        } catch (_: Exception) { sqliteRunConflict<Unit>("internal model Attempt settlement rejected") }
+    }
+
+    public func prepareModelAttemptReturning159(loan: ModelInputToolsBorrow159,
+        attempt: DurableModelAttempt, event: AgentEvent, continuation: RunContinuation): Result<Unit> {
+        // The actual original SQL method, transaction closure, codecs and
+        // statements all returned. No input continuation is cached here.
+        let result = prepareModelAttempt(attempt, event, continuation)
+        match (result) { case Result.Ok(_) => loan.returnModelToolsFrame159(); case Result.Err(_) => () }
+        result
+    }
+
+    public func prepareContextBoundaryModelAttemptReturning159(loan: ModelInputToolsBorrow159,
+        expected: RunContextBoundary, attempt: DurableModelAttempt, event: AgentEvent, continuation: RunContinuation): Result<Unit> {
+        // The actual original SQL method, transaction closure, codecs and
+        // statements all returned. No input continuation is cached here.
+        let result = prepareContextBoundaryModelAttempt(expected, attempt, event, continuation)
+        match (result) { case Result.Ok(_) => loan.returnModelToolsFrame159(); case Result.Err(_) => () }
+        result
+    }
+
+    public func prepareRestartModelAttemptReturning159(loan: ModelInputToolsBorrow159,
+        parent: DurableModelAttempt, attempt: DurableModelAttempt, policyEvent: AgentEvent, duplicateEvent: AgentEvent, continuation: RunContinuation): Result<Unit> {
+        // The actual original SQL method, transaction closure, codecs and
+        // statements all returned. No input continuation is cached here.
+        let result = prepareRestartModelAttempt(parent, attempt, policyEvent, duplicateEvent, continuation)
+        match (result) { case Result.Ok(_) => loan.returnModelToolsFrame159(); case Result.Err(_) => () }
+        result
+    }
+
+    public func prepareModelAttempt(attempt: DurableModelAttempt, event: AgentEvent,
+        continuation: RunContinuation): Result<Unit> {
+        prepareModelAttemptWithBoundary(attempt, event, continuation, None)
+    }
+
+    private func prepareModelAttemptWithBoundary(
         attempt: DurableModelAttempt,
         event: AgentEvent,
-        continuation: RunContinuation
+        continuation: RunContinuation,
+        expectedBoundary: ?RunContextBoundary
     ): Result<Unit> {
         match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
@@ -447,6 +663,43 @@ public class SqliteRunRepository <: RunRepository {
                         sqliteText(attempt.runId.value)
                 )
                 if (rows.size != 1) { return sqliteRunMissing<Unit>(attempt.runId, "Run was not found") }
+                match (expectedBoundary) { case Some(expected) =>
+                    let actual = requireContextBoundaryCurrent(transaction, expected)
+                    let data = actual.data()
+                    requireBoundaryFreshModelRequest(data, continuation)
+                    let checkpoint = continuation.runningModel.getOrThrow()
+                    let count = contextBoundaryField(data, "counter")
+                    if (contextBoundaryText(data, "point") != "turn_reserved" || attempt.attemptNo != 1 || attempt.parentAttemptId.isSome() ||
+                        contextBoundaryText(contextBoundaryField(data, "request"), "run_id") != continuation.runId.value ||
+                        contextBoundaryText(data, "thread_id") != continuation.sessionId.value ||
+                        contextBoundaryInteger(count, "turns") != checkpoint.turns ||
+                        contextBoundaryInteger(count, "model_requests") == Int64.Max ||
+                        attempt.semanticRequestId.value != "semantic-" + attempt.runId.value + "-model-" +
+                            (contextBoundaryInteger(count, "model_requests") + 1).toString() ||
+                        checkpoint.modelRequests != contextBoundaryInteger(count, "model_requests") ||
+                        checkpoint.workModelRequests != contextBoundaryInteger(count, "work_model_requests") ||
+                        checkpoint.drainModelRequests != contextBoundaryInteger(count, "drain_model_requests") ||
+                        checkpoint.inputTokens != contextBoundaryInteger(count, "input_tokens") ||
+                        checkpoint.outputTokens != contextBoundaryInteger(count, "output_tokens") ||
+                        checkpoint.reasoningTokens != contextBoundaryInteger(count, "reasoning_tokens") ||
+                        checkpoint.cacheReadTokens != contextBoundaryInteger(count, "cache_read_tokens") ||
+                        checkpoint.cacheWriteTokens != contextBoundaryInteger(count, "cache_write_tokens") ||
+                        checkpoint.lastInputTokens != contextBoundaryInteger(count, "last_input_tokens") ||
+                        checkpoint.lastOutputTokens != contextBoundaryInteger(count, "last_output_tokens") ||
+                        checkpoint.lastRequestDurationMillis != contextBoundaryInteger(count, "last_duration_millis") ||
+                        checkpoint.toolCalls != contextBoundaryInteger(count, "tool_calls") ||
+                        canonicalAgentValue(match (checkpoint.costMicros) { case Some(cost) => integerValue(cost); case None => nullValue() }) !=
+                            canonicalAgentValue(contextBoundaryField(count, "cost_micros")) ||
+                        checkpoint.consecutiveCapabilityDenials != contextBoundaryInteger(contextBoundaryField(data, "tool_loop_state"), "consecutive_capability_denials") ||
+                        checkpoint.lastCapabilityDeniedTool != contextBoundaryText(contextBoundaryField(data, "tool_loop_state"), "last_capability_denied_tool") ||
+                        checkpoint.stableTurnId != contextBoundaryText(contextBoundaryField(data, "control"), "active_turn_id") ||
+                        contextBoundaryInteger(contextBoundaryField(data, "control"), "request_serial") == Int64.Max ||
+                        checkpoint.stableRequestId != attempt.runId.value + "-request-" +
+                            (contextBoundaryInteger(contextBoundaryField(data, "control"), "request_serial") + 1).toString()) {
+                        throw IllegalStateException("fresh model Attempt does not match the paid context boundary") }
+                    case None => if (rows[0][0].isSome() && contextBoundaryData(
+                        decodeDurableRunContinuation(rows[0].required(0))).isSome()) {
+                        throw IllegalStateException("context boundary requires its exact fresh Attempt prepare") } }
                 match (canonicalContinuationFromRow(rows[0], attempt.runId, 0)) {
                     case Result.Ok(Some(existing)) =>
                             let exactMatch = sameContinuationBinding(existing, continuation)
@@ -492,15 +745,20 @@ public class SqliteRunRepository <: RunRepository {
                                 return sqliteRunConflict<Unit>("model continuation changed concurrently")
                             }
                     case Result.Ok(None) => ()
-                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Err(error) => return Result<Unit>.Err(error)
                 }
                 let disposition = runEventDisposition(transaction, event)
                 if (disposition < 0) { return runEventConflict<Unit>(event) }
+                if (!transaction.query("SELECT id FROM model_attempts WHERE run_id=? AND lifecycle IN ('created','streaming') " +
+                    "AND policy_reason IN ('internal_approval_review','internal_context_compaction')",
+                    [SqlParameter.Text(attempt.runId.value)]).isEmpty()) {
+                    return sqliteRunConflict<Unit>("ordinary model prepare cannot replace an unsettled internal Attempt")
+                }
                 persistModelAttemptInTransaction(transaction, attempt)
                 if (disposition > 0) {
                     match (appendRunEventInTransaction(transaction, event, eventCapacity, true)) {
                         case Result.Ok(_) => ()
-                        case Result.Err(error) => return Result.Err(error)
+                        case Result.Err(error) => return Result<Unit>.Err(error)
                     }
                 }
                 writeRunContinuationSnapshotProjection(
@@ -626,8 +884,20 @@ public class SqliteRunRepository <: RunRepository {
                 if (attempt.runId.value != event.runId.value) {
                     return sqliteRunConflict<Bool>("model dispatch event Run binding drift")
                 }
+                if (attempt.policyReason == "internal_approval_review" || attempt.policyReason == "internal_context_compaction") {
+                    if (event.meta.attemptId.isNone() || event.meta.attemptId.getOrThrow().value != attempt.id.value ||
+                        event.meta.requestId.isNone() || event.meta.requestId.getOrThrow().value != attempt.providerRequestId ||
+                        event.meta.semanticRequestId.isNone() || event.meta.semanticRequestId.getOrThrow().value != attempt.semanticRequestId.value) {
+                        return sqliteRunConflict<Bool>("internal model claim event identity differs")
+                    }
+                    let _ = verifyInternalModelAttemptCurrent(transaction, attemptId, attempt.runId)
+                }
                 if (attempt.dispatchState == ModelAttemptDispatchState.DispatchClaimed) {
                     return Result.Ok(false)
+                }
+                if ((attempt.policyReason == "internal_approval_review" || attempt.policyReason == "internal_context_compaction") &&
+                    attempt.lifecycle != ModelAttemptLifecycle.Created) {
+                    return sqliteRunRecovery<Bool>(attempt.runId, "terminal internal Attempt cannot be reclaimed")
                 }
                 if (attempt.replayBarrier != ModelAttemptReplayBarrier.NoBarrier ||
                     runEventDisposition(transaction, event) != 1) {
@@ -688,8 +958,7 @@ public class SqliteRunRepository <: RunRepository {
     }
 
     public func clearModelExecutionContinuation(
-        runId: RunId,
-        activeAttemptId: ModelAttemptId
+        runId: RunId, activeAttemptId: ModelAttemptId
     ): Result<Unit> {
         match (consumeLegacyContinuationImports()) {
             case Result.Ok(_) => ()
@@ -697,35 +966,7 @@ public class SqliteRunRepository <: RunRepository {
         }
         try {
             database.transaction<Result<Unit>>({ transaction =>
-                let rows = transaction.query(
-                    "SELECT run_continuations.payload,run_continuations.active_attempt_id FROM runs " +
-                        "LEFT JOIN run_continuations ON run_continuations.run_id=runs.id WHERE runs.id=" +
-                        sqliteText(runId.value)
-                )
-                if (rows.size != 1) { return sqliteRunMissing<Unit>(runId, "Run was not found") }
-                match (rows[0][1]) {
-                    case Some(storedAttemptId) => if (storedAttemptId != activeAttemptId.value) {
-                        return sqliteRunConflict<Unit>(
-                            "model continuation Attempt binding drift: expected=" +
-                                activeAttemptId.value + ", actual=" + storedAttemptId
-                        )
-                    }
-                    case None => match (canonicalContinuationFromRow(rows[0], runId, 0)) {
-                        case Result.Ok(None) => return Result.Ok(())
-                        case Result.Ok(Some(value)) => if (value.runningModel.isNone() ||
-                                value.runningModel.getOrThrow().activeAttemptId.value != activeAttemptId.value) {
-                            return sqliteRunConflict<Unit>(
-                                "model continuation Attempt binding drift: expected=" +
-                                    activeAttemptId.value + ", actual=" + match (value.runningModel) {
-                                        case Some(checkpoint) => checkpoint.activeAttemptId.value
-                                        case None => "none"
-                                    }
-                            )
-                        }
-                        case Result.Err(error) => return Result.Err(error)
-                    }
-                }
-                removeRunContinuationProjection(transaction, runId)
+                settleModelExecutionContinuation(transaction, runId, activeAttemptId)
                 Result.Ok(())
             })
         } catch (error: Exception) {
@@ -795,10 +1036,39 @@ public class SqliteRunRepository <: RunRepository {
         }
     }
 
+    public func continuationModelInput(item: ThreadItem): Result<ModelMessage> {
+        try {
+            database.readTransaction<Result<ModelMessage>>({ transaction =>
+                let value = if (isContinuationHistoryDescription(item)) { continuationHistoryRequest(transaction, item) }
+                    else { consumedContinuationRequest(transaction, item) }
+                let model = match (modelRequestFromSnapshotValue(value.field("model_input").getOrThrow(), "")) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(result) => result }
+                if (model.messages.size != 1 || model.messages[0].role != ModelRole.User) {
+                    return sqliteRunRecovery<ModelMessage>(item.provenance.runId.getOrThrow(), "continuation model input is malformed") }
+                Result.Ok(model.messages[0])
+            })
+        } catch (_: Exception) { sqliteRunRecovery<ModelMessage>(item.provenance.runId.getOrThrow(), "continuation claim or frozen input changed") }
+    }
+
     public func stats(sessionId: SessionId): Result<SessionRunStats> {
-        let snapshots = match (snapshots(sessionId)) {
-            case Result.Ok(values) => values
-            case Result.Err(error) => return Result.Err(error)
+        try {
+            database.transaction<Result<SessionRunStats>>({ transaction => statsInTransaction(transaction, sessionId) })
+        } catch (error: Exception) { sqliteRunStorageError("persistence.sqlite_run_list", error.message) }
+    }
+
+    // Read the same canonical product snapshots while an existing caller owns
+    // the transaction. Never re-enter database.transaction from a document CAS
+    // callback. This returns accounting facts, not a continuation grant.
+    public func statsInTransaction(transaction: SqliteTransaction, sessionId: SessionId): Result<SessionRunStats> {
+        let rows = transaction.query(
+            "SELECT app_snapshot FROM runs WHERE thread_id=? AND app_snapshot IS NOT NULL ORDER BY started_at_millis,id",
+            [SqlParameter.Text(sessionId.value)])
+        let snapshots = ArrayList<RunSnapshot>()
+        for (row in rows) {
+            match (decodeSnapshot(row.required(0))) {
+                case Result.Ok(value) => snapshots.add(value)
+                case Result.Err(_) => return sqliteRunRecovery<SessionRunStats>(RunId("unknown"), "Run snapshot is corrupt")
+            }
         }
         var modelRequests: Int64 = 0
         var inputTokens: Int64 = 0
@@ -825,9 +1095,13 @@ public class SqliteRunRepository <: RunRepository {
                     case Some(value) => totalCostMicros += value
                     case None => costKnown = false
                 }
-                lastInputTokens = snapshot.lastInputTokens
-                lastOutputTokens = snapshot.lastOutputTokens
-                lastRequestDurationMillis = snapshot.lastRequestDurationMillis
+                // Maintenance remains included in every total above. Its
+                // prompt is not the user's conversational context window.
+                if (snapshot.kind == RunKind.Agent || snapshot.kind == RunKind.Chat) {
+                    lastInputTokens = snapshot.lastInputTokens
+                    lastOutputTokens = snapshot.lastOutputTokens
+                    lastRequestDurationMillis = snapshot.lastRequestDurationMillis
+                }
             }
             toolCalls += snapshot.toolCalls
             turns += snapshot.turns
@@ -1270,6 +1544,71 @@ func sqliteRunConflict<T>(message: String): Result<T> {
 // run_continuations is the only production continuation register. New writes
 // carry a structured, digest-verified Run request snapshot in the sealed phase
 // payload. The opaque v4 projection remains a read-only migration format.
+// Current durable request equality, not a source grant. All properties below
+// come from the real RunContinuation about to enter the original prepare path.
+func requireBoundaryFreshModelRequest(data: AgentValue, value: RunContinuation): Unit {
+    let request = contextBoundaryField(data, "request")
+    let blocks = ArrayList<ModelBlock>()
+    blocks.add(ModelBlock(ModelBlockKind.Text, text: value.prompt))
+    for (image in value.imageInputs) { blocks.add(ModelBlock(ModelBlockKind.Image, image: Some(image))) }
+    let model = modelRequestSnapshotValue(ModelRequest(value.model, [ModelMessage(ModelRole.User, blocks.toArray())],
+        system: value.system, thinking: value.thinking, maxOutputTokens: value.budget.maxOutputTokens,
+        streaming: true, parallelToolCalls: value.parallelToolCalls, serviceTier: value.serviceTier,
+        cachePolicy: value.cachePolicy, structuredOutput: value.structuredOutput, cacheKey: value.cacheKey))
+    if (contextBoundaryText(request, "run_id") != value.runId.value || contextBoundaryText(request, "thread_id") != value.sessionId.value ||
+        contextBoundaryText(request, "lane_id") != value.executionLaneId.value ||
+        canonicalAgentValue(contextBoundaryField(request, "model_input")) != canonicalAgentValue(model) ||
+        canonicalAgentValue(contextBoundaryField(request, "tool_context")) != canonicalAgentValue(value.toolContextPayload) ||
+        canonicalAgentValue(contextBoundaryField(request, "context_snapshot")) != canonicalAgentValue(value.contextSnapshotPayload) ||
+        contextBoundaryText(request, "approval_mode") != value.approvalMode ||
+        canonicalAgentValue(contextBoundaryField(request, "auto_retry")) != canonicalAgentValue(boolValue(value.autoRetry)) ||
+        contextBoundaryInteger(request, "resolver_version") != Int64(value.resolverVersion) ||
+        contextBoundaryInteger(request, "context_window") != value.contextWindow ||
+        contextBoundaryInteger(request, "provider_margin") != value.providerSafetyMargin) {
+        throw IllegalStateException("context boundary full request changed before fresh prepare") }
+    let capabilities = listValue(value.capabilities.values.map { c => objectValue([ValueField("kind", textValue(capabilityDisplayName(c.kind))), ValueField("resource", textValue(c.resource))]) })
+    if (canonicalAgentValue(contextBoundaryField(request, "capabilities")) != canonicalAgentValue(capabilities)) {
+        throw IllegalStateException("context boundary capabilities changed") }
+    let budget = contextBoundaryField(request, "budget")
+    for (field in budgetValue(value.budget).fields) {
+        if (canonicalAgentValue(field.value) != canonicalAgentValue(contextBoundaryField(budget, field.name))) {
+            throw IllegalStateException("context boundary budget ceiling changed") } }
+    let output = contextBoundaryField(budget, "request_output_budget")
+    if (contextBoundaryInteger(budget, "max_concurrent_tools") != value.budget.maxConcurrentTools ||
+        contextBoundaryInteger(output, "hard_limit") != value.budget.requestOutputBudget.hardLimit ||
+        contextBoundaryInteger(output, "min_visible_response_tokens") != value.budget.requestOutputBudget.minVisibleResponseTokens) {
+        throw IllegalStateException("context boundary concurrency or response reserve changed") }
+    let policy = value.requestedPolicy.getOrThrow()
+    let frozenPolicy = contextBoundaryField(request, "requested_policy")
+    if (contextBoundaryText(frozenPolicy, "policy_requested_thinking") != thinkingName(policy.policyRequestedThinking) ||
+        contextBoundaryText(frozenPolicy, "thinking_source") != thinkingPreferenceSourceName(policy.thinkingSource) ||
+        canonicalAgentValue(contextBoundaryField(frozenPolicy, "user_requested_thinking")) != canonicalAgentValue(match (policy.userRequestedThinking) {
+            case Some(level) => textValue(thinkingName(level)); case None => nullValue() }) ||
+        contextBoundaryInteger(contextBoundaryField(frozenPolicy, "request_output_budget"), "hard_limit") != policy.requestOutputBudget.hardLimit ||
+        contextBoundaryInteger(contextBoundaryField(frozenPolicy, "request_output_budget"), "min_visible_response_tokens") != policy.requestOutputBudget.minVisibleResponseTokens) {
+        throw IllegalStateException("context boundary requested policy changed") }
+    let caps = value.modelCapabilitiesSnapshot.getOrThrow()
+    let frozenCaps = contextBoundaryField(request, "model_capabilities")
+    let encodedCaps = modelCapabilitiesSnapshotValue(caps)
+    if (contextBoundaryInteger(frozenCaps, "schema_version") != Int64(caps.snapshotSchemaVersion) ||
+        contextBoundaryText(frozenCaps, "configuration_digest") != caps.configurationDigest) {
+        throw IllegalStateException("context boundary capability version or configuration changed") }
+    for (name in ["model_id", "model_max_output_tokens", "endpoint_max_output_tokens", "capability_fingerprint"]) {
+        if (canonicalAgentValue(contextBoundaryField(frozenCaps, name)) != canonicalAgentValue(contextBoundaryField(encodedCaps, name))) {
+            throw IllegalStateException("context boundary model capabilities changed") } }
+    let frozenThinking = contextBoundaryField(frozenCaps, "thinking")
+    if (contextBoundaryText(frozenThinking, "mode") != contextBoundaryText(encodedCaps, "thinking_mode")) {
+        throw IllegalStateException("context boundary thinking mode changed") }
+    for (name in ["supported_levels", "budget_tiers"]) {
+        if (canonicalAgentValue(contextBoundaryField(frozenThinking, name)) != canonicalAgentValue(contextBoundaryField(encodedCaps, name))) {
+            throw IllegalStateException("context boundary full thinking capabilities changed") } }
+    let pricing = match (value.pricing) { case None => nullValue(); case Some(p) => objectValue([
+        ValueField("input", optionalIntegerValue(p.inputMicrosPerMillion)), ValueField("output", optionalIntegerValue(p.outputMicrosPerMillion)),
+        ValueField("cache_read", optionalIntegerValue(p.cacheReadMicrosPerMillion)), ValueField("cache_write", optionalIntegerValue(p.cacheWriteMicrosPerMillion))]) }
+    if (canonicalAgentValue(contextBoundaryField(request, "pricing")) != canonicalAgentValue(pricing)) {
+        throw IllegalStateException("context boundary pricing changed") }
+}
+
 func canonicalContinuationFromRow(
     row: SqliteRow,
     runId: RunId,
@@ -1288,8 +1627,24 @@ func canonicalContinuationFromRow(
                     runId, "canonical continuation Run binding is corrupt"
                 )
             }
+            // Settled model checkpoints retain request data for diagnosis and
+            // canonical context compilation, not permission to replay the old
+            // RunningModel projection. Only its actual effect phase owns it.
+            match (durable.phase) {
+                case RunExecutionPhase.Checkpoint(_) | RunExecutionPhase.ContextCompiling(_) |
+                    RunExecutionPhase.ContextReady(_) => if (durable.attemptId.isNone() &&
+                        durable.pendingOperationId.isNone() && durable.pendingApprovalId.isNone()) {
+                        return Result.Ok(None)
+                    }
+                case _ => ()
+            }
             match (optionalRunRequestSnapshotFromDurableContinuation(durable)) {
                 case Some(snapshot) =>
+                    if (isInitialContextRequest(snapshot)) {
+                        if (httpIntentText(snapshot, "run_id") != durable.runId.value) {
+                            return sqliteRunRecovery<?RunContinuation>(runId, "initial request Run binding is corrupt") }
+                        return Result.Ok(None)
+                    }
                     match (decodeContinuation(encodeAgentValue(snapshot))) {
                     case Result.Ok(value) => if (value.runId.value == runId.value) {
                         Result.Ok(Some(value))
@@ -1330,6 +1685,14 @@ func saveSqliteDecision(
     transaction: SqliteTransaction,
     receipt: ApprovalDecisionReceipt
 ): Result<Unit> {
+    // This check shares the decision transaction with Attempt preparation.
+    // A concurrent UI approval cannot consume the original wait while its
+    // reviewer owns an unsettled effect, even before resumeAfterApproval.
+    if (!transaction.query("SELECT id FROM model_attempts WHERE run_id=? AND lifecycle IN ('created','streaming') " +
+        "AND policy_reason IN ('internal_approval_review','internal_context_compaction')",
+        [SqlParameter.Text(receipt.runId.value)]).isEmpty()) {
+        return operationConflict<Unit>("approval has an unsettled internal model Attempt")
+    }
     let existing = transaction.query(
         "SELECT payload FROM approval_decisions WHERE operation_id=" + sqliteText(receipt.operationId.value)
     )

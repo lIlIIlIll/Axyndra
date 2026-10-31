@@ -3,7 +3,6 @@ package thread_runtime_integration_contract
 import std.sync.*
 import agent_domain.*
 import agent_runtime.*
-import agent_skills.*
 import agent_store.*
 
 func concurrentThreadSnapshotContract(path: String): Unit {
@@ -58,7 +57,7 @@ func concurrentThreadSnapshotContract(path: String): Unit {
             let id = index.toString()
             runtime.startTurn(SemanticTurnId("snapshot-turn-" + id), RunId("snapshot-run-" + id),
                 ItemId("snapshot-user-" + id), ThreadItemContent.UserMessage(textMessageParts("input")),
-                lane("snapshot-model"), SkillStackSnapshot([], [])).value().getOrThrow()
+                lane("snapshot-model"), InvocationContextProjection()).value().getOrThrow()
             runtime.finish(RunState.Completed, 1000).value().getOrThrow()
         }
     } finally { done.store(true) }

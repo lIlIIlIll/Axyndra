@@ -126,6 +126,18 @@ public interface McpTransport {
         rpcRequest: JsonRpcRequest,
         notificationSink: (JsonRpcNotification) -> Unit
     ): McpResult<JsonRpcResponse> { let _ = notificationSink; request(rpcRequest) }
+    // Pure transport-specific projection. It must not invoke the I/O port,
+    // allocate an exchange, reserve an ID or send any request.
+    func freezePrepared(prepared: McpPreparedToolCall): McpResult<McpPreparedToolCall> {
+        McpResult.Ok(prepared)
+    }
+    func requestPrepared(
+        prepared: McpPreparedToolCall, notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> {
+        let _ = prepared; let _ = notificationSink
+        mcpFailure<JsonRpcResponse>(McpErrorKind.Lifecycle, "mcp.prepared_transport_unsupported",
+            "MCP transport does not support exact prepared requests")
+    }
     func openSubscription(request: JsonRpcRequest): McpResult<McpSubscriptionHandle>
     func notify(notification: JsonRpcNotification): McpResult<Unit>
     func cancel(
@@ -227,25 +239,68 @@ class StdioMcpSubscriptionHandle <: McpSubscriptionHandle {
     func acknowledgedSnapshot(): Bool { lock.lock(); try { accepted.isSome() } finally { lock.unlock() } }
 }
 
+// One reader owns stdout for its full lifetime; unread bytes belong to the
+// next frame, including UTF-8 split across physical reads.
+private class McpStdioLineReader {
+    private let input: InputStream
+    private let maximum: Int64
+    private let buffer = Array<Byte>(8192, repeat: 0)
+    private var offset: Int64 = 0
+    private var count: Int64 = 0
+
+    init(input: InputStream, maximum: Int64) {
+        this.input = input; this.maximum = maximum
+    }
+
+    func readLine(): ?String {
+        let output = ArrayList<Byte>(min(maximum, buffer.size))
+        while (true) {
+            if (offset == count) {
+                count = input.read(buffer); offset = 0
+                if (count <= 0) {
+                    if (output.isEmpty()) { return None }
+                    return Some(String.fromUtf8(output.toArray()))
+                }
+            }
+            var end = offset
+            while (end < count && buffer[end] != b'\n') { end++ }
+            if (end - offset > maximum - output.size) {
+                throw ProcessError(ProcessErrorKind.Frame, "line frame exceeds configured byte limit")
+            }
+            output.add(all: buffer[offset..end])
+            offset = end
+            if (end < count) {
+                offset++; return Some(String.fromUtf8(output.toArray()).removeSuffix("\r"))
+            }
+        }
+        None
+    }
+}
+
 public class StdioMcpTransport <: McpTransport {
-    private let config: McpStdioConfig
-    private let process: ManagedProcess
+    private let framing: McpFramingConfig
+    private let channel: McpStdioChannel
     private let lifecycle = McpLifecycle()
     private let requestLock = Mutex()
     private let writerLock = Mutex()
+    private let closeLock = Mutex()
     private let pendingLock = Mutex()
     private let pending = ArrayList<McpStdioPendingResponse>()
     private let subscriptions = ArrayList<StdioMcpSubscriptionHandle>()
     private let stderrBytes = BoundedByteBuffer(65536)
+    private var cleanupStarted = false
+    private var cleanupFuture: ?Future<Unit> = None
+    private let cleanupDone = AtomicBool(false)
+    private let cleanupFailed = AtomicBool(false)
     private let stderrDrain: Future<Unit>
     private var stdoutDrain: ?Future<Unit> = None
 
-    init(config: McpStdioConfig, process: ManagedProcess) {
-        this.config = config
-        this.process = process
+    init(framing: McpFramingConfig, channel: McpStdioChannel) {
+        this.framing = framing
+        this.channel = channel
         let _ = lifecycle.transition(McpLifecycleState.Starting)
         let _ = lifecycle.transition(McpLifecycleState.Ready)
-        let stderr = process.stderr
+        let stderr = channel.stderr
         let captured = stderrBytes
         stderrDrain = spawn {
             let buffer = Array<Byte>(4096, repeat: 0)
@@ -269,6 +324,18 @@ public class StdioMcpTransport <: McpTransport {
         request: JsonRpcRequest,
         notificationSink: (JsonRpcNotification) -> Unit
     ): McpResult<JsonRpcResponse> {
+        requestExact(request, encodeJsonRpc(JsonRpcEnvelope.Request(request)), notificationSink)
+    }
+
+    public func requestPrepared(
+        prepared: McpPreparedToolCall, notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> {
+        requestExact(prepared.request(), prepared.rpcJson, notificationSink)
+    }
+
+    private func requestExact(
+        request: JsonRpcRequest, rpcJson: String, notificationSink: (JsonRpcNotification) -> Unit
+    ): McpResult<JsonRpcResponse> {
         requestLock.lock()
         try {
             if (state() != McpLifecycleState.Ready) {
@@ -276,11 +343,11 @@ public class StdioMcpTransport <: McpTransport {
             }
             let waiting = McpStdioPendingResponse(request.id, notificationSink: notificationSink)
             pendingLock.lock(); try { pending.add(waiting) } finally { pendingLock.unlock() }
-            match (write(JsonRpcEnvelope.Request(request))) {
+            match (writeJson(rpcJson)) {
                 case McpResult.Ok(_) => ()
                 case McpResult.Err(error) => removePending(waiting); return McpResult.Err(error)
             }
-            let deadline = MonoTime.now() + Duration.millisecond * config.framing.requestTimeoutMillis
+            let deadline = MonoTime.now() + Duration.millisecond * framing.requestTimeoutMillis
             var completed = false
             while (MonoTime.now() < deadline) {
                 pendingLock.lock()
@@ -301,7 +368,7 @@ public class StdioMcpTransport <: McpTransport {
                         "MCP stdio request timed out",
                         retryable: false
                     )
-                    let _ = process.terminate(force: true)
+                    abortChannel()
                     fail(error)
                 }
             }
@@ -322,7 +389,7 @@ public class StdioMcpTransport <: McpTransport {
             case McpResult.Ok(_) => ()
             case McpResult.Err(error) => removeSubscription(handle); return McpResult.Err(error)
         }
-        let deadline = MonoTime.now() + Duration.millisecond * config.framing.requestTimeoutMillis
+        let deadline = MonoTime.now() + Duration.millisecond * framing.requestTimeoutMillis
         while (!handle.ready() && MonoTime.now() < deadline) { sleep(Duration.millisecond * 5) }
         if (!handle.ready()) {
             let _ = handle.close(); removeSubscription(handle)
@@ -365,50 +432,108 @@ public class StdioMcpTransport <: McpTransport {
     }
 
     public func close(): McpResult<Unit> {
-        if (state() == McpLifecycleState.Stopped) { return McpResult.Ok(()) }
-        if (state() != McpLifecycleState.Stopping) { let _ = lifecycle.transition(McpLifecycleState.Stopping) }
-        let _ = process.terminate()
-        let deadline = MonoTime.now() + Duration.millisecond * config.framing.gracefulShutdownMillis
-        while (process.tryExit().isNone() && MonoTime.now() < deadline) {
-            sleep(Duration.millisecond * 5)
+        closeLock.lock()
+        try {
+            if (state() == McpLifecycleState.Stopped) { return McpResult.Ok(()) }
+            if (!cleanupStarted || (cleanupDone.load() && cleanupFailed.load())) {
+                cleanupStarted = true
+                cleanupDone.store(false)
+                cleanupFailed.store(false)
+                // Refuse admission synchronously, independently of the blocked
+                // writer or an injected stop/release implementation.
+                failAll(McpError(McpErrorKind.Transport, "mcp.stdio_closed", "MCP stdio channel closed"))
+                if (state() != McpLifecycleState.Stopping) { let _ = lifecycle.transition(McpLifecycleState.Stopping) }
+                try { cleanupFuture = Some(spawn { cleanupChannel() }) }
+                catch (_: Exception) {
+                    cleanupFailed.store(true)
+                    cleanupDone.store(true)
+                    return mcpFailure<Unit>(McpErrorKind.Transport, "mcp.stdio_close_failed", "MCP stdio cleanup could not be scheduled; ownership is retained")
+                }
+            }
+        } finally { closeLock.unlock() }
+        let deadline = MonoTime.now() + Duration.millisecond * 2000
+        // Future.tryGet itself may wait on a native task completion lock.
+        while (!cleanupDone.load() && MonoTime.now() < deadline) { sleep(Duration.millisecond) }
+        closeLock.lock()
+        try {
+            // Another caller may have started a retry after the preceding
+            // attempt failed. Snapshot completion and its outcome together.
+            if (!cleanupDone.load()) {
+                return mcpFailure<Unit>(McpErrorKind.Transport, "mcp.stdio_close_pending", "MCP stdio cleanup remains owned and pending")
+            }
+            if (cleanupFailed.load()) {
+                return mcpFailure<Unit>(McpErrorKind.Transport, "mcp.stdio_close_failed", "MCP stdio cleanup did not complete without errors")
+            }
+            if (state() != McpLifecycleState.Stopped) {
+                return mcpFailure<Unit>(McpErrorKind.Transport, "mcp.stdio_close_pending", "MCP stdio cleanup has not acknowledged release")
+            }
+            McpResult.Ok(())
+        } finally { closeLock.unlock() }
+    }
+
+    private func cleanupChannel(): Unit {
+        var failed = false
+        var released = false
+        var joined = false
+        try {
+            try { channel.stop(framing.gracefulShutdownMillis) }
+            catch (_: Exception) { failed = true; abortChannel() }
+            // close must settle the underlying streams before we can join
+            // readers. A failed release retains the object and can be retried.
+            try { channel.close(); released = true }
+            catch (_: Exception) { failed = true }
+            if (!released) { return }
+            // get() returning a task exception still joins that finished task.
+            // Report the first error, but do not retain an already released
+            // process forever because its notification consumer threw.
+            match (stdoutDrain) { case Some(value) => try { value.get() } catch (_: Exception) { failed = true }; case None => () }
+            try { stderrDrain.get() } catch (_: Exception) { failed = true }
+            joined = true
+            let _ = lifecycle.transition(McpLifecycleState.Stopped)
+        } finally {
+            cleanupFailed.store(failed || !released || !joined)
+            cleanupDone.store(true)
         }
-        if (process.tryExit().isNone()) { let _ = process.terminate(force: true) }
-        let _ = process.wait()
-        match (stdoutDrain) { case Some(value) => try { value.get() } catch (_: Exception) {}; case None => () }
-        try { stderrDrain.get() } catch (_: Exception) {}
-        let _ = process.close()
-        let _ = lifecycle.transition(McpLifecycleState.Stopped)
-        McpResult.Ok(())
+    }
+
+    // Abort must bypass the writer lock: the write may be blocked on a full pipe.
+    private func abortChannel(): Unit {
+        try { channel.abort() } catch (_: Exception) {}
     }
 
     private func write(envelope: JsonRpcEnvelope): McpResult<Unit> {
+        writeJson(encodeJsonRpc(envelope))
+    }
+
+    private func writeJson(rpcJson: String): McpResult<Unit> {
         writerLock.lock()
         try {
-            let frame = encodeJsonRpc(envelope) + "\n"
-            if (unsafe { frame.rawData().size } > config.framing.maxFrameBytes + 1) {
+            let frame = rpcJson + "\n"
+            if (unsafe { frame.rawData().size } > framing.maxFrameBytes + 1) {
                 return mcpFailure<Unit>(McpErrorKind.Protocol, "mcp.frame_too_large", "MCP stdio frame exceeds configured limit")
             }
             try {
-                process.writeStdin(frame.toArray())
-                process.flushInput()
+                channel.write(frame.toArray())
+                channel.flush()
                 McpResult.Ok(())
-            } catch (error: ProcessError) {
-                fail(McpError(McpErrorKind.Transport, "mcp.stdio_write_failed", error.message))
+            } catch (_: Exception) {
+                fail(McpError(McpErrorKind.Transport, "mcp.stdio_write_failed", "MCP stdio channel write failed"))
             }
         } finally { writerLock.unlock() }
     }
 
     private func readPump(): Unit {
+        let input = McpStdioLineReader(channel.stdout, framing.maxFrameBytes)
         while (state() == McpLifecycleState.Ready) {
             let line = try {
-                match (readLineBounded(process.stdout, config.framing.maxFrameBytes, allowPartialAtEof: true)) {
+                match (input.readLine()) {
                     case Some(value) => value
                     case None => failAll(McpError(McpErrorKind.Transport, "mcp.stdio_eof", "MCP stdio server closed")); return
                 }
             } catch (error: Exception) {
-                failAll(McpError(McpErrorKind.Transport, "mcp.stdio_read_failed", error.message)); return
+                failAll(McpError(McpErrorKind.Transport, "mcp.stdio_read_failed", "MCP stdio channel read failed")); return
             }
-            let envelope = match (decodeJsonRpc(line, maxBytes: config.framing.maxFrameBytes)) {
+            let envelope = match (decodeJsonRpc(line, maxBytes: framing.maxFrameBytes)) {
                 case JsonRpcResult.Ok(value) => value
                 case JsonRpcResult.Err(error) => failAll(McpError(McpErrorKind.Protocol, error.code, error.message)); return
             }
@@ -506,19 +631,33 @@ public class StdioMcpTransport <: McpTransport {
 
     private func fail<T>(error: McpError): McpResult<T> {
         if (state() == McpLifecycleState.Ready) { let _ = lifecycle.transition(McpLifecycleState.Failed) }
-        let _ = process.terminate(force: true)
+        abortChannel()
         McpResult.Err(error)
+    }
+}
+
+// Attaches an already opened, caller-authorized byte channel. No process is started.
+// Ownership transfers to the transport, including cleanup after attach failure.
+public func attachStdioMcpTransport(
+    channel: McpStdioChannel,
+    framing!: McpFramingConfig = McpFramingConfig()
+): McpResult<StdioMcpTransport> {
+    try { McpResult.Ok(StdioMcpTransport(framing, channel)) }
+    catch (_: Exception) {
+        try { channel.abort() } catch (_: Exception) {}
+        try { channel.close() } catch (_: Exception) {}
+        mcpFailure<StdioMcpTransport>(McpErrorKind.Transport, "mcp.stdio_start_failed", "MCP stdio channel could not be attached")
     }
 }
 
 public func openStdioMcpTransport(config: McpStdioConfig): McpResult<StdioMcpTransport> {
     try {
-        McpResult.Ok(StdioMcpTransport(config, startProcess(ProcessCommand(
+        attachStdioMcpTransport(ManagedProcessMcpStdioChannel(startProcess(ProcessCommand(
             config.command,
             arguments: config.arguments,
             workingDirectory: config.cwd,
             environment: config.environment
-        ))))
+        ))), framing: config.framing)
     } catch (error: ProcessError) {
         mcpFailure<StdioMcpTransport>(McpErrorKind.Transport, "mcp.stdio_start_failed", error.message)
     }

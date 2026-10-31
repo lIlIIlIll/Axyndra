@@ -1,0 +1,10 @@
+{
+  "id": "program",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/program-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": ["tool.readonly"],
+  "contributions": [{"kind": "tool", "name": "run", "input_attachment": {"field": "code", "max_bytes": 262144}}]
+}

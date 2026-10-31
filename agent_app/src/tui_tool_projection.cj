@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_tui.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 
@@ -62,11 +61,11 @@ private func projectShellCompletion(output: AgentValue): TuiToolCompletionPayloa
     let rawStderr = if (output.unifiedKind == ValueKind.Object) { valueText(output, "stderr") } else { "" }
     let stdout = boundedTerminalPreview(rawStdout)
     let stderr = boundedTerminalPreview(rawStderr)
-    let exitCode = valueText(output, "exit_code")
+    let exitCode = copyTuiDisplayText(valueText(output, "exit_code"))
     let stdoutBytes = valueInteger(output, "stdout_bytes", rawStdout.size)
     let stderrBytes = valueInteger(output, "stderr_bytes", rawStderr.size)
     let sourceTruncated = valueBoolean(output, "truncated")
-    let artifactId = firstArtifactId(output)
+    let artifactId = copyTuiDisplayText(firstArtifactId(output))
     let previewTruncated = stdout.truncated || stderr.truncated
     let detail = objectValue([
         ValueField("stdout", textValue(stdout.text)),
@@ -91,7 +90,7 @@ private func projectShellCompletion(output: AgentValue): TuiToolCompletionPayloa
     )
 }
 
-private class TuiProjectionBudget {
+class TuiProjectionBudget {
     var remaining: Int64
     var truncated = false
 
@@ -104,7 +103,7 @@ private class TuiProjectionBudget {
     }
 }
 
-private func projectTuiValue(
+func projectTuiValue(
     value: AgentValue,
     budget: TuiProjectionBudget,
     depth: Int64
@@ -116,7 +115,7 @@ private func projectTuiValue(
     match (value.unifiedKind) {
         case ValueKind.Null => nullValue()
         case ValueKind.Boolean => boolValue(value.asBool())
-        case ValueKind.Number => numberValue(value.asNumberText())
+        case ValueKind.Number => numberValue(copyTuiDisplayText(value.asNumberText()))
         case ValueKind.Text =>
             let maximum = max(1, min(2048, budget.remaining))
             let preview = boundedTerminalPreview(value.text, maximumBytes: maximum,
@@ -126,31 +125,31 @@ private func projectTuiValue(
             textValue(preview.text)
         case ValueKind.List =>
             let items = ArrayList<AgentValue>()
-            for (index in 0..value.items.size) {
+            for (index in 0..value.asArray().size()) {
                 if (index >= 24 || budget.remaining <= 16) {
                     budget.truncated = true
                     break
                 }
                 budget.consume(4)
-                items.add(projectTuiValue(value.items[index], budget, depth + 1))
+                items.add(projectTuiValue(value.asArray().get(index).getOrThrow(), budget, depth + 1))
             }
             listValue(items.toArray())
         case ValueKind.Object =>
             let fields = ArrayList<ValueField>()
-            for (index in 0..value.fields.size) {
-                let field = value.fields[index]
-                if (index >= 24 || budget.remaining <= field.name.size + 8) {
+            for (index in 0..value.asObject().size()) {
+                let name = value.asObject().nameAt(index)
+                if (index >= 24 || budget.remaining <= name.size + 8) {
                     budget.truncated = true
                     break
                 }
-                budget.consume(field.name.size + 8)
-                fields.add(ValueField(field.name, projectTuiValue(field.value, budget, depth + 1)))
+                budget.consume(name.size + 8)
+                fields.add(ValueField(copyTuiDisplayText(name), projectTuiValue(value.asObject().valueAt(index), budget, depth + 1)))
             }
             objectValue(fields.toArray())
     }
 }
 
-private func valueText(value: AgentValue, name: String): String {
+func valueText(value: AgentValue, name: String): String {
     match (value.field(name)) {
         case Some(field) => match (field.unifiedKind) {
             case ValueKind.Text => field.text
@@ -172,7 +171,7 @@ private func valueInteger(value: AgentValue, name: String, fallback: Int64): Int
     }
 }
 
-private func valueBoolean(value: AgentValue, name: String): Bool {
+func valueBoolean(value: AgentValue, name: String): Bool {
     match (value.field(name)) {
         case Some(field) => match (field.unifiedKind) {
             case ValueKind.Boolean => field.asBool()
@@ -183,14 +182,14 @@ private func valueBoolean(value: AgentValue, name: String): Bool {
     }
 }
 
-private func firstArtifactId(output: AgentValue): String {
+func firstArtifactId(output: AgentValue): String {
     let direct = valueText(output, "artifact")
     if (direct != "") { return direct }
     let directId = valueText(output, "artifact_id")
     if (directId != "") { return directId }
     match (output.field("artifacts")) {
-        case Some(artifacts) => if (artifacts.unifiedKind == ValueKind.List && !artifacts.items.isEmpty()) {
-            let first = artifacts.items[0]
+        case Some(artifacts) => if (artifacts.unifiedKind == ValueKind.List && artifacts.asArray().size() != 0) {
+            let first = artifacts.asArray().get(0).getOrThrow()
             let id = valueText(first, "id")
             if (id != "") { id } else { valueText(first, "path") }
         } else {

@@ -14,6 +14,7 @@ class AcpProductConfigTests {
             settingsRoot: "/settings",
             stateRoot: "/state",
             workspaceRoot: "/original-workspace",
+            distributionRoot: "/distribution",
             fixture: true,
             approvalMode: ApprovalMode.Yolo,
             approvalRoutingModeOverride: Some(ApprovalRoutingMode.Trusted),
@@ -27,6 +28,7 @@ class AcpProductConfigTests {
         @Expect(session.settingsRoot, base.settingsRoot)
         @Expect(session.stateRoot, base.stateRoot)
         @Expect(session.workspaceRoot, "/acp-workspace")
+        @Expect(session.distributionRoot, base.distributionRoot)
         @Expect(session.fixture, base.fixture)
         @Expect(session.approvalMode == ApprovalMode.Yolo)
         @Expect(session.approvalRoutingModeOverride == Some(ApprovalRoutingMode.Trusted))

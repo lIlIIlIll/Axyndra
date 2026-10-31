@@ -4,6 +4,7 @@ import std.collection.*
 import std.env.*
 import std.io.*
 import std.time.*
+import std.sync.*
 
 const STDIN_FILENO: Int32 = 0
 const STDOUT_FILENO: Int32 = 1
@@ -85,10 +86,24 @@ foreign func SetConsoleMode(handle: CPointer<Unit>, mode: UInt32): Int32
 foreign func GetConsoleScreenBufferInfo(handle: CPointer<Unit>, info: CPointer<Unit>): Int32
 
 @FastNative
+@When[os == "Windows"]
 foreign func signal(signum: Int32, handler: CFunc<(Int32) -> Unit>): CFunc<(Int32) -> Unit>
 
 @FastNative
+@When[os == "Windows"]
 foreign func _exit(status: Int32): Unit
+
+@FastNative
+@When[os != "Windows"]
+foreign func cjtui_terminal_begin(modes: Int32): Int32
+
+@FastNative
+@When[os != "Windows"]
+foreign func cjtui_terminal_modes(modes: Int32): Unit
+
+@FastNative
+@When[os != "Windows"]
+foreign func cjtui_terminal_end(): Int32
 
 @When[os == "Windows"]
 let STD_INPUT_HANDLE: Int32 = -10
@@ -283,6 +298,9 @@ public class Terminal {
     private var back: ?Buffer = None
     private var previousMedia: Array<MediaPlacement> = []
     private var cursorVisible: Bool = false
+    private let frameReferencesLock = Mutex()
+    private var frameReferenceBorrows: Int64 = 0
+    private var internalFrameReferencesClosed = false
 
     public init(
         backend: Backend,
@@ -300,6 +318,16 @@ public class Terminal {
     }
 
     public func draw(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects): RenderMetrics {
+        frameReferencesLock.lock()
+        if (internalFrameReferencesClosed) { frameReferencesLock.unlock(); throw Exception("display.frame_references_retired") }
+        frameReferenceBorrows++; frameReferencesLock.unlock()
+        try { drawBorrowedFrame(render, dirtyRects: dirtyRects) }
+        finally { frameReferencesLock.lock(); try { frameReferenceBorrows-- } finally { frameReferencesLock.unlock() } }
+    }
+    private func drawBorrowedFrame(render: (Frame) -> Unit, dirtyRects!: ?DirtyRects): RenderMetrics {
+        // Actual Frame, Buffer, DirtyCellSnapshot, StringBuilder/rawPrefix,
+        // diff plans, output callbacks and media locals live only in this
+        // helper. The outer borrow drops after this helper frame has ended.
         let area = backend.size()
         if (!frontMatches(area)) {
             front = None
@@ -494,6 +522,23 @@ public class Terminal {
         // this bit so the next draw can emit a required hide/show sequence.
     }
 
+    public func retainedFrameCopiesInvoice(): Int64 {
+        var total: Int64 = 0
+        match (front) { case Some(value) => total = retainedDisplayAdd(total, retainedBufferCellInvoice(value)); case None => () }
+        match (back) { case Some(value) => total = retainedDisplayAdd(total, retainedBufferCellInvoice(value)); case None => () }
+        total
+    }
+    func tryRetireInternalFrameReferences(): Bool {
+        frameReferencesLock.lock()
+        try {
+            if (frameReferenceBorrows != 0) { return false }
+            internalFrameReferencesClosed = true
+            // No old Buffer/media local is introduced during the clear. All
+            // actual draw helper frames already ended before this branch.
+            front = None; back = None; previousMedia = []
+            true
+        } finally { frameReferencesLock.unlock() }
+    }
     private func frontMatches(area: Rect): Bool {
         match (front) {
             case Some(buffer) => buffer.area == area
@@ -745,6 +790,7 @@ public class TerminalSession {
     private var focusActive: Bool = false
     private var pasteActive: Bool = false
     private var keyboardActive: Bool = false
+    private var signalGuardActive: Bool = false
     private var fullscreenRequested: Bool = false
     private var fullscreenAlternateOwned: Bool = false
     private var fullscreenMouseOwned: Bool = false
@@ -791,6 +837,14 @@ public class TerminalSession {
     public func enterFullscreen(): Unit {
         fullscreenRequested = true
         if (!active) { return }
+        TerminalSignalGuard.updateModes(
+            alternateScreen: true,
+            mouse: true,
+            mouseMove: mouseMoveActive,
+            focusEvents: focusActive,
+            bracketedPaste: pasteActive,
+            hideCursor: cursorHidden
+        )
         if (!alternateActive) {
             backend.enterAlternateScreen()
             alternateActive = true
@@ -801,14 +855,6 @@ public class TerminalSession {
             mouseActive = true
             fullscreenMouseOwned = true
         }
-        TerminalSignalGuard.updateModes(
-            alternateScreen: alternateActive,
-            mouse: mouseActive,
-            mouseMove: mouseMoveActive,
-            focusEvents: focusActive,
-            bracketedPaste: pasteActive,
-            hideCursor: cursorHidden
-        )
     }
 
     public func leaveFullscreen(): Unit {
@@ -838,6 +884,14 @@ public class TerminalSession {
     public func setPrimaryMouse(enabled: Bool): Unit {
         if (!active || fullscreenRequested) { return }
         if (enabled && !mouseActive) {
+            TerminalSignalGuard.updateModes(
+                alternateScreen: alternateActive,
+                mouse: true,
+                mouseMove: mouseMoveActive,
+                focusEvents: focusActive,
+                bracketedPaste: pasteActive,
+                hideCursor: cursorHidden
+            )
             backend.enableMouse()
             mouseActive = true
         } else if (!enabled && mouseActive && !mouse) {
@@ -857,6 +911,19 @@ public class TerminalSession {
     public func start(): Bool {
         if (active) { return true }
         try {
+            // Snapshot cooked termios before the driver changes it. Install
+            // native-only signal handling before publishing any terminal modes.
+            TerminalSignalGuard.activate(
+                raw: rawMode,
+                alternateScreen: alternateScreen,
+                mouse: mouse,
+                mouseMove: mouseMove,
+                focusEvents: focusEvents,
+                bracketedPaste: bracketedPaste,
+                hideCursor: hideCursor,
+                keyboard: keyboard
+            )
+            signalGuardActive = true
             if (alternateScreen) { backend.enterAlternateScreen(); alternateActive = true }
             if (hideCursor) { backend.hideCursor(); cursorHidden = true }
             if (mouse) { backend.enableMouse(); mouseActive = true }
@@ -875,16 +942,6 @@ public class TerminalSession {
             enableKeyboardProtocol()
             keyboardActive = true
             active = true
-            TerminalSignalGuard.activate(
-                raw: rawActive,
-                alternateScreen: alternateActive,
-                mouse: mouseActive,
-                mouseMove: mouseMoveActive,
-                focusEvents: focusActive,
-                bracketedPaste: pasteActive,
-                hideCursor: cursorHidden,
-                keyboard: keyboard
-            )
             atExit { this.stop() }
             rawOk
         } catch (setup: Exception) {
@@ -958,7 +1015,12 @@ public class TerminalSession {
         fullscreenMouseOwned = false
         try { backend.flush() } catch (error: Exception) { failures = appendCleanupFailure(failures, error) }
         active = false
-        TerminalSignalGuard.deactivate()
+        if (signalGuardActive) {
+            try {
+                TerminalSignalGuard.deactivate()
+                signalGuardActive = false
+            } catch (error: Exception) { failures = appendCleanupFailure(failures, error) }
+        }
         failures
     }
 
@@ -1007,19 +1069,10 @@ func appendCleanupFailure(current: String, error: Exception): String {
     }
 }
 
+@When[os == "Windows"]
 @C
 func tuiTerminalSignalHandler(signum: Int32): Unit {
     TerminalSignalGuard.restoreFromSignal(signum)
-}
-
-@When[os == "Linux"]
-func restoreNativeRawMode(): Unit {
-    TerminalMode.restore()
-}
-
-@When[os == "macOS"]
-func restoreNativeRawMode(): Unit {
-    MacOSTerminalMode.restore()
 }
 
 @When[os == "Windows"]
@@ -1027,20 +1080,78 @@ func restoreNativeRawMode(): Unit {
     WindowsConsoleMode.restore()
 }
 
-@When[os != "Windows"]
-func writeAnsiToStdout(text: String): Unit {
-    unsafe {
-        let bytes = text.rawData()
-        let handle = acquireArrayRawData(bytes)
-        _ = write(STDOUT_FILENO, CPointer<Unit>(handle.pointer), UIntNative(bytes.size))
-        releaseArrayRawData(handle)
-    }
-}
-
 @When[os == "Windows"]
 func writeAnsiToStdout(text: String): Unit {
     if (text.isEmpty()) { return }
 }
+
+// Only ordinary managed calls publish scalar mode bits. The native handler
+// owns its termios copy and never calls back into this class.
+@When[os != "Windows"]
+class TerminalSignalGuard {
+    private static var fixedModes: Int32 = 0
+
+    static func activate(
+        raw!: Bool,
+        alternateScreen!: Bool,
+        mouse!: Bool,
+        mouseMove!: Bool,
+        focusEvents!: Bool,
+        bracketedPaste!: Bool,
+        hideCursor!: Bool,
+        keyboard!: KeyboardOptions
+    ): Unit {
+        var nextFixedModes: Int32 = if (raw) { 256 } else { 0 }
+        match (keyboard.mode) {
+            case KeyboardProtocolMode.Basic => ()
+            case KeyboardProtocolMode.ModifyOtherKeys => nextFixedModes = nextFixedModes | 64
+            case KeyboardProtocolMode.Kitty => nextFixedModes = nextFixedModes | 128
+            case KeyboardProtocolMode.Auto =>
+                match (keyboard.probe) {
+                    case TerminalProbeMode.Active => nextFixedModes = nextFixedModes | 192
+                    case _ => ()
+                }
+        }
+        let modes = modeBits(alternateScreen, mouse, mouseMove, focusEvents, bracketedPaste, hideCursor, nextFixedModes)
+        if (unsafe { cjtui_terminal_begin(modes) } != 0) {
+            throw Exception("native terminal signal guard installation failed")
+        }
+        fixedModes = nextFixedModes
+    }
+
+    static func updateModes(
+        alternateScreen!: Bool,
+        mouse!: Bool,
+        mouseMove!: Bool,
+        focusEvents!: Bool,
+        bracketedPaste!: Bool,
+        hideCursor!: Bool
+    ): Unit {
+        unsafe { cjtui_terminal_modes(modeBits(alternateScreen, mouse, mouseMove, focusEvents, bracketedPaste, hideCursor, fixedModes)) }
+    }
+
+    static func deactivate(): Unit {
+        if (unsafe { cjtui_terminal_end() } != 0) {
+            throw Exception("native terminal signal handler restoration failed")
+        }
+        fixedModes = 0
+    }
+
+    private static func modeBits(alternate: Bool, mouse: Bool, move: Bool, focus: Bool, paste: Bool, cursor: Bool, fixed: Int32): Int32 {
+        var modes = fixed
+        if (alternate) { modes = modes | 1 }
+        if (mouse) { modes = modes | 2 }
+        if (move) { modes = modes | 4 }
+        if (focus) { modes = modes | 8 }
+        if (paste) { modes = modes | 16 }
+        if (cursor) { modes = modes | 32 }
+        modes
+    }
+}
+
+// Windows retains its existing console fallback; the POSIX archive is not
+// a Windows implementation.
+@When[os == "Windows"]
 
 class TerminalSignalGuard {
     private static var installed: Bool = false

@@ -5,14 +5,15 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
+import logical_json_payload.LogicalJsonCopiedDisplayAllocation as ImportedLogicalJsonCopiedDisplayAllocation
 import agent_core.*
+import agent_runtime.*
 import agent_app_protocol.*
 import agent_cli.*
 import agent_product.*
 import agent_rpc.*
 import agent_embed.*
 import agent_tui.*
-import model_adapters.*
 import process4cj.*
 import std.collection.*
 import std.convert.*
@@ -26,11 +27,8 @@ import tool_runtime.*
 
 main(): Int64 {
     let rawArguments = getCommandLine()
-    if (isProductToolProgramWorker(rawArguments)) {
-        return runProductToolProgramWorker(rawArguments)
-    }
     if (isProductProcessBrokerWorker(rawArguments)) {
-        return runProductProcessBrokerWorker(rawArguments)
+        return runProductProcessBrokerWorker(rawArguments, AppProductOwnerFrontend180())
     }
     if (isProductProcessBrokerClient(rawArguments)) {
         return runProductProcessBrokerClient(rawArguments)
@@ -38,6 +36,30 @@ main(): Int64 {
     tuiStartupStage("runtime_initialization_completed")
     let cliCommandIndex = directCliCommandIndex(rawArguments)
     let cliCommand = directCliCommand(rawArguments)
+    match (reservedCliCommandRegistry().resolve(cliCommand)) {
+        case Some(spec) => if (spec.replacement != "") {
+            printError(AgentError(AgentErrorKind.Configuration, "cli.command_moved",
+                spec.replacement, fields: [ErrorField("command", cliCommand)]))
+            return 2
+        }
+        case None => ()
+    }
+    if (cliCommand == "tools") {
+        let toolArguments = cliCommandTail(rawArguments, cliCommandIndex)
+        if (toolArguments.isEmpty() || (toolArguments.size == 1 &&
+            (toolArguments[0] == "--help" || toolArguments[0] == "-h"))) {
+            printToolsHelp()
+            return 0
+        }
+    }
+    if (cliCommand == "plugin") {
+        let pluginArguments = cliCommandTail(rawArguments, cliCommandIndex)
+        if (pluginArguments.isEmpty() || (pluginArguments.size == 1 &&
+            (pluginArguments[0] == "--help" || pluginArguments[0] == "-h"))) {
+            printPluginHelp()
+            return 0
+        }
+    }
     if ((rawArguments.size > 1 && rawArguments[1] == "setup") || cliCommand == "setup") {
         return runSetup()
     }
@@ -99,6 +121,7 @@ main(): Int64 {
             "."
         ),
         shellNetworkModeOverride: shellNetworkModeOverride,
+        distributionRoot: bundledProductDistributionRoot(),
         fixture: fixture,
         approvalMode: approvalMode,
         approvalRoutingModeOverride: approvalRoutingMode,
@@ -122,6 +145,7 @@ main(): Int64 {
                 settingsRoot: productConfig.settingsRoot,
                 stateRoot: localStateRoot,
                 workspaceRoot: productConfig.workspaceRoot,
+                distributionRoot: productConfig.distributionRoot,
                 fixture: productConfig.fixture,
                 unsafeDirectLaunchForTests: productConfig.unsafeDirectLaunchForTests,
                 approvalMode: productConfig.approvalMode,
@@ -130,95 +154,33 @@ main(): Int64 {
                 modelOverride: productConfig.modelOverride,
                 asyncEnabled: productConfig.asyncEnabled,
                 wallTimeoutMillis: productConfig.wallTimeoutMillis,
+                modelAttemptRecovery: productConfig.modelAttemptRecovery,
+                modelStreamFaultProfile: productConfig.modelStreamFaultProfile,
+                extensionSignatureVerifier: productConfig.extensionSignatureVerifier,
                 compactionOverride: productConfig.compactionOverride,
                 startupMode: ProductStartupMode.LocalMaintenance
-            )
+            ),
+            rawArguments180: rawArguments
         )
     }
     if (cliCommand == "gallery") {
         return runGalleryCli(cliCommandTail(rawArguments, cliCommandIndex))
     }
-    let product = match (openProduct(config: productConfig)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) =>
-            printError(error)
-            return 1
-    }
-    tuiStartupStage("configuration_loading_completed")
-    if ((rawArguments.size > 1 && rawArguments[1] == "models") || cliCommand == "models") {
-        return runModelsCli(
-            product.applicationSession(),
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if (cliCommand == "reviewer-dry-run") {
-        return runReviewerDryRun(product)
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "__complete") || cliCommand == "__complete") {
-        return runDynamicCompletionCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "token") || cliCommand == "token") {
-        return runTokenCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if (cliCommand == "shell") {
-        return runShellCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if (cliCommand == "mcp-server") {
-        return runMcpServerCli(
-            product,
-            cliCommandTail(rawArguments, cliCommandIndex)
-        )
-    }
-    if ((rawArguments.size > 1 && rawArguments[1] == "launch") || cliCommand == "launch") {
+    if ((rawArguments.size > 1 && rawArguments[1] == "launch") || cliCommand == "launch" ||
+        (rawArguments.size > 1 && rawArguments[1] == "acp") || cliCommand == "acp") {
         arguments = stripCliCommand(arguments)
-    } else if ((rawArguments.size > 1 && rawArguments[1] == "acp") || cliCommand == "acp") {
-        arguments = stripCliCommand(arguments)
-    } else if (cliCommand != "") {
-        printError(
-            unavailableCliCommand(
-                cliCommand,
-                cliCommandTail(rawArguments, cliCommandIndex)
-            )
-        )
+    }
+    let direct = cliCommand == "models" || cliCommand == "reviewer-dry-run" || cliCommand == "__complete" ||
+        cliCommand == "token" || cliCommand == "shell"
+    if (!direct && cliCommand != "" && cliCommand != "launch" && cliCommand != "acp") {
+        printError(unavailableCliCommand(cliCommand, cliCommandTail(rawArguments, cliCommandIndex)))
         return 1
     }
-    if (mode == "rpc" || mode == "rpc-ui") {
-        return serveRpc(product, false)
-    }
-    if (mode == "acp") {
-        return serveAcp(product, productConfig)
-    }
-    if (mode == "json") {
-        var prompt = joinArguments(arguments, 1)
-        if (prompt == "") {
-            prompt = readStdinPrompt()
-        }
-        return runJsonStream(product, prompt)
-    }
-    if (hasArgument(rawArguments, "--print") || hasArgument(rawArguments, "-p") || mode == "text") {
-        var prompt = joinArguments(arguments, 1)
-        if (prompt == "") {
-            prompt = readStdinPrompt()
-        }
-        if (prompt == "") {
-            return 0
-        }
-        return runPrint(product, prompt)
-    }
-    runAgentTui(
-        ProductTuiBackend(product),
-        title: "axyndra",
-        initialPrompt: joinArguments(arguments, 1)
-    )
+    let frontendRoot = reserveProductControlMetadata113(65536)
+    let status = runNativeOwnerFrontend180(productConfig, rawArguments, arguments, cliCommand,
+        cliCommandIndex, mode, direct, frontendRoot)
+    frontendRoot.close()
+    status
 }
 
 func localMaintenanceCommand(
@@ -233,8 +195,8 @@ func localMaintenanceCommand(
         ""
     }
     if (candidate == "read" || candidate == "config" || candidate == "grep" ||
-        candidate == "agents" || candidate == "worktree" || candidate == "search" ||
-        candidate == "gc" || candidate == "usage" || candidate == "stats" ||
+        candidate == "agents" || candidate == "worktree" ||
+        candidate == "tools" || candidate == "plugin" || candidate == "gc" || candidate == "usage" || candidate == "stats" ||
         candidate == "grievances" || candidate == "ssh") {
         candidate
     } else {
@@ -245,36 +207,44 @@ func localMaintenanceCommand(
 func runLocalMaintenanceCommand(
     command: String,
     arguments: Array<String>,
-    config: ProductConfig
+    config: ProductConfig,
+    rawArguments180!: Array<String> = []
 ): Int64 {
-    let product = match (openProduct(config: config)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) =>
-            printError(error)
-            return 1
+    let paid = reserveProductControlMetadata113(65536)
+    let request = ownerFrontendRequest180("cli", rawArguments180, command, arguments)
+    let status = runOwnerFrontendClient180(config, request, paid)
+    paid.close()
+    status
+}
+
+func runNativeOwnerFrontend180(config: ProductConfig, rawArguments: Array<String>, arguments: Array<String>,
+    command: String, commandIndex: Int64, mode: String, direct: Bool,
+    frontendRoot: LogicalJsonOwnerReservation): Int64 {
+    let frontend = if (direct) { "cli" } else if (mode == "rpc" || mode == "rpc-ui") { "rpc" }
+        else if (mode == "acp") { "acp" } else if (mode == "json") { "json" }
+        else if (mode == "text" || hasArgument(rawArguments, "--print") || hasArgument(rawArguments, "-p")) { "text" }
+        else { "tui" }
+    var bytes: Int64 = 65536
+    for (argument in rawArguments) { bytes += argument.size * 16 + 4096 }
+    frontendRoot.ensureRetainedPeak(bytes)
+    let request = ownerFrontendRequest180(frontend, rawArguments, command, cliCommandTail(rawArguments, commandIndex))
+    if (frontend == "tui") {
+        let allocate = { extent: Int64 =>
+            let paid = frontendRoot.deriveRetainedLease()
+            try { paid.ensureRetainedPeak(extent); paid }
+            catch (error: Exception) { paid.close(); throw error }
+        }
+        return runProductOwnerClientFrontend180(config, request,
+            { peer => createOwnerProductTuiClientFrontend180(peer, joinArguments(arguments, 1)) },
+            allocate: allocate)
     }
-    tuiStartupStage("configuration_loading_completed")
-    let session = product.applicationSession()
-    let status = match (command) {
-        case "read" => runReadCli(session, arguments)
-        case "config" => runConfigCli(session, arguments)
-        case "grep" => runGrepCli(session, arguments)
-        case "agents" => runAgentsCli(session, arguments)
-        case "worktree" => runWorktreeCli(session, arguments)
-        case "search" => runSearchCli(session, arguments)
-        case "gc" => runGcCli(session, arguments)
-        case "usage" => runUsageCli(session, arguments)
-        case "stats" => runStatsCli(session, arguments)
-        case "grievances" => runGrievancesCli(session, arguments)
-        case "ssh" => runSshCli(session, arguments)
-        case _ => 2
+    if (frontend == "text" || frontend == "json") {
+        var prompt = joinArguments(arguments, 1)
+        if (prompt == "") { prompt = readStdinPrompt() }
+        if (frontend == "text" && prompt == "") { return 0 }
+        return runOwnerFrontendClient180(config, request, frontendRoot, prompt: Some(prompt))
     }
-    match (product.close()) {
-        case Result.Ok(_) => status
-        case Result.Err(error) =>
-            printError(error)
-            1
-    }
+    runOwnerFrontendClient180(config, request, frontendRoot)
 }
 
 func unavailableCliCommand(
@@ -377,9 +347,9 @@ func cliCommandTail(
 func runModelsCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra models [ls|find <substring>|refresh|<provider>] " + "[--json]")
+        io.println("axyndra models [ls|find <substring>|refresh|<provider>] " + "[--json]")
         return 0
     }
     let json = hasArgument(arguments, "--json")
@@ -402,11 +372,11 @@ func runModelsCli(
         }
     }
     if (action == "find" && pattern.trimAscii() == "") {
-        println("`axyndra models find` requires a search substring, " + "e.g. `axyndra models find deepseek`")
+        io.println("`axyndra models find` requires a search substring, " + "e.g. `axyndra models find deepseek`")
         return 1
     }
     if (action == "refresh") {
-        println("Error: model catalog refresh requires the OMP-compatible " + "catalog service, which is not installed.")
+        io.println("Error: model catalog refresh requires the OMP-compatible " + "catalog service, which is not installed.")
         return 1
     }
     let models = filteredModels(session, pattern, action == "find")
@@ -415,15 +385,15 @@ func runModelsCli(
         for (model in models) {
             values.add(cliModelValue(session, model))
         }
-        println(encodeAgentValue(objectValue([ValueField("models", listValue(values.toArray()))])))
+        io.println(encodeAgentValue(objectValue([ValueField("models", listValue(values.toArray()))])))
         return 0
     }
     if (session.models().isEmpty()) {
-        println("No models available. Set API keys in environment variables.")
+        io.println("No models available. Set API keys in environment variables.")
         return 0
     }
     if (models.isEmpty()) {
-        println("No models matching \"" + pattern + "\"")
+        io.println("No models matching \"" + pattern + "\"")
         return 0
     }
     var activeProvider = ""
@@ -432,60 +402,61 @@ func runModelsCli(
         let provider = session.modelProvider(model)
         if (provider != activeProvider) {
             if (activeProvider != "") {
-                println()
+                io.println()
             }
             activeProvider = provider
             providerCount = countProviderModels(session, models, provider)
-            println(provider + " (" + providerCount.toString() + ")")
-            println("model")
+            io.println(provider + " (" + providerCount.toString() + ")")
+            io.println("model")
         }
-        println(session.rawModelId(model))
+        io.println(session.rawModelId(model))
     }
     0
 }
 
-func runReadCli(
-    session: ApplicationSession,
-    arguments: Array<String>
-): Int64 {
-    if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra read <path>")
-        return 0
+// Strip only flags already owned by the application's configuration parser.
+// The sentinel is retained, so subsequent tool-shaped words remain literal.
+func workspaceFrontendCliArguments(arguments: Array<String>): Array<String> {
+    let values=ArrayList<String>();var skipNext=false;var positionalOnly=false
+    let globals=["--approval-mode","--mode","--model","--cwd","--max-time","--model-attempt-recovery",
+        "--model-stream-idle-timeout-ms","--model-stream-fault-profile","--shell-network-mode"]
+    for(argument in arguments){
+        if(positionalOnly){values.add(argument);continue}
+        if(skipNext){skipNext=false;continue}
+        if(argument=="--"){values.add(argument);positionalOnly=true;continue}
+        if(globals.contains(argument)){skipNext=true;continue}
+        var configured=false
+        for(flag in globals where argument.startsWith(flag+"=")){configured=true}
+        if(configured || ["--fixture","--print","-p","--version","-v","--json"].contains(argument)){continue}
+        values.add(argument)
     }
-    let positional = cliPositionals(arguments, [])
-    if (positional.size != 1) {
-        println("error: path is required")
-        return 1
-    }
-    match (session.invokeLocalTool(
-        "read",
-        objectValue([ValueField("path", textValue(positional[0]))])
-    )) {
-        case Result.Err(error) =>
-            printError(error)
-            1
-        case Result.Ok(result) =>
-            let output = match (result.output.field("content")) {
-                case Some(value) => value.text
-                case None => match (result.output.field("entries")) {
-                    case Some(value) => value.text
-                    case None => encodeAgentValue(result.output)
-                }
-            }
-            print(output)
-            if (!output.endsWith("\n")) {
-                println()
-            }
-            0
-    }
+    values.toArray()
+}
+
+func runReadCli(session: ApplicationSession, arguments: Array<String>, io!: CliIo180 = consoleCliIo180): Int64 {
+    if(hasArgument(arguments,"--help") || hasArgument(arguments,"-h")){
+        io.println("axyndra read <path-or-resource> [--destination <workspace-file>] [--interactive]");return 0}
+    let toolArguments=workspaceFrontendCliArguments(arguments)
+    let input=ArrayList<ValueField>();let positional=ArrayList<String>();var destination="";var index:Int64=0;var positionalOnly=false
+    while(index<toolArguments.size){
+        if(positionalOnly){positional.add(toolArguments[index]);index++;continue}
+        if(toolArguments[index]=="--"){positionalOnly=true;index++;continue}
+        if(toolArguments[index]=="--destination"){
+            if(index+1>=toolArguments.size){io.println("error: destination is required");return 1}
+            destination=toolArguments[index+1];index+=2;continue}
+        if(toolArguments[index]!="--interactive"){positional.add(toolArguments[index])};index++}
+    if(positional.size!=1){io.println("error: one path or resource is required");return 1}
+    input.add(ValueField("path",textValue(positional[0])))
+    if(destination!=""){input.add(ValueField("destination",textValue(destination)))}
+    runSelectedWorkspaceCli(session,"read",objectValue(input.toArray()),hasArgument(arguments,"--interactive"), io: io)
 }
 
 func runConfigCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra config [list|get|set|reset|path] [key] [value] " + "[--json]")
+        io.println("axyndra config [list|get|set|reset|path] [key] [value] " + "[--json]")
         return 0
     }
     let json = hasArgument(arguments, "--json")
@@ -496,18 +467,18 @@ func runConfigCli(
         positional[0]
     }
     if (action == "path") {
-        println(session.configRoot() + "/config.yml")
+        io.println(session.configRoot() + "/config.yml")
         return 0
     }
     let settings = match (loadProductSettings(session.configRoot())) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (action == "list") {
         if (json) {
-            println(
+            io.println(
                 encodeAgentValue(
                     objectValue(
                         [
@@ -536,16 +507,16 @@ func runConfigCli(
                 )
             )
         } else {
-            println("Settings:")
-            println("  schema_version = 1")
-            println("  default_model = " + if (settings.model == "") {
+            io.println("Settings:")
+            io.println("  schema_version = 1")
+            io.println("  default_model = " + if (settings.model == "") {
                 "(not set)"
             } else {
                 settings.model
             })
-            println("  async.enabled = " + settings.asyncEnabled.toString())
-            println("  shell.network_mode = " + shellNetworkModeName(settings.shellNetworkMode))
-            println("  sandbox.ca_bundle = " + if (settings.sandboxCaBundle == "") {
+            io.println("  async.enabled = " + settings.asyncEnabled.toString())
+            io.println("  shell.network_mode = " + shellNetworkModeName(settings.shellNetworkMode))
+            io.println("  sandbox.ca_bundle = " + if (settings.sandboxCaBundle == "") {
                 "(not set)"
             } else {
                 settings.sandboxCaBundle
@@ -555,18 +526,18 @@ func runConfigCli(
     }
     if (action == "get") {
         if (positional.size < 2) {
-            println("Usage: axyndra config get <key>")
+            io.println("Usage: axyndra config get <key>")
             return 1
         }
         return printConfigValue(
             settings,
             positional[1],
             json
-        )
+        , io: io)
     }
     if (action == "set") {
         if (positional.size < 3) {
-            println("Usage: axyndra config set <key> <value>")
+            io.println("Usage: axyndra config set <key> <value>")
             return 1
         }
         let value = joinArguments(positional, 2)
@@ -574,7 +545,7 @@ func runConfigCli(
         match (positional[1]) {
             case "default_model" =>
                 if (value.trimAscii() == "") {
-                    println("default_model must not be empty")
+                    io.println("default_model must not be empty")
                     return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -584,7 +555,7 @@ func runConfigCli(
             case "async.enabled" =>
                 let parsed = parseCliBool(value)
                 if (parsed.isNone()) {
-                    println("Invalid boolean value: " + value + ". Use true/false, yes/no, on/off, or 1/0")
+                    io.println("Invalid boolean value: " + value + ". Use true/false, yes/no, on/off, or 1/0")
                     return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -595,7 +566,7 @@ func runConfigCli(
                 let parsed = match (parseShellNetworkMode(value)) {
                     case Result.Ok(mode) => mode
                     case Result.Err(error) =>
-                        println(error.message)
+                        io.println(error.message)
                         return 1
                 }
                 edits.add(ProductConfigEdit(
@@ -608,7 +579,7 @@ func runConfigCli(
                     ProductConfigScalar.Text(value.trimAscii())
                 ))
             case key =>
-                println("Unknown setting: " + key)
+                io.println("Unknown setting: " + key)
                 return 1
         }
         return saveCliSettings(
@@ -616,7 +587,7 @@ func runConfigCli(
             edits.toArray(),
             json,
             positional[1]
-        )
+        , io: io)
     }
     if (action == "reset") {
         let key = if (positional.size > 1) {
@@ -626,7 +597,7 @@ func runConfigCli(
         }
         if (key != "" && key != "default_model" && key != "async.enabled" &&
             key != "shell.network_mode" && key != "sandbox.ca_bundle") {
-            println("Unknown setting: " + key)
+            io.println("Unknown setting: " + key)
             return 1
         }
         let edits = ArrayList<ProductConfigEdit>()
@@ -659,9 +630,9 @@ func runConfigCli(
             edits.toArray(),
             json,
             key
-        )
+        , io: io)
     }
-    println("Unknown config command: " + action + "\nValid commands: list, get, set, reset, path")
+    io.println("Unknown config command: " + action + "\nValid commands: list, get, set, reset, path")
     1
 }
 
@@ -669,7 +640,7 @@ func printConfigValue(
     settings: ProductSettings,
     key: String,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let value: AgentValue
     match (key) {
         case "schema_version" => value = textValue("1")
@@ -679,11 +650,11 @@ func printConfigValue(
             value = textValue(shellNetworkModeName(settings.shellNetworkMode))
         case "sandbox.ca_bundle" => value = textValue(settings.sandboxCaBundle)
         case _ =>
-            println("Unknown setting: " + key)
+            io.println("Unknown setting: " + key)
             return 1
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
@@ -695,9 +666,9 @@ func printConfigValue(
         )
     } else {
         match (value.unifiedKind) {
-            case ValueKind.Text => println(value.text)
-            case ValueKind.Boolean => println(value.asBool().toString())
-            case _ => println(encodeAgentValue(value))
+            case ValueKind.Text => io.println(value.text)
+            case ValueKind.Boolean => io.println(value.asBool().toString())
+            case _ => io.println(encodeAgentValue(value))
         }
     }
     0
@@ -708,16 +679,16 @@ func saveCliSettings(
     edits: Array<ProductConfigEdit>,
     json: Bool,
     key: String
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let path = root + "/config.yml"
     match (updateProductConfig(root, edits)) {
         case Result.Ok(_) => ()
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             return 1
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
@@ -728,7 +699,7 @@ func saveCliSettings(
             )
         )
     } else {
-        println("Updated " + path)
+        io.println("Updated " + path)
     }
     0
 }
@@ -741,175 +712,27 @@ func parseCliBool(value: String): ?Bool {
     }
 }
 
-func runGrepCli(
-    session: ApplicationSession,
-    arguments: Array<String>
-): Int64 {
-    if (hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println(
-            "axyndra grep <pattern> [path] " + "[-g|--glob <pattern>] [-l|--limit <n>] " +
-                "[-C|--context <n>] [-f|--files] [-c|--count] " + "[--no-gitignore]")
-        return 0
-    }
-    var glob = ""
-    var limit: Int64 = 20
-    var contextLines: Int64 = 2
-    var mode = "content"
-    var gitignore = true
-    let positional = ArrayList<String>()
-    var index: Int64 = 0
-    while (index < arguments.size) {
-        let argument = arguments[index]
-        if (argument == "--glob" || argument == "-g" || argument == "--limit" || argument == "-l" || argument ==
-            "--context" || argument == "-C" || argument == "--approval-mode" || argument == "--mode" || argument ==
-            "--model" || argument == "--cwd" || argument == "--max-time") {
-            if (index + 1 >= arguments.size) {
-                println("Error: missing value for flag: " + argument)
-                return 1
-            }
-            let value = arguments[index + 1]
-            if (argument == "--glob" || argument == "-g") {
-                glob = value
-            } else if (argument == "--limit" || argument == "-l") {
-                limit = parseCliInteger(value, -1)
-            } else if (argument == "--context" || argument == "-C") {
-                contextLines = parseCliInteger(value, -1)
-            }
-            index += 2
-            continue
-        }
-        if (argument == "--files" || argument == "-f") {
-            mode = "files"
-        } else if (argument == "--count" || argument == "-c") {
-            mode = "count"
-        } else if (argument == "--no-gitignore") {
-            gitignore = false
-        } else if (argument == "--fixture" ||
-            argument.startsWith("--approval-mode=") || argument.startsWith("--mode=") || argument.startsWith("--model=") ||
-            argument.startsWith("--cwd=")) {
-            ()
-        } else if (argument.startsWith("-")) {
-            println("Error: unknown grep flag: " + argument)
-            return 1
-        } else {
-            positional.add(argument)
-        }
-        index += 1
-    }
-    if (positional.isEmpty() || positional[0] == "") {
-        println("Error: Pattern is required")
-        return 1
-    }
-    if (limit < 1) {
-        println("Error: limit must be a positive integer")
-        return 1
-    }
-    if (contextLines < 0) {
-        println("Error: context must not be negative")
-        return 1
-    }
-    let path = if (positional.size > 1) {
-        positional[1]
-    } else {
-        "."
-    }
-    let resolved = match (LocalWorkspace(session.workspaceRoot()).resolve(path, allowDirectory: true)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) =>
-            printError(error)
-            return 1
-    }
-    let common = ArrayList<String>()
-    common.add("--color")
-    common.add("never")
-    common.add("--sort")
-    common.add("path")
-    common.add("--hidden")
-    common.add("--glob")
-    common.add("!.git/**")
-    if (!gitignore) {
-        common.add("--no-ignore")
-    }
-    if (glob != "") {
-        common.add("--glob")
-        common.add(glob)
-    }
-    let countArguments = ArrayList<String>(common)
-    countArguments.add("--count-matches")
-    countArguments.add("--no-heading")
-    countArguments.add("--with-filename")
-    countArguments.add("--")
-    countArguments.add(positional[0])
-    countArguments.add(resolved)
-    let countResult = executeWithOutput(
-        "rg",
-        countArguments.toArray(),
-        workingDirectory: Path(session.workspaceRoot())
-    )
-    if (countResult[0] != 0 && countResult[0] != 1) {
-        println("Error: " + String.fromUtf8(countResult[2]).trimAscii())
-        return 1
-    }
-    let counts = grepCounts(String.fromUtf8(countResult[1]))
-    let filesSearched = grepFilesSearched(
-        resolved,
-        glob,
-        gitignore,
-        session.workspaceRoot()
-    )
-    let outputArguments = ArrayList<String>(common)
-    match (mode) {
-        case "files" => outputArguments.add("--files-with-matches")
-        case "count" =>
-            outputArguments.add("--count-matches")
-            outputArguments.add("--with-filename")
-        case _ =>
-            outputArguments.add("--line-number")
-            outputArguments.add("--no-heading")
-            outputArguments.add("--with-filename")
-            if (contextLines > 0) {
-                outputArguments.add("--context")
-                outputArguments.add(contextLines.toString())
-            }
-    }
-    outputArguments.add("--")
-    outputArguments.add(positional[0])
-    outputArguments.add(resolved)
-    let outputResult = executeWithOutput(
-        "rg",
-        outputArguments.toArray(),
-        workingDirectory: Path(session.workspaceRoot())
-    )
-    if (outputResult[0] != 0 && outputResult[0] != 1) {
-        println("Error: " + String.fromUtf8(outputResult[2]).trimAscii())
-        return 1
-    }
-    println("Searching in: " + resolved)
-    println("Pattern: " + positional[0])
-    println(
-        "Mode: " + mode + ", Limit: " + limit.toString() + ", Context: " + contextLines.toString() + ", Gitignore: " +
-            gitignore.toString())
-    println()
-    println("Total matches: " + counts[0].toString())
-    println("Files with matches: " + counts[1].toString())
-    println("Files searched: " + filesSearched.toString())
-    let renderedOutput = if (mode == "count") {
-        formatGrepCountOutput(String.fromUtf8(outputResult[1]))
-    } else {
-        String.fromUtf8(outputResult[1])
-    }
-    let output = limitGrepOutput(
-        renderedOutput,
-        limit
-    )
-    if (output[1]) {
-        println("Limit reached: true")
-    }
-    println()
-    if (output[0] != "") {
-        println(output[0])
-    }
-    0
+func runGrepCli(session: ApplicationSession, arguments: Array<String>, io!: CliIo180 = consoleCliIo180): Int64 {
+    if(hasArgument(arguments,"--help") || hasArgument(arguments,"-h")){
+        io.println("axyndra grep <pattern> [path-or-globs] [--count] [--case] [--no-gitignore] [--skip <n>] [--interactive]");return 0}
+    let toolArguments=workspaceFrontendCliArguments(arguments)
+    let positional=ArrayList<String>();var skip:Int64=0;var index:Int64=0;var positionalOnly=false
+    while(index<toolArguments.size){
+        let argument=toolArguments[index]
+        if(positionalOnly){positional.add(argument);index++;continue}
+        if(argument=="--"){positionalOnly=true;index++;continue}
+        if(argument=="--skip"){
+            if(index+1>=toolArguments.size){io.println("error: skip requires an integer");return 1}
+            skip=parseCliInteger(toolArguments[index+1],-1);if(skip<0){io.println("error: skip requires a nonnegative integer");return 1}
+            index+=2;continue}
+        if(!["--count","--case","--no-gitignore","--interactive"].contains(argument)){
+            if(argument.startsWith("-")){io.println("error: unsupported native grep flag: "+argument);return 1};positional.add(argument)}
+        index++}
+    if(positional.size<1 || positional.size>2){io.println("error: pattern and optional native path filter are required");return 1}
+    runSelectedWorkspaceCli(session,"grep",objectValue([ValueField("pattern",textValue(positional[0])),
+        ValueField("path",textValue(if(positional.size==2){positional[1]}else{""})),
+        ValueField("count",boolValue(hasArgument(arguments,"--count"))),ValueField("case",boolValue(hasArgument(arguments,"--case"))),
+        ValueField("gitignore",boolValue(!hasArgument(arguments,"--no-gitignore"))),ValueField("skip",integerValue(skip))]),hasArgument(arguments,"--interactive"), io: io)
 }
 
 func parseCliInteger(value: String, fallback: Int64): Int64 {
@@ -920,88 +743,13 @@ func parseCliInteger(value: String, fallback: Int64): Int64 {
     }
 }
 
-func grepCounts(source: String): (Int64, Int64) {
-    var matches: Int64 = 0
-    var files: Int64 = 0
-    for (line in source.split("\n") where line != "") {
-        let separator = line.lastIndexOf(":")
-        match (separator) {
-            case Some(value) =>
-                let count = parseCliInteger(line[value + 1..], 0)
-                matches += count
-                files += 1
-            case None => ()
-        }
-    }
-    (matches, files)
-}
 
-func grepFilesSearched(
-    resolved: String,
-    glob: String,
-    gitignore: Bool,
-    workspaceRoot: String
-): Int64 {
-    if (!FileInfo(resolved).isDirectory()) {
-        return 1
-    }
-    let arguments = ArrayList<String>()
-    arguments.add("--files")
-    arguments.add("--hidden")
-    arguments.add("--sort")
-    arguments.add("path")
-    arguments.add("--glob")
-    arguments.add("!.git/**")
-    if (!gitignore) {
-        arguments.add("--no-ignore")
-    }
-    if (glob != "") {
-        arguments.add("--glob")
-        arguments.add(glob)
-    }
-    arguments.add(resolved)
-    let (code, output, _) = executeWithOutput(
-        "rg",
-        arguments.toArray(),
-        workingDirectory: Path(workspaceRoot)
-    )
-    if (code != 0 && code != 1) {
-        return 0
-    }
-    var count: Int64 = 0
-    for (line in String.fromUtf8(output).split("\n") where line != "") {
-        count += 1
-    }
-    count
-}
 
-func limitGrepOutput(
-    source: String,
-    limit: Int64
-): (String, Bool) {
-    let lines = source.split("\n")
-    let selected = ArrayList<String>()
-    var available: Int64 = 0
-    for (line in lines where line != "" && line != "--") {
-        available += 1
-        if (selected.size < limit) {
-            selected.add(line)
-        }
-    }
-    (joinCliLines(selected.toArray()), available > limit)
-}
 
-func formatGrepCountOutput(source: String): String {
-    let lines = ArrayList<String>()
-    for (line in source.split("\n") where line != "") {
-        let separator = line.lastIndexOf(":")
-        match (separator) {
-            case Some(value) => lines.add(line[..value] + ": " + line[value + 1..] + " matches")
-            case None => lines.add(line)
-        }
-    }
-    joinCliLines(lines.toArray())
-}
+
+
+
+
 
 func joinCliLines(lines: Array<String>): String {
     var output = ""
@@ -1017,13 +765,13 @@ func joinCliLines(lines: Array<String>): String {
 func runAgentsCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (arguments.isEmpty() || hasArgument(arguments, "--help") || hasArgument(arguments, "-h")) {
-        println("axyndra agents unpack [--force] [--json] " + "[--dir <path>|--user|--project]")
+        io.println("axyndra agents unpack [--force] [--json] " + "[--dir <path>|--user|--project]")
         return 0
     }
     if (arguments[0] != "unpack") {
-        println("Unknown agents action: " + arguments[0])
+        io.println("Unknown agents action: " + arguments[0])
         return 1
     }
     var force = false
@@ -1044,7 +792,7 @@ func runAgentsCli(
             project = true
         } else if (argument == "--dir") {
             if (index + 1 >= arguments.size) {
-                println("Error: --dir requires a path")
+                io.println("Error: --dir requires a path")
                 return 1
             }
             authoredDirectory = arguments[index + 1]
@@ -1052,17 +800,17 @@ func runAgentsCli(
         } else if (argument == "--fixture") {
             ()
         } else {
-            println("Error: unknown agents flag: " + argument)
+            io.println("Error: unknown agents flag: " + argument)
             return 1
         }
         index += 1
     }
     if (user && project) {
-        println("Choose either --user or --project, not both.")
+        io.println("Choose either --user or --project, not both.")
         return 1
     }
     if (authoredDirectory != "" && (user || project)) {
-        println("--dir cannot be combined with --user or --project.")
+        io.println("--dir cannot be combined with --user or --project.")
         return 1
     }
     let target = if (authoredDirectory != "") {
@@ -1072,7 +820,7 @@ func runAgentsCli(
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) =>
-                printError(error)
+                printError(error, io: io)
                 return 1
         }
     } else if (project) {
@@ -1084,16 +832,21 @@ func runAgentsCli(
         if (!exists(Path(target))) {
             Directory.create(target, recursive: true)
         } else if (!FileInfo(target).isDirectory()) {
-            println("error: agent target is not a directory: " + target)
+            io.println("error: agent target is not a directory: " + target)
             return 1
         }
     } catch (error: Exception) {
-        println("error: cannot create agent directory: " + error.message)
+        io.println("error: cannot create agent directory: " + error.message)
         return 1
     }
     let written = ArrayList<String>()
     let skipped = ArrayList<String>()
-    for (agent in session.bundledAgents()) {
+    let agents = match (session.bundledAgents()) {
+        case Result.Err(error) =>
+            io.println("error: installed workflow roles are unavailable: " + error.code + ": " + error.message)
+            return 1
+        case Result.Ok(value) => value }
+    for (agent in agents) {
         let path = target + "/" + agent.name + ".md"
         if (exists(Path(path)) && !force) {
             skipped.add(path)
@@ -1109,19 +862,19 @@ func runAgentsCli(
             written.add(path)
         } catch (error: Exception) {
             let _ = removeIfExists(temporary)
-            println("error: cannot write agent " + agent.name + ": " + error.message)
+            io.println("error: cannot write agent " + agent.name + ": " + error.message)
             return 1
         }
     }
     if (json) {
-        println(
+        io.println(
             encodeAgentValue(
                 objectValue(
                     [
                         ValueField("targetDir", textValue(target)),
                         ValueField(
                             "total",
-                            integerValue(session.bundledAgents().size)
+                            integerValue(agents.size)
                         ),
                         ValueField("written", cliStringList(written.toArray())),
                         ValueField("skipped", cliStringList(skipped.toArray()))
@@ -1130,17 +883,17 @@ func runAgentsCli(
             )
         )
     } else {
-        println("Bundled agents: " + session.bundledAgents().size.toString())
-        println("Target directory: " + target)
-        println("Written: " + written.size.toString())
+        io.println("Bundled agents: " + agents.size.toString())
+        io.println("Target directory: " + target)
+        io.println("Written: " + written.size.toString())
         if (!skipped.isEmpty()) {
-            println("Skipped existing: " + skipped.size.toString() + " (use --force to overwrite)")
+            io.println("Skipped existing: " + skipped.size.toString() + " (use --force to overwrite)")
         }
         for (path in written) {
-            println("  + " + path)
+            io.println("  + " + path)
         }
         for (path in skipped) {
-            println("  = " + path)
+            io.println("  = " + path)
         }
     }
     0
@@ -2053,84 +1806,84 @@ class PollingJsonlInput {
     }
 }
 
-func serveRpc(product: ProductRuntime, once: Bool): Int64 {
-    let output = RpcOutput()
-    let session = product.applicationSession()
-    let server = ProductJsonlRpcServer(
-        session,
-        {frame => output.write(frame)}
-    )
-    match (session.resumeStartup()) {
-        case Result.Ok(_) => ()
-        case Result.Err(error) =>
-            printError(error)
-            return 1
-    }
-    output.write(server.ready())
-    let input = PollingJsonlInput()
-    try {
-    while (true) {
-        let polled = input.poll(50)
-        if (polled.eof) { return 0 }
-        let line = match (polled.line) {
-            case Some(value) => value
-            case None => continue
-        }
-        let response = server.handle(line)
-        if (response != "") {
-            output.write(response)
-        }
-        if (once) {
-            return 0
-        }
-    }
-    0
-    } finally { server.close(cancelBash: !once) }
-}
-
-func serveAcp(
-    product: ProductRuntime,
-    config: ProductConfig
-): Int64 {
-    let output = RpcOutput()
-    let server = ProductAcpServer(
-        product,
-        {
-            cwd => openProduct(
-                config: acpSessionProductConfig(config, cwd)
-            )
-        },
-        {frame => output.write(frame)}
-    )
-    atExit({ =>
-        let _ = server.close()
-    })
+func serveOwnedAcpBody113(server: ProductAcpServer, input: AcpOwnedJsonlInput113): Int64 {
     var status: Int64 = 0
-    let input = PollingJsonlInput()
     try {
         while (true) {
-            let polled = input.poll(50)
-            if (polled.eof) { break }
-            let line = match (polled.line) {
-                case Some(value) => value
+            let _ = server.collectOwnedCheckpointFailures113()
+            let (eof, line) = input.poll113(50)
+            if (eof) { break }
+            match (line) {
                 case None => continue
+                case Some(actual) =>
+                    // Main performs no bare String handle/write. The whole
+                    // parser/dispatch/output helper returns before source ACK.
+                    match (server.handleOwnedInput113(actual)) {
+                        case Result.Err(_) => status = 1; break
+                        case Result.Ok(_) => () }
             }
-            let response = server.handle(line)
-            if (response != "") {
-                output.write(response)
-            }
+            if (!server.afterOwnedInputHelperReturn113(line.getOrThrow())) { status = 1; break }
+            if (!input.retireHandledInputAfterHelperReturn113()) { status = 1; break }
             server.flushDeferred()
         }
+    } catch (error: OwnedCanonicalPaidFailure113) {
+        server.retainFrontendFailure113(error.takeConsumer())
+        let _ = server.writeFrontendFailure113({ frame => writeOwnedAcpFrontendFailure113(frame) })
+        status = 1
+    } catch (error: OwnedCanonicalDataFailure113) {
+        server.retainFrontendFailure113(error.error)
+        let _ = server.writeFrontendFailure113({ frame => writeOwnedAcpFrontendFailure113(frame) })
+        status = 1
     } catch (error: Exception) {
-        eprintln("acp.server_failed: " + error.message)
+        server.retainFrontendFailure113(error)
+        let _ = server.writeFrontendFailure113({ frame => writeOwnedAcpFrontendFailure113(frame) })
         status = 1
     }
-    match (server.close()) {
-        case Result.Ok(_) => status
-        case Result.Err(error) =>
-            printError(error)
+    match (server.closeOwned113()) {
+        case AcpOwnedCloseStatus113.Complete => status
+        case AcpOwnedCloseStatus113.Failed =>
+            // Full original close error and every real secondary are produced
+            // and offered only once; flush/helper return precedes any ACK.
+            let _ = server.writeOwnedClose113({ frame => writeOwnedAcpClose113(frame) })
             1
+        case AcpOwnedCloseStatus113.FailedConsumed => 1
+        case AcpOwnedCloseStatus113.Held => 1 }
+}
+
+func writeOwnedAcpClose113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    let answer = writeOwnedAcpCloseHelper113(frame, io: io)
+    match (answer) {
+        case OwnedFailureDataOutcome113.Failure(_) => answer
+        case OwnedFailureDataOutcome113.Value(_) =>
+            try {
+                match (frame.acknowledgeAfterWriteHelperReturn113()) {
+                    case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(())
+                    case Result.Err(error) => frame.captureOutputFailure113(error) }
+            } catch (failure: OwnedCanonicalPaidFailure113) { frame.captureOutputFailure113(failure.takeConsumer()) }
+            catch (failure: OwnedCanonicalDataFailure113) { frame.captureOutputFailure113(failure.error) }
+            catch (failure: Exception) { frame.captureOutputException113(failure) }
     }
+}
+func writeOwnedAcpFrontendFailure113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    let answer = writeOwnedAcpFrontendFailureHelper113(frame, io: io)
+    match (answer) {
+        case OwnedFailureDataOutcome113.Failure(_) => answer
+        case OwnedFailureDataOutcome113.Value(_) =>
+            try {
+                match (frame.acknowledgeAfterWriteHelperReturn113()) {
+                    case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(())
+                    case Result.Err(error) => frame.captureOutputFailure113(error) }
+            } catch (failure: OwnedCanonicalPaidFailure113) { frame.captureOutputFailure113(failure.takeConsumer()) }
+            catch (failure: OwnedCanonicalDataFailure113) { frame.captureOutputFailure113(failure.error) }
+            catch (failure: Exception) { frame.captureOutputException113(failure) }
+    }
+}
+func writeOwnedAcpFrontendFailureHelper113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    frame.withResponse113({ value => io.flush(); io.eprintln(value); Result<Unit>.Ok(()) })
+}
+
+func writeOwnedAcpCloseHelper113(frame: AcpOwnedResponse113, io!: CliIo180 = consoleCliIo180): OwnedFailureDataOutcome113<Unit> {
+    frame.withResponse113({ value => io.flush(); io.println(value); Result<Unit>.Ok(()) })
 }
 
 func acpSessionProductConfig(
@@ -2141,6 +1894,7 @@ func acpSessionProductConfig(
         settingsRoot: config.settingsRoot,
         stateRoot: config.stateRoot,
         workspaceRoot: workspaceRoot,
+        distributionRoot: config.distributionRoot,
         fixture: config.fixture,
         unsafeDirectLaunchForTests: config.unsafeDirectLaunchForTests,
         approvalMode: config.approvalMode,
@@ -2153,83 +1907,215 @@ func acpSessionProductConfig(
         modelStreamFaultProfile: config.modelStreamFaultProfile,
         compactionOverride: config.compactionOverride,
         startupMode: config.startupMode,
-        extensionSignatureVerifier: config.extensionSignatureVerifier
+        extensionSignatureVerifier: config.extensionSignatureVerifier,
+        fixtureTransactionCommitMonitor: config.fixtureTransactionCommitMonitor,
+        fixtureDerivedSettlementFailureObserver: config.fixtureDerivedSettlementFailureObserver
     )
 }
 
-class RpcOutput {
+// This control cell is separately prepaid in the actual output share.
+class OwnedRpcFailureAnswer113 {
+    var value = OwnedFailureDataOutcome113<Unit>.Value(())
+}
+
+class RpcOutput <: OwnedRpcFrameOutput & OwnedRpcFailureOutput113 & AcpOwnedResponseOutput113 {
     private let lock = Mutex()
+    private let io: CliIo180
+    init(io!: CliIo180 = consoleCliIo180) { this.io = io }
+
+    public func writeAcpResponse113(value: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
+        let answer = writeAcpResponseHelper113(value)
+        match (answer) {
+            case OwnedFailureDataOutcome113.Failure(_) => answer
+            case OwnedFailureDataOutcome113.Value(_) =>
+                try {
+                    match (value.acknowledgeAfterWriteHelperReturn113()) {
+                        case Result.Err(error) => value.captureOutputFailure113(error)
+                        case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(()) }
+                } catch (failure: OwnedCanonicalPaidFailure113) { value.captureOutputFailure113(failure.takeConsumer()) }
+                catch (failure: OwnedCanonicalDataFailure113) { value.captureOutputFailure113(failure.error) }
+                catch (failure: Exception) { value.captureOutputException113(failure) }
+        }
+    }
+    private func writeAcpResponseHelper113(value: AcpOwnedResponse113): OwnedFailureDataOutcome113<Unit> {
+        lock.lock()
+        try { value.withResponse113({ frame => io.flush(); io.println(frame); Result<Unit>.Ok(()) }) }
+        finally { lock.unlock() }
+    }
+
+    public func write(frame: OwnedRpcOutputFrame): Result<Unit> {
+        lock.lock()
+        let result = try {
+            frame.withFrame({ value => io.flush(); io.println(value); Result.Ok(()) })
+        } finally { lock.unlock() }
+        match (result) { case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => frame.closeAfterFrameRetirement() }
+    }
+
+    public func writeFailureFrame113(value: OwnedFailureRunPublication113,
+        render: (AgentError, (Int64) -> Result<Unit>) -> Result<String>): OwnedFailureDataOutcome113<Unit> {
+        lock.lock()
+        let answer = try { writeFailurePublicationFrame113(value, render) } finally { lock.unlock() }
+        match (answer) {
+            case OwnedFailureDataOutcome113.Failure(failure) => OwnedFailureDataOutcome113<Unit>.Failure(failure)
+            case OwnedFailureDataOutcome113.Value(_) =>
+                // Paid holder, error, encoder, String and stdout helper frames
+                // have returned before this distinct output share can ACK.
+                match (value.acknowledgeAfterConsumption()) {
+                    case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
+                    case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(()) }
+        }
+    }
+    public func writeFailureFrame113(value: OwnedFailureDataConsumer113,
+        render: (AgentError, (Int64) -> Result<Unit>) -> Result<String>): OwnedFailureDataOutcome113<Unit> {
+        lock.lock()
+        let answer = try { writeFailureDataFrame113(value, render) } finally { lock.unlock() }
+        match (answer) {
+            case OwnedFailureDataOutcome113.Failure(failure) => OwnedFailureDataOutcome113<Unit>.Failure(failure)
+            case OwnedFailureDataOutcome113.Value(_) =>
+                match (value.acknowledgeAfterConsumption()) {
+                    case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
+                    case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(()) }
+        }
+    }
+    private func writeFailurePublicationFrame113(value: OwnedFailureRunPublication113,
+        render: (AgentError, (Int64) -> Result<Unit>) -> Result<String>): OwnedFailureDataOutcome113<Unit> {
+        match (value.withError({ _, fund => fund(4096) })) {
+            case Result.Err(error) => throw OwnedCanonicalDataFailure113(error); case Result.Ok(_) => () }
+        let answer = OwnedRpcFailureAnswer113()
+        let borrowed = value.withError({ error, fund =>
+            answer.value = writeFailureLoan113(error, fund, render,
+                { failed => value.captureFailure113<Unit>(failed) })
+            Result<Unit>.Ok(())
+        })
+        match (borrowed) { case Result.Err(error) => throw OwnedCanonicalDataFailure113(error); case Result.Ok(_) => answer.value }
+    }
+    private func writeFailureDataFrame113(value: OwnedFailureDataConsumer113,
+        render: (AgentError, (Int64) -> Result<Unit>) -> Result<String>): OwnedFailureDataOutcome113<Unit> {
+        match (value.withError({ _, fund =>
+            match (fund(4096)) {
+                case Result.Err(error) => throw OwnedCanonicalDataFailure113(error)
+                case Result.Ok(_) => ()
+            }
+        })) { case Result.Err(error) => throw OwnedCanonicalDataFailure113(error); case Result.Ok(_) => () }
+        let answer = OwnedRpcFailureAnswer113()
+        let borrowed = value.withError({ error, fund =>
+            answer.value = writeFailureLoan113(error, fund, render,
+                { failed => value.captureFailure113<Unit>(failed) })
+        })
+        match (borrowed) { case Result.Err(error) => throw OwnedCanonicalDataFailure113(error); case Result.Ok(_) => answer.value }
+    }
+    private func writeFailureLoan113(error: AgentError, fund: (Int64) -> Result<Unit>,
+        render: (AgentError, (Int64) -> Result<Unit>) -> Result<String>,
+        capture: (AgentError) -> OwnedFailureDataOutcome113<Unit>): OwnedFailureDataOutcome113<Unit> {
+        try {
+            match (render(error, fund)) {
+                case Result.Err(failure) => capture(failure)
+                case Result.Ok(frame) =>
+                    io.flush()
+                    io.println(frame)
+                    OwnedFailureDataOutcome113<Unit>.Value(())
+            }
+        } catch (failure: OwnedCanonicalPaidFailure113) {
+            OwnedFailureDataOutcome113<Unit>.Failure(failure.takeConsumer())
+        } catch (failure: OwnedCanonicalDataFailure113) {
+            // Preserve all original AgentError fields while this typed
+            // producer and the actual input borrow are still alive.
+            capture(failure.error)
+        } catch (failure: Exception) {
+            let bytes = failure.message.size
+            if (bytes > (Int64.Max - 32768) / 8) {
+                throw IllegalStateException("failure output exception payment overflow") }
+            match (fund(32768 + bytes * 8)) {
+                case Result.Err(pressure) => throw OwnedCanonicalDataFailure113(pressure)
+                case Result.Ok(_) => () }
+            capture(AgentError(AgentErrorKind.Transport, "rpc.failure_frame_write_failed",
+                failure.message, retryable: false, fallbackAllowed: false))
+        }
+    }
 
     func write(frame: String): Unit {
         lock.lock()
         try {
-            println(frame)
-            getStdOut().flush()
+            io.flush()
+            io.println(frame)
         } finally {
             lock.unlock()
         }
     }
 }
 
-func runPrint(product: ProductRuntime, prompt: String): Int64 {
-    let session = product.applicationSession()
+func runPrint(product: ProductRuntime, prompt: String, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180,
+    session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
+    let session = session180 ?? product.applicationSession()
+    failures.bindSession(session)
     let stream = StreamState()
-    session.subscribe({
+    io.subscribeOwned180(session, {
         event => match (event.payload) {
             case AgentEventPayload.TextDelta(text) => if (text != "") {
-                    print(text)
+                    io.print(text)
                     stream.wroteText = true
                 }
             case AgentEventPayload.Extension(_, detail) =>
                 if (extensionCode(detail) == "model.text_delta") {
                     let text = eventText(event, "text")
                     if (text != "") {
-                        print(text)
+                        io.print(text)
                         stream.wroteText = true
                     }
                 }
             case _ => ()
         }
-    })
+    }, CallbackOwnedAgentEventSink({ event => ignoreOwnedPrintToolLifecycle(event) }),
+        failures: Some<OwnedFailureEventSink113>(failures))
     match (session.resumeStartup()) {
         case Result.Err(error) =>
-            if (stream.wroteText) { println() }
-            printError(error)
+            if (stream.wroteText) { io.println() }
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             return 1
         case Result.Ok(Some(response)) => match (response.approval) {
             case Some(approval) =>
-                if (stream.wroteText) { println() }
-                println("approval required: " + approval.operationId.value)
+                if (stream.wroteText) { io.println() }
+                io.println("approval required: " + approval.operationId.value)
                 return 3
             case None => ()
         }
         case Result.Ok(None) => ()
     }
+    match (session.ownedRegistryCommand161(prompt)) {
+        case Some(owned) => return appConsumeOwnedRegistryPlain161(owned, session, stream, failures, io: io)
+        case None => ()
+    }
     match (session.handle(prompt)) {
         case Result.Err(error) =>
             if (stream.wroteText) {
-                println()
+                io.println()
             }
-            printError(error)
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             1
         case Result.Ok(response) =>
             if (stream.wroteText) {
-                println()
+                io.println()
             } else if (response.text != "") {
-                println(response.text)
+                io.println(response.text)
             }
             match (response.approval) {
                 case Some(approval) =>
-                    println("approval required: " + approval.operationId.value)
+                    io.println("approval required: " + approval.operationId.value)
                     3
-                case None => 0
+                case None => match (response.action) {
+                    case ApplicationAction.OpenPluginView(route) => runPluginCli(session, ["view", route], io: io)
+                    case _ => 0
+                }
             }
     }
 }
 
-func runJsonStream(product: ProductRuntime, prompt: String): Int64 {
-    let session = product.applicationSession()
-    println(
+func runJsonStream(product: ProductRuntime, prompt: String, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180,
+    session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
+    let session = session180 ?? product.applicationSession()
+    failures.bindSession(session)
+    io.println(
         encodeAgentValue(
             redactJsonAgentValue(objectValue(
                 [
@@ -2246,13 +2132,15 @@ func runJsonStream(product: ProductRuntime, prompt: String): Int64 {
         )
     )
     let stream = ApplicationJsonEventStream({ event =>
-        println(encodeAgentValue(applicationJsonEventValue(event)))
-    })
-    session.subscribe({ event => stream.accept(event) })
+        appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)), io: io)
+    }, io: io)
+    io.subscribeOwned180(session, { event => stream.accept(event) },
+        CallbackOwnedAgentEventSink({ event => stream.acceptOwned(event) }),
+        failures: Some<OwnedFailureEventSink113>(failures))
     match (session.resumeStartup()) {
         case Result.Err(error) =>
             stream.finish()
-            printError(error)
+            if (!failures.consumeCaller(session, error)) { printError(error, io: io) }
             return 1
         case Result.Ok(Some(_)) => if (prompt == "") {
             stream.finish()
@@ -2261,10 +2149,15 @@ func runJsonStream(product: ProductRuntime, prompt: String): Int64 {
         case Result.Ok(None) => ()
     }
     if (prompt == "") { return 0 }
+    match (session.ownedRegistryCommand161(prompt)) {
+        case Some(owned) => return appConsumeOwnedRegistryJson161(owned, session, stream, failures, io: io)
+        case None => ()
+    }
     match (session.handle(prompt)) {
         case Result.Err(error) =>
             stream.finish()
-            println(
+            if (!failures.consumeCaller(session, error)) {
+            io.println(
                 encodeAgentValue(
                     redactJsonAgentValue(objectValue(
                         [
@@ -2275,9 +2168,16 @@ func runJsonStream(product: ProductRuntime, prompt: String): Int64 {
                     ))
                 )
             )
+            }
             1
         case Result.Ok(response) =>
             stream.finish()
+            let viewStatus = if (response.approval.isNone()) {
+                match (response.action) {
+                    case ApplicationAction.OpenPluginView(route) => runPluginCli(session, ["view", route, "--json"], io: io)
+                    case _ => 0
+                }
+            } else { 0 }
             let fields = ArrayList<ValueField>()
             fields.add(ValueField("type", textValue("result")))
             fields.add(
@@ -2350,13 +2250,13 @@ func runJsonStream(product: ProductRuntime, prompt: String): Int64 {
                     )
                 case None => ()
             }
-            println(encodeAgentValue(redactJsonAgentValue(
+            io.println(encodeAgentValue(redactJsonAgentValue(
                 objectValue(fields.toArray())
             )))
             if (response.approval.isSome()) {
                 3
             } else {
-                0
+                viewStatus
             }
     }
 }
@@ -2381,12 +2281,13 @@ func applicationJsonEventDetail(event: AgentEvent): AgentValue {
 class ApplicationJsonEventStream {
     private let lock = Mutex()
     private let output: AgentEventSink
+    private let io: CliIo180
     private let text = ApplicationJsonDeltaStream()
     private let reasoning = ApplicationJsonDeltaStream()
     private let tools = ArrayList<ApplicationJsonToolStream>()
 
-    init(output: AgentEventSink) {
-        this.output = output
+    init(output: AgentEventSink, io!: CliIo180 = consoleCliIo180) {
+        this.output = output; this.io = io
     }
 
     func accept(event: AgentEvent): Unit {
@@ -2424,6 +2325,12 @@ class ApplicationJsonEventStream {
         } finally {
             lock.unlock()
         }
+    }
+
+    func acceptOwned(event: OwnedAgentEvent): Result<Unit> {
+        lock.lock()
+        try { writeOwnedApplicationJsonEvent(event, io: io) }
+        finally { lock.unlock() }
     }
 
     func finish(): Unit {
@@ -2678,10 +2585,10 @@ class TuiRunEventCursor {
     }
 }
 
-class ProductTuiBackend <: AgentTuiBackend {
+class ProductTuiBackend <: AgentTuiBackend & OwnedAgentTuiBackend & OwnedFailureAgentTuiBackend113 {
     private let session: ApplicationSession
     private let product: ProductRuntime
-    private let branchLabel: String
+    private var branchLabel: String = ""
     private let lock = Mutex()
     private var running = false
     private let uiRunEvents = TuiRunEventCursor()
@@ -2689,32 +2596,312 @@ class ProductTuiBackend <: AgentTuiBackend {
     private var appCommandSequence: Int64 = 0
     private var sink: ?TuiAgentEventSink = None
     private var observerSink: ?TuiAgentEventSink = None
+    private var ownedDisplayOutput: ?OwnedTuiToolDisplayOutput = None
+    private var ownedFailureDisplayOutput113: ?OwnedTuiFailureDisplayOutput113 = Option<OwnedTuiFailureDisplayOutput113>.None
+    private let ownedFailureQueue113 = OwnedTuiFailureQueue113()
+    // This is only the exact fixed marker from the still-paid actual App
+    // slot, never a copied or displayed dynamic error. Clear it before the
+    // accepted caller's loan/ACK can retire that slot's control metadata.
+    private var pendingFailureMarker113: ?AgentError = Option<AgentError>.None
+    private var retainedCopiedDisplays: ?OwnedTuiDisplayRegistration = None
+    private var copiedDisplayProducerClosing = false
+    private var copiedDisplayProducerBorrows: Int64 = 0
+    private var retiringRegistryMetadata: ?LogicalJsonCopiedDisplayAllocation = None
+    private var retainedRegistryResponses167: ?OwnedTuiRegistryRegistration167 = None
+    private var pendingRegistryScope167: ?OwnedApplicationRegistryResponse161 = None
+    private var pendingRegistryMetadata167: ?LogicalJsonCopiedDisplayAllocation = None
+    private var pendingRegistryProjectionFailure167: ?AgentError = None
+    private var retiringRegistryResponseMetadata167: ?LogicalJsonCopiedDisplayAllocation = None
+    private var registryConstructing167 = false
     private var focusedSubagentId = ""
     private var pendingSubagentApproval: ?TuiPendingSubagentApproval = None
     private let queuedSubagentApprovals = ArrayList<TuiPendingSubagentApproval>()
-
-    init(product: ProductRuntime, applicationSession!: ?ApplicationSession = None) {
-        this.product = product
-        this.session = match (applicationSession) {
-            case Some(value) => value
-            case None => product.applicationSession()
+    private var ownerSubscription180: ?ApplicationOwnedSubscription113 = None
+    private var ownerControls180: ?ApplicationControlSubscription180 = None
+    private var ownerSerializerLifetime180: ?OwnedTuiSerializerLifetime180 = None
+    private let ownerAllocation180: ?((Int64) -> LogicalJsonOwnerReservation)
+    private var pendingOwnerSubscription180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var pendingOwnerControls180: ?LogicalJsonOwnerReservation = None<LogicalJsonOwnerReservation>
+    private var initializerEntered180 = false
+    init(product: ProductRuntime, applicationSession!: ApplicationSession,
+        ownerAllocation180!: ?((Int64) -> LogicalJsonOwnerReservation) = None,
+        ownerSerializerLifetime180!: ?OwnedTuiSerializerLifetime180 = None) {
+        this.product = product; this.session = applicationSession
+        this.appEvents = AppEventCursor(ThreadId(applicationSession.id().value))
+        this.ownerSerializerLifetime180 = ownerSerializerLifetime180
+        this.ownerAllocation180 = ownerAllocation180
+    }
+    func initializeFrontend180(): Unit {
+        if (initializerEntered180) { throw IllegalStateException("TUI frontend initialization already entered") }
+        initializerEntered180 = true
+        branchLabel = workspaceBranch(session.workspaceRoot())
+        match (ownerAllocation180) {
+            case Some(allocate) =>
+                pendingOwnerSubscription180 = Some(allocate(65536))
+                ownerSubscription180 = Some(session.subscribeRetirableOwned113(pendingOwnerSubscription180.getOrThrow(),
+                    { event => forward(event) }, CallbackOwnedAgentEventSink({ event => forwardOwnedDisplay(event) }),
+                    failures: Some<OwnedFailureEventSink113>(OwnedTuiFailureAdmission113(ownedFailureQueue113))))
+                pendingOwnerSubscription180 = None<LogicalJsonOwnerReservation>
+                pendingOwnerControls180 = Some(allocate(65536))
+                ownerControls180 = Some(session.subscribeRetirableControls180(pendingOwnerControls180.getOrThrow(),
+                    { request => forwardAsk(request) }, { event => forwardJob(event) }, { event => forwardSubagent(event) }))
+                pendingOwnerControls180 = None<LogicalJsonOwnerReservation>
+            case None =>
+                session.subscribeOwned({ event => forward(event) },
+                    CallbackOwnedAgentEventSink({ event => forwardOwnedDisplay(event) }),
+                    failures: Some<OwnedFailureEventSink113>(OwnedTuiFailureAdmission113(ownedFailureQueue113)))
+                session.subscribeAsyncJobs({ event => forwardJob(event) })
+                session.subscribeSubagents({ event => forwardSubagent(event) })
+                session.subscribeAsks({ request => forwardAsk(request) })
         }
-        this.appEvents = AppEventCursor(ThreadId(this.session.id().value))
-        this.branchLabel = workspaceBranch(session.workspaceRoot())
-        session.subscribe({event => forward(event)})
-        session.subscribeAsyncJobs({event => forwardJob(event)})
-        session.subscribeSubagents({event => forwardSubagent(event)})
         session.setAskInteractive(true)
-        session.subscribeAsks({request => forwardAsk(request)})
         let _ = session.resumeStartup()
     }
+
 
     public func observe(events: TuiAgentEventSink): Unit {
         lock.lock()
         try {
+            if (copiedDisplayProducerClosing) { throw Exception("display.producer_references_closed") }
             observerSink = Some(events)
         } finally {
             lock.unlock()
+        }
+    }
+
+    public func observeOwnedToolDisplay(output: OwnedTuiToolDisplayOutput): Unit {
+        lock.lock()
+        try {
+            if (copiedDisplayProducerClosing) { throw Exception("display.producer_references_closed") }
+            ownedDisplayOutput = Some(output)
+        } finally { lock.unlock() }
+    }
+
+    public func observeOwnedFailureDisplay113(output: OwnedTuiFailureDisplayOutput113): Unit {
+        lock.lock()
+        try {
+            if (copiedDisplayProducerClosing) { throw Exception("display.producer_references_closed") }
+            ownedFailureDisplayOutput113 = Some(output)
+        } finally { lock.unlock() }
+        drainOwnedFailureDisplays113()
+    }
+    public func pollOwnedFailureDisplays113(): Unit { drainOwnedFailureDisplays113() }
+    private func drainOwnedFailureDisplays113(): Unit {
+        if (!beginCopiedDisplayProducerBorrow()) { return }
+        try {
+            lock.lock(); let output = ownedFailureDisplayOutput113; lock.unlock()
+            match (output) { case Some(actual) => ownedFailureQueue113.drain(actual); case None => () }
+            session.collectOwnedCheckpointFailure113()
+            lock.lock(); let pending = pendingFailureMarker113; lock.unlock()
+            match (pending) {
+                case Some(marker) =>
+                    let admitted = session.pollAndAdmitOwnedCheckpointFailure113(marker,
+                        { actual => ownedFailureQueue113.admit(actual) })
+                    if (admitted) {
+                        lock.lock()
+                        try { match (pendingFailureMarker113) {
+                            case Some(current) => if (refEq(current, marker)) {
+                                pendingFailureMarker113 = Option<AgentError>.None }
+                            case None => () } }
+                        finally { lock.unlock() }
+                        match (output) { case Some(actual) => ownedFailureQueue113.drain(actual); case None => () }
+                        session.collectOwnedCheckpointFailure113()
+                    }
+                case None => () }
+        } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func emitTuiTurnFailure113(result: Result<ApplicationResponse>, events: TuiAgentEventSink): Bool {
+        match (result) {
+            case Result.Err(marker) => if (session.hasOwnedCheckpointFailure113(marker)) {
+                lock.lock(); try { pendingFailureMarker113 = Some(marker) } finally { lock.unlock() }
+                drainOwnedFailureDisplays113()
+                return true
+            }
+            case Result.Ok(_) => () }
+        emitTurnError(result, events)
+        false
+    }
+    private func tuiTurnData113(result: Result<ApplicationResponse>, prompt: String, paidFailure: Bool): TuiTurnResult {
+        // Fixed status is metadata. Full error data travels only through the
+        // independently paid mailbox/card path; the canonical result is not
+        // reclassified and an App marker is never formatted as the error.
+        if (paidFailure) { TuiTurnResult("", "error") } else { tuiResult(result, prompt) }
+    }
+
+    private func beginCopiedDisplayProducerBorrow(): Bool {
+        lock.lock()
+        try { if (copiedDisplayProducerClosing) { return false }; copiedDisplayProducerBorrows++; true }
+        finally { lock.unlock() }
+    }
+    private func endCopiedDisplayProducerBorrow(): Unit {
+        lock.lock(); try { copiedDisplayProducerBorrows-- } finally { lock.unlock() } }
+    func awaitRootSerializerFrames180(): Bool {
+        while (true) {
+            lock.lock()
+            let framesEnded = copiedDisplayProducerClosing && copiedDisplayProducerBorrows == 0
+            let callersHeld = registryConstructing167 || pendingRegistryScope167.isSome() || pendingFailureMarker113.isSome()
+            lock.unlock()
+            if (framesEnded) { return !callersHeld }
+            sleep(Duration.millisecond)
+        }
+        false
+    }
+    func cancelOwnerTurn180(): Result<Unit> { session.cancel() }
+    func retireRootSerializer180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        if (!receipt.acknowledges180(this)) { return ownedTuiDisplayError("display.serializer_retirement_unknown") }
+        lock.lock()
+        let live = !copiedDisplayProducerClosing || copiedDisplayProducerBorrows != 0 ||
+            registryConstructing167 || pendingRegistryScope167.isSome() || pendingFailureMarker113.isSome()
+        lock.unlock()
+        if (live) { return ownedTuiDisplayError("display.serializer_producer_pending") }
+        match (ownedFailureQueue113.discardRegisteredOriginalsAfterActualFrames113()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        session.collectOwnedCheckpointFailure113()
+        match (ownerControls180) {
+            case Some(token) =>
+                while (!session.unsubscribeRetirableControls180(token)) { sleep(Duration.millisecond) }
+                if (!token.retireAfterUnsubscribe180()) { return ownedTuiDisplayError("display.control_subscription_pending") }
+                ownerControls180 = None
+            case None => () }
+        match (ownerSubscription180) {
+            case Some(token) =>
+                while (!session.unsubscribeRetirableOwned113(token)) { sleep(Duration.millisecond) }
+                if (!token.retireAfterUnsubscribe113()) { return ownedTuiDisplayError("display.subscription_pending") }
+                ownerSubscription180 = None
+            case None => () }
+        while (retainedCopiedDisplays.isSome() || retiringRegistryMetadata.isSome()) {
+            if (retiringRegistryMetadata.isSome()) {
+                match (retiringRegistryMetadata.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => retiringRegistryMetadata = None }
+            } else {
+                match (detachRootToolMetadata180(receipt)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            }
+        }
+        while (retainedRegistryResponses167.isSome() || retiringRegistryResponseMetadata167.isSome()) {
+            if (retiringRegistryResponseMetadata167.isSome()) {
+                match (retiringRegistryResponseMetadata167.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => retiringRegistryResponseMetadata167 = None }
+            } else {
+                match (detachRootRegistryMetadata180(receipt)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            }
+        }
+        match (ownedFailureQueue113.retireRootSerializedRegistry180(receipt, this)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        ownerSerializerLifetime180 = None
+        Result<Unit>.Ok(())
+    }
+    private func detachRootToolMetadata180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        let node = retainedCopiedDisplays.getOrThrow()
+        match (node.retireRootSerializedData180(receipt, this)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retiringRegistryMetadata = Some(node.takeMetadataAfterDataRetirement())
+        retainedCopiedDisplays = node.next; node.next = None
+        Result<Unit>.Ok(())
+    }
+    private func detachRootRegistryMetadata180(receipt: TuiRootSerializerRetirement180): Result<Unit> {
+        let node = retainedRegistryResponses167.getOrThrow()
+        match (node.retireRootSerializedData180(receipt, this)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        retiringRegistryResponseMetadata167 = Some(node.takeMetadataAfterDataRetirement167())
+        retainedRegistryResponses167 = node.next; node.next = None
+        Result<Unit>.Ok(())
+    }
+    public func beginOwnedToolDisplayProducerClosing(): Unit {
+        lock.lock()
+        try {
+            copiedDisplayProducerClosing = true
+            ownedDisplayOutput = None; ownedFailureDisplayOutput113 = Option<OwnedTuiFailureDisplayOutput113>.None
+            observerSink = None; sink = None
+            ownedFailureQueue113.beginClosing()
+        } finally { lock.unlock() }
+        let _ = session.cancel()
+    }
+    public func awaitOwnedToolDisplayProducerReferencesRetired(): Bool {
+        while (true) {
+            lock.lock()
+            let done = copiedDisplayProducerClosing && copiedDisplayProducerBorrows == 0
+            lock.unlock()
+            if (done) {
+                lock.lock(); let registryPending = registryConstructing167 || pendingRegistryScope167.isSome(); lock.unlock()
+                return !registryPending && !ownedFailureQueue113.hasOriginalDebt() }
+            sleep(Duration.millisecond)
+        }
+        false
+    }
+    public func discardOwnedFailureInputsAfterProducerRetirement113(retired: RetiredOwnedTuiFailureProducerFrames113): Result<Unit> {
+        if (!retired.acknowledges(this)) { return ownedTuiDisplayError("display.failure_producer_retirement_unknown") }
+        lock.lock()
+        let actualFramesEnded = copiedDisplayProducerClosing && copiedDisplayProducerBorrows == 0
+        let callerStillHeld = pendingFailureMarker113.isSome()
+        lock.unlock()
+        // The Screen receipt carries its actual native/async/Window/Terminal
+        // retirement; these counters cover this backend's live copy/drain
+        // helper frames. An untransferred App caller stays explicitly OPEN.
+        if (!actualFramesEnded || callerStillHeld) { return ownedTuiDisplayError("display.failure_input_pending") }
+        match (ownedFailureQueue113.discardRegisteredOriginalsAfterActualFrames113()) {
+            case Result.Err(error) => Result.Err(error)
+            case Result.Ok(_) => session.collectOwnedCheckpointFailure113(); Result<Unit>.Ok(()) }
+    }
+    public func retireOwnedToolDisplayRegistry(retired: RetiredOwnedTuiScreenReferences): Result<Unit> {
+        if (!retired.copiedReferencesRetired() || !awaitOwnedToolDisplayProducerReferencesRetired()) {
+            return ownedTuiDisplayError("display.registry_producer_pending") }
+        while (retainedCopiedDisplays.isSome()) {
+            var node = retainedCopiedDisplays
+            match (node.getOrThrow().retireCopiedData(retired)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            retiringRegistryMetadata = Some(node.getOrThrow().takeMetadataAfterDataRetirement())
+            retainedCopiedDisplays = node.getOrThrow().next
+            node.getOrThrow().next = None; node = None
+            // Actual node/data/next helper references cleared before its
+            // distinct same-bank metadata payment can be retired.
+            match (retiringRegistryMetadata.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => retiringRegistryMetadata = None }
+        }
+        match (retireRegistryResponses167(retired)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        ownedFailureQueue113.retireCopiedRegistry(retired)
+    }
+    private func forwardOwnedDisplay(event: OwnedAgentEvent): Result<Unit> {
+        if (!beginCopiedDisplayProducerBorrow()) { return ownedTuiDisplayError("display.producer_references_closed") }
+        try { forwardOwnedDisplayFrame(event) } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func forwardOwnedDisplayFrame(event: OwnedAgentEvent): Result<Unit> {
+        lock.lock(); let output = ownedDisplayOutput; lock.unlock()
+        match (output) {
+            case None =>
+                // Preserve the legacy actual observer behavior without
+                // manufacturing its full-DOM lifetime acknowledgement.
+                return event.withEvent(1048576, {actual =>
+                    forward(actual); ownedTuiDisplayError("display.owned_observer_required") })
+            case Some(target) =>
+                match (event.ensureAdditionalRetainedPeak(4096)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                let decision = OwnedTuiCursorDecision()
+                match (event.withEvent(65536, {actual => decision.accepted = acceptUiRunEvent(actual); Result.Ok(()) })) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                if (!decision.accepted) { return event.closeAfterEventRetirement() }
+                // Pay the actual linked registry metadata independently of
+                // the original row high-water, before the node allocation.
+                let registryPayment = match (event.acquireCopiedDisplayAllocation(4096)) {
+                    case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+                let registration = try { OwnedTuiDisplayRegistration(registryPayment) }
+                    catch (error: Exception) { let _ = registryPayment.closeAfterCopiedDisplayRetirement(); throw error }
+                lock.lock()
+                try { registration.next = retainedCopiedDisplays; retainedCopiedDisplays = Some(registration) }
+                finally { lock.unlock() }
+                let display = match (copyOwnedTuiToolEvent(event, {copy => registration.install(copy)})) {
+                    case Result.Err(error) =>
+                        // Builder cleanup cleared its actual copied event.
+                        // Remove the real registered token reference; this
+                        // empty linked node keeps its own metadata paid.
+                        registration.clearFailedDisplayReference(); return Result.Err(error)
+                    case Result.Ok(value) => value }
+                match (target.accept(display)) {
+                    case Result.Err(error) => return Result.Err(error)
+                    case Result.Ok(_) => () }
+                // The mailbox has only genuinely copied, independently
+                // prepaid display bytes. The original DOM loan ended before
+                // this original alias ACK. Copied payment remains retained.
+                event.closeAfterEventRetirement()
         }
     }
 
@@ -2760,18 +2947,104 @@ class ProductTuiBackend <: AgentTuiBackend {
             }
         }
         begin(events)
-        var result = session.handle(prompt)
+        let first = handleRegistryResponse167(prompt)
+        var result = first[0]
+        var registration = first[1]
         while (true) {
             match (session.takeQueuedAtSafeBoundary(result)) {
-                case Some(next) => result = session.handle(next.input)
+                case Some(next) =>
+                    let following = handleRegistryResponse167(next.input)
+                    result = following[0]; registration = following[1]
                 case None => break
             }
         }
-        emitTurnError(result, events)
-        emitApproval(result)
-        finish()
-        let tui = tuiResult(result, prompt)
-        tui
+        finalRegistryTurn167(result, prompt, registration, events)
+    }
+
+    private func handleRegistryResponse167(input: String): (Result<ApplicationResponse>, ?OwnedTuiRegistryRegistration167) {
+        lock.lock()
+        try {
+            if (copiedDisplayProducerClosing || registryConstructing167 || pendingRegistryScope167.isSome()) {
+                throw Exception("display.registry_unregistered_response_pending") }
+            registryConstructing167 = true
+        } finally { lock.unlock() }
+        try {
+            match (session.ownedRegistryCommand161(input)) {
+                case None => (session.handle(input), Option<OwnedTuiRegistryRegistration167>.None)
+                case Some(actual) =>
+                    lock.lock(); try { pendingRegistryScope167 = Some(actual) } finally { lock.unlock() }
+                    // The actual source is reachable before either of these
+                    // fallible allocations; no unknown error refunds it.
+                    actual.prepayConsumerCopies161(4096)
+                    match (actual.acquireTuiCopiedDisplay167(4096)) {
+                        case Result.Err(error) =>
+                            pendingRegistryProjectionFailure167 = Some(error)
+                            throw Exception("display.registry_projection_pending")
+                        case Result.Ok(value) =>
+                            lock.lock(); try { pendingRegistryMetadata167 = Some(value) } finally { lock.unlock() } }
+                    let node = OwnedTuiRegistryRegistration167(actual, pendingRegistryMetadata167.getOrThrow())
+                    lock.lock()
+                    try {
+                        node.next = retainedRegistryResponses167; retainedRegistryResponses167 = Some(node)
+                        pendingRegistryMetadata167 = None; pendingRegistryScope167 = None
+                    } finally { lock.unlock() }
+                    node.installProjection167(this, serializerLifetime180: ownerSerializerLifetime180)
+                    (node.originalResult167(), Some(node))
+            }
+        } finally {
+            lock.lock(); try { registryConstructing167 = false } finally { lock.unlock() }
+        }
+    }
+    private func finalRegistryTurn167(result: Result<ApplicationResponse>, prompt: String,
+        registration: ?OwnedTuiRegistryRegistration167, events: TuiAgentEventSink): TuiTurnResult {
+        match (registration) {
+            case None =>
+                let paidFailure113 = emitTuiTurnFailure113(result, events)
+                emitApproval(result); finish()
+                tuiTurnData113(result, prompt, paidFailure113)
+            case Some(node) =>
+                let display = node.copiedDisplay167()
+                match (display.prepareQueueAndScreenCopies167(65536)) {
+                    case Result.Err(error) =>
+                        node.rememberProjectionFailure167(error)
+                        throw Exception("display.registry_projection_pending")
+                    case Result.Ok(_) => () }
+                // Preserve the old error text/UI semantics, now with the
+                // actual maintenance-data payment across mailbox and cards.
+                match (result) {
+                    case Result.Err(error) => events(TuiAgentEvent.OwnedRegistryError167(display, error.describe()))
+                    case Result.Ok(_) => () }
+                emitApproval(result); finish()
+                let original = tuiTurnData113(result, prompt, false)
+                TuiTurnResult(original.text, original.status, action: original.action,
+                    ownedRegistryDisplay167: Some(display))
+        }
+    }
+    private func retireRegistryResponses167(retired: RetiredOwnedTuiScreenReferences): Result<Unit> {
+        if (!retired.acknowledgesRegistryProducer167(this)) {
+            return Result<Unit>.Err(AgentError(AgentErrorKind.RecoveryRequired,
+                "display.registry_screen_retirement_unknown", "actual maintenance Screen is required")) }
+        let original = RetiredActualRegistryTuiReferences167(retired, this)
+        // A failed close retains the exact old metadata field. A later
+        // call must finish it before another node can reuse that slot.
+        match (retiringRegistryResponseMetadata167) {
+            case Some(value) => match (value.closeAfterCopiedDisplayRetirement()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => retiringRegistryResponseMetadata167 = None }
+            case None => () }
+        while (retainedRegistryResponses167.isSome()) {
+            var node = retainedRegistryResponses167
+            match (node.getOrThrow().retireResponseData167(retired, original)) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => () }
+            retiringRegistryResponseMetadata167 = Some(node.getOrThrow().takeMetadataAfterDataRetirement167())
+            retainedRegistryResponses167 = node.getOrThrow().next
+            node.getOrThrow().next = None; node = None
+            match (retiringRegistryResponseMetadata167.getOrThrow().closeAfterCopiedDisplayRetirement()) {
+                case Result.Err(error) => return Result.Err(error)
+                case Result.Ok(_) => retiringRegistryResponseMetadata167 = None }
+        }
+        Result<Unit>.Ok(())
     }
 
     public func steer(correlationId: String, prompt: String): Bool {
@@ -2851,18 +3124,21 @@ class ProductTuiBackend <: AgentTuiBackend {
                         case None => break
                     }
                 }
-                emitTurnError(result, events)
+                let paidFailure113 = emitTuiTurnFailure113(result, events)
                 emitApproval(result)
                 finish()
                 emitPendingSubagentApproval(events)
-                // A failed decision is terminal for that approval attempt.
-                // ApplicationSession clears it; do not defensively replay a
-                // stale request from a failed run back into the TUI.
-                match (result) {
-                    case Result.Ok(_) => emitCurrentMainApproval(events)
-                    case Result.Err(_) => ()
-                }
-                tuiResult(result, "")
+                // A pure invalid choice can retain the actual frozen review.
+                // Read only Application's current owner, never replay an old card.
+                emitCurrentMainApproval(events)
+                if(result.isOk()){
+                    match(session.takeTodoEditorCompletion()){
+                        case Some(completed)=>return if(completed.saved){
+                            TuiTurnResult("","todo saved",action:TuiTurnAction.TodoSaved(TuiTodoSaveResult(true,"Saved the selected native Todo document.")))
+                        }else{
+                            TuiTurnResult("","todo loaded",action:TuiTurnAction.TodoLoaded(TuiTodoLoadResult(true,completed.markdown,"todo loaded")))}
+                        case None=>()}}
+                tuiTurnData113(result, "", paidFailure113)
             case None => match (takePendingSubagentApproval(operationId: operationId)) {
                 case Some(pending) => decidePendingSubagentApproval(
                     pending,
@@ -2906,138 +3182,52 @@ class ProductTuiBackend <: AgentTuiBackend {
         }
     }
 
-    public func reviewPlan(
-        contentHash: String,
-        decision: TuiPlanReviewDecision,
-        feedback: String,
-        events: TuiAgentEventSink
-    ): TuiTurnResult {
-        match (decision) {
-            case TuiPlanReviewDecision.UpdatePlan => return match (session.updateLatestPlan(contentHash, feedback)) {
-                case Result.Ok(updated) => TuiTurnResult(
-                    "",
-                    "plan updated",
-                    action: TuiTurnAction.OpenPlanReview(updated),
-                    planReviewDisposition: TuiPlanReviewDisposition.Retain
-                )
-                case Result.Err(error) => TuiTurnResult(
-                    "",
-                    "plan update failed: " + error.message,
-                    planReviewDisposition: planReviewFailureDisposition(error)
-                )
+    public func loadPluginView(routeName: String): TuiTurnResult {
+        let allocate = match (ownerAllocation180) {
+            case Some(value) => value
+            case None => return TuiTurnResult("", "error: view.frontend_owner_missing") }
+        let source = allocate(65536)
+        let paid = try { source.acquireIndependentDataFrame(65536) } finally { source.close() }
+        var retained = false
+        try {
+            let observed = session.withJavaScriptPluginViewDocument<TuiPluginViewDocument>(
+                routeName, "{}", "views-v1", { metadata, model, primary =>
+                    let modelBytes = logicalJsonWriteReservationBytes(model, 196608)
+                    let metadataBytes = logicalJsonWriteReservationBytes(metadata, 4096)
+                    paid.ensureRetainedPeak(2097152 + primary.size * 8 + modelBytes * 16 + metadataBytes * 16)
+                    let document = TuiPluginViewDocument(encodeAgentValue(metadata), encodeAgentValue(model),
+                        String.fromUtf8(primary.toArray()), { bytes => paid.ensureRetainedPeak(bytes) }, { => paid.close() })
+                    Result.Ok(document)
+                })
+            match (observed) {
+                case Result.Err(error) => TuiTurnResult("", "error: " + error.describe())
+                case Result.Ok(document) =>
+                    retained = true
+                    TuiTurnResult("", "Host View loaded", action: TuiTurnAction.PluginViewLoaded(document))
             }
-            case _ => ()
-        }
-        let current = match (session.handle("/plan-review")) {
-            case Result.Ok(value) => value.text
-            case Result.Err(error) => return TuiTurnResult(
-                "",
-                "plan review failed: " + error.message,
-                planReviewDisposition: planReviewFailureDisposition(error)
-            )
-        }
-        if (planContentHash(current) != contentHash) {
-            return TuiTurnResult(
-                "",
-                "plan changed since review opened; refreshed latest plan",
-                action: TuiTurnAction.OpenPlanReview(current),
-                planReviewDisposition: TuiPlanReviewDisposition.Retain
-            )
-        }
+        } finally { if (!retained) { paid.close() } }
+    }
+
+    public func pluginViewAction(viewId: String, revision: String, actionId: String,
+        fields: Array<TuiPluginViewField>, events: TuiAgentEventSink): TuiTurnResult {
         begin(events)
-        let note = feedback.trimAscii()
-        var disposition = TuiPlanReviewDisposition.Retain
-        var result: Result<ApplicationResponse> = match (decision) {
-            case TuiPlanReviewDecision.ApproveAndExecute => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "keep",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveFresh => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "fresh",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveCompact => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "compact",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.ApproveKeep => match (session.approveLatestPlanForReview(
-                expectedHash: contentHash,
-                feedback: note,
-                contextMode: "keep",
-                onConsumed: {hash => events(TuiAgentEvent.PlanReviewConsumed(hash))}
-            )) {
-                case PlanApprovalOutcome.NotConsumed(error) =>
-                    disposition = planReviewFailureDisposition(error)
-                    Result.Err(error)
-                case PlanApprovalOutcome.Consumed(value) =>
-                    disposition = TuiPlanReviewDisposition.Consumed
-                    value
-            }
-            case TuiPlanReviewDecision.Refine => session.handle(
-                "[plan-review refine hash=" + contentHash + "] Revise the structured plan without executing it." +
-                    if (note == "") {
-                        " Ask for refinement feedback before changing the plan."
-                    } else {
-                        "\n\n" + note
-                    }
-            )
-            case TuiPlanReviewDecision.KeepPlanning => session.handle(
-                "[plan-review continue hash=" + contentHash + "] Continue planning without executing." + if (note == "") {
-                    ""
-                } else {
-                    " Feedback: " + note
-                })
-            case TuiPlanReviewDecision.Reject => session.handle(
-                "[plan-review rejected hash=" + contentHash + "] The plan was rejected. Preserve its history and " +
-                    "revise it before execution." + if (note == "") {
-                    ""
-                } else {
-                    " Reason: " + note
-                })
-            case TuiPlanReviewDecision.UpdatePlan => Result.Err(
-                AgentError(
-                    AgentErrorKind.Internal,
-                    "plan_review.update_unreachable",
-                    "plan update should complete before starting an agent turn"
-                )
-            )
-        }
-        match (decision) {
-            case TuiPlanReviewDecision.ApproveAndExecute | TuiPlanReviewDecision.ApproveFresh |
-                TuiPlanReviewDecision.ApproveCompact | TuiPlanReviewDecision.ApproveKeep => ()
-            case _ => disposition = if (result.isOk()) {
-                TuiPlanReviewDisposition.Consumed
-            } else {
-                TuiPlanReviewDisposition.Retain
-            }
-        }
+        let result = try {
+            session.invokeJavaScriptPluginViewAction(viewId, revision, actionId,
+                objectValue(fields.map { field => ValueField(field.id, textValue(field.value)) }),
+                { kind, message => events(TuiAgentEvent.PluginNotice(kind, message)) })
+        } catch (error: Exception) { finish(); throw error }
+        let paidFailure = emitTuiTurnFailure113(result, events)
+        emitApproval(result); finish()
+        tuiTurnData113(result, "", paidFailure)
+    }
+
+    public func confirmPluginView(viewId: String, revision: String, requestDigest: String,
+        confirmed: Bool, events: TuiAgentEventSink): TuiTurnResult {
+        begin(events)
+        var result = try {
+            session.confirmJavaScriptPluginView(viewId, revision, requestDigest, confirmed,
+                onClosed: { id, reason => events(TuiAgentEvent.PluginViewClosed(id, reason)) })
+        } catch (error: Exception) { finish(); throw error }
         if (result.isOk()) {
             while (true) {
                 match (session.takeQueuedAtSafeBoundary(result)) {
@@ -3046,16 +3236,13 @@ class ProductTuiBackend <: AgentTuiBackend {
                 }
             }
         }
-        emitTurnError(result, events)
-        emitApproval(result)
-        finish()
-        let tui = tuiResult(result, "")
-        TuiTurnResult(
-            tui.text,
-            tui.status,
-            action: tui.action,
-            planReviewDisposition: disposition
-        )
+        let paidFailure = emitTuiTurnFailure113(result, events)
+        emitApproval(result); finish()
+        tuiTurnData113(result, "", paidFailure)
+    }
+
+    public func closePluginView(viewId: String): Bool {
+        session.closeJavaScriptPluginView(viewId).isOk()
     }
 
     public func answerAsk(
@@ -3101,7 +3288,9 @@ class ProductTuiBackend <: AgentTuiBackend {
                 events(TuiAgentEvent.PluginNotice(kind, message))
             }
         )) {
-            case Result.Ok(_) => TuiTurnResult("", "plugin command completed")
+            case Result.Ok(_) => match (session.approval()) {
+                case Some(approval) => events(tuiApprovalEvent(approval)); TuiTurnResult("", "plugin command awaiting approval")
+                case None => TuiTurnResult("", "plugin command completed") }
             case Result.Err(error) =>
                 events(TuiAgentEvent.Warning(
                     "Plugin command failed (" + error.code + ")", error.message
@@ -3410,31 +3599,6 @@ class ProductTuiBackend <: AgentTuiBackend {
         } finally { lock.unlock() }
     }
 
-    public func extensions(): Array<TuiExtensionInfo> {
-        let values = ArrayList<TuiExtensionInfo>()
-        for (extension in session.extensions()) {
-            values.add(
-                TuiExtensionInfo(
-                    extension.id,
-                    extension.source,
-                    extension.enabled,
-                    extension.tools
-                )
-            )
-        }
-        values.toArray()
-    }
-    public func mcpStatus(): TuiTurnResult {
-        tuiResult(session.handle("/mcp"), "/mcp")
-    }
-
-    public func setExtensionEnabled(
-        id: String,
-        enabled: Bool
-    ): Bool {
-        session.setExtensionEnabled(id, enabled).isOk()
-    }
-
     public func draft(): String {
         match (session.draft()) {
             case Result.Ok(value) => value
@@ -3520,6 +3684,8 @@ class ProductTuiBackend <: AgentTuiBackend {
         }
     }
 
+    public func frontendSlashDefinitions():Array<SlashCommandDefinition> { session.frontendSlashDefinitions() }
+
     public func todoMarkdown(): TuiTodoLoadResult {
         match (session.todoMarkdown()) {
             case Result.Ok(value) => TuiTodoLoadResult(true, value, "todo loaded")
@@ -3531,9 +3697,21 @@ class ProductTuiBackend <: AgentTuiBackend {
         }
     }
 
+    public func loadTodoEditor(): TuiTodoLoadResult {
+        match(session.loadTodoEditor()){
+            case Result.Ok(value)=>TuiTodoLoadResult(true,value,"todo loaded")
+            case Result.Err(error)=>
+                match(observerTarget()){case Some(events)=>emitCurrentMainApproval(events);case None=>()}
+                TuiTodoLoadResult(false,"","todo load error: "+error.message)
+        }
+    }
+
     public func saveTodoMarkdown(markdown: String): TuiTodoSaveResult {
         match (session.replaceTodoMarkdown(markdown)) {
-            case Result.Ok(message) => TuiTodoSaveResult(true, message)
+            case Result.Ok(message) =>
+                let pending=session.approval().isSome()
+                if(pending){match(observerTarget()){case Some(events)=>emitCurrentMainApproval(events);case None=>()}}
+                TuiTodoSaveResult(!pending, message)
             case Result.Err(error) => TuiTodoSaveResult(
                 false,
                 "todo parse error: " + error.message
@@ -3541,6 +3719,15 @@ class ProductTuiBackend <: AgentTuiBackend {
         }
     }
 
+    func copyTodoData180(): TuiTodoLoadResult {
+        let phases = match (session.todoPhases()) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return TuiTodoLoadResult(false, "", error.message) }
+        if (phases.isEmpty()) { return TuiTodoLoadResult(true, "", "No todos to copy.") }
+        match (session.todoMarkdown()) {
+            case Result.Ok(value) => TuiTodoLoadResult(true, value, "todo loaded")
+            case Result.Err(error) => TuiTodoLoadResult(false, "", error.message) }
+    }
     public func copyTodoMarkdown(): String {
         let phases = match (session.todoPhases()) {
             case Result.Ok(value) => value
@@ -3602,6 +3789,7 @@ class ProductTuiBackend <: AgentTuiBackend {
     ): Unit {
         lock.lock()
         try {
+            if (copiedDisplayProducerClosing) { throw Exception("display.producer_references_closed") }
             sink = Some(events)
             running = true
             uiRunEvents.begin(expectedRunId: expectedRunId)
@@ -3622,6 +3810,10 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     private func forward(event: AgentEvent): Unit {
+        if (!beginCopiedDisplayProducerBorrow()) { return }
+        try { forwardFrame(event) } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func forwardFrame(event: AgentEvent): Unit {
         if (!acceptUiRunEvent(event)) { return }
         let target = currentSink()
         match (target) {
@@ -3638,6 +3830,10 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     private func forwardAsk(request: ProductAskRequest): Unit {
+        if (!beginCopiedDisplayProducerBorrow()) { return }
+        try { forwardAskFrame(request) } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func forwardAskFrame(request: ProductAskRequest): Unit {
         let target = observerTarget()
         match (target) {
             case Some(events) =>
@@ -3684,6 +3880,10 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     private func forwardJob(event: ProductAsyncJobEvent): Unit {
+        if (!beginCopiedDisplayProducerBorrow()) { return }
+        try { forwardJobFrame(event) } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func forwardJobFrame(event: ProductAsyncJobEvent): Unit {
         let target = observerTarget()
         match (target) {
             case Some(events) =>
@@ -3703,6 +3903,10 @@ class ProductTuiBackend <: AgentTuiBackend {
     }
 
     private func forwardSubagent(event: ProductSubagentEvent): Unit {
+        if (!beginCopiedDisplayProducerBorrow()) { return }
+        try { forwardSubagentFrame(event) } finally { endCopiedDisplayProducerBorrow() }
+    }
+    private func forwardSubagentFrame(event: ProductSubagentEvent): Unit {
         let surfacedApproval: ?ApprovalRequest
         match (event.approval) {
             case Some(approval) =>
@@ -4009,13 +4213,6 @@ func tuiByteSize(value: Int64): String {
     (value / 1048576).toString() + "." + ((value % 1048576) * 10 / 1048576).toString() + " MiB"
 }
 
-func planReviewFailureDisposition(error: AgentError): TuiPlanReviewDisposition {
-    if (error.code == "application.plan_mode_inactive") {
-        TuiPlanReviewDisposition.Consumed
-    } else {
-        TuiPlanReviewDisposition.Retain
-    }
-}
 
 func emitTurnError(
     result: Result<ApplicationResponse>,
@@ -4039,7 +4236,6 @@ func tuiResult(
                 "approval required · " + approval.toolName + " · " + approval.operationId.value
             )
             case None =>
-                let planReview = response.planReview
                 let documentTitle = localDocumentTitle(prompt)
                 TuiTurnResult(
                     if (documentTitle.isSome()) {
@@ -4053,12 +4249,9 @@ func tuiResult(
                         case Some(snapshot) => runStatusName(snapshot.status)
                         case None => "ready"
                     },
-                    action: match (planReview) {
-                        case Some(body) => TuiTurnAction.OpenPlanReview(body)
-                        case None => match (documentTitle) {
-                            case Some(title) => TuiTurnAction.OpenDocument(title, response.text)
-                            case None => applicationTuiAction(response)
-                        }
+                    action: match (documentTitle) {
+                        case Some(title) => TuiTurnAction.OpenDocument(title, response.text)
+                        case None => applicationTuiAction(response)
                     }
                 )
         }
@@ -4070,8 +4263,8 @@ func localDocumentTitle(prompt: String): ?String {
     if (value == "/help") {
         return Some("Commands")
     }
-    if (value == "/extensions") {
-        return Some("Extensions")
+    if (value == "/extensions" || value == "/plugins" || value == "/plugins list") {
+        return Some("Plugins")
     }
     if (value == "/tree") {
         return Some("Session tree")
@@ -4226,6 +4419,8 @@ func applicationTuiAction(response: ApplicationResponse): TuiTurnAction {
         case ApplicationAction.OpenProviderSetup => TuiTurnAction.OpenProviderSetup
         case ApplicationAction.OpenModelSelector => TuiTurnAction.OpenModelSelector
         case ApplicationAction.OpenBranchSelector => TuiTurnAction.OpenBranchSelector
+        case ApplicationAction.OpenPluginView(route) => TuiTurnAction.OpenPluginView(route)
+        case ApplicationAction.ConfirmPluginView(value) => TuiTurnAction.ConfirmPluginView(value)
     }
 }
 
@@ -4838,8 +5033,253 @@ func extensionCode(detail: AgentValue): String {
     }
 }
 
-func printError(error: AgentError): Unit {
-    println("error[" + error.code + "]: " + error.message)
+// Same-bank aliases are independent consumers, not a grant to dispatch or retry.
+private let CLI_FAILURE_PREPAY_REFUSED113 = IllegalStateException("CLI failure control payment refused")
+private enum CliFailureAlias113 {
+    Publication(OwnedFailureRunPublication113) | Data(OwnedFailureDataConsumer113)
+    func prepay(bytes: Int64): Bool {
+        try {
+            match (this) {
+                case Publication(value) => value.withError({ _, fund => fund(bytes) }).isOk()
+                case Data(value) => value.withError({ _, fund =>
+                    if (fund(bytes).isError()) { throw CLI_FAILURE_PREPAY_REFUSED113 }
+                }).isOk()
+            }
+        } catch (_: Exception) { false }
+    }
+    func retain(): ?CliFailureAlias113 {
+        match (this) {
+            case Publication(value) => match (value.retainConsumer()) {
+                case Result.Ok(child) => Some(CliFailureAlias113.Publication(child)); case Result.Err(_) => None<CliFailureAlias113> }
+            case Data(value) => match (value.retainConsumer()) {
+                case Result.Ok(child) => Some(CliFailureAlias113.Data(child)); case Result.Err(_) => None<CliFailureAlias113> }
+        }
+    }
+    func write(output: RpcOutput, json: Bool): OwnedFailureDataOutcome113<Unit> {
+        match (this) {
+            case Publication(value) => output.writeFailureFrame113(value, { error, fund => renderCliFailure113(error, fund, json) })
+            case Data(value) => output.writeFailureFrame113(value, { error, fund => renderCliFailure113(error, fund, json) })
+        }
+    }
+    func acknowledged(): Bool {
+        match (this) { case Publication(value) => value.isAcknowledged(); case Data(value) => value.isAcknowledged() }
+    }
+    func acknowledge(): Bool {
+        match (this) { case Publication(value) => value.acknowledgeAfterConsumption().isOk()
+            case Data(value) => value.acknowledgeAfterConsumption().isOk() }
+    }
+}
+
+private func renderCliFailure113(error: AgentError, fund: (Int64) -> Result<Unit>, json: Bool): Result<String> {
+    let size = error.code.size
+    if (size > Int64.Max - error.message.size || size + error.message.size > (Int64.Max - 16384) / 8) {
+        throw IllegalStateException("CLI failure prefix extent overflow") }
+    match (fund(16384 + (size + error.message.size) * 8)) {
+        case Result.Err(failure) => return Result<String>.Err(failure); case Result.Ok(_) => () }
+    let encoded = if (json) {
+        encodeOwnedFailureError113(error, [ValueField("type", textValue("error")),
+            ValueField("code", textValue(error.code)), ValueField("message", textValue(error.message))], "error_data", fund)
+    } else { encodeOwnedFailureError113(error, fund) }
+    match (encoded) {
+        case Result.Err(failure) => Result<String>.Err(failure)
+        case Result.Ok(actual) =>
+            if (json) { return Result<String>.Ok(actual) }
+            if (actual.size > (Int64.Max - 16384) / 4) { throw IllegalStateException("CLI failure output extent overflow") }
+            match (fund(16384 + actual.size * 4)) {
+                case Result.Err(failure) => Result<String>.Err(failure)
+                case Result.Ok(_) => Result<String>.Ok("error[" + error.code + "]: " + error.message + "\n" + actual) }
+    }
+}
+
+private class CliFailureDelivery113 {
+    private var source: ?CliFailureAlias113
+    private var stdout: ?CliFailureAlias113
+    private var control: ?CliFailureAlias113
+    private var secondary: ?OwnedFailureDataConsumer113 = None<OwnedFailureDataConsumer113>
+    private var offered = false
+    private var returned = false
+    private var succeeded = false
+    init(source: CliFailureAlias113, stdout: CliFailureAlias113, control: CliFailureAlias113) {
+        this.source = Some(source); this.stdout = Some(stdout); this.control = Some(control)
+    }
+    func offer(output: RpcOutput, json: Bool): Unit {
+        if (offered) { return }
+        // Set before entering the writer. Failure or a partial prefix is never replayed.
+        offered = true
+        try {
+            match (stdout.getOrThrow().write(output, json)) {
+                case OwnedFailureDataOutcome113.Failure(actual) => secondary = Some(actual)
+                case OwnedFailureDataOutcome113.Value(_) => succeeded = stdout.getOrThrow().acknowledged() }
+            returned = true
+        } catch (failure: OwnedCanonicalPaidFailure113) { secondary = Some(failure.takeConsumer()) }
+          catch (_: Exception) { () }
+    }
+    func sourceReady(): Bool {
+        returned && succeeded && secondary.isNone() && stdout.getOrThrow().acknowledged()
+    }
+    func sourceData(): ?CliFailureAlias113 { source }
+    func clearTransferredSource(): Unit { source = None<CliFailureAlias113> }
+    func controlData(): CliFailureAlias113 { control.getOrThrow() }
+    func clearAfterSourceAcknowledgement(): Unit {
+        source = None<CliFailureAlias113>; stdout = None<CliFailureAlias113>
+        control = None<CliFailureAlias113>
+    }
+}
+
+// Main reserves this fixed controller before its Mutex/slots/output exist.
+// The actual Native reservation remains held for the Root process lifetime:
+// subscribeOwned has no unsubscribe, so mode return cannot prove those callback
+// aliases and their fixed metadata have retired. It is never a payload ACK.
+class CliFailureOutput113 <: OwnedFailureEventSink113 & OwnedFailureEventAdmission113 {
+    private let rootMetadata: LogicalJsonOwnerReservation
+    private let lock = Mutex()
+    private let output: RpcOutput
+    private let json: Bool
+    private var session: ?ApplicationSession = None<ApplicationSession>
+    private var rejectedMarker: ?AgentError = None<AgentError>
+    private var pending: ?CliFailureDelivery113 = None<CliFailureDelivery113>
+    private var stagingStdout: ?CliFailureAlias113 = None<CliFailureAlias113>
+    private var stagingControl: ?CliFailureAlias113 = None<CliFailureAlias113>
+    private var retiringSource: ?CliFailureAlias113 = None<CliFailureAlias113>
+    private var retiringControl: ?CliFailureAlias113 = None<CliFailureAlias113>
+    init(metadata: LogicalJsonOwnerReservation, json: Bool, io!: CliIo180 = consoleCliIo180) {
+        this.rootMetadata = metadata; this.json = json; this.output = RpcOutput(io: io)
+    }
+    func bindSession(actual: ApplicationSession): Unit {
+        lock.lock(); try { session = Some(actual) } finally { lock.unlock() }
+    }
+    // Explicit diagnostic ignore consumes only this event share. Its loan frame
+    // has returned before ACK; the actual caller is a separate stdout delivery.
+    public func emitOwnedFailure113(value: OwnedFailureRunPublication113): Result<Unit> {
+        match (value.withError({ _, _ => Result<Unit>.Ok(()) })) {
+            case Result.Err(error) => return Result<Unit>.Err(error); case Result.Ok(_) => () }
+        value.acknowledgeAfterConsumption()
+    }
+    public func admitOwnedFailure113(value: OwnedFailureRunPublication113): OwnedFailureEventAdmissionOutcome113 {
+        if (emitOwnedFailure113(value).isOk() && value.isAcknowledged()) {
+            OwnedFailureEventAdmissionOutcome113.Accepted
+        } else { OwnedFailureEventAdmissionOutcome113.Held }
+    }
+    public func emitOwnedFailureOutcome113(value: OwnedFailureRunPublication113): OwnedFailureDataOutcome113<Unit> {
+        match (emitOwnedFailure113(value)) {
+            case Result.Ok(_) => OwnedFailureDataOutcome113<Unit>.Value(())
+            case Result.Err(error) => value.captureFailure113<Unit>(error) }
+    }
+    private func register(value: OwnedAgentRunResult113): Bool {
+        lock.lock()
+        try {
+            if (pending.isSome() || stagingStdout.isSome() || stagingControl.isSome() ||
+                retiringSource.isSome() || retiringControl.isSome()) { return false }
+            // The installed Root already pays these fixed alias/slot wrappers.
+            // Retain the real control share in that reachable slot FIRST. Its
+            // own constructor prepays every copied metadata field. A concurrent
+            // source loan may refuse reentry, but does not forbid deriving this
+            // independent immutable DATA share or authorize the source's ACK.
+            let actual = match (value) {
+                case OwnedAgentRunResult113.Failed(publication) => CliFailureAlias113.Publication(publication)
+                case OwnedAgentRunResult113.Pending(consumer) => CliFailureAlias113.Data(consumer)
+                case _ => return false }
+            stagingControl = actual.retain()
+            if (stagingControl.isNone()) { return false }
+            // The independent control loan funds the delivery envelope BEFORE
+            // allocation. Refusal keeps both original source and staged control
+            // reachable; it neither discards debt nor offers stdout twice.
+            if (!stagingControl.getOrThrow().prepay(8192)) { return false }
+            stagingStdout = actual.retain()
+            if (stagingStdout.isNone()) { return false }
+            pending = Some(CliFailureDelivery113(actual, stagingStdout.getOrThrow(), stagingControl.getOrThrow()))
+            stagingStdout = None<CliFailureAlias113>; stagingControl = None<CliFailureAlias113>
+            true
+        } finally { lock.unlock() }
+    }
+    private func stageSourceRetirement(): Unit {
+        lock.lock()
+        try {
+            if (retiringSource.isSome()) { return }
+            let node = match (pending) { case Some(actual) => actual; case None => return }
+            node.offer(output, json)
+            if (!node.sourceReady()) { return }
+            match (node.sourceData()) {
+                case None => ()
+                case Some(actual) =>
+                    retiringSource = Some(actual)
+                    // Root installed the exact alias before the node clears it.
+                    node.clearTransferredSource() }
+        } finally { lock.unlock() }
+    }
+    private func acknowledgeRetiringSource(): Unit {
+        lock.lock()
+        try {
+            match (retiringSource) {
+                case Some(actual) => if (actual.acknowledge()) { retiringSource = None<CliFailureAlias113> }
+                case None => () }
+        } finally { lock.unlock() }
+    }
+    private func stageControlRetirement(): Unit {
+        lock.lock()
+        try {
+            if (retiringSource.isSome() || retiringControl.isSome()) { return }
+            let node = match (pending) { case Some(actual) => actual; case None => return }
+            if (!node.sourceReady() || node.sourceData().isSome()) { return }
+            retiringControl = Some(node.controlData())
+            node.clearAfterSourceAcknowledgement()
+            pending = None<CliFailureDelivery113>
+            // The control ACK runs only after this complete node helper frame
+            // returns; rendering/stdout/source and all node fields are clear.
+        } finally { lock.unlock() }
+    }
+    private func acknowledgeRetiringControl(): Unit {
+        lock.lock()
+        try {
+            match (retiringControl) {
+                case Some(actual) => if (actual.acknowledge()) { retiringControl = None<CliFailureAlias113> }
+                case None => () }
+        } finally { lock.unlock() }
+    }
+    private func progress(): Unit {
+        // These are separate returned frames. A failed ACK leaves its original
+        // exact alias installed; only ACKs may be polled, never stdout offers.
+        stageSourceRetirement()
+        acknowledgeRetiringSource()
+        stageControlRetirement()
+        acknowledgeRetiringControl()
+    }
+    func hasPending(): Bool {
+        lock.lock(); try {
+            rejectedMarker.isSome() || pending.isSome() || stagingStdout.isSome() || stagingControl.isSome() ||
+                retiringSource.isSome() || retiringControl.isSome()
+        } finally { lock.unlock() }
+    }
+    func consumeCaller(actualSession: ApplicationSession, marker: AgentError): Bool {
+        if (!actualSession.hasOwnedCheckpointFailure113(marker)) { return false }
+        lock.lock(); try { session = Some(actualSession); rejectedMarker = Some(marker) } finally { lock.unlock() }
+        let accepted = try { actualSession.admitOwnedCheckpointFailure113(marker, { actual => register(actual) }) }
+            catch (_: Exception) { false }
+        if (accepted) {
+            // Application's handoff/finally frame has really returned before
+            // source ACK is possible. No callback-return inference is used.
+            lock.lock(); try { rejectedMarker = None<AgentError> } finally { lock.unlock() }
+            try { progress() } catch (_: Exception) { () }
+        }
+        actualSession.collectOwnedCheckpointFailure113()
+        if (hasPending()) { eprintln("cli.failure_output_pending") }
+        true
+    }
+    func finishMode(originalStatus: Int64): Int64 {
+        try { progress() } catch (_: Exception) { () }
+        match (session) { case Some(actual) => actual.collectOwnedCheckpointFailure113(); case None => () }
+        if (hasPending()) {
+            eprintln("cli.failure_output_pending")
+            if (originalStatus == 0) { return 1 }
+        }
+        // Keep original status and actual Root custody. No product.close,
+        // physical exit, callback return or reservation close stands for ACK.
+        originalStatus
+    }
+}
+
+func printError(error: AgentError, io!: CliIo180 = consoleCliIo180): Unit {
+    io.println("error[" + error.code + "]: " + error.message)
 }
 
 func joinArguments(arguments: Array<String>, from: Int64): String {
@@ -4865,4 +5305,351 @@ func runStatusName(status: RunState): String {
         case RunState.Failed => "failed"
         case RunState.RecoveryRequired => "recovery_required"
     }
+}
+
+// Interactive confirmation is read only after displaying the actual frozen
+// review. No plugin response or CLI DTO manufactures a user approval.
+func runSelectedWorkspaceCli(session: ApplicationSession, contribution: String, args: AgentValue, interactive: Bool, io!: CliIo180 = consoleCliIo180): Int64 {
+    let invocation=match(session.invokeWorkspaceTool(contribution,args)){
+        case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
+    try{
+        var reviews:Int64=0
+        while(invocation.approval().isSome()){
+            let approval=invocation.approval().getOrThrow()
+            io.println(encodeAgentValue(approval.preview))
+            if(!interactive){io.println("Approval required; repeat with --interactive to review this actual Root.");return 1}
+            if(reviews>=2){io.println("error: too many independent native Root reviews");return 1};reviews++
+            io.println("Type approve "+approval.operationId.value+" to approve this exact Root; any other response rejects it.")
+            let choice=match(io.readln()){case Some(value)=>value;case None=>""}
+            let decision=if(choice=="approve "+approval.operationId.value){ApprovalDecision.Approve}else{ApprovalDecision.Reject}
+            match(invocation.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(_)=>()}
+        }
+        let output=match(invocation.output()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
+        let hasResource=output.field("resource_request").isSome() || output.field("application_plan").isSome()
+        if(hasResource && interactive){
+            io.println(encodeAgentValue(output))
+            io.println("Type execute-resource to submit a separate canonical Root for this exact frozen resource or file plan; any other response leaves it unapplied.")
+            let choice=match(io.readln()){case Some(value)=>value;case None=>""}
+            if(choice!="execute-resource"){return 0}
+            let resource=match(invocation.beginResource()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
+            try{
+                var resourceReviews:Int64=0
+                while(resource.approval().isSome()){
+                    if(resourceReviews>=2){io.println("error: too many independent resource Root reviews");return 1};resourceReviews++
+                    let approval=resource.approval().getOrThrow()
+                    io.println(encodeAgentValue(approval.preview))
+                    io.println("Type approve "+approval.operationId.value+" to approve this separate exact resource Root; any other response rejects it.")
+                    let answer=match(io.readln()){case Some(value)=>value;case None=>""}
+                    let decision=if(answer=="approve "+approval.operationId.value){ApprovalDecision.Approve}else{ApprovalDecision.Reject}
+                    match(resource.decide(approval.operationId.value,decision)){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(_)=>()}
+                }
+                let result=match(resource.output()){case Result.Err(error)=>printError(error, io: io);return 1;case Result.Ok(value)=>value}
+                printWorkspaceCliOutput(result, io: io)
+            }finally{let _=resource.close()}
+        }else{printWorkspaceCliOutput(output, io: io)}
+        0
+    }finally{let _=invocation.close()}
+}
+func printWorkspaceCliOutput(output: AgentValue, io!: CliIo180 = consoleCliIo180): Unit {
+    let content=output.field("content") ?? output.field("entries") ?? output.field("matches") ?? output.field("paths") ?? textValue(encodeAgentValue(output))
+    let text=if(content.unifiedKind==ValueKind.Text){content.text}else{encodeAgentValue(output)}
+    io.print(text);if(!text.endsWith("\n")){io.println()}
+}
+
+
+// Additive test entry only. The caller reserves the SAME Native root before
+// this facade/controller exists. No writer, flush, Source or ACK is injected.
+// Original CLI methods and the command-line flow are untouched.
+class ActualCliFailureFacade95 <: OwnedFailureEventSink113 & OwnedFailureEventAdmission113 {
+    private let original: CliFailureOutput113
+    init(metadata: LogicalJsonOwnerReservation, json: Bool) {
+        metadata.ensureRetainedPeak(65536)
+        original = CliFailureOutput113(metadata, json)
+    }
+    func bindSession(actual: ApplicationSession): Unit { original.bindSession(actual) }
+    func consumeCaller(actual: ApplicationSession, marker: AgentError): Bool {
+        original.consumeCaller(actual, marker)
+    }
+    func finishMode(status: Int64): Int64 { original.finishMode(status) }
+    func hasPending(): Bool { original.hasPending() }
+    public func emitOwnedFailure113(value: OwnedFailureRunPublication113): Result<Unit> {
+        original.emitOwnedFailure113(value)
+    }
+    public func emitOwnedFailureOutcome113(value: OwnedFailureRunPublication113): OwnedFailureDataOutcome113<Unit> {
+        original.emitOwnedFailureOutcome113(value)
+    }
+    public func admitOwnedFailure113(value: OwnedFailureRunPublication113): OwnedFailureEventAdmissionOutcome113 {
+        original.admitOwnedFailure113(value)
+    }
+}
+
+// DATA receipts are minted only in the actual synchronous stdout consumer.
+private class RetiredActualRegistryCliReferences161 <: OwnedRegistryResponseRetirement161 {
+    init() {}
+    public func copiedReferencesRetired(): Bool { true }
+}
+private class HeldActualRegistryCliNode161 {
+    private let response: OwnedApplicationRegistryResponse161
+    private let previous: ?HeldActualRegistryCliNode161
+    init(response: OwnedApplicationRegistryResponse161, previous: ?HeldActualRegistryCliNode161) {
+        this.response = response; this.previous = previous
+    }
+}
+private class HeldActualRegistryCli161 {
+    private let lock = Mutex()
+    private var head: ?HeldActualRegistryCliNode161 = None
+    func hold(response: OwnedApplicationRegistryResponse161): Unit {
+        lock.lock()
+        try { head = Some(HeldActualRegistryCliNode161(response, head)) }
+        finally { lock.unlock() }
+    }
+}
+private let heldActualRegistryCli161 = HeldActualRegistryCli161()
+
+private func prepayActualRegistryCli161(owned: OwnedApplicationRegistryResponse161, json: Bool): Unit {
+    owned.prepayConsumerCopies161(owned.copiedResponseCopyInvoice161(json))
+}
+private func appConsumeOwnedRegistryPlain161(owned: OwnedApplicationRegistryResponse161,
+    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
+    try {
+        prepayActualRegistryCli161(owned, false)
+        let actual = owned.borrowForCli161({ result =>
+            actualRegistryPlainStdoutFrame161(result, session, stream, failures, io: io)
+        })
+        if (!actual[0]) { heldActualRegistryCli161.hold(owned); return actual[1] }
+        // Formatter, stdout and callback frames all returned before this token.
+        if (!owned.closeAfterActualCopiedResponse161(RetiredActualRegistryCliReferences161())) {
+            heldActualRegistryCli161.hold(owned)
+        }
+        actual[1]
+    } catch (_: Exception) { heldActualRegistryCli161.hold(owned); 1 }
+}
+private func actualRegistryPlainStdoutFrame161(result: Result<ApplicationResponse>,
+    session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): (Bool, Int64) {
+    try {
+        let status = originalRegistryPlainProjectionFrame161(result, session, stream, failures, io: io)
+        io.flush()
+        (true, status)
+    } catch (_: Exception) { (false, 1) }
+}
+private func appConsumeOwnedRegistryJson161(owned: OwnedApplicationRegistryResponse161,
+    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
+    try {
+        prepayActualRegistryCli161(owned, true)
+        let actual = owned.borrowForCli161({ result =>
+            actualRegistryJsonStdoutFrame161(result, session, stream, failures, io: io)
+        })
+        if (!actual[0]) { heldActualRegistryCli161.hold(owned); return actual[1] }
+        if (!owned.closeAfterActualCopiedResponse161(RetiredActualRegistryCliReferences161())) {
+            heldActualRegistryCli161.hold(owned)
+        }
+        actual[1]
+    } catch (_: Exception) { heldActualRegistryCli161.hold(owned); 1 }
+}
+private func actualRegistryJsonStdoutFrame161(result: Result<ApplicationResponse>,
+    session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): (Bool, Int64) {
+    try {
+        let status = originalRegistryJsonProjectionFrame161(result, session, stream, failures, io: io)
+        io.flush()
+        (true, status)
+    } catch (_: Exception) { (false, 1) }
+}
+
+// The same synchronous Main formatters can be reused by a long-lived Session
+// without creating another Session or subscription for every command. The
+// caller supplies an actual original-Registry DATA lease before construction.
+class RegistrySessionCliConsumer161 {
+    private let lock = Mutex()
+    private var metadata: ?LogicalJsonOwnerReservation
+    private var session: ?ApplicationSession
+    private var failures: ?CliFailureOutput113
+    private var plain: ?StreamState
+    private var jsonStream: ?ApplicationJsonEventStream
+    private let json: Bool
+    private let io: CliIo180
+    private var closed = false
+    init(session: ApplicationSession, metadata: LogicalJsonOwnerReservation, json: Bool, io!: CliIo180 = consoleCliIo180) {
+        this.metadata = Some(metadata); this.session = Some(session); this.json = json; this.io = io
+        let actual = CliFailureOutput113(metadata, json, io: io)
+        actual.bindSession(session)
+        this.failures = Some(actual)
+        this.plain = Some(StreamState())
+        this.jsonStream = Some(ApplicationJsonEventStream({ event =>
+            appWriteRegistryLineChecked181(encodeAgentValue(applicationJsonEventValue(event)), io: io)
+        }, io: io))
+    }
+    func print(input: String): Int64 {
+        lock.lock()
+        try {
+            if (closed) { throw IllegalStateException("registry CLI consumer is closed") }
+            match (session.getOrThrow().ownedRegistryCommand161(input)) {
+                case Some(owned) =>
+                    if (json) {
+                        appConsumeOwnedRegistryJson161(owned, session.getOrThrow(), jsonStream.getOrThrow(), failures.getOrThrow(), io: io)
+                    } else {
+                        appConsumeOwnedRegistryPlain161(owned, session.getOrThrow(), plain.getOrThrow(), failures.getOrThrow(), io: io)
+                    }
+                case None => throw IllegalStateException("input is not a Registry maintenance command")
+            }
+        } finally { lock.unlock() }
+    }
+    private func clearReturnedConsumerFields161(): Unit {
+        // Only paid DATA/control envelopes remain in this helper. No formatter,
+        // stdout callback or response reference is active when print returned.
+        session = None; failures = None; plain = None; jsonStream = None
+    }
+    func closeAfterConsumersReturned161(): Bool {
+        lock.lock()
+        try {
+            if (closed) { return true }
+            if (failures.getOrThrow().hasPending()) { return false }
+            clearReturnedConsumerFields161()
+            match (metadata) { case Some(value) => metadata = None; value.close(); case None => () }
+            closed = true; true
+        } finally { lock.unlock() }
+    }
+}
+
+private func originalRegistryPlainProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: StreamState, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
+    match (result) {
+        case Result.Err(error) =>
+            if (stream.wroteText) {
+                appWriteRegistryLineChecked181("", io: io)
+            }
+            if (!failures.consumeCaller(session, error)) { appWriteRegistryLineChecked181("error[" + error.code + "]: " + error.message, io: io) }
+            1
+        case Result.Ok(response) =>
+            if (stream.wroteText) {
+                appWriteRegistryLineChecked181("", io: io)
+            } else if (response.text != "") {
+                appWriteRegistryLineChecked181(response.text, io: io)
+            }
+            match (response.approval) {
+                case Some(approval) =>
+                    appWriteRegistryLineChecked181("approval required: " + approval.operationId.value, io: io)
+                    3
+                case None => 0
+            }
+    }
+
+}
+
+private func originalRegistryJsonProjectionFrame161(result: Result<ApplicationResponse>, session: ApplicationSession, stream: ApplicationJsonEventStream, failures: CliFailureOutput113, io!: CliIo180 = consoleCliIo180): Int64 {
+    match (result) {
+        case Result.Err(error) =>
+            stream.finish()
+            if (!failures.consumeCaller(session, error)) {
+            appWriteRegistryLineChecked181(
+                encodeAgentValue(
+                    redactJsonAgentValue(objectValue(
+                        [
+                            ValueField("type", textValue("error")),
+                            ValueField("code", textValue(error.code)),
+                            ValueField("message", textValue(error.message))
+                        ]
+                    ))
+                )
+            , io: io)
+            }
+            1
+        case Result.Ok(response) =>
+            stream.finish()
+            let fields = ArrayList<ValueField>()
+            fields.add(ValueField("type", textValue("result")))
+            fields.add(
+                ValueField(
+                    "agent_invoked",
+                    boolValue(response.agentInvoked)
+                )
+            )
+            match (response.snapshot) {
+                case Some(snapshot) =>
+                    fields.add(
+                        ValueField(
+                            "run_id",
+                            textValue(snapshot.runId.value)
+                        )
+                    )
+                    fields.add(
+                        ValueField(
+                            "session_id",
+                            textValue(snapshot.sessionId.value)
+                        )
+                    )
+                    fields.add(
+                        ValueField(
+                            "status",
+                            textValue(runStatusName(snapshot.status))
+                        )
+                    )
+                case None => ()
+            }
+            match (response.approval) {
+                case Some(approval) =>
+                    let details = approvalDetails(approval)
+                    fields.add(
+                        ValueField(
+                            "approval",
+                            objectValue(
+                                [
+                                    ValueField(
+                                        "operation_id",
+                                        textValue(details.operationId.value)
+                                    ),
+                                    ValueField(
+                                        "tool",
+                                        textValue(details.toolName)
+                                    ),
+                                    ValueField(
+                                        "call_id",
+                                        textValue(details.callId)
+                                    ),
+                                    ValueField(
+                                        "capability",
+                                        textValue(capabilityDisplayName(details.capability.kind))
+                                    ),
+                                    ValueField(
+                                        "resource",
+                                        textValue(details.capability.resource)
+                                    ),
+                                    ValueField(
+                                        "risk",
+                                        textValue(approvalRiskName(details.risk))
+                                    ),
+                                    ValueField(
+                                        "preview",
+                                        redactJsonAgentValue(details.arguments)
+                                    )
+                                ]
+                            )
+                        )
+                    )
+                case None => ()
+            }
+            appWriteRegistryLineChecked181(encodeAgentValue(redactJsonAgentValue(
+                objectValue(fields.toArray())
+            )), io: io)
+            if (response.approval.isSome()) {
+                3
+            } else {
+                0
+            }
+    }
+}
+
+// A successful formatter return also requires the actual fd write to finish.
+// On a partial write or EPIPE the caller retains its same paid response.
+func appWriteRegistryLineChecked181(text: String, io!: CliIo180 = consoleCliIo180): Unit {
+    io.flush()
+    io.println(text)
+}
+
+// The constructor consumes only the actual opaque Screen receipt. No empty
+// Screen, counter, ordinary callback or headless render can mint this proof.
+private class RetiredActualRegistryTuiReferences167 <: OwnedRegistryResponseRetirement161 {
+    private let actual: RetiredOwnedTuiScreenReferences
+    private let producer: Object
+    init(actual: RetiredOwnedTuiScreenReferences, producer: Object) {
+        this.actual = actual; this.producer = producer }
+    public func copiedReferencesRetired(): Bool { actual.acknowledgesRegistryProducer167(producer) }
 }

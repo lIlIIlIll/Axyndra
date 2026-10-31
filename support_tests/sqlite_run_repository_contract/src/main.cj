@@ -16,6 +16,11 @@ main(): Int64 {
     let database = SqliteDatabase(root + "/state.db")
     try {
         interiorRetentionGapContract(root)
+        maintenanceContextIndicatorContract(root)
+        continuationAllowanceFactsContract(root)
+        continuationResumeOrCreateFactsContract(root)
+        continuationRunAdmissionContract(root)
+        continuationPayloadWindowContract(root)
         seedCanonicalRun(database)
         let repository = SqliteRunRepository(database, eventCapacity: 2)
         let runId = RunId("run-1")
@@ -83,7 +88,8 @@ func retryAttemptAtomicityContract(database: SqliteDatabase): Unit {
             ThinkingControlMode.Effort,
             supportedLevels: canonicalNonOffThinkingLevels()
         ),
-        4096
+        4096,
+        configurationDigest: modelPolicySha256Text("exact-operator-model-configuration")
     )
     let parentCheckpoint = RunningModelCheckpoint(
         semanticId, canonical, "retry-semantic-digest", "retry-wire-digest",
@@ -135,10 +141,15 @@ func retryAttemptAtomicityContract(database: SqliteDatabase): Unit {
         repository.continuation(runId).value().getOrThrow()
             .runningModel.getOrThrow().activeAttemptId.value == childId.value,
         "a durably abandoned parent authorizes exactly one same-request retry transition")
+    let reopened = SqliteRunRepository(database).continuation(runId).value().getOrThrow()
+    let restored = reopened.modelCapabilitiesSnapshot.getOrThrow()
+    expect(restored.configurationDigest == capabilities.configurationDigest &&
+        restored.capabilityFingerprint == capabilities.capabilityFingerprint,
+        "actual SQLite retry continuation preserves exact model configuration and fingerprint")
 }
 
 func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
-    seedMigrationRun(database)
+    let approvalFixture = RepositoryApprovalSettlementFixture(database)
     let repository = SqliteRunRepository(database)
     let runId = RunId("migration-run")
     let sessionId = SessionId("migration-thread")
@@ -262,6 +273,23 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         semanticRequestDigest: "migration-semantic-digest",
         wirePolicyDigest: "migration-wire-digest"
     )
+    let beforeUnsettled = database.query(
+        "SELECT payload FROM run_continuations WHERE run_id='migration-run'")[0].required(0)
+    let denied = repository.prepareModelAttempt(attempt,
+        scopedEvent(1, runId, semanticId, attemptId,
+            AgentEventPayload.Extension(AgentEventKind.Audit, objectValue([]))), running)
+    match (denied) {
+        case Result.Err(error) =>
+            println("Repository unsettled approval diagnostic: " + error.describe())
+            expect(error.code == "persistence.sqlite_model_attempt_prepare" &&
+                error.message.contains("model checkpoint cannot bypass foreground settlement"),
+                "the actual foreground fence rejects an approved but unsettled Tool")
+        case Result.Ok(_) => expect(false, "an approval decision alone cannot settle a Tool")
+    }
+    expect(database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE run_id='migration-run'") == 0 &&
+        database.query("SELECT payload FROM run_continuations WHERE run_id='migration-run'")[0].required(0) == beforeUnsettled,
+        "rejected model admission rolls back its Attempt and preserves original approval bytes")
+    approvalFixture.settle()
     expect(repository.prepareModelAttempt(
         attempt,
         scopedEvent(1, runId, semanticId, attemptId,
@@ -271,11 +299,12 @@ func continuationCasIdempotencyContract(database: SqliteDatabase): Unit {
         "SELECT active_attempt_id FROM run_continuations WHERE run_id='migration-run'"
     )[0].required(0) == attemptId.value,
         "approved continuation indexes its exact active model Attempt")
-    expect(repository.clearModelExecutionContinuation(runId, attemptId).isOk() &&
-        database.scalarInt(
-            "SELECT COUNT(*) FROM run_continuations WHERE run_id='migration-run'"
-        ) == 0,
-        "completed model Attempt atomically clears the structured continuation")
+    let beforeUncommittedClear = database.query(
+        "SELECT payload FROM run_continuations WHERE run_id='migration-run'")[0].required(0)
+    expect(repository.clearModelExecutionContinuation(runId, attemptId).isError() &&
+        database.query("SELECT payload FROM run_continuations WHERE run_id='migration-run'")[0].required(0) == beforeUncommittedClear &&
+        database.query("SELECT active_attempt_id FROM run_continuations WHERE run_id='migration-run'")[0].required(0) == attemptId.value,
+        "a merely Created Attempt cannot clear its continuation without an actually committed canonical Decision")
 }
 
 func restartAttemptAtomicityContract(database: SqliteDatabase): Unit {
@@ -652,8 +681,8 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
         repository.setFastMode(source, true).isOk() &&
         repository.setWorkMode(source, "plan").isOk() &&
         repository.setDraft(source, "draft").isOk() &&
-        repository.setTodoPhases(source, listValue([textValue("verify")])).isOk() &&
-        repository.setGoalState(source, objectValue([
+        seedHistoricalTodoPayload(database,source,listValue([textValue("verify")])).isOk() &&
+        seedHistoricalGoalPayload(database, source, objectValue([
             ValueField("objective", textValue("finish"))
         ])).isOk(), "SQLite Thread metadata accepts public product fields")
     expect(repository.copy(source, target).isOk() &&
@@ -663,7 +692,7 @@ func metadataContract(database: SqliteDatabase, root: String): Unit {
         repository.fastMode(target).value().getOrThrow() &&
         repository.workMode(target).value().getOrThrow() == "plan" &&
         repository.draft(target).value().getOrThrow() == "draft" &&
-        repository.todoPhases(target).value().getOrThrow().items.size == 1 &&
+        decodeAgentValue(repository.legacyTodoBytes(target).value().getOrThrow()).value().getOrThrow().items.size == 1 &&
         repository.goalState(target).value().getOrThrow().unifiedKind == ValueKind.Object,
         "SQLite Thread metadata copies atomically without file sidecars")
     expect(repository.setWorkMode(source, "unsafe").isError() &&
@@ -687,6 +716,14 @@ func v24SnapshotMigrationContract(): Unit {
             "UPDATE runs SET app_snapshot=json_set(app_snapshot,'$.format_version',2) " +
                 "WHERE id='run-1'"
         )
+        // The seed must have the actual old shape, not merely an old version marker.
+        seed.execute("DROP INDEX derived_child_call_identity")
+        seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN child_call_id")
+        seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN root_operation_id")
+        seed.execute("ALTER TABLE derived_operation_admissions DROP COLUMN depth")
+        expect(seed.scalarInt("SELECT COUNT(*) FROM plugin_documents") == 0,
+            "owned v24 fixture has no current plugin document data to discard")
+        seed.execute("DROP TABLE plugin_documents")
         seed.execute("PRAGMA user_version=24")
     } finally { seed.close() }
 
@@ -694,12 +731,12 @@ func v24SnapshotMigrationContract(): Unit {
     try {
         let restored = SqliteRunRepository(migrated)
             .find(RunId("run-1")).value().getOrThrow()
-        expect(migrated.scalarInt("PRAGMA user_version") == 26 &&
+        expect(migrated.scalarInt("PRAGMA user_version") == 28 &&
             migrated.scalarInt(
                 "SELECT json_extract(app_snapshot,'$.format_version') " +
                     "FROM runs WHERE id='run-1'"
             ) == 3 && restored.summary == "version-two snapshot",
-            "v24 migration rewrites version-two snapshots before repository decode at v26")
+            "v24 migration rewrites version-two snapshots before repository decode at v28")
     } finally {
         migrated.close()
         let _ = removeIfExists(root, recursive: true)
@@ -836,4 +873,29 @@ func interiorRetentionGapContract(root: String): Unit {
         expect(pruning.events(runId, 4).value().getOrThrow().resyncRequired,
             "retained interleaved envelope cannot hide a pruned stream")
     } finally { database.close() }
+}
+
+// Same cold pre-migration seeding pattern as the todo payload below: the
+// production repository exposes only the goalState reader, and product tests
+// seed goal_payload through SQL, so this contract updates the already-created
+// fixture row directly instead of calling a production writer that never
+// existed.
+func seedHistoricalGoalPayload(database:SqliteDatabase,session:SessionId,value:AgentValue):Result<Unit>{
+    if(value.unifiedKind!=ValueKind.Object){return Result.Err(AgentError(AgentErrorKind.InvalidInput,"persistence.goal_payload_not_object","goal payload must be an object"))}
+    try{
+        database.transaction<Unit>({ tx=>
+            tx.execute("UPDATE thread_metadata SET goal_payload=? WHERE thread_id=?",[SqlParameter.Text(encodeAgentValue(value)),SqlParameter.Text(session.value)])})
+        Result.Ok(())
+    }catch(error:Exception){Result.Err(AgentError(AgentErrorKind.Internal,"persistence.session_metadata_write",error.message))}
+}
+
+// Preserve cold pre-migration payload/copy coverage without restoring a
+// production writer. The same already-created fixture row is updated only.
+func seedHistoricalTodoPayload(database:SqliteDatabase,session:SessionId,value:AgentValue):Result<Unit>{
+    if(value.unifiedKind!=ValueKind.List){return Result.Err(AgentError(AgentErrorKind.InvalidInput,"persistence.todo_phases_not_list","todo phases must be a list"))}
+    try{
+        database.transaction<Unit>({ tx=>
+            tx.execute("UPDATE thread_metadata SET todo_payload=? WHERE thread_id=?",[SqlParameter.Text(encodeAgentValue(value)),SqlParameter.Text(session.value)])})
+        Result.Ok(())
+    }catch(error:Exception){Result.Err(AgentError(AgentErrorKind.Internal,"persistence.session_metadata_write",error.message))}
 }

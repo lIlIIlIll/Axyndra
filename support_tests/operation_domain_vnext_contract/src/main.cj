@@ -7,6 +7,7 @@ import yjson.*
 import agent_domain.*
 
 main(): Int64 {
+    genericContextSnapshotContracts()
     networkPolicyContract()
     let writePlan = NormalizedOperationPlan(
         "write", objectValue([]),
@@ -49,6 +50,7 @@ main(): Int64 {
     expect(rejected, "idempotency retry requires a key")
     replayDispositionContract()
     operationResolutionContract(writePlan)
+    operationObservationContract()
     println("vNext operation domain contract passed")
     0
 }

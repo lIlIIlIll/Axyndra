@@ -1,4 +1,5 @@
 package product_contract
+import std.sync.*
 
 import agent_runtime.*
 
@@ -8,6 +9,10 @@ import yjson_support.*
 import agent_core.*
 import agent_domain.*
 import agent_product.*
+import workspace_legacy_oracle.*
+import eval_native_contract.*
+import shell_native_contract.*
+import shell_readonly_native_contract.*
 import agent_ports.*
 import agent_store.*
 import agent_testkit.*
@@ -20,11 +25,27 @@ import std.fs.*
 import std.process.*
 import std.time.*
 
-main(): Int64 {
-    let workerArguments = getCommandLine()
-    if (isProductToolProgramWorker(workerArguments)) {
-        return runProductToolProgramWorker(workerArguments)
+func contractPlanReviewView(application: ApplicationSession, response: ApplicationResponse,
+    expectedSource!: ?String = None): Bool {
+    let route = match (response.action) {
+        case ApplicationAction.OpenPluginView(value) => value
+        case _ => return false
     }
+    let observed = application.withJavaScriptPluginViewDocument<Bool>(route, "{}", "views-v1",
+        { metadata, model, primary =>
+            var boundInput = false
+            for (node in model.field("nodes").getOrThrow().items) {
+                if (httpIntentText(node, "id") == "plan" && httpIntentText(node, "kind") == "input") {
+                    boundInput = httpIntentText(node, "source") == "primary" && node.field("text").isNone()
+                }
+            }
+            let matches = match (expectedSource) { case Some(value) => primary == value; case None => true }
+            Result.Ok(boundInput && httpIntentText(metadata.field("primary").getOrThrow(), "kind") == "plan" && matches)
+        })
+    match (observed) { case Result.Ok(value) => value; case Result.Err(error) => throw IllegalStateException(error.describe()) }
+}
+
+main(): Int64 {
     if (!exists(Path("target"))) {
         Directory.create("target", recursive: true)
     }
@@ -108,7 +129,7 @@ main(): Int64 {
         }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("process-hub")) {
             prepareProductContractWorkspace(root)
-            let product = openProduct(
+            let product = openLegacyWorkspaceProduct(
                 config: ProductConfig(
                     stateRoot: root + "/focused-process-hub-state",
                     workspaceRoot: root,
@@ -139,7 +160,7 @@ main(): Int64 {
         }
         if (getVariable("AXYNDRA_PRODUCT_CONTRACT_SCOPE") == Some("session-lifecycle")) {
             prepareProductContractWorkspace(root)
-            let product = openProduct(config: ProductConfig(
+            let product = openLegacyWorkspaceProduct(config: ProductConfig(
                 stateRoot: root + "/state",
                 workspaceRoot: root,
                 fixture: true,
@@ -196,7 +217,7 @@ func runOptionalInterpreterDefaultProductContract(root: String): Unit {
     let original = getVariable(variable)
     try {
         setVariable(variable, root + "/missing-python/python3")
-        let product = openProduct(
+        let product = openLegacyWorkspaceProduct(
             config: ProductConfig(
                 stateRoot: root + "/optional-eval-state",
                 workspaceRoot: root,
@@ -227,7 +248,7 @@ func runOptionalInterpreterDefaultProductContract(root: String): Unit {
 }
 
 func runApplicationResponseProjectionOnly(root: String): Unit {
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/focused-application-response-state",
             workspaceRoot: root,
@@ -252,7 +273,7 @@ func runApplicationResponseProjectionOnly(root: String): Unit {
 }
 
 func runNetworkApprovalProductContracts(root: String): Unit {
-    let enabled = openProduct(config: ProductConfig(
+    let enabled = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: root + "/config",
         stateRoot: root + "/network-approval-enabled-state",
         workspaceRoot: root,
@@ -286,7 +307,7 @@ func runNetworkApprovalProductContracts(root: String): Unit {
         ("schema_version: 1\n" + "approval:\n" + "  policy:\n" +
             "    ask_on_network: false\n").toArray()
     )
-    let disabled = openProduct(config: ProductConfig(
+    let disabled = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: disabledSettings,
         stateRoot: root + "/network-approval-disabled-state",
         workspaceRoot: root,
@@ -328,7 +349,7 @@ func runNetworkApprovalProductContracts(root: String): Unit {
 
 func runSessionCatalogContracts(root: String): Unit {
     let stateRoot = root + "/session-catalog-state"
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: stateRoot,
             workspaceRoot: root,
@@ -415,7 +436,39 @@ func runSessionCatalogContracts(root: String): Unit {
     product.close()
 }
 
+func copyContractDependency(source: Path, destination: Path): Unit {
+    Directory.create(destination, recursive: true)
+    Directory.walk(source, { info: FileInfo =>
+        expect(!info.isSymbolicLink(), "contract dependencies must not contain symlinks")
+        let target = destination.join(info.name)
+        if (info.isDirectory()) {
+            copyContractDependency(info.path, target)
+        } else {
+            expect(info.isRegular(), "contract dependencies must be regular files")
+            File.writeTo(target, File.readFrom(info.path))
+        }
+        true
+    })
+}
+
 func prepareProductContractWorkspace(root: String): Unit {
+    if (let Some(bun) <- getVariable("AXYNDRA_PRODUCT_CONTRACT_BUN")) {
+        expect(Path(bun).isAbsolute() && exists(Path(bun)), "explicit Bun contract dependency must exist")
+        let copiedBun = root + "/.contract-deps/bun"
+        Directory.create(root + "/.contract-deps", recursive: true)
+        File.writeTo(copiedBun, File.readFrom(Path(bun)))
+        let (code, _, _) = executeWithOutput("/bin/chmod", ["755", copiedBun])
+        expect(code == 0, "Bun fixture preserves executable mode")
+        setVariable("AXYNDRA_EVAL_JS_EXECUTABLE", copiedBun)
+    }
+    if (let Some(rubyRoot) <- getVariable("AXYNDRA_PRODUCT_CONTRACT_RUBY_ROOT")) {
+        expect(Path(rubyRoot).isAbsolute() && exists(Path(rubyRoot)), "explicit Ruby contract dependency must exist")
+        let copiedRuby = root + "/.contract-deps/ruby"
+        copyContractDependency(Path(rubyRoot), Path(copiedRuby))
+        let (code, _, _) = executeWithOutput("/bin/chmod", ["755", copiedRuby + "/bin/ruby", copiedRuby + "/bin/ruby.real"])
+        expect(code == 0, "Ruby fixture preserves executable modes")
+        setVariable("AXYNDRA_EVAL_RUBY_EXECUTABLE", copiedRuby + "/bin/ruby")
+    }
     prepareContractFiles(root)
     runProviderConfigurationContracts(root)
 }
@@ -469,12 +522,33 @@ func prepareContractFiles(root: String): Unit {
         resourceServer,
         resourceLspServerSource().toArray()
     )
-    File.writeTo(
-        root + "/lsp.json",
-        ("{\"servers\":{\"resource-contract\":{" + "\"command\":\"/usr/bin/python3\"," + "\"args\":[\"" + resourceServer +
-            "\"]," + "\"fileTypes\":[\".resource\"]," + "\"languageId\":\"resource\"," + "\"rootMarkers\":[\".\"]}}}")
-            .toArray()
-    )
+    let lspServers = ArrayList<ValueField>()
+    lspServers.add(ValueField("resource-contract", objectValue([
+        ValueField("command", textValue("/usr/bin/python3")),
+        ValueField("args", listValue([textValue(resourceServer)])),
+        ValueField("fileTypes", listValue([textValue(".resource")])),
+        ValueField("languageId", textValue("resource")),
+        ValueField("rootMarkers", listValue([textValue(".")]))
+    ])))
+    if (let Some(pyright) <- getVariable("AXYNDRA_PYRIGHT_LANGSERVER")) {
+        expect(Path(pyright).isAbsolute() && exists(Path(pyright)),
+            "explicit Pyright contract dependency must be an existing absolute executable")
+        let copiedPackage = root + "/.contract-deps/pyright"
+        copyContractDependency(Path(pyright).parent, Path(copiedPackage))
+        lspServers.add(ValueField("pyright", objectValue([
+            ValueField("command", textValue("/usr/bin/node")),
+            ValueField("args", listValue([
+                textValue(copiedPackage + "/" + FileInfo(Path(pyright)).name),
+                textValue("--stdio")
+            ])),
+            ValueField("fileTypes", listValue([textValue(".py"), textValue(".pyw")])),
+            ValueField("languageId", textValue("python")),
+            ValueField("rootMarkers", listValue([textValue(".")]))
+        ])))
+    }
+    File.writeTo(root + "/lsp.json", encodeAgentValue(objectValue([
+        ValueField("servers", objectValue(lspServers.toArray()))
+    ])).toArray())
     File.writeTo(
         root + "/large-lines.txt",
         largeLinesContent().toArray()
@@ -547,7 +621,7 @@ func runProviderConfigurationContracts(root: String): Unit {
 func runAiApprovalContracts(root: String): Unit {
     let workspace = root + "/approval-ai"
     Directory.create(workspace + "/tmp", recursive: true)
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/approval-ai-state",
             workspaceRoot: workspace,
@@ -592,7 +666,7 @@ func runAiApprovalContracts(root: String): Unit {
 
     let _ = removeIfExists(workspace + "/tmp/result.txt")
     let manualState = root + "/approval-manual-state"
-    let manualProduct = openProduct(
+    let manualProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: manualState,
             workspaceRoot: workspace,
@@ -614,7 +688,7 @@ func runAiApprovalContracts(root: String): Unit {
         "manual remains the default route for requests that policy actually requires approval for"
     )
     let pendingSession = manualApplication.id()
-    let restartedManual = openProduct(
+    let restartedManual = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: manualState,
             workspaceRoot: workspace,
@@ -642,7 +716,7 @@ func runAiApprovalContracts(root: String): Unit {
 
     let failingPathRoot = workspace + "/../missing-parent"
     let _ = removeIfExists(failingPathRoot, recursive: true)
-    let failingApplication = openProduct(
+    let failingApplication = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/approval-failure-state",
             workspaceRoot: workspace,
@@ -669,7 +743,7 @@ func runAiApprovalContracts(root: String): Unit {
         "a failed approved operation commits its recoverable error result, clears the prompt, and remains cancellable"
     )
 
-    let never = openProduct(
+    let never = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/approval-never-state",
             workspaceRoot: workspace,
@@ -1174,7 +1248,7 @@ func runConfigFileContracts(root: String): Unit {
             "#221d1a" && themes[0].muted == "244",
         "OMP-compatible JSON themes resolve variables and palette indexes"
     )
-    let configuredProductResult = openProduct(
+    let configuredProductResult = openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: root + "/config",
             stateRoot: root + "/theme-state",
@@ -1188,9 +1262,31 @@ func runConfigFileContracts(root: String): Unit {
         case Result.Ok(_) => "ok"
     })
     let configuredProduct = configuredProductResult.value().getOrThrow()
+    try {
+    let configuredCompaction = installConfigurationContractPlugins(configuredProduct, root + "/config")
     let themeSession = configuredProduct.applicationSession()
     let localRequest = configuredProduct.request("local budget", modelOverride: "local-openai/local-model")
     let fallbackRequest = configuredProduct.request("fallback budget", modelOverride: "local-openai/backup-model")
+    // TEMP: numeric/Boolean fixture metadata only; never emit keys, prompts,
+    // provider URLs, configuration bytes or credentials. Keep the assertion.
+    for ((label, observed) in [("local", localRequest), ("fallback", fallbackRequest)]) {
+        let expectedPricing = match (observed.pricing) {
+            case Some(value) => value.inputMicrosPerMillion == Some(1000000) &&
+                value.outputMicrosPerMillion == Some(2000000) &&
+                value.cacheReadMicrosPerMillion == Some(250000) &&
+                value.cacheWriteMicrosPerMillion == Some(1250000)
+            case None => false
+        }
+        println("MODEL_CONFIG_DIAGNOSTIC case=" + label +
+            " input=" + observed.budget.maxInputTokens.toString() +
+            " output=" + observed.budget.maxOutputTokens.toString() +
+            " window=" + observed.contextWindow.toString() +
+            " stable_cache=" + (observed.cachePolicy == ModelCachePolicy.StablePrefix).toString() +
+            " cache_key_present=" + (observed.cacheKey != "").toString() +
+            " tier_empty=" + (observed.serviceTier == "").toString() +
+            " pricing_present=" + observed.pricing.isSome().toString() +
+            " fixture_pricing_exact=" + expectedPricing.toString())
+    }
     expect(
         localRequest.budget.maxInputTokens == 180000 && localRequest.budget.maxOutputTokens == 8192 &&
             localRequest.cachePolicy == ModelCachePolicy.StablePrefix && localRequest.cacheKey != "" &&
@@ -1254,6 +1350,7 @@ func runConfigFileContracts(root: String): Unit {
         case (Some(tokens), Some(window), Some(percent)) => tokens == 240000 && window == 200000 && percent == 120.0
         case _ => false
     }, "provider-reported context usage is authoritative and honestly reports over-window percentages")
+    requireConfigurationContractCompaction(configuredProduct, configuredCompaction)
     expect(
         configuredProduct.compactSession(metadataSession, force: true).value().getOrThrow() > 0,
         "context fixture compacts its provider-facing projection"
@@ -1274,7 +1371,7 @@ func runConfigFileContracts(root: String): Unit {
         summary: "failed before provider"
     )).value().getOrThrow()
     contextDatabase.close()
-    let reopenedProduct = openProduct(
+    let reopenedProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: root + "/config",
             stateRoot: root + "/theme-state",
@@ -1283,7 +1380,14 @@ func runConfigFileContracts(root: String): Unit {
             asyncEnabled: false
         )
     ).value().getOrThrow()
+    try {
     let reopenedContext = reopenedProduct.contextUsage(metadataSession, "local-openai/local-model")
+    // TEMP: only Boolean/numeric context metadata; preserve the original assertion.
+    println("MODEL_REOPEN_DIAGNOSTIC fast_enabled=" + reopenedProduct.fastModeEnabled(metadataSession).toString() +
+        " fast_active=" + reopenedProduct.fastModeActive(metadataSession, "local-openai/local-model").toString() +
+        " tokens=" + (match (reopenedContext.tokens) { case Some(value) => value.toString(); case None => "none" }) +
+        " window=" + (match (reopenedContext.contextWindow) { case Some(value) => value.toString(); case None => "none" }) +
+        " percent=" + (match (reopenedContext.percent) { case Some(value) => value.toString(); case None => "none" }))
     expect(
         reopenedProduct.fastModeEnabled(metadataSession) &&
             reopenedProduct.fastModeActive(metadataSession, "local-openai/local-model") &&
@@ -1293,6 +1397,9 @@ func runConfigFileContracts(root: String): Unit {
             },
         "fast preference and last provider context usage survive compaction, a newer zero-request run, and reopen"
     )
+    } finally {
+        expect(reopenedProduct.close().isOk(), "reopened configuration fixture closes its actual installed runtime")
+    }
     expect(
         themeSession.currentTheme() == "contract" && themeSession.handle("/theme light").isOk() &&
             loadProductSettings(root + "/config").value().getOrThrow().theme == "light" &&
@@ -1306,6 +1413,9 @@ func runConfigFileContracts(root: String): Unit {
                 .maxInputTokens == 180000,
         "/theme persists global and model-specific compaction configuration"
     )
+    } finally {
+        expect(configuredProduct.close().isOk(), "configuration fixture joins its actual installed policy worker")
+    }
 }
 
 func runProviderProfileContracts(root: String): Unit {
@@ -1392,7 +1502,7 @@ func runProviderProfileContracts(root: String): Unit {
         customLegacyRoot + "/config.yml",
         "schema_version: 1\ndefault_model: pretend-anthropic/custom-model\n".toArray()
     )
-    let rejectedLegacy = openProduct(config: ProductConfig(
+    let rejectedLegacy = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: customLegacyRoot,
         stateRoot: root + "/custom-legacy-thinking-rejected-state",
         workspaceRoot: root,
@@ -1435,7 +1545,7 @@ func runProviderProfileContracts(root: String): Unit {
                 .contains("allow_insecure_http: true"),
         "remote HTTP opt-in survives provider profile round-trip"
     )
-    let explicitProduct = openProduct(config: ProductConfig(
+    let explicitProduct = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: customLegacyRoot,
         stateRoot: root + "/custom-legacy-thinking-explicit-state",
         workspaceRoot: root,
@@ -1446,13 +1556,14 @@ func runProviderProfileContracts(root: String): Unit {
         profileRoot + "/config.yml",
         "schema_version: 1\ndefault_model: anthropic-official/shared-model\n".toArray()
     )
-    let profiledProduct = openProduct(config: ProductConfig(
+    let profiledProduct = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: profileRoot,
         stateRoot: root + "/profile-capability-state",
         workspaceRoot: root,
         approvalMode: ApprovalMode.Yolo,
         asyncEnabled: false
     )).value().getOrThrow()
+    installProfileConfigurationContractModel(profiledProduct, profileRoot)
     let officialCache = profiledProduct.request(
         "official cache",
         modelOverride: "anthropic-official/shared-model"
@@ -1466,6 +1577,7 @@ func runProviderProfileContracts(root: String): Unit {
             compatibleCache.cachePolicy == ModelCachePolicy.Default && compatibleCache.cacheKey == "",
         "prompt caching follows explicit model capability and compatible endpoints remain conservative"
     )
+    expect(profiledProduct.close().isOk(), "profile capability fixture closes its installed runtime")
     expect(
         saveProviderCredential(
             profileRoot,
@@ -1533,7 +1645,7 @@ func runProviderAuthenticationContracts(root: String): Unit {
         oauthRoot + "/config.yml",
         "schema_version: 1\ndefault_model: oauth-provider/oauth-model\n".toArray()
     )
-    let oauthProduct = openProduct(
+    let oauthProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: oauthRoot,
             stateRoot: root + "/oauth-state",
@@ -1554,11 +1666,12 @@ func runProviderAuthenticationContracts(root: String): Unit {
         )
         case Result.Ok(_) => throw IllegalStateException("OAuth model invocation unexpectedly succeeded")
     }
+    expect(oauthProduct.close().isOk(), "unsupported OAuth fixture closes without an inference owner")
     File.writeTo(
         profileRoot + "/config.yml",
         "schema_version: 1\ndefault_model: deepseek-anthropic/shared-model\n".toArray()
     )
-    let profiledProduct = match (openProduct(
+    let profiledProduct = match (openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: profileRoot,
             stateRoot: root + "/profile-state",
@@ -1586,10 +1699,11 @@ func runProviderAuthenticationContracts(root: String): Unit {
             Path(anthropicCredential)) && !exists(Path(deepseekCredential)),
         "logout removes only the selected provider credential"
     )
+    expect(profiledProduct.close().isOk(), "profile authentication fixture closes its runtime")
     removeVariable("ANTHROPIC_API_KEY")
     removeVariable("DEEPSEEK_API_KEY")
     setVariable("LOCAL_API_KEY", "contract-secret")
-    let configuredProduct = match (openProduct(
+    let configuredProduct = match (openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: root + "/config",
             stateRoot: root + "/configured-state",
@@ -1607,6 +1721,7 @@ func runProviderAuthenticationContracts(root: String): Unit {
         configuredProduct.logout().value().getOrThrow(),
         "logout removes the stored credential"
     )
+    expect(configuredProduct.close().isOk(), "configured authentication fixture closes its runtime")
     removeVariable("LOCAL_API_KEY")
 }
 
@@ -1619,9 +1734,9 @@ func runToolContracts(root: String): Unit {
     let catalog = ToolCatalog()
     let askRuntime = AskRuntime()
     let toolDatabase = SqliteDatabase(root + "/tool-state.db")
-    let todoRepository = SqliteSessionMetadataRepository(toolDatabase)
+    let todoRepository = LegacyTodoRepository(toolDatabase)
     expect(
-        installLocalTools(
+        installLegacyLocalTools(
             catalog,
             workspace,
             processes,
@@ -1662,7 +1777,9 @@ func runToolContracts(root: String): Unit {
         )
         try {
             runEvalRuntimeConfigurationContracts(evalPipeline, context, root)
-            runEvalContracts(evalPipeline, context, workspace, processes)
+            let nativeEvalScope = NativeEvalContractScope(workspace.rootPath())
+            try { runEvalContracts(nativeEvalScope, context, workspace, processes) }
+            finally { nativeEvalScope.close() }
         } finally {
             processes.close().value().getOrThrow()
             toolDatabase.close()
@@ -1671,12 +1788,14 @@ func runToolContracts(root: String): Unit {
     }
     runAskToolContracts(pipeline, context, askRuntime)
     let initializedTodos = runAstSearchContracts(pipeline, context)
-    runAstEditContracts(workspace, processes)
     runLspContracts(workspace, processes)
     runCheckpointContracts(workspace, processes)
     runTodoToolContracts(pipeline, context, todoRepository, initializedTodos, toolDatabase)
-    runWorkspaceAndEvalContracts(pipeline, context, workspace, processes)
-    runRestartedPermissionContracts(toolDatabase, context, workspace)
+    let actualShellScope=NativeShellContractScope(root,approvalMode:ApprovalMode.AlwaysAsk)
+    try{
+        runWorkspaceAndEvalContracts(pipeline,context,workspace,processes,actualShellScope)
+        runRestartedPermissionContracts(context,workspace,actualShellScope)
+    }finally{actualShellScope.close()}
     processes.close().value().getOrThrow()
     toolDatabase.close()
 }
@@ -1688,34 +1807,33 @@ func runEvalRuntimeConfigurationContracts(
 ): Unit {
     let variable = "AXYNDRA_EVAL_PYTHON_EXECUTABLE"
     let original = getVariable(variable)
+    let nativeScope = NativeEvalContractScope(root)
     try {
-        setVariable(variable, "python3")
-        let relativeContent = evalConfigurationFailureContent(
-            executePipelineCall(
-                pipeline,
-                context,
-                evalCall("eval-relative-interpreter", "py", "1 + 1")
-            ),
-            "eval.interpreter_path_invalid",
-            "absolute path"
-        )
+        // Bare python3 is now an explicitly configured, fixed-path Host lookup.
+        // NUL and a missing executable are the actual invalid operator inputs.
+        let invalid = nativeScope.binding("py", executable: "python3\u{0000}invalid")
+        let invalidContent = evalConfigurationFailureContent(invalid.start(context.sessionId),
+            "plugin.lifecycle_path_invalid", "operator lifecycle configuration")
+        expect(!invalid.visible(context.sessionId) && invalid.childReceipts() == 0,
+            "invalid interpreter configuration publishes no service and executes no cell")
         let missingPath = root + "/missing-python/python3"
-        setVariable(variable, missingPath)
-        let unavailableContent = evalConfigurationFailureContent(
-            executePipelineCall(
-                pipeline,
-                context,
-                evalCall("eval-missing-interpreter", "py", "1 + 1")
-            ),
-            "eval.interpreter_unavailable",
-            "Python interpreter is unavailable"
-        )
-        expect(
-            !unavailableContent.contains(missingPath),
-            "missing interpreter diagnostics do not reveal the configured host path"
-        )
-        let _ = relativeContent
+        let unavailable = nativeScope.binding("py", executable: missingPath)
+        let unavailableContent = evalConfigurationFailureContent(unavailable.start(context.sessionId),
+            "plugin.lifecycle_executable_invalid", "operator lifecycle configuration")
+        expect(!unavailableContent.contains(missingPath) && !unavailable.visible(context.sessionId) &&
+            unavailable.childReceipts() == 0,
+            "missing interpreter diagnostics do not reveal the configured host path or execute a cell")
+        setVariable(variable, "python3")
+        let relative = nativeScope.binding("py")
+        nativeEvalStartChecked(relative, context.sessionId)
+        let actual = completedFrom(nativeEvalObservedCellSnapshot(relative.call(context.sessionId,
+            evalCall("eval-relative-interpreter", "py", "1 + 1"))))
+        expect(!actual.isError && actual.output.field("content").getOrThrow().text.trimAscii() == "2" &&
+            actual.receiptId != "" && relative.childReceipts() == 1,
+            "explicit bare interpreter selection follows the actual approved Host lookup")
+        let _ = invalidContent
     } finally {
+        nativeScope.close()
         match (original) {
             case Some(value) => setVariable(variable, value)
             case None => removeVariable(variable)
@@ -1730,19 +1848,10 @@ func evalConfigurationFailureContent(
 ): String {
     match (result) {
         case Result.Err(error) =>
-            expect(
-                error.code == expectedCode && error.message.contains(expectedMessage),
-                "eval configuration errors preserve their specific code and diagnostic"
-            )
+            expect(error.code == expectedCode && error.message.contains(expectedMessage),
+                "eval configuration errors preserve their specific code and diagnostic")
             error.message
-        case Result.Ok(ToolInvocationResult.Completed(value)) =>
-            let content = value.output.field("content").getOrThrow().text
-            expect(
-                value.isError && content.contains(expectedMessage),
-                "eval configuration errors are visible in the completed tool result"
-            )
-            content
-        case Result.Ok(_) => throw IllegalStateException("expected eval configuration failure")
+        case Result.Ok(_) => throw IllegalStateException("expected actual operator configuration rejection")
     }
 }
 func runWriteApprovalClassificationContracts(root: String): Unit {
@@ -1867,7 +1976,7 @@ func runReadApprovalClassificationContracts(root: String): Unit {
 
     let catalog = ToolCatalog()
     expect(
-        installLocalTools(catalog, workspace, LocalProcessPort(workspace)).isOk(),
+        installLegacyLocalTools(catalog, workspace, LocalProcessPort(workspace)).isOk(),
         "install read approval contract tools"
     )
     let pipeline = ToolPipeline(
@@ -1966,7 +2075,7 @@ func runProcessCancellationContract(processes: LocalProcessPort): Unit {
 
 func expectCoreToolSchemas(catalog: ToolCatalog): Unit {
     expectToolSchema(catalog, "ask", ["questions"], ["questions"])
-    expectToolSchema(catalog, "plan_write", ["content"], ["content"])
+    expect(catalog.publishedDescriptor("plan_write").isNone(), "optional Plan Tool has no default static Product registration")
     // The read contract includes the core path plus optional artifact
     // pagination/export fields. Object member order is not part of JSON Schema.
     expectToolSchemaWithOptionalExtensions(
@@ -1995,37 +2104,18 @@ func expectCoreToolSchemas(catalog: ToolCatalog): Unit {
         ["pattern", "hidden", "gitignore", "limit"],
         ["pattern"]
     )
-    expectToolSchema(
-        catalog,
-        "bash",
-        ["command", "env", "timeout", "cwd", "pty", "async", "network"],
-        ["command"]
-    )
-    expectToolSchema(
-        catalog,
-        "bash_readonly",
-        ["command", "timeout"],
-        ["command"]
-    )
-    expectToolSchema(
-        catalog,
-        "eval",
-        ["language", "code", "title", "timeout", "reset"],
-        ["language", "code"]
-    )
-    expectToolSchema(
-        catalog,
-        "ast_grep",
-        ["pat", "path", "skip"],
-        ["pat"]
-    )
-    expectToolSchema(
-        catalog,
-        "ast_edit",
-        ["ops", "paths"],
-        ["ops", "paths"]
-    )
-    expectToolSchema(
+    for(name in ["bash","bash_readonly"]){
+        expect(catalog.publishedDescriptor(name).isNone(),"retired Shell alias is absent from the static catalog")
+        expect(ToolCatalog().publishedDescriptor(name).isNone(),"an empty catalog cannot restore retired Shell")
+    }
+    expect(ToolCatalog().publishedDescriptor("eval").isNone(), "empty catalog has no retired Eval alias")
+    expect(catalog.publishedDescriptor("eval").isNone(), "core catalog has no retired static Eval registration")
+    expect(!catalog.definitions().any({ item => item.name == "eval" }), "Eval schema requires an actual installed service")
+    expect(!catalog.definitions().any({ item => item.name == "ast_grep" }),
+        "AST query requires its independently installed process plugin")
+    expect(!catalog.definitions().any({ item => item.name == "ast_edit" }),
+        "AST edits require the independent plugin and immutable file plans")
+    expectLegacyLspSchema(
         catalog,
         "lsp",
         [
@@ -2049,13 +2139,72 @@ func expectCoreToolSchemas(catalog: ToolCatalog): Unit {
     )
 }
 
+// The former Eval schema is checked on the actual selected Thread export,
+// after its existing explicit service startup and first canonical cell.
+// This public metadata lookup creates no Root, grant, service or authority.
+func expectActualNativeShellSchema(binding: NativeShellContractBinding, thread: SessionId): Unit {
+    binding.start(thread)
+    let definitions=binding.product.tools(threadId:Some(ThreadId(thread.value)))
+    expect(!definitions.any({item=>["bash","bash_readonly"].contains(item.name)}),"no old Shell alias is restored")
+    var found=false
+    for(definition in definitions where definition.name==binding.name){
+        found=true
+        let properties=definition.inputSchema.field("properties").getOrThrow()
+        for(name in ["command","env","timeout","timeout_ms","cwd","pty","async"]){
+            expect(properties.field(name).isSome(),"actual Native Shell schema preserves supported command arguments")}
+        expect(definition.inputSchema.field("required").getOrThrow().items.size==1 &&
+            definition.inputSchema.field("required").getOrThrow().items[0].text=="command","actual Native Shell still requires command")
+        expect(properties.field("timeout").getOrThrow().field("maximum").getOrThrow().asNumberText()=="600" &&
+            properties.field("timeout_ms").getOrThrow().field("maximum").getOrThrow().asNumberText()=="600000",
+            "actual backend declares the original finite600-second support boundary")
+        expect(properties.field("network").isNone(),"network choice comes only from existing configured service policy")
+    }
+    expect(found,"only a real installed and started current Native Shell supplies this schema")
+}
+
+func expectNativeEvalToolSchema(binding: NativeEvalContractBinding, thread: SessionId): Unit {
+    let actual = binding.product.tools(threadId: Some(ThreadId(thread.value)))
+    expect(!actual.any({ item => item.name == "eval" }), "actual Product never restores the retired Eval alias")
+    for (definition in actual where definition.name == binding.name) {
+        let schema = definition.inputSchema
+        let properties = schema.field("properties").getOrThrow()
+        let required = schema.field("required").getOrThrow()
+        let propertyNames = ArrayList<String>()
+        for (field in properties.fields) { propertyNames.add(field.name) }
+        let requiredNames = ArrayList<String>()
+        for (value in required.items) { requiredNames.add(value.text) }
+        expect(sameStrings(propertyNames.toArray(), ["language", "code", "title", "timeout", "reset"]) &&
+            sameStrings(requiredNames.toArray(), ["language", "code"]),
+            "actual Native Eval keeps the reviewed five properties and two required fields")
+        expect(schema.field("type").getOrThrow().text == "object" &&
+            !schema.field("additionalProperties").getOrThrow().asBool(),
+            "actual Native Eval schema remains an exact object")
+        let language = properties.field("language").getOrThrow()
+        expect(language.field("type").getOrThrow().text == "string" &&
+            language.field("enum").getOrThrow().items.size == 1 &&
+            language.field("enum").getOrThrow().items[0].text == binding.language,
+            "actual selected Eval service publishes only its approved language")
+        expect(properties.field("code").getOrThrow().field("type").getOrThrow().text == "string" &&
+            properties.field("title").getOrThrow().field("type").getOrThrow().text == "string" &&
+            properties.field("reset").getOrThrow().field("type").getOrThrow().text == "boolean",
+            "code title and reset retain their reviewed types")
+        let timeout = properties.field("timeout").getOrThrow()
+        expect(timeout.field("type").getOrThrow().text == "integer" &&
+            timeout.field("minimum").getOrThrow().asNumberText() == "1" &&
+            timeout.field("maximum").getOrThrow().asNumberText() == "30",
+            "actual frozen thirty-second Eval profile publishes timeout range one through thirty")
+        return
+    }
+    throw IllegalStateException("actual selected Native Eval schema missing: " + binding.name)
+}
+
 func expectOrchestrationToolSchemas(
     workspace: LocalWorkspace,
     processes: LocalProcessPort
 ): Unit {
     let orchestrationCatalog = ToolCatalog()
     expect(
-        installLocalTools(
+        installLegacyLocalTools(
             orchestrationCatalog,
             workspace,
             processes,
@@ -2063,15 +2212,23 @@ func expectOrchestrationToolSchemas(
         ).isOk(),
         "install orchestration tools"
     )
+    expect(!orchestrationCatalog.definitions().any({ definition => definition.name == "task" }),
+        "bare Task is retired from the production catalog")
+    expect(!orchestrationCatalog.definitions().any({ definition => definition.name == "hub" }),
+        "bare Hub is retired from the production catalog")
+    expect(!orchestrationCatalog.definitions().any({ definition => definition.name == "yield" }),
+        "bare Yield is retired from the production catalog")
+    let root=workspace.rootPath()
+    let actual=contractValue(openProduct(config:ProductConfig(workspaceRoot:root,
+        settingsRoot:root+"/yield-schema-settings150",stateRoot:root+"/yield-schema-state150",
+        fixture:true,approvalMode:ApprovalMode.Yolo,asyncEnabled:false)),"actual installed Native Yield schema")
+    try {
+        let _=installWorkflowContractPolicy(actual)
+        expectToolSchema(actual.tools(),"plugin.axyndra:workflow.yield",["type","result"],["result"])
+        expectToolSchema(actual.tools(),"plugin.axyndra:workflow.task",["context","tasks"],["context","tasks"])
     expectToolSchema(
-        orchestrationCatalog,
-        "task",
-        ["context", "tasks"],
-        ["context", "tasks"]
-    )
-    expectToolSchema(
-        orchestrationCatalog,
-        "hub",
+        actual.tools(),
+        "plugin.axyndra:workflow.hub_process",
         [
             "op",
             "to",
@@ -2110,12 +2267,7 @@ func expectOrchestrationToolSchemas(
         ],
         ["op"]
     )
-    expectToolSchema(
-        orchestrationCatalog,
-        "yield",
-        ["type", "result"],
-        ["result"]
-    )
+    } finally {expect(actual.close().isOk(),"actual Yield schema fixture closes its original Product owners")}
 }
 
 func runAskToolContracts(
@@ -2383,273 +2535,7 @@ func runAstSearchContracts(
             )
         )
     )
-    let astMatches = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "ast-grep-contract",
-                "ast_grep",
-                objectValue(
-                    [
-                        ValueField("pat", textValue("return $VALUE")),
-                        ValueField(
-                            "path",
-                            textValue("ast/**/*.py")
-                        )
-                    ]
-                )
-            )
-        )
-    )
-    expect(
-        !astMatches.isError && astMatches.output.field("match_count").getOrThrow().asNumberText() == "2" &&
-            astMatches.output.field("file_count").getOrThrow().asNumberText() == "1" &&
-            astMatches.output.field("content").getOrThrow().text.contains("[ast/sample.py#") &&
-            astMatches.output.field("content").getOrThrow().text.contains("meta: VALUE=value") &&
-            astMatches.output.field("content").getOrThrow().text.contains("meta: VALUE=42"),
-        "ast_grep performs structural search with hashline anchors"
-    )
-    let astPaged = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "ast-grep-page",
-                "ast_grep",
-                objectValue(
-                    [
-                        ValueField("pat", textValue("return $VALUE")),
-                        ValueField(
-                            "path",
-                            textValue("ast/sample.py")
-                        ),
-                        ValueField("skip", integerValue(1))
-                    ]
-                )
-            )
-        )
-    )
-    expect(
-        astPaged.output.field("match_count").getOrThrow().asNumberText() == "2" &&
-            astPaged.output.field("visible_count").getOrThrow().asNumberText() == "1" &&
-            !astPaged.output.field("content").getOrThrow().text.contains("VALUE=value") &&
-            astPaged.output.field("content").getOrThrow().text.contains("VALUE=42"),
-        "ast_grep applies the stable match offset"
-    )
-    let astEmpty = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "ast-grep-empty",
-                "ast_grep",
-                objectValue(
-                    [
-                        ValueField(
-                            "pat",
-                            textValue("never_called($$$ARGS)")
-                        ),
-                        ValueField(
-                            "path",
-                            textValue("ast/sample.py")
-                        )
-                    ]
-                )
-            )
-        )
-    )
-    expect(
-        !astEmpty.isError && astEmpty.output.field("match_count").getOrThrow().asNumberText() == "0" &&
-            astEmpty.output.field("content").getOrThrow().text == "No matches found",
-        "ast_grep treats zero structural matches as a successful result"
-    )
-    expect(
-        toolOutcomeFailed(executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "ast-grep-escape",
-                "ast_grep",
-                objectValue(
-                    [
-                        ValueField("pat", textValue("return $VALUE")),
-                        ValueField("path", textValue("../*.py"))
-                    ]
-                )
-            )
-        )),
-        "ast_grep rejects workspace escape through a glob base"
-    )
     initializedTodos
-}
-
-func runAstEditContracts(
-    workspace: LocalWorkspace,
-    processes: LocalProcessPort
-): Unit {
-    let root = workspace.rootPath()
-    let astEditCatalog = ToolCatalog()
-    expect(
-        installLocalTools(
-            astEditCatalog,
-            workspace,
-            processes
-        ).isOk(),
-        "install isolated AST edit catalog"
-    )
-    let astEditPipeline = ToolPipeline(
-        astEditCatalog,
-        InMemoryOperationRuntimePort(),
-        RecordingAuditPort(),
-        ProductIds(),
-        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
-    )
-    let astEditContext = ToolInvocationContext(
-        RunId("ast-edit-contract"),
-        SessionId("ast-edit-contract"),
-        CapabilitySet(values: [Capability(CapabilityKind.WorkspaceWrite)])
-    )
-    let astOriginal = String.fromUtf8(File.readFrom(root + "/ast/sample.py"))
-    let preview = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            astEditCall(
-                "ast-edit-preview",
-                "return $VALUE",
-                "return wrap($VALUE)",
-                ["ast/sample.py"]
-            )
-        )
-    )
-    expect(
-        !preview.isError && !preview.output.field("applied").getOrThrow().asBool() &&
-            preview.output.field("total_replacements").getOrThrow().asNumberText() == "2" &&
-            preview.output.field("content").getOrThrow().text.contains("files NOT modified yet") &&
-            preview.output.field("content").getOrThrow().text.contains("[ast/sample.py#") &&
-            String.fromUtf8(File.readFrom(root + "/ast/sample.py")) == astOriginal,
-        "ast_edit stages a hashline preview without modifying files"
-    )
-    let rejected = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            resolutionWrite(
-                "ast-edit-reject",
-                "xd://reject",
-                "the rewrite is not wanted"
-            )
-        )
-    )
-    expect(
-        rejected.output.field("action").getOrThrow().text == "discard" &&
-            rejected.output.field("content").getOrThrow().text.contains("Discarded: AST Edit") &&
-            String.fromUtf8(File.readFrom(root + "/ast/sample.py")) == astOriginal,
-        "xd://reject discards the pending AST edit"
-    )
-    let _ = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            astEditCall(
-                "ast-edit-stale-preview",
-                "return $VALUE",
-                "return wrap($VALUE)",
-                ["ast/sample.py"]
-            )
-        )
-    )
-    let externallyChanged = astOriginal + "# external change\n"
-    File.writeTo(
-        root + "/ast/sample.py",
-        externallyChanged.toArray()
-    )
-    let staleResolution = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            resolutionWrite(
-                "ast-edit-stale-resolve",
-                "xd://resolve",
-                "apply the structural rewrite"
-            )
-        )
-    )
-    expect(
-        staleResolution.isError &&
-            staleResolution.output.field("error_kind").getOrThrow().text == "conflict" &&
-            String.fromUtf8(File.readFrom(root + "/ast/sample.py")) == externallyChanged,
-        "ast_edit rejects stale previews before any file is modified"
-    )
-    let _ = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            resolutionWrite(
-                "ast-edit-stale-reject",
-                "xd://reject",
-                "the preview is stale"
-            )
-        )
-    )
-    File.writeTo(root + "/ast/sample.py", astOriginal.toArray())
-    let _ = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            astEditCall(
-                "ast-edit-apply-preview",
-                "return $VALUE",
-                "return wrap($VALUE)",
-                ["ast/sample.py"]
-            )
-        )
-    )
-    let applied = completedFrom(
-        executePipelineCall(astEditPipeline,
-            astEditContext,
-            resolutionWrite(
-                "ast-edit-apply",
-                "xd://resolve",
-                "apply the reviewed structural rewrite"
-            )
-        )
-    )
-    let appliedSource = String.fromUtf8(File.readFrom(root + "/ast/sample.py"))
-    expect(
-        applied.output.field("applied").getOrThrow().asBool() && applied.output.field("action").getOrThrow().text ==
-            "apply" && applied.output.field("content").getOrThrow().text.contains("Applied 2 replacements in 1 file.") &&
-            applied.output.field("content").getOrThrow().text.contains("[ast/sample.py#") && appliedSource.contains(
-            "return wrap(value)") && appliedSource.contains("return wrap(42)"),
-        "xd://resolve atomically applies the reviewed AST edit"
-    )
-    match (executePipelineCall(astEditPipeline,
-        astEditContext,
-        resolutionWrite(
-            "ast-edit-duplicate-resolve",
-            "xd://resolve",
-            "do not apply twice"
-        )
-    )) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            result.isError &&
-                result.output.field("error").getOrThrow().text == "tool.ast_edit_no_pending",
-            "resolved AST edits cannot be applied twice"
-        )
-        case _ => throw IllegalStateException("duplicate AST resolve was not denied")
-    }
-    match (executePipelineCall(astEditPipeline,
-        astEditContext,
-        astEditCallWithOps(
-            "ast-edit-duplicate-pattern",
-            [
-                ["return $VALUE", "return first($VALUE)"],
-                ["return $VALUE", "return second($VALUE)"]
-            ],
-            ["ast/sample.py"]
-        )
-    )) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            result.isError &&
-                result.output.field("error").getOrThrow().text == "tool.invalid_argument" &&
-                result.output.field("message").getOrThrow().text.contains(
-                    "Duplicate rewrite pattern"
-                ),
-            "ast_edit rejects duplicate rewrite patterns"
-        )
-        case _ => throw IllegalStateException("duplicate ast_edit pattern was not denied")
-    }
 }
 
 func runLspContracts(
@@ -2657,14 +2543,10 @@ func runLspContracts(
     processes: LocalProcessPort
 ): Unit {
     let lspCatalog = ToolCatalog()
-    expect(
-        installLocalTools(
-            lspCatalog,
-            workspace,
-            processes
-        ).isOk(),
-        "install isolated LSP catalog"
-    )
+    let legacyRuntime = LegacyLspRuntime(workspace, sandboxEnabled: processes.sandboxEnabled())
+    try {
+    expect(installLegacyLspTools(lspCatalog, workspace, legacyRuntime).isOk(),
+        "install isolated LSP catalog")
     let lspPipeline = ToolPipeline(
         lspCatalog,
         InMemoryOperationRuntimePort(),
@@ -2686,6 +2568,7 @@ func runLspContracts(
     runLspQueryContracts(lspPipeline, lspContext)
     runLspMutationContracts(lspPipeline, lspContext, workspace)
     runLspResourceContracts(lspPipeline, lspContext, workspace)
+    } finally { legacyRuntime.closeOracle() }
 }
 
 func runLspQueryContracts(
@@ -2721,7 +2604,7 @@ func runLspQueryContracts(
     )
     expect(
         !lspDefinition.isError && lspDefinition.output.field("content").getOrThrow().text.contains("lsp/helper.py:1:"),
-        "lsp definition comes from the live pyright server"
+        "lsp definition comes from the live pyright server; actual=" + encodeAgentValue(lspDefinition.output)
     )
     let lspReferences = completedFrom(
         executePipelineCall(lspPipeline,
@@ -3038,7 +2921,12 @@ func runCheckpointContracts(
     processes: LocalProcessPort
 ): Unit {
     let root = workspace.rootPath()
+    let policyProduct = openLegacyWorkspaceProduct(config: ProductConfig(workspaceRoot: root,
+        settingsRoot: root + "/checkpoint-policy-settings", stateRoot: root + "/checkpoint-policy-state",
+        fixture: true, asyncEnabled: false)).value().getOrThrow()
     let database = SqliteDatabase(root + "/checkpoint-contract.db")
+    try {
+    installContractCompactionPolicy(policyProduct)
     let checkpointSession = SessionId("checkpoint-contract")
     let activeMessages = checkpointContractMessages(false)
     expect(
@@ -3052,11 +2940,15 @@ func runCheckpointContracts(
     )
     let checkpointCatalog = ToolCatalog()
     expect(
-        installLocalTools(
+        installLegacyLocalTools(
             checkpointCatalog,
             workspace,
             processes,
-            checkpointDatabase: Some(database)
+            allowUnsafeDirectLaunchForTests: true,
+            checkpointDatabase: Some(database),
+            checkpointPolicy: Some({ context: ToolInvocationContext, call: ToolCall,
+                loadThread: () -> Result<AgentThreadSnapshot>, timestamp: () -> String =>
+                    policyProduct.proposeCheckpointExecution(context, call, loadThread, timestamp) })
         ).isOk(),
         "install checkpoint tools with the canonical store"
     )
@@ -3115,10 +3007,11 @@ func runCheckpointContracts(
         persistResult: false
     )
     match (rewindAttempt) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            !result.isError,
-            "active canonical checkpoint accepts rewind: " + result.output.stringify()
-        )
+        case Result.Ok(ToolInvocationResult.Completed(result)) =>
+            try { expect(
+                !result.isError,
+                "active canonical checkpoint accepts rewind: " + result.output.stringify()
+            ) } finally { result.releasePayload() }
         case Result.Ok(_) => throw IllegalStateException(
             "active canonical checkpoint returned a non-completed result"
         )
@@ -3126,7 +3019,7 @@ func runCheckpointContracts(
             "active canonical checkpoint failed: " + error.code + ": " + error.message
         )
     }
-    database.close()
+    } finally { database.close(); let _ = policyProduct.close() }
     runRewindContract(workspace, processes)
 }
 
@@ -3135,7 +3028,12 @@ func runRewindContract(
     processes: LocalProcessPort
 ): Unit {
     let root = workspace.rootPath()
-    let database = SqliteDatabase(root + "/rewind-contract.db")
+    let policyProduct = openLegacyWorkspaceProduct(config: ProductConfig(workspaceRoot: root,
+        settingsRoot: root + "/rewind-policy-settings", stateRoot: root + "/rewind-policy-state",
+        fixture: true, asyncEnabled: false)).value().getOrThrow()
+    let database = SqliteDatabase(root + "/rewind-policy-state/state.db")
+    try {
+    installContractCompactionPolicy(policyProduct)
     let checkpointSession = SessionId("rewind-contract")
     expect(SqliteThreadSeedStore(database).createCompleted(
         completedThreadSeedSnapshot(
@@ -3145,11 +3043,16 @@ func runRewindContract(
     ).isOk(), "seed canonical completed rewind Thread")
     let restartedCheckpointCatalog = ToolCatalog()
     expect(
-        installLocalTools(
+        installLegacyLocalTools(
             restartedCheckpointCatalog,
             workspace,
             processes,
-            checkpointDatabase: Some(database)
+            allowUnsafeDirectLaunchForTests: true,
+            checkpointDatabase: Some(database),
+            checkpointSummary: Some({ sessionId, messages, cancellation => policyProduct.proposeContextSummary(sessionId, messages, cancellation: Some(cancellation)) }),
+            checkpointPolicy: Some({ context: ToolInvocationContext, call: ToolCall,
+                loadThread: () -> Result<AgentThreadSnapshot>, timestamp: () -> String =>
+                    policyProduct.proposeCheckpointExecution(context, call, loadThread, timestamp) })
         ).isOk(),
         "reinstall checkpoint tools after simulated restart"
     )
@@ -3232,7 +3135,7 @@ func runRewindContract(
         )),
         "completed checkpoint cannot be rewound twice"
     )
-    database.close()
+    } finally { database.close(); let _ = policyProduct.close() }
 }
 
 func checkpointContractMessages(completed: Bool): Array<ModelMessage> {
@@ -3280,7 +3183,7 @@ func checkpointContractMessages(completed: Bool): Array<ModelMessage> {
 func runTodoToolContracts(
     pipeline: ToolPipeline,
     context: ToolInvocationContext,
-    todoRepository: SessionMetadataRepository,
+    todoRepository: LegacyTodoRepository,
     initializedTodos: ToolResult,
     database: SqliteDatabase
 ): Unit {
@@ -3305,8 +3208,8 @@ func runTodoMutationContracts(
     let initializedPhases = decodeTodoPhases(initializedTodos.output.field("phases").getOrThrow()).value().getOrThrow()
     expect(
         !initializedTodos.isError && initializedTodos.output.field("op").getOrThrow().text == "init" &&
-            initializedPhases.size == 2 && initializedPhases[0].tasks[0].status == TodoStatus.InProgress &&
-            initializedPhases[0].tasks[1].status == TodoStatus.Pending,
+            initializedPhases.size == 2 && initializedPhases[0].tasks[0].status == ProductTodoStatus.InProgress &&
+            initializedPhases[0].tasks[1].status == ProductTodoStatus.Pending,
         "todo initializes explicitly and promotes the first pending task: " + initializedTodos.output.stringify()
     )
     expect(
@@ -3340,7 +3243,7 @@ func runTodoMutationContracts(
     )
     expect(
         doneResult.output.field("completedTasks").getOrThrow().items.size == 1 &&
-            decodeTodoPhases(doneResult.output.field("phases").getOrThrow()).value().getOrThrow()[0].tasks[0].status == TodoStatus
+            decodeTodoPhases(doneResult.output.field("phases").getOrThrow()).value().getOrThrow()[0].tasks[0].status == ProductTodoStatus
             .InProgress,
         "todo done reports completion and advances pending work"
     )
@@ -3357,8 +3260,8 @@ func runTodoMutationContracts(
     )
     let blockedPhases = decodeTodoPhases(blockedResult.output.field("phases").getOrThrow()).value().getOrThrow()
     expect(
-        blockedPhases[0].tasks[0].status == TodoStatus.Blocked && blockedPhases[0].tasks[0].blocker ==
-            "waiting for input" && blockedPhases[1].tasks[0].status == TodoStatus.InProgress,
+        blockedPhases[0].tasks[0].status == ProductTodoStatus.Blocked && blockedPhases[0].tasks[0].blocker ==
+            "waiting for input" && blockedPhases[1].tasks[0].status == ProductTodoStatus.InProgress,
         "todo block normalizes its reason and advances other work"
     )
     let unblockedPhases = decodeTodoPhases(completedFrom(
@@ -3372,7 +3275,7 @@ func runTodoMutationContracts(
         )
     ).output.field("phases").getOrThrow()).value().getOrThrow()
     expect(
-        unblockedPhases[0].tasks[0].status == TodoStatus.Pending && unblockedPhases[0].tasks[0].blocker == "",
+        unblockedPhases[0].tasks[0].status == ProductTodoStatus.Pending && unblockedPhases[0].tasks[0].blocker == "",
         "todo unblock restores blocked work to pending"
     )
     expect(
@@ -3456,20 +3359,20 @@ func runTodoMutationContracts(
 func runTodoViewContracts(
     pipeline: ToolPipeline,
     context: ToolInvocationContext,
-    todoRepository: SessionMetadataRepository,
+    todoRepository: LegacyTodoRepository,
     database: SqliteDatabase
 ): Unit {
     let beforeView = [
-        TodoPhase(
+        ProductTodoPhase(
             "Manual",
             [
-                TodoItem(
+                ProductTodoItem(
                     "First",
-                    status: TodoStatus.InProgress
+                    status: ProductTodoStatus.InProgress
                 ),
-                TodoItem(
+                ProductTodoItem(
                     "Second",
-                    status: TodoStatus.InProgress
+                    status: ProductTodoStatus.InProgress
                 )
             ]
         )
@@ -3492,8 +3395,8 @@ func runTodoViewContracts(
         .value()
         .getOrThrow()
     expect(
-        viewedPhases[0].tasks[0].status == TodoStatus.InProgress && viewedPhases[0].tasks[1].status == TodoStatus
-            .InProgress && persistedAfterView[0].tasks[1].status == TodoStatus.InProgress,
+        viewedPhases[0].tasks[0].status == ProductTodoStatus.InProgress && viewedPhases[0].tasks[1].status == ProductTodoStatus
+            .InProgress && persistedAfterView[0].tasks[1].status == ProductTodoStatus.InProgress,
         "todo view is pure and does not normalize or rewrite state"
     )
     let clearedTodos = completedFrom(
@@ -3504,7 +3407,7 @@ func runTodoViewContracts(
     )
     expect(
         clearedTodos.output.field("phases").getOrThrow().items[0].field("tasks").getOrThrow().items.isEmpty() &&
-            SqliteSessionMetadataRepository(database).todoPhases(context.sessionId).isOk(),
+            LegacyTodoRepository(database).todoPhases(context.sessionId).isOk(),
         "todo rm clears all tasks and state survives repository restart"
     )
     expect(
@@ -3537,21 +3440,28 @@ func runWorkspaceAndEvalContracts(
     pipeline: ToolPipeline,
     context: ToolInvocationContext,
     workspace: LocalWorkspace,
-    processes: LocalProcessPort
+    processes: LocalProcessPort,
+    shell: NativeShellContractScope
 ): Unit {
+    let binding=shell.binding()
+    expectActualNativeShellSchema(binding,context.sessionId)
     runWorkspaceReadEditBashContracts(
         pipeline,
         context,
-        workspace
+        workspace,
+        binding
     )
-    runEvalContracts(pipeline, context, workspace, processes)
-    runPersistentShellContracts(pipeline, context, processes)
+    let nativeEvalScope = NativeEvalContractScope(workspace.rootPath())
+    try { runEvalContracts(nativeEvalScope, context, workspace, processes) }
+    finally { nativeEvalScope.close() }
+    runPersistentShellContracts(binding, context)
 }
 
 func runWorkspaceReadEditBashContracts(
     pipeline: ToolPipeline,
     context: ToolInvocationContext,
-    workspace: LocalWorkspace
+    workspace: LocalWorkspace,
+    binding: NativeShellContractBinding
 ): Unit {
     runWorkspaceReadContracts(
         pipeline,
@@ -3560,7 +3470,8 @@ func runWorkspaceReadEditBashContracts(
     runWorkspaceEditAndBashContracts(
         pipeline,
         context,
-        workspace
+        workspace,
+        binding
     )
 }
 
@@ -3680,7 +3591,8 @@ func runWorkspaceReadContracts(
 func runWorkspaceEditAndBashContracts(
     pipeline: ToolPipeline,
     context: ToolInvocationContext,
-    workspace: LocalWorkspace
+    workspace: LocalWorkspace,
+    binding: NativeShellContractBinding
 ): Unit {
     runHashlineContractAlignment(workspace)
     let root = workspace.rootPath()
@@ -3781,13 +3693,7 @@ func runWorkspaceEditAndBashContracts(
             String.fromUtf8(File.readFrom(root + "/multi-b.txt")) == "fresh-b\n",
         "one stale anchor prevents every file in the transaction"
     )
-    let bashApproval = approvalFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-1",
-                "bash",
-                objectValue(
+    let actualShell=binding.invoke(context.sessionId,objectValue(
                     [
                         ValueField(
                             "command",
@@ -3796,18 +3702,12 @@ func runWorkspaceEditAndBashContracts(
                                     "printf product-ok")
                         )
                     ]
-                )
-            )
-        )
-    )
-    expect(
-        pipeline.decide(
-            context,
-            bashApproval.operationId,
-            ApprovalDecision.ApproveSession
-        ).isOk(),
-        "approved bash executes"
-    )
+                ))
+    let bashApproval=actualShell.approval().getOrThrow()
+    expect(actualShell.decide(bashApproval.operationId.value,ApprovalDecision.ApproveSession).isOk(),"approved bash executes")
+    let observed=binding.observe(context.sessionId,actualShell)
+    expect(!observed.isError && observed.output.field("stdout").getOrThrow().text=="product-ok" && observed.receiptId!="",
+        "first native command has its actual completed Receipt")
 }
 
 func runHashlineContractAlignment(workspace: LocalWorkspace): Unit {
@@ -3911,13 +3811,13 @@ func expectHashlineRejected(
 }
 
 func runEvalContracts(
-    pipeline: ToolPipeline,
+    pipeline: NativeEvalContractScope,
     context: ToolInvocationContext,
     workspace: LocalWorkspace,
     processes: LocalProcessPort
 ): Unit {
     let pythonFirst = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-py-first",
@@ -3931,8 +3831,9 @@ func runEvalContracts(
         !pythonFirst.isError && pythonFirst.output.field("content").getOrThrow().text.trimAscii() == "42",
         "python eval executes a real cell"
     )
+    expectNativeEvalToolSchema(pipeline.binding("py"), context.sessionId)
     let pythonPersistent = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-py-persistent",
@@ -3946,7 +3847,7 @@ func runEvalContracts(
         "python eval preserves state across calls"
     )
     let pythonTimeout = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-py-timeout",
@@ -3962,7 +3863,7 @@ func runEvalContracts(
         "python eval enforces the cell timeout"
     )
     let pythonAfterTimeout = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-py-after-timeout",
@@ -3983,70 +3884,47 @@ func runEvalCancellationContract(
     workspace: LocalWorkspace,
     processes: LocalProcessPort
 ): Unit {
-    let cancelCatalog = ToolCatalog()
-    expect(
-        installLocalTools(
-            cancelCatalog,
-            workspace,
-            processes
-        ).isOk(),
-        "install isolated eval cancellation catalog"
-    )
-    let cancelPipeline = ToolPipeline(
-        cancelCatalog,
-        InMemoryOperationRuntimePort(),
-        RecordingAuditPort(),
-        ProductIds(),
-        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
-    )
-    let cancelContext = ToolInvocationContext(
-        RunId("eval-cancel-contract"),
-        SessionId("eval-cancel-contract"),
-        CapabilitySet(values: [Capability(CapabilityKind.ProcessSpawn)])
-    )
-    let cancelCall = evalCall(
-        "eval-py-cancel",
-        "py",
-        "import time\ntime.sleep(10)"
-    )
-    let preparedEval = match (preparePipelineCall(
-        cancelPipeline,
-        cancelContext,
-        cancelCall
-    )) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => throw IllegalStateException(error.message)
-    }
-    let cancelledEvalFuture = spawn {
-        cancelPipeline.executePrepared(cancelContext, preparedEval)
-    }
-    var activeObserved = false
-    for (_ in 0..500) {
-        if (processes.hasActiveOperation(preparedEval.operationId)) {
-            activeObserved = true
-            break
-        }
-        sleep(Duration.millisecond * 10)
-    }
-    expect(
-        activeObserved && cancelPipeline.cancel(cancelContext.runId).isOk(),
-        "eval cancellation reaches the active runtime"
-    )
-    let cancelledEval = completedFrom(cancelledEvalFuture.get())
-    expect(
-        cancelledEval.isError &&
-            cancelledEval.output.field("status").getOrThrow().text == "error" &&
-            cancelledEval.output.field("exit_code").getOrThrow().asNumberText() != "0",
-        "cancelled eval reports a failed cell instead of fake success"
-    )
+    let nativeScope = NativeEvalContractScope(workspace.rootPath(), approvalMode: ApprovalMode.AlwaysAsk)
+    let thread = SessionId("eval-cancel-contract")
+    try {
+        let binding = nativeScope.binding("py")
+        nativeEvalStartChecked(binding, thread)
+        let session = binding.product.applicationSession(sessionId: Some(thread))
+        let ready = workspace.rootPath() + "/eval-cancel-ready"
+        let cancelCall = evalCall("eval-py-cancel", "py",
+            "open('eval-cancel-ready', 'w').write('ready')\nimport time\ntime.sleep(10)")
+        binding.product.fixtureProbe.getOrThrow().enqueueToolCallReply(cancelCall.callId,
+            binding.name, cancelCall.arguments)
+        expect(session.submit("Prepare the requested Python cell.").isOk(), "real Eval call prepares through Application")
+        let approval = session.approval().getOrThrow()
+        expect(binding.childReceipts() == 0 && !exists(Path(ready)),
+            "the cell cannot execute before its own canonical approval")
+        let cancelledEvalFuture = spawn { session.decide(approval.operationId.value, ApprovalDecision.Approve) }
+        try {
+            var activeObserved = false
+            for (_ in 0..500) {
+                if (exists(Path(ready)) && binding.childReceipts() == 1) { activeObserved = true; break }
+                sleep(Duration.millisecond * 10)
+            }
+            expect(activeObserved && session.cancel().isOk(), "eval cancellation reaches the active runtime")
+            let _ = cancelledEvalFuture.get()
+            binding.waitReleased()
+            expect(binding.childReceipts() == 1 &&
+                binding.count("SELECT COUNT(*) FROM operation_receipts WHERE outcome='unknown'") == 1 &&
+                !binding.visible(thread),
+                "cancelled accepted Eval retains its actual Unknown Receipt and cannot fake a completed cell")
+            expect(nativeEvalFailed(binding.call(thread, cancelCall)) && binding.childReceipts() == 1,
+                "a withdrawn service cannot replay the already accepted cell")
+        } finally { let _ = session.cancel(); let _ = cancelledEvalFuture.get() }
+    } finally { nativeScope.close() }
 }
 
 func runEvalLanguageContracts(
-    pipeline: ToolPipeline,
+    pipeline: NativeEvalContractScope,
     context: ToolInvocationContext
 ): Unit {
     let pythonReset = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-py-reset",
@@ -4061,7 +3939,7 @@ func runEvalLanguageContracts(
         "python eval reset clears only the selected runtime"
     )
     let javascriptFirst = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-js-first",
@@ -4072,7 +3950,7 @@ func runEvalLanguageContracts(
         )
     )
     let javascriptPersistent = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-js-persistent",
@@ -4085,10 +3963,11 @@ func runEvalLanguageContracts(
         !javascriptFirst.isError && javascriptFirst.output.field("content").getOrThrow().text.trimAscii() == "7" &&
             !javascriptPersistent.isError &&
             javascriptPersistent.output.field("content").getOrThrow().text.trimAscii() == "9",
-        "javascript eval executes and preserves VM bindings"
+        "javascript eval executes and preserves VM bindings; first=" + encodeAgentValue(javascriptFirst.output) +
+            "; persistent=" + encodeAgentValue(javascriptPersistent.output)
     )
     let javascriptFailure = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-js-error",
@@ -4107,7 +3986,7 @@ func runEvalLanguageContracts(
         "javascript eval surfaces runtime failures as tool errors"
     )
     let rubyFirst = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-rb-first",
@@ -4118,7 +3997,7 @@ func runEvalLanguageContracts(
         )
     )
     let rubyPersistent = completedFrom(
-        executePipelineCall(pipeline,
+        executeNativeEvalCall(pipeline,
             context,
             evalCall(
                 "eval-rb-persistent",
@@ -4130,32 +4009,23 @@ func runEvalLanguageContracts(
     expect(
         !rubyFirst.isError && rubyFirst.output.field("content").getOrThrow().text.trimAscii() == "5" &&
             !rubyPersistent.isError && rubyPersistent.output.field("content").getOrThrow().text.trimAscii() == "7",
-        "ruby eval executes and preserves binding state"
+        "ruby eval executes and preserves binding state; first=" + encodeAgentValue(rubyFirst.output) +
+            "; persistent=" + encodeAgentValue(rubyPersistent.output)
     )
 }
 
 func runPersistentShellContracts(
-    pipeline: ToolPipeline,
-    context: ToolInvocationContext,
-    processes: LocalProcessPort
+    binding: NativeShellContractBinding,
+    context: ToolInvocationContext
 ): Unit {
-    let persistedShell = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-2",
-                "bash",
-                objectValue(
+    let persistedShell = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField(
                             "command",
                             textValue("printf \"$AXYNDRA_CONTRACT:\"; pwd")
                         )
                     ]
-                )
-            )
-        )
-    )
+                ))
     let isolatedStdout = persistedShell.output.field("stdout")
         .getOrThrow().text.trimAscii()
     let isolatedCwd = persistedShell.output.field("cwd")
@@ -4164,13 +4034,7 @@ func runPersistentShellContracts(
         isolatedStdout == "kept:" + isolatedCwd && isolatedCwd.endsWith("/nested"),
         "sandboxed persistent bash retains session state inside one isolation profile"
     )
-    let emptyInputCommand = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-empty-input",
-                "bash",
-                objectValue(
+    let emptyInputCommand = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField(
                             "command",
@@ -4178,31 +4042,19 @@ func runPersistentShellContracts(
                                 "head -2 $(find . -type f -name 'definitely-missing-testrunner' 2>/dev/null | head -1) 2>/dev/null; printf marker-ok")
                         )
                     ]
-                )
-            )
-        )
-    )
+                ))
     expect(
         emptyInputCommand.output.field("stdout").getOrThrow().text.contains("marker-ok"),
         "persistent shell does not consume completion markers as command stdin"
     )
-    let binaryOutput = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-binary-output",
-                "bash",
-                objectValue(
+    let binaryOutput = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField(
                             "command",
                             textValue("printf 'before\\377\\000after\\n'; printf 'err-before\\376err-after' >&2")
                         )
                     ]
-                )
-            )
-        )
-    )
+                ))
     expect(
         !binaryOutput.isError && binaryOutput.output.field("stdout").getOrThrow().text.contains("before") &&
             binaryOutput.output.field("stdout").getOrThrow().text.contains("\u{FFFD}") && binaryOutput
@@ -4219,13 +4071,7 @@ func runPersistentShellContracts(
             binaryOutput.output.field("stderr").getOrThrow().text.contains("err-after"),
         "persistent shell recognizes completion markers after binary stdout and stderr"
     )
-    let boundaryOutput = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-binary-boundary",
-                "bash",
-                objectValue(
+    let boundaryOutput = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField(
                             "command",
@@ -4235,10 +4081,7 @@ func runPersistentShellContracts(
                             )
                         )
                     ]
-                )
-            )
-        )
-    )
+                ))
     expect(
         !boundaryOutput.isError && boundaryOutput.output.field("stdout").getOrThrow().text.startsWith("aaaa") &&
             boundaryOutput.output.field("stdout").getOrThrow().text.contains("boundary-tail") && boundaryOutput
@@ -4249,23 +4092,14 @@ func runPersistentShellContracts(
             .contains("AXYNDRA_DONE_fake"),
         "persistent shell handles invalid UTF-8 across read boundaries and marker-like output"
     )
-    let largeOutput = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-large-output",
-                "bash",
-                objectValue(
+    let largeOutput = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField(
                             "command",
                             textValue("head -c 131072 /dev/zero | tr '\\000' z; printf large-output-tail")
                         )
                     ]
-                )
-            )
-        )
-    )
+                ), artifactChoice: Some(ApprovalDecision.Approve))
     expect(
         !largeOutput.isError && largeOutput.output.field("stdout").getOrThrow().text.size >= 131072 && largeOutput
             .output
@@ -4275,26 +4109,8 @@ func runPersistentShellContracts(
             .contains("large-output-tail"),
         "large stdout does not delay persistent shell completion marker recognition"
     )
-    let nonzeroOutput = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-nonzero-output",
-                "bash",
-                objectValue([ValueField("command", textValue("printf nonzero-output; false"))])
-            )
-        )
-    )
-    let signalledOutput = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-signalled-output",
-                "bash",
-                objectValue([ValueField("command", textValue("sh -c 'kill -TERM $$'"))])
-            )
-        )
-    )
+    let nonzeroOutput = nativeShellObservedCall(binding, context, objectValue([ValueField("command", textValue("printf nonzero-output; false"))]))
+    let signalledOutput = nativeShellObservedCall(binding, context, objectValue([ValueField("command", textValue("sh -c 'kill -TERM $$'"))]))
     expect(
         nonzeroOutput.isError && nonzeroOutput.output.field("exit_code").getOrThrow().asNumberText() == "1" && nonzeroOutput
             .output
@@ -4307,30 +4123,26 @@ func runPersistentShellContracts(
             .asNumberText() == "143",
         "persistent shell parses normal nonzero and signal termination statuses"
     )
+    let timeoutThread=SessionId("persistent-shell-timeout-contract")
+    binding.start(timeoutThread) // separate explicit startup, outside command clock
     let timeoutStarted = MonoTime.now()
-    let timeoutResult = processes.executeShell(
-        SessionId("persistent-shell-timeout-contract"),
-        ProcessRequest(
-            "/bin/bash",
-            operationId: OperationId("persistent-shell-timeout-operation"),
-            arguments: ["printf timeout-stdout; printf timeout-stderr >&2; sleep 5"],
-            timeoutMillis: 1000,
-            sandboxMode: ProcessSandboxMode.WorkspaceReadWrite
-        )
-    ).value().getOrThrow()
+    let timeoutInvocation=binding.invoke(timeoutThread,objectValue([
+        ValueField("command",textValue("printf timeout-stdout; printf timeout-stderr >&2; sleep 5")),
+        ValueField("timeout_ms",integerValue(1000))]))
+    match(timeoutInvocation.approval()){
+        case Some(request)=>let _=timeoutInvocation.decide(request.operationId.value,ApprovalDecision.Approve)
+        case None=>()}
     let timeoutElapsed = (MonoTime.now() - timeoutStarted).toMilliseconds()
+    expect(timeoutInvocation.failure().isSome(),"timeout retains the actual non-success canonical outcome")
+    let timeoutResult=binding.observe(timeoutThread,timeoutInvocation)
     expect(
-        timeoutResult.timedOut && timeoutResult.exitCode == 124 && timeoutResult.stdout.contains("timeout-stdout") &&
-            timeoutResult.stderr.contains("timeout-stderr") && timeoutElapsed >= 900 && timeoutElapsed <= 1600,
+        timeoutResult.status=="unknown" && timeoutResult.output.field("timed_out").getOrThrow().asBool() &&
+            timeoutResult.output.field("exit_code").getOrThrow().asNumberText()=="124" &&
+            timeoutResult.output.field("stdout").getOrThrow().text.contains("timeout-stdout") &&
+            timeoutResult.output.field("stderr").getOrThrow().text.contains("timeout-stderr") && timeoutElapsed >= 900 && timeoutElapsed <= 1600,
         "persistent shell uses a monotonic deadline and preserves partial output on timeout"
     )
-    let ptyResult = completedFrom(
-        executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-pty",
-                "bash",
-                objectValue(
+    let ptyResult = nativeShellObservedCall(binding, context, objectValue(
                     [
                         ValueField("command", textValue("printf pty-ok")),
                         ValueField("pty", boolValue(true)),
@@ -4339,10 +4151,7 @@ func runPersistentShellContracts(
                             objectValue([ValueField("AXYNDRA_PTY", textValue("yes"))])
                         )
                     ]
-                )
-            )
-        )
-    )
+                ))
     expect(
         ptyResult.output.field("stdout").getOrThrow().text.contains("pty-ok") && ptyResult
             .output
@@ -4351,79 +4160,38 @@ func runPersistentShellContracts(
             .asBool(),
         "bash supports an explicitly requested PTY"
     )
-    expect(
-        toolOutcomeFailed(executePipelineCall(pipeline,
-            context,
-            ToolCall(
-                "bash-escape-cwd",
-                "bash",
-                objectValue(
+    let escaped=binding.invoke(context.sessionId,objectValue(
                     [
                         ValueField("command", textValue("pwd")),
                         ValueField("cwd", textValue("../"))
                     ]
-                )
-            )
-        )),
-        "bash cwd cannot escape the workspace"
-    )
+                ))
+    expect(escaped.failure().isSome(),"bash cwd cannot escape the workspace")
+    escaped.close().value().getOrThrow()
 }
 
 func runRestartedPermissionContracts(
-    database: SqliteDatabase,
     context: ToolInvocationContext,
-    workspace: LocalWorkspace
+    workspace: LocalWorkspace,
+    shell: NativeShellContractScope
 ): Unit {
-    let restartedCatalog = ToolCatalog()
-    let restartedProcesses = LocalProcessPort(
-        workspace,
-        sandboxEnabled: true
-    )
-    expect(
-        installLocalTools(
-            restartedCatalog,
-            workspace,
-            restartedProcesses
-        ).isOk(),
-        "reinstall local tools after restart"
-    )
-    let restartedPipeline = ToolPipeline(
-        restartedCatalog,
-        InMemoryOperationRuntimePort(),
-        RecordingAuditPort(),
-        ProductIds(),
-        policy: DefaultCapabilityPolicy(mode: ApprovalMode.AlwaysAsk),
-        permissions: SqlitePermissionRepository(database)
-    )
-    match (executePipelineCall(restartedPipeline,
-        context,
-        ToolCall(
-            "bash-after-restart",
-            "bash",
-            objectValue(
-                [
-                    ValueField(
-                        "command",
-                        textValue("printf permission-restored")
-                    )
-                ]
-            )
-        )
-    )) {
-        case Result.Ok(ToolInvocationResult.Completed(result)) => expect(
-            result.output.field("stdout").getOrThrow().text == "permission-restored",
-            "restored session grant executes the same capability"
-        )
-        case _ => throw IllegalStateException("session approval was not restored after restart")
-    }
-    expect(
-        workspace.read(WorkspaceReadRequest("../escape.txt")).isError(),
-        "workspace escape is denied"
-    )
-    restartedProcesses.close().value().getOrThrow()
+    let restarted=shell.reopenBinding()
+    // Reopening creates new service ownership with a separate explicit startup.
+    // The command must find only the original stored actual session choice.
+    restarted.start(context.sessionId)
+    let actual=restarted.invoke(context.sessionId,objectValue([ValueField("command",textValue("printf permission-restored"))]))
+    expect(actual.approval().isNone(),"same actual Store restores the original session command approval")
+    let result=restarted.observe(context.sessionId,actual)
+    expect(!result.isError && result.output.field("stdout").getOrThrow().text=="permission-restored" && result.receiptId!="",
+        "restored session grant executes the same capability")
+    expect(workspace.read(WorkspaceReadRequest("../escape.txt")).isError(),"workspace escape is denied")
 }
 
 func verifyToolLimitClamping(application: ApplicationSession): Unit {
+    let selected=SelectedWorkspaceContract(application)
+    let nativeReadonly=NativeShellContractScope(application.workspaceRoot())
+    let readonly=nativeReadonly.binding(readOnly:true)
+    try{
     // A small file so glob/read have something to scan in the workspace.
     File.writeTo(
         application.workspaceRoot() + "/clamp-check.txt",
@@ -4431,7 +4199,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     )
     // OMP clamps an over-limit glob limit to 200 instead of failing
     // (Math.min(MAX_LIMIT, ...) in tools/glob.ts).
-    let globResult = application.invokeLocalTool(
+    let globResult = invokeSelectedWorkspaceContract(application,
         "glob",
         objectValue(
             [
@@ -4444,7 +4212,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
         globResult.isOk(),
         "glob clamps an over-limit limit instead of failing"
     )
-    let globPatternResult = application.invokeLocalTool(
+    let globPatternResult = invokeSelectedWorkspaceContract(application,
         "glob",
         objectValue(
             [
@@ -4453,7 +4221,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
             ]
         )
     )
-    let globAllResult = application.invokeLocalTool(
+    let globAllResult = invokeSelectedWorkspaceContract(application,
         "glob",
         objectValue([ValueField("pattern", textValue("**/*"))])
     )
@@ -4480,7 +4248,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     )
     // OMP clamps an over-limit read limit instead of failing
     // (Math.min with DEFAULT_MAX_LINES in tools/read.ts).
-    let readResult = application.invokeLocalTool(
+    let readResult = invokeSelectedWorkspaceContract(application,
         "read",
         objectValue(
             [
@@ -4495,8 +4263,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     )
     // bash_readonly: a read-only command runs; a write-shaped command is
     // rejected before execution.
-    let readonlyOk = application.invokeLocalTool(
-        "bash_readonly",
+    let readonlyOk = readonly.observedResult(application.id(),
         objectValue([ValueField("command", textValue("printf 'one\\ntwo\\nthree\\n' | wc -l"))])
     )
     expect(
@@ -4509,8 +4276,7 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
     // Discard/merge redirections (2>/dev/null, 2>&1) are read-only and must
     // not be rejected — a pure inspection pipeline like this one counts
     // lines without touching any file.
-    let readonlyDiscard = application.invokeLocalTool(
-        "bash_readonly",
+    let readonlyDiscard = readonly.observedResult(application.id(),
         objectValue(
             [
                 ValueField(
@@ -4527,19 +4293,19 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
         },
         "bash_readonly allows discard redirections (2>/dev/null)"
     )
-    let readonlyWrite = application.invokeLocalTool(
-        "bash_readonly",
+    let readonlyWrite = readonly.observedResult(application.id(),
         objectValue([ValueField("command", textValue("touch /tmp/oop-nope"))])
     )
     expect(
         readonlyWrite.isError() && match (readonlyWrite.error()) {
-            case Some(error) => error.code == "tool.readonly_rejected" && error.kind == AgentErrorKind.InvalidInput
+            case Some(error) => error.code == "tool.readonly_rejected" && error.kind == AgentErrorKind.Provider &&
+                !exists(Path("/tmp/oop-nope"))
             case None => false
         },
         "bash_readonly rejects a write command"
     )
     // Count mode is part of the descriptor and returns aggregate matches.
-    let grepCount = application.invokeLocalTool(
+    let grepCount = invokeSelectedWorkspaceContract(application,
         "grep",
         objectValue(
             [
@@ -4559,10 +4325,11 @@ func verifyToolLimitClamping(application: ApplicationSession): Unit {
         },
         "grep count returns the total instead of matched lines"
     )
+    }finally{nativeReadonly.close();selected.close()}
 }
 
 func runApplicationContracts(root: String): Unit {
-    let responseProduct = openProduct(
+    let responseProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/application-response-state",
             workspaceRoot: root,
@@ -4584,7 +4351,7 @@ func runApplicationContracts(root: String): Unit {
             },
         "application response projects assistant content while preserving stop metadata"
     )
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/state",
             workspaceRoot: root,
@@ -4593,12 +4360,14 @@ func runApplicationContracts(root: String): Unit {
             asyncEnabled: false
         )
     ).value().getOrThrow()
+    installWorkflowContractPolicy(product)
+    let readonlyBinding=NativeReadonlyShellContractBinding(product)
     let application = product.applicationSession()
     let productToolchain = root + "-product-toolchain"
     Directory.create(productToolchain + "/bin", recursive: true)
     File.writeTo(productToolchain + "/sentinel", "unchanged".toArray())
     setVariable("CANGJIE_SDK_ROOT", productToolchain)
-    let sandboxProduct = openProduct(
+    let sandboxProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             settingsRoot: root + "/sandbox-application-settings",
             stateRoot: root + "/sandbox-application-state",
@@ -4610,6 +4379,14 @@ func runApplicationContracts(root: String): Unit {
     ).value().getOrThrow()
     removeVariable("CANGJIE_SDK_ROOT")
     let sandboxApplication = sandboxProduct.applicationSession()
+    // These are actual operator profiles. The old 4096 FD and explicit
+    // read-only toolchain/PATH checks still execute in the real Native service.
+    let fixtureShell=NativeShellContractBinding(product,openFiles:4096)
+    let sandboxShell=NativeShellContractBinding(sandboxProduct,openFiles:4096,
+        readOnlyMounts:[productToolchain],
+        pathEnvironment:productToolchain+"/bin:/usr/local/bin:/usr/bin:/bin")
+    try{
+    fixtureShell.start(application.id());sandboxShell.start(sandboxApplication.id())
     let fullRequest = product.request("network capability contract")
     let readOnlyRequest = product.request(
         "read-only capability contract",
@@ -4733,10 +4510,12 @@ func runApplicationContracts(root: String): Unit {
         product,
         application
     )
-    sandboxProduct.close()
-    product.close()
-    responseProduct.close()
-    let _ = removeIfExists(productToolchain, recursive: true)
+    }finally{
+        fixtureShell.close();sandboxShell.close()
+        sandboxProduct.close().value().getOrThrow()
+        product.close().value().getOrThrow()
+        responseProduct.close().value().getOrThrow()
+        let _=removeIfExists(productToolchain,recursive:true)}
 }
 
 class NetworkContractTool <: ToolExecutor {
@@ -4798,7 +4577,7 @@ func runSessionQueueContracts(root: String): Unit {
         stateRoot: root + "/queue-state", workspaceRoot: root,
         fixture: true, approvalMode: ApprovalMode.Yolo, asyncEnabled: false
     )
-    let product = openProduct(config: config).value().getOrThrow()
+    let product = openLegacyWorkspaceProduct(config: config).value().getOrThrow()
     let app = product.applicationSession()
     let source = app.id()
     app.enqueue("source-input", "steer", "source work").value().getOrThrow()
@@ -4834,7 +4613,7 @@ func runSessionQueueContracts(root: String): Unit {
     expect(app.resumeStartup().isOk() && app.queuedCount() == 1,
         "recovery errors do not follow a switch to a healthy session")
     product.close()
-    let reopened = openProduct(config: config).value().getOrThrow()
+    let reopened = openLegacyWorkspaceProduct(config: config).value().getOrThrow()
     let restoredSource = reopened.applicationSession(sessionId: Some(source))
     let restoredTarget = reopened.applicationSession(sessionId: Some(target))
     expect(restoredSource.queuedCount() == 1 && restoredTarget.queuedCount() == 0,
@@ -4855,7 +4634,7 @@ func runSessionQueueContracts(root: String): Unit {
         "failed durable clear reports failure and retains in-memory work")
     expect(restoredSource.withdrawQueued("clear-failure").isError(),
         "failed durable withdrawal reports storage error instead of already delivered")
-    let recovered = openProduct(config: config).value().getOrThrow()
+    let recovered = openLegacyWorkspaceProduct(config: config).value().getOrThrow()
     expect(recovered.applicationSession(sessionId: Some(source)).queuedCount() == 1,
         "failed clear leaves durable work recoverable")
     recovered.close()
@@ -5023,6 +4802,22 @@ func runSlashCommandContracts(
         "local help uses terminal-safe hard breaks and contains only public slash commands"
     )
     let tools = application.handle("/tools").value().getOrThrow()
+    // Fixed actual Source1 registrations plus its explicitly installed ready
+    // Workflow, mutable service and independent readonly Native package. This
+    // migrates the retired aliases, without weakening the other CLI oracles.
+    let retiredAliases = ["grep", "glob", "github", "eval", "lsp", "plan_write", "goal", "bash", "bash_readonly", "run_program",
+        "memory_edit", "retain", "recall", "reflect", "learn", "manage_skill", "yield", "hub"]
+    for (definition in application.activeTools()) {
+        expect(!retiredAliases.contains(definition.name), "retired static alias is absent: " + definition.name)
+    }
+    let expectedNames=["ask","read_resource","write_resource","export_artifact","debug","todo","plugin.axyndra:workflow.task","plugin.axyndra:workflow.hub_peers","plugin.axyndra:workflow.hub_messages","plugin.axyndra:workflow.hub_jobs","plugin.axyndra:workflow.hub_cancel","plugin.axyndra:workflow.hub_process","plugin.axyndra:workflow.hub_process_read","plugin.axyndra:workflow.yield",
+        "apply_file_plan","recover_file_plan","checkpoint","rewind","read","edit","write",
+        "plugin.axyndra:workflow.todo","plugin.axyndra:workflow.goal","plugin.axyndra:workflow.plan_write",
+        "plugin.axyndra:shell.service.stdio.bash","plugin.axyndra:shell-readonly.exec"]
+    expect(tools.text.startsWith("tools: "),"inspection uses the actual current tool listing")
+    let listedNames=tools.text[7..].split(" ")
+    expect(listedNames.size==expectedNames.size,"actual catalog contains the fixed current inventory, with no extra alias")
+    for(name in expectedNames){expect(listedNames.contains(name),"current installed/catalog tool is present: "+name)}
     let setup = application.handle("/setup").value().getOrThrow()
     let providers = application.handle("/providers").value().getOrThrow()
     let switchModel = application.handle("/switch").value().getOrThrow()
@@ -5041,11 +4836,7 @@ func runSlashCommandContracts(
     let exportPath = root + "/session-export.html"
     let exported = application.handle("/export " + exportPath).value().getOrThrow()
     expect(
-        tools.text ==
-            "tools: ast_grep ast_edit web_search grep write ask read github edit glob bash bash_readonly eval " +
-            "checkpoint rewind lsp debug plan_write goal memory_edit " +
-            "retain recall reflect learn manage_skill read_skill_reference todo " +
-            "task hub yield run_program apply_file_plan recover_file_plan" && !setup.agentInvoked &&
+        !tools.agentInvoked && tools.approval.isNone() && !setup.agentInvoked &&
             isProviderSetupAction(setup.action) && !providers.agentInvoked && isProviderSetupAction(providers.action) &&
             isModelSelectorAction(switchModel.action) && isBranchSelectorAction(branch.action) &&
             !emptyJobs.agentInvoked && emptyJobs.text == "No background jobs." && !stats.agentInvoked &&
@@ -5114,21 +4905,20 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     let vibeRun = modeApplication.handle("/vibe inspect this workspace").value().getOrThrow()
     let vibeDisabled = modeApplication.handle("/vibe").value().getOrThrow()
     let guided = modeApplication.handle("/guided-goal ship a reliable release").value().getOrThrow()
-    // Plan mode must let the agent write the plan through plan_write and
-    // /plan-review must surface the tool payload (the structured plan).
+    // Both automatic completion and /plan-review open the declared public
+    // View. Its bounded model refers to the actual Host-owned plan source.
     let planEvents = ArrayList<AgentEvent>()
     modeApplication.subscribe({event => planEvents.add(event)})
     let planWriteRun = modeApplication.handle("/plan fixture plan write").value().getOrThrow()
     let planWriteReview = modeApplication.handle("/plan-review").value().getOrThrow()
-    let automaticPlanReview = match (planWriteRun.planReview) {
-        case Some(value) => value
-        case None => ""
-    }
     expect(
-        planWriteRun.agentInvoked && automaticPlanReview.contains("Goal: ship a plan") &&
-            automaticPlanReview.contains("Acceptance: contract passes") && planWriteReview.planReview.isSome() &&
-            planWriteReview.text == automaticPlanReview,
-        "plan_write completion automatically carries the same authoritative plan that /plan-review reopens"
+        planWriteRun.agentInvoked && contractPlanReviewView(modeApplication, planWriteRun) &&
+            contractPlanReviewView(modeApplication, planWriteReview) &&
+            match ((planWriteRun.action, planWriteReview.action)) {
+                case (ApplicationAction.OpenPluginView(first), ApplicationAction.OpenPluginView(second)) => first == second
+                case _ => false
+            },
+        "plan_write completion and explicit review expose the current source through the same public View"
     )
     let editedPlan = modeApplication.updateLatestPlan(
         "",
@@ -5136,7 +4926,7 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     ).value().getOrThrow()
     let editedPlanReview = modeApplication.handle("/plan-review").value().getOrThrow()
     expect(
-        editedPlan.contains("Ship the edited plan") && editedPlanReview.text == editedPlan &&
+        contractPlanReviewView(modeApplication, editedPlanReview, expectedSource: Some(editedPlan)) &&
             modeApplication.updateLatestPlan("stale-review-hash", "# Goal\n\nStale edit").isError(),
         "plan review edits persist through the structured plan payload and reject stale writers"
     )
@@ -5163,22 +4953,22 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
         }
     }
     expect(
-        recoveredPlanRun.agentInvoked && recoveredPlanReview.text.contains("Goal: ship a plan") && planUpdatedCount >= 2 &&
-            latestPlanEventBody.contains("Acceptance: contract passes") && latestPlanEventId != "",
+        recoveredPlanRun.agentInvoked && planUpdatedCount >= 2 && latestPlanEventId != "" &&
+            contractPlanReviewView(modeApplication, recoveredPlanReview, expectedSource: Some(latestPlanEventBody)),
         "plan mode corrects an omitted plan_write and publishes plan.updated"
     )
     expect(
         planEnabled.agentInvoked && planEnabled.text.contains("fixture response") &&
             !planEnabled.text.contains("end_turn") && modeApplication.allSubagents().isEmpty() &&
-            planTools.text.contains(" read") && !planTools.text.contains(" write") && !planTools
+            planTools.text.contains(" read") && planTools.text.contains("plugin.axyndra:shell-readonly.exec") && !planTools.text.contains(" write") && !planTools
             .text
-            .contains(" task") && !planReview.agentInvoked && planReview.text.contains("Latest plan:") &&
+            .contains(" task") && !planReview.agentInvoked &&
             planRequest.field("thinkingLevel").getOrThrow().text == "xhigh" && planRequest
             .field("workMode")
             .getOrThrow()
             .text == "plan" && planRequest.field("system").getOrThrow().text.contains("PLAN MODE IS ACTIVE") &&
-            requestHasTool(planRequest, "read") && requestHasTool(planRequest, "plan_write") && requestHasTool(
-            planRequest, "bash_readonly") && !requestHasTool(planRequest, "write") && !requestHasTool(
+            requestHasTool(planRequest, "read") && requestHasTool(planRequest, "plugin.axyndra:workflow.plan_write") && requestHasTool(
+            planRequest, "plugin.axyndra:shell-readonly.exec") && !requestHasTool(planRequest, "bash_readonly") && !requestHasTool(planRequest, "write") && !requestHasTool(
             planRequest, "bash") && !requestHasTool(planRequest, "task") &&
             !planDisabled.agentInvoked && planDisabled.text == "Plan mode disabled." && vibeRun.agentInvoked &&
             vibeRun.text.contains("fixture response") && !vibeRun.text.contains("end_turn") &&
@@ -5230,7 +5020,8 @@ func runModeAndDiagnosticContracts(product: ProductRuntime): Unit {
     expect(
         diagnostics[0].text.contains("axyndra 1.0.0") && diagnostics[1].text.contains("axyndra 1.0.0") &&
             diagnostics[2].text.contains("Ctrl+C") && diagnostics[3].text.contains("Context estimate:") &&
-            diagnostics[4].text.contains("Extension control center:") && diagnostics[5].text.contains("Session tree:") &&
+            (diagnostics[4].text.contains("Plugins:") && diagnostics[4].text.contains("axyndra:workflow") &&
+                diagnostics[4].text.contains("URI")) && diagnostics[5].text.contains("Session tree:") &&
             diagnostics[6].text.contains("Debug snapshot:") && modeApplication.handle("/changelog nope").isError() &&
             modeApplication.handle("/hotkeys nope").isError() && modeApplication.handle("/plan-review nope").isError(),
         "diagnostic commands expose truthful state and validate arguments"
@@ -5382,7 +5173,8 @@ func runLocalTodoContracts(
     root: String,
     product: ProductRuntime
 ): Unit {
-    let todoApplication = product.applicationSession()
+    let todoApplication = LegacyTodoApplication(product)
+    try {
     expect(
         todoApplication.handle("/todo").value().getOrThrow().text == "No todos. Use /todo append <task> to start one." &&
             todoApplication.handle("/todo append \"Build Phase\" write tests").value().getOrThrow().text ==
@@ -5443,6 +5235,7 @@ func runLocalTodoContracts(
             todoApplication.handle("/todo rm").value().getOrThrow().text == "Cleared all todos.",
         "native todo editor round-trip and clear persist typed state"
     )
+    }finally{todoApplication.close()}
 }
 
 func runBranchAndHandoffContracts(product: ProductRuntime): Unit {
@@ -5503,7 +5296,7 @@ func runSubagentContracts(product: ProductRuntime): Unit {
         taskApplication.subagentTranscript(subagentId: "fixture-child"),
         "fixture child transcript"
     )
-    let childHasYield = transcriptHasTool(childTranscript.messages, "yield")
+    let childHasYield = transcriptHasTool(childTranscript.messages, "plugin.axyndra:workflow.yield")
     let sawRunning = hasSubagentLifecycle(subagentEvents.toArray(), "running")
     let sawCompleted = hasSubagentLifecycle(subagentEvents.toArray(), "completed")
     expect(
@@ -5718,7 +5511,7 @@ func runProcessHubContracts(
             stoppedDaemon.field("pid").getOrThrow().unifiedKind == ValueKind.Null,
         "hub stop terminates the process group and returns a terminal " + "snapshot"
     )
-    let guardedHubProduct = openProduct(
+    let guardedHubProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/guarded-hub-state",
             workspaceRoot: root,
@@ -5777,7 +5570,7 @@ func runProcessHubContracts(
 }
 
 func runGuardedAndAsyncContracts(root: String): Unit {
-    let guardedProduct = openProduct(
+    let guardedProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/guarded-task-state",
             workspaceRoot: root,
@@ -5786,6 +5579,8 @@ func runGuardedAndAsyncContracts(root: String): Unit {
             asyncEnabled: false
         )
     ).value().getOrThrow()
+    try {
+    let guardedWorkflow = installWorkflowContractPolicy(guardedProduct)
     let guardedApplication = guardedProduct.applicationSession()
     let guardedTurn = guardedApplication.handle("fixture task write").value().getOrThrow()
     let guardedApproval = guardedTurn.approval.getOrThrow()
@@ -5836,7 +5631,7 @@ func runGuardedAndAsyncContracts(root: String): Unit {
         guardedCancelApplication.cancel().isOk(),
         "second pending approval remains cancellable"
     )
-    let asyncProduct = openProduct(
+    let asyncProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/async-state",
             workspaceRoot: root,
@@ -5845,6 +5640,9 @@ func runGuardedAndAsyncContracts(root: String): Unit {
             asyncEnabled: true
         )
     ).value().getOrThrow()
+    try {
+    expect(asyncProduct.settingsRoot == guardedProduct.settingsRoot, "guarded and async fixtures share their installed operator settings")
+    requireWorkflowContractPolicy(asyncProduct, guardedWorkflow)
     let asyncApplication = asyncProduct.applicationSession()
     let asyncTurn = asyncApplication.handle("fixture task").value().getOrThrow()
     let asyncJobs = asyncApplication.waitForAsyncJobs(
@@ -5870,7 +5668,7 @@ func runGuardedAndAsyncContracts(root: String): Unit {
     expect(
         hubTurn.agentInvoked && transcriptHasTool(
             asyncApplication.messages().value().getOrThrow(),
-            "hub"
+            "plugin.axyndra:workflow.hub_jobs"
         ),
         "hub jobs is a real model-facing tool over the managed job " + "registry"
     )
@@ -5929,8 +5727,8 @@ func runGuardedAndAsyncContracts(root: String): Unit {
             .isEmpty(),
         "hub cancellation stops the specific background child and its " + "running process"
     )
-    asyncProduct.close()
-    guardedProduct.close()
+    } finally { expect(asyncProduct.close().isOk(), "async fixture joins its actual plugin and child owners") }
+    } finally { expect(guardedProduct.close().isOk(), "guarded fixture joins its actual plugin and child owners") }
 }
 
 func runSubagentCancellationContracts(product: ProductRuntime): Unit {
@@ -5982,6 +5780,7 @@ func runSessionLifecycleContracts(
     product: ProductRuntime,
     application: ApplicationSession
 ): Unit {
+    installContractCompactionPolicy(product)
     runAtomicProjectionWrapperContract(product)
     let selected = application.handle("/model fixture-next").value().getOrThrow()
     expect(
@@ -6105,12 +5904,14 @@ func runSessionLifecycleContracts(
     runStructuredCompactionSummaryContract(root, product)
     runHybridCompactionSummaryContracts(root)
     let sourceBeforeFork = application.id()
-    let sourceEval = application.invokeLocalTool(
-        "eval",
+    let evalBinding = NativeEvalContractBinding(product)
+    nativeEvalStartChecked(evalBinding, sourceBeforeFork)
+    let sourceEval = nativeEvalObservedLocalCell(application.invokeLocalTool(
+        evalBinding.name,
         evalCall(
             "fork-source-state", "py", "fork_probe = 73\nfork_probe", reset: true
         ).arguments
-    )
+    ))
     expect(
         sourceEval.isOk() && sourceEval.value().getOrThrow().output
             .field("content").getOrThrow().text.trimAscii() == "73",
@@ -6134,12 +5935,13 @@ func runSessionLifecycleContracts(
         branchTranscriptAtFork == sourceTranscript.size,
         "fork starts with the complete source transcript before branch-local calls"
     )
-    let branchEval = application.invokeLocalTool(
-        "eval",
+    nativeEvalStartChecked(evalBinding, branchSession)
+    let branchEval = nativeEvalObservedLocalCell(application.invokeLocalTool(
+        evalBinding.name,
         evalCall(
             "fork-branch-state", "py", "globals().get(\"fork_probe\", \"missing\")"
         ).arguments
-    )
+    ))
     expect(
         branchEval.isOk() && branchEval.value().getOrThrow().output
             .field("content").getOrThrow().text.trimAscii() == "missing",
@@ -6149,10 +5951,10 @@ func runSessionLifecycleContracts(
         application.handle("/session " + sourceBeforeFork.value).isOk(),
         "switch back to source session for Eval state check"
     )
-    let sourceEvalAfterFork = application.invokeLocalTool(
-        "eval",
+    let sourceEvalAfterFork = nativeEvalObservedLocalCell(application.invokeLocalTool(
+        evalBinding.name,
         evalCall("fork-source-after", "py", "fork_probe").arguments
-    )
+    ))
     expect(
         sourceEvalAfterFork.isOk() && sourceEvalAfterFork.value().getOrThrow()
             .output.field("content").getOrThrow().text.trimAscii() == "73",
@@ -6199,7 +6001,7 @@ func runSessionLifecycleContracts(
         migratedApplication.model() == "fixture" && product.sessionModel(legacySession).value().getOrThrow() == "fixture",
         "legacy session without model metadata is lazily migrated"
     )
-    let restartedProduct = openProduct(
+    let restartedProduct = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/state",
             workspaceRoot: root,
@@ -6340,15 +6142,17 @@ func runResourceCompactionContracts(root: String): Unit {
             maxInputTokens: Some(100000)
         )]
     )
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/resource-compaction-state",
+            settingsRoot: root + "/resource-compaction-settings",
             workspaceRoot: root,
             fixture: true,
             asyncEnabled: false,
             compactionOverride: Some(settings)
         )
     ).value().getOrThrow()
+    installContractCompactionPolicy(product)
     let session = SessionId("resource-compaction")
     var large = ""
     for (_ in 0..12000) {
@@ -6425,10 +6229,10 @@ func runStructuredCompactionSummaryContract(
     product: ProductRuntime
 ): Unit {
     let session = SessionId("structured-compaction")
-    product.createGoal(session, "Preserve deterministic compaction facts").value().getOrThrow()
-    product.setTodoPhases(session, [TodoPhase(
+    createWorkflowContractGoal(product, session, "Preserve deterministic compaction facts")
+    product.applicationSession(sessionId:Some(session)).setTodoPhases([ProductTodoPhase(
         "Verification",
-        [TodoItem("rerun product contract", status: TodoStatus.InProgress)]
+        [ProductTodoItem("rerun product contract", status: ProductTodoStatus.InProgress)]
     )]).value().getOrThrow()
     let messages = ArrayList<ModelMessage>()
     messages.add(ModelMessage(ModelRole.User, [ModelBlock(ModelBlockKind.Text, text: "record facts")]))
@@ -6483,9 +6287,10 @@ func runStructuredCompactionSummaryContract(
 }
 
 func runHybridCompactionSummaryContracts(root: String): Unit {
-    let product = openProduct(
+    let product = openLegacyWorkspaceProduct(
         config: ProductConfig(
             stateRoot: root + "/hybrid-compaction-state",
+            settingsRoot: root + "/hybrid-compaction-settings",
             workspaceRoot: root,
             fixture: true,
             asyncEnabled: false,
@@ -6499,9 +6304,22 @@ func runHybridCompactionSummaryContracts(root: String): Unit {
             ))
         )
     ).value().getOrThrow()
+    try {
+    let installed = match (product.importLocalPlugin(getVariable("AXYNDRA_COMPACTION_PLUGIN_PACKAGE").getOrThrow())) {
+        case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + supportRegistryExclusiveErrorText96(error))
+    }
+    expect(supportRegistryOkay96(product.setPluginEnabled(supportRegistryDescriptor96(installed,"namespace"), true)), "normal compaction plugin enable")
+    if (!exists(Path(root + "/hybrid-compaction-settings/plugins"))) {
+    Directory.create(root + "/hybrid-compaction-settings/plugins", recursive: true)
+    }
+    File.writeTo(root + "/hybrid-compaction-settings/plugins/policies.json", stringifyUnifiedJson(objectValue([
+        ValueField("version", integerValue(1)), ValueField("bindings", objectValue([ValueField("compaction", objectValue([
+            ValueField("namespace", textValue(supportRegistryDescriptor96(installed,"namespace"))), ValueField("provider", textValue("summarize")),
+            ValueField("package_digest", textValue(supportRegistryDescriptor96(installed,"content_digest")))]))]))])).toArray())
 
     let hybridSession = SessionId("hybrid-compaction")
-    product.createGoal(hybridSession, "Preserve facts while adding semantic context").value().getOrThrow()
+    createWorkflowContractGoal(product, hybridSession, "Preserve facts while adding semantic context")
     let hybridMessages = ArrayList<ModelMessage>()
     hybridMessages.add(ModelMessage(
         ModelRole.User,
@@ -6514,7 +6332,11 @@ func runHybridCompactionSummaryContracts(root: String): Unit {
         ))
     }
     product.replaceMessages(hybridSession, hybridMessages.toArray()).value().getOrThrow()
-    expect(product.compactSession(hybridSession, force: true).value().getOrThrow() > 0, "hybrid history compacts")
+    let compacted = match (product.compactSession(hybridSession, force: true)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException("hybrid compaction failed: " + error.code)
+    }
+    expect(compacted > 0, "hybrid history compacts")
     let hybridSummary = durableCheckpointSummary(
         root + "/hybrid-compaction-state/state.db", hybridSession
     )
@@ -6533,8 +6355,8 @@ func runHybridCompactionSummaryContracts(root: String): Unit {
         hybridHasRun = true
     }
     expect(
-        !hybridHasRun,
-        "standalone compaction does not fabricate a semantic Run without a Turn owner"
+        hybridHasRun,
+        "compaction accounts its actual canonical maintenance Run and Attempt"
     )
 
     let fallbackSession = SessionId("hybrid-compaction-fallback")
@@ -6568,9 +6390,18 @@ func runHybridCompactionSummaryContracts(root: String): Unit {
         fallbackHasRun = true
     }
     expect(
-        !fallbackHasRun,
-        "failed optional compaction summary does not create an ownerless maintenance Run"
+        fallbackHasRun,
+        "failed optional summary retains its actual canonical maintenance Run and Attempt"
     )
+    let database = SqliteDatabase(root + "/hybrid-compaction-state/state.db")
+    try {
+        expect(database.scalarInt("SELECT COUNT(*) FROM model_attempts WHERE policy_reason='internal_context_compaction'") == 2,
+            "both observed model calls retain their exact internal Attempts")
+        expect(database.scalarInt("SELECT COUNT(*) FROM model_decisions") == 0 &&
+            database.scalarInt("SELECT COUNT(*) FROM operations") == 0,
+            "semantic overview creates no conversation Decision or Tool authority")
+    } finally { database.close() }
+    } finally { expect(product.close().isOk(), "hybrid fixture joins its actual installed compaction runtime") }
 }
 
 func durableCheckpointSummary(path: String, sessionId: SessionId): String {
@@ -6791,6 +6622,33 @@ func expectToolSchema(
     expectedRequired: Array<String>
 ): Unit {
     for (definition in catalog.definitions() where definition.name == toolName) {
+        let properties = definition.inputSchema.field("properties").getOrThrow()
+        let required = definition.inputSchema.field("required").getOrThrow()
+        let propertyNames = ArrayList<String>()
+        for (field in properties.fields) {
+            propertyNames.add(field.name)
+        }
+        let requiredNames = ArrayList<String>()
+        for (value in required.items) {
+            requiredNames.add(value.text)
+        }
+        expect(
+            sameStrings(propertyNames.toArray(), expectedProperties) && sameStrings(requiredNames.toArray(),
+                expectedRequired),
+            toolName + " schema exposes the reviewed tool wire surface"
+        )
+        return
+    }
+    throw IllegalStateException("missing tool schema: " + toolName)
+}
+
+func expectToolSchema(
+    definitions: Array<ModelToolDefinition>,
+    toolName: String,
+    expectedProperties: Array<String>,
+    expectedRequired: Array<String>
+): Unit {
+    for (definition in definitions where definition.name == toolName) {
         let properties = definition.inputSchema.field("properties").getOrThrow()
         let required = definition.inputSchema.field("required").getOrThrow()
         let propertyNames = ArrayList<String>()
@@ -7043,64 +6901,6 @@ func evalCall(
     )
 }
 
-func astEditCall(
-    callId: String,
-    pattern: String,
-    output: String,
-    paths: Array<String>
-): ToolCall {
-    astEditCallWithOps(callId, [[pattern, output]], paths)
-}
-
-func astEditCallWithOps(
-    callId: String,
-    ops: Array<Array<String>>,
-    paths: Array<String>
-): ToolCall {
-    let encodedOps = ArrayList<AgentValue>()
-    for (op in ops) {
-        encodedOps.add(
-            objectValue(
-                [
-                    ValueField("pat", textValue(op[0])),
-                    ValueField("out", textValue(op[1]))
-                ]
-            )
-        )
-    }
-    let encodedPaths = ArrayList<AgentValue>()
-    for (path in paths) {
-        encodedPaths.add(textValue(path))
-    }
-    ToolCall(
-        callId,
-        "ast_edit",
-        objectValue(
-            [
-                ValueField("ops", listValue(encodedOps.toArray())),
-                ValueField("paths", listValue(encodedPaths.toArray()))
-            ]
-        )
-    )
-}
-
-func resolutionWrite(
-    callId: String,
-    path: String,
-    reason: String
-): ToolCall {
-    ToolCall(
-        callId,
-        "write",
-        objectValue(
-            [
-                ValueField("path", textValue(path)),
-                ValueField("content", textValue(reason))
-            ]
-        )
-    )
-}
-
 func lspCall(
     callId: String,
     action: String,
@@ -7201,7 +7001,7 @@ func subagentSlashCommandsVisible(application: ApplicationSession): Bool {
     let agentList = application.handle("/agents").value().getOrThrow()
     let agentTranscript = application.handle("/agent fixture-child").value().getOrThrow()
     !agentList.agentInvoked && agentList.text.contains("fixture-child") && agentList.text.contains("session=") &&
-        !agentTranscript.agentInvoked && agentTranscript.text.contains("Tool Call: yield")
+        !agentTranscript.agentInvoked && agentTranscript.text.contains("Tool Call: plugin.axyndra:workflow.yield")
 }
 
 func approvalFrom(result: Result<ToolInvocationResult>): ApprovalRequest {
@@ -7300,7 +7100,7 @@ func runAtomicWorkspaceContracts(root: String): Unit {
     ]).isOk(), "transaction staging failure reported")
     expect(String.fromUtf8(File.readFrom(path)) == "multi", "failed transaction preserves original")
     let catalog = ToolCatalog()
-    expect(installLocalTools(catalog, workspace, LocalProcessPort(workspace, sandboxEnabled: true)).isOk(), "install atomic tools")
+    expect(installLegacyLocalTools(catalog, workspace, LocalProcessPort(workspace, sandboxEnabled: true)).isOk(), "install atomic tools")
     let call = ToolCall("atomic-paths", "edit", objectValue([ValueField("input", textValue(
         "[atomic-mode.txt#" + hashlineTag("multi") + "]\nSWAP 1:\n+x\n" +
         "[atomic-other.txt#" + hashlineTag("other") + "]\nSWAP 1:\n+y"
@@ -7339,4 +7139,184 @@ func runAtomicWriteFailureContract(root: String): Unit {
     File.writeTo(root + "/fault-write", "before".toArray())
     expect(!workspace.writeFile("fault-write", "after").isOk(), "injected replacement failure is reported")
     expect(String.fromUtf8(File.readFrom(root + "/fault-write")) == "before", "failed replacement retains original content")
+}
+
+func installContractCompactionPolicy(product: ProductRuntime): Unit {
+    let installed = match (product.importLocalPlugin(getVariable("AXYNDRA_COMPACTION_PLUGIN_PACKAGE").getOrThrow())) {
+        case PluginRegistryResult.Ok(value) => supportRegistryRecord96(value)
+        case PluginRegistryResult.Err(error) => throw IllegalStateException(error.code + ": " + supportRegistryExclusiveErrorText96(error))
+    }
+    expect(supportRegistryOkay96(product.setPluginEnabled(supportRegistryDescriptor96(installed,"namespace"), true)), "normal installed structured compaction policy")
+    let path = product.settingsRoot + "/plugins/policies.json"
+    let selection = if (exists(Path(path))) { parseUnifiedJson(String.fromUtf8(File.readFrom(path))) }
+        else { objectValue([ValueField("version", integerValue(1)), ValueField("bindings", objectValue([]))]) }
+    selection.field("bindings").getOrThrow().put("compaction", objectValue([
+        ValueField("namespace", textValue(supportRegistryDescriptor96(installed,"namespace"))), ValueField("provider", textValue("summarize")),
+        ValueField("package_digest", textValue(supportRegistryDescriptor96(installed,"content_digest")))]))
+    File.writeTo(path, stringifyUnifiedJson(selection).toArray())
+}
+
+
+// Explicit historical schema oracle; never default production registration.
+func expectLegacyLspSchema(
+    catalog: ToolCatalog,
+    toolName: String,
+    expectedProperties: Array<String>,
+    expectedRequired: Array<String>
+): Unit {
+    for (actual in catalog.definitions()) {
+        expect(actual.name != "lsp", "production defaults have no static LSP tool")
+    }
+    for (definition in [legacyLspToolDefinition()] where definition.name == toolName) {
+        let properties = definition.inputSchema.field("properties").getOrThrow()
+        let required = definition.inputSchema.field("required").getOrThrow()
+        let propertyNames = ArrayList<String>()
+        for (field in properties.fields) {
+            propertyNames.add(field.name)
+        }
+        let requiredNames = ArrayList<String>()
+        for (value in required.items) {
+            requiredNames.add(value.text)
+        }
+        expect(
+            sameStrings(propertyNames.toArray(), expectedProperties) && sameStrings(requiredNames.toArray(),
+                expectedRequired),
+            toolName + " schema exposes the reviewed tool wire surface"
+        )
+        return
+    }
+    throw IllegalStateException("missing tool schema: " + toolName)
+}
+
+// Test consumer DATA only. No copied metadata becomes an installed Source,
+// pin, receipt, grant, operation, or replacement public Registry record.
+// The source Registry byte carrier pays its complete copied graph before
+// allocating an Array/String/DOM. Original configuration/public fixture text
+// has no retirement protocol, so those independent loans remain paid.
+class SupportRegistryCopyDebt96 {
+    let payment:LogicalJsonOwnerReservation
+    let previous:?SupportRegistryCopyDebt96
+    init(payment:LogicalJsonOwnerReservation,previous:?SupportRegistryCopyDebt96){
+        this.payment=payment;this.previous=previous}
+}
+class SupportRegistryRecordData96 {
+    let record:ProductPluginRecord
+    private let graph:AgentValue
+    private let payment:LogicalJsonOwnerReservation
+    private let lock=Mutex()
+    private var pending:?LogicalJsonOwnerReservation=None<LogicalJsonOwnerReservation>
+    let enabled:Bool
+    let explicitlyDisabled:Bool
+    let sourceKind:PluginSourceKind
+    let scope:PluginInstallScope
+    let previous:?SupportRegistryRecordData96
+    init(record:ProductPluginRecord,graph:AgentValue,payment:LogicalJsonOwnerReservation,
+        enabled:Bool,explicitlyDisabled:Bool,sourceKind:PluginSourceKind,scope:PluginInstallScope,
+        previous:?SupportRegistryRecordData96){
+        this.record=record;this.graph=graph;this.payment=payment
+        this.enabled=enabled;this.explicitlyDisabled=explicitlyDisabled;this.sourceKind=sourceKind
+        this.scope=scope;this.previous=previous}
+    func text(key:String,descriptor!:Bool=false):String{
+        lock.lock();try{
+            if(pending.isSome()){throw LogicalJsonPayloadError("same copied metadata keeps its failed occurrence payment")}
+            let value=if(descriptor){graph.field("descriptor").getOrThrow().field(key).getOrThrow().text}
+                else{graph.field(key).getOrThrow().text}
+            let loan=payment.deriveRetainedLease();pending=Some(loan)
+            loan.ensureRetainedPeak(supportRegistryInvoice96(value.size,0))
+            supportRegistryRetain96(loan);pending=None<LogicalJsonOwnerReservation>;value
+        }finally{lock.unlock()}
+    }
+}
+class SupportRegistryCopies96 {
+    let lock=Mutex()
+    var payments:?SupportRegistryCopyDebt96=None<SupportRegistryCopyDebt96>
+    var records:?SupportRegistryRecordData96=None<SupportRegistryRecordData96>
+}
+let supportRegistryCopies96=SupportRegistryCopies96()
+func supportRegistryInvoice96(bytes:Int64,nodes:Int64):Int64{
+    if(bytes<0 || nodes<0 || nodes>(134217728-8192)/1024 ||
+        bytes>(134217728-8192-nodes*1024)/64){
+        throw LogicalJsonPayloadError("registry copied data cannot fit the original shared capacity")}
+    bytes*64+nodes*1024+8192
+}
+func supportRegistryRetain96(payment:LogicalJsonOwnerReservation):Unit{
+    supportRegistryCopies96.lock.lock();try{
+        supportRegistryCopies96.payments=Some(SupportRegistryCopyDebt96(payment,supportRegistryCopies96.payments))
+    }finally{supportRegistryCopies96.lock.unlock()}
+}
+func supportRegistryText96(result:PluginRegistryResult<OwnedRegistryUtf8>):String{
+    let source=match(result){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,0))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        String.fromUtf8(bytes)
+    }finally{source.close()}
+}
+func supportRegistryErrorText96(error:PluginRegistryOwnedError):String{
+        match(error.staticReason){
+            case PluginRegistryStaticReason.MetadataCapacity=>"registry metadata cannot fit the original shared capacity"
+            case PluginRegistryStaticReason.ExecutionNotCurrent=>"installed execution pin is not current"
+            case PluginRegistryStaticReason.InstalledRecordAbsent=>"installed record is absent"
+            case PluginRegistryStaticReason.ComponentAliasInvalid=>"initial context configuration or its exact installed binding is unavailable"
+            case PluginRegistryStaticReason.NoStaticReason=>supportRegistryText96(error.copyText(PluginRegistryErrorText.Message))}
+}
+func supportRegistryExclusiveErrorText96(error:PluginRegistryOwnedError):String{
+    try{supportRegistryErrorText96(error)}finally{error.close()}
+}
+func supportRegistryExclusiveErrorCode96(error:PluginRegistryOwnedError):String{
+    try{error.code}finally{error.close()}
+}
+func supportRegistryDiscard96(record:ProductPluginRecord):Unit{record.close()}
+func supportRegistryOkay96(result:PluginRegistryResult<ProductPluginRecord>):Bool{
+    match(result){case PluginRegistryResult.Ok(record)=>record.close();true
+        case PluginRegistryResult.Err(error)=>error.close();false}
+}
+func supportRegistryData96(record:ProductPluginRecord):SupportRegistryRecordData96{
+    supportRegistryCopies96.lock.lock();try{
+        var current=supportRegistryCopies96.records
+        while(current.isSome()){
+            let row=current.getOrThrow()
+            if(refEq(row.record,record)){return row};current=row.previous}
+    }finally{supportRegistryCopies96.lock.unlock()}
+    // Read real immutable scalar data while the actual view is live. State
+    // replacement may revoke it later; the test's original metadata stays in
+    // this independent same-bank copy instead of resurrecting that view.
+    let enabled=record.enabled;let disabled=record.explicitlyDisabled
+    let kind=record.sourceKind;let scope=record.scope
+    let source=match(record.copyJson()){case PluginRegistryResult.Ok(value)=>value
+        case PluginRegistryResult.Err(error)=>throw IllegalStateException(supportRegistryExclusiveErrorText96(error))}
+    try{
+        let size=source.byteCount
+        var quoted=false;var escaped=false;var primitive=false;var nodes:Int64=0
+        for(index in 0..size){
+            let byte=source.byteAt(index)
+            if(quoted){if(escaped){escaped=false}else if(byte==92u8){escaped=true}else if(byte==34u8){quoted=false};continue}
+            if(byte==34u8){nodes+=1;quoted=true;primitive=false}
+            else if(byte==123u8 || byte==91u8){nodes+=1;primitive=false}
+            else if(byte==44u8 || byte==58u8 || byte==125u8 || byte==93u8 || byte<=32u8){primitive=false}
+            else if(!primitive){nodes+=1;primitive=true}}
+        let payment=source.deriveCopiedDataPayment(supportRegistryInvoice96(size,nodes))
+        supportRegistryRetain96(payment)
+        let bytes=Array<UInt8>(size,{index=>source.byteAt(index)})
+        let graph=parseUnifiedJson(String.fromUtf8(bytes),maxBytes:size)
+        supportRegistryCopies96.lock.lock();try{
+            let row=SupportRegistryRecordData96(record,graph,payment,enabled,disabled,kind,scope,supportRegistryCopies96.records)
+            supportRegistryCopies96.records=Some(row);row
+        }finally{supportRegistryCopies96.lock.unlock()}
+    }finally{source.close()}
+}
+func supportRegistryRecord96(record:ProductPluginRecord):ProductPluginRecord{
+    let _=supportRegistryData96(record);record
+}
+func supportRegistryDescriptor96(record:ProductPluginRecord,key:String):String{
+    let row=supportRegistryData96(record)
+    // Each returned occurrence is separately paid before it can escape into
+    // configuration, a path, a fixture field, an exception or another frame.
+    row.text(key,descriptor:true)
+}
+func supportRegistryField96(record:ProductPluginRecord,key:String):String{
+    supportRegistryData96(record).text(key)
 }

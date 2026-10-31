@@ -16,7 +16,7 @@ enum SurfaceOwner {
     | Ask
     | Approval
     | Todo
-    | PlanReview
+    | PluginView
     | AgentHub
     | Completion
 }
@@ -134,7 +134,7 @@ func surfaceOwnerKey(owner: SurfaceOwner): String {
         case SurfaceOwner.Ask => "ask"
         case SurfaceOwner.Approval => "approval"
         case SurfaceOwner.Todo => "todo"
-        case SurfaceOwner.PlanReview => "plan-review"
+        case SurfaceOwner.PluginView => "plugin-view"
         case SurfaceOwner.AgentHub => "agent-hub"
         case SurfaceOwner.Completion => "completion"
     }

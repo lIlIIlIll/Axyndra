@@ -59,6 +59,9 @@ public interface VirtualTranscriptSource {
         _: Int64,
         _: String
     ): ?VirtualTranscriptAppendOnlyText { None }
+    // Guard the simultaneous old document/rows before any new materialization.
+    // Ordinary sources retain their existing behavior through this default.
+    func prepareItemRetainedCopies(_: Int64, _: Int64, _: Int64): Bool { true }
     func document(index: Int64, width: Int64, themeKey: String): Document
     // Per-entry border theme; falls back to the view-wide card theme when
     // None, so hosts can color borders by card kind.
@@ -417,7 +420,7 @@ public class VirtualTranscriptMetrics {
 public class VirtualTranscriptView <: Widget {
     private let source: VirtualTranscriptSource
     public let state: VirtualTranscriptState
-    private let entries = ArrayList<VirtualTranscriptCacheEntry>()
+    private var entries = ArrayList<VirtualTranscriptCacheEntry>()
     private let heights = TranscriptHeightIndex()
     private var width: Int64 = -1
     private var viewportRows: Int64 = 1
@@ -475,6 +478,14 @@ public class VirtualTranscriptView <: Widget {
     public let lastVisibleRanges = ArrayList<VisibleRange>()
     private let lastVisibleIndices = ArrayList<Int64>()
 
+    public func retireRetainedReferences(): Unit {
+        // The concrete product calls only after every actual App/render/task
+        // frame has ended. No history/frame return is inferred as this call.
+        for (entry in entries) { entry.document = Document([]); entry.rows = []; entry.id = ""; entry.themeKey = "" }
+        entries = ArrayList<VirtualTranscriptCacheEntry>()
+        lastVisibleRanges.clear(); lastVisibleIndices.clear(); heights.reset(0)
+        state.anchorId = ""; themeKey = ""
+    }
     public init(
         source: VirtualTranscriptSource,
         state!: VirtualTranscriptState = VirtualTranscriptState(),
@@ -1049,6 +1060,10 @@ public class VirtualTranscriptView <: Widget {
             entry.revision != revision || entry.width != itemWidth ||
             entry.themeKey != themeKey ||
             entry.sourceGeneration != sourceGeneration) {
+            let oldCopies = retainedDisplayAdd(retainedDocumentInvoice(entry.document),
+                retainedStyledRowsInvoice(entry.rows))
+            if (!source.prepareItemRetainedCopies(index, itemWidth, oldCopies)) {
+                throw Exception("display.document_payment_required") }
             let estimatedHeight = entry.height
             if (instrumentationEnabled && entry.measured &&
                 (entry.id != id || entry.revision != revision)) {

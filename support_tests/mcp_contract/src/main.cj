@@ -5,7 +5,7 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
-import agent_mcp.*
+import mcp4cj.*
 import agent_protocol.*
 import std.collection.*
 import std.env.*
@@ -15,6 +15,13 @@ import std.process.*
 import std.sync.*
 import stdx.log.NoopLogger
 import stdx.net.http.*
+
+func contractMcpValue<T>(value: McpResult<T>): T {
+    match (value) {
+        case McpResult.Ok(result) => result
+        case McpResult.Err(error) => throw IllegalStateException(error.code + ": " + error.message)
+    }
+}
 
 class RawMcpHttpResponse {
     let status: UInt16
@@ -90,137 +97,33 @@ func runJsonRpcContracts(): Unit {
     expect(correlation.complete(id).isError(), "correlation completion is single-use")
 }
 
+// This executable now consumes mcp4cj directly. Operator credential resolution
+// belongs to the Product's generic service grants, not this optional library.
 func runAliasAndConfigContracts(): Unit {
-    expect(
-        mcpToolAlias("git hub", "read-file") == "mcp__git_hub__read_file",
-        "MCP aliases are model-safe"
-    )
-    let longAlias = mcpToolAlias(
-        "server-with-a-very-long-identity-that-needs-truncation",
-        "tool-with-a-very-long-identity-that-needs-truncation"
-    )
-    expect(longAlias.size == 64, "long MCP aliases are capped and hashed")
-    expect(
-        longAlias == mcpToolAlias(
-            "server-with-a-very-long-identity-that-needs-truncation",
-            "tool-with-a-very-long-identity-that-needs-truncation"
-        ),
-        "MCP alias hashing is stable"
-    )
-    let aliases = McpToolAliasRegistry()
-    let first = aliases.register("a-b", "read").value().getOrThrow()
-    let second = aliases.register("a_b", "read").value().getOrThrow()
-    expect(first.alias != second.alias, "sanitization collisions receive a stable hash suffix")
-    expect(
-        aliases.resolve(second.alias).getOrThrow().serverId == "a_b",
-        "MCP aliases map back to the original identity"
-    )
-
-    let _ = McpStdioTransportConfig(
-        "/usr/bin/example-mcp",
-        arguments: ["--stdio"],
-        environment: [McpEnvironmentBinding("TOKEN", "MCP_TOKEN")]
-    )
-    expect(
-        McpFramingConfig().maxConcurrentRequests == 16 &&
-            rejects({ => McpFramingConfig(maxConcurrentRequests: 0) }),
-        "stdio framing defaults to sixteen concurrent requests and rejects an empty limit"
-    )
-    let framer = McpJsonLineFramer(config: McpFramingConfig(maxFrameBytes: 1024))
-    expect(framer.push("{\"one\":1}\n{\"two\"").value().getOrThrow().size == 1,
-           "stdio framing emits complete JSON lines only")
-    let completed = framer.push(":2}\r\n").value().getOrThrow()
-    expect(completed == ["{\"two\":2}"], "stdio framing preserves partial input and accepts CRLF")
-    expect(rejects({ =>
-        McpStreamableHttpClientConfig("http://remote.example/mcp")
-    }), "remote MCP clients require HTTPS")
+    let _ = McpStdioConfig("/usr/bin/example-mcp", arguments: ["--stdio"])
+    expect(McpFramingConfig().maxConcurrentRequests == 16 &&
+        rejects({ => McpFramingConfig(maxConcurrentRequests: 0) }),
+        "stdio framing rejects an empty concurrent-request ceiling")
+    expect(rejects({ => McpStreamableHttpClientConfig("http://remote.example/mcp") }),
+        "remote MCP clients require HTTPS")
+    expect(rejects({ => McpStreamableHttpClientConfig("http://127.0.0.1.evil.example/mcp") }),
+        "loopback HTTP validation rejects host-prefix confusion")
     let proxyCredential = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    let authenticatedProxy = McpStreamableHttpClientConfig(
-        "http://127.0.0.1:9/mcp",
-        proxyUrl: "http://axyndra:" + proxyCredential + "@127.0.0.1:9"
-    )
-    match (openStreamableHttpMcpTransport(authenticatedProxy)) {
-        case Result.Ok(transport) => expect(
-            transport.close().isOk(),
-            "authenticated loopback proxy configuration reaches the transport"
-        )
-        case Result.Err(error) => throw IllegalStateException(
-            "authenticated loopback proxy configuration was rejected: " + error.message
-        )
-    }
-    expect(rejects({ => McpStreamableHttpClientConfig(
-        "http://127.0.0.1:9/mcp",
-        proxyUrl: "http://axyndra:short@127.0.0.1:9"
-    ) }), "loopback proxy credentials require the generated per-lease format")
-    let _ = McpStreamableHttpClientConfig(
-        "https://mcp.example/mcp",
-        bearerTokenEnvironment: "MCP_BEARER"
-    )
-    expect(rejects({ =>
-        McpStreamableHttpClientConfig("http://127.0.0.1.evil.example/mcp")
-    }), "loopback HTTP validation rejects host-prefix confusion")
-    expect(rejects({ =>
-        McpStreamableHttpClientConfig(
-            "https://mcp.example/mcp",
-            headers: [McpHttpHeaderBinding("Authorization", "MCP_BEARER")]
-        )
-    }), "custom header bindings cannot replace security headers")
-    expect(rejects({ =>
-        McpStreamableHttpServerConfig(bindHost: "0.0.0.0", bearerTokenEnvironment: "MCP_BEARER")
-    }), "non-loopback HTTP refuses missing external TLS trust")
-    let httpServer = McpStreamableHttpServerConfig(
-        bindHost: "0.0.0.0",
-        bearerTokenEnvironment: "MCP_BEARER",
-        externalTls: true,
-        trustProxy: true,
-        originAllowlist: ["https://app.example"]
-    )
-    expect(McpNativeTransportWiring().httpRequest.indexOf("POST /mcp").isSome(),
-           "native Streamable HTTP wiring point is explicit")
-    match (openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
-        "https://mcp.example/mcp",
-        bearerTokenEnvironment: "MCP_HTTP_CONTRACT_MISSING"
-    ))) {
-        case Result.Err(error) => expect(
-            error.code == "mcp.http_environment_missing",
-            "Streamable HTTP resolves secret references before opening"
-        )
-        case _ => throw IllegalStateException("missing Streamable HTTP secret was accepted")
-    }
-    setVariable("MCP_HTTP_CONTRACT_INVALID", "secret\r\nX-Injected: yes")
-    match (openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
-        "https://mcp.example/mcp",
-        bearerTokenEnvironment: "MCP_HTTP_CONTRACT_INVALID"
-    ))) {
-        case Result.Err(error) => expect(
-            error.code == "mcp.http_environment_value_invalid" &&
-            error.describe().indexOf("X-Injected").isNone(),
-            "HTTP secret values reject header injection without leaking the value"
-        )
-        case _ => throw IllegalStateException("HTTP header injection value was accepted")
-    }
-    let httpMetadata = McpHttpRequestMetadata(
-        MCP_PROTOCOL_VERSION,
-        MCP_METHOD_TOOLS_CALL,
-        name: "echo",
-        origin: "https://app.example"
-    )
-    expect(
-        httpMetadata.validateBody(
-            MCP_METHOD_TOOLS_CALL,
-            objectValue([
-                ValueField("name", textValue("echo")),
-                ValueField("_meta", McpRequestMeta(
-                    clientInfo: McpImplementationInfo("contract", "1")
-                ).toValue())
-            ])
-        ).isOk() &&
-        mcpOriginAllowed(httpServer, httpMetadata.origin) &&
-        !mcpOriginAllowed(httpServer, "https://evil.example") &&
-        mcpBearerAuthorized("Bearer secret", "secret") &&
-        !mcpBearerAuthorized("Bearer wrong", "secret"),
-        "HTTP headers, exact Origin allowlist, and bearer auth are enforced"
-    )
+    let transport = contractMcpValue(openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+        "http://127.0.0.1:9/mcp", proxyUrl: "http://axyndra:" + proxyCredential + "@127.0.0.1:9"
+    )))
+    expect(transport.close().isOk(), "authenticated loopback proxy remains a library capability")
+    expect(rejects({ => McpStreamableHttpClientConfig("http://127.0.0.1:9/mcp",
+        proxyUrl: "http://axyndra:short@127.0.0.1:9") }),
+        "loopback proxy credentials require the per-lease format")
+    expect(rejects({ => McpStreamableHttpClientConfig("https://mcp.example/mcp",
+        headers: [McpHttpHeader("Authorization", "secret")]) }),
+        "custom public headers cannot replace authentication")
+    expect(rejects({ => McpStreamableHttpClientConfig("https://mcp.example/mcp",
+        bearerToken: "secret\r\nX-Injected: yes") }),
+        "explicit library credentials reject header injection")
+    expect(rejects({ => McpStreamableHttpServerConfig(bindHost: "0.0.0.0") }),
+        "non-loopback library server requires explicit authentication")
 }
 
 func runStdioAdmissionAndShutdownContracts(): Unit {
@@ -330,7 +233,7 @@ func runClientServerContracts(): Unit {
         tools,
         {name, arguments, _ =>
             if (name == "failure") {
-                Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+                McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                     [objectValue([
                         ValueField("type", textValue("text")),
                         ValueField("text", textValue("tool failed"))
@@ -338,7 +241,7 @@ func runClientServerContracts(): Unit {
                     isError: true
                 )))
             } else {
-                Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+                McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                     [objectValue([
                         ValueField("type", textValue("text")),
                         ValueField("text", textValue("ok"))
@@ -360,13 +263,13 @@ func runClientServerContracts(): Unit {
             serverInfo: McpImplementationInfo("fixture-server", "1.0.0"),
             instructions: "external content, not trusted instructions"
         ),
-        host
+        host: Some(host)
     )
     let transport = FakeMcpTransport(server)
     let meta = McpRequestMeta(clientInfo: McpImplementationInfo("fixture-client", "1.0.0"))
     let client = McpClient(transport, meta)
 
-    let discovery = client.discover().value().getOrThrow()
+    let discovery = contractMcpValue(client.discover())
     expect(
         discovery.supportedVersions == ["2026-07-28"] &&
         discovery.serverInfo.getOrThrow().name == "fixture-server" &&
@@ -374,7 +277,7 @@ func runClientServerContracts(): Unit {
         "server/discover is self-describing without initialize"
     )
 
-    let firstPage = client.listTools().value().getOrThrow()
+    let firstPage = contractMcpValue(client.listTools())
     expect(
         firstPage.tools.size == 2 &&
         firstPage.tools[0].name == "echo" &&
@@ -384,15 +287,15 @@ func runClientServerContracts(): Unit {
         firstPage.cacheScope == "private",
         "tools/list is deterministic, paginated, and cache-aware"
     )
-    let secondPage = client.listTools(cursor: firstPage.nextCursor).value().getOrThrow()
+    let secondPage = contractMcpValue(client.listTools(cursor: firstPage.nextCursor))
     expect(secondPage.tools.size == 1 && secondPage.tools[0].name == "zeta" && secondPage.nextCursor == "",
            "tools/list cursor retrieves the final deterministic page")
-    expect(client.listTools(cursor: "3:0").isError(), "stale tool cursors are rejected")
+    expect(!client.listTools(cursor: "3:0").isOk(), "stale tool cursors are rejected")
     let directory = McpToolDirectorySnapshot(secondPage, 1000)
     expect(directory.isFresh(91000) && !directory.isFresh(91001),
            "tool directory TTL is explicit")
     let beforeDirectoryFetch = transport.requestCount()
-    let completeDirectory = client.toolDirectory(2000).value().getOrThrow()
+    let completeDirectory = contractMcpValue(client.toolDirectory(2000))
     let afterDirectoryFetch = transport.requestCount()
     expect(
         completeDirectory.tools.size == 3 &&
@@ -402,11 +305,11 @@ func runClientServerContracts(): Unit {
         "MCP client paginates and reuses a fresh directory cache"
     )
 
-    let call = completeResult(client.callTool(
+    let call = completeResult(contractMcpValue(client.callTool(
         "echo",
         objectValue([ValueField("text", textValue("hello"))]),
-        runId: "run-echo"
-    ).value().getOrThrow())
+        owner: "run-echo"
+    )))
     expect(
         !call.isError &&
         call.content.size == 1 &&
@@ -414,15 +317,15 @@ func runClientServerContracts(): Unit {
         "tools/call preserves content and structuredContent"
     )
     let executionFailure = completeResult(
-        client.callTool("failure", objectValue([])).value().getOrThrow()
+        contractMcpValue(client.callTool("failure", objectValue([])))
     )
     expect(executionFailure.isError, "tool execution errors are results, not JSON-RPC failures")
 
     let countBeforeLoss = transport.requestCount()
     transport.failNextAfterDispatch()
     match (client.callTool("echo", objectValue([]))) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.RecoveryRequired &&
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Transport &&
             transport.requestCount() == countBeforeLoss + 1,
             "ambiguous tools/call loss is not retried"
         )
@@ -475,18 +378,16 @@ func runFinalWireAndMrtrContracts(): Unit {
         [McpTool("mrtr", "multi round trip", requiredSchema), tool("remote-error")],
         {name, arguments, continuation =>
             if (name == "remote-error") {
-                return Result.Err(AgentError(
-                    AgentErrorKind.PermissionDenied,
+                return McpResult.Err(McpError(
+                    McpErrorKind.Authorization,
                     "mcp.fixture_approval_required",
                     "fixture requires approval",
-                    fields: [
-                        ErrorField("operation_id", "fixture-operation"),
-                        ErrorField("retry_safe", "false")
-                    ]
+                    remoteCode: "mcp.fixture_approval_required",
+                    data: objectValue([ValueField("operation_id", textValue("fixture-operation")), ValueField("retry_safe", boolValue(false))])
                 ))
             }
             if (!continuation.isRetry()) {
-                Result.Ok(McpCallToolOutcome.InputRequired(McpInputRequiredResult(
+                McpResult.Ok(McpCallToolOutcome.InputRequired(McpInputRequiredResult(
                     inputRequests: objectValue([
                         ValueField("confirm", objectValue([
                             ValueField("method", textValue("elicitation/create")),
@@ -508,7 +409,7 @@ func runFinalWireAndMrtrContracts(): Unit {
                     continuation.inputResponses.field("confirm").isSome(),
                     "MRTR retry echoes request state and keyed input responses"
                 )
-                Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+                McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                     [objectValue([
                         ValueField("type", textValue("text")),
                         ValueField("text", textValue("completed"))
@@ -527,7 +428,7 @@ func runFinalWireAndMrtrContracts(): Unit {
             ttlMillis: 4321,
             cacheScope: "private"
         ),
-        host
+        host: Some(host)
     )
     let transport = FakeMcpTransport(server)
     let client = McpClient(
@@ -539,7 +440,7 @@ func runFinalWireAndMrtrContracts(): Unit {
             )
         )
     )
-    let discovery = client.discover().value().getOrThrow()
+    let discovery = contractMcpValue(client.discover())
     expect(
         discovery.supportedVersions == [MCP_PROTOCOL_VERSION] &&
         discovery.ttlMillis == 4321 && discovery.cacheScope == "private" &&
@@ -570,31 +471,31 @@ func runFinalWireAndMrtrContracts(): Unit {
         case _ => throw IllegalStateException("final discovery wire was not successful")
     }
 
-    let page = client.listTools().value().getOrThrow()
+    let page = contractMcpValue(client.listTools())
     expect(
         page.tools.size == 2 && page.ttlMillis == 1234 && page.cacheScope == "private",
         "final tools/list result has deterministic cache metadata"
     )
     match (client.callTool("remote-error", objectValue([]))) {
-        case Result.Err(error) => expect(
+        case McpResult.Err(error) => expect(
             error.code == "mcp.fixture_approval_required" &&
-            error.field("remote_code") == Some("mcp.fixture_approval_required") &&
-            error.field("operation_id") == Some("fixture-operation") &&
-            error.field("retry_safe") == Some("false") &&
-            error.field("json_rpc_code") == Some(JSON_RPC_INTERNAL_ERROR.toString()),
+            error.remoteCode == "mcp.fixture_approval_required" &&
+            requiredText(error.data, "operation_id") == "fixture-operation" &&
+            !error.retrySafe &&
+            error.rpcCode == Some(JSON_RPC_INTERNAL_ERROR),
             "client preserves bounded remote host error code and scalar data fields"
         )
         case _ => throw IllegalStateException("remote host error was accepted")
     }
     match (client.callTool("mrtr", objectValue([]))) {
-        case Result.Err(error) => expect(
+        case McpResult.Err(error) => expect(
             error.code == "mcp.invalid_params",
             "server validates tools/call arguments against inputSchema"
         )
         case _ => throw IllegalStateException("invalid tool input was accepted")
     }
     let arguments = objectValue([ValueField("value", textValue("ok"))])
-    let pending = match (client.callTool("mrtr", arguments).value().getOrThrow()) {
+    let pending = match (contractMcpValue(client.callTool("mrtr", arguments))) {
         case McpCallToolOutcome.InputRequired(value) => value
         case _ => throw IllegalStateException("MRTR input_required result was not decoded")
     }
@@ -603,11 +504,11 @@ func runFinalWireAndMrtrContracts(): Unit {
         "tools/call decodes the input_required MRTR union"
     )
     expect(
-        client.retryToolCall("mrtr", arguments, pending, objectValue([])).isError(),
+        !client.retryToolCall("mrtr", arguments, pending, objectValue([])).isOk(),
         "MRTR retry rejects missing keyed responses before dispatch"
     )
     let beforeRetry = transport.requestCount()
-    let completed = client.retryToolCall(
+    let completed = contractMcpValue(client.retryToolCall(
         "mrtr",
         arguments,
         pending,
@@ -617,7 +518,7 @@ func runFinalWireAndMrtrContracts(): Unit {
                 ValueField("content", objectValue([]))
             ]))
         ])
-    ).value().getOrThrow()
+    ))
     expect(
         completeResult(completed).content.size == 1 &&
         transport.requestCount() == beforeRetry + 1,
@@ -649,35 +550,35 @@ func runFinalWireAndMrtrContracts(): Unit {
 
 func runStdioLoopbackContract(): Unit {
     let executable = getCommandLine()[0]
-    let transport = openStdioMcpTransport(McpStdioTransportConfig(
+    let transport = contractMcpValue(openStdioMcpTransport(McpStdioConfig(
         executable,
         arguments: ["--mcp-stdio-server"],
-        environment: [McpEnvironmentBinding("LD_LIBRARY_PATH", "LD_LIBRARY_PATH")],
+        environment: contractLibraryEnvironment(),
         framing: McpFramingConfig(
             maxFrameBytes: 65536,
             requestTimeoutMillis: 5000,
             gracefulShutdownMillis: 1000
         )
-    )).value().getOrThrow()
+    )))
     let client = McpClient(
         transport,
         McpRequestMeta(clientInfo: McpImplementationInfo("loopback-client", "1.0.0"))
     )
-    expect(client.discover().value().getOrThrow().serverInfo.getOrThrow().name == "loopback-server",
+    expect(contractMcpValue(client.discover()).serverInfo.getOrThrow().name == "loopback-server",
            "real stdio transport performs server/discover")
-    let page = client.listTools().value().getOrThrow()
+    let page = contractMcpValue(client.listTools())
     expect(page.tools.size == 2 && page.tools[0].name == "echo" && page.tools[1].name == "slow",
            "real stdio transport performs tools/list")
-    let result = completeResult(client.callTool(
+    let result = completeResult(contractMcpValue(client.callTool(
         "echo",
         objectValue([ValueField("value", textValue("over-stdio"))])
-    ).value().getOrThrow())
+    )))
     expect(
         requiredText(result.structuredContent, "value") == "over-stdio",
         "real stdio transport performs tools/call"
     )
     let slow = spawn {
-        client.callTool("slow", objectValue([]), runId: "run-slow")
+        client.callTool("slow", objectValue([]), owner: "run-slow")
     }
     var waited: Int64 = 0
     while (client.activeRequestId("run-slow").isNone() && waited < 1000) {
@@ -686,8 +587,8 @@ func runStdioLoopbackContract(): Unit {
     }
     expect(client.cancel("run-slow").isOk(), "stdio cancellation notification is written")
     match (slow.get()) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.Cancelled,
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Cancelled,
             "real stdio cancellation wins over a late tool response"
         )
         case _ => throw IllegalStateException("cancelled stdio tool call completed normally")
@@ -702,7 +603,7 @@ func runFixtureStdioServer(): Int64 {
         [tool("echo"), tool("slow")],
         {name, arguments, _ =>
             if (name == "slow") { sleep(Duration.millisecond * 200) }
-            Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+            McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                 [objectValue([
                     ValueField("type", textValue("text")),
                     ValueField("text", textValue("loopback"))
@@ -713,11 +614,11 @@ func runFixtureStdioServer(): Int64 {
     )
     let server = StdioMcpServer(McpServer(
         McpDiscoverResult(serverInfo: McpImplementationInfo("loopback-server", "1.0.0")),
-        host
+        host: Some(host)
     ))
-    match (server.serveConsole()) {
-        case Result.Ok(_) => 0
-        case Result.Err(_) => 1
+    match (server.serve(getStdIn(), getStdOut())) {
+        case McpResult.Ok(_) => 0
+        case McpResult.Err(_) => 1
     }
 }
 
@@ -726,7 +627,7 @@ func runLimitedStdioServer(): Int64 {
         [tool("slow")],
         {_, arguments, _ =>
             sleep(Duration.millisecond * 150)
-            Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+            McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                 [objectValue([
                     ValueField("type", textValue("text")),
                     ValueField("text", textValue("limited"))
@@ -738,7 +639,7 @@ func runLimitedStdioServer(): Int64 {
     let server = StdioMcpServer(
         McpServer(
             McpDiscoverResult(serverInfo: McpImplementationInfo("limited-server", "1.0.0")),
-            host
+            host: Some(host)
         ),
         framing: McpFramingConfig(
             maxFrameBytes: 65536,
@@ -746,10 +647,10 @@ func runLimitedStdioServer(): Int64 {
             maxConcurrentRequests: 2
         )
     )
-    match (server.serveConsole()) {
-        case Result.Ok(_) => 0
-        case Result.Err(error) =>
-            eprintln(error.describe())
+    match (server.serve(getStdIn(), getStdOut())) {
+        case McpResult.Ok(_) => 0
+        case McpResult.Err(error) =>
+            eprintln(error.code)
             1
     }
 }
@@ -759,7 +660,7 @@ func runIncompleteShutdownStdioServer(): Int64 {
         [tool("slow")],
         {_, arguments, _ =>
             sleep(Duration.millisecond * 300)
-            Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+            McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                 [objectValue([
                     ValueField("type", textValue("text")),
                     ValueField("text", textValue("late"))
@@ -771,7 +672,7 @@ func runIncompleteShutdownStdioServer(): Int64 {
     let server = StdioMcpServer(
         McpServer(
             McpDiscoverResult(serverInfo: McpImplementationInfo("shutdown-server", "1.0.0")),
-            host
+            host: Some(host)
         ),
         framing: McpFramingConfig(
             maxFrameBytes: 65536,
@@ -779,20 +680,20 @@ func runIncompleteShutdownStdioServer(): Int64 {
             maxConcurrentRequests: 1
         )
     )
-    match (server.serveConsole()) {
-        case Result.Err(error) =>
-            if (error.kind == AgentErrorKind.Timeout &&
+    match (server.serve(getStdIn(), getStdOut())) {
+        case McpResult.Err(error) =>
+            if (error.kind == McpErrorKind.Deadline &&
                 error.code == "mcp.stdio_shutdown_incomplete" &&
-                error.field("active_requests") == Some("1") &&
+                error.data.field("active_requests").getOrThrow().asNumberText() == "1" &&
                 server.state() == McpLifecycleState.Stopping &&
                 host.cancellations() == ["41"]) {
                 eprintln(error.code + ":Stopping:1")
                 0
             } else {
-                eprintln(error.describe())
+                eprintln(error.code)
                 2
             }
-        case Result.Ok(_) =>
+        case McpResult.Ok(_) =>
             eprintln("stdio shutdown unexpectedly completed")
             3
     }
@@ -819,7 +720,7 @@ func runHttpLoopbackContract(): Unit {
                 slowStarted.store(true)
                 sleep(Duration.millisecond * 200)
             }
-            Result.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
+            McpResult.Ok(McpCallToolOutcome.Complete(McpCallToolResult(
                 [objectValue([
                     ValueField("type", textValue("text")),
                     ValueField("text", textValue("loopback-http"))
@@ -831,7 +732,7 @@ func runHttpLoopbackContract(): Unit {
     let server = match (openStreamableHttpMcpServer(
         McpStreamableHttpServerConfig(
             port: 0,
-            bearerTokenEnvironment: secretEnvironment,
+            bearerToken: getVariable(secretEnvironment) ?? "",
             originAllowlist: ["http://127.0.0.1"],
             framing: McpFramingConfig(
                 maxFrameBytes: 65536,
@@ -841,12 +742,12 @@ func runHttpLoopbackContract(): Unit {
         ),
         McpServer(
             McpDiscoverResult(serverInfo: McpImplementationInfo("http-loopback-server", "1.0.0")),
-            host
+            host: Some(host)
         )
     )) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => throw IllegalStateException(
-            "failed to open HTTP fixture: " + error.describe()
+        case McpResult.Ok(value) => value
+        case McpResult.Err(error) => throw IllegalStateException(
+            "failed to open HTTP fixture: " + error.code
         )
     }
     let serving = spawn { server.serve() }
@@ -913,30 +814,30 @@ func runHttpLoopbackContract(): Unit {
     expectHttpError(unknown, 404, JSON_RPC_METHOD_NOT_FOUND,
                     "unknown method maps to HTTP 404 and JSON-RPC MethodNotFound")
 
-    let jsonTransport = openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+    let jsonTransport = contractMcpValue(openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
         endpoint,
-        bearerTokenEnvironment: secretEnvironment,
+        bearerToken: getVariable(secretEnvironment) ?? "",
         origin: "http://127.0.0.1"
-    )).value().getOrThrow()
+    )))
     let jsonClient = McpClient(jsonTransport, meta)
     expect(
-        jsonClient.discover().value().getOrThrow().serverInfo.getOrThrow().name == "http-loopback-server",
+        contractMcpValue(jsonClient.discover()).serverInfo.getOrThrow().name == "http-loopback-server",
         "Streamable HTTP performs POST JSON server/discover"
     )
     expect(jsonClient.close().isOk(), "JSON HTTP client closes local transport resources")
 
     setVariable(secretEnvironment, "wrong-secret")
     let denied = McpClient(
-        openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+        contractMcpValue(openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
             endpoint,
-            bearerTokenEnvironment: secretEnvironment,
+            bearerToken: getVariable(secretEnvironment) ?? "",
             origin: "http://127.0.0.1"
-        )).value().getOrThrow(),
+        ))),
         meta
     )
     match (denied.discover()) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.Authentication && error.field("http_status") == Some("401"),
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Authentication && error.httpStatus == Some(401),
             "Streamable HTTP bearer validation fails closed"
         )
         case _ => throw IllegalStateException("invalid HTTP bearer token was accepted")
@@ -945,25 +846,25 @@ func runHttpLoopbackContract(): Unit {
     setVariable(secretEnvironment, "contract-secret")
 
     let badOrigin = McpClient(
-        openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+        contractMcpValue(openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
             endpoint,
-            bearerTokenEnvironment: secretEnvironment,
+            bearerToken: getVariable(secretEnvironment) ?? "",
             origin: "http://localhost"
-        )).value().getOrThrow(),
+        ))),
         meta
     )
     match (badOrigin.discover()) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.PermissionDenied && error.field("http_status") == Some("403"),
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Authorization && error.httpStatus == Some(403),
             "Streamable HTTP Origin allowlist uses exact matching"
         )
         case _ => throw IllegalStateException("unlisted HTTP Origin was accepted")
     }
     let _ = badOrigin.close()
 
-    let sseTransport = openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
+    let sseTransport = contractMcpValue(openStreamableHttpMcpTransport(McpStreamableHttpClientConfig(
         endpoint,
-        bearerTokenEnvironment: secretEnvironment,
+        bearerToken: getVariable(secretEnvironment) ?? "",
         origin: "http://127.0.0.1",
         preferSse: true,
         framing: McpFramingConfig(
@@ -971,11 +872,11 @@ func runHttpLoopbackContract(): Unit {
             requestTimeoutMillis: 5000,
             gracefulShutdownMillis: 1000
         )
-    )).value().getOrThrow()
+    )))
     let sseClient = McpClient(sseTransport, meta)
     let page = match (sseClient.listTools()) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => throw IllegalStateException(
+        case McpResult.Ok(value) => value
+        case McpResult.Err(error) => throw IllegalStateException(
             "SSE tools/list failed: " + error.code + ": " + error.message
         )
     }
@@ -984,13 +885,13 @@ func runHttpLoopbackContract(): Unit {
         containsTool(page.tools, "routed") && containsTool(page.tools, "天气") &&
         !containsTool(page.tools, "invalid-header"),
         "Streamable HTTP parses SSE and excludes malformed x-mcp-header tools")
-    let result = completeResult(sseClient.callTool(
+    let result = completeResult(contractMcpValue(sseClient.callTool(
         "echo",
         objectValue([ValueField("value", textValue("over-http"))])
-    ).value().getOrThrow())
+    )))
     expect(requiredText(result.structuredContent, "value") == "over-http",
            "Streamable HTTP preserves tools/call structuredContent")
-    let routed = completeResult(sseClient.callTool(
+    let routed = completeResult(contractMcpValue(sseClient.callTool(
         "routed",
         objectValue([
             ValueField("region", textValue("中国")),
@@ -998,18 +899,18 @@ func runHttpLoopbackContract(): Unit {
                 ValueField("trusted", boolValue(true))
             ]))
         ])
-    ).value().getOrThrow())
+    )))
     expect(
         requiredText(routed.structuredContent, "region") == "中国",
         "Streamable HTTP extracts nested x-mcp-header values and base64-encodes UTF-8"
     )
     expect(
-        completeResult(sseClient.callTool("天气", objectValue([])).value().getOrThrow()).content.size == 1,
+        completeResult(contractMcpValue(sseClient.callTool("天气", objectValue([])))).content.size == 1,
         "Streamable HTTP base64-encodes and validates a non-ASCII Mcp-Name"
     )
     match (sseClient.callTool("explode", objectValue([]))) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.Provider &&
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Remote &&
             error.code == "mcp.remote_protocol_error" &&
             error.message == "fixture loses the response after dispatch",
             "SSE tools/call emits a terminal JSON-RPC failure when host execution throws"
@@ -1017,7 +918,7 @@ func runHttpLoopbackContract(): Unit {
         case _ => throw IllegalStateException("SSE tools/call host failure was accepted")
     }
 
-    let slow = spawn { sseClient.callTool("slow", objectValue([]), runId: "http-slow") }
+    let slow = spawn { sseClient.callTool("slow", objectValue([]), owner: "http-slow") }
     waited = 0
     while (sseClient.activeRequestId("http-slow").isNone() && waited < 1000) {
         sleep(Duration.millisecond * 5)
@@ -1033,8 +934,8 @@ func runHttpLoopbackContract(): Unit {
     expect(sseClient.cancel("http-slow").isOk(),
            "HTTP cancellation posts notifications/cancelled and closes the active request")
     match (slow.get()) {
-        case Result.Err(error) => expect(
-            error.kind == AgentErrorKind.Cancelled,
+        case McpResult.Err(error) => expect(
+            error.kind == McpErrorKind.Cancelled,
             "cancelled Streamable HTTP tool call cannot win with a late response"
         )
         case _ => throw IllegalStateException("cancelled HTTP tool call completed normally")
@@ -1044,8 +945,8 @@ func runHttpLoopbackContract(): Unit {
     expect(sseClient.close().isOk(), "SSE HTTP client closes local transport resources")
     expect(server.close().isOk(), "loopback Streamable HTTP server closes gracefully")
     match (serving.get()) {
-        case Result.Ok(_) => ()
-        case Result.Err(error) => throw IllegalStateException("HTTP server failed: " + error.describe())
+        case McpResult.Ok(_) => ()
+        case McpResult.Err(error) => throw IllegalStateException("HTTP server failed: " + error.code)
     }
 }
 
@@ -1195,4 +1096,10 @@ func rejects(action: () -> Unit): Bool {
     } catch (_: IllegalArgumentException) {
         true
     }
+}
+
+func contractLibraryEnvironment(): HashMap<String, String> {
+    let values = HashMap<String, String>()
+    match (getVariable("LD_LIBRARY_PATH")) { case Some(value) => values["LD_LIBRARY_PATH"] = value; case None => () }
+    values
 }

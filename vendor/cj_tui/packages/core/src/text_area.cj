@@ -419,8 +419,8 @@ public class TextArea <: Widget {
         let textTarget = Rect(target.x + gutter, target.y, max(0, target.width - gutter), target.height)
         ensureCursorVisible(textTarget.height)
         let row = visibleRowForLine(lineForOffset(cursor))
-        let col = displayWidth(value[lineStartForOffset(cursor)..cursor])
-        Position(textTarget.x + min(col, textTarget.width), textTarget.y + clamp(row - scroll, 0, max(0, textTarget.height - 1)))
+        let col = measureGraphemeWidthUpTo(value[lineStartForOffset(cursor)..cursor], textTarget.width, TextWidthOptions())
+        Position(textTarget.x + col, textTarget.y + clamp(row - scroll, 0, max(0, textTarget.height - 1)))
     }
 
     public func cursorPositions(area: Rect): Array<Position> {
@@ -1300,6 +1300,7 @@ public class TextArea <: Widget {
         if (line.isEmpty()) { return [RichSpan("", style: style)] }
         let lineMarkers = decorationsForLine(lineStartOffset, line.size)
         let markers = if (markdownEditing && decorations.size == 0) { markdownLineDecorations(line, lineStartOffset) } else { lineMarkers }
+        if (markers.isEmpty()) { return [RichSpan(line, style: style)] }
         let spans = ArrayList<RichSpan>()
         var offset: Int64 = 0
         var currentText = ""

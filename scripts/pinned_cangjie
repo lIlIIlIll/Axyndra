@@ -75,6 +75,13 @@ export PATH="$sdk_root/bin:$sdk_root/tools/bin:$PATH"
 export LD_LIBRARY_PATH="$AXYNDRA_NATIVE_ROOT:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
 
 "$root/scripts/prepare_native_deps.sh"
+# The vendored core's target-specific FFI links this archive transitively;
+# never replace or re-tokenize caller/manifest link-option values. Minimal
+# source profiles omit core and therefore do not require terminal artifacts.
+terminal_native="$root/vendor/cj_tui/packages/core/native/build.sh"
+if [[ -f "$terminal_native" ]]; then
+  bash "$terminal_native"
+fi
 export AXYNDRA_NETWORK_BRIDGE="$(prepare_network_bridge)"
 native_compiler=${AXYNDRA_NATIVE_CC:-$(command -v clang || true)}
 if [[ -n "$native_compiler" ]]; then
@@ -85,7 +92,11 @@ if [[ -n "$native_compiler" ]]; then
 fi
 
 command=("$@")
-if [[ -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then
+explicit_target=false
+for argument in "${command[@]}"; do
+  case "$argument" in --target-dir|--target-dir=*) explicit_target=true ;; esac
+done
+if [[ "$explicit_target" != true && -n "${AXYNDRA_CANONICAL_TARGET_ROOT:-}" && ${command[0]##*/} == cjpm && ${#command[@]} -ge 2 && ${command[1]} =~ ^(bench|build|run|test)$ ]]; then
   cjc_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/bin/cjc")
   cjpm_identity=$(stat -Lc '%d:%i:%s:%Y' -- "$sdk_root/tools/bin/cjpm")
   native_compiler_dir=$(cd -- "$(dirname -- "$native_compiler")" && pwd -P)

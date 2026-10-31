@@ -146,6 +146,13 @@ def responses_text_events(
                     "delta": reasoning,
                 },
                 {
+                    "type": "response.reasoning_summary_text.done",
+                    "item_id": reasoning_id,
+                    "output_index": 0,
+                    "summary_index": 0,
+                    "text": reasoning,
+                },
+                {
                     "type": "response.reasoning_summary_part.done",
                     "item_id": reasoning_id,
                     "output_index": 0,
@@ -570,6 +577,9 @@ def event_specs(events: list[Any], behavior: dict[str, Any]) -> list[dict[str, A
             spec["gate_after"] = gates[str(index)]
         elif index in gates:
             spec["gate_after"] = gates[index]
+        for needle, gate in behavior.get("gate_after_contains", {}).items():
+            if needle in json.dumps(payload, ensure_ascii=False):
+                spec["gate_after"] = gate
         if str(index) in delays:
             spec["delay_after"] = float(delays[str(index)])
         elif index in delays:
@@ -733,7 +743,11 @@ class ProviderHandler(BaseHTTPRequestHandler):
         self.send_header("connection", "close")
         self.end_headers()
         fixed_chunks = behavior.get("wire_chunk_size")
-        for event_index, spec in enumerate(event_specs(events, behavior)):
+        specs = event_specs(events, behavior)
+        if behavior.get("incomplete_eof"):
+            specs = specs[:3]
+            append_json(state.stream_log, {"kind": "incomplete_eof", "request_index": request_index})
+        for event_index, spec in enumerate(specs):
             payload = spec["payload"]
             if payload == "[DONE]":
                 encoded = f"data: [DONE]{ending}{ending}".encode("utf-8")
@@ -742,6 +756,9 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 encoded_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                 encoded = f"data: {encoded_json}{ending}{ending}".encode("utf-8")
                 event_type = payload.get("type", "json") if isinstance(payload, dict) else "json"
+            if behavior.get("invalid_utf8") and event_index == 2:
+                encoded = encoded.replace(b"data: ", b"data: \xff", 1)
+                append_json(state.stream_log, {"kind": "invalid_utf8", "request_index": request_index})
             append_json(
                 state.stream_log,
                 {

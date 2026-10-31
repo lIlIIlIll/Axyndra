@@ -6,17 +6,16 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 
 func runGrievancesCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printGrievancesHelp()
+        printGrievancesHelp(io: io)
         return 0
     }
     let action = grievanceAction(arguments)
@@ -47,16 +46,16 @@ func runGrievancesCli(
                 return 2
         }
         let tool = grievanceOption(arguments, "--tool", "-t")
-        return printGrievanceList(session, limit, tool, json)
+        return printGrievanceList(session, limit, tool, json, io: io)
     }
     if (action == "clean") {
-        return cleanGrievanceCli(session, arguments, json)
+        return cleanGrievanceCli(session, arguments, json, io: io)
     }
-    pushGrievanceCli(session, json)
+    pushGrievanceCli(session, json, io: io)
 }
 
-func printGrievancesHelp(): Unit {
-    println(
+func printGrievancesHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println(
         "View, clean, or push reported tool issues (auto-QA grievances)\n\n" +
         "USAGE\n" +
         "  $ axyndra grievances [ACTION] [FLAGS]\n\n" +
@@ -76,10 +75,10 @@ func printGrievanceList(
     limit: Int64,
     tool: String,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     match (session.listGrievances(limit, tool)) {
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             1
         case Result.Ok(result) =>
             if (json) {
@@ -87,29 +86,29 @@ func printGrievanceList(
                 for (row in result.rows) {
                     values.add(grievanceCliValue(row))
                 }
-                println(encodeAgentValue(listValue(values.toArray())))
+                io.println(encodeAgentValue(listValue(values.toArray())))
                 return 0
             }
             if (!result.databaseFound) {
-                println(
+                io.println(
                     "No grievances database found. Auto-QA has not " +
                         "recorded any reports yet (or was disabled)."
                 )
                 return 0
             }
             if (result.rows.isEmpty()) {
-                println("No grievances recorded yet.")
+                io.println("No grievances recorded yet.")
                 return 0
             }
             for (row in result.rows) {
-                println(
+                io.println(
                     "#" + row.id.toString() + " " + row.tool +
                         " (" + row.model + " v" + row.version + ")"
                 )
-                println("  " + row.report)
-                println()
+                io.println("  " + row.report)
+                io.println()
             }
-            println(
+            io.println(
                 "Showing " + result.rows.size.toString() +
                     " most recent" +
                     if (tool == "") { "" } else { " for " + tool }
@@ -122,7 +121,7 @@ func cleanGrievanceCli(
     session: ApplicationSession,
     arguments: Array<String>,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let idText = grievanceOption(arguments, "--id", "")
     let tool = grievanceOption(arguments, "--tool", "-t")
     let all = hasArgument(arguments, "--all")
@@ -149,20 +148,20 @@ func cleanGrievanceCli(
     }
     match (session.cleanGrievances(id, tool, all)) {
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             1
         case Result.Ok(result) =>
             if (json) {
-                println(encodeAgentValue(objectValue([
+                io.println(encodeAgentValue(objectValue([
                     ValueField("deleted", integerValue(result.deleted))
                 ])))
             } else if (!result.databaseFound) {
-                println(
+                io.println(
                     "No grievances database found. Auto-QA has not " +
                         "recorded any reports yet (or was disabled)."
                 )
             } else if (result.deleted == 0) {
-                println("No matching grievances to delete.")
+                io.println("No matching grievances to delete.")
             } else {
                 let scope = match (id) {
                     case Some(value) => "#" + value.toString()
@@ -173,7 +172,7 @@ func cleanGrievanceCli(
                             "for " + tool
                         }
                 }
-                println(
+                io.println(
                     "Deleted " + result.deleted.toString() +
                         " grievance" +
                         if (result.deleted == 1) { "" } else { "s" } +
@@ -187,20 +186,20 @@ func cleanGrievanceCli(
 func pushGrievanceCli(
     session: ApplicationSession,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     match (session.listGrievances(1, "")) {
         case Result.Err(error) =>
-            printError(error)
+            printError(error, io: io)
             1
         case Result.Ok(result) =>
             if (!result.databaseFound) {
                 if (json) {
-                    println(encodeAgentValue(objectValue([
+                    io.println(encodeAgentValue(objectValue([
                         ValueField("pushed", integerValue(0)),
                         ValueField("ok", boolValue(true))
                     ])))
                 } else {
-                    println(
+                    io.println(
                         "No grievances database found — nothing to push."
                     )
                 }

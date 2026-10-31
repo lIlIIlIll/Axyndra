@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
@@ -17,10 +16,10 @@ let USAGE_DAY_MILLIS: Int64 = 86400000
 func runUsageCli(
     session: ApplicationSession,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        printUsageHelp()
+        printUsageHelp(io: io)
         return 0
     }
     let parseError = usageParseError(arguments)
@@ -36,7 +35,7 @@ func runUsageCli(
     let action = usageAction(arguments)
     let provider = usageProvider(arguments).toAsciiLower()
     if (action == "invalidate") {
-        return invalidateUsage(session, provider)
+        return invalidateUsage(session, provider, io: io)
     }
     if (hasArgument(arguments, "--history")) {
         return usageHistory(
@@ -45,21 +44,21 @@ func runUsageCli(
             usageDays(arguments),
             hasArgument(arguments, "--json") ||
                 hasArgument(arguments, "-j")
-        )
+        , io: io)
     }
     usageSnapshot(
         session,
         provider,
         hasArgument(arguments, "--json") ||
             hasArgument(arguments, "-j")
-    )
+    , io: io)
 }
 
 func usageSnapshot(
     session: ApplicationSession,
     provider: String,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let accounts = usageAccounts(session, provider)
     if (json) {
         let accountValues = ArrayList<AgentValue>()
@@ -78,7 +77,7 @@ func usageSnapshot(
                 ]))
             }
         }
-        println(encodeAgentValue(objectValue([
+        io.println(encodeAgentValue(objectValue([
             ValueField(
                 "generatedAt",
                 integerValue(usageNowMillis())
@@ -125,12 +124,12 @@ func usageHistory(
     provider: String,
     days: Int64,
     json: Bool
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let generatedAt = usageNowMillis()
     let since = generatedAt - days * USAGE_DAY_MILLIS
     let entries = loadUsageHistory(session.stateRoot(), provider, since)
     if (json) {
-        println(encodeAgentValue(objectValue([
+        io.println(encodeAgentValue(objectValue([
             ValueField(
                 "generatedAt",
                 integerValue(generatedAt)
@@ -153,12 +152,12 @@ func usageHistory(
         )
         return 1
     }
-    println(
+    io.println(
         "Usage history · last " + days.toString() + " days · " +
             entries.size.toString() + " snapshots"
     )
     for (entry in entries) {
-        println(encodeAgentValue(entry))
+        io.println(encodeAgentValue(entry))
     }
     0
 }
@@ -166,19 +165,19 @@ func usageHistory(
 func invalidateUsage(
     session: ApplicationSession,
     provider: String
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     let root = session.stateRoot() + "/usage-cache"
     try {
         if (provider == "") {
             let _ = removeIfExists(root, recursive: true)
-            println(
+            io.println(
                 "Invalidated cached usage reports for all providers."
             )
         } else {
             if (usageSafeProvider(provider)) {
                 let _ = removeIfExists(root + "/" + provider + ".json")
             }
-            println(
+            io.println(
                 "Invalidated cached usage reports for provider \"" +
                     provider + "\"."
             )
@@ -392,34 +391,34 @@ func usageNowMillis(): Int64 {
     DateTime.nowUTC().toUnixTimeStamp().toMilliseconds()
 }
 
-func printUsageHelp(): Unit {
-    println(
+func printUsageHelp(io!: CliIo180 = consoleCliIo180): Unit {
+    io.println(
         "Show provider usage limits for every authenticated account"
     )
-    println()
-    println("USAGE")
-    println("  $ axyndra usage [ACTION] [FLAGS]")
-    println()
-    println("ARGUMENTS")
-    println("  ACTION   Optional subcommand to execute (invalidate)")
-    println()
-    println("FLAGS")
-    println(
+    io.println()
+    io.println("USAGE")
+    io.println("  $ axyndra usage [ACTION] [FLAGS]")
+    io.println()
+    io.println("ARGUMENTS")
+    io.println("  ACTION   Optional subcommand to execute (invalidate)")
+    io.println()
+    io.println("FLAGS")
+    io.println(
         "  -j, --json              Output usage reports as JSON"
     )
-    println(
+    io.println(
         "  -p, --provider=<value>  Only show usage for this " +
             "provider id (e.g. anthropic)"
     )
-    println(
+    io.println(
         "  -r, --redact            Redact account emails/ids " +
             "for sharing screenshots"
     )
-    println(
+    io.println(
         "      --history           Show recorded usage-limit " +
             "history instead of a live snapshot"
     )
-    println(
+    io.println(
         "  -d, --days=<int>        History window in days " +
             "(with --history)"
     )

@@ -201,7 +201,7 @@ public func parseCommandInputForCompletion(source: String): CommandInputParse {
     }
 }
 
-public func commandCompletionPlan(source: String, cursor: Int64): CommandCompletionPlan {
+public func commandCompletionPlan(source: String, cursor: Int64, extraDefinitions!:Array<SlashCommandDefinition> = []): CommandCompletionPlan {
     let boundedCursor = clampCommandCursor(source, cursor)
     let full = parseCommandInputForCompletion(source)
     let prefix = parseCommandInputForCompletion(source[..boundedCursor])
@@ -237,7 +237,7 @@ public func commandCompletionPlan(source: String, cursor: Int64): CommandComplet
             }
     }
 
-    let (target, commandName) = completionTarget(tokensBefore.toArray(), activePrefix)
+    let (target, commandName) = completionTarget(tokensBefore.toArray(), activePrefix, extraDefinitions)
     CommandCompletionPlan(
         target,
         tokensBefore.toArray(),
@@ -256,12 +256,13 @@ public func commandCompletionPlan(source: String, cursor: Int64): CommandComplet
 // so agent_cli stays independent of the terminal and filesystem layers.
 public func commandCompletionCandidates(
     plan: CommandCompletionPlan,
-    pathCandidates!: Array<CompletionCandidate> = []
+    pathCandidates!: Array<CompletionCandidate> = [],
+    extraDefinitions!:Array<SlashCommandDefinition> = []
 ): Array<CompletionCandidate> {
     match (plan.target) {
         case CommandCompletionTarget.SlashCommand =>
             let candidates = ArrayList<CompletionCandidate>()
-            for (definition in slashCommandDefinitions()) {
+            for (definition in presentedSlashCommandDefinitions(extraDefinitions)) {
                 let command = "/" + definition.name
                 candidates.add(
                     CompletionCandidate(
@@ -273,7 +274,7 @@ public func commandCompletionCandidates(
             }
             filterCompletionCandidates(candidates.toArray(), plan.activePrefix)
         case CommandCompletionTarget.Subcommand =>
-            let definition = match (slashCommandDefinitionForCompletion(plan.commandName)) {
+            let definition = match (slashCommandDefinitionForCompletion(plan.commandName,extraDefinitions)) {
                 case Some(value) => value
                 case None => return []
             }
@@ -538,26 +539,6 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         SlashCommandDefinition("tree", "Sessions", "Show the session branch tree"),
         SlashCommandDefinition("reset", "Sessions", "Archive state and start clean", usage: "/reset <archive-label>"),
         SlashCommandDefinition(
-            "todo",
-            "Work modes",
-            "Manage the session todo list",
-            usage: "/todo [subcommand]",
-            subcommands: [
-                "edit",
-                "copy",
-                "export",
-                "import",
-                "append",
-                "start",
-                "done",
-                "drop",
-                "rm",
-                "help",
-                "?"
-            ],
-            pathArgumentPrefixes: [["export"], ["import"]]
-        ),
-        SlashCommandDefinition(
             "goal",
             "Work modes",
             "Create and manage an autonomous goal",
@@ -573,6 +554,7 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         ),
         SlashCommandDefinition("plan", "Work modes", "Toggle read-only planning mode", usage: "/plan [request]"),
         SlashCommandDefinition("plan-review", "Work modes", "Review the latest structured plan"),
+        SlashCommandDefinition("view", "Extensions", "Discover or open an installed plugin View", usage: "/view [route]"),
         SlashCommandDefinition("vibe", "Work modes", "Toggle delegated director mode", usage: "/vibe [request]"),
         SlashCommandDefinition("guided-goal", "Work modes", "Turn a rough objective into a goal",
             usage: "/guided-goal [objective]"),
@@ -584,9 +566,8 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
         SlashCommandDefinition("agents", "Agents & tools", "List subagents and their status"),
         SlashCommandDefinition("agent", "Agents & tools", "Open a subagent transcript", usage: "/agent <subagent-id>"),
         SlashCommandDefinition("jobs", "Agents & tools", "List background jobs"),
-        SlashCommandDefinition("extensions", "Agents & tools", "Manage installed extensions"),
-        SlashCommandDefinition("mcp", "Agents & tools", "Show configured MCP servers"),
-        SlashCommandDefinition("plugins", "Agents & tools", "Import and manage portable plugins", usage: "/plugins [list|inspect <path>|import <path>|update <id> <path>|rollback <id>|uninstall <id>|enable <id>|disable <id>|doctor|gc]"),
+        SlashCommandDefinition("extensions", "Agents & tools", "List installed Native plugins (alias of /plugins)"),
+        SlashCommandDefinition("plugins", "Agents & tools", "Import plugins and manage live session services", usage: "/plugins [list|inspect <path> [--json]|import <path>|update <id> <path>|rollback <id>|uninstall <id>|enable <id>|disable <id>|doctor|gc|service list|service start <namespace> <service-id> <route> --approve|service stop <namespace> <service-id>]"),
         SlashCommandDefinition("prompts", "Agents & tools", "List and run declarative plugin prompts", usage: "/prompts [list|run <namespace/path> [arguments...]]"),
         SlashCommandDefinition(
             "ssh",
@@ -615,17 +596,17 @@ public func slashCommandDefinitions(): Array<SlashCommandDefinition> {
     ]
 }
 
-public func availableSlashCommands(): Array<String> {
+public func availableSlashCommands(extraDefinitions!:Array<SlashCommandDefinition> = []): Array<String> {
     let names = ArrayList<String>()
-    for (definition in slashCommandDefinitions()) {
+    for (definition in presentedSlashCommandDefinitions(extraDefinitions)) {
         names.add(definition.name)
     }
     names.toArray()
 }
 
-public func availableSlashSurfaceNames(): Array<String> {
+public func availableSlashSurfaceNames(extraDefinitions!:Array<SlashCommandDefinition> = []): Array<String> {
     let names = ArrayList<String>()
-    for (definition in slashCommandDefinitions()) {
+    for (definition in presentedSlashCommandDefinitions(extraDefinitions)) {
         addSlashSurfaceName(names, definition.name)
         for (subcommand in definition.subcommands) {
             addSlashSurfaceName(names, subcommand)
@@ -726,7 +707,8 @@ func clampCommandCursor(source: String, cursor: Int64): Int64 {
 
 func completionTarget(
     tokensBefore: Array<String>,
-    activePrefix: String
+    activePrefix: String,
+    extraDefinitions:Array<SlashCommandDefinition>
 ): (CommandCompletionTarget, String) {
     if (tokensBefore.isEmpty()) {
         if (activePrefix.startsWith("/")) {
@@ -739,7 +721,7 @@ func completionTarget(
         return (CommandCompletionTarget.Path, "")
     }
     let authoredName = withoutSlash(commandToken)
-    let definition = match (slashCommandDefinitionForCompletion(authoredName)) {
+    let definition = match (slashCommandDefinitionForCompletion(authoredName,extraDefinitions)) {
         case Some(value) => value
         case None => return (CommandCompletionTarget.Unavailable, authoredName)
     }
@@ -757,8 +739,8 @@ func completionTarget(
     (CommandCompletionTarget.Unavailable, definition.name)
 }
 
-func slashCommandDefinitionForCompletion(name: String): ?SlashCommandDefinition {
-    for (definition in slashCommandDefinitions()) {
+func slashCommandDefinitionForCompletion(name: String,extraDefinitions:Array<SlashCommandDefinition>): ?SlashCommandDefinition {
+    for (definition in presentedSlashCommandDefinitions(extraDefinitions)) {
         if (definition.name == name) {
             return Some(definition)
         }
@@ -863,4 +845,16 @@ func completionCandidateBefore(
         return leftNormalized < rightNormalized
     }
     left.value < right.value
+}
+
+// Extra definitions are display data supplied by an actual frontend. They do
+// not change CommandRouter or grant execution of a builtin or installed tool.
+public func presentedSlashCommandDefinitions(extraDefinitions:Array<SlashCommandDefinition>):Array<SlashCommandDefinition>{
+    let values=ArrayList<SlashCommandDefinition>()
+    values.add(all:slashCommandDefinitions())
+    for(extra in extraDefinitions){
+        var existing=false
+        for(value in values where value.name==extra.name){existing=true}
+        if(!existing){values.add(extra)}}
+    values.toArray()
 }

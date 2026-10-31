@@ -20,6 +20,10 @@ experimental = [
 
 [internal]
 packages = [
+  "libs/logical_json_payload",
+  "agent_history",
+  "agent_minimal",
+  "agent_plugin_registry",
   "agent_domain",
   "agent_app_protocol",
   "agent_skills",
@@ -34,17 +38,14 @@ packages = [
   "task_runtime",
   "agent_client",
   "agent_cli",
-  "agent_extensions",
-  "agent_mcp",
   "model_adapters",
+  "model_provider_runtime",
+  "model_fixture_runtime",
   "agent_embed",
   "agent_extension_runtime",
-  "extensions/workspace_search_extension",
-  "extensions/workspace_write_extension",
-  "extensions/ast_extension",
-  "extensions/web_search_extension",
   "agent_testkit",
   "agent_product",
+  "agent_host_runtime",
   "agent_rpc",
   "agent_tui",
   "agent_app",
@@ -69,5 +70,5 @@ mcp4cj = "pre-1.0 public generic"
 sandbox4cj = "stable public generic; Linux implementation"
 lsp4cj = "stable public generic"
 dap4cj = "stable public generic"
-agent_sdk = "stable core with documented experimental symbols"
+agent_sdk = "Native source-authoring API 3; existing Native wire SDK 2.1"
 axyndra_agent_testkit = "stable public test seams with documented experimental helpers"

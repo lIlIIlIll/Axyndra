@@ -1,5 +1,7 @@
 package agent_product
 
+import agent_plugin_registry.*
+
 import yjson_support.*
 
 import yjson.*
@@ -12,10 +14,21 @@ import agent_domain.*
 import agent_extension_runtime.*
 import agent_ports.*
 import agent_runtime.*
+import agent_host_runtime.*
 import agent_store.*
-import agent_skills.*
 import tool_runtime.*
-import model_adapters.*
+
+// Descriptive metadata only. Construction and use stay inside Product;
+// no catalog, executor callback, source, admission or grant is exposed.
+class ProductPublishedToolIdentity {
+    public let implementationVersion: String
+    public let implementationFingerprint: String
+
+    init(implementationVersion: String, implementationFingerprint: String) {
+        this.implementationVersion = implementationVersion
+        this.implementationFingerprint = implementationFingerprint
+    }
+}
 
 func codexHookGrantAllows(event: String, capabilities: Array<String>): Bool {
     let workspaceWriteGranted = capabilities.contains("workspace.write")
@@ -27,19 +40,23 @@ func codexHookGrantAllows(event: String, capabilities: Array<String>): Bool {
 // implicit in a normal AgentCore request. These APIs keep persistence and
 // capability checks in the production composition root instead of requiring
 // callers to assemble test-only stores and runtimes.
-public class ProductVnextControl {
+public class ProductVnextControl <: HostServiceToolControl {
     private let database: SqliteDatabase
     private let catalog: ToolCatalog
     private let pipeline: ToolPipeline
     private let ids: ProductIds
     private let threadRuntimes: ThreadRuntimeRegistry
-    private let operations: OperationRuntimePort
+    private let canonicalTools: HostCanonicalToolGateway
+    let operations: DurableOperationStore
     private let askRuntime: AskRuntime
+    private let payloadArtifacts: ?ProductArtifactStore
     private let workspaceRoot: String
     private let settingsRoot: String
+    private let canonicalSummaryTimeout173: Int64
     private let managedPluginPackageRoots: Array<String>
     private let extensionSignatureVerifier: ?ExtensionPackageSignatureVerifier
     private let javascriptPluginLifecycleLock = Mutex()
+    private let stdioIngress: HostStdioIngressRuntime
     public let storageService: ServiceRegistry<String>
     public let isolatedPlugins: ProductIsolatedPluginHost
     public let javascriptPlugins: ProductJavaScriptPluginHost
@@ -50,13 +67,15 @@ public class ProductVnextControl {
         pipeline: ToolPipeline,
         ids: ProductIds,
         threadRuntimes: ThreadRuntimeRegistry,
-        operations: OperationRuntimePort,
+        operations: DurableOperationStore,
         askRuntime: AskRuntime,
         workspaceRoot: String,
         settingsRoot: String,
         processes: ProcessPort,
         javascriptPlugins: ProductJavaScriptPluginHost,
-        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None
+        extensionSignatureVerifier!: ?ExtensionPackageSignatureVerifier = None,
+        payloadArtifacts!: ?ProductArtifactStore = None,
+        canonicalSummaryTimeout173!: Int64 = 5000
     ) {
         this.database = database
         this.catalog = catalog
@@ -64,9 +83,10 @@ public class ProductVnextControl {
         this.ids = ids
         this.threadRuntimes = threadRuntimes
         this.operations = operations
-        this.askRuntime = askRuntime
+        this.askRuntime = askRuntime; this.payloadArtifacts = payloadArtifacts
         this.workspaceRoot = workspaceRoot
         this.settingsRoot = settingsRoot
+        this.canonicalSummaryTimeout173 = canonicalSummaryTimeout173
         let packageRoots = ArrayList<String>()
         if (settingsRoot.trimAscii() != "") {
             packageRoots.add(settingsRoot + "/plugins/packages")
@@ -78,10 +98,48 @@ public class ProductVnextControl {
             managedPackageRoots: packageRoots.toArray()
         )
         this.javascriptPlugins = javascriptPlugins
+        canonicalTools = HostCanonicalToolGateway(database, catalog, pipeline, ids, threadRuntimes, operations,
+            workspaceRoot, { root => productToolContext(root) }, { name => javascriptPlugins.readonlyDelegationTool(name) },
+            { _ => Result<Unit>.Ok(()) })
+        stdioIngress = HostStdioIngressRuntime(canonicalTools, threadRuntimes, ids, catalog,
+            javascriptPlugins, settingsRoot, workspaceRoot, { root => productToolContext(root) })
         storageService = ServiceRegistry<String>(ServiceKey<String>(
             "SemanticStore", 1u32, RealmKind.Host
         ))
         let _ = storageService.bind(ProductStorageServiceProvider())
+    }
+
+    // Read-only current publication identity from this Product's sole catalog.
+    // Preserve the exact name/thread active lookup, returning only two Strings.
+    func publishedToolIdentity(name: String, threadId!: ?ThreadId = None): ?ProductPublishedToolIdentity {
+        match (catalog.publishedDescriptor(name, threadId: threadId)) {
+            case Some(value) => Some(ProductPublishedToolIdentity(
+                value.implementationVersion, value.implementationFingerprint))
+            case None => None
+        }
+    }
+
+    // Internal composition seam: reuse the exact Store and catalog of this
+    // Product. No plugin/RPC route exposes the factory or underlying registry.
+    func createPluginLifecycleManager(processes: ProcessPort, caBundle!: String = "",
+        managedJobLauncher!: ?ProductManagedJobLauncher = None,
+        cleanupObserver!:?HostManagedChannelCleanupObserver=None): Result<ProductPluginLifecycleManager> {
+        let services: HostJavaScriptPluginServiceRuntime = ProductJavaScriptPluginServiceRuntime(catalog, pipeline, operations, askRuntime,
+            canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173)
+        hostCreatePluginLifecycleManager(database, catalog, javascriptPlugins, services, processes,
+            operations: operations, payloadArtifacts: payloadArtifacts, caBundle: caBundle, managedJobLauncher: managedJobLauncher, installOwnedChannel: true, cleanupObserver: cleanupObserver)
+    }
+
+    // Real, finite, zero-effect parser ownership. No ToolCall, broker observer,
+    // approval, hidden port or model request is created by this window.
+
+
+    // Local operator entry. Explicit callbacks carry actual frontend I/O,
+    // while the same generic owner keeps its fixed grant and connection.
+    public func servePluginStdio(grantId: String, input180!: ?(() -> Result<?HostStdioInputFrame180>) = None,
+        output180!: ?((String) -> Result<Unit>) = None, callerCancellation180!: ?CancellationToken = None): Result<Unit> {
+        stdioIngress.servePluginStdio(grantId, input180: input180, output180: output180,
+            callerCancellation180: callerCancellation180)
     }
 
     public func createSharedHistoryLane(lane: LaneRecord): Result<Unit> {
@@ -151,6 +209,25 @@ public class ProductVnextControl {
             }
             case Result.Err(error) => Result.Err(error)
         }
+    }
+
+    func hasPendingRpcLocalProcessing113(threadId: ThreadId): Result<Bool> {
+        SqliteInboxStepStore(database).hasPendingRpcLocalProcessing113(threadId)
+    }
+    func prepareActualRpcQueuedInput113(value: QueuedRunInitiatorData113, local: Bool,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
+        SqliteInboxStepStore(database).prepareActualRpcQueuedInput113(value, local, allocate, retain)
+    }
+    func completeReturnedRpcInput113(value: QueuedRunInitiatorData113, local: Bool, accepted: Bool,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Unit {
+        SqliteInboxStepStore(database).completeReturnedRpcInput113(value, local, accepted, allocate, retain)
+    }
+    func actualRpcQueuedInputTerminal113(value: QueuedRunInitiatorData113,
+        allocate: (Int64) -> RpcQueuedStorePayment113,
+        retain: (RpcQueuedStoreFailure113) -> Unit): Bool {
+        SqliteInboxStepStore(database).actualRpcQueuedInputTerminal113(value, allocate, retain)
     }
 
     public func rejectLaneInput(entryId: InboxEntryId): Result<Unit> {
@@ -240,91 +317,285 @@ public class ProductVnextControl {
         sessionId: SessionId,
         capabilities: CapabilitySet,
         call: ToolCall,
-        skillStack!: SkillStackSnapshot = SkillStackSnapshot([], []),
-        runId!: ?RunId = None
+        contextSnapshot!: InvocationContextProjection = InvocationContextProjection(),
+        runId!: ?RunId = None,
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>
     ): Result<ToolInvocationResult> {
         executeCanonicalToolWithDecision(
-            sessionId, capabilities, call, skillStack, runId, None
+            sessionId, capabilities, call, contextSnapshot, runId, Option<ApprovalDecision>.None, budget: budget,
+            operatorOptions180: operatorOptions180, frontendCancellation180: callerCancellation180
         )
+    }
+
+    // Actual Application user owner only; neither RPC data nor plugin frames
+    // can manufacture a retained Direct approval continuation.
+    func executeDeferredCanonicalTool(sessionId: SessionId, capabilities: CapabilitySet, call: ToolCall,
+        owner: ProductDirectPreparationOwner, cancellation: CancellationToken,
+        participant!: ?PluginDocumentCommitParticipant = None,
+        contextSnapshot!: InvocationContextProjection = InvocationContextProjection(),
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        callerCancellation180!: ?CancellationToken = None<CancellationToken>): Result<ToolInvocationResult> {
+        match (owner.current()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        executeCanonicalToolWithDecision(sessionId, capabilities, call, contextSnapshot, Option<RunId>.None, Option<ApprovalDecision>.None,
+            budget: budget, hostCallerCancellation: Some(cancellation), directPreparationOwner: Some(owner),
+            commandParticipant: participant, operatorOptions180: operatorOptions180, frontendCancellation180: callerCancellation180)
+    }
+
+    // Package-internal host service gateway. The caller supplies a dedicated
+    // maintenance Thread, actual operator capabilities and an immutable origin.
+    // This is not registered as a plugin service, RPC method or public CLI API.
+    // Product presentation only: borrow the existing Store and exact durable
+    // completed root Receipt. This does not execute, admit, or produce authority.
+    func completedDataToolArguments(thread: ThreadId, run: RunId, receiptId: String,
+        callId: String, name: String, version!: String = "", fingerprint!: String = ""): Result<AgentValue> {
+        try {
+            let rows=database.query("SELECT o.id FROM operations o JOIN runs r ON r.id=o.run_id " +
+                "JOIN operation_effect_records e ON e.operation_id=o.id AND e.run_id=o.run_id " +
+                "AND e.tool_call_item_id=o.tool_call_item_id AND e.normalized_plan=o.normalized_plan " +
+                "JOIN operation_state_registers state ON state.operation_id=o.id AND state.state=o.state " +
+                "JOIN items source ON source.id=o.tool_call_item_id AND source.kind='tool_call' " +
+                "AND source.thread_id=r.thread_id AND source.turn_id=r.turn_id " +
+                "JOIN operation_receipts receipt ON receipt.operation_id=o.id AND receipt.id=e.reserved_receipt_id " +
+                "JOIN items result ON result.id=e.reserved_result_item_id AND result.thread_id=r.thread_id " +
+                "AND result.turn_id=r.turn_id AND result.kind='tool_result' " +
+                "WHERE receipt.id=? AND receipt.outcome='completed' AND o.state='committed' " +
+                "AND r.thread_id=? AND r.id=? AND e.tool_id=? " +
+                "AND NOT EXISTS(SELECT 1 FROM derived_operation_admissions a WHERE a.operation_id=o.id) LIMIT 2",
+                [SqlParameter.Text(receiptId),SqlParameter.Text(thread.value),SqlParameter.Text(run.value),SqlParameter.Text(name)])
+            if(rows.size!=1){return Result.Err(AgentError(AgentErrorKind.Conflict,
+                "application.plan_receipt_missing","plan presentation requires its exact completed canonical root"))}
+            let plan=match(operations.loadPlan(OperationId(rows[0].required(0)),run)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            if(plan.toolName!=name || plan.effectClass!=OperationEffectClass.ReadOnly ||
+                plan.requiredCapabilities.size!=1 || plan.requiredCapabilities[0].kind!=CapabilityKind.WorkspaceRead ||
+                !networkPolicyModeIsDenied(plan.networkPolicy.mode)){
+                return Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_changed",
+                    "completed plan Tool no longer has its exact read-only presentation"))}
+            let operation=OperationId(rows[0].required(0))
+            let actualCall=match(operations.loadCall(operation,run)){
+                case Result.Err(error)=>return Result.Err(error);case Result.Ok(value)=>value}
+            if(callId=="" || actualCall.callId!=callId || actualCall.name!=name ||
+                canonicalAgentValue(actualCall.arguments)!=canonicalAgentValue(plan.canonicalArguments) ||
+                (version!="" && plan.implementation.toolVersion!=version) ||
+                (fingerprint!="" && plan.implementation.implementationFingerprint!=fingerprint)){
+                return Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_changed",
+                    "plan presentation requires the same actual canonical call and selected implementation"))}
+            let result=match(operations.loadCommittedToolResult(operation,run)){
+                case Result.Err(error)=>return Result.Err(error)
+                case Result.Ok(None)=>return Result.Err(AgentError(AgentErrorKind.Conflict,
+                    "application.plan_receipt_missing","plan presentation requires its canonical result"))
+                case Result.Ok(Some(value))=>value}
+            try{
+                if(result.callId!=callId || result.receiptId!=receiptId || result.isError){
+                    return Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_changed",
+                        "plan presentation requires its exact successful canonical result"))}
+                Result.Ok(plan.canonicalArguments)
+            }finally{result.releasePayload()}
+        }catch(_:Exception){Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_missing",
+            "plan presentation requires its exact completed canonical root"))}
+    }
+
+    // Historical UI lookup borrows the actual stored Run for a globally unique
+    // completed Receipt; callers cannot invent a Run or use this as authority.
+    func completedDataToolHistoryArguments(thread: ThreadId, receiptId: String,
+        callId: String, name: String, version!: String = "", fingerprint!: String = ""): Result<AgentValue> {
+        try {
+            let rows=database.query("SELECT o.run_id FROM operations o JOIN runs r ON r.id=o.run_id " +
+                "JOIN operation_receipts receipt ON receipt.operation_id=o.id " +
+                "WHERE r.thread_id=? AND receipt.id=? AND receipt.outcome='completed' LIMIT 2",
+                [SqlParameter.Text(thread.value),SqlParameter.Text(receiptId)])
+            if(rows.size!=1){return Result.Err(AgentError(AgentErrorKind.Conflict,
+                "application.plan_receipt_missing","plan history requires its actual completed root Receipt"))}
+            completedDataToolArguments(thread,RunId(rows[0].required(0)),receiptId,callId,name,version:version,fingerprint:fingerprint)
+        }catch(_:Exception){Result.Err(AgentError(AgentErrorKind.Conflict,"application.plan_receipt_missing",
+            "plan history requires its actual completed root Receipt"))}
+    }
+
+    public func executeCanonicalHostServiceTool(sessionId: SessionId, origin: HostServiceOrigin,
+        capabilities: CapabilitySet, call: ToolCall, approvalDecision: ?ApprovalDecision,
+        budget: ExecutionBudget, callerCancellation: ?CancellationToken): Result<ToolInvocationResult> {
+        executeHostServiceTool(sessionId, origin, capabilities, call, approvalDecision: approvalDecision,
+            budget: budget, callerCancellation: callerCancellation)
+    }
+
+    public func executeHostServiceTool(
+        sessionId: SessionId,
+        origin: HostServiceOrigin,
+        capabilities: CapabilitySet,
+        call: ToolCall,
+        approvalDecision!: ?ApprovalDecision = None,
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        callerCancellation!: ?CancellationToken = None
+    ): Result<ToolInvocationResult> {
+        canonicalTools.executeHostServiceTool(sessionId, origin, capabilities, call,
+            approvalDecision: approvalDecision, budget: budget,
+            callerCancellation: callerCancellation)
+    }
+
+    // Package-private ingress gateway. A real ingress owner must first obtain
+    // the sealed connection from host authentication/export policy; neither
+    // request JSON nor persisted External origin can call this on its own.
+    func executeExternalTool(connection: ExternalIngressConnection, request: ExternalRequestId,
+        call: ToolCall, approvalDecision!: ?ApprovalDecision = None,
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        receivedFrame!: ?ExternalReceivedFrame = None): Result<ToolInvocationResult> {
+        canonicalTools.executeExternalTool(connection, request, call, approvalDecision: approvalDecision,
+            budget: budget, receivedFrame: receivedFrame)
     }
 
     private func executeCanonicalToolWithDecision(
         sessionId: SessionId,
         capabilities: CapabilitySet,
         call: ToolCall,
-        skillStack: SkillStackSnapshot,
+        contextSnapshot: InvocationContextProjection,
         runId: ?RunId,
         approvalDecision: ?ApprovalDecision,
         executionRoot!: String = "",
-        trustedControl!: Bool = false
+        trustedControl!: Bool = false,
+        budget!: ExecutionBudget = ExecutionBudget(maxConcurrentTools: 1),
+        hostServiceOrigin!: ?HostServiceOrigin = None,
+        hostCallerCancellation!: ?CancellationToken = None,
+        externalConnection!: ?ExternalIngressConnection = None,
+        externalRequest!: ?ExternalRequestId = None,
+        externalFrame!: ?ExternalReceivedFrame = None,
+        directPreparationOwner!: ?ProductDirectPreparationOwner = None,
+        commandParticipant!: ?PluginDocumentCommitParticipant = None,
+        operatorOptions180!: ?ProductOperatorOptions180 = None<ProductOperatorOptions180>,
+        frontendCancellation180!: ?CancellationToken = None<CancellationToken>
     ): Result<ToolInvocationResult> {
-        if (call.name == "run_program") {
-            return Result.Err(AgentError(
-                AgentErrorKind.PermissionDenied,
-                "program.committed_root_required",
-                "run_program requires a canonical committed model ToolCall"
-            ))
+        let bindCommand: ?(RunId, Int64) -> Result<Unit> = match (commandParticipant) {
+            case Some(participant) => Some({ actualRun, actualEpoch =>
+                let actual = match (participant as ProductCommandPreparationParticipant) { case Some(value) => value
+                    case None => return commandControlError<Unit>("plugin.command_participant_invalid") }
+                actual.bindActualRun(actualRun, actualEpoch)
+            })
+            case None => None
         }
-        let effectiveRunId = match (runId) {
-            case Some(value) => value
-            case None => ids.nextRunId()
-        }
-        let runtime = match (threadRuntimes.acquire(
-            ThreadId(sessionId.value), workspaceRoot
-        )) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (runtime.startTurn(
-            SemanticTurnId("direct-tool-turn-" + effectiveRunId.value),
-            effectiveRunId,
-            ItemId("direct-tool-input-" + effectiveRunId.value),
-            ThreadItemContent.UserMessage([
-                ThreadMessagePart.Text("direct tool: " + call.name)
-            ]),
-            directControlModelLane(effectiveRunId, capabilities),
-            skillStack,
-            createdAtMillis: agentUtcMillis(),
-            runBudgetSnapshot: objectValue([
-                ValueField("run_kind", textValue("direct_tool")),
-                ValueField("read_only", boolValue(false))
-            ])
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let invocationRoot = if (executionRoot.trimAscii() == "") {
-            workspaceRoot
-        } else {
-            executionRoot
-        }
-        let execution = ProductTrustedControlToolExecutor(pipeline, operations, runtime).invoke(
-            ToolInvocationContext(
-                effectiveRunId,
-                sessionId,
-                capabilities,
-                toolContext: productToolContext(invocationRoot),
-                skills: skillStack,
-                trustedControl: trustedControl
-            ),
-            call,
-            approvalDecision: approvalDecision
-        )
-        let terminal = match (execution) {
-            case Result.Ok(ToolInvocationResult.Completed(_)) => RunState.Completed
-            case _ => RunState.Failed
-        }
-        match (runtime.finish(
-            terminal, 1000,
-            reason: if (terminal == RunState.Completed) {
-                "direct tool completed"
-            } else {
-                "direct tool did not complete"
+        canonicalTools.execute(sessionId, capabilities, call, contextSnapshot, runId, approvalDecision,
+            executionRoot: executionRoot, trustedControl: trustedControl, budget: budget,
+            hostServiceOrigin: hostServiceOrigin, hostCallerCancellation: hostCallerCancellation,
+            externalConnection: externalConnection, externalRequest: externalRequest, externalFrame: externalFrame,
+            directPreparationOwner: directPreparationOwner, commandParticipant: commandParticipant, commandControlAdmission159e: bindCommand,
+            executionSettings180: match (operatorOptions180) { case Some(options) => options.executionSettingsValue180(); case None => nullValue() },
+            modelFaultCounters180: match (operatorOptions180) { case Some(options) => options.modelFaultCounters180; case None => None<ModelStreamFaultCounters180> },
+            approvalModeOverride180: match (operatorOptions180) { case Some(options) => Some(options.approvalMode); case None => None<ApprovalMode> },
+            frontendCancellation180: frontendCancellation180)
+    }
+
+    func reserveManagedJob(context: ToolInvocationContext, prepared: PreparedToolInvocation): Result<ManagedJobReservation> {
+        if (prepared.source.operationRoot.isNone() || prepared.source.kind == PreparedInvocationSourceKind.Derived ||
+            prepared.source.runId.value != context.runId.value || prepared.source.sessionId.value != context.sessionId.value ||
+            prepared.source.epoch != context.epoch || !isManagedJobLaunchPlan(prepared.operationPlan)) {
+            return lifecycleLeaseError("task.managed_job_source_required") }
+        let runtime = match (threadRuntimes.acquire(ThreadId(context.sessionId.value), context.workspaceRoot)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        runtime.reserveManagedJob(prepared.source.operationRoot.getOrThrow(), prepared.operationId, prepared.operationPlan,
+            operations, context.runId, context.epoch)
+    }
+
+    // Readiness is only a scheduling hint. reservation.claim() independently
+    // proves exact launch output/Receipt and atomically consumes the seal.
+    func managedJobLaunchReady(reservation: ManagedJobReservation): Result<Bool> {
+        match (reservation.cancellationToken.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        let binding = reservation.binding
+        try {
+            let rows = database.query("SELECT o.state,r.outcome FROM operations o LEFT JOIN operation_receipts r ON r.operation_id=o.id WHERE o.id=? AND o.run_id=?",
+                [SqlParameter.Text(binding.parentOperationId.value), SqlParameter.Text(binding.parentRunId.value)])
+            if (rows.size != 1) { return lifecycleLeaseError("task.managed_job_launch_missing") }
+            let state = rows[0].required(0)
+            if (state == "prepared" || state == "waiting_approval" || state == "executing") { return Result.Ok(false) }
+            if (state != "committed" || rows[0][1] != Some("completed")) {
+                return lifecycleLeaseError("task.managed_job_launch_failed") }
+            Result.Ok(true)
+        } catch (_: Exception) { lifecycleLeaseError("task.managed_job_launch_unavailable") }
+    }
+
+    func executeManagedJob(admission: ManagedJobAdmission, parent: ToolInvocationContext,
+        budget: ExecutionBudget, operation: OperationId): ProductManagedJobExecution {
+        let binding = admission.binding; let job = binding.declaration
+        let execution = executeManagedJobRoot(admission, parent, budget, operation)
+        let settled = try {
+            let rows = database.query("SELECT state FROM runs WHERE id=?", [SqlParameter.Text(job.runId.value)])
+            var known = rows.size == 1 && ["completed", "failed", "cancelled"].contains(rows[0].required(0)) && budget.snapshot().activeTools == 0
+            // Run cancellation can coexist with an Unknown mutation Receipt.
+            // Physical cleanup ACK and a terminal Run never refund that debt.
+            let effects = database.query("SELECT o.state,COALESCE(r.outcome,'') FROM operations o LEFT JOIN operation_receipts r " +
+                "ON r.operation_id=o.id WHERE o.run_id=?", [SqlParameter.Text(job.runId.value)])
+            for (effect in effects) {
+                if (["prepared", "waiting_approval", "executing", "recovery_required", "unknown"].contains(effect.required(0)) ||
+                    !["completed", "rejected", "cancelled", "timed_out", "failed"].contains(effect.required(1))) { known = false }
             }
-        )) {
-            case Result.Ok(_) => execution
-            case Result.Err(error) => Result.Err(error)
+            known
+        } catch (_: Exception) { false }
+        ProductManagedJobExecution(execution, budget.snapshot(), settled, operation)
+    }
+
+    private func executeManagedJobRoot(admission: ManagedJobAdmission, parent: ToolInvocationContext,
+        budget: ExecutionBudget, operation: OperationId): Result<ToolInvocationResult> {
+        let launch = admission.binding; let job = launch.declaration
+        let runtime = match (threadRuntimes.acquire(job.threadId, parent.workspaceRoot)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let call = match (operations.loadCall(launch.parentOperationId, launch.parentRunId)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let frozenPlan = match (admission.frozenPlan()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let started = match (runtime.startManagedJobTurn(admission, SemanticTurnId("managed-turn-" + job.runId.value),
+            ItemId("managed-input-" + job.runId.value), directControlModelLane(job.runId, parent.capabilities,
+                threadId: Some(job.threadId)), parent.contextProjection, createdAtMillis: agentUtcMillis())) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let execution: Result<ToolInvocationResult> = try {
+            match (runtime.commitManagedJobToolCall(admission, ItemId("managed-call-" + job.runId.value), operation,
+                call, job.runId, started.epoch, createdAtMillis: agentUtcMillis())) {
+                case Result.Err(error) => Result.Err(error)
+                case Result.Ok(root) =>
+                    let context = ToolInvocationContext(job.runId, SessionId(job.threadId.value), parent.capabilities,
+                        epoch: started.epoch, cancellation: root.externalCancellationToken.getOrThrow(),
+                        toolContext: ToolContextDescriptor(workspaceRoot: parent.workspaceRoot, cwd: parent.cwd,
+                            environment: parent.environment, services: parent.services, executionSettings180: parent.executionSettings180, modelFaultCounters180: parent.modelFaultCounters180), contextProjection: parent.contextProjection,
+                        budget: budget, trustedControl: false)
+                    // Persist the exact approved plan through the sealed Task
+                    // admission before looking up its current executor. A stale
+                    // directory refusal still produces a Prepared-stage fact.
+                    match (operations.prepareDirectOperation(root, frozenPlan)) {
+                        case Result.Err(error) => Result.Err(error)
+                        case Result.Ok(_) => match (pipeline.prepareManagedJob(context, root)) {
+                            case Result.Err(error) =>
+                                let rejected: Result<ToolInvocationResult> = Result.Err(error)
+                                match (runtime.resolveOperation(ItemId("result-" + operation.value), operation,
+                                    CanonicalToolCallId(call.callId), frozenPlan, OperationAttemptStage.Prepared, rejected,
+                                    "receipt-" + operation.value, agentUtcMillis(),
+                                    expectedRunId: Some(job.runId), expectedEpoch: Some(started.epoch))) {
+                                    case Result.Err(settlement) => Result.Err(settlement)
+                                    case Result.Ok(_) => rejected }
+                            case Result.Ok(prepared) => ProductTrustedControlToolExecutor(pipeline, operations, runtime)
+                                .executeCanonicalPrepared(context, prepared, root, Option<ApprovalDecision>.None)
+                        }
+                    }
+            }
+        } catch (_: Exception) {
+            Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "task.managed_job_execution_unknown",
+                "managed job execution requires reconciliation"))
         }
+        let terminal = match (directToolTerminalState(job.runId, execution)) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        if (terminal == RunState.Cancelled) {
+            return match (runtime.cancel(1000, expectedRunId: Some(job.runId), expectedEpoch: Some(started.epoch))) {
+                case Result.Ok(_) => execution; case Result.Err(error) => Result.Err(error) }
+        }
+        match (runtime.finish(terminal, 1000, expectedRunId: Some(job.runId), expectedEpoch: Some(started.epoch),
+            reason: "managed job settled from canonical operation facts")) {
+            case Result.Ok(_) => execution; case Result.Err(error) => Result.Err(error) }
+    }
+
+    // A successful parent response cannot erase a failed or unknown broker
+    // child. Preserve the result payload, but settle the Run from its durable
+    // operation facts; completed-Run proof remains unchanged.
+    private func directToolTerminalState(runId: RunId,
+        execution: Result<ToolInvocationResult>): Result<RunState> {
+        canonicalTools.terminalState(runId, execution)
     }
 
     // Plugin acquisition is a trusted host request, not a PTC capability.
@@ -413,8 +684,8 @@ public class ProductVnextControl {
             sessionId,
             capabilities,
             call,
-            SkillStackSnapshot([], []),
-            None,
+            InvocationContextProjection(),
+            Option<RunId>.None,
             Some(approvalDecision),
             executionRoot: acquisitionRoot,
             trustedControl: true
@@ -537,10 +808,19 @@ public class ProductVnextControl {
     }
 
     public func activateImportedPlugin(record: ProductPluginRecord): Result<Unit> {
+        activateImportedPluginWithLock(record, serialize: true)
+    }
+
+    /// `serialize: false` is only for the first-install assembly, where the
+    /// Product is not published yet and no reader can observe a partially
+    /// mounted host/catalog. Every other caller keeps the global lifecycle
+    /// lock so activation stays one product lifecycle boundary.
+    public func activateImportedPluginWithLock(record: ProductPluginRecord,
+        serialize!: Bool = true): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.ecosystem == PluginEcosystem.Pi ||
             descriptor.ecosystem == PluginEcosystem.Codex) {
-            let root = descriptor.root.trimAscii()
+            let root = productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)).trimAscii()
             if (!isManagedPluginSnapshot(root)) {
                 return Result.Err(AgentError(
                     AgentErrorKind.Configuration,
@@ -549,66 +829,73 @@ public class ProductVnextControl {
                 ))
             }
             if (descriptor.ecosystem == PluginEcosystem.Codex) {
+                productRegistryPrepayCells83(descriptor, descriptor.hookCount * 8 + 8)
                 let handlers = ArrayList<ToolHookHandlerSnapshot>()
-                for (declaration in descriptor.hookDeclarations) {
+                for (declaration in productRegistryHooks83(descriptor)) {
                     if (!codexHookGrantAllows(
-                        declaration.event, descriptor.requestedCapabilities
+                        productRegistryCopyText83(declaration.copyText(PluginHookText.Event)), productRegistryCapabilities83(descriptor)
                     )) { continue }
                     handlers.add(ToolHookHandlerSnapshot(
-                        declaration.event,
-                        descriptor.namespace,
-                        descriptor.version,
-                        descriptor.contentDigest,
+                        productRegistryCopyText83(declaration.copyText(PluginHookText.Event)),
+                        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)),
+                        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)),
+                        productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)),
                         root,
-                        declaration.matcher,
-                        declaration.command,
+                        productRegistryCopyText83(declaration.copyText(PluginHookText.Matcher)),
+                        productRegistryCopyText83(declaration.copyText(PluginHookText.Command)),
                         declaration.timeoutMillis
                     ))
                 }
                 match (catalog.registerHookHandlers(
-                    descriptor.namespace, handlers.toArray()
+                    productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)), handlers.toArray()
                 )) {
                     case Result.Err(error) => return Result.Err(error)
                     case Result.Ok(_) => ()
                 }
             }
-            if (descriptor.entrypoint.trimAscii() == "") { return Result.Ok(()) }
-            javascriptPluginLifecycleLock.lock()
+            if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint)).trimAscii() == "") { return Result.Ok(()) }
+            if (serialize) { javascriptPluginLifecycleLock.lock() }
             try {
                 match (mountAndRegisterJavaScriptPlugin(
                     record,
                     javascriptPlugins,
                     catalog,
-                    serviceRuntime: Some(ProductJavaScriptPluginServiceRuntime(catalog, pipeline, operations, askRuntime))
+                    serviceRuntime: Some(ProductJavaScriptPluginServiceRuntime(catalog, pipeline, operations, askRuntime,
+            canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173))
                 )) {
                     case Result.Ok(_) => Result.Ok(())
                     case Result.Err(error) =>
-                        let _ = catalog.unregisterHookHandlers(descriptor.namespace)
+                        let _ = catalog.unregisterHookHandlers(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
                         return Result.Err(error)
                 }
             } finally {
-                javascriptPluginLifecycleLock.unlock()
+                if (serialize) { javascriptPluginLifecycleLock.unlock() }
             }
         }
         if (descriptor.ecosystem != PluginEcosystem.Axyndra) {
             return Result.Ok(())
         }
-        activateAxyndraImportedPlugin(record, false)
+        activateAxyndraImportedPlugin(record)
     }
 
     func restoreImportedPlugin(record: ProductPluginRecord): Result<Unit> {
-        if (record.descriptor.ecosystem != PluginEcosystem.Axyndra) {
-            return activateImportedPlugin(record)
-        }
-        activateAxyndraImportedPlugin(record, true)
+        // Re-activate the same immutable package through the same protocol.
+        // A new process never proves recovery of plugin-local mutable state.
+        activateImportedPlugin(record)
     }
 
     private func activateAxyndraImportedPlugin(
-        record: ProductPluginRecord,
-        restoreExisting: Bool
+        record: ProductPluginRecord
     ): Result<Unit> {
         let descriptor = record.descriptor
-        let root = descriptor.root.trimAscii()
+        if (descriptor.entryKind != PluginEntryKind.NativeExecutable) {
+            return Result.Err(AgentError(
+                AgentErrorKind.Configuration,
+                "plugin.entry_kind_migration_required",
+                "legacy one-shot plugins cannot execute; migrate to native-executable and the versioned plugin protocol"
+            ))
+        }
+        let root = productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Root)).trimAscii()
         if (!isManagedPluginSnapshot(root)) {
             return Result.Err(AgentError(
                 AgentErrorKind.Configuration,
@@ -616,9 +903,9 @@ public class ProductVnextControl {
                 "executable plugin snapshots must remain inside managed package storage"
             ))
         }
-        for (capability in descriptor.requestedCapabilities) {
-            if (capability != "workspace.read" && capability != "workspace.write" &&
-                !capability.startsWith("network.access:")) {
+        for (capability in productRegistryCapabilities83(descriptor)) {
+            if (capability != "workspace.read" && capability != "workspace.write" && capability != "network.http" &&
+                capability != "process.channel" && capability != "process.readview" && capability != "tool.readonly" && capability != "document.store") {
                 return Result.Err(AgentError(
                     AgentErrorKind.Configuration,
                     "plugin.capability_unsupported",
@@ -627,86 +914,63 @@ public class ProductVnextControl {
             }
         }
         let manifest = SignedExtensionPackageManifest(
-            descriptor.id,
-            descriptor.version,
-            if (descriptor.sdkRange == "") { "1.x" } else { descriptor.sdkRange },
-            descriptor.protocolRange,
-            descriptor.entrypoint,
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Version)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.SdkRange)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ProtocolRange)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Entrypoint)),
             [],
             [],
-            descriptor.requestedCapabilities,
+            productRegistryCapabilities83(descriptor),
             1u32,
-            "restart-safe",
-            descriptor.contentDigest,
-            descriptor.signature
+            "restart-does-not-replay",
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.ContentDigest)),
+            productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Signature))
         )
-        let launch = match (extensionSignatureVerifier) {
+        // Package trust is checked before initialization. Declared capabilities
+        // remain requests; the isolated process receives no ambient grants.
+        match (extensionSignatureVerifier) {
             case Some(verifier) => match (validateIsolatedPluginPackage(
                 manifest,
                 ExtensionExecutionKind.ProcessPlugin,
                 1u64,
-                descriptor.requestedCapabilities,
+                productRegistryCapabilities83(descriptor),
                 verifier,
                 packageRoot: root
             )) {
-                case SafeLifecycleResult.Ok(value) => value
+                case SafeLifecycleResult.Ok(_) => ()
                 case SafeLifecycleResult.Err(message) => return Result.Err(AgentError(
                     AgentErrorKind.Configuration,
                     "plugin.activation_rejected",
                     message
                 ))
             }
-            case None => return Result.Err(AgentError(
-                AgentErrorKind.Configuration,
-                "plugin.signature_trust_root_missing",
-                "executable plugin activation requires a configured signature trust root"
-            ))
+            case None => if (productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Signature)) != "") {
+                return Result.Err(AgentError(
+                    AgentErrorKind.Configuration,
+                    "plugin.signature_trust_root_missing",
+                    "a signed plugin requires its configured signature trust root"
+                ))
+            }
         }
-        let networkPolicy = match (isolatedPluginNetworkPolicy(launch)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let additionalCapabilities = isolatedPluginToolCapabilities(launch)
-        let toolName = "plugin." + descriptor.namespace + ".invoke"
-        let registered = catalog.register(
-            ToolDescriptor(
-                ModelToolDefinition(
-                    toolName,
-                    "Invoke isolated plugin " + descriptor.namespace,
-                    objectValue([ValueField("type", textValue("object"))])
-                ),
-                Capability(CapabilityKind.ExtensionInvoke),
-                sideEffecting: true,
-                implementationVersion: descriptor.version,
-                additionalCapabilities: additionalCapabilities,
-                networkPolicyResolver: Some({_ => Result.Ok(networkPolicy)}),
-                implementationFingerprint: descriptor.namespace + ":" + descriptor.contentDigest
-            ),
-            ProductPluginToolExecutor(isolatedPlugins, descriptor.id)
-        )
-        match (registered) {
-            case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) =>
-                let activated = if (restoreExisting) {
-                    isolatedPlugins.restore(
-                        descriptor.id,
-                        launch.generation,
-                        descriptor.contentDigest,
-                        root
-                    )
-                } else {
-                    isolatedPlugins.mountInitial(launch)
-                }
-                match (activated) {
-                    case Result.Ok(_) => Result.Ok(())
-                    case Result.Err(error) =>
-                        let _ = catalog.unregister(toolName)
-                        Result.Err(error)
-                }
+        javascriptPluginLifecycleLock.lock()
+        try {
+            mountAndRegisterJavaScriptPlugin(
+                record, javascriptPlugins, catalog,
+                serviceRuntime: Some(ProductJavaScriptPluginServiceRuntime(
+                    catalog, pipeline, operations, askRuntime,
+                    canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173
+                ))
+            )
+        } finally {
+            javascriptPluginLifecycleLock.unlock()
         }
     }
 
     public func close(): Result<Unit> {
+        match (stdioIngress.close()) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => ()
+        }
         javascriptPluginLifecycleLock.lock()
         try {
             javascriptPlugins.close()
@@ -714,17 +978,43 @@ public class ProductVnextControl {
             javascriptPluginLifecycleLock.unlock()
         }
     }
-    public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
-        javascriptPlugins.commands()
+    public func javascriptPluginViews(): Array<ProductJavaScriptPluginView> {
+        javascriptPluginLifecycleLock.lock()
+        try {
+            javascriptPlugins.views()
+        } finally {
+            javascriptPluginLifecycleLock.unlock()
+        }
     }
 
-    public func invokeJavaScriptPluginCommand(
+    public func javascriptPluginCommands(): Array<ProductJavaScriptPluginCommand> {
+        // Activation publishes tools/hooks and command routes as one product
+        // lifecycle boundary. Copy routes while holding the same lock, then
+        // release it before executing so disable/cancellation can still run.
+        javascriptPluginLifecycleLock.lock()
+        try {
+            javascriptPlugins.commands()
+        } finally {
+            javascriptPluginLifecycleLock.unlock()
+        }
+    }
+
+    public func invokeJavaScriptPluginCommand(routeName: String, arguments: String, sessionId: SessionId,
+        commandId: String, cancellation: CancellationToken, noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
+        invokePluginCommand(routeName, arguments, sessionId, commandId, cancellation, noticeSink, Option<ProductPluginCommandScope>.None)
+    }
+    func invokeScopedPluginCommand(routeName: String, arguments: String, scope: ProductPluginCommandScope,
+        noticeSink: ProductJavaScriptPluginNoticeSink): Result<Unit> {
+        invokePluginCommand(routeName, arguments, scope.sessionId, scope.commandId, scope.cancellation, noticeSink, Some(scope))
+    }
+    private func invokePluginCommand(
         routeName: String,
         arguments: String,
         sessionId: SessionId,
         commandId: String,
         cancellation: CancellationToken,
-        noticeSink: ProductJavaScriptPluginNoticeSink
+        noticeSink: ProductJavaScriptPluginNoticeSink,
+        scope: ?ProductPluginCommandScope
     ): Result<Unit> {
         if (arguments.size > JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES ||
             commandId.trimAscii() == "" || cancellation.isCancelled()) {
@@ -735,7 +1025,7 @@ public class ProductVnextControl {
             ))
         }
         var target: ?ProductJavaScriptPluginCommand = None
-        for (command in javascriptPlugins.commands()) {
+        for (command in javascriptPluginCommands()) {
             if (command.routeName == routeName) {
                 target = Some(command)
                 break
@@ -748,6 +1038,11 @@ public class ProductVnextControl {
                 "plugin.command_not_found",
                 "plugin command is not registered"
             ))
+        }
+        match (scope) {
+            case Some(owner) => match (owner.bind(javascriptPlugins, selected, arguments, sessionId, commandId)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            case None => ()
         }
         let identity = JavaScriptHostInvocationIdentity(
             threadId: sessionId.value,
@@ -762,15 +1057,17 @@ public class ProductVnextControl {
             ValueField("command_args", textValue(arguments))
         ]))
         let observer = ProductJavaScriptPluginServiceRuntime(
-            catalog, pipeline, operations, askRuntime
+            catalog, pipeline, operations, askRuntime,
+            canonicalDatabase173: Some(database), canonicalSummaryTimeout173: canonicalSummaryTimeout173
         ).commandObserver(sessionId, commandId, cancellation, noticeSink)
         match (javascriptPlugins.invoke(
             selected.extensionId, selected.name, argumentsJson,
             identity: identity, cancellation: cancellation, cwd: workspaceRoot,
-            hasUI: askRuntime.hasInteractive(sessionId), observer: Some(observer)
+            hasUI: askRuntime.hasInteractive(sessionId), observer: Some(observer),
+            expectedInstanceGeneration: selected.instanceGeneration
         )) {
             case Result.Err(error) => Result.Err(error)
-            case Result.Ok(value) => if (value.isError) {
+            case Result.Ok(value) => try { if (value.isError) {
                 let details = match (value.value.field("error")) {
                     case Some(item) => item
                     case None => return Result.Err(AgentError(
@@ -779,30 +1076,70 @@ public class ProductVnextControl {
                         "plugin command reported an error"
                     ))
                 }
-                let code = pluginReceiptText(details, "code")
-                let message = pluginReceiptText(details, "message")
+                let code = if (details.unifiedKind == ValueKind.Text) {
+                    details.text
+                } else { pluginReceiptText(details, "code") }
+                let message = if (details.unifiedKind == ValueKind.Text) {
+                    pluginReceiptText(value.value, "message")
+                } else { pluginReceiptText(details, "message") }
                 Result.Err(AgentError(
                     AgentErrorKind.InvalidInput,
                     if (code == "") { "plugin.command_failed" } else { code },
                     if (message == "") { "plugin command reported an error" } else { message }
                 ))
             } else {
+                if (httpIntentText(value.value, "schema") == "axyndra.command-message/v1") {
+                    if (!httpIntentExactFields(value.value, ["schema", "text"]) ||
+                        value.value.field("text").getOrThrow().unifiedKind != ValueKind.Text ||
+                        value.value.field("text").getOrThrow().text == "" || value.value.field("text").getOrThrow().text.size > 16384) {
+                        return commandControlError("plugin.command_message_invalid") }
+                    match (cancellation.check()) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                    match (scope) { case Some(owner) => match (owner.current()) {
+                        case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+                        case None =>
+                            let descriptor = match (javascriptPlugins.servicePackage(selected.extensionId, selected.instanceGeneration)) {
+                                case Result.Err(error) => return Result.Err(error); case Result.Ok(item) => item }
+                            match (ProductCommandBinding(javascriptPlugins, selected, descriptor).verify()) {
+                                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () } }
+                    noticeSink("info", value.value.field("text").getOrThrow().text)
+                    return Result.Ok(())
+                }
+                if (value.value.field("schema").isSome() || value.value.field("local_tool").isSome() || value.value.field("user_control").isSome()) {
+                    return match (scope) { case Some(owner) => owner.capture(value.value)
+                        case None => commandControlError("plugin.command_user_scope_required") }
+                }
+                // A command can return noninteractive text (for example help)
+                // without requesting an interactive UI service. Every frontend
+                // already supplies this notice sink; the result stays bounded.
+                match (value.value.field("content")) {
+                    case Some(content) =>
+                        if (content.unifiedKind != ValueKind.Text || content.text.size > 4096) {
+                            return Result.Err(AgentError(AgentErrorKind.InvalidInput,
+                                "plugin.command_output_invalid", "command content must be text of at most 4096 bytes"))
+                        }
+                        if (content.text != "") { noticeSink("info", content.text) }
+                    case None => ()
+                }
                 Result.Ok(())
-            }
+            } } finally { value.releasePayload() }
         }
     }
 
     public func deactivateImportedPlugin(record: ProductPluginRecord): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.ecosystem == PluginEcosystem.Pi ||
-            descriptor.ecosystem == PluginEcosystem.Codex) {
-            let _ = catalog.unregisterHookHandlers(descriptor.namespace)
+            descriptor.ecosystem == PluginEcosystem.Codex ||
+            descriptor.entryKind == PluginEntryKind.NativeExecutable) {
+            let _ = catalog.unregisterHookHandlers(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             javascriptPluginLifecycleLock.lock()
             try {
-                for (tool in javascriptPlugins.toolNames(descriptor.namespace)) {
-                    let _ = catalog.unregister("plugin." + descriptor.namespace + "." + tool)
+                for (namespace in javascriptPlugins.deactivationNamespaces(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))) {
+                    let _ = catalog.unregisterHookHandlers(namespace)
+                    for (tool in javascriptPlugins.toolNames(namespace)) {
+                        let _ = catalog.revoke("plugin." + namespace + "." + tool)
+                    }
                 }
-                return javascriptPlugins.unmount(descriptor.namespace)
+                return javascriptPlugins.unmount(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)))
             } finally {
                 javascriptPluginLifecycleLock.unlock()
             }
@@ -810,10 +1147,10 @@ public class ProductVnextControl {
         if (descriptor.ecosystem != PluginEcosystem.Axyndra) {
             return Result.Ok(())
         }
-        let _ = catalog.unregister("plugin." + descriptor.namespace + ".invoke")
-        match (isolatedPlugins.deactivate(descriptor.id)) {
+        let _ = catalog.revoke("plugin." + productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Namespace)) + ".invoke")
+        match (isolatedPlugins.deactivate(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)))) {
             case Result.Err(error) => Result.Err(error)
-            case Result.Ok(_) => isolatedPlugins.cancelAll(descriptor.id)
+            case Result.Ok(_) => isolatedPlugins.cancelAll(productRegistryCopyText83(descriptor.copyText(PluginDescriptorText.Id)))
         }
     }
     public func mountIsolatedExtension(
@@ -831,12 +1168,10 @@ public class ProductVnextControl {
     public func createEffectScope(owner: ComponentInstanceRef): EffectScope {
         EffectScope(owner)
     }
-
-    public func adaptExtensionLifecycle(
-        host: ExtensionLifecycleHost
-    ): SafeExtensionLifecycleRuntime {
-        SafeExtensionLifecycleRuntime(CompiledExtensionLifecycleAdapter(host))
+    func bindCanonicalOwner180(owner: ActualProcessBrokerRoot180, product: ProductRuntime, config: ProductConfig): Unit {
+        owner.bindActualProduct180(product, database, operations, config)
     }
+
 }
 
 // Both third-party execution kinds cross the same fail-closed ProcessPort.
@@ -1423,277 +1758,22 @@ func isolatedPluginNetworkPolicy(
 
 
 
-class ProductTrustedControlToolExecutor {
-    private let pipeline: ToolPipeline
-    private let operations: OperationRuntimePort
-    private let runtime: AgentThreadRuntime
-
-    init(
-        pipeline: ToolPipeline,
-        operations: OperationRuntimePort,
-        runtime: AgentThreadRuntime
-    ) {
-        this.pipeline = pipeline
-        this.operations = operations
-        this.runtime = runtime
-    }
-
-
-    public func invoke(
-        context: ToolInvocationContext,
-        call: ToolCall,
-        approvalDecision!: ?ApprovalDecision
-    ): Result<ToolInvocationResult> {
-        let prepared = match (pipeline.prepare(context, call)) {
-            case Result.Err(error) => return Result.Err(error)
-            case Result.Ok(ToolPreparation.Ready(value)) => value
-            case Result.Ok(ToolPreparation.NeedsApproval(value, request)) =>
-                match (approvalDecision) {
-                    case Some(_) => value
-                    case None => return Result.Ok(ToolInvocationResult.NeedsApproval(request))
-                }
-            case Result.Ok(ToolPreparation.Completed(value)) =>
-                return Result.Ok(ToolInvocationResult.Completed(value))
-            case Result.Ok(ToolPreparation.Denied(value)) =>
-                return Result.Ok(ToolInvocationResult.Denied(value))
-        }
-        let active = runtime.activeRun().getOrThrow()
-        let before = runtime.threadSnapshot()
-        let callItemId = ItemId(
-            "direct-tool-call-" + context.runId.value + "-" + call.callId
-        )
-        match (runtime.commitResult(ResultEnvelope(
-            before.thread.id,
-            active.turnId,
-            active.runId,
-            active.epoch,
-            before.nextResultSequence,
-            ThreadItemDraft(
-                callItemId,
-                ThreadItemContent.ToolCall(
-                    CanonicalToolCallId(call.callId), call.name, call.arguments
-                ),
-                ItemProvenance("direct_tool", runId: Some(active.runId)),
-                createdAtMillis: agentUtcMillis()
-            )
-        ))) {
-            case SemanticCommitDecision.Committed(_, _) => ()
-            case SemanticCommitDecision.Stale(reason) => return Result.Err(AgentError(
-                AgentErrorKind.Conflict, reason.code, reason.message
-            ))
-            case SemanticCommitDecision.Rejected(error) => return Result.Err(error)
-        }
-        match (operations.prepareTrustedControlOperation(
-            prepared.operationId, context.runId, callItemId, prepared.operationPlan
-        )) {
-            case Result.Ok(_) => ()
-            case Result.Err(error) => return Result.Err(error)
-        }
-        let execution: Result<ToolInvocationResult> = match (prepared.authorization) {
-            case PreparedAuthorization.ApprovalRequired => match (approvalDecision) {
-                case Some(decision) => match (operations.waitForApproval(
-                    prepared.operationId, context.runId
-                )) {
-                    case Result.Err(error) => Result.Err(error)
-                    case Result.Ok(_) => match (pipeline.authorize(
-                        context,
-                        prepared,
-                        decision,
-                        decisionSource: ApprovalDecisionSource.User
-                    )) {
-                        case Result.Err(error) => Result.Err(error)
-                        case Result.Ok(ToolAuthorization.Ready(authorized)) =>
-                            pipeline.executePrepared(context, authorized)
-                        case Result.Ok(ToolAuthorization.Completed(result)) =>
-                            Result.Ok(ToolInvocationResult.Completed(result))
-                        case Result.Ok(ToolAuthorization.Denied(denial)) =>
-                            Result.Ok(ToolInvocationResult.Denied(denial))
-                    }
-                }
-                case None => Result.Err(AgentError(
-                    AgentErrorKind.Conflict,
-                    "plugin.acquisition_approval_missing",
-                    "prepared plugin acquisition reached execution without user approval"
-                ))
-            }
-            case _ => pipeline.executePrepared(context, prepared)
-        }
-        let receiptId = match (execution) {
-            case Result.Ok(ToolInvocationResult.Completed(value)) => if (
-                value.receiptId == ""
-            ) {
-                "receipt-" + prepared.operationId.value
-            } else {
-                value.receiptId
-            }
-            case _ => "receipt-" + prepared.operationId.value
-        }
-        match (runtime.resolveOperation(
-            ItemId("direct-tool-result-" + context.runId.value + "-" + call.callId),
-            prepared.operationId,
-            CanonicalToolCallId(call.callId),
-            prepared.operationPlan,
-            OperationAttemptStage.Executing,
-            execution,
-            receiptId,
-            agentUtcMillis()
-        )) {
-            case Result.Ok(_) => execution
-            case Result.Err(error) => Result.Err(error)
-        }
-    }
-}
-
+// Direct synchronous roots retain one Run budget slot while a single child
+// temporarily owns it. No second budget or raw-call execution lane is created.
 func mountAndRegisterJavaScriptPlugin(
     record: ProductPluginRecord,
     hostManager: ProductJavaScriptPluginHost,
     catalog: ToolCatalog,
     serviceRuntime!: ?ProductJavaScriptPluginServiceRuntime = None
 ): Result<Unit> {
-    let descriptor = record.descriptor
-    let tools = match (hostManager.mount(record)) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    try {
-        let additionalCapabilities = ArrayList<Capability>()
-        let workspaceWriteGranted = descriptor.requestedCapabilities.contains("workspace.write")
-        let workspaceReadGranted = workspaceWriteGranted ||
-            descriptor.requestedCapabilities.contains("workspace.read")
-        if (workspaceWriteGranted) {
-            additionalCapabilities.add(Capability(CapabilityKind.WorkspaceWrite))
-        } else if (workspaceReadGranted) {
-            additionalCapabilities.add(Capability(CapabilityKind.WorkspaceRead))
-        }
-        let candidates = ArrayList<ToolCatalogRegistration>()
-        for (tool in tools) {
-            let schema = match (decodeAgentValue(
-                tool.inputSchemaJson,
-                maxBytes: JAVASCRIPT_EXTENSION_MAX_FRAME_BYTES
-            )) {
-                case Result.Ok(value) =>
-                    if (value.unifiedKind != ValueKind.Object) {
-                        let _ = hostManager.unmount(descriptor.namespace)
-                        return Result.Err(AgentError(
-                            AgentErrorKind.InvalidInput,
-                            "plugin.tool_schema_invalid",
-                            "extension tool input_schema must be an object"
-                        ))
-                    }
-                    value
-                case Result.Err(error) =>
-                    let _ = hostManager.unmount(descriptor.namespace)
-                    return Result.Err(AgentError(
-                        AgentErrorKind.InvalidInput,
-                        "plugin.tool_schema_invalid",
-                        error.message
-                    ))
-            }
-            let toolName = "plugin." + descriptor.namespace + "." + tool.name
-            candidates.add(ToolCatalogRegistration(
-                ToolDescriptor(
-                    ModelToolDefinition(toolName, tool.description, schema),
-                    Capability(CapabilityKind.ExtensionInvoke),
-                    sideEffecting: true,
-                    additionalCapabilities: additionalCapabilities.toArray(),
-                    implementationVersion: descriptor.version,
-                    implementationFingerprint: descriptor.namespace + ":" + descriptor.contentDigest
-                ),
-                ProductJavaScriptPluginToolExecutor(
-                    hostManager,
-                    descriptor.namespace,
-                    tool.name,
-                    serviceRuntime: serviceRuntime
-                )
-            ))
-        }
-        match (catalog.registerBatch(candidates.toArray())) {
-            case Result.Err(error) =>
-                let _ = hostManager.unmount(descriptor.namespace)
-                Result.Err(error)
-            case Result.Ok(_) =>
-                if (descriptor.ecosystem == PluginEcosystem.Pi) {
-                    let handlers = ArrayList<ToolHookHandlerSnapshot>()
-                    for (hook in hostManager.hookDescriptors() where
-                        hook.extensionId == descriptor.namespace) {
-                        let event = if (hook.descriptor.event == "tool_call") {
-                            if (!workspaceWriteGranted) { continue }
-                            "PreToolUse"
-                        } else if (hook.descriptor.event == "tool_result") {
-                            if (!workspaceReadGranted) { continue }
-                            "PostToolUse"
-                        } else {
-                            let _ = hostManager.unmount(descriptor.namespace)
-                            return Result.Err(AgentError(
-                                AgentErrorKind.InvalidInput,
-                                "extension.pi_event_unsupported",
-                                "Pi event registration is not supported"
-                            ))
-                        }
-                        handlers.add(ToolHookHandlerSnapshot(
-                            event, descriptor.namespace, descriptor.version,
-                            descriptor.contentDigest, descriptor.root, "*",
-                            "pi.event:" + hook.descriptor.reference, 30000
-                        ))
-                    }
-                    if (!handlers.isEmpty()) {
-                        match (catalog.registerHookHandlers(
-                            descriptor.namespace, handlers.toArray()
-                        )) {
-                            case Result.Ok(_) => ()
-                            case Result.Err(error) =>
-                                for (tool in tools) {
-                                    let _ = catalog.unregister(
-                                        "plugin." + descriptor.namespace + "." + tool.name
-                                    )
-                                }
-                                let _ = hostManager.unmount(descriptor.namespace)
-                                return Result.Err(error)
-                        }
-                    }
-                }
-                Result.Ok(())
-        }
-    } catch (error: Exception) {
-        let _ = catalog.unregisterHookHandlers(descriptor.namespace)
-        for (tool in tools) {
-            let _ = catalog.unregister("plugin." + descriptor.namespace + "." + tool.name)
-        }
-        let _ = hostManager.unmount(descriptor.namespace)
-        Result.Err(AgentError(
-            AgentErrorKind.Internal,
-            "plugin.tool_registration_failed",
-            error.message
-        ))
-    }
+    let borrowed: ?HostJavaScriptPluginServiceRuntime = match (serviceRuntime) {
+        case Some(value) => Some(value); case None => None }
+    hostMountAndRegisterPluginTools(record, hostManager, catalog, serviceRuntime: borrowed)
 }
 
-func directControlModelLane(runId: RunId, capabilities: CapabilitySet): ModelLane {
-    let entries = ArrayList<ToolSnapshotEntry>()
-    let _ = capabilities
-    ModelLane(
-        ModelLaneRole.Main,
-        "direct-control",
-        "none",
-        "direct-control-v1",
-        ModelLaneCapabilitiesSnapshot(
-            streaming: false,
-            tools: false,
-            reasoning: false,
-            structuredOutput: false,
-            imageInput: false,
-            promptCache: false,
-            providerOpaqueState: false
-        ),
-        4096,
-        1024,
-        128,
-        "direct-control-v1",
-        "never",
-        "none",
-        ToolSetSnapshot("direct-control-catalog-" + runId.value, entries.toArray()),
-        "direct-control-v1"
-    )
+func directControlModelLane(runId: RunId, capabilities: CapabilitySet, threadId!: ?ThreadId = None,
+    snapshot!: ?ToolSetSnapshot = None): ModelLane {
+    hostControlModelLane(runId, capabilities, threadId: threadId, snapshot: snapshot)
 }
 class ProductStorageServiceProvider <: ServiceProvider<String> {
     public init() {}

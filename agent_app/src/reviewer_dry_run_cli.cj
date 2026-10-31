@@ -7,11 +7,10 @@ import yjson.*
 import agent_domain.*
 import agent_core.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 
-func runReviewerDryRun(product: ProductRuntime): Int64 {
-    let session = product.applicationSession()
+func runReviewerDryRun(product: ProductRuntime, io!: CliIo180 = consoleCliIo180, session180!: ?ApplicationSession = None<ApplicationSession>): Int64 {
+    let session = session180 ?? product.applicationSession()
     let model = session.model()
     let provider = product.modelProvider(model)
     let workspace = product.workspace.rootPath()
@@ -88,7 +87,7 @@ func runReviewerDryRun(product: ProductRuntime): Int64 {
         } else {
             review.failureType
         })))
-        println(encodeAgentValue(objectValue(fields.toArray())))
+        io.println(encodeAgentValue(objectValue(fields.toArray())))
         if (name == "workspace_create") {
             failed = failed || review.decision != ApprovalReviewDecision.Approve || review.approvedCapabilities.size !=
                 1 || review.approvedCapabilities[0] != "workspace.write"
@@ -100,10 +99,10 @@ func runReviewerDryRun(product: ProductRuntime): Int64 {
         }
     }
     if (failed) {
-        println("reviewer_dry_run_failed")
+        io.println("reviewer_dry_run_failed")
         return 1
     }
-    println("reviewer_dry_run_passed tools_executed=0")
+    io.println("reviewer_dry_run_passed tools_executed=0")
     0
 }
 

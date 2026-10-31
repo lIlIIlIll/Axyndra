@@ -1,5 +1,6 @@
 package agent_tui
 
+import agent_domain.Result
 import agent_cli.*
 import core.*
 import markdown.*
@@ -53,9 +54,9 @@ func stopAgentStream(result: UpdateResult): UpdateResult {
     )
 }
 
-func productSlashHints(): Array<String> {
+func productSlashHints(extraDefinitions!:Array<SlashCommandDefinition> = []): Array<String> {
     let values = ArrayList<String>()
-    for (name in availableSlashCommands()) {
+    for (name in availableSlashCommands(extraDefinitions:extraDefinitions)) {
         values.add("/" + name)
     }
     values.toArray()
@@ -97,16 +98,38 @@ class DocumentWindowCache {
     private var width: Int64 = -1
     private var state = DocumentViewState()
     private var view: ?DocumentView = None
-    private var raster = Buffer(Rect(0, 0, 1, 1))
+    private var raster: ?Buffer = Some(Buffer(Rect(0, 0, 1, 1)))
+    private let copyReferencesLock = Mutex()
+    private var copyReferenceBorrows: Int64 = 0
+    private var internalCopyReferencesClosed = false
     private var rasterStart: Int64 = 0
     private var rasterHeight: Int64 = 0
     private var rasterValid = false
     private var layoutCount: Int64 = 0
 
     func render(document: Document, documentKey: String, scroll: Int64, area: Rect, target: Buffer): Unit {
+        copyReferencesLock.lock()
+        if (internalCopyReferencesClosed) { copyReferencesLock.unlock(); throw Exception("display.window_references_retired") }
+        copyReferenceBorrows++; copyReferencesLock.unlock()
+        try { renderBorrowedCopies(document, documentKey, scroll, area, target) }
+        finally { copyReferencesLock.lock(); try { copyReferenceBorrows-- } finally { copyReferencesLock.unlock() } }
+    }
+    private func renderBorrowedCopies(document: Document, documentKey: String, scroll: Int64, area: Rect, target: Buffer): Unit {
+        // The actual Document/view/Buffer locals and layout/paint callbacks
+        // end in this helper before the outer borrow may permit clear.
         if (area.width <= 0 || area.height <= 0) {
             return
         }
+        match (document.retainedPayment) {
+            case Some(payment) =>
+                // Inspect the actual previous view/rows and raster, including
+                // old geometry and complete combining-grapheme scalar backing,
+                // before creating the new view/rows/Buffer or changing keys.
+                let invoice = ownedTuiInvoiceAdd(
+                    retainedDocumentRasterInvoice(document, area.width, max(128, area.height * 4)),
+                    retainedPreviousCopiesInvoice())
+                if (!payment.prepareRasterCopies(invoice)) { throw Exception("display.raster_payment_required") }
+            case None => () }
         if (key != documentKey) {
             key = documentKey
             width = -1
@@ -125,22 +148,28 @@ class DocumentWindowCache {
             rasterStart + rasterHeight) {
             rasterStart = max(0, requested - wantedHeight / 3)
             rasterHeight = wantedHeight
-            raster = Buffer(Rect(0, 0, area.width, rasterHeight))
+            raster = Some(Buffer(Rect(0, 0, area.width, rasterHeight)))
             state.scroll = rasterStart
             match (view) {
-                case Some(current) => current.render(Rect(0, 0, area.width, rasterHeight), raster)
+                case Some(current) => current.render(Rect(0, 0, area.width, rasterHeight), raster.getOrThrow())
                 case None => ()
             }
             rasterValid = true
         }
         target.blitFromUnchecked(
-            raster,
+            raster.getOrThrow(),
             Rect(0, requested - rasterStart, area.width, area.height),
             area.x,
             area.y
         )
     }
 
+    func retainedPreviousCopiesInvoice(): Int64 {
+        var total: Int64 = 0
+        match (view) { case Some(current) => total = current.retainedCopiesInvoice(); case None => () }
+        match (raster) { case Some(current) => total = ownedTuiInvoiceAdd(total, retainedBufferCellInvoice(current)); case None => () }
+        total
+    }
     func layouts(): Int64 {
         layoutCount
     }
@@ -150,7 +179,17 @@ class DocumentWindowCache {
     }
 
     func bufferCapacityCells(): Int64 {
-        max(0, raster.area.width * raster.area.height)
+        match (raster) { case Some(value) => max(0, value.area.width * value.area.height); case None => 0 }
+    }
+    func tryRetireInternalWindowReferences(): Bool {
+        copyReferencesLock.lock()
+        try {
+            if (copyReferenceBorrows != 0) { return false }
+            internalCopyReferencesClosed = true
+            view = None; raster = None; key = ""; width = -1
+            state = DocumentViewState(); rasterStart = 0; rasterHeight = 0; rasterValid = false
+            true
+        } finally { copyReferencesLock.unlock() }
     }
 }
 
@@ -215,7 +254,6 @@ enum TuiModalKind {
     | Session
     | Tree
     | Agent
-    | Extensions
     | Branch
     | Settings
     | Reset
@@ -266,9 +304,26 @@ public func runAgentTui(
         externalPort.close()
         return result
     }
+    let directOutput = DirectStdOutDisplayOutput.open()
+    try { runNativeTuiProducerFrames(screen, externalPort, performanceTrace, directOutput) }
+    finally {
+        screen.noteActualNativeProducerFramesEnded()
+        screen.beginRetainedDisplayProducerClosing()
+        match (RetiredOwnedTuiScreenReferences.retire(screen)) {
+            case Some(retired) => screen.retireCopiedRegistry(retired)
+            case None => () }
+    }
+    0
+}
+
+// All actual App/presenter/Terminal/ANSI/trace producer frames must leave this
+// helper before a full Screen/registry retirement may be attempted.
+func runNativeTuiProducerFrames(screen: AgentScreen, externalPort: ExternalPort<Event>,
+    performanceTrace: ?TuiPerformanceTrace, directOutput: DirectStdOutDisplayOutput): Unit {
+    screen.bindActualNativeOutput(directOutput)
     match (performanceTrace) {
         case Some(trace) =>
-            let output = TuiTracingOutput(getStdOut(), trace)
+            let output = TuiTracingOutput(directOutput, trace)
             let app = App(
                 backend: AnsiBackend(output: output),
                 alternateScreen: false,
@@ -286,6 +341,7 @@ public func runAgentTui(
             )
         case None =>
             App(
+                backend: AnsiBackend(output: directOutput),
                 alternateScreen: false,
                 mouse: false
             ).runWithFrameProvider(
@@ -294,7 +350,6 @@ public func runAgentTui(
                 {event => screen.update(event)}
             )
     }
-    0
 }
 
 class MarkdownCacheEntry {
@@ -386,7 +441,8 @@ class HistorySlice {
 
 class AgentTranscriptSource <: VirtualTranscriptSource {
     private var snapshot: UiSnapshot
-    private let renderCard: (UiCard, Int64, String) -> Document
+    private var renderCard: (UiCard, Int64, String) -> Document
+    private var prepareCardCopies: (UiCard, Int64, Int64) -> Bool
     private var theme = axyndraTheme()
     private var generationValue: Int64 = 0
     private var retiredCountValue: Int64 = 0
@@ -406,12 +462,19 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
 
     init(
         snapshot: UiSnapshot,
-        renderCard: (UiCard, Int64, String) -> Document
+        renderCard: (UiCard, Int64, String) -> Document,
+        prepareCardCopies!: (UiCard, Int64, Int64) -> Bool = {_, _, _ => true}
     ) {
         this.snapshot = snapshot
         this.renderCard = renderCard
+        this.prepareCardCopies = prepareCardCopies
     }
 
+    func retireOwnedReferences(): Unit {
+        snapshot.cards.clear(); snapshot.cardLookupId = ""; snapshot.approvalId = None
+        snapshot = UiSnapshot(); pendingHistoryBatch = None; focusedCardId = ""
+        renderCard = {_, _, _ => Document([])}; prepareCardCopies = {_, _, _ => true}
+    }
     func setSnapshot(value: UiSnapshot): Unit {
         this.snapshot = value
         retiredCountValue = 0
@@ -829,6 +892,9 @@ class AgentTranscriptSource <: VirtualTranscriptSource {
         }
     }
 
+    public func prepareItemRetainedCopies(index: Int64, width: Int64, oldCopies: Int64): Bool {
+        prepareCardCopies(snapshot.cards[physicalIndex(index)], width, oldCopies)
+    }
     public func document(
         index: Int64,
         width: Int64,
@@ -879,11 +945,21 @@ func prependTranscriptPage(current: UiSnapshot, page: TuiTranscriptPage): UiSnap
 class AgentScreen <: TerminalFrameProvider {
     private let backend: AgentTuiBackend
     private let performanceTrace: ?TuiPerformanceTrace
-    private let title: String
-    private let initialPrompt: String
-    private let composer = Composer(slashHints: productSlashHints())
+    private var title: String
+    private var initialPrompt: String
+    private var composer = Composer(slashHints: productSlashHints())
     private var ui = UiSnapshot()
-    private let markdownCache = HashMap<String, MarkdownCacheEntry>()
+    private var retainedCopiedToolDisplays = ArrayList<OwnedTuiToolDisplay>()
+    private var activeOwnedToolDisplay: ?OwnedTuiToolDisplay = None
+    private var retainedCopiedFailureDisplays113 = ArrayList<OwnedTuiFailureDisplay113>()
+    private var retainedRegistryDisplays167 = ArrayList<OwnedTuiRegistryResponseDisplay167>()
+    private var activeRegistryDocument167: ?OwnedTuiRegistryResponseDisplay167 = None
+    private var terminalInternalFrameReferencesRetired = false
+    private var windowInternalReferencesRetired = false
+    private var asyncTaskReferencesRetired = false
+    private var actualNativeProducerFramesEnded = false
+    private var actualNativeOutput: ?DirectStdOutDisplayOutput = None
+    private var markdownCache = HashMap<String, MarkdownCacheEntry>()
     private let mailbox: TuiMailbox
     private let externalPort: ExternalPort<Event>
     private var mailboxChanged = false
@@ -919,12 +995,12 @@ class AgentScreen <: TerminalFrameProvider {
     private var virtualTranscriptSource: ?AgentTranscriptSource = None
     private var presentationAdapter: ?AgentPresentationAdapter = None
     private var virtualTranscriptView: ?VirtualTranscriptView = None
-    private let transcriptRanges = ArrayList<CardScreenRange>()
-    private let queuedPrompts = ArrayList<QueuedPrompt>()
+    private var transcriptRanges = ArrayList<CardScreenRange>()
+    private var queuedPrompts = ArrayList<QueuedPrompt>()
     private let queueWithdrawalLock = Mutex()
-    private let completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>()
+    private var completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>()
     private var withdrawalInFlightId = ""
-    private let toolBindings = ArrayList<ToolCardBinding>()
+    private var toolBindings = ArrayList<ToolCardBinding>()
     private var modal: ?TuiModalKind = None
     private var modalItems: Array<String> = []
     private var modalSelected: Int64 = 0
@@ -950,12 +1026,11 @@ class AgentScreen <: TerminalFrameProvider {
     private var focusedConversationLabel = "Main"
     private var mainTranscriptBeforeOrdinal: Int64 = 0
     private var mainTranscriptHasMore = false
-    private let runningSubagentIds = ArrayList<String>()
-    private var extensionItems: Array<TuiExtensionInfo> = []
+    private var runningSubagentIds = ArrayList<String>()
     private let surfaces = SurfaceHost()
-    private let planReview = PlanReviewController()
-    private let ask = AskController()
-    private let todos = TodoController()
+    private var pluginView = PluginViewController()
+    private var ask = AskController()
+    private var todos = TodoController()
     private var setupDraft: ?SetupDraft = None
     private var setupRequired = false
     private var initialSubmitted: Bool
@@ -963,7 +1038,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var cardSequence: Int64 = 0
     private var turnSequence: Int64 = 0
     private var modelRoundSequence: Int64 = 0
-    private let attemptProjection = AttemptProjection()
+    private var attemptProjection = AttemptProjection()
     private var activeToolCardId = ""
     private var activeToolCallId = ""
     private var activeToolArguments = ""
@@ -1002,7 +1077,7 @@ class AgentScreen <: TerminalFrameProvider {
     private var themeName: String
     private var customThemeDefinitions: Array<TuiThemeDefinition>
     private var modelLabel: String
-    private let workspaceLabel: String
+    private var workspaceLabel: String
 
     init(
         backend: AgentTuiBackend,
@@ -1024,10 +1099,10 @@ class AgentScreen <: TerminalFrameProvider {
         this.initialSubmitted = this.initialPrompt == ""
         this.modelLabel = backend.currentModel()
         this.workspaceLabel = backend.workspace()
+        composer = Composer(slashHints: productSlashHints(extraDefinitions:backend.frontendSlashDefinitions()))
         this.themeName = backend.currentTheme()
         this.customThemeDefinitions = backend.customThemes()
         this.terminalUnicode = !asciiRailRequested()
-        planReview.setTheme(themeName, customThemeDefinitions)
         let source = AgentTranscriptSource(ui, {
             item, width, section => renderTranscriptBodyDocument(
                 item,
@@ -1038,7 +1113,7 @@ class AgentScreen <: TerminalFrameProvider {
                 ),
                 history: section == "history"
             )
-        })
+        }, prepareCardCopies: {item, width, oldCopies => prepareOwnedCardDocument(item, width, oldCopies)})
         source.unicode = terminalUnicode
         virtualTranscriptSource = Some(source)
         presentationAdapter = Some(AgentPresentationAdapter(source))
@@ -1053,6 +1128,15 @@ class AgentScreen <: TerminalFrameProvider {
         )
         view.setUnicode(terminalUnicode)
         virtualTranscriptView = Some(view)
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => owned.observeOwnedToolDisplay(CallbackOwnedTuiToolDisplayOutput({display =>
+                // This actual queue entry carries its real copied-data owner.
+                mailbox.pushOwned(display) }))
+            case None => () }
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(owned) => owned.observeOwnedFailureDisplay113(CallbackOwnedTuiFailureDisplayOutput113({ display =>
+                mailbox.pushOwnedFailure113(display) }))
+            case None => () }
         backend.observe({event => mailbox.push(event)})
         var needsSetup = false
         for (event in backend.welcome()) {
@@ -1175,7 +1259,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         if (altRune(key, r'l')) {
             status = "terminal display reset"
-            return syncPlanReviewStatus(UpdateResult.withCommand(Command.ResetTerminal))
+            return syncPluginViewStatus(UpdateResult.withCommand(Command.ResetTerminal))
         }
         if (ctrlRune(key, r'z')) {
             status = if (working) {
@@ -1183,18 +1267,18 @@ class AgentScreen <: TerminalFrameProvider {
             } else {
                 "ready"
             }
-            return syncPlanReviewStatus(UpdateResult.withCommand(Command.Suspend))
+            return syncPluginViewStatus(UpdateResult.withCommand(Command.Suspend))
         }
         if (ctrlRune(key, r'o')) {
-            return syncPlanReviewStatus(toggleToolOutputVisibility())
+            return syncPluginViewStatus(toggleToolOutputVisibility())
         }
         if (ctrlRune(key, r't')) {
-            return syncPlanReviewStatus(toggleThinkingVisibility())
+            return syncPluginViewStatus(toggleThinkingVisibility())
         }
-        if (planReview.isActive()) {
-            return applyPlanReviewTransition(planReview.updateKey(key, working))
+        if (pluginViewForeground()) {
+            return applyPluginViewTransition(pluginView.updateKey(key))
         }
-        if (todos.isEditing()) {
+        if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.updateKey(key))
         }
         if (ask.editorActive()) {
@@ -1260,6 +1344,14 @@ class AgentScreen <: TerminalFrameProvider {
         }
         match (key.code) {
             case KeyCode.CtrlC =>
+                if (working) {
+                    idleCtrlCArmed = false
+                    status = "cancelling"
+                    return backgroundTask("cancel", { =>
+                        backend.cancel()
+                        Event.Message("cancel requested")
+                    })
+                }
                 if (idleCtrlCArmed) {
                     UpdateResult.exit()
                 } else {
@@ -1469,9 +1561,11 @@ class AgentScreen <: TerminalFrameProvider {
 
     private func handlePaste(text: String): UpdateResult {
         idleCtrlCArmed = false
-        if (planReview.isActive()) {
-            return planReview.paste(text)
-        } else if (todos.isEditing()) {
+        if (pluginViewForeground()) {
+            pluginView.paste(text)
+            status = pluginView.statusText()
+            return UpdateResult.dirty(viewportArea)
+        } else if (todos.editorVisible(ui.approvalId.isSome())) {
             return applyTodoTransition(todos.paste(text))
         } else if (ask.editorActive()) {
             return ask.paste(text)
@@ -1490,57 +1584,39 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
-    private func applyPlanReviewTransition(step: PlanReviewTransition): UpdateResult {
-        status = planReview.statusText()
-        match (step.effect) {
-            case None => step.update
-            case Some(PlanReviewEffect.Close) =>
-                planReview.close()
-                status = "ready"
-                if (viewportArea.width > 0 && viewportArea.height > 0) {
-                    UpdateResult.dirty(viewportArea)
-                } else {
-                    UpdateResult.next()
-                }
-            case Some(PlanReviewEffect.CopyText(text)) =>
-                status = backend.copyTextToClipboard(text)
-                _ = planReview.setStatusText(status)
-                step.update
-            case Some(PlanReviewEffect.ReviewPlan(hash, decision, feedback)) =>
-                if (decision == TuiPlanReviewDecision.UpdatePlan) {
-                    return startBackground(
-                        "updating plan",
-                        {
-                            => backend.reviewPlan(
-                                hash,
-                                decision,
-                                feedback,
-                                {event => mailbox.push(event)}
-                            )
-                        }
-                    )
-                }
-                turnOwnerSubagentId = focusedSubagentId
-                if (focusedSubagentId == "") {
-                    mainWorking = true
-                }
-                working = true
-                UiReducer.reduce(ui, UiEvent.SetWorking(true))
-                status = "reviewing plan"
-                startAgentTurn(
-                    {
-                        =>
-                            let result = backend.reviewPlan(
-                                hash,
-                                decision,
-                                feedback,
-                                {event => mailbox.push(event)}
-                            )
-                            mailbox.complete(result)
-                            Event.Message("agent-turn")
-                    }
-                )
+    private func applyPluginViewTransition(step: PluginViewTransition): UpdateResult {
+        status = pluginView.statusText()
+        match (step) {
+            case PluginViewTransition.None => UpdateResult.dirty(viewportArea)
+            case PluginViewTransition.Close(id) =>
+                if (working) { backend.cancel() }
+                let _ = backend.closePluginView(id)
+                pluginView.close()
+                status = "View closed"
+                UpdateResult.dirty(viewportArea)
+            case PluginViewTransition.Action(id, revision, action, fields) =>
+                startPluginViewTurn({ =>
+                    try {
+                        fields.withFields({ actual => backend.pluginViewAction(id, revision, action, actual,
+                            { event => mailbox.push(event) }) })
+                    } finally { fields.close() }
+                })
+            case PluginViewTransition.Confirm(id, revision, digest, confirmed) =>
+                startPluginViewTurn({ => backend.confirmPluginView(id, revision, digest, confirmed,
+                    { event => mailbox.push(event) }) })
         }
+    }
+    private func startPluginViewTurn(invoke: () -> TuiTurnResult): UpdateResult {
+        turnOwnerSubagentId = focusedSubagentId
+        if (focusedSubagentId == "") { mainWorking = true }
+        working = true
+        UiReducer.reduce(ui, UiEvent.SetWorking(true))
+        status = "Host: processing View user event"
+        startAgentTurn({ =>
+            let result = invoke()
+            mailbox.complete(result)
+            Event.Message("agent-turn")
+        })
     }
 
     private func applyTodoTransition(step: TodoTransition): UpdateResult {
@@ -1571,11 +1647,16 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
-    private func syncPlanReviewStatus(result: UpdateResult): UpdateResult {
-        if (!planReview.isActive()) {
-            return result
-        }
-        mergeDirty(planReview.setStatusText(status), result)
+    private func syncPluginViewStatus(result: UpdateResult): UpdateResult {
+        if (!pluginViewForeground()) { return result }
+        pluginView.noteHostStatus(status)
+        result.withDirty(viewportArea)
+    }
+    private func pluginViewForeground(): Bool {
+        // A plugin's presentation cannot cover or consume keys intended for
+        // the Host's actual security approval. Retain its paid data while the
+        // existing canonical Command/Tool approval continuation is pending.
+        pluginView.isActive() && ui.approvalId.isNone()
     }
 
     private func submitComposer(delivery: String): UpdateResult {
@@ -1600,9 +1681,9 @@ class AgentScreen <: TerminalFrameProvider {
         match (event) {
             case Event.KeyDown(key) => handleKeyDown(key)
             case Event.Mouse(mouse) =>
-                if (planReview.isActive()) {
-                    planReview.updateMouse(mouse)
-                } else if (todos.isEditing()) {
+                if (pluginViewForeground()) {
+                    applyPluginViewTransition(pluginView.updateMouse(mouse))
+                } else if (todos.editorVisible(ui.approvalId.isSome())) {
                     applyTodoTransition(todos.updateMouse(mouse))
                 } else if (ask.editorActive()) {
                     ask.updateMouse(mouse)
@@ -1699,7 +1780,12 @@ class AgentScreen <: TerminalFrameProvider {
                         // A modal-local input must not hide the background
                         // redraw required by the concurrently applied action.
                         modalRefreshOnly = false
-                        return consumeMailboxViewportRefresh(mergeDirty(actionResult, interactiveResult))
+                        let merged = mergeDirty(actionResult, interactiveResult)
+                        return consumeMailboxViewportRefresh(UpdateResult(
+                            flow: merged.flow,
+                            command: Command.Batch([actionResult.command, merged.command]),
+                            dirtyRects: merged.dirtyRects
+                        ))
                     case _ =>
                         var result = applyTurnAction(action)
                         if (mailboxChanged) {
@@ -1799,18 +1885,11 @@ class AgentScreen <: TerminalFrameProvider {
             case Event.AsyncCancelled("agent-turn") => settleStreamingCards("cancelled")
             case _ => ()
         }
-        if (planReview.hasPending()) {
+        if (pluginView.hasPending()) {
             match (event) {
-                case Event.AsyncCompleted("agent-turn", _) => if (pendingAction.isNone()) {
-                    _ = planReview.completeWithoutResult()
-                    status = planReview.statusText()
-                }
-                case Event.AsyncFailed("agent-turn", _) =>
-                    _ = planReview.failAgentTurn()
-                    status = planReview.statusText()
-                case Event.AsyncCancelled("agent-turn") =>
-                    _ = planReview.cancelAgentTurn()
-                    status = planReview.statusText()
+                case Event.AsyncCompleted("agent-turn", _) => pluginView.completeTurn()
+                case Event.AsyncFailed("agent-turn", message) => pluginView.failTurn(message)
+                case Event.AsyncCancelled("agent-turn") => pluginView.cancelPending()
                 case _ => ()
             }
         }
@@ -1917,7 +1996,7 @@ class AgentScreen <: TerminalFrameProvider {
                 // selected. Redraw the mailbox mutations now instead of
                 // waiting for an unrelated key press.
                 if (mailboxChanged) {
-                    result = mergeDirty(result, dirtyTranscriptAndActivity())
+                    result = mergeDirty(dirtyTranscriptAndActivity(), result)
                 }
                 if (todoChanged) {
                     result = invalidateTodoLayout(result)
@@ -2855,7 +2934,7 @@ class AgentScreen <: TerminalFrameProvider {
                 => TuiTurnResult(
                     "",
                     "todo loaded",
-                    action: TuiTurnAction.TodoLoaded(backend.todoMarkdown())
+                    action: TuiTurnAction.TodoLoaded(backend.loadTodoEditor())
                 )
             })
         }
@@ -2930,24 +3009,6 @@ class AgentScreen <: TerminalFrameProvider {
                     action: TuiTurnAction.SessionTreeLoaded(backend.sessionTree())
                 )
             })
-        }
-        if (prompt == "/extensions") {
-            return startBackground("loading extensions", {
-                => TuiTurnResult(
-                    "",
-                    "extensions",
-                    action: TuiTurnAction.ExtensionsLoaded(backend.extensions())
-                )
-            })
-        }
-        if (prompt == "/mcp") {
-            let result = backend.mcpStatus()
-            if (result.text != "") {
-                addCard(UiCardKind.Mcp, "MCP", result.text)
-            }
-            status = result.status
-            let actionResult = applyTurnAction(result.action)
-            return mergeDirty(dirtyTranscriptAndActivity(), actionResult)
         }
         if (prompt == "/settings") {
             return openModal(
@@ -3554,41 +3615,6 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     })
                 }
-            case TuiModalKind.Extensions =>
-                if (!extensionItems.isEmpty()) {
-                    let selectedExtension = extensionItems[modalSelected]
-                    let enabled = !selectedExtension.enabled
-                    closeModal(keepStatus: true)
-                    startBackground(
-                        "updating extension",
-                        {
-                            =>
-                                let ok = backend.setExtensionEnabled(
-                                    selectedExtension.id,
-                                    enabled
-                                )
-                                TuiTurnResult(
-                                    "",
-                                    if (ok) {
-                                        (if (enabled) {
-                                            "enabled: "
-                                        } else {
-                                            "disabled: "
-                                        }) + selectedExtension.id
-                                    } else {
-                                        "extension state change failed"
-                                    },
-                                    action: TuiTurnAction.ExtensionToggled(
-                                        selectedExtension.id,
-                                        ok,
-                                        backend.extensions()
-                                    )
-                                )
-                        }
-                    )
-                } else {
-                    UpdateResult.next()
-                }
             case TuiModalKind.Branch =>
                 closeModal(keepStatus: true)
                 startBackground("creating branch", {
@@ -3912,18 +3938,24 @@ class AgentScreen <: TerminalFrameProvider {
         sessionInput = ""
         sessionMode = "browse"
         sessionShowArchived = false
-        extensionItems = []
     }
 
     private func closeModal(keepStatus!: Bool = false): Unit {
         resetGenericModal()
-        planReview.close(keepStatus: keepStatus)
+        pluginView.close()
         if (!keepStatus) {
             status = "ready"
         }
     }
 
     private func drainMailbox(): ?TuiTurnAction {
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(actual) => actual.pollOwnedFailureDisplays113()
+            case None => () }
+        // Retry only the already paid Screen tokens from earlier updates.
+        // No mailbox capacity, extra queue node or immediate retry loop is
+        // needed when formatting was previously refused by the real bank.
+        retryRetainedFailureProjections113()
         let events = mailbox.drain()
         if (!events.isEmpty()) {
             mailboxChanged = true
@@ -3934,6 +3966,14 @@ class AgentScreen <: TerminalFrameProvider {
         match (mailbox.takeResult()) {
             case Some(result) =>
                 mailboxChanged = true
+                match (result.action) {
+                    case TuiTurnAction.OpenDocument(_, _) => activeRegistryDocument167 = result.ownedRegistryDisplay167
+                    case _ => () }
+                match (result.ownedRegistryDisplay167) {
+                    case Some(display) =>
+                        adoptRegistryDisplay167(display)
+                        if (result.text != "") { display.noteUiCardIdentity167(assistantCardId()) }
+                    case None => () }
                 if (result.text != "") {
                     UiReducer.reduce(
                         ui,
@@ -3948,28 +3988,19 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     )
                 }
-                if (planReview.hasPending()) {
-                    match (planReview.acceptTurnResult(
-                        result.status.trimAscii(),
-                        result.action,
-                        disposition: result.planReviewDisposition
-                    )) {
-                        case Some(action) =>
-                            status = planReview.statusText()
-                            return Some(action)
-                        case None => status = planReview.statusText()
-                    }
-                } else {
-                    let resultStatus = compactRunStatus(result.status)
-                    status = if (resultStatus == "completed" && status.startsWith("tokens ")) {
-                        status
-                    } else {
-                        resultStatus
-                    }
-                    match (result.action) {
-                        case TuiTurnAction.NoAction => ()
-                        case action => return Some(action)
-                    }
+                if (pluginView.hasPending()) {
+                    pluginView.completeTurn()
+                    if (result.status.startsWith("error")) { pluginView.failTurn(result.status) }
+                }
+                let resultStatus = compactRunStatus(result.status)
+                status = if (resultStatus == "completed" && status.startsWith("tokens ")) { status } else { resultStatus }
+                match (result.action) {
+                    case TuiTurnAction.NoAction =>
+                        if (pluginView.isActive() && ui.approvalId.isNone() && !result.status.startsWith("error")) {
+                            let _ = backend.closePluginView(pluginView.viewId())
+                            pluginView.close()
+                        }
+                    case action => return Some(action)
                 }
             case None => ()
         }
@@ -3996,13 +4027,24 @@ class AgentScreen <: TerminalFrameProvider {
             case TuiTurnAction.OpenBranchSelector => applyTurnAction(
                 TuiTurnAction.BranchesLoaded(backend.branchMessages())
             )
-            case TuiTurnAction.OpenPlanReview(body) =>
+            case TuiTurnAction.OpenPluginView(route) =>
                 resetGenericModal()
-                let update = planReview.open(body)
-                status = planReview.statusText()
-                update
+                startBackground("loading plugin View", { => backend.loadPluginView(route) })
+            case TuiTurnAction.PluginViewLoaded(document) =>
+                resetGenericModal()
+                try { pluginView.open(document); status = pluginView.statusText() }
+                catch (error: Exception) {
+                    backend.cancel()
+                    status = "Host View render failed: " + error.message
+                    addCard(UiCardKind.Error, "Host View error", status)
+                }
+                UpdateResult.dirty(viewportArea)
+            case TuiTurnAction.ConfirmPluginView(confirmation) =>
+                pluginView.confirm(confirmation)
+                status = pluginView.statusText()
+                UpdateResult.dirty(viewportArea)
             case TuiTurnAction.OpenDocument(title, body) =>
-                planReview.close()
+                pluginView.close()
                 documentTitle = title
                 documentBody = body
                 documentRevision++
@@ -4025,7 +4067,6 @@ class AgentScreen <: TerminalFrameProvider {
                         case None => ()
                     }
                     documentRevision++
-                    planReview.setTheme(name, definitions)
                     status = "theme: " + name
                 } else {
                     status = "theme selection failed: " + name
@@ -4044,22 +4085,6 @@ class AgentScreen <: TerminalFrameProvider {
                 status = "select conversation"
                 refreshViewport()
             case TuiTurnAction.ConversationFocused(view) => applyConversationView(view)
-            case TuiTurnAction.ExtensionsLoaded(items) =>
-                extensionItems = items
-                if (items.isEmpty()) {
-                    applyTurnAction(
-                        TuiTurnAction.OpenDocument(
-                            "Extensions",
-                            "No external extensions are installed.\n\n" + "Built-in tools are product capabilities and " +
-                                "are not counted as extensions."
-                        )
-                    )
-                } else {
-                    openModal(
-                        TuiModalKind.Extensions,
-                        extensionLabels(items)
-                    )
-                }
             case TuiTurnAction.TodoLoaded(result) =>
                 applyTodoTransition(todos.open(result))
             case TuiTurnAction.ModelSelected(_, ok, current) =>
@@ -4092,16 +4117,6 @@ class AgentScreen <: TerminalFrameProvider {
                     composer.restoreDraft(draft)
                 }
                 UpdateResult.next()
-            case TuiTurnAction.ExtensionToggled(_, ok, items) =>
-                if (ok) {
-                    extensionItems = items
-                    openModal(
-                        TuiModalKind.Extensions,
-                        extensionLabels(items)
-                    )
-                } else {
-                    UpdateResult.next()
-                }
             case TuiTurnAction.ResetCompleted(value) =>
                 addCard(UiCardKind.Setup, "Session storage", value)
                 if (refreshTodoSnapshot()) {
@@ -4259,6 +4274,7 @@ class AgentScreen <: TerminalFrameProvider {
         }
         let startedAt = MonoTime.now()
         let cardId = nextCardId("tool")
+        match (activeOwnedToolDisplay) { case Some(display) => display.noteUiCardIdentity(cardId); case None => () }
         toolBindings.add(ToolCardBinding(callId, cardId, name, arguments, startedAt))
         activeToolCardId = cardId
         activeToolCallId = callId
@@ -4354,6 +4370,7 @@ class AgentScreen <: TerminalFrameProvider {
                     }
             }
         }
+        match (activeOwnedToolDisplay) { case Some(display) => display.noteUiCardIdentity(cardId); case None => () }
         let resolvedName = match (binding) {
             case Some(value) => value.name
             case None =>
@@ -4490,7 +4507,114 @@ class AgentScreen <: TerminalFrameProvider {
         }
     }
 
+    private func adoptRegistryDisplay167(display: OwnedTuiRegistryResponseDisplay167): Unit {
+        for (current in retainedRegistryDisplays167 where refEq(current, display)) { return }
+        let count = ownedTuiInvoiceAdd(retainedRegistryDisplays167.size, 1)
+        match (display.prepareQueueAndScreenCopies167(
+            ownedTuiInvoiceAdd(65536, ownedTuiInvoiceMultiply(count, 1024)))) {
+            case Result.Err(_) => throw Exception("display.registry_screen_payment_required")
+            case Result.Ok(_) => retainedRegistryDisplays167.add(display) }
+    }
+    private func acceptRegistryError167(display: OwnedTuiRegistryResponseDisplay167, message: String): Unit {
+        adoptRegistryDisplay167(display)
+        // Run the original card reducer once, preserving its deduplication,
+        // exact error text and transcript mutation behavior.
+        acceptAgentEvent(TuiAgentEvent.Error(message))
+        for (card in ui.cards where card.kind == UiCardKind.Error && card.title == "Error" && card.body == message) {
+            display.noteUiCardIdentity167(card.id); return }
+    }
+    private func acceptOwnedFailureDisplay113(display: OwnedTuiFailureDisplay113): Unit {
+        if (display.isProjected()) { return }
+        if (!display.isAdopted()) {
+            let count = ownedTuiInvoiceAdd(retainedCopiedFailureDisplays113.size, 1)
+            match (display.prepareQueueAndScreenCopies113(
+                ownedTuiInvoiceAdd(65536, ownedTuiInvoiceMultiply(count, 512)))) {
+                case Result.Err(_) => return; case Result.Ok(_) => () }
+            retainedCopiedFailureDisplays113.add(display); display.noteUiAdoption()
+        }
+        let result = display.withCopiedFailure113({ code, message, complete =>
+            let bytes = ownedTuiInvoiceAdd(ownedTuiInvoiceAdd(code.size, message.size), complete.size)
+            let invoice = match (ownedTuiCardFormattingInvoice(display.fundedProjectionInvoice113(), bytes)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (display.ensureCopiedDisplayRetainedPeak(invoice)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            display.noteCardFormattingPeak(invoice)
+            let cardId = nextCardId("error")
+            display.noteUiCardIdentity(cardId)
+            // Preserve code/message and every original typed field. No marker
+            // or preview is substituted for the complete paid error data.
+            UiReducer.reduce(ui, UiEvent.UpsertCard(cardId, UiCardKind.Error,
+                "Error: " + code, message + "\n\n" + complete, "failed", false, ""))
+            Result<Unit>.Ok(())
+        })
+        match (result) {
+            case Result.Ok(_) => display.noteUiProjection(); mailboxChanged = true
+            case Result.Err(_) => () // The actual adopted Screen token remains paid.
+        }
+    }
+    private func retryRetainedFailureProjections113(): Unit {
+        let count = retainedCopiedFailureDisplays113.size
+        for (index in 0..count) {
+            let actual = retainedCopiedFailureDisplays113[index]
+            if (!actual.isProjected()) { acceptOwnedFailureDisplay113(actual) }
+        }
+    }
+
+    private func acceptOwnedToolDisplay(display: OwnedTuiToolDisplay): Unit {
+        if (display.isProjected()) { return }
+        if (!display.isAdopted()) {
+            retainedCopiedToolDisplays.add(display); display.noteUiAdoption()
+        }
+        let result = display.withCopiedEvent({copied =>
+            var bytes: Int64 = 0
+            var callId = ""
+            match (copied) {
+                case TuiAgentEvent.ToolStarted(name, arguments) => bytes = name.size + arguments.size
+                case TuiAgentEvent.ToolStartedWithId(name, id, arguments) =>
+                    callId = id; bytes = name.size + id.size + arguments.size
+                case TuiAgentEvent.ToolCompleted(name, _, completion) =>
+                    bytes = name.size + completion.detailPreview.size + completion.stdoutPreview.size +
+                        completion.stderrPreview.size + completion.exitCode.size + completion.artifactId.size
+                case TuiAgentEvent.ToolCompletedWithId(name, id, _, completion) =>
+                    callId = id; bytes = name.size + id.size + completion.detailPreview.size + completion.stdoutPreview.size +
+                        completion.stderrPreview.size + completion.exitCode.size + completion.artifactId.size
+                case _ => return ownedTuiDisplayError("display.unexpected_event") }
+            // Include every existing argument/body/output/result/title/footer
+            // alongside the new completion and formatting scratch copies.
+            for (card in ui.cards where card.kind == UiCardKind.Tool &&
+                (card.toolCallId == callId || callId == "" || card.id == activeToolCardId)) {
+                bytes += card.title.size + card.body.size + card.footer.size + card.toolName.size +
+                    card.toolArguments.size + card.toolCallId.size + card.toolOutput.size + card.toolResult.size
+            }
+            for (binding in toolBindings where binding.callId == callId || callId == "") {
+                bytes += binding.arguments.size + binding.name.size + binding.callId.size + binding.cardId.size
+            }
+            bytes += activeToolArguments.size + activeToolCallId.size + activeToolCardId.size
+            let invoice = match (ownedTuiCardFormattingInvoice(display.projectionInvoice, bytes)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+            match (display.ensureCopiedDisplayRetainedPeak(invoice)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            display.noteCardFormattingPeak(invoice)
+            activeOwnedToolDisplay = Some(display)
+            try { acceptAgentEvent(copied); Result.Ok(()) }
+            finally { activeOwnedToolDisplay = None }
+        })
+        match (result) {
+            case Result.Ok(_) => display.noteUiProjection()
+            case Result.Err(_) =>
+                // Bank pressure does not drop complete copied data or clear
+                // its payment. Retry from the actual queue after other real
+                // owners retire; no original DOM alias needs to be retained.
+                mailbox.push(TuiAgentEvent.OwnedToolDisplay(display))
+        }
+    }
+
     private func acceptAgentEvent(event: TuiAgentEvent): Unit {
+        match (event) {
+            case TuiAgentEvent.OwnedToolDisplay(display) => acceptOwnedToolDisplay(display); return
+            case TuiAgentEvent.OwnedFailureDisplay113(display) => acceptOwnedFailureDisplay113(display); return
+            case TuiAgentEvent.OwnedRegistryError167(display, message) => acceptRegistryError167(display, message); return
+            case _ => () }
         let followedBefore = scrollOffset <= 0
         match (event) {
             case TuiAgentEvent.AttemptStarted(_) | TuiAgentEvent.AttemptTextDelta(_, _) |
@@ -4515,6 +4639,9 @@ class AgentScreen <: TerminalFrameProvider {
             case _ => ()
         }
         match (event) {
+            case TuiAgentEvent.OwnedToolDisplay(display) => acceptOwnedToolDisplay(display); return
+            case TuiAgentEvent.OwnedFailureDisplay113(display) => acceptOwnedFailureDisplay113(display); return
+            case TuiAgentEvent.OwnedRegistryError167(display, message) => acceptRegistryError167(display, message); return
             case TuiAgentEvent.AttemptStarted(scope) =>
                 let previous = attemptProjection.activeAttemptId(scope.semanticRequestId)
                 attemptProjection.start(scope)
@@ -4778,9 +4905,10 @@ class AgentScreen <: TerminalFrameProvider {
                     )
                 )
             case TuiAgentEvent.Ask(request) => beginAsk(request)
-            case TuiAgentEvent.PlanReviewConsumed(contentHash) =>
-                if (planReview.acceptConsumed(contentHash)) {
-                    status = planReview.statusText()
+            case TuiAgentEvent.PluginViewClosed(id, reason) =>
+                if (pluginView.viewId() == id) {
+                    pluginView.close()
+                    status = "Host: View " + reason
                     mailboxViewportRefresh = true
                 }
             case TuiAgentEvent.Usage(input, output) =>
@@ -4885,7 +5013,7 @@ class AgentScreen <: TerminalFrameProvider {
             case TuiAgentEvent.ToolOutput(_, chunk, _) => max(1, chunk.split("\n").size - 1)
             case TuiAgentEvent.InputInjected(_, _, text) => max(1, text.split("\n").size)
             case TuiAgentEvent.Usage(_, _) => 0
-            case TuiAgentEvent.PlanReviewConsumed(_) => 0
+            case TuiAgentEvent.PluginViewClosed(_, _) => 0
             case _ => 1
         }
         if (changedLines > 0) {
@@ -5106,12 +5234,13 @@ class AgentScreen <: TerminalFrameProvider {
     private func openComposerCompletion(): UpdateResult {
         completionSequence += 1
         let request = composer.area.beginCompletion("composer-completion-" + completionSequence.toString())
-        let plan = commandCompletionPlan(request.value, request.cursor)
+        let definitions=backend.frontendSlashDefinitions()
+        let plan = commandCompletionPlan(request.value, request.cursor, extraDefinitions:definitions)
         let pathCandidates: Array<CompletionCandidate> = match (plan.target) {
             case CommandCompletionTarget.Path => pathCompletionCandidates(workspaceLabel, plan.activePrefix)
             case _ => []
         }
-        let candidates = commandCompletionCandidates(plan, pathCandidates: pathCandidates)
+        let candidates = commandCompletionCandidates(plan, pathCandidates: pathCandidates, extraDefinitions:definitions)
         let completionItems = ArrayList<TextCompletionItem>()
         for (candidate in candidates) {
             if (completionItems.size >= 100) {
@@ -5473,8 +5602,10 @@ class AgentScreen <: TerminalFrameProvider {
     ): Document {
         let lines = ArrayList<DocumentLine>()
         var renderedAny = false
+        let paidDocuments = ArrayList<RetainedDocumentPayment>()
         for (item in items) {
             let card = renderTranscriptCardDocument(item, width, theme)
+            match (card.retainedPayment) { case Some(payment) => paidDocuments.add(payment); case None => () }
             if (card.lines.isEmpty()) {
                 continue
             }
@@ -5492,7 +5623,8 @@ class AgentScreen <: TerminalFrameProvider {
             }
             renderedAny = true
         }
-        Document(lines.toArray())
+        if (paidDocuments.isEmpty()) { Document(lines.toArray()) }
+        else { Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPaymentGroup(paidDocuments.toArray()))) }
     }
 
     private func transcriptSurfaceLines(items: Array<UiCard>, width: Int64): Array<String> {
@@ -5511,7 +5643,8 @@ class AgentScreen <: TerminalFrameProvider {
     private func renderTranscriptCardDocument(
         item: UiCard,
         width: Int64,
-        theme: ProductTheme
+        theme: ProductTheme,
+        occurrence167!: Int64 = 2
     ): Document {
         if (isApprovalRejectionToolCard(item)) {
             return Document([])
@@ -5520,6 +5653,7 @@ class AgentScreen <: TerminalFrameProvider {
             return Document([])
         }
         if (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning) {
+            if (!prepareOwnedCardDocument(item, width, 0, occurrence: occurrence167)) { throw Exception("display.document_payment_required") }
             if (item.state == "streaming") {
                 let lines = ArrayList<DocumentLine>()
                 let bodyWidth = max(1, width - 2)
@@ -5531,7 +5665,9 @@ class AgentScreen <: TerminalFrameProvider {
                         )
                     )
                 }
-                return Document(lines.toArray())
+                return match (retainedDisplayForCard(item)) {
+                    case Some(display) => Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: occurrence167)))
+                    case None => Document(lines.toArray()) }
             }
             let lines = ArrayList<DocumentLine>()
             for (line in cachedMarkdownDocument(item, theme).lines) {
@@ -5540,7 +5676,9 @@ class AgentScreen <: TerminalFrameProvider {
                     case _ => lines.add(line)
                 }
             }
-            return Document(lines.toArray())
+            return match (retainedDisplayForCard(item)) {
+                    case Some(display) => Document(lines.toArray(), retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: occurrence167)))
+                    case None => Document(lines.toArray()) }
         }
         if (item.kind == UiCardKind.User) {
             let lines = ArrayList<DocumentLine>()
@@ -5552,6 +5690,7 @@ class AgentScreen <: TerminalFrameProvider {
             }
             return Document(lines.toArray())
         }
+        if (!prepareOwnedCardDocument(item, width, 0, occurrence: 2)) { throw Exception("display.document_payment_required") }
         let card = productTranscriptItem(
             item,
             width,
@@ -5563,15 +5702,44 @@ class AgentScreen <: TerminalFrameProvider {
                 -1
             }
         )
-        transcriptCardDocument(
+        let document = transcriptCardDocument(
             card,
             theme: productTranscriptCardTheme(theme, item)
         )
+        match (retainedDisplayForCard(item)) {
+            case Some(display) => Document(document.lines, retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: 2)))
+            case None => document }
     }
 
     // VirtualTranscriptView owns the event rail and header.  Its source must
     // therefore return only the body for structured cards; returning the
     // Reusing a TranscriptCard document here would create a nested second card.
+    private func retainedDisplayForCard(item: UiCard): ?OwnedTuiCardDisplay113 {
+        var registryIndex = retainedRegistryDisplays167.size - 1
+        while (registryIndex >= 0) {
+            let display = retainedRegistryDisplays167[registryIndex]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            registryIndex-- }
+        var index = retainedCopiedToolDisplays.size - 1
+        while (index >= 0) {
+            let display = retainedCopiedToolDisplays[index]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            index-- }
+        var failureIndex = retainedCopiedFailureDisplays113.size - 1
+        while (failureIndex >= 0) {
+            let display = retainedCopiedFailureDisplays113[failureIndex]
+            if (display.matchesUiCard(item.id)) { return Some<OwnedTuiCardDisplay113>(display) }
+            failureIndex-- }
+        Option<OwnedTuiCardDisplay113>.None
+    }
+    private func prepareOwnedCardDocument(item: UiCard, width: Int64, oldCopies: Int64, occurrence!: Int64 = 0): Bool {
+        let _ = width
+        match (retainedDisplayForCard(item)) {
+            case None => true
+            case Some(display) =>
+                let invoice = ownedTuiDocumentConstructionInvoice(ownedTuiCardRetainedBytes(item), oldCopies)
+                display.prepareCardRenderCopies113(0, invoice, occurrence).isOk() }
+    }
     private func renderTranscriptBodyDocument(
         item: UiCard,
         width: Int64,
@@ -5579,7 +5747,14 @@ class AgentScreen <: TerminalFrameProvider {
         history!: Bool = false
     ): Document {
         if (item.kind == UiCardKind.Assistant || item.kind == UiCardKind.Reasoning || item.kind == UiCardKind.User) {
-            return renderTranscriptCardDocument(item, width, theme)
+            let body = renderTranscriptCardDocument(item, width, theme,
+                occurrence167: if (history) { 1 } else { 0 })
+            if (history) {
+                match (body.retainedPayment) {
+                    case Some(payment) => if (!payment.prepareHistoryCopies(ownedTuiDocumentConstructionInvoice(
+                        ownedTuiDocumentTextBytes(body), 0))) { throw Exception("display.history_payment_required") }
+                    case None => () } }
+            return body
         }
         if (isApprovalRejectionToolCard(item)) {
             return Document([])
@@ -5590,11 +5765,24 @@ class AgentScreen <: TerminalFrameProvider {
         // the card revision and materializes the specialized renderer then.
         if (!history && (item.collapsed || (item.kind == UiCardKind.Approval && !approvalCardIsWaiting(item.state)))) {
             if (item.kind == UiCardKind.Tool && isShellToolCard(item)) {
-                return agentCardBodyDocument(item, width, theme)
+                if (!prepareOwnedCardDocument(item, width, 0)) { throw Exception("display.document_payment_required") }
+                let body = agentCardBodyDocument(item, width, theme)
+                match (retainedDisplayForCard(item)) {
+                    case Some(display) => return Document(body.lines, retainedPayment: Some(OwnedTuiDocumentPayment(display)))
+                    case None => return body }
             }
             return Document([])
         }
+        let occurrence: Int64 = if (history) { 1 } else { 0 }
+        if (!prepareOwnedCardDocument(item, width, 0, occurrence: occurrence)) { throw Exception("display.document_payment_required") }
         var body = agentCardBodyDocument(item, width, theme, archive: history)
+        match (retainedDisplayForCard(item)) {
+            case Some(display) =>
+                let payment = OwnedTuiDocumentPayment(display, occurrence: occurrence)
+                body = Document(body.lines, retainedPayment: Some(payment))
+                if (history && !payment.prepareHistoryCopies(ownedTuiDocumentConstructionInvoice(
+                    ownedTuiDocumentTextBytes(body), 0))) { throw Exception("display.history_payment_required") }
+            case None => () }
         if (item.kind == UiCardKind.Approval && approvalCardIsWaiting(item.state)) {
             let lines = ArrayList<DocumentLine>()
             for (line in body.lines) {
@@ -5630,7 +5818,7 @@ class AgentScreen <: TerminalFrameProvider {
                 lines.add(
                     DocumentLine(DocumentLineKind.Paragraph, "  e  Inspect full content", style: Style(fg: theme.muted)))
             }
-            body = Document(lines.toArray())
+            body = Document(lines.toArray(), retainedPayment: body.retainedPayment)
         }
         body
     }
@@ -5834,9 +6022,9 @@ class AgentScreen <: TerminalFrameProvider {
             }
             case None => false
         }
-        let editorFullscreen = todos.isEditing() || (ask.editorActive() && !ask.inlineEditorActive())
+        let editorFullscreen = todos.editorVisible(ui.approvalId.isSome()) || (ask.editorActive() && !ask.inlineEditorActive())
         surfaces.presentationMode(
-            fullscreen: agentHubActive || planReview.isActive() || modalFullscreen || editorFullscreen
+            fullscreen: agentHubActive || pluginViewForeground() || modalFullscreen || editorFullscreen
         )
     }
     private func mouseCaptureFor(mode: PresentationMode): Bool {
@@ -5852,6 +6040,173 @@ class AgentScreen <: TerminalFrameProvider {
     }
 
 
+    public func wantsRetainedDisplayProducerRetirement(): Bool { (backend as OwnedAgentTuiBackend).isSome() }
+    public func beginRetainedDisplayProducerClosing(): Unit {
+        mailbox.beginClosing()
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => owned.beginOwnedToolDisplayProducerClosing()
+            case None => () }
+    }
+    public func noteAsyncTaskReferencesRetired(retired: RetiredAsyncTaskReferences): Unit {
+        // This proves only actual runtime callable/notifier/result fields.
+        // Initial task metadata/capacity and inherited prompt/status/session
+        // data custody remain separately OPEN; no bank payment is inferred.
+        asyncTaskReferencesRetired = retired.callableReferencesRetired() &&
+            retired.notifierAndRuntimeResultReferencesRetired() }
+    func bindActualNativeOutput(output: DirectStdOutDisplayOutput): Unit {
+        if (actualNativeOutput.isSome()) { throw Exception("display.native_output_already_bound") }
+        actualNativeOutput = Some(output)
+    }
+    func noteActualNativeProducerFramesEnded(): Unit { actualNativeProducerFramesEnded = true }
+    func actualRegistryProducer167(): ?Object { backend as Object }
+    func actualRetiredFailureProducer113(): ?OwnedFailureAgentTuiBackend113 {
+        if (!actualNativeProducerFramesEnded || actualNativeOutput.isNone() ||
+            !terminalInternalFrameReferencesRetired || !windowInternalReferencesRetired || !asyncTaskReferencesRetired) {
+            return Option<OwnedFailureAgentTuiBackend113>.None }
+        backend as OwnedFailureAgentTuiBackend113
+    }
+    func retireActualNativeOutputAndScreenReferences(): Bool {
+        if (!actualNativeProducerFramesEnded || actualNativeOutput.isNone() ||
+              !terminalInternalFrameReferencesRetired || !windowInternalReferencesRetired || !asyncTaskReferencesRetired) { return false }
+        match (backend as OwnedFailureAgentTuiBackend113) {
+            case Some(actual) => match (RetiredOwnedTuiFailureProducerFrames113.retire(this)) {
+                case None => return false
+                case Some(retired) => if (actual.discardOwnedFailureInputsAfterProducerRetirement113(retired).isError()) {
+                    return false } }
+            case None => () }
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => if (!owned.awaitOwnedToolDisplayProducerReferencesRetired()) { return false }
+            case None => return false }
+        // Flush only the exact direct output used by the actual native
+        // producer, after all its App/Terminal/ANSI/trace method frames ended.
+        match (RetiredDirectStdOutDisplayReferences.retire(actualNativeOutput.getOrThrow())) {
+            case Some(output) => if (!output.physicallyFlushed() || !output.acknowledges(actualNativeOutput.getOrThrow())) { return false }
+            case None => return false }
+        if (!pluginView.tryRetireRetainedReferences()) { return false }
+        clearActualCopiedScreenReferencesFrame()
+        // Clear the actual inherited Screen fields in their own helper. An
+        // external prompt/node/backing/callback remains its own live owner;
+        // no early task payment or global bank retirement follows from this.
+        clearInheritedScreenFieldReferencesFrame()
+        actualNativeOutput = None; true
+    }
+    private func clearInheritedScreenFieldReferencesFrame(): Unit {
+        // This production call occurs only after real native App producer,
+        // runtime callable/notifier, backend callback, Window/Terminal and
+        // exact bound StdOut retirement guards. Clear the REAL fields; do not
+        // clear a parallel holder while these original fields stay alive.
+        title = ""; initialPrompt = ""; workspaceLabel = ""
+        status = ""; taskLabel = ""; turnOwnerSubagentId = ""
+        queuedPrompts = ArrayList<QueuedPrompt>()
+        queueWithdrawalLock.lock()
+        try { completedQueueWithdrawals = ArrayList<CompletedQueueWithdrawal>(); withdrawalInFlightId = "" }
+        finally { queueWithdrawalLock.unlock() }
+        runningSubagentIds = ArrayList<String>()
+        treeNodes = []; sessionNodes = []; visibleSessionNodes = []
+        sessionFilter = ""; sessionInput = ""; sessionMode = ""
+        subagentItems = []; focusedSubagentId = ""; focusedConversationLabel = ""
+        documentTitle = ""; documentBody = ""; customThemeDefinitions = []
+        themeName = ""; modelLabel = ""
+        approvalSessionLabel = ""; approvalInspectTitle = ""
+        performanceBurstInitialVisibleSignature = ""
+        working = false; mainWorking = false; initialSubmitted = true
+        // Backend/session subscribers, the caller's containers/Strings, SDK
+        // task metadata and the separate performance trace are outside this
+        // field-only retirement. Their references/payment remain OPEN.
+    }
+
+    // Source control only: exercise the same REAL private field helper and
+    // retain old backing/node aliases in this caller frame. This returns no
+    // private Screen/transport receipt, payment grant or global lifetime ACK.
+    func observeInheritedFieldClearWithoutReceipt(queued: QueuedPrompt,
+        withdrawal: CompletedQueueWithdrawal, nodes: Array<TuiSessionNode>,
+        agents: Array<TuiSubagentInfo>, pluginDocument: String,
+        themes: Array<TuiThemeDefinition>): Bool {
+        queuedPrompts.add(queued); completedQueueWithdrawals.add(withdrawal)
+        runningSubagentIds.add(agents[0].id)
+        let oldQueueBacking = queuedPrompts
+        let oldWithdrawalBacking = completedQueueWithdrawals
+        let oldRunningBacking = runningSubagentIds
+        taskLabel = queued.text; status = withdrawal.id; turnOwnerSubagentId = agents[0].id
+        withdrawalInFlightId = withdrawal.id
+        treeNodes = nodes; sessionNodes = nodes; visibleSessionNodes = nodes
+        sessionFilter = nodes[0].name; sessionInput = nodes[0].summary; sessionMode = nodes[0].workMode
+        subagentItems = agents; focusedSubagentId = agents[0].id; focusedConversationLabel = agents[0].task
+        documentTitle = "Plugins"; documentBody = pluginDocument; customThemeDefinitions = themes
+        themeName = themes[0].name; modelLabel = nodes[0].model
+        approvalSessionLabel = queued.text; approvalInspectTitle = withdrawal.id
+        performanceBurstInitialVisibleSignature = queued.text
+        clearInheritedScreenFieldReferencesFrame()
+        let realFieldsEmpty = title == "" && initialPrompt == "" && workspaceLabel == "" &&
+            status == "" && taskLabel == "" && turnOwnerSubagentId == "" &&
+            queuedPrompts.isEmpty() && completedQueueWithdrawals.isEmpty() && runningSubagentIds.isEmpty() &&
+            withdrawalInFlightId == "" && treeNodes.size == 0 && sessionNodes.size == 0 && visibleSessionNodes.size == 0 &&
+            sessionFilter == "" && sessionInput == "" && sessionMode == "" && subagentItems.size == 0 &&
+            focusedSubagentId == "" && focusedConversationLabel == "" && documentTitle == "" && documentBody == "" &&
+            customThemeDefinitions.size == 0 && themeName == "" && modelLabel == "" &&
+            approvalSessionLabel == "" && approvalInspectTitle == "" && performanceBurstInitialVisibleSignature == ""
+        // Actual old ArrayList backings still own exact external data here.
+        // Replacing Screen fields must not mutate those independent owners.
+        realFieldsEmpty && oldQueueBacking.size == 1 && oldQueueBacking[0].text == queued.text &&
+            oldWithdrawalBacking.size == 1 && oldWithdrawalBacking[0].id == withdrawal.id &&
+            oldRunningBacking.size == 1 && oldRunningBacking[0] == agents[0].id
+    }
+
+    private func clearActualCopiedScreenReferencesFrame(): Unit {
+        mailbox.clearAfterProducerRetirement()
+        match (virtualTranscriptSource) { case Some(source) => source.retireOwnedReferences(); case None => () }
+        match (virtualTranscriptView) { case Some(view) => view.retireRetainedReferences(); case None => () }
+        match (presentationAdapter) { case Some(adapter) => adapter.retireRetainedReferences(); case None => () }
+        virtualTranscriptSource = None; virtualTranscriptView = None; presentationAdapter = None
+        ui.cards.clear(); ui.cardLookupId = ""; ui.approvalId = None; ui = UiSnapshot()
+        activeOwnedToolDisplay = None; retainedCopiedToolDisplays = ArrayList<OwnedTuiToolDisplay>()
+        retainedCopiedFailureDisplays113 = ArrayList<OwnedTuiFailureDisplay113>()
+        retainedRegistryDisplays167 = ArrayList<OwnedTuiRegistryResponseDisplay167>()
+        activeRegistryDocument167 = None
+        toolBindings = ArrayList<ToolCardBinding>(); transcriptRanges = ArrayList<CardScreenRange>()
+        markdownCache = HashMap<String, MarkdownCacheEntry>()
+        activeToolCardId = ""; activeToolCallId = ""; activeToolArguments = ""; activeToolStartedAt = None
+        focusedCardId = ""; approvalToolCardId = ""; approvalInspectBody = ""; approvalInspectTitle = ""
+        documentTitle = ""; documentBody = ""; documentModalCacheKey = ""; documentModalCache = Document([])
+        modal = None; modalItems = []; setupDraft = None
+        pluginView = PluginViewController()
+        ask = AskController(); todos = TodoController(); composer = Composer(slashHints: productSlashHints())
+        attemptProjection = AttemptProjection()
+    }
+    func retireCopiedRegistry(retired: RetiredOwnedTuiScreenReferences): Unit {
+        match (backend as OwnedAgentTuiBackend) {
+            case Some(owned) => match (owned.retireOwnedToolDisplayRegistry(retired)) {
+                case Result.Err(error) => throw Exception(error.describe())
+                case Result.Ok(_) => () }
+            case None => () }
+    }
+    public func noteInternalDisplayFrameReferencesRetired(retired: RetiredInternalDisplayFrameReferences): Unit {
+        terminalInternalFrameReferencesRetired = retired.internalReferencesRetired()
+        match (RetiredDocumentWindowReferences.retire(documentWindowCache)) {
+            case Some(window) => windowInternalReferencesRetired = window.internalReferencesRetired()
+            case None => () }
+        // transport ACK is deliberately false. Neither this internal witness
+        // nor clearing a raster closes mailbox/cards/source/history/renderer
+        // or App registration owners. They remain actually paid.
+    }
+    public func prepareRetainedFrameCopies(size: Rect): Bool { prepareRetainedFrameCopies(size, 0) }
+    public func prepareRetainedFrameCopies(size: Rect, previousCopies: Int64): Bool {
+        if (retainedCopiedToolDisplays.isEmpty() && retainedCopiedFailureDisplays113.isEmpty() && retainedRegistryDisplays167.isEmpty()) { return true }
+        var bytes: Int64 = 0
+        // The actual immutable history snapshot retains old tool cards for
+        // replay. Account all owned card data, not merely visible glyphs.
+        for (card in ui.cards where retainedDisplayForCard(card).isSome()) {
+            bytes = ownedTuiInvoiceAdd(bytes, ownedTuiCardRetainedBytes(card)) }
+        if (activeRegistryDocument167.isSome()) {
+            bytes = ownedTuiInvoiceAdd(bytes, ownedTuiInvoiceAdd(documentTitle.size, documentBody.size)) }
+        let invoice = ownedTuiInvoiceAdd(previousCopies,
+            ownedTuiFrameConstructionInvoice(size.width, size.height, bytes))
+        if (!retainedCopiedToolDisplays.isEmpty()) {
+            return retainedCopiedToolDisplays[retainedCopiedToolDisplays.size - 1].prepareRenderCopies(4, invoice).isOk() }
+        if (!retainedCopiedFailureDisplays113.isEmpty()) {
+            return retainedCopiedFailureDisplays113[retainedCopiedFailureDisplays113.size - 1].prepareCardRenderCopies113(4, invoice, 0).isOk() }
+        retainedRegistryDisplays167[retainedRegistryDisplays167.size - 1].prepareCardRenderCopies113(4, invoice, 0).isOk()
+    }
     public func prepareFrame(size: Rect): PresentationFrame {
         let mode = presentationMode()
         let mouseCapture = mouseCaptureFor(mode)
@@ -5939,10 +6294,10 @@ class AgentScreen <: TerminalFrameProvider {
                 Style(bg: theme.background)
             )
         }
-        if (planReview.isActive()) {
+        if (pluginViewForeground()) {
             let surface = surfaces.fullscreenArea(margin: 1)
-            surfaces.activate(SurfaceOwner.PlanReview, SurfacePlacement.Fullscreen, surface)
-            surfaces.focus(SurfaceOwner.PlanReview)
+            surfaces.activate(SurfaceOwner.PluginView, SurfacePlacement.Fullscreen, surface)
+            surfaces.focus(SurfaceOwner.PluginView)
             activeModalArea = surface
             canvas.fillRect(surface, Style(bg: theme.background))
             match (performanceTrace) {
@@ -5952,7 +6307,7 @@ class AgentScreen <: TerminalFrameProvider {
                     trace.overlayStarted()
                 case None => ()
             }
-            planReview.render(frame, theme, terminalUnicode, area: Some(surface))
+            pluginView.render(frame, theme, terminalUnicode, area: Some(surface))
             match (performanceTrace) {
                 case Some(trace) =>
                     trace.overlayCompleted()
@@ -5973,7 +6328,7 @@ class AgentScreen <: TerminalFrameProvider {
             renderAgentHub(canvas, surface, theme)
             return
         }
-        if (todos.isEditing()) {
+        if (todos.editorVisible(ui.approvalId.isSome())) {
             let surface = surfaces.fullscreenArea(margin: 1)
             surfaces.activate(SurfaceOwner.Todo, SurfacePlacement.Fullscreen, surface)
             surfaces.focus(SurfaceOwner.Todo)
@@ -6448,6 +6803,14 @@ class AgentScreen <: TerminalFrameProvider {
                         sessionInput
                     )
                 } else if (isDocument) {
+                    match (activeRegistryDocument167) {
+                        case Some(display) =>
+                            let invoice = ownedTuiDocumentConstructionInvoice(
+                                ownedTuiInvoiceAdd(documentTitle.size, documentBody.size),
+                                ownedTuiDocumentTextBytes(documentModalCache))
+                            if (!display.prepareCardRenderCopies113(0, invoice, 3).isOk()) {
+                                throw Exception("display.registry_document_payment_required") }
+                        case None => () }
                     let key = documentRevision.toString()
                     if (key != documentModalCacheKey) {
                         documentModalCacheKey = key
@@ -6456,7 +6819,10 @@ class AgentScreen <: TerminalFrameProvider {
                             theme: productMarkdownTheme(theme)
                         )
                     }
-                    documentModalCache
+                    match (activeRegistryDocument167) {
+                        case Some(display) => Document(documentModalCache.lines,
+                            retainedPayment: Some(OwnedTuiDocumentPayment(display, occurrence: 3)))
+                        case None => documentModalCache }
                 } else {
                     modalBody(modalItems, modalSelected, theme)
                 }
@@ -6727,315 +7093,6 @@ class AgentScreen <: TerminalFrameProvider {
         terminalUnicode
     }
 
-    func planReviewInteractionObserved(): Bool {
-        let previousModal = modal
-        let previousItems = modalItems
-        let previousSelected = modalSelected
-        let previousTitle = documentTitle
-        let previousBody = documentBody
-        let previousScroll = documentScroll
-        let previousRevision = documentRevision
-        let previousPlanState = planReview.beginProbe()
-        let previousStatus = status
-        let previousViewportArea = viewportArea
-        let previousViewportHeight = viewportHeight
-        let previousActiveModalArea = activeModalArea
-        let previousMailboxChanged = mailboxChanged
-        let previousMailboxViewportRefresh = mailboxViewportRefresh
-        let previousWorking = working
-        let previousMainWorking = mainWorking
-        let previousTurnOwner = turnOwnerSubagentId
-        let previousUiWorking = ui.working
-        let previousWorkingElapsedMillis = workingElapsedMillis
-        let previousModalRefreshOnly = modalRefreshOnly
-
-        // This is a self-contained controller probe. Ask fixtures deliberately
-        // keep their real turn alive while waiting for input, but that state
-        // must not make Plan Review's edit interactions look busy.
-        working = false
-        mainWorking = false
-        UiReducer.reduce(ui, UiEvent.SetWorking(false))
-
-        var body = "Latest plan:\n\n# Goal\n\n"
-        for (index in 0..32) {
-            body += "- Step " + (index + 1).toString() + " · deterministic cached plan row\n"
-        }
-        body += "\n# Verification\n\nRun the TUI gate.\nEND-SENTINEL"
-        _ = applyTurnAction(TuiTurnAction.OpenPlanReview(body))
-        planReview.probeSetNavigation(2, PlanReviewFocus.Body, 1, 3)
-        planReview.probeAddAnnotation("Goal", "Step 1", "stale annotation")
-        let replacementBody = body + "\n\n# Replacement"
-        _ = planReview.open(replacementBody)
-        let resetState = planReview.probeSnapshot()
-        let newPlanStateReset = resetState.contentHash == planContentHash(replacementBody) &&
-            resetState.selected == 0 && resetState.focus == PlanReviewFocus.Actions &&
-            resetState.tocSelected == 0 && resetState.scroll == 0 && resetState.annotationCount == 0
-
-        planReview.probeSetNavigation(1, PlanReviewFocus.Body, 0, 2)
-        planReview.probeAddAnnotation("Goal", "Step 2", "keep annotation")
-        planReview.probeSetPending(false, true)
-        let updatedBody = body + "\n\nUpdated after review."
-        let updateResultAction = planReview.acceptTurnResult(
-            "plan updated",
-            TuiTurnAction.OpenPlanReview(updatedBody)
-        )
-        let preservedState = planReview.probeSnapshot()
-        let updateResultPreservedState = updateResultAction.isNone() &&
-            preservedState.contentHash == planContentHash(updatedBody) && preservedState.selected == 1 &&
-            preservedState.focus == PlanReviewFocus.Body && preservedState.scroll == 2 &&
-            preservedState.annotationCount == 1
-        _ = planReview.open(body)
-        status = planReview.statusText()
-        let openedState = planReview.probeSnapshot()
-        let opened = planReview.isActive() && openedState.contentHash == planContentHash(body) &&
-            openedState.selected == 0 && openedState.focus == PlanReviewFocus.Actions &&
-            status == "plan review · actions"
-        let resetDisplay = handleKeyDown(
-            KeyEvent(KeyCode.Char(r'l'), modifiers: KeyModifier(alt: true))
-        )
-        let resetCommandObserved = match (resetDisplay.command) {
-            case Command.ResetTerminal => true
-            case _ => false
-        }
-        let globalShortcutStatusSynced = resetCommandObserved && status == "terminal display reset" &&
-            planReview.statusText() == status
-        status = planReviewFocusStatus(planReview.probeSnapshot().focus)
-        _ = planReview.setStatusText(status)
-
-        let beforeRender = planReview.probeSnapshot()
-        let layoutsBefore = beforeRender.layoutCount
-        let parsesBefore = beforeRender.parseCount
-        let wideBackend = TestBackend(area: Rect(0, 0, 80, 24))
-        let wideTerminal = Terminal(wideBackend, renderMode: RenderMode.Diff)
-        _ = wideTerminal.draw({frame => render(frame)})
-        let wideVisual = wideBackend.snapshot()
-        let afterFirstRender = planReview.probeSnapshot()
-        let layoutsAfterFirst = afterFirstRender.layoutCount
-        let parsesAfterFirst = afterFirstRender.parseCount
-        let cachePrimed = afterFirstRender.cacheEntries == 1 && layoutsAfterFirst > layoutsBefore &&
-            parsesAfterFirst == parsesBefore + 1
-        let fullScreen = wideVisual.contains("Plan Review") &&
-            wideVisual.contains("Approve and execute · fresh context") &&
-            wideVisual.contains("Approve and compact context") &&
-            wideVisual.contains("Approve and keep context") && wideVisual.contains("Refine plan")
-
-        _ = wideTerminal.draw({frame => render(frame)})
-        let unchangedRenderState = planReview.probeSnapshot()
-        let unchangedFrameReused = unchangedRenderState.layoutCount == layoutsAfterFirst &&
-            unchangedRenderState.parseCount == parsesAfterFirst
-        let actionTopPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageUp), working))
-        let actionTopBoundary = !actionTopPage.renderRequested && planReview.probeSnapshot().scroll == 0
-        let downUpdate = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let downSelected = downUpdate.renderRequested && planReview.probeSnapshot().selected == 1
-        _ = wideTerminal.draw({frame => render(frame)})
-        let selectionRenderState = planReview.probeSnapshot()
-        let actionSelectionReused = selectionRenderState.layoutCount == layoutsAfterFirst &&
-            selectionRenderState.parseCount == parsesAfterFirst
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'j')), working))
-        let jSelected = planReview.probeSnapshot().selected == 2
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Up), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'k')), working))
-        let backAtFirst = planReview.probeSnapshot().selected == 0
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let wideBodyFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Body
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let wideTocFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Toc
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Enter), working))
-        _ = wideTerminal.draw({frame => render(frame)})
-        let tocJumpedToRenderedHeading = planReview.probeSnapshot().focus == PlanReviewFocus.Body &&
-            wideBackend.snapshot().contains("Verification")
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Home), working))
-        let bodyTopUp = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Up), working))
-        let bodyTopPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageUp), working))
-        let bodyTopBoundary = !bodyTopUp.renderRequested && !bodyTopPage.renderRequested &&
-            planReview.probeSnapshot().scroll == 0
-        let firstScroll = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let firstScrollChanged = firstScroll.renderRequested && planReview.probeSnapshot().scroll == 1
-        _ = wideTerminal.draw({frame => render(frame)})
-        let bodyScrollState = planReview.probeSnapshot()
-        let bodyScrollReused = bodyScrollState.layoutCount == layoutsAfterFirst &&
-            bodyScrollState.parseCount == parsesAfterFirst
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.End), working))
-        let bottom = planReview.probeSnapshot().scroll
-        _ = wideTerminal.draw({frame => render(frame)})
-        let endVisible = wideBackend.snapshot().contains("END-SENTINEL")
-        let bodyBottomDown = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Down), working))
-        let bodyBottomPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageDown), working))
-        let bodyBottomBoundary = !bodyBottomDown.renderRequested && !bodyBottomPage.renderRequested &&
-            planReview.probeSnapshot().scroll == bottom
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Right), working))
-        let actionBottomPage = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.PageDown), working))
-        let actionBottomBoundary = !actionBottomPage.renderRequested && planReview.probeSnapshot().scroll == bottom
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Home), working))
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Right), working))
-        let narrowBackend = TestBackend(area: Rect(0, 0, 60, 18))
-        let narrowTerminal = Terminal(narrowBackend, renderMode: RenderMode.Diff)
-        _ = narrowTerminal.draw({frame => render(frame)})
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let narrowBodyFocused = planReview.probeSnapshot().focus == PlanReviewFocus.Body
-        let narrowDocumentArea = planReview.probeSnapshot().documentArea
-        let mouseScroll = update(
-            Event.Mouse(
-                MouseEvent(
-                    MouseKind.Scroll,
-                    MouseButton.WheelDown,
-                    narrowDocumentArea.x,
-                    narrowDocumentArea.y
-                )
-            )
-        )
-        let mouseUsedPlanGeometry = mouseScroll.renderRequested && planReview.probeSnapshot().scroll > 0
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Tab), working))
-        let narrowSkippedHiddenToc = planReview.probeSnapshot().focus == PlanReviewFocus.Actions
-
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Char(r'e')), working))
-        let editorOpenedState = planReview.probeSnapshot()
-        let editOpened = editorOpenedState.mode == "edit" &&
-            editorOpenedState.editorValue == stripPlanReviewLabel(body)
-        planReview.probeSetEditor("edit", "")
-        _ = applyPlanReviewTransition(
-            planReview.updateKey(KeyEvent(KeyCode.Char(r's'), modifiers: KeyModifier(ctrl: true)), working)
-        )
-        _ = narrowTerminal.draw({frame => render(frame)})
-        let emptyEditErrorVisible = narrowBackend.snapshot().contains("plan must not be empty")
-        planReview.probeSetEditor("edit", stripPlanReviewLabel(body))
-        let editorBeforePaste = planReview.probeSnapshot().editorValue
-        let composerBeforePaste = composer.area.value
-        let pasted = "\n\n## Pasted section\n\nPASTE-SENTINEL"
-        let pasteUpdate = update(Event.Paste(pasted))
-        let pasteRouted = pasteUpdate.renderRequested &&
-            planReview.probeSnapshot().editorValue == editorBeforePaste + pasted && composer.area.value == composerBeforePaste
-        _ = applyPlanReviewTransition(planReview.updateKey(KeyEvent(KeyCode.Esc), working))
-        let editCancelledState = planReview.probeSnapshot()
-        let editCancelled = editCancelledState.mode == "" && planReview.isActive() &&
-            editCancelledState.contentHash == planContentHash(body)
-
-        planReview.probeSetEditor("edit", "pending draft")
-        planReview.probeSetPending(false, true)
-        let pendingKeyUpdate = planReview.updateKey(KeyEvent(KeyCode.Char(r'x')), false).update
-        let pendingPasteUpdate = planReview.paste("-mutated")
-        let updatePendingInputFrozen = !pendingKeyUpdate.renderRequested && !pendingPasteUpdate.renderRequested &&
-            planReview.probeSnapshot().editorValue == "pending draft"
-        planReview.probeSetPending(false, false)
-        planReview.probeSetEditor("", "pending draft")
-
-        planReview.probeSetNavigation(0, PlanReviewFocus.Actions, 0, planReview.probeSnapshot().scroll)
-        planReview.probeSetPending(true, false)
-        let pendingActionsArea = planReview.probeSnapshot().actionsArea
-        let pendingMouseUpdate = planReview.updateMouse(
-            MouseEvent(
-                MouseKind.Down,
-                MouseButton.Left,
-                pendingActionsArea.x,
-                pendingActionsArea.y + 2
-            )
-        )
-        let decisionPendingMouseFrozen = !pendingMouseUpdate.renderRequested && planReview.probeSnapshot().selected == 0
-        planReview.probeSetPending(false, false)
-
-        // Consumption is delivered before approved-plan execution finishes.
-        // A timer-driven mailbox refresh must retire the full-screen overlay
-        // immediately without stopping the still-running main turn.
-        planReview.probeSetPending(true, false)
-        working = true
-        mainWorking = true
-        turnOwnerSubagentId = ""
-        UiReducer.reduce(ui, UiEvent.SetWorking(true))
-        mailbox.push(TuiAgentEvent.PlanReviewConsumed(planContentHash(body)))
-        let consumedUpdate = update(
-            Event.Timer(
-                TimerEvent(
-                    AGENT_STREAM_TIMER,
-                    elapsedMillis: 80
-                )
-            )
-        )
-        _ = narrowTerminal.draw({frame => render(frame)})
-        let consumedVisual = narrowBackend.snapshot()
-        let consumedBeforeResult = !planReview.isActive() && !planReview.hasPending() &&
-            status == "executing approved plan" && working && mainWorking &&
-            updateInvalidates(consumedUpdate, viewportArea) &&
-            !consumedVisual.contains("Approve and execute · fresh context") &&
-            !consumedVisual.contains("reviewing plan")
-
-        working = previousWorking
-        mainWorking = previousMainWorking
-        turnOwnerSubagentId = previousTurnOwner
-        workingElapsedMillis = previousWorkingElapsedMillis
-        modalRefreshOnly = previousModalRefreshOnly
-        UiReducer.reduce(ui, UiEvent.SetWorking(previousUiWorking))
-        _ = planReview.open(body)
-        status = planReview.statusText()
-
-        planReview.probeSetPending(true, false)
-        mailbox.complete(TuiTurnResult(
-            "",
-            "plan review failed: stale plan",
-            planReviewDisposition: TuiPlanReviewDisposition.Retain
-        ))
-        let failedDecisionAction = drainMailbox()
-        let failedDecisionState = planReview.probeSnapshot()
-        let failedDecisionPreserved = failedDecisionAction.isNone() && !failedDecisionState.decisionPending &&
-            planReview.isActive() && failedDecisionState.contentHash == planContentHash(body) &&
-            failedDecisionState.body == body
-
-        planReview.probeSetPending(true, false)
-        mailbox.complete(
-            TuiTurnResult(
-                "",
-                "error: fixture approved-plan execution failed",
-                planReviewDisposition: TuiPlanReviewDisposition.Consumed
-            )
-        )
-        let acceptedDecisionAction = drainMailbox()
-        match (acceptedDecisionAction) {
-            case Some(action) => _ = applyTurnAction(action)
-            case None => ()
-        }
-        let acceptedDecisionClosed = !planReview.isActive() && !planReview.probeSnapshot().decisionPending &&
-            status == "error: fixture approved-plan execution failed"
-
-        _ = openModal(TuiModalKind.Model, ["model-a", "model-b"])
-        _ = updateModal(KeyEvent(KeyCode.Char(r'j')))
-        let genericJSelected = modalSelected == 1
-        _ = updateModal(KeyEvent(KeyCode.Esc))
-        let genericClosed = modal.isNone()
-
-        modal = previousModal
-        modalItems = previousItems
-        modalSelected = previousSelected
-        documentTitle = previousTitle
-        documentBody = previousBody
-        documentScroll = previousScroll
-        documentRevision = previousRevision
-        planReview.restoreProbe(previousPlanState)
-        status = previousStatus
-        viewportArea = previousViewportArea
-        viewportHeight = previousViewportHeight
-        activeModalArea = previousActiveModalArea
-        mailboxChanged = previousMailboxChanged
-        mailboxViewportRefresh = previousMailboxViewportRefresh
-        working = previousWorking
-        mainWorking = previousMainWorking
-        turnOwnerSubagentId = previousTurnOwner
-        UiReducer.reduce(ui, UiEvent.SetWorking(previousUiWorking))
-
-        newPlanStateReset && updateResultPreservedState && opened && globalShortcutStatusSynced && fullScreen &&
-            cachePrimed &&
-            unchangedFrameReused && actionTopBoundary && downSelected &&
-            actionSelectionReused && jSelected && backAtFirst && wideBodyFocused && wideTocFocused &&
-            tocJumpedToRenderedHeading && bodyTopBoundary && firstScrollChanged && bodyScrollReused && endVisible &&
-            bodyBottomBoundary && actionBottomBoundary && narrowBodyFocused && mouseUsedPlanGeometry &&
-            narrowSkippedHiddenToc && editOpened && emptyEditErrorVisible && pasteRouted && editCancelled &&
-            updatePendingInputFrozen && decisionPendingMouseFrozen && consumedBeforeResult &&
-            failedDecisionPreserved && acceptedDecisionClosed && genericJSelected && genericClosed
-    }
 
     func composerHistoryNavigationObserved(): Bool {
         let previousValue = composer.area.value
@@ -9534,7 +9591,6 @@ class AgentScreen <: TerminalFrameProvider {
 
     func todoEditorMouseCaptureObserved(): Bool {
         let previousTodoState = todos.captureProbeState()
-        let previousPlanState = planReview.beginProbe()
         let previousArea = transcriptArea
         let previousTotal = transcriptTotalLines
         let previousVisible = transcriptVisibleLines
@@ -9544,8 +9600,6 @@ class AgentScreen <: TerminalFrameProvider {
         // Plan review owns mouse routing ahead of the Todo editor. Isolate the
         // probe from the screen's current modal state, then restore that state
         // exactly as the Ask editor isolation probe does below.
-        let _ = planReview.open("# Competing plan review\n")
-        planReview.close()
         let _ = todos.open(TuiTodoLoadResult(true, "- [ ] mouse capture\n", "fixture"))
         let frameArea = Rect(0, 0, 80, 24)
         todos.renderEditor(Frame(frameArea, Buffer(frameArea)), axyndraTheme())
@@ -9557,7 +9611,7 @@ class AgentScreen <: TerminalFrameProvider {
         let mouse = MouseEvent(MouseKind.Scroll, MouseButton.WheelUp, 8, 5)
 
         let interactive = handleInteractive(Event.Mouse(mouse))
-        let interactiveCaptured = !interactive.renderRequested && scrollOffset == 0 && todos.isEditing()
+        let interactiveCaptured = !interactive.renderRequested && scrollOffset == 0 && todos.editorVisible(ui.approvalId.isSome())
         let _ = update(Event.Mouse(mouse))
         // update() drains the asynchronous mailbox before routing interactive
         // input. A concurrently completed background action can therefore
@@ -9565,10 +9619,9 @@ class AgentScreen <: TerminalFrameProvider {
         // mouse event. Ownership is proven by the editor remaining active and
         // the underlying transcript not scrolling; renderRequested describes
         // the whole frame, not just the mouse route.
-        let directCaptured = scrollOffset == 0 && todos.isEditing()
+        let directCaptured = scrollOffset == 0 && todos.editorVisible(ui.approvalId.isSome())
 
         todos.restoreProbeState(previousTodoState)
-        planReview.restoreProbe(previousPlanState)
         transcriptArea = previousArea
         transcriptTotalLines = previousTotal
         transcriptVisibleLines = previousVisible
@@ -9579,7 +9632,6 @@ class AgentScreen <: TerminalFrameProvider {
 
     func askEditorIsolationObserved(): Bool {
         let previousAskState = ask.captureProbeState()
-        let previousPlanState = planReview.beginProbe()
         let previousTodoEditing = todos.suspendEditorForProbe()
         let previousUi = ui
         let previousStatus = status
@@ -9589,7 +9641,7 @@ class AgentScreen <: TerminalFrameProvider {
         let previousStart = transcriptStartLine
         let previousOffset = scrollOffset
 
-        planReview.close()
+        pluginView.close()
         ui = UiSnapshot()
         let request = TuiAskRequest(
             "ask-editor-isolation",
@@ -9638,7 +9690,6 @@ class AgentScreen <: TerminalFrameProvider {
             revisionAfterSave > revisionAfterType
 
         ask.restoreProbeState(previousAskState)
-        planReview.restoreProbe(previousPlanState)
         todos.restoreEditorForProbe(previousTodoEditing)
         ui = previousUi
         match (virtualTranscriptSource) {

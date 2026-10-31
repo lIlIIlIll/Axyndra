@@ -38,14 +38,21 @@ public func displayWidth(text: String): Int64 {
 public func displayWidth(text: String, options!: TextWidthOptions): Int64 {
     let bytes = unsafe { text.rawData() }
     if (isPrintableAscii(bytes)) { return bytes.size }
+    measureGraphemeWidthUpTo(text, Int64.Max, options)
+}
+
+// Cursor columns are clipped to the viewport; text after that column cannot
+// affect their result and must not delay the next actual input event.
+func measureGraphemeWidthUpTo(text: String, maximum: Int64, options: TextWidthOptions): Int64 {
+    if (maximum <= 0) { return 0 }
     var width: Int64 = 0
     var offset: Int64 = 0
-    while (offset < bytes.size) {
-        let next = nextGraphemeOffset(text, offset)
+    while (offset < text.size && width < maximum) {
+        let next = nextGraphemeOffsetAtRuneBoundary(text, offset)
         width += graphemeDisplayWidth(text[offset..next], options: options)
         offset = next
     }
-    width
+    min(width, maximum)
 }
 
 func displayWidthFast(text: String): Int64 {
@@ -97,7 +104,7 @@ public func graphemeClusters(text: String): Array<GraphemeCluster> {
     let clusters = ArrayList<GraphemeCluster>()
     var offset: Int64 = 0
     while (offset < text.size) {
-        let next = nextGraphemeOffset(text, offset)
+        let next = nextGraphemeOffsetAtRuneBoundary(text, offset)
         let cluster = text[offset..next]
         clusters.add(GraphemeCluster(cluster, offset, next, graphemeDisplayWidth(cluster)))
         offset = next
@@ -202,7 +209,7 @@ func appendCharacterWrappedLine(text: String, width: Int64, lines: ArrayList<Str
     var currentWidth: Int64 = 0
     var offset: Int64 = 0
     while (offset < text.size) {
-        let next = nextGraphemeOffset(text, offset)
+        let next = nextGraphemeOffsetAtRuneBoundary(text, offset)
         let part = text[offset..next]
         let partWidth = graphemeDisplayWidth(part)
         if (partWidth > 0 && currentWidth > 0 && currentWidth + partWidth > width) {
@@ -347,7 +354,7 @@ func truncate(text: String, maxWidth: Int64): String {
     var width: Int64 = 0
     var offset: Int64 = 0
     while (offset < bytes.size) {
-        let next = nextGraphemeOffset(text, offset)
+        let next = nextGraphemeOffsetAtRuneBoundary(text, offset)
         let part = text[offset..next]
         let w = graphemeDisplayWidth(part)
         if (width + w > maxWidth) { break }
@@ -382,7 +389,7 @@ public func previousGraphemeOffset(text: String, offset: Int64): Int64 {
     var prev: Int64 = 0
     while (pos < target) {
         prev = pos
-        pos = nextGraphemeOffset(text, pos)
+        pos = nextGraphemeOffsetAtRuneBoundary(text, pos)
     }
     prev
 }
@@ -392,7 +399,12 @@ func nextRuneOffset(text: String, offset: Int64): Int64 {
 }
 
 public func nextGraphemeOffset(text: String, offset: Int64): Int64 {
-    let target = clampToRuneBoundary(text, offset)
+    nextGraphemeOffsetAtRuneBoundary(text, clampToRuneBoundary(text, offset))
+}
+
+// Monotonic traversals already hold a rune boundary. Revalidating the complete
+// prefix at every cluster makes a long Unicode line quadratic.
+func nextGraphemeOffsetAtRuneBoundary(text: String, target: Int64): Int64 {
     if (target >= text.size) { return text.size }
     let bytes = unsafe { text.rawData() }
     // Two adjacent printable ASCII code points are always separated by the
@@ -420,7 +432,7 @@ public func nextGraphemeOffset(text: String, offset: Int64): Int64 {
     var indicConsonantSeen = sameIndicConjunctBreakClass(firstInCB, IndicConjunctBreakClass.Consonant)
     var indicLinkerSeen = false
     while (pos < text.size) {
-        let r = runeAt(text, pos)
+        let (r, runeBytes) = Rune.fromUtf8(bytes, pos)
         let code = UInt32(r)
         let currentClass = graphemeBreakClass(code)
         let currentInCB = indicConjunctBreakClass(code)
@@ -436,7 +448,7 @@ public func nextGraphemeOffset(text: String, offset: Int64): Int64 {
             break
         }
         let previousClass = prevClass
-        pos = nextRuneBoundary(text, pos)
+        pos += runeBytes
         if (sameGraphemeBreakClass(currentClass, GraphemeBreakClass.RegionalIndicator)) {
             regionalCount++
         } else {
@@ -589,7 +601,7 @@ func offsetAtLineColumn(text: String, line: Int64, column: Int64): Int64 {
     while (pos < bytes.size) {
         let (r, _) = Rune.fromUtf8(bytes, pos)
         if (r == r'\n') { return pos }
-        let next = nextGraphemeOffset(text, pos)
+        let next = nextGraphemeOffsetAtRuneBoundary(text, pos)
         let w = graphemeDisplayWidth(text[pos..next])
         if (width + w > column) { return pos }
         width += w

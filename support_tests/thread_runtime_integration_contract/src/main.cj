@@ -9,7 +9,6 @@ import std.sync.*
 import std.collection.*
 import agent_domain.*
 import agent_runtime.*
-import agent_skills.*
 import agent_store.*
 
 main(): Int64 {
@@ -30,7 +29,7 @@ main(): Int64 {
         let runtime = AgentThreadRuntime(
             coordinator, ContextProjector("projector", FixedEstimator()), { => 100 }
         )
-        let skills = SkillStackSnapshot([], [])
+        let skills = InvocationContextProjection()
 
         let first = runtime.startTurn(
             SemanticTurnId("turn-a"), RunId("run-a"), ItemId("user-a"),
@@ -48,9 +47,9 @@ main(): Int64 {
             durableLane.field("tool_set_id").getOrThrow().text == "tools",
             "Run launch atomically persists its immutable ModelLane snapshot")
         expect(modelLaneFromSnapshotValue(durableLane).modelId == "model-a" &&
-            skillStackFromSnapshotValue(decodeStoredValue(database.query(
+            contextSnapshotFromValue(decodeStoredValue(database.query(
                 "SELECT skill_snapshot FROM runs WHERE id='run-a'"
-            )[0].required(0))).active.isEmpty(),
+            )[0].required(0))).contributions().isEmpty(),
             "Run launch snapshots round-trip independently of live configuration")
         let call = runtime.commitResult(ResultEnvelope(
             ThreadId("thread"), SemanticTurnId("turn-a"), RunId("run-a"), first.epoch, 1,
@@ -63,13 +62,13 @@ main(): Int64 {
             )
         ))
         expect(isCommitted(call), "active Run commits its canonical ToolCall")
-        database.execute(
-            "INSERT INTO operations VALUES ('operation-a','run-a','call-a'," +
-                "'plan','capability','resource','read_only','safe',NULL,'executing',1)"
-        )
         let operationPlan = NormalizedOperationPlan(
             "read", objectValue([]), [Capability(CapabilityKind.WorkspaceRead)],
             OperationEffectClass.ReadOnly, OperationRetryDisposition.Safe, "binding-a"
+        )
+        database.execute(
+            "INSERT INTO operations VALUES ('operation-a','run-a','call-a'," +
+                sqliteText(runtimeContractEncodedPlan(operationPlan)) + ",'capability','resource','read_only','safe',NULL,'executing',1)"
         )
         let operation = runtime.resolveOperation(
             ItemId("result-a"), OperationId("operation-a"), CanonicalToolCallId("call-a"),
@@ -116,7 +115,7 @@ main(): Int64 {
         expect(durableRun.state == RunState.Completed &&
             durableRun.transitionSequence == 2 &&
             durableRun.lane.getOrThrow().modelId == "model-a" &&
-            durableRun.skills.getOrThrow().active.isEmpty() &&
+            durableRun.contextSnapshot.getOrThrow().contributions().isEmpty() &&
             durableRun.usage.field("input_tokens").getOrThrow().asNumberText() == "38" &&
             durableRun.usage.field("cost_micros").getOrThrow().unifiedKind == ValueKind.Null &&
             runtime.threadSnapshot().thread.revision == revisionBeforeLateUsage,
@@ -127,7 +126,9 @@ main(): Int64 {
             ThreadItemContent.UserMessage(textMessageParts("cancel")),
             lane("model-b"), skills
         ).value().getOrThrow()
-        let child = runtime.childCancellationToken().value().getOrThrow()
+        let child = runtime.childCancellationToken(
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(cancelledRun.epoch)
+        ).value().getOrThrow()
         runtime.ownTask("tool/process", spawn {
             while (!child.isCancelled()) { sleep(Duration.millisecond) }
         }).value().getOrThrow()
@@ -149,6 +150,62 @@ main(): Int64 {
             ThreadItemContent.UserMessage(textMessageParts("quarantine")),
             lane("model-c"), skills
         ).value().getOrThrow()
+        let beforeStaleFinish = runtime.threadSnapshot().thread.revision
+        let staleResolution = runtime.resolveOperation(
+            ItemId("late-operation-b"), OperationId("operation-b"), CanonicalToolCallId("call-b"),
+            operationPlan, OperationAttemptStage.Executing,
+            Result<ToolInvocationResult>.Ok(ToolInvocationResult.Completed(ToolResult(
+                "call-b", objectValue([ValueField("value", textValue("late"))])
+            ))),
+            "late-receipt-b", 101,
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(cancelledRun.epoch)
+        )
+        expect(staleResolution.isError() &&
+            staleResolution.error().getOrThrow().code == "runtime.run_stale",
+            "a late Operation result cannot be attributed to the subsequent Run")
+        let staleToken = runtime.childCancellationToken(
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(cancelledRun.epoch)
+        )
+        let staleTokenEpoch = runtime.childCancellationToken(
+            expectedRunId: Some(current.runId), expectedEpoch: Some(cancelledRun.epoch)
+        )
+        let staleTokenRun = runtime.childCancellationToken(
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(current.epoch)
+        )
+        for (rejected in [staleToken, staleTokenEpoch, staleTokenRun]) {
+            expect(rejected.isError() && rejected.error().getOrThrow().code == "runtime.run_stale" &&
+                rejected.error().getOrThrow().kind == AgentErrorKind.Conflict,
+                "a stale executor cannot acquire the newer Run's cancellation domain")
+        }
+        let currentChild = runtime.childCancellationToken(
+            expectedRunId: Some(current.runId), expectedEpoch: Some(current.epoch)
+        ).value().getOrThrow()
+        expect(child.isCancelled() && !currentChild.isCancelled(),
+            "bound cancellation propagates within its Run and never leaks into the next Run")
+        let staleSettlement = runtime.finish(
+            RunState.Completed, 1000,
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(cancelledRun.epoch)
+        )
+        let staleEpochSettlement = runtime.finish(
+            RunState.Failed, 1000,
+            expectedRunId: Some(current.runId), expectedEpoch: Some(cancelledRun.epoch)
+        )
+        let staleRunSettlement = runtime.finish(
+            RunState.Completed, 1000,
+            expectedRunId: Some(cancelledRun.runId), expectedEpoch: Some(current.epoch)
+        )
+        for (rejected in [staleSettlement, staleEpochSettlement, staleRunSettlement]) {
+            expect(rejected.isError() && rejected.error().getOrThrow().code == "runtime.run_stale" &&
+                rejected.error().getOrThrow().kind == AgentErrorKind.Conflict,
+                "stale completion validates both Run and epoch before entering settlement")
+        }
+        let stillActive = runtime.activeRun().getOrThrow()
+        expect(stillActive.runId.value == current.runId.value && stillActive.epoch == current.epoch &&
+            stillActive.state == RunState.Running &&
+            runtime.threadSnapshot().thread.revision == beforeStaleFinish &&
+            database.query("SELECT state FROM runs WHERE id='run-c'")[0].required(0) == "running" &&
+            journalStates(database, "run-c") == ["created>running"],
+            "late settlement from a cancelled Run leaves the newer Run and durable state unchanged")
         let stale = runtime.commitResult(ResultEnvelope(
             ThreadId("thread"), SemanticTurnId("turn-b"), RunId("run-b"),
             cancelledRun.epoch, 1,
@@ -168,7 +225,10 @@ main(): Int64 {
             while (!release.load()) { sleep(Duration.millisecond) }
         }
         runtime.ownTask("mcp/ambiguous", stubborn).value().getOrThrow()
-        let quarantined = runtime.finish(RunState.Completed, 1).value().getOrThrow()
+        let quarantined = runtime.finish(
+            RunState.Completed, 1,
+            expectedRunId: Some(current.runId), expectedEpoch: Some(current.epoch)
+        ).value().getOrThrow()
         expect(quarantined.joined.quarantinedCount() == 1 &&
             quarantined.run.state == RunState.RecoveryRequired &&
             database.query("SELECT state FROM runs WHERE id='run-c'")[0].required(0) == "recovery_required" &&
@@ -196,14 +256,14 @@ main(): Int64 {
                 ItemProvenance("model", runId: Some(RunId("run-d")))
             )
         ))), "unknown-effect fixture commits its ToolCall")
-        database.execute(
-            "INSERT INTO operations VALUES ('operation-d','run-d','call-d'," +
-                "'plan','capability','resource','workspace_mutation','never',NULL,'executing',1)"
-        )
         let unknownPlan = NormalizedOperationPlan(
             "write", objectValue([]), [Capability(CapabilityKind.WorkspaceWrite)],
             OperationEffectClass.WorkspaceMutation, OperationRetryDisposition.Never,
             "binding-d"
+        )
+        database.execute(
+            "INSERT INTO operations VALUES ('operation-d','run-d','call-d'," +
+                sqliteText(runtimeContractEncodedPlan(unknownPlan)) + ",'capability','resource','workspace_mutation','never',NULL,'executing',1)"
         )
         let unknown = runtime.resolveOperation(
             ItemId("result-d"), OperationId("operation-d"), CanonicalToolCallId("call-d"),
@@ -260,7 +320,7 @@ func schedulerPermutationContract(database: SqliteDatabase): Unit {
             RunId("permutation-run-a-" + suffix),
             ItemId("permutation-user-a-" + suffix),
             ThreadItemContent.UserMessage(textMessageParts("first")),
-            lane("permutation-model-a"), SkillStackSnapshot([], [])
+            lane("permutation-model-a"), InvocationContextProjection()
         ).value().getOrThrow()
         runtime.cancel(1000).value().getOrThrow()
         let second = runtime.startTurn(
@@ -268,7 +328,7 @@ func schedulerPermutationContract(database: SqliteDatabase): Unit {
             RunId("permutation-run-b-" + suffix),
             ItemId("permutation-user-b-" + suffix),
             ThreadItemContent.UserMessage(textMessageParts("second")),
-            lane("permutation-model-b"), SkillStackSnapshot([], [])
+            lane("permutation-model-b"), InvocationContextProjection()
         ).value().getOrThrow()
 
         let order = shuffledEventOrder(seed)
@@ -416,7 +476,7 @@ func externalInputCommitContract(database: SqliteDatabase): Unit {
         SemanticTurnId("external-live-turn"), RunId("external-live-run"),
         ItemId("external-live-user"),
         ThreadItemContent.UserMessage(textMessageParts("continue")),
-        lane("external-model"), SkillStackSnapshot([], [])
+        lane("external-model"), InvocationContextProjection()
     ).value().getOrThrow()
     expect(runtime.appendExternalUserTextOnce(
         "receipt-b", "live async completed", source: "async_result", createdAtMillis: 73
@@ -441,7 +501,7 @@ func modelResultBatchContract(database: SqliteDatabase): Unit {
     let active = runtime.startTurn(
         SemanticTurnId("batch-turn"), RunId("batch-run"), ItemId("batch-user"),
         ThreadItemContent.UserMessage(textMessageParts("batch")),
-        lane("batch-model"), SkillStackSnapshot([], [])
+        lane("batch-model"), InvocationContextProjection()
     ).value().getOrThrow()
     let committed = runtime.commitBatch(ResultBatchEnvelope(
         ThreadId("batch-thread"), SemanticTurnId("batch-turn"), RunId("batch-run"),
@@ -486,7 +546,7 @@ func modelResultBatchContract(database: SqliteDatabase): Unit {
         SemanticTurnId("batch-fail-turn"), RunId("batch-fail-run"),
         ItemId("batch-fail-user"),
         ThreadItemContent.UserMessage(textMessageParts("batch fail")),
-        lane("batch-model"), SkillStackSnapshot([], [])
+        lane("batch-model"), InvocationContextProjection()
     ).value().getOrThrow()
     database.execute(
         "CREATE TRIGGER reject_batch_item BEFORE INSERT ON items " +
@@ -535,7 +595,7 @@ func registryOwnershipContract(database: SqliteDatabase): Unit {
         SemanticTurnId("registry-turn"), RunId("registry-run"),
         ItemId("registry-user"),
         ThreadItemContent.UserMessage(textMessageParts("owned")),
-        lane("registry-model"), SkillStackSnapshot([], [])
+        lane("registry-model"), InvocationContextProjection()
     ).value().getOrThrow()
     let second = registry.acquire(ThreadId("registry-thread"), "workspace")
         .value().getOrThrow()
@@ -544,7 +604,7 @@ func registryOwnershipContract(database: SqliteDatabase): Unit {
             SemanticTurnId("parallel-turn"), RunId("parallel-run"),
             ItemId("parallel-user"),
             ThreadItemContent.UserMessage(textMessageParts("parallel")),
-            lane("parallel-model"), SkillStackSnapshot([], [])
+            lane("parallel-model"), InvocationContextProjection()
         ).isError(),
         "registry returns one mutable owner and rejects a parallel semantic Turn")
     expect(registry.discardInactive(ThreadId("registry-thread")).isError() &&
@@ -601,6 +661,37 @@ func journalStates(database: SqliteDatabase, runId: String): Array<String> {
     states.toArray()
 }
 
+// These coordinator assertions deliberately insert executing rows directly.
+// Obtain their actual plan bytes from public Store preparation in a separate
+// database, preserving the original tested Thread revision and Item sequence.
+func runtimeContractEncodedPlan(plan: NormalizedOperationPlan): String {
+    let root = Directory.createTemp("/tmp").toString()
+    let database = SqliteDatabase(root + "/plan.db")
+    try {
+        let sink = SqliteThreadCommitSink(database)
+        let thread = ThreadId("codec-thread"); let run = RunId("codec-run")
+        let turn = SemanticTurnId("codec-turn"); let operation = OperationId("codec-operation")
+        let runtime = AgentThreadRuntime(ThreadCoordinator(sink.createThread(thread, "workspace"), sink),
+            ContextProjector("codec-projector", FixedEstimator()), { => 1 })
+        let active = runtime.startTurn(turn, run, ItemId("codec-user"),
+            ThreadItemContent.UserMessage(textMessageParts("actual plan codec")), lane("codec-model"),
+            InvocationContextProjection()).value().getOrThrow()
+        expect(isCommitted(runtime.commitResult(ResultEnvelope(thread, turn, run, active.epoch, 1,
+            ThreadItemDraft(ItemId("codec-call"), ThreadItemContent.ToolCall(CanonicalToolCallId("codec-call"),
+                plan.toolName, plan.canonicalArguments), ItemProvenance("direct_tool", runId: Some(run),
+                    operationId: Some(operation)))))), "plan codec fixture commits a real Direct ToolCall")
+        let source = runtime.attestDirectToolCall(ItemId("codec-call"), operation, run, active.epoch).value().getOrThrow()
+        let store = DurableOperationStore(database)
+        store.prepareDirectOperation(source, plan).value().getOrThrow()
+        let loaded = store.loadPlan(operation, run).value().getOrThrow()
+        expect(loaded.toolName == plan.toolName && loaded.effectClass == plan.effectClass &&
+            loaded.retryDisposition == plan.retryDisposition && loaded.bindingDigest == plan.bindingDigest &&
+            canonicalAgentValue(loaded.canonicalArguments) == canonicalAgentValue(plan.canonicalArguments),
+            "public codec round trip preserves the exact original operation semantics")
+        database.query("SELECT normalized_plan FROM operations WHERE id=?", [SqlParameter.Text(operation.value)])[0].required(0)
+    } finally { database.close(); remove(root, recursive: true) }
+}
+
 func isCommitted(decision: SemanticCommitDecision): Bool {
     match (decision) {
         case SemanticCommitDecision.Committed(_, _) => true
@@ -637,7 +728,7 @@ func settlementReentryContract(): Unit {
         )
         runtime.startTurn(SemanticTurnId("turn"), RunId("run"), ItemId("user"),
             ThreadItemContent.UserMessage(textMessageParts("join")), lane("model"),
-            SkillStackSnapshot([], [])).value().getOrThrow()
+            InvocationContextProjection()).value().getOrThrow()
         var negativeRejected = false
         try {
             let _ = if (cancel) { runtime.cancel(-1) } else { runtime.finish(RunState.Completed, -1) }
@@ -680,7 +771,7 @@ func rejectedSettlementContract(): Unit {
     )
     let active = runtime.startTurn(SemanticTurnId("turn"), RunId("run"), ItemId("user"),
         ThreadItemContent.UserMessage(textMessageParts("pending tool")), lane("model"),
-        SkillStackSnapshot([], [])).value().getOrThrow()
+        InvocationContextProjection()).value().getOrThrow()
     let _ = runtime.commitResult(ResultEnvelope(ThreadId("rejected-settlement"),
         SemanticTurnId("turn"), RunId("run"), active.epoch, 1,
         ThreadItemDraft(ItemId("call"), ThreadItemContent.ToolCall(

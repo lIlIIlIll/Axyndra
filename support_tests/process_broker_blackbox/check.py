@@ -1,34 +1,107 @@
 #!/usr/bin/env python3
-"""Real-process contract for the agent_app Unix-domain process broker."""
+"""Real Workflow tools CLI contract for the canonical Unix-domain process broker."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import hashlib
 import shutil
 import signal
 import socket
 import stat
 import subprocess
 import sys
+import sqlite3
 import tempfile
 import time
+import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from support_tests.minimal_host_contract.check import stored_value
+
 
 class BrokerScope:
+    temp_parent = Path.home() / ".cache/agent-tmp"
+    workflow_package: Path
+
     def __init__(self, candidate: Path, label: str) -> None:
         self.candidate = candidate
-        self.root = Path(tempfile.mkdtemp(prefix=f"pb-{label}-", dir="/tmp"))
+        self.temp_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.root = Path(tempfile.mkdtemp(prefix="", dir=self.temp_parent))
         self.workspace = self.root / "w"
-        self.state = self.root / "s"
+        self.home = self.root
+        self.state = self.home / "sessions"
         self.workspace.mkdir()
-        self.state.mkdir()
+        self.state.mkdir(parents=True)
+        self.evidence = self.root / "evidence"
+        self.evidence.mkdir()
+        keep = {"PATH", "LD_LIBRARY_PATH", "LANG", "LC_ALL", "HOME", "TMPDIR", "TMP", "TEMP",
+                "XDG_RUNTIME_DIR", "CANGJIE_HOME", "CANGJIE_ROOT", "CANGJIE_PATH",
+                "CANGJIE_SDK_ROOT", "CANGJIE_STDX_PATH", "AXYNDRA_SDK_ROOT", "AXYNDRA_STDX_ROOT",
+                "AXYNDRA_NATIVE_ROOT", "AXYNDRA_NETWORK_BRIDGE", "AXYNDRA_CLANG_RUNTIME_PATH",
+                "SSL_CERT_FILE", "SSL_CERT_DIR"}
+        self.environment = {key: value for key, value in os.environ.items() if key in keep}
+        self.environment["AXYNDRA_HOME"] = str(self.home)
         self.daemons: set[str] = set()
         self.identities: dict[int, str] = {}
+        self.calls: list[dict[str, Any]] = []
+        self.counter = 0
+        self.lock = threading.Lock()
+        paths = self.paths()
+        require(len(os.fsencode(paths["socketPath"])) <= 100, "fixture path exceeds the product's portable Unix socket bound")
+        self.install_workflow(label)
+
+    def public_command(self, label: str, arguments: list[str], timeout: float = 15.0):
+        with self.lock:
+            self.counter += 1
+            prefix = self.evidence / (f"{self.counter:04d}-" + label)
+        try:
+            completed = subprocess.run([str(self.candidate), "--cwd", str(self.workspace), *arguments],
+                                       env=self.environment, text=True, capture_output=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired as failure:
+            for suffix, value in [(".stdout", failure.stdout), (".stderr", failure.stderr)]:
+                raw = value if isinstance(value, bytes) else (value or "").encode("utf-8")
+                prefix.with_suffix(suffix).write_bytes(raw)
+            prefix.with_suffix(".json").write_text(json.dumps({"arguments": arguments, "timeout": timeout,
+                "exit_code": None, "timed_out": True}, indent=2) + "\n", encoding="utf-8")
+            raise
+        prefix.with_suffix(".stdout").write_text(completed.stdout, encoding="utf-8")
+        prefix.with_suffix(".stderr").write_text(completed.stderr, encoding="utf-8")
+        prefix.with_suffix(".json").write_text(json.dumps({"arguments": arguments, "timeout": timeout,
+            "exit_code": completed.returncode}, indent=2) + "\n", encoding="utf-8")
+        return completed
+
+    def install_workflow(self, label: str) -> None:
+        imported = self.public_command("import-" + label, ["plugin", "import", str(self.workflow_package), "--scope", "user"])
+        require(imported.returncode == 0, "real Workflow import failed: " + imported.stdout + imported.stderr)
+        listed = self.public_command("installed-" + label, ["plugin", "list", "--json"])
+        require(listed.returncode == 0, "real Workflow list failed: " + listed.stderr)
+        records = [value for value in json.loads(listed.stdout) if value["namespace"] == "axyndra:workflow"]
+        require(len(records) == 1, "real import did not create one exact Workflow record")
+        record = records[0]
+        require(record["source_kind"] == "local" and record["enabled"] is False and
+                Path(record["locator"]).resolve() == self.workflow_package, "Workflow import identity differs from actual package")
+        selected = {"version": 1, "plugins": [{"namespace": record["namespace"],
+            "package_digest": record["content_digest"], "tools": [
+                {"name": "hub_process", "profile": "frozen-primitives-v1", "services": ["process.service"],
+                 "preparation_provider": "prepare_child", "invocation_capability": "process.spawn"},
+                {"name": "hub_process_read", "profile": "frozen-primitives-v1", "services": ["process.observe"],
+                 "preparation_provider": "prepare_child", "invocation_capability": "workspace.read"}]}]}
+        (self.home / "plugins/primitives.json").write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
+        enabled = self.public_command("enable-" + label, ["plugin", "enable", record["namespace"], "--scope", "user"])
+        require(enabled.returncode == 0, "real Workflow enable failed: " + enabled.stdout + enabled.stderr)
+        listed = self.public_command("enabled-" + label, ["plugin", "list", "--json"])
+        require(listed.returncode == 0 and [value for value in json.loads(listed.stdout)
+            if value["namespace"] == record["namespace"]] == [dict(record, enabled=True)], "Workflow enabled identity changed")
+        (self.evidence / "workflow-record.json").write_text(json.dumps(dict(record, enabled=True), indent=2) + "\n")
 
     def command(self) -> list[str]:
         return [
@@ -43,6 +116,7 @@ class BrokerScope:
     def invoke_raw(self, *arguments: str, timeout: float = 15.0) -> tuple[int, dict[str, Any], str]:
         completed = subprocess.run(
             [*self.command(), *arguments],
+            env=self.environment,
             text=True,
             capture_output=True,
             timeout=timeout,
@@ -88,19 +162,20 @@ class BrokerScope:
         call_id: str,
         timeout: float = 15.0,
     ) -> dict[str, Any]:
-        source = json.dumps(
-            {
-                "op": op,
-                "owner": owner,
-                "callId": call_id,
-                "arguments": arguments,
-            },
-            separators=(",", ":"),
-        )
-        code, value, stderr = self.invoke_raw("--request", source, timeout=timeout)
-        require(code == 0 and value.get("ok") is True, f"{op} failed: {value}; stderr={stderr!r}")
-        output = value.get("output")
-        require(isinstance(output, dict), f"{op} returned no object output: {value}")
+        # Historical owner/call labels identify fixture clients only. The real
+        # tools CLI creates and seals its own Session, Direct Root and ToolCall.
+        family = "hub_process" if op in {"start", "stop", "restart", "send"} else "hub_process_read"
+        tool = "plugin.axyndra:workflow." + family
+        source = dict(arguments, op=op)
+        if op == "restart" and "network" not in source:
+            source["network"] = {"mode": "denied"}
+        completed = self.public_command(call_id, ["--approval-mode", "trusted", "tools", "invoke", tool,
+            json.dumps(source, separators=(",", ":"))], timeout)
+        require(completed.returncode == 0, f"{op} failed: {completed.stdout}; stderr={completed.stderr!r}")
+        output = json.loads(completed.stdout)
+        require(isinstance(output, dict), f"{op} returned no actual object output: {output}")
+        with self.lock:
+            self.calls.append({"tool": tool, "arguments": source, "client_label": owner, "fixture_call_label": call_id})
         return output
 
     def remember_identity(self, value: dict[str, Any]) -> None:
@@ -109,7 +184,7 @@ class BrokerScope:
         if isinstance(pid, int) and pid > 0 and isinstance(identity, str) and identity:
             self.identities[pid] = identity
 
-    def best_effort_cleanup(self) -> None:
+    def best_effort_cleanup(self, preserve: bool = False) -> None:
         for name in tuple(self.daemons):
             try:
                 self.request(
@@ -127,7 +202,10 @@ class BrokerScope:
             pass
         for pid, identity in tuple(self.identities.items()):
             terminate_owned_process(pid, identity)
-        shutil.rmtree(self.root, ignore_errors=True)
+        if not preserve:
+            shutil.rmtree(self.root, ignore_errors=True)
+        else:
+            print(f"Preserved failure evidence: {self.root}", file=sys.stderr)
 
 
 def require(condition: bool, message: str) -> None:
@@ -833,9 +911,15 @@ def run_deadlines_and_generations(scope: BrokerScope) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", required=True, type=Path)
+    parser.add_argument("--workflow-package", type=Path, default=os.environ.get("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE"))
+    parser.add_argument("--temp-parent", type=Path, default=BrokerScope.temp_parent)
     arguments = parser.parse_args()
     candidate = arguments.candidate.resolve()
     require(candidate.is_file() and os.access(candidate, os.X_OK), f"agent_app candidate is not executable: {candidate}")
+    require(arguments.workflow_package is not None, "actual Workflow package is required; run scripts/prepare_workflow_plugin.py")
+    BrokerScope.workflow_package = arguments.workflow_package.resolve(strict=True)
+    BrokerScope.temp_parent = arguments.temp_parent.resolve()
+    complete = False
     scopes: list[BrokerScope] = []
     try:
         main_scope = BrokerScope(candidate, "main")
@@ -854,11 +938,12 @@ def main() -> int:
         run_overload_single_owner(candidate, scopes)
         run_corrupt_record_isolation(candidate, scopes)
         run_unsafe_token_symlink(candidate, scopes)
+        complete = True
         print("process broker blackbox passed")
         return 0
     finally:
         for scope in reversed(scopes):
-            scope.best_effort_cleanup()
+            scope.best_effort_cleanup(preserve=not complete)
 
 
 if __name__ == "__main__":

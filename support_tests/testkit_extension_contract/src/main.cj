@@ -1,11 +1,10 @@
 package testkit_extension_contract
 
 import agent_sdk.*
-import ast_extension.*
+import legacy_extension_sdk.*
 import yjson.*
 import yjson_support.*
-import axyndra_agent_testkit.*
-import web_search_extension.*
+import legacy_extension_testkit.*
 import workspace_search_extension.*
 import workspace_write_extension.*
 
@@ -33,19 +32,6 @@ func readOnlyContracts(): Unit {
         case _ => false
     }, "workspace search prepares a read intent")
 
-    let ast = ExtensionContractHarness(AstExtension())
-    let astPrepared = requireSdkOk(ast.prepare(
-        "ast_grep",
-        jsonObject([JsonObjectEntry("pat", jsonString("$X"))]),
-        workspaceRoot: "/workspace",
-        cwd: "/workspace",
-        callId: "ast-1"
-    ))
-    assertCapabilityRequested(astPrepared.definition, "workspace.read")
-    expect(match (astPrepared.intent) {
-        case OperationIntent.HostOperation(value) => value.operation == "ast_grep"
-        case _ => false
-    }, "AST search prepares an opaque host intent without executor authority")
 }
 
 func sideEffectContract(): Unit {
@@ -70,17 +56,38 @@ func sideEffectContract(): Unit {
 }
 
 func networkContract(): Unit {
-    let web = ExtensionContractHarness(WebSearchExtension())
-    let prepared = requireSdkOk(web.prepare(
-        "web_search",
-        jsonObject([JsonObjectEntry("query", jsonString("cangjie"))]),
-        callId: "web-1"
+    let network = ExtensionContractHarness(NetworkContractExtension())
+    let prepared = requireSdkOk(network.prepare(
+        "network_probe",
+        jsonObject([JsonObjectEntry("value", jsonString("fixture"))]),
+        callId: "network-1"
     ))
     assertCapabilityRequested(prepared.definition, "network.http")
     expect(match (prepared.intent) {
-        case OperationIntent.HostOperation(value) => value.operation == "web_search"
+        case OperationIntent.HostOperation(value) => value.operation == "network_probe"
         case _ => false
-    }, "web search prepares a bounded host intent without raw HTTP authority")
+    }, "SDK fixture prepares an untrusted intent without raw HTTP authority")
+}
+
+class NetworkContractExtension <: Extension {
+    public func metadata(): ExtensionMetadata {
+        ExtensionMetadata("contract.network", "Network contract", "1.0.0", "Generic network fixture.")
+    }
+    public func tools(): Array<ExtensionTool> { [NetworkContractTool()] }
+}
+
+class NetworkContractTool <: ExtensionTool {
+    public func definition(): ExtensionToolDefinition {
+        ExtensionToolDefinition("network_probe", "Generic network fixture.", jsonObject([]),
+            [networkHttp(resource: "network_probe")])
+    }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
+    public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
+        SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("network_probe", invocation.input)))
+    }
+    public func decode(_invocation: ToolInvocation, result: ExecutionResult): SdkResult<ToolOutput> {
+        SdkResult.Ok(ToolOutput(structured: result.value))
+    }
 }
 
 func cancellationAndDeadlineContract(): Unit {

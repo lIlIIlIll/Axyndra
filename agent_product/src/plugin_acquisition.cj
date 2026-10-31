@@ -1,5 +1,6 @@
 package agent_product
 
+import agent_plugin_registry.*
 import agent_domain.*
 import agent_extension_runtime.*
 import std.collection.*
@@ -42,67 +43,9 @@ class ProductPluginSourceEndpoint {
     }
 }
 
-class ProductPluginAcquisitionSpec {
-    let kind: PluginSourceKind
-    let locator: String
-    let packageName: String
-    let version: String
-    let revision: String
-    let registryUrl: String
-    let sourceLocator: String
-    let networkPolicy: NetworkPolicy
-    let workspaceSource: Bool
 
-    init(
-        kind: PluginSourceKind,
-        locator: String,
-        packageName: String,
-        version: String,
-        revision: String,
-        registryUrl: String,
-        sourceLocator: String,
-        workspaceSource: Bool,
-        networkPolicy: NetworkPolicy
-    ) {
-        this.kind = kind
-        this.locator = locator
-        this.packageName = packageName
-        this.version = version
-        this.revision = revision
-        this.registryUrl = registryUrl
-        this.sourceLocator = sourceLocator
-        this.networkPolicy = networkPolicy
-        this.workspaceSource = workspaceSource
-    }
-}
 
-class ProductAcquiredPluginSource {
-    let kind: PluginSourceKind
-    let locator: String
-    let version: String
-    let revision: String
-    let integrity: String
-    let packageRoot: String
-    let stageRoot: String
 
-    init(
-        kind: PluginSourceKind,
-        locator: String,
-        version: String,
-        revision: String,
-        integrity: String,
-        packageRoot: String,
-        stageRoot: String
-    ) {
-        this.kind = kind
-        this.locator = locator
-        this.version = version
-        this.revision = revision
-        this.integrity = integrity
-        this.packageRoot = packageRoot
-        this.stageRoot = stageRoot
-    }
-}
 
 func productPluginSourceSpec(
     request: ProductPluginSourceRequest,
@@ -168,7 +111,7 @@ func productPluginSourceSpec(
             }
             let policy = match (productPluginAcquisitionPolicy(
                 shellNetworkMode,
-                None,
+                Option<ProductPluginSourceEndpoint>.None,
                 registry,
                 true
             )) {
@@ -190,16 +133,7 @@ func productPluginSourceSpec(
     }
 }
 
-func productPluginExactGitRevision(value: String): Bool {
-    if (value.size != 40 && value.size != 64) { return false }
-    for (rune in value.toRuneArray()) {
-        if (!((rune >= r'0' && rune <= r'9') || (rune >= r'a' && rune <= r'f') ||
-            (rune >= r'A' && rune <= r'F'))) {
-            return false
-        }
-    }
-    true
-}
+
 
 func productPluginExactVersion(value: String): Bool {
     if (value == "" || value != value.trimAscii() || value.contains(" ") || value.contains("\t") ||
@@ -284,7 +218,7 @@ func productPluginGitEndpoint(locator: String): PluginImportResult<?ProductPlugi
             "Git sources must use a local path or an HTTPS URL without embedded credentials"
         )
     }
-    PluginImportResult.Ok(None)
+    PluginImportResult.Ok(Option<ProductPluginSourceEndpoint>.None)
 }
 func productPluginWorkspaceSourceAllowed(
     spec: ProductPluginAcquisitionSpec,

@@ -1,0 +1,10 @@
+{
+  "id": "web-search",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/web-search-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": ["network.http"],
+  "contributions": [{"kind": "tool", "name": "web_search"}, {"kind": "command", "name": "help"}]
+}
