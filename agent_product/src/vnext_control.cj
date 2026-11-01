@@ -875,7 +875,7 @@ public class ProductVnextControl <: HostServiceToolControl {
         if (descriptor.ecosystem != PluginEcosystem.Axyndra) {
             return Result.Ok(())
         }
-        activateAxyndraImportedPlugin(record)
+        activateAxyndraImportedPlugin(record, serialize: serialize)
     }
 
     func restoreImportedPlugin(record: ProductPluginRecord): Result<Unit> {
@@ -885,7 +885,8 @@ public class ProductVnextControl <: HostServiceToolControl {
     }
 
     private func activateAxyndraImportedPlugin(
-        record: ProductPluginRecord
+        record: ProductPluginRecord,
+        serialize!: Bool = true
     ): Result<Unit> {
         let descriptor = record.descriptor
         if (descriptor.entryKind != PluginEntryKind.NativeExecutable) {
@@ -953,7 +954,7 @@ public class ProductVnextControl <: HostServiceToolControl {
                 ))
             }
         }
-        javascriptPluginLifecycleLock.lock()
+        if (serialize) { javascriptPluginLifecycleLock.lock() }
         try {
             mountAndRegisterJavaScriptPlugin(
                 record, javascriptPlugins, catalog,
@@ -963,7 +964,7 @@ public class ProductVnextControl <: HostServiceToolControl {
                 ))
             )
         } finally {
-            javascriptPluginLifecycleLock.unlock()
+            if (serialize) { javascriptPluginLifecycleLock.unlock() }
         }
     }
 
