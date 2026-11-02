@@ -638,6 +638,12 @@ public class ToolInvocationContext {
                         share.close159(); throw error
                     }
                 case None =>
+                    // An unowned Context has no snapshot and no prepaid DATA:
+                    // there is nothing to fork, so retaining it borrows the
+                    // same live view instead of inventing a payment. This is
+                    // the same rule `beginInvocationView159` already applies
+                    // to a Context that owns neither.
+                    if (ownedInvocationData180.isNone()) { return this }
                     let original = match (ownedInvocationData180) {
                         case Some(value) => value
                         case None => throw IllegalStateException("escaping Context has no prepaid DATA owner")
