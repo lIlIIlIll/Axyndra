@@ -11,6 +11,7 @@ main(): Int64 {
     cancellationContract()
     scriptedToolContract()
     memoryPortsContract()
+    memoryOutputLimitRecoveryBoundaryContract()
     scriptedPolicyContract()
     deterministicControlContract()
     benchmarkContract()
@@ -209,6 +210,439 @@ func memoryPortsContract(): Unit {
         AgentEventPayload.Audit("recording", objectValue([]))
     )).isOk() && audit.events().size == 1,
         "recording audit exposes captured events")
+}
+
+func memoryOutputLimitRecoveryBoundaryContract(): Unit {
+    memoryOutputLimitRecoveryCase("exact", true)
+    memoryOutputLimitRecoveryCase("messages", false)
+    memoryOutputLimitRecoveryCase("capabilities", false)
+    memoryOutputLimitRecoveryCase("policy_scalar", false)
+    memoryOutputLimitRecoveryCase("wire_only", false)
+    memoryOutputLimitRecoveryCase("images", false)
+    memoryOutputLimitRecoveryCase("execution_lane", false)
+}
+
+func memoryOutputLimitRecoveryCase(mutation: String, shouldAccept: Bool): Unit {
+    let runId = RunId("memory-recovery-" + mutation)
+    let sessionId = SessionId("memory-recovery-session")
+    let semanticId = SemanticModelRequestId("memory-recovery-semantic")
+    let parentId = ModelAttemptId("memory-recovery-a1")
+    let childId = ModelAttemptId("memory-recovery-a2")
+    let stableRequestId = "memory-recovery-request"
+    let model = "fixture-model"
+    let requested = RequestedModelPolicy(
+        ThinkingLevel.Medium,
+        RequestOutputBudget(4096, minVisibleResponseTokens: 128),
+        userRequestedThinking: Some(ThinkingLevel.Medium),
+        thinkingSource: ThinkingPreferenceSource.ExplicitUser
+    )
+    let capabilities = memoryRecoveryCapabilities(8192)
+    let parentResolved = memoryResolvePolicy(AttemptPolicyInput(requested, capabilities))
+    let parentCanonical = memoryRecoveryRequest(
+        model, ThinkingLevel.Medium, parentResolved, "frozen message"
+    )
+    let parentDigest = modelPolicySha256Text(canonicalAgentValue(parentCanonical))
+    let parentPolicyCanonical = canonicalResolvedModelRequestPolicy(parentResolved)
+    let parentWireDigest = modelAttemptWirePolicyDigest(
+        model, parentResolved.output.effectiveWireLimit, ModelToolChoice.Auto, 0,
+        parentPolicyCanonical
+    )
+    let parentPolicy = AttemptPolicy(
+        model,
+        ThinkingLevel.Medium,
+        ModelToolChoice.Auto,
+        parentResolved.output.effectiveWireLimit,
+        streamIdleMillis: 30000,
+        resolvedPolicy: Some(parentResolved)
+    )
+    let parentCheckpoint = RunningModelCheckpoint(
+        semanticId,
+        parentCanonical,
+        parentDigest,
+        parentWireDigest,
+        parentId,
+        parentId,
+        "memory-recovery-turn",
+        stableRequestId,
+        100,
+        modelRequests: 1
+    )
+    let parentContinuation = memoryRecoveryContinuation(
+        runId, sessionId, model, parentCheckpoint, requested, capabilities
+    )
+    let parent = DurableModelAttempt(
+        parentId,
+        semanticId,
+        runId,
+        1,
+        ModelAttemptLifecycle.Created,
+        attemptPolicyValue(parentPolicy),
+        "initial",
+        100,
+        100,
+        providerRequestId: stableRequestId,
+        semanticRequestDigest: parentDigest,
+        wirePolicyDigest: parentWireDigest
+    )
+    let parentEvent = memoryRecoveryEvent(runId, 1)
+    let runs = MemoryRunRepository()
+    expect(runs.save(RunSnapshot(runId, sessionId, RunState.Running)).isOk(),
+        "recovery memory fixture stores its run")
+    expect(runs.prepareModelAttempt(parent, parentEvent, parentContinuation).isOk(),
+        "initial frozen model boundary is prepared")
+    let claimed = runs.claimModelAttemptDispatch(
+        parentId, memoryRecoveryEvent(runId, 2)
+    )
+    expect(match (claimed) {
+        case Result.Ok(value) => value
+        case Result.Err(_) => false
+    }, "recovery parent is recorded as dispatched")
+
+    let childCeiling = match (nextLowerThinkingCeiling(
+        capabilities, parentResolved.thinking.effective
+    )) {
+        case Some(value) => value
+        case None => throw IllegalStateException("fixture has no lower thinking ceiling")
+    }
+    let childResolved = memoryResolvePolicy(AttemptPolicyInput(
+        requested, capabilities, recoveryCeiling: Some(childCeiling)
+    ))
+    let childThinking = childResolved.thinking.effective
+    let wireOnly = mutation == "wire_only"
+    let childMessage = if (mutation == "messages") {
+        "mutated message"
+    } else {
+        "frozen message"
+    }
+    let recoveryCanonical = memoryRecoveryRequest(
+        model, childThinking, childResolved, childMessage
+    )
+    let childCanonical = if (wireOnly) { parentCanonical } else { recoveryCanonical }
+    let childDigest = if (wireOnly) {
+        parentDigest
+    } else {
+        modelPolicySha256Text(canonicalAgentValue(childCanonical))
+    }
+    let childPolicyCanonical = if (wireOnly) {
+        parentPolicyCanonical
+    } else {
+        canonicalResolvedModelRequestPolicy(childResolved)
+    }
+    let childWireDigest = if (wireOnly) {
+        modelAttemptWirePolicyDigest(
+            model, parentResolved.output.effectiveWireLimit, ModelToolChoice.Auto, 1,
+            parentPolicyCanonical
+        )
+    } else {
+        modelAttemptWirePolicyDigest(
+            model, childResolved.output.effectiveWireLimit, ModelToolChoice.Auto, 0,
+            childPolicyCanonical
+        )
+    }
+    let childStreamIdleMillis = if (mutation == "policy_scalar") { 30001 } else { 30000 }
+    let childPolicy = if (wireOnly) {
+        AttemptPolicy(
+            model,
+            ThinkingLevel.Medium,
+            ModelToolChoice.Auto,
+            parentResolved.output.effectiveWireLimit,
+            reason: AttemptPolicyReason.Retry,
+            streamIdleMillis: childStreamIdleMillis,
+            resolvedPolicy: Some(parentResolved)
+        )
+    } else {
+        AttemptPolicy(
+            model,
+            childThinking,
+            ModelToolChoice.Auto,
+            childResolved.output.effectiveWireLimit,
+            reason: AttemptPolicyReason.OutputLimitRecovery,
+            streamIdleMillis: childStreamIdleMillis,
+            resolvedPolicy: Some(childResolved)
+        )
+    }
+    let childPolicyReason = if (wireOnly) { "retry" } else { "output_limit_recovery" }
+    let childCheckpoint = RunningModelCheckpoint(
+        semanticId,
+        childCanonical,
+        childDigest,
+        childWireDigest,
+        parentId,
+        childId,
+        "memory-recovery-turn",
+        stableRequestId + "-retry-1",
+        100,
+        modelRequests: 2,
+        inputTokens: 100
+    )
+    let nextCapabilities = if (mutation == "capabilities") {
+        memoryRecoveryCapabilities(16384)
+    } else {
+        capabilities
+    }
+    let childImageInputs = if (mutation == "images") {
+        [ModelImage(ModelImageSourceKind.Url, "https://example.test/image")]
+    } else {
+        Array<ModelImage>()
+    }
+    let childExecutionLane = if (mutation == "execution_lane") {
+        LaneId("memory-recovery-other-lane")
+    } else {
+        LaneId("main")
+    }
+    let childContinuation = memoryRecoveryContinuation(
+        runId,
+        sessionId,
+        model,
+        childCheckpoint,
+        requested,
+        nextCapabilities,
+        imageInputs: childImageInputs,
+        executionLaneId: childExecutionLane
+    )
+    let child = DurableModelAttempt(
+        childId,
+        semanticId,
+        runId,
+        2,
+        ModelAttemptLifecycle.Created,
+        attemptPolicyValue(childPolicy),
+        childPolicyReason,
+        101,
+        101,
+        parentAttemptId: Some(parentId),
+        providerRequestId: stableRequestId + "-retry-1",
+        semanticRequestDigest: childDigest,
+        wirePolicyDigest: childWireDigest
+    )
+    let childEvent = memoryRecoveryEvent(runId, 3)
+    let beforeContinuation = memoryRecoveryReadContinuation(runs, runId)
+    let beforeCheckpoint = memoryRecoveryReadCheckpoint(beforeContinuation)
+    let beforeEventCount = memoryRecoveryEventCount(runs, runId)
+    let result = runs.prepareModelAttempt(child, childEvent, childContinuation)
+    if (shouldAccept) {
+        expect(result.isOk(), "exact frozen output-limit child is accepted by the public memory port")
+        let storedChild = match (runs.modelAttempt(childId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => throw IllegalStateException("accepted child Attempt is missing")
+        }
+        let afterCheckpoint = memoryRecoveryReadCheckpoint(
+            memoryRecoveryReadContinuation(runs, runId)
+        )
+        let storedParent = match (runs.modelAttempt(parentId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => throw IllegalStateException("recovery parent Attempt is missing")
+        }
+        expect(storedChild.id.value == childId.value &&
+            afterCheckpoint.activeAttemptId.value == childId.value &&
+            afterCheckpoint.semanticRequestId.value == semanticId.value &&
+            afterCheckpoint.semanticRequestDigest != beforeCheckpoint.semanticRequestDigest &&
+            memoryRecoveryEventCount(runs, runId) == beforeEventCount + 1 &&
+            storedParent.lifecycle == ModelAttemptLifecycle.Created &&
+            storedParent.dispatchState == ModelAttemptDispatchState.DispatchClaimed,
+            "memory accepts the proven child without synthesizing parent lifecycle state")
+    } else {
+        let afterContinuation = memoryRecoveryReadContinuation(runs, runId)
+        let afterCheckpoint = memoryRecoveryReadCheckpoint(afterContinuation)
+        let afterEventCount = memoryRecoveryEventCount(runs, runId)
+        let storedParent = match (runs.modelAttempt(parentId)) {
+            case Result.Ok(value) => value
+            case Result.Err(_) => throw IllegalStateException("rejected child lost its parent Attempt")
+        }
+        expect(result.isError() &&
+            afterContinuation.model == beforeContinuation.model &&
+            afterContinuation.prompt == beforeContinuation.prompt &&
+            memoryRecoveryCapabilitiesMatch(afterContinuation, beforeContinuation) &&
+            memoryRecoveryCheckpointMatches(beforeCheckpoint, afterCheckpoint) &&
+            afterEventCount == beforeEventCount &&
+            errorKind(runs.modelAttempt(childId)) == Some(AgentErrorKind.RecoveryRequired) &&
+            storedParent.lifecycle == ModelAttemptLifecycle.Created &&
+            storedParent.dispatchState == ModelAttemptDispatchState.DispatchClaimed &&
+            runs.prepareModelAttempt(parent, parentEvent, parentContinuation).isOk(),
+            "rejected " + mutation +
+                " drift leaves the stored continuation, events, and attempts unchanged")
+    }
+}
+
+func memoryRecoveryCapabilities(maxOutputTokens: Int64): ModelExecutionCapabilitiesSnapshot {
+    ModelExecutionCapabilitiesSnapshot(
+        "fixture-model",
+        ThinkingCapabilities(
+            ThinkingControlMode.Effort,
+            supportedLevels: [
+                ThinkingLevel.Low,
+                ThinkingLevel.Medium,
+                ThinkingLevel.High
+            ]
+        ),
+        maxOutputTokens
+    )
+}
+
+func memoryResolvePolicy(input: AttemptPolicyInput): ResolvedModelRequestPolicy {
+    match (resolveModelAttemptPolicy(input)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+}
+
+func memoryRecoveryRequest(
+    model: String,
+    thinking: ThinkingLevel,
+    policy: ResolvedModelRequestPolicy,
+    message: String
+): AgentValue {
+    objectValue([
+        ValueField("model", textValue(model)),
+        ValueField("system", textValue("")),
+        ValueField("messages", listValue([
+            objectValue([
+                ValueField("role", textValue("user")),
+                ValueField("blocks", listValue([
+                    objectValue([
+                        ValueField("kind", textValue("text")),
+                        ValueField("text", textValue(message)),
+                        ValueField("call_id", textValue("")),
+                        ValueField("name", textValue("")),
+                        ValueField("arguments", objectValue([])),
+                        ValueField("is_error", boolValue(false)),
+                        ValueField("receipt_id", textValue("")),
+                        ValueField("image", nullValue()),
+                        ValueField("opaque_state", nullValue())
+                    ])
+                ]))
+            ])
+        ])),
+        ValueField("tools", listValue([])),
+        ValueField("thinking", textValue(memoryRecoveryThinkingName(thinking))),
+        ValueField("wire_max_output_tokens", integerValue(policy.output.effectiveWireLimit)),
+        ValueField("streaming", boolValue(true)),
+        ValueField("parallel_tool_calls", boolValue(false)),
+        ValueField("service_tier", textValue("")),
+        ValueField("cache_policy", textValue("default")),
+        ValueField("cache_key", textValue("")),
+        ValueField("tool_choice", textValue("auto")),
+        ValueField("structured_output", nullValue()),
+        ValueField("resolved_policy", resolvedModelPolicyCheckpointValue(policy))
+    ])
+}
+
+func memoryRecoveryThinkingName(value: ThinkingLevel): String {
+    match (value) {
+        case ThinkingLevel.Off => "off"
+        case ThinkingLevel.Minimal => "minimal"
+        case ThinkingLevel.Low => "low"
+        case ThinkingLevel.Medium => "medium"
+        case ThinkingLevel.High => "high"
+        case ThinkingLevel.XHigh => "xhigh"
+        case ThinkingLevel.Max => "max"
+    }
+}
+
+func memoryRecoveryContinuation(
+    runId: RunId,
+    sessionId: SessionId,
+    model: String,
+    checkpoint: RunningModelCheckpoint,
+    requested: RequestedModelPolicy,
+    capabilities: ModelExecutionCapabilitiesSnapshot,
+    imageInputs!: Array<ModelImage> = [],
+    executionLaneId!: LaneId = LaneId("main")
+): RunContinuation {
+    RunContinuation(
+        RunContinuationKind.RunningModel,
+        runId,
+        sessionId,
+        model,
+        "frozen prompt",
+        checkpoint,
+        requested,
+        capabilities,
+        thinking: ThinkingLevel.Medium,
+        imageInputs: imageInputs,
+        executionLaneId: executionLaneId
+    )
+}
+
+func memoryRecoveryEvent(runId: RunId, sequence: Int64): AgentEvent {
+    AgentEvent(
+        EventMeta(sequence, TraceId("testkit-memory-recovery"), runId),
+        AgentEventPayload.Extension(AgentEventKind.Audit, objectValue([]))
+    )
+}
+
+func memoryRecoveryReadContinuation(
+    runs: MemoryRunRepository,
+    runId: RunId
+): RunContinuation {
+    match (runs.continuation(runId)) {
+        case Result.Ok(value) => value
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+}
+
+func memoryRecoveryReadCheckpoint(value: RunContinuation): RunningModelCheckpoint {
+    match (value.runningModel) {
+        case Some(checkpoint) => checkpoint
+        case None => throw IllegalStateException("memory recovery continuation has no checkpoint")
+    }
+}
+
+func memoryRecoveryCapabilitiesMatch(
+    left: RunContinuation,
+    right: RunContinuation
+): Bool {
+    match ((left.modelCapabilitiesSnapshot, right.modelCapabilitiesSnapshot)) {
+        case (Some(a), Some(b)) =>
+            a.snapshotSchemaVersion == b.snapshotSchemaVersion &&
+                a.modelId == b.modelId &&
+                a.capabilityFingerprint == b.capabilityFingerprint
+        case _ => false
+    }
+}
+
+func memoryRecoveryEventCount(runs: MemoryRunRepository, runId: RunId): Int64 {
+    match (runs.events(runId, 0)) {
+        case Result.Ok(page) => page.events.size
+        case Result.Err(error) => throw IllegalStateException(error.message)
+    }
+}
+
+func memoryRecoveryCheckpointMatches(
+    left: RunningModelCheckpoint,
+    right: RunningModelCheckpoint
+): Bool {
+    let costsMatch = match ((left.costMicros, right.costMicros)) {
+        case (None, None) => true
+        case (Some(a), Some(b)) => a == b
+        case _ => false
+    }
+    left.semanticRequestId.value == right.semanticRequestId.value &&
+        canonicalAgentValue(left.canonicalRequest) == canonicalAgentValue(right.canonicalRequest) &&
+        left.semanticRequestDigest == right.semanticRequestDigest &&
+        left.wirePolicyDigest == right.wirePolicyDigest &&
+        left.originalAttemptId.value == right.originalAttemptId.value &&
+        left.activeAttemptId.value == right.activeAttemptId.value &&
+        left.stableTurnId == right.stableTurnId &&
+        left.stableRequestId == right.stableRequestId &&
+        left.requestStartedAtMillis == right.requestStartedAtMillis &&
+        left.modelRequests == right.modelRequests &&
+        left.workModelRequests == right.workModelRequests &&
+        left.drainModelRequests == right.drainModelRequests &&
+        left.requestBudgetClass == right.requestBudgetClass &&
+        left.inputTokens == right.inputTokens &&
+        left.outputTokens == right.outputTokens &&
+        left.reasoningTokens == right.reasoningTokens &&
+        left.cacheReadTokens == right.cacheReadTokens &&
+        left.cacheWriteTokens == right.cacheWriteTokens &&
+        costsMatch &&
+        left.lastInputTokens == right.lastInputTokens &&
+        left.lastOutputTokens == right.lastOutputTokens &&
+        left.lastRequestDurationMillis == right.lastRequestDurationMillis &&
+        left.toolCalls == right.toolCalls &&
+        left.turns == right.turns &&
+        left.consecutiveCapabilityDenials == right.consecutiveCapabilityDenials &&
+        left.lastCapabilityDeniedTool == right.lastCapabilityDeniedTool
 }
 
 func continuation(

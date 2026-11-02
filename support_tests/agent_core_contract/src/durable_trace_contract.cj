@@ -848,6 +848,8 @@ func maybeRunDurableCoreTraceWorker(): ?Int64 {
         case "model-dispatch" => Some(durableModelDispatchWorker(args[3]))
         case "tool-result" => Some(durableReceiptWorker(args[3]))
         case "tool-effect" => Some(durableEffectWorker(args[3]))
+        case "output-recovery" => Some(durableOutputLimitRecoveryWorker(args[3]))
+        case "output-decision" => Some(durableOutputDecisionWorker(args[3]))
         case _ => throw IllegalArgumentException("unknown durable crash worker mode")
     }
 }

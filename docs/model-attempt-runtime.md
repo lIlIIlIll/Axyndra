@@ -147,9 +147,28 @@ signal.
 21. Telemetry persistence failure cannot invalidate an already durable
     ModelDecision or canonical projection.
 
-Usage remains separate accounting metadata and is excluded from decision
-identity and integrity fingerprints. Provider terminal, transport completion,
-and Agent validity remain distinct facts.
+## Usage accounting
+
+Usage is separate accounting metadata and is excluded from decision identity
+and integrity fingerprints. Provider terminal, transport completion, and Agent
+validity remain distinct facts. `ModelRequestAttemptCompleted(Succeeded)`
+records transport success even when subsequent decision validation rejects the
+reply.
+
+Core settles provider-reported usage from rejected replies and adapter errors
+before it returns the failure or prepares a retry. Input, output, reasoning,
+cache-read, cache-write, and known costs count once per attempt. Accepted replies
+keep their existing success-path settlement. Reported zero usage still settles,
+and usage with no known price keeps its cost absent.
+
+Per-request ceilings apply to each attempt separately. Cumulative Run limits
+include rejected attempts. A budget failure stops recovery but retains the
+consumption that already occurred. The next Prepared checkpoint carries these
+totals so resume can restore them before dispatching the frozen child.
+
+This change does not backfill historical runs. It does not close the crash
+window between provider completion and the next checkpoint, or change
+accounting after an accepted Decision's storage failure.
 
 ## Online attempt recovery
 
@@ -170,17 +189,40 @@ Automatic turn retry is bounded to two Attempts. Stream-idle failure retries
 the exact effective thinking, tool choice, and output policy. A retry gets a
 new `AttemptId`, links its parent, and keeps the same
 `SemanticModelRequestId`. Immediately before a retry, Core re-reads durable
-Decision state; an existing Decision is projected instead of regenerated.
+Decision state. An existing Decision is projected instead of regenerated.
+
+When an output limit prevents an accepted Decision, RecoveryV1 can lower
+thinking for one child Attempt. The resolver uses the frozen requested policy
+and capability snapshot to select the next lower compatible level. Disabled
+recovery, thinking already Off, or a second output-limited reply stops the Run
+with the output-limit error.
+
+The effective policy is part of both the semantic request and wire-policy
+digests. A proved downgrade can therefore change both digests under the same
+`SemanticModelRequestId`. SQLite verifies each digest against its own payload.
+It accepts the change only from the active Abandoned A1 with an output-limit
+failure and no parent Decision. The proof permits changes only to the request's
+`thinking` and `resolved_policy` fields. Model input, tools, output ceiling, and
+other request fields remain unchanged. A reason label alone does not authorize
+a change.
+The child and `model.auto_retry_start` diagnostic both report
+`output_limit_recovery`.
 
 Before any provider side effect, Core atomically persists the normalized
 request/policy Attempt row, the `model.attempt_policy_applied` event, and a
 running-model continuation, then claims dispatch with a second durable CAS.
-After process restart, a Prepared Attempt is dispatched exactly once. An A1
-whose dispatch was already claimed may create only one linked A2 and records a
-possible-duplicate audit fact; a dispatched A2 is never expanded into A3.
-Persisted capability snapshots validate their own canonical fingerprints and
-are never compared with the live model catalog. Existing resolved attempts are
-reused verbatim rather than re-resolved.
+After process restart, resume reuses the Prepared Attempt and claims its
+dispatch once. A Prepared recovery child retains its frozen policy and the
+parent's settled usage. Resume does not create A3 or resolve the child against
+the live model catalog.
+
+An A1 whose dispatch was already claimed may create only one linked A2 and
+records a possible-duplicate audit fact. A dispatched A2 is never expanded into
+A3. This restart retry still requires identical request and wire-policy
+digests. Persisted capability snapshots validate their own canonical
+fingerprints. Existing resolved attempts are reused verbatim. Same-policy
+retry checks remain unchanged, while a policy-changing retry requires complete
+frozen policy evidence.
 
 ## Attempt-scoped UI and telemetry
 
@@ -217,8 +259,9 @@ preparation consumes only an attested `CommittedToolCallRef`; the SQLite source
 binding makes repeated preparation idempotent.
 
 Core-owned idle recovery, typed attempt failures, meaningful progress,
-same-policy retry, frozen capability/policy resolution, and durable pre-HTTP
-dispatch boundaries are implemented. Attempt-scoped provisional UI,
-identity-based supersession, late-event rejection, cursor-gap resync, and
-independent aggregated telemetry retention are implemented. Adaptive policy,
+same-policy retry, constrained output-limit thinking recovery, frozen
+capability/policy resolution, and durable pre-HTTP dispatch boundaries are
+implemented. Attempt-scoped provisional UI, identity-based supersession,
+late-event rejection, cursor-gap resync, and independent aggregated telemetry
+retention are implemented. Adaptive policy,
 richer failed-attempt presentation, and provider fallback remain later slices.

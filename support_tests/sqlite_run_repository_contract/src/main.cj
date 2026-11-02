@@ -48,6 +48,7 @@ main(): Int64 {
         )).isError(), "SQLite Run journal rejects sequence gaps")
         attemptPolicyAtomicityContract(database, repository, runId)
         retryAttemptAtomicityContract(database)
+        outputLimitRetryBoundaryContract(database)
         restartAttemptAtomicityContract(database)
         continuationCasIdempotencyContract(database)
         telemetryRetentionContract(database, repository, runId)

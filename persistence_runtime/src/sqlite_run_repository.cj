@@ -721,23 +721,51 @@ public class SqliteRunRepository <: RunRepository & OwnedRunEventRepository & Ow
                             let retryRequestMatch =
                                 sameContinuationRequestBinding(existing, continuation)
                             let retryTransition =
-                                existing.kind == RunContinuationKind.RunningModel &&
-                                continuation.kind == RunContinuationKind.RunningModel &&
                                 retryRequestMatch &&
-                                match ((existing.runningModel, continuation.runningModel,
-                                    attempt.parentAttemptId)) {
-                                    case (Some(previous), Some(next), Some(parentId)) =>
-                                        parentId.value == previous.activeAttemptId.value &&
-                                        next.originalAttemptId.value == previous.originalAttemptId.value &&
-                                        next.semanticRequestId.value == previous.semanticRequestId.value &&
-                                        next.semanticRequestDigest == previous.semanticRequestDigest &&
-                                        next.wirePolicyDigest == previous.wirePolicyDigest &&
-                                        match (readModelAttempt(transaction, parentId)) {
-                                            case Result.Ok(parent) =>
-                                                parent.lifecycle == ModelAttemptLifecycle.Abandoned &&
-                                                parent.attemptNo + 1 == attempt.attemptNo &&
-                                                parent.semanticRequestId.value == attempt.semanticRequestId.value
-                                            case Result.Err(_) => false
+                                match ((existing.kind, continuation.kind, existing.runningModel,
+                                    continuation.runningModel, attempt.parentAttemptId)) {
+                                    case (RunContinuationKind.RunningModel,
+                                        RunContinuationKind.RunningModel,
+                                        Some(previous), Some(next), Some(parentId)) =>
+                                        if (parentId.value != previous.activeAttemptId.value ||
+                                            next.originalAttemptId.value != previous.originalAttemptId.value ||
+                                            next.semanticRequestId.value != previous.semanticRequestId.value) {
+                                            false
+                                        } else {
+                                            match (readModelAttempt(transaction, parentId)) {
+                                                case Result.Ok(parent) =>
+                                                    let samePolicyRetry =
+                                                        parent.lifecycle == ModelAttemptLifecycle.Abandoned &&
+                                                        parent.attemptNo + 1 == attempt.attemptNo &&
+                                                        parent.semanticRequestId.value == attempt.semanticRequestId.value &&
+                                                        next.semanticRequestDigest == previous.semanticRequestDigest &&
+                                                        next.wirePolicyDigest == previous.wirePolicyDigest
+                                                    if (samePolicyRetry) {
+                                                        true
+                                                    } else if (parent.lifecycle != ModelAttemptLifecycle.Abandoned ||
+                                                        parent.attemptNo + 1 != attempt.attemptNo ||
+                                                        parent.semanticRequestId.value != attempt.semanticRequestId.value ||
+                                                        (parent.failureKind != "output_limited" &&
+                                                            parent.failureKind != "output_limited_before_decision")) {
+                                                        false
+                                                    } else {
+                                                        let parentDecisions = transaction.query(
+                                                            "SELECT id FROM model_decisions WHERE attempt_id=" +
+                                                                sqliteText(parentId.value)
+                                                        )
+                                                        if (parentDecisions.size != 0) {
+                                                            false
+                                                        } else {
+                                                            match (exactOutputLimitRecoveryBoundary(
+                                                                existing, continuation, attempt, parent
+                                                            )) {
+                                                                case Result.Ok(value) => value
+                                                                case Result.Err(error) => return Result.Err(error)
+                                                            }
+                                                        }
+                                                    }
+                                                case Result.Err(_) => false
+                                            }
                                         }
                                     case _ => false
                                 }

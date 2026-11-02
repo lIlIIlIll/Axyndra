@@ -1232,14 +1232,18 @@ public class AgentCore <: AgentRunner {
                 durableRequest, context, control, error, sink, counter: Some(counter)
             )
         }
-        if (storedAttempt.transcriptSnapshot == "" ||
+        // An empty snapshot means the Attempt crashed before it froze a
+        // transcript. There is nothing to restore, so recovery rebuilds the
+        // request from the frozen checkpoint instead of refusing the Attempt;
+        // a present snapshot must still validate.
+        if (storedAttempt.transcriptSnapshot != "" &&
             !model.validateTranscriptSnapshot(storedAttempt.transcriptSnapshot)) {
             return fail(
                 durableRequest, context, control,
                 AgentError(
                     AgentErrorKind.RecoveryRequired,
                     "model.attempt_replay_binding_invalid",
-                    "durable model Attempt transcript snapshot is missing or cannot be restored"
+                    "durable model Attempt transcript snapshot cannot be restored"
                 ), sink, counter: Some(counter)
             )
         }
@@ -1458,7 +1462,8 @@ public class AgentCore <: AgentRunner {
         }
         let durable = recordDurableDecisionLifecycle(
             durableResultForAttempt(
-                durableRequest, checkpoint.semanticRequestId, attemptId, result
+                durableRequest, checkpoint.semanticRequestId, attemptId, result,
+                RequestId(modelRequest.requestId), counter, context, control, sink
             ),
             context, control, checkpoint.semanticRequestId, attemptId, sink
         )
@@ -4832,7 +4837,8 @@ public class AgentCore <: AgentRunner {
                 case Result.Err(error) => return Result.Err(error)
             }
             let durable = durableResultForAttempt(
-                request, semanticRequestId, attemptId, result
+                request, semanticRequestId, attemptId, result,
+                RequestId(effectiveAttemptRequest.requestId), counter, context, control, sink
             )
             return recordDurableDecisionLifecycle(
                 durable, context, control, semanticRequestId, attemptId, sink
@@ -4925,6 +4931,7 @@ public class AgentCore <: AgentRunner {
             let provisionalEvents = execution.provisionalEvents
             let durableResult = durableResultForAttempt(
                 request, semanticRequestId, attemptId, result,
+                RequestId(effectiveAttemptRequest.requestId), counter, context, control, sink,
                 terminalizeFailure: false
             )
             match (durableResult) {
@@ -5157,7 +5164,7 @@ public class AgentCore <: AgentRunner {
                                 ValueField("error_code", textValue(error.code)),
                                 ValueField("policy_reason", textValue(
                                     if (disposition == AttemptRetryDisposition.RetryEscalated) {
-                                        "deadline_escalation"
+                                        attemptPolicyReasonName(AttemptPolicyReason.OutputLimitRecovery)
                                     } else { "retry" }
                                 ))
                             ]
@@ -5199,6 +5206,45 @@ public class AgentCore <: AgentRunner {
         )
     }
 
+    // One settlement path for every outcome that consumed provider tokens:
+    // adapter-reported failures and replies the Decision validator rejected.
+    // Accounting failure still records the observed usage as a fact, and the
+    // caller decides whether to surface or keep the budget error.
+    private func settleAttemptUsage(
+        request: AgentRunRequest,
+        usage: ModelUsage,
+        requestId: RequestId,
+        counter: BudgetCounter,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink
+    ): Result<Unit> {
+        match (counter.accountAttemptUsage(usage, request.budget)) {
+            case Result.Err(error) =>
+                let _ = control.ledger.recordObservedUsage(usage)
+                return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
+        match (reserveBudget(
+            control,
+            context,
+            BudgetCharge(
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                costMicros: match (usage.costMicros) {
+                    case Some(value) => value
+                    case None => 0
+                }
+            ),
+            sink,
+            requestId: Some(requestId),
+            observedUsage: Some(usage)
+        )) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
     private func recordModelAttempt(
         request: AgentRunRequest,
         modelRequest: ModelRequest,
@@ -5229,33 +5275,13 @@ public class AgentCore <: AgentRunner {
                 // token and cost enforcement counts abandoned attempts too.
                 let billed = attemptUsageFromError(error, request.pricing)
                 match (billed) {
-                    case Some(usage) =>
-                        match (counter.accountAttemptUsage(usage, request.budget)) {
-                            case Result.Err(requestBudgetError) =>
-                                // Provider-reported usage is irreversible even
-                                // when it violates the per-request ceiling.
-                                let _ = control.ledger.recordObservedUsage(usage)
-                                budgetFailure = Some(requestBudgetError)
-                            case Result.Ok(_) => match (reserveBudget(
-                                control,
-                                context,
-                                BudgetCharge(
-                                    inputTokens: usage.inputTokens,
-                                    outputTokens: usage.outputTokens,
-                                    costMicros: match (usage.costMicros) {
-                                        case Some(value) => value
-                                        case None => 0
-                                    }
-                                ),
-                                sink,
-                                requestId: Some(RequestId(modelRequest.requestId)),
-                                observedUsage: Some(usage)
-                            )) {
-                                case Result.Ok(_) => ()
-                                case Result.Err(budgetError) =>
-                                    budgetFailure = Some(budgetError)
-                            }
-                        }
+                    case Some(usage) => match (settleAttemptUsage(
+                        request, usage, RequestId(modelRequest.requestId),
+                        counter, context, control, sink
+                    )) {
+                        case Result.Ok(_) => ()
+                        case Result.Err(error) => budgetFailure = Some(error)
+                    }
                     case None => ()
                 }
                 ModelRequestAttempt(
@@ -8221,6 +8247,11 @@ public class AgentCore <: AgentRunner {
         semanticRequestId: SemanticModelRequestId,
         attemptId: ModelAttemptId,
         result: Result<ModelReply>,
+        physicalRequestId: RequestId,
+        counter: BudgetCounter,
+        context: ToolInvocationContext,
+        control: CoreRunControl,
+        sink: AgentEventSink,
         terminalizeFailure!: Bool = true
     ): Result<DurableModelResult> {
         match (result) {
@@ -8246,15 +8277,26 @@ public class AgentCore <: AgentRunner {
                 )) {
                     case Result.Ok(value) => value
                     case Result.Err(error) =>
-                        if (!terminalizeFailure) { return Result.Err(error) }
+                        // A rejected reply still consumed provider tokens: the
+                        // authoritative usage comes from the reply itself, not
+                        // from the error. Settle it before deciding how the
+                        // rejection is surfaced.
+                        let rejected = match (settleAttemptUsage(
+                            request, accountedModelAttemptUsage(reply, request.pricing),
+                            physicalRequestId, counter, context, control, sink
+                        )) {
+                            case Result.Ok(_) => error
+                            case Result.Err(budgetError) => budgetError
+                        }
+                        if (!terminalizeFailure) { return Result.Err(rejected) }
                         let _ = modelDecisionRuntime.terminalizeAttempt(
                             attemptId, ModelAttemptLifecycle.Failed,
-                            match (error.attemptFailure) {
+                            match (rejected.attemptFailure) {
                                 case Some(value) => attemptFailureKindName(value.kind)
-                                case None => error.code
+                                case None => rejected.code
                             }, agentUtcMillis()
                         )
-                        return Result.Err(error)
+                        return Result.Err(rejected)
                 }
                 match (modelDecisionRuntime.persistValidatedDecision(decision)) {
                     case Result.Ok(_) => ()

@@ -182,6 +182,8 @@ main(): Int64 {
     attemptPolicyAppliedContract()
     failedAttemptDoesNotPolluteTranscriptContract()
     telemetryPersistenceFailureIsolationContract()
+    rejectedReplyUsageContract()
+    durableOutputLimitRecoveryContract()
     terminalDecisionPersistenceFailureContract()
     durableDecisionRecoveryDoesNotInvokeProviderContract()
     invalidArgumentContinuesRunContract()
@@ -969,6 +971,9 @@ func missingTranscriptBlocksRecoveryContract(): Unit {
     ).start(request)
     expect(first.isError() && model.calls == 0,
         "R1 fixture stops before dispatching its prepared Attempt")
+    // An Attempt that crashed before freezing a transcript has nothing to
+    // restore, so recovery rebuilds the request from the frozen checkpoint
+    // instead of refusing it. The binding error must NOT be produced.
     runs.modelAttempts[0] = fixtureAttemptWithTranscriptSnapshot(
         runs.modelAttempts[0], ""
     )
@@ -980,11 +985,49 @@ func missingTranscriptBlocksRecoveryContract(): Unit {
         threadRuntimes: Some(threadRegistry),
         modelDecisionRuntime: Some(RecordingModelDecisionPort())
     ).resume(request)
-    expect(resumed.isError() && match (resumed.error()) {
+    expect(model.calls == 1 && match (resumed) {
+        case Result.Err(error) => error.code != "model.attempt_replay_binding_invalid"
+        case Result.Ok(_) => true
+    }, "R1 recovers an Attempt without a frozen transcript snapshot")
+
+    // A snapshot that IS present must still validate: an unparseable one is a
+    // real binding failure and must be rejected before any provider dispatch.
+    let brokenRuns = MemoryRuns(failClaimBeforeCommitAt: 1)
+    let brokenModel = ResumeAnswerModel()
+    let brokenRegistry = resumeThreadRegistry("broken-transcript")
+    let brokenFirst = AgentCore(
+        brokenModel, brokenRuns,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(brokenRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).start(AgentRunRequest(
+        RunId("broken-transcript-run"),
+        SessionId("broken-transcript-session"),
+        "fixture", "reject a mismatched transcript snapshot"
+    ))
+    expect(brokenFirst.isError() && brokenModel.calls == 0,
+        "mismatched transcript fixture stops before dispatching its prepared Attempt")
+    brokenRuns.modelAttempts[0] = fixtureAttemptWithTranscriptSnapshot(
+        brokenRuns.modelAttempts[0], "not-a-resume-transcript"
+    )
+    brokenRuns.failClaimBeforeCommitAt = 0
+    let brokenResumed = AgentCore(
+        brokenModel, brokenRuns,
+        ToolPipeline(catalog, MemoryOperations(), MemoryAudit(), FixtureIds()),
+        catalog,
+        threadRuntimes: Some(brokenRegistry),
+        modelDecisionRuntime: Some(RecordingModelDecisionPort())
+    ).resume(AgentRunRequest(
+        RunId("broken-transcript-run"),
+        SessionId("broken-transcript-session"),
+        "fixture", "reject a mismatched transcript snapshot"
+    ))
+    expect(brokenResumed.isError() && match (brokenResumed.error()) {
         case Some(error) => error.code == "model.attempt_replay_binding_invalid"
         case None => false
-    } && model.calls == 0,
-        "R1 rejects a legacy Attempt without a frozen transcript snapshot")
+    } && brokenModel.calls == 0,
+        "R1 rejects an Attempt whose frozen transcript snapshot cannot be restored")
 }
 
 func claimedAttemptRestartContract(): Unit {
