@@ -1928,8 +1928,14 @@ public class AgentCore <: AgentRunner {
         }
         updateCoreToolLoopState(resumedToolState, durableApproval.toolName, outcome)
         } finally { releaseToolInvocationPayload(Result.Ok(outcome)) }
+        // RunSnapshot carries only the total, so the split is restored from the
+        // ledger's own drain count: work = total - drain keeps the invariant
+        // without inventing a class for requests the snapshot cannot attribute.
         let resumedCounter = BudgetCounter(
             modelRequests: decisionSnapshot.modelRequests,
+            workModelRequests: decisionSnapshot.modelRequests -
+                min(decisionSnapshot.modelRequests, control.ledger.snapshot().drainModelRequests),
+            drainModelRequests: min(decisionSnapshot.modelRequests, control.ledger.snapshot().drainModelRequests),
             inputTokens: decisionSnapshot.inputTokens,
             outputTokens: decisionSnapshot.outputTokens,
             reasoningTokens: decisionSnapshot.reasoningTokens,
@@ -3668,7 +3674,15 @@ public class AgentCore <: AgentRunner {
             }
         match (settled) { case Result.Err(error) => return fail(request, context, control, error, sink); case Result.Ok(_) => () }
         let _ = emitDetail(context, AgentEventKind.Approval, approvalDecisionEventValue(approval, decision), sink)
-        let counter = BudgetCounter(modelRequests: previous.modelRequests, inputTokens: previous.inputTokens,
+        // model_requests == work + drain is an invariant of this counter, and a
+        // rebuild that copies only the total breaks every boundary check that
+        // compares the halves against the ledger. `RunSnapshot` carries only the
+        // total, so the split comes from the ledger's own drain count.
+        let priorDrain = min(previous.modelRequests, control.ledger.snapshot().drainModelRequests)
+        let counter = BudgetCounter(modelRequests: previous.modelRequests,
+            workModelRequests: previous.modelRequests - priorDrain,
+            drainModelRequests: priorDrain,
+            inputTokens: previous.inputTokens,
             outputTokens: previous.outputTokens, reasoningTokens: previous.reasoningTokens,
             cacheReadTokens: previous.cacheReadTokens, cacheWriteTokens: previous.cacheWriteTokens,
             costMicros: previous.costMicros, lastInputTokens: previous.lastInputTokens,
