@@ -39,6 +39,7 @@ public class CliCommandSpec {
     public let visibility: CliCommandVisibility
     public let flags: Array<String>
     public let handler: CliCommandHandler
+    public let replacement: String
 
     public init(
         name: String,
@@ -46,7 +47,8 @@ public class CliCommandSpec {
         handler: CliCommandHandler,
         aliases!: Array<String> = [],
         visibility!: CliCommandVisibility = CliCommandVisibility.Public,
-        flags!: Array<String> = []
+        flags!: Array<String> = [],
+        replacement!: String = ""
     ) {
         if (name.trimAscii() == "") {
             throw IllegalArgumentException("CLI command name must not be empty")
@@ -57,6 +59,7 @@ public class CliCommandSpec {
         this.visibility = visibility
         this.flags = flags
         this.handler = handler
+        this.replacement = replacement
     }
 }
 
@@ -180,20 +183,19 @@ public func reservedCliCommandRegistry(): CliCommandRegistry {
             visibility: CliCommandVisibility.Hidden
         ),
         CliCommandSpec("models", "List configured models", unavailable),
-        CliCommandSpec("mcp-server", "Expose product tools over MCP stdio", unavailable),
         CliCommandSpec(
             "reviewer-dry-run",
             "Run no-tools approval reviewer fixtures",
             unavailable,
             visibility: CliCommandVisibility.Internal
         ),
-        CliCommandSpec("plugin", "Manage plugins", unavailable,
-            visibility: CliCommandVisibility.Hidden),
+        CliCommandSpec("plugin", "Manage plugins without a model", unavailable),
         CliCommandSpec("say", "Synthesize speech", unavailable,
             visibility: CliCommandVisibility.Hidden),
         CliCommandSpec("setup", "Configure providers and models", unavailable),
         CliCommandSpec("shell", "Open a persistent shell", unavailable),
         CliCommandSpec("read", "Read a workspace file", unavailable),
+        CliCommandSpec("tools", "Inspect or invoke registered tools", unavailable),
         CliCommandSpec("ssh", "Manage SSH hosts", unavailable),
         CliCommandSpec("stats", "View usage statistics", unavailable),
         CliCommandSpec(
@@ -216,9 +218,14 @@ public func reservedCliCommandRegistry(): CliCommandRegistry {
         ),
         CliCommandSpec(
             "search",
-            "Test web search providers",
+            "Retired built-in command",
             unavailable,
-            aliases: ["q"]
+            aliases: ["q"],
+            visibility: CliCommandVisibility.Hidden,
+            replacement: "Install and enable the independent web-search plugin, then use " +
+                "axyndra tools inspect plugin.axyndra:web-search.web_search and " +
+                "axyndra tools invoke plugin.axyndra:web-search.web_search '<JSON object>'. " +
+                "Provider configuration now uses plugins/services.json; see plugins/web_search/README.md."
         )
     ])
 }

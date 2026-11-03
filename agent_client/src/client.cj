@@ -1,10 +1,43 @@
 package agent_client
 
 import agent_core.*
+import agent_runtime.OwnedAgentEventSink
 import agent_domain.*
 import run_control.*
 
 public interface AgentClient {
+
+    // Typed DATA stays on the original installed forwarding chain.
+    func startOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(start(request, events))
+    }
+    func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(resumeContextBoundary(request, events))
+    }
+    func resumeOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(resume(request, events))
+    }
+    func decideOwnedCheckpointFailure113(request: AgentRunRequest, approval: ApprovalRequest, decision: ApprovalDecision, events: AgentEventSink): OwnedAgentRunResult113 {
+        OwnedAgentRunResult113.Existing(decide(request, approval, decision, events))
+    }
+    func takeOwnedCheckpointFailure113(run: RunId): OwnedAgentRunResult113 { OwnedAgentRunResult113.Held }
+    func prepareOwnedCheckpointWave113(run: RunId,
+        events!: ?OwnedAgentEventSink): (Bool, Int64, Int64) { (false, 0, 0) }
+
+    func ownedCheckpointEventExpectation113(run: RunId, sequence: Int64): ?Bool { None<Bool> }
+
+    func retireOwnedCheckpointProducerWitness113(run: RunId): Unit { () }
+
+    func startRestricted111(request: AgentRunRequest, restriction: AgentRunStartRestriction111,
+        events: AgentEventSink): Result<AgentRunOutcome> {
+        Result.Err(AgentError(AgentErrorKind.PermissionDenied, "child.start_restriction_unsupported",
+            "this transport cannot carry the original live start restriction"))
+    }
+
+    func startContinuation(value: AgentContinuationStart, events: AgentEventSink): Result<AgentRunOutcome> {
+        Result.Err(AgentError(AgentErrorKind.PermissionDenied, "continuation.client_unsupported", "this transport cannot carry a live continuation admission"))
+    }
+
     func start(
         request: AgentRunRequest,
         events: AgentEventSink
@@ -18,6 +51,10 @@ public interface AgentClient {
     func find(runId: RunId): Result<RunSnapshot>
     func events(runId: RunId, after: Int64): Result<EventPage>
     func cancel(runId: RunId): Result<Unit>
+    func resumeContextBoundary(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
+        Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "context.boundary_client_unavailable", "client cannot recover a context boundary"))
+    }
+
     func resume(
         request: AgentRunRequest,
         events: AgentEventSink
@@ -33,9 +70,45 @@ public interface AgentClient {
 }
 
 public class InProcessAgentClient <: AgentClient {
+
+    public func startOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        runs.startOwnedCheckpointFailure113(request, events)
+    }
+    public func resumeContextBoundaryOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        runs.resumeContextBoundaryOwnedCheckpointFailure113(request, events)
+    }
+    public func resumeOwnedCheckpointFailure113(request: AgentRunRequest, events: AgentEventSink): OwnedAgentRunResult113 {
+        runs.resumeOwnedCheckpointFailure113(request, events)
+    }
+    public func decideOwnedCheckpointFailure113(request: AgentRunRequest, approval: ApprovalRequest, decision: ApprovalDecision, events: AgentEventSink): OwnedAgentRunResult113 {
+        runs.decideOwnedCheckpointFailure113(request, approval, decision, events)
+    }
+    public func takeOwnedCheckpointFailure113(run: RunId): OwnedAgentRunResult113 {
+        runs.takeOwnedCheckpointFailure113(run)
+    }
+    public func prepareOwnedCheckpointWave113(run: RunId,
+        events!: ?OwnedAgentEventSink = None<OwnedAgentEventSink>): (Bool, Int64, Int64) {
+        runs.prepareOwnedCheckpointWave113(run, events: events)
+    }
+
+    public func ownedCheckpointEventExpectation113(run: RunId, sequence: Int64): ?Bool {
+        runs.ownedCheckpointEventExpectation113(run, sequence)
+    }
+
+    public func retireOwnedCheckpointProducerWitness113(run: RunId): Unit {
+        runs.retireOwnedCheckpointProducerWitness113(run)
+    }
+
     private let runs: RunService
 
     public init(runs: RunService) { this.runs = runs }
+
+    public func startRestricted111(request: AgentRunRequest, restriction: AgentRunStartRestriction111,
+        events: AgentEventSink): Result<AgentRunOutcome> { runs.startRestricted111(request, restriction, events) }
+
+    public func startContinuation(value: AgentContinuationStart, events: AgentEventSink): Result<AgentRunOutcome> {
+        runs.startContinuation(value, events)
+    }
 
     public func start(
         request: AgentRunRequest,
@@ -65,6 +138,10 @@ public class InProcessAgentClient <: AgentClient {
         runs.cancel(runId)
     }
 
+    public func resumeContextBoundary(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
+        runs.resumeContextBoundary(request, events)
+    }
+
     public func resume(
         request: AgentRunRequest,
         events: AgentEventSink
@@ -79,6 +156,7 @@ public enum AgentRpcCommand {
     | Find(RunId)
     | Events(RunId, Int64)
     | Cancel(RunId)
+    | ResumeContextBoundary(AgentRunRequest)
 }
 
 public enum AgentRpcReply {
@@ -120,6 +198,12 @@ public class RpcAgentClient <: AgentClient {
         events: AgentEventSink
     ): Result<AgentRunOutcome> {
         outcome(transport.exchange(AgentRpcCommand.Start(request), events))
+    }
+
+    // This command names only the new safe-cut recovery entry. The service
+    // re-reads the durable continuation; request data never supplies authority.
+    public func resumeContextBoundary(request: AgentRunRequest, events: AgentEventSink): Result<AgentRunOutcome> {
+        outcome(transport.exchange(AgentRpcCommand.ResumeContextBoundary(request), events))
     }
 
     public func resume(

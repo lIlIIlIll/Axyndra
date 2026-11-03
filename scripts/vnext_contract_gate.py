@@ -136,6 +136,18 @@ def main() -> int:
         run([sys.executable, "scripts/vnext_fixture_gate_test.py"], cwd=repo, env=env)
         run([sys.executable, "scripts/vnext_baseline_test.py"], cwd=repo, env=env)
         run([sys.executable, "scripts/vnext_fixture_gate.py"], cwd=repo, env=env)
+        # This gate precedes workspace unit tests in CI. Build its native
+        # process fixtures here so the product broker contract never skips
+        # the independent executable path or depends on a developer artifact.
+        fixture = repo / "support_tests" / "native_plugin_fixture"
+        run([sys.executable, str(fixture / "check.py")], cwd=repo, env=env)
+        env["AXYNDRA_NATIVE_PLUGIN_FIXTURE"] = str(fixture / "target" / "native-plugin")
+        env["AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE"] = str(fixture / "target" / "tool" / "native-plugin-tool")
+        env["AXYNDRA_NATIVE_SERVICE_PLUGIN_FIXTURE"] = str(fixture / "target" / "service" / "native-plugin-service")
+        env["AXYNDRA_AST_PLUGIN_PACKAGE"] = subprocess.check_output(
+            [sys.executable, str(repo / "scripts" / "prepare_ast_plugin.py")],
+            cwd=repo, env=env, text=True,
+        ).strip()
         for name in CONTRACTS:
             package = repo / "support_tests" / name
             contract_started = time.monotonic()

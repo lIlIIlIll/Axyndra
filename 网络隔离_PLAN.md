@@ -1,5 +1,11 @@
 # 统一执行策略、域名网络隔离与恢复语义
 
+> 历史实施计划：其中 Web Search 的宿主路径与旧 `web_search_contract` 已由
+> issue #45 的独立 `plugins/web_search` 和通用 HTTP 服务替代。当前配置、授权与
+> 验证范围见 [plugin-http-services](docs/plugin-http-services.md) 和
+> [逐项迁移记录](docs/plugin-first-migration.md)。当前定向门禁为
+> `python3 scripts/product_unit_gate.py --package agent_product --case-prefix PluginHttp`。
+
 ## Context
 
 用户要求根据执行失败、联网和恢复链路的讨论优化 Axyndra 架构与实现。已确认三个产品决定：

@@ -78,10 +78,6 @@ func runHeadless(screen: AgentScreen): Int64 {
         println("headless cjtui session transcript restore assertion failed")
         return 1
     }
-    if (!screen.planReviewInteractionObserved()) {
-        println("headless cjtui plan review interaction assertion failed")
-        return 1
-    }
     if (!setupMode && !cardMode && !askMode && !todoMode && !screen.composerHistoryNavigationObserved()) {
         println("headless cjtui composer history navigation assertion failed")
         return 1
@@ -538,7 +534,7 @@ func runHeadless(screen: AgentScreen): Int64 {
     var saw80x24 = false
     var saw60x18 = false
     var sawSessionTree = false
-    var sawExtensions = false
+    var sawPlugins = false
     var sawInlineAgentHub = false
     for (snapshot in result.snapshots) {
         if (cardMode && snapshot.contains("The tool completed; summarize its result.")) {
@@ -657,8 +653,8 @@ func runHeadless(screen: AgentScreen): Int64 {
         if (snapshot.contains("Session tree")) {
             sawSessionTree = true
         }
-        if (snapshot.contains("Extensions") && snapshot.contains("No external extensions are installed.")) {
-            sawExtensions = true
+        if (snapshot.contains("Plugins") && snapshot.contains("Plugins:")) {
+            sawPlugins = true
         }
         if (snapshot.contains("Agent Hub") && snapshot.contains("Main") && snapshot.contains("task spawns appear here") &&
             snapshot.contains("Enter switch") && !snapshot.contains("Select subagent") &&
@@ -693,8 +689,8 @@ func runHeadless(screen: AgentScreen): Int64 {
             "headless cjtui snapshot assertion failed:" + " chinese=" + sawSmallChinese.toString() + " status=" +
                 sawLargeStatus.toString() + " cards=" + sawCards.toString() + " tool-card=" + sawToolCard.toString() +
                 " approval-risk=" + sawApprovalRisk.toString() + " branch=" + sawBranch.toString() + " diagnostics=" +
-                sawDiagnostics.toString() + " tree=" + sawSessionTree.toString() + " extensions=" +
-                sawExtensions.toString() + " agent-hub=" + sawInlineAgentHub.toString() + " todo=" +
+                sawDiagnostics.toString() + " tree=" + sawSessionTree.toString() + " plugins=" +
+                sawPlugins.toString() + " agent-hub=" + sawInlineAgentHub.toString() + " todo=" +
                 sawTodoEditor.toString() + " todo-saved=" + sawTodoSaved.toString() + " todo-copy=" +
                 sawTodoCopy.toString() + " todo-strip=" + sawTodoStrip.toString() + " ask=" + sawAsk.toString() +
                 " ask-single-square=" + sawAskSingleSquare.toString() + " ask-single-selected=" +
@@ -957,31 +953,6 @@ func snapshotHasSize(
 
 func agentOverlayChromeObserved(): Bool {
     let theme = axyndraTheme()
-    let plan = planReviewDocument(
-        "Latest plan:\n\n# Goal\n\nShip the event-card migration.",
-        1,
-        theme
-    )
-    let unicodeBackend = TestBackend(area: Rect(0, 0, 60, 18))
-    let unicodeTerminal = Terminal(unicodeBackend, renderMode: RenderMode.Diff)
-    _ = unicodeTerminal.draw({
-        frame => renderAgentOverlay(
-            frame,
-            frame.area,
-            "Plan review",
-            plan,
-            0,
-            "↑↓ choose · Enter confirm · Esc cancel",
-            theme,
-            true,
-            document: true
-        )
-    })
-    let unicodeSnapshot = unicodeBackend.snapshot()
-    if (!unicodeSnapshot.contains("╭─ Plan review") || !unicodeSnapshot.contains("› 2. Keep planning") ||
-        !unicodeSnapshot.contains("╰─") || unicodeSnapshot.contains("+-- Plan review")) {
-        return false
-    }
 
     let asciiBackend = TestBackend(area: Rect(0, 0, 40, 12))
     let asciiTerminal = Terminal(asciiBackend, renderMode: RenderMode.Diff)

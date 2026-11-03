@@ -1,12 +1,15 @@
 package agent_core
 
 import agent_domain.*
+import agent_domain.CancellationToken as InternalCallCancellationToken
 import agent_ports.*
 import std.collection.*
 import std.convert.*
 import std.deriving.*
 import std.sync.*
 import std.time.*
+import yjson.*
+import yjson_support.*
 
 public enum ModelAttemptRecoveryMode {
     Disabled | RecoveryV1
@@ -58,6 +61,22 @@ public class ModelAttemptRecoveryPolicy {
             case ModelAttemptRecoveryMode.Disabled => false
         }
     }
+}
+
+func modelAttemptRecoveryForSettings180(settings: AgentValue, fallback: ModelAttemptRecoveryPolicy): ModelAttemptRecoveryPolicy {
+    if (settings.unifiedKind == ValueKind.Null) { return fallback }
+    if (requiredCoreTextField(settings, "schema") != "axyndra.operator-request-settings/v1") {
+        throw IllegalArgumentException("unsupported frozen request settings schema")
+    }
+    let value = requiredCoreValueField(settings, "model_attempt_recovery")
+    let mode = match (requiredCoreTextField(value, "mode")) {
+        case "recovery_v1" => ModelAttemptRecoveryMode.RecoveryV1
+        case "disabled" => ModelAttemptRecoveryMode.Disabled
+        case _ => throw IllegalArgumentException("unsupported frozen recovery mode")
+    }
+    ModelAttemptRecoveryPolicy(mode: mode, attemptTimeoutMillis: requiredCoreIntegerField(value, "attempt_timeout_ms"),
+        maxRecoveryRetries: requiredCoreIntegerField(value, "max_recovery_retries"), hardTimeoutMillis: requiredCoreIntegerField(value, "hard_timeout_ms"),
+        streamIdleMillis: requiredCoreIntegerField(value, "stream_idle_ms"), recentProgressMillis: requiredCoreIntegerField(value, "recent_progress_ms"))
 }
 
 // Online attempt timing is deliberately process-local. Implementations expose
@@ -132,6 +151,9 @@ public class AttemptDeadlineContext {
             min(policy.streamIdleMillis, idleLimitMillis)
         } else { policy.streamIdleMillis }
         lastProgressAt = started
+    }
+    public func acceptsEvents180(): Bool {
+        lock.lock(); try { accepting } finally { lock.unlock() }
     }
 
     public func record(event: ModelEvent): Bool {
@@ -322,6 +344,9 @@ public func retryDispositionForAttempt(
 // executeInternal() so they cannot bypass retry, timeout, cancellation, or a
 // parent run's durable request/usage/cost counters.
 interface InternalModelBudgetController {
+    func executeCanonicalInternal(request: ModelRequest, options: InternalModelCallOptions,
+        events: ModelEventSink): Result<ModelReply>
+
     func reserveInternalModelRequest(parent: AgentRunRequest): Result<Unit>
     func accountInternalModelUsage(parent: AgentRunRequest, usage: ModelUsage): Result<Unit>
 }
@@ -331,12 +356,16 @@ public class InternalModelCallOptions {
     public let maxAttempts: Int64
     public let parent: ?AgentRunRequest
     public let standaloneAccounting: Bool
+    public let purpose: ?InternalModelPurpose
+    public let cancellation: ?InternalCallCancellationToken
 
     public init(
         timeoutMillis!: Int64 = 30000,
         maxAttempts!: Int64 = 2,
         parent!: ?AgentRunRequest = None,
-        standaloneAccounting!: Bool = false
+        standaloneAccounting!: Bool = false,
+        purpose!: ?InternalModelPurpose = None,
+        cancellation!: ?InternalCallCancellationToken = None
     ) {
         if (timeoutMillis < 1 || maxAttempts < 1 || maxAttempts > 8) {
             throw IllegalArgumentException("internal model call limits are out of range")
@@ -348,14 +377,28 @@ public class InternalModelCallOptions {
         }
         this.parent = parent
         this.standaloneAccounting = standaloneAccounting
+        this.purpose = purpose
+        this.cancellation = cancellation
     }
 }
 
-public class ControlledModelPort <: ModelPort {
+public class ControlledModelPort <: ModelPort & ReturningModelInputPort159 & ReturningModelTranscriptPort159 {
     private let provider: ModelPort
     private let runs: ?RunRepository
     private let budgetLock = Mutex()
     private var budgetController: ?InternalModelBudgetController = None
+    private let internalCancellations = HashMap<String, () -> Result<Unit>>()
+
+    func registerInternalCancellation(id: String, cancel: () -> Result<Unit>): Result<Unit> {
+        budgetLock.lock(); try {
+            if (internalCancellations.contains(id)) { return Result.Err(AgentError(AgentErrorKind.Conflict,
+                "model.internal_call_active", "this internal request is already active")) }
+            internalCancellations[id] = cancel; Result.Ok(())
+        } finally { budgetLock.unlock() }
+    }
+    func releaseInternalCancellation(id: String): Unit {
+        budgetLock.lock(); try { internalCancellations.remove(id) } finally { budgetLock.unlock() }
+    }
 
     public init(provider: ModelPort, runs!: ?RunRepository = None) {
         this.provider = provider
@@ -381,6 +424,28 @@ public class ControlledModelPort <: ModelPort {
         provider.execute(request, events)
     }
 
+    public func executeReturningInput159(request: ModelRequest, events: ModelEventSink,
+        funding: ModelInputDataBudget159): ModelInputReturn159 {
+        // This concrete wrapper adds no input cache. Forward the actual typed
+        // outcome through the same provider selected by normal composition.
+        match (provider) {
+            case returning: ReturningModelInputPort159 => returning.executeReturningInput159(request, events, funding)
+            case _ => ModelInputReturn159.Held(provider.execute(request, events))
+        }
+    }
+
+    public func validatePolicySnapshot(model: String, snapshot: ?ModelExecutionCapabilitiesSnapshot): Result<Unit> {
+        provider.validatePolicySnapshot(model, snapshot)
+    }
+
+    public func transcriptSnapshotReturning159(request: ModelRequest, loan: ModelInputToolsBorrow159): ?String {
+        match (provider) {
+            case actual: ReturningModelTranscriptPort159 => actual.transcriptSnapshotReturning159(request, loan)
+            // This ordinary callback has no retirement contract. Its exact
+            // independent loan remains registered, even when it returns None.
+            case _ => provider.transcriptSnapshot(request)
+        }
+    }
     public func transcriptSnapshot(request: ModelRequest): ?String {
         provider.transcriptSnapshot(request)
     }
@@ -390,7 +455,9 @@ public class ControlledModelPort <: ModelPort {
     }
 
     public func cancel(requestId: String): Result<Unit> {
-        provider.cancel(requestId)
+        let internal = { => budgetLock.lock(); try { internalCancellations.get(requestId) }
+            finally { budgetLock.unlock() } }()
+        match (internal) { case Some(callback) => callback(); case None => provider.cancel(requestId) }
     }
 
     public func executeInternal(
@@ -398,6 +465,24 @@ public class ControlledModelPort <: ModelPort {
         options: InternalModelCallOptions,
         events!: ModelEventSink = {_ => ()}
     ): Result<ModelReply> {
+        if (options.cancellation.isSome() && (options.purpose.isNone() ||
+            options.purpose.getOrThrow() != InternalModelPurpose.ContextCompaction)) {
+            return Result.Err(AgentError(AgentErrorKind.InvalidInput, "model.internal_cancellation_owner_required",
+                "an explicit cancellation token requires its own canonical maintenance Run")) }
+        match (checkInternalCallCancellation(options)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        match (provider.validatePolicySnapshot(request.model, internalPolicySnapshot(request, options.parent))) {
+            case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        if (options.purpose.isSome()) {
+            return match (boundBudgetController()) {
+                case Some(controller) => controller.executeCanonicalInternal(request, options, events)
+                case None => Result.Err(AgentError(AgentErrorKind.RecoveryRequired, "model.internal_owner_required",
+                    "typed internal model calls require the actual Core Run owner")) }
+        }
+        executeInternalLoop(request, options, events)
+    }
+
+    func executeInternalLoop(request: ModelRequest, options: InternalModelCallOptions,
+        events: ModelEventSink): Result<ModelReply> {
         if (!request.tools.isEmpty() || request.parallelToolCalls ||
             match (request.toolChoice) {
                 case ModelToolChoice.NoTools => false
@@ -442,10 +527,12 @@ public class ControlledModelPort <: ModelPort {
         let started = MonoTime.now()
         var attempt: Int64 = 1
         while (attempt <= options.maxAttempts) {
-            match (internalParentGuard(options.parent, started, checkRunState: !options.standaloneAccounting)) {
+            match (internalCallGuard(options, started, checkRunState: !options.standaloneAccounting)) {
                 case Result.Ok(_) => ()
                 case Result.Err(error) => return Result.Err(error)
             }
+            match (provider.validatePolicySnapshot(request.model, internalPolicySnapshot(request, options.parent))) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
             let attemptCharge = match (standalone) {
                 case Some(ledger) => ledger.chargeAttempt()
                 case None => match ((options.parent, runBudgetController)) {
@@ -474,8 +561,8 @@ public class ControlledModelPort <: ModelPort {
                 })
             }
             while (future.tryGet().isNone()) {
-                match (internalParentGuard(
-                    options.parent,
+                match (internalCallGuard(
+                    options,
                     started,
                     checkRunState: false
                 )) {
@@ -606,9 +693,10 @@ public class ControlledModelPort <: ModelPort {
                             error.kind,
                             error.code,
                             error.message,
-                            retryable: false,
+                            retryable: error.retryable,
                             fallbackAllowed: error.fallbackAllowed,
-                            fields: fields.toArray()
+                            fields: fields.toArray(),
+                            attemptFailure: error.attemptFailure, observation: error.observation
                         )
                     } else {
                         error
@@ -642,7 +730,7 @@ public class ControlledModelPort <: ModelPort {
                         case Result.Ok(_) => ()
                         case Result.Err(usageError) => return Result.Err(usageError)
                     }
-                    if (!normalized.retryable || attempt == options.maxAttempts) {
+                    if (activity.hasEvents() || !normalized.retryable || attempt == options.maxAttempts) {
                         return Result.Err(normalized)
                     }
                     let remaining = options.timeoutMillis -
@@ -957,8 +1045,8 @@ public class ControlledModelPort <: ModelPort {
         while (true) {
             let elapsed = (MonoTime.now() - waitStarted).toMilliseconds()
             let checkRunState = elapsed - lastRunStateCheck >= 100
-            match (internalParentGuard(
-                options.parent,
+            match (internalCallGuard(
+                options,
                 started,
                 checkRunState: checkRunState && !options.standaloneAccounting
             )) {
@@ -979,6 +1067,12 @@ public class ControlledModelPort <: ModelPort {
             sleep(Duration.millisecond * min(10, bounded - elapsed))
         }
         Result.Ok(())
+    }
+
+    private func internalCallGuard(options: InternalModelCallOptions, started: MonoTime,
+        checkRunState!: Bool = true): Result<Unit> {
+        match (checkInternalCallCancellation(options)) { case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+        internalParentGuard(options.parent, started, checkRunState: checkRunState)
     }
 
     private func internalParentGuard(
@@ -1140,6 +1234,7 @@ func internalModelUsageDelta(
 
 func copyInternalSnapshot(
     value: RunSnapshot,
+    status!: ?RunState = None,
     sequence!: Int64 = -1,
     modelRequests!: Int64 = -1,
     inputTokens!: Int64 = -1,
@@ -1156,7 +1251,7 @@ func copyInternalSnapshot(
     RunSnapshot(
         value.runId,
         value.sessionId,
-        value.status,
+        match (status) { case Some(value) => value; case None => value.status },
         sequence: if (sequence >= 0) { sequence } else { value.sequence },
         summary: value.summary,
         error: value.error,
@@ -1264,7 +1359,26 @@ func attemptUsageFromError(
     let cacheWrite = cacheWriteTokens.getOrThrow()
     if (cacheRead > Int64.Max - cacheWrite ||
         cacheRead + cacheWrite > input || reasoning > output) { return None }
+    // New typed provider frames carry the same observed counters with explicit
+    // evidence. Legacy adapters without those fields retain Unknown semantics.
+    var usageSource = ModelUsageSource.Unknown
+    var usageEvidence: ?ModelUsageEvidence = None
+    match (error.field("usage_source")) {
+        case Some(name) => if (["provider_final", "provider_stream_final", "estimated"].contains(name)) {
+            match ((error.field("usage_protocol"), error.field("usage_event"))) {
+                case (Some(protocol), Some(event)) => if (protocol.trimAscii() != "" && event.trimAscii() != "") {
+                    usageEvidence = Some(ModelUsageEvidence(protocol, event,
+                        providerResponseId: error.field("usage_response_id") ?? ""))
+                    usageSource = modelUsageSourceFromName(name)
+                }
+                case _ => ()
+            }
+        }
+        case None => ()
+    }
     Some(ModelUsage(
+        source: usageSource,
+        evidence: usageEvidence,
         inputTokens: input,
         outputTokens: output,
         reasoningTokens: reasoning,
@@ -1408,7 +1522,7 @@ func resolvedModelRequestForAttempt(
         request.model,
         request.messages,
         system: request.system,
-        tools: request.tools,
+        tools: request.tools, inputToolsLifetime159: request.inputToolsLifetime159,
         thinking: resolved.thinking.effective,
         maxOutputTokens: resolved.output.effectiveWireLimit,
         wireMaxOutputTokens: Some(resolved.output.effectiveWireLimit),
@@ -1432,7 +1546,7 @@ func modelRequestForAttempt(value: ModelRequest, attempt: Int64): ModelRequest {
         value.model,
         value.messages,
         system: value.system,
-        tools: value.tools,
+        tools: value.tools, inputToolsLifetime159: value.inputToolsLifetime159,
         thinking: value.thinking,
         maxOutputTokens: value.maxOutputTokens,
         wireMaxOutputTokens: Some(value.wireMaxOutputTokens),
@@ -1470,7 +1584,7 @@ func attemptPolicyFor(
 
 func requestFromAttemptPolicy(request: ModelRequest, policy: AttemptPolicy): ModelRequest {
     ModelRequest(
-        policy.model, request.messages, system: request.system, tools: request.tools,
+        policy.model, request.messages, system: request.system, tools: request.tools, inputToolsLifetime159: request.inputToolsLifetime159,
         thinking: policy.thinking, maxOutputTokens: policy.maxOutputTokens,
         wireMaxOutputTokens: Some(policy.maxOutputTokens),
         resolvedPolicy: request.resolvedPolicy,
@@ -1553,3 +1667,18 @@ func planModelAttemptFailure(
     )
 }
 
+
+// Internal approval review may intentionally use another model. Its parent is
+// an accounting owner, not authority to borrow that parent's model policy.
+func internalPolicySnapshot(request: ModelRequest, parent: ?AgentRunRequest): ?ModelExecutionCapabilitiesSnapshot {
+    match (parent) {
+        case Some(value) => if (value.modelCapabilitiesSnapshot.modelId == request.model) {
+            Some(value.modelCapabilitiesSnapshot)
+        } else { None }
+        case None => None
+    }
+}
+
+func checkInternalCallCancellation(options: InternalModelCallOptions): Result<Unit> {
+    match (options.cancellation) { case Some(token) => token.check(); case None => Result.Ok(()) }
+}

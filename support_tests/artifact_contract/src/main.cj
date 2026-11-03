@@ -7,6 +7,7 @@ import yjson.*
 import agent_runtime.*
 import agent_domain.*
 import agent_product.*
+import workspace_legacy_oracle.*
 import agent_store.*
 import agent_testkit.*
 import persistence_runtime.*
@@ -136,7 +137,7 @@ func runStoreContract(root: String): Unit {
     )
 
     let workspace = LocalWorkspace(workspaceRoot)
-    let exported = store.export(
+    let exported = exportProductArtifact(store, 
         paged.reference,
         workspace,
         "exports/page.txt"
@@ -144,7 +145,7 @@ func runStoreContract(root: String): Unit {
     expect(
         fieldText(exported, "artifact_ref") == paged.reference &&
         String.fromUtf8(File.readFrom(workspaceRoot + "/exports/page.txt")) == pageSource &&
-        store.export(paged.reference, workspace, root + "/outside.txt").error().getOrThrow().code ==
+        exportProductArtifact(store, paged.reference, workspace, root + "/outside.txt").error().getOrThrow().code ==
             "artifact.export_outside_workspace",
         "explicit export is atomic inside the workspace and rejects escape targets"
     )
@@ -183,7 +184,7 @@ func runToolContract(root: String): Unit {
     let store = ProductArtifactStore(state, database: Some(database))
     let processes = LocalProcessPort(workspace, sandboxEnabled: true)
     let catalog = ToolCatalog()
-    installLocalTools(
+    installLegacyLocalTools(
         catalog,
         workspace,
         processes,
@@ -406,7 +407,7 @@ func runPersistenceFailureContract(root: String): Unit {
     let database = SqliteDatabase(operationState + "/state.db")
     let processes = LocalProcessPort(workspace, sandboxEnabled: true)
     let catalog = ToolCatalog()
-    installLocalTools(
+    installLegacyLocalTools(
         catalog,
         workspace,
         processes,

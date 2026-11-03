@@ -583,10 +583,14 @@ import yjson_support.*
 import axyndra_agent_testkit.*
 
 main(): Int64 {
-    let harness = ExtensionContractHarness(ConsumerExtension())
+    let harness = NativePluginContractHarness(ConsumerNativePlugin())
     let input = jsonObject([JsonObjectEntry("text", jsonString("package"))])
     let prepared = requireSdkOk(harness.prepare("consumer_echo", input, callId: "package-run"))
-    assertCapabilityRequested(prepared.definition, "workspace.read")
+    assertCapabilityNotRequested(prepared.definition, "workspace.read")
+    let output = requireSdkOk(harness.invoke(prepared))
+    if (output.field("text").getOrThrow().text != "package") {
+        throw IllegalStateException("native consumer lost full result")
+    }
     println("axyndra_agent_testkit external consumer passed")
     0
 }

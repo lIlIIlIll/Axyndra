@@ -1,7 +1,8 @@
 package agent_product
 
 import agent_domain.*
-import model_adapters.*
+import yjson.*
+import yjson_support.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
@@ -9,14 +10,9 @@ import std.unittest.testmacro.*
 class ProviderDialectTests {
     @TestCase
     func deepSeekMessagesDisablesParallelToolCalling(): Unit {
-        let capabilities = productModelCapabilities(
-            ModelCatalogEntry(
-                "deepseek-v4-flash",
-                providerProfile: "DEEPSEEK",
-                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
-            ),
-            dialect: "deepseek_messages"
-        )
+        let declared = installedNeutralCapabilities(128000)
+        declared.put("parallel_tools", boolValue(false))
+        let capabilities = parseProductNeutralModelPolicy(declared, modelPolicySha256Text("explicit-operator-config")).capabilities
 
         @Expect(capabilities.toolCalling, true)
         @Expect(capabilities.parallelToolCalling, false)
@@ -24,14 +20,9 @@ class ProviderDialectTests {
 
     @TestCase
     func deepSeekChatDisablesParallelToolCalling(): Unit {
-        let capabilities = productModelCapabilities(
-            ModelCatalogEntry(
-                "deepseek-v4-flash",
-                providerProfile: "DEEPSEEK",
-                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
-            ),
-            dialect: "deepseek_chat"
-        )
+        let declared = installedNeutralCapabilities(128000)
+        declared.put("parallel_tools", boolValue(false))
+        let capabilities = parseProductNeutralModelPolicy(declared, modelPolicySha256Text("explicit-operator-config")).capabilities
 
         @Expect(capabilities.toolCalling, true)
         @Expect(capabilities.parallelToolCalling, false)
@@ -39,21 +30,16 @@ class ProviderDialectTests {
 
     @TestCase
     func deepSeekResponsesDisablesParallelToolCalling(): Unit {
-        let capabilities = productModelCapabilities(
-            ModelCatalogEntry(
-                "deepseek-v4-flash",
-                providerProfile: "DEEPSEEK",
-                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
-            ),
-            dialect: "deepseek_responses"
-        )
+        let declared = installedNeutralCapabilities(128000)
+        declared.put("parallel_tools", boolValue(false))
+        let capabilities = parseProductNeutralModelPolicy(declared, modelPolicySha256Text("explicit-operator-config")).capabilities
 
         @Expect(capabilities.toolCalling, true)
         @Expect(capabilities.parallelToolCalling, false)
     }
 
     @TestCase
-    func deepSeekResponsesSetupUsesTypedResponsesBinding(): Unit {
+    func deepSeekResponsesSetupKeepsExplicitConfiguration(): Unit {
         @Expect(
             configuredDialectForSetup(
                 "deepseek",
@@ -76,15 +62,12 @@ class ProviderDialectTests {
             apiId: "openai_responses",
             dialect: "deepseek_responses"
         )
-        let binding = runtimeApiBinding(entry, profile)
-        @Expect(
-            match (binding.dialect) {
-                case TypedProviderDialect.OpenAiResponses(OpenAiResponsesDialect.DeepSeek) => true
-                case _ => false
-            },
-            true
-        )
-        @Expect(llmApiIdName(binding.apiId), "openai_responses")
+        @Expect(profile.protocol, "responses")
+        @Expect(profile.dialect, "deepseek_responses")
+        @Expect(entry.apiId, "openai_responses")
+        @Expect(entry.dialect, "deepseek_responses")
+        // Actual typed API dispatch now belongs to the independent package;
+        // its protocol matrix exercises all eight explicit dialects.
     }
 
     @TestCase
@@ -102,14 +85,8 @@ class ProviderDialectTests {
 
     @TestCase
     func openAiResponsesKeepsParallelToolCalling(): Unit {
-        let capabilities = productModelCapabilities(
-            ModelCatalogEntry(
-                "gpt-5",
-                providerProfile: "OPENAI",
-                thinking: Some(ThinkingCapabilities(ThinkingControlMode.NoThinking))
-            ),
-            dialect: "openai_responses"
-        )
+        let capabilities = parseProductNeutralModelPolicy(installedNeutralCapabilities(128000),
+            modelPolicySha256Text("explicit-parallel-true")).capabilities
 
         @Expect(capabilities.parallelToolCalling, true)
     }

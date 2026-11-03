@@ -1,0 +1,15 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "plugin_document_contract"
+  organization = ""
+  description = "Actual canonical SQLite plugin-document migration and CAS"
+  version = "1.0.0"
+  output-type = "executable"
+  link-option = "-lsqlite3"
+
+[dependencies]
+  "agent_domain" = { path = "../../agent_domain", output-type = "static" }
+  "agent_store" = { path = "../../agent_store", output-type = "static" }
+  "persistence_runtime" = { path = "../../persistence_runtime", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }

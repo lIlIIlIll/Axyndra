@@ -10,11 +10,24 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
+  "logical_json_payload" = { path = "../libs/logical_json_payload", output-type = "static" }
+  "agent_embed" = { path = "../agent_embed", output-type = "static" }
   "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_cli" = { path = "../agent_cli", output-type = "static" }
   "agent_core" = { path = "../agent_core", output-type = "static" }
   "agent_product" = { path = "../agent_product", output-type = "static" }
   "agent_domain" = { path = "../agent_domain", output-type = "static" }
-  "model_adapters" = { path = "../model_adapters", output-type = "static" }
   "tool_runtime" = { path = "../tool_runtime", output-type = "static" }
+  "agent_sdk" = { path = "../agent_sdk", output-type = "static" }
+
+# Test-only edge. acp_owned_lifecycle113_test.cj and rpc_queued_canonical113_test.cj
+# build real Store transactions for their oracles, while agent_rpc itself must
+# keep using the Product boundary instead of a production Store dependency.
+[test-dependencies]
+  "agent_store" = { path = "../agent_store", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

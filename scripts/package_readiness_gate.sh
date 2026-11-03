@@ -99,6 +99,7 @@ if ldd "$process_binary" | "$GREP" -q 'libprocess4cj_native'; then
   exit 1
 fi
 
+AXYNDRA_DISTRIBUTION="${AXYNDRA_DISTRIBUTION:-coding}" \
 AXYNDRA_SOURCE_BINARY="$process_binary" \
 AXYNDRA_PACKAGE_ROOT="$work_root/process-runtime" \
 AXYNDRA_SDK_ROOT="$sdk_root" \

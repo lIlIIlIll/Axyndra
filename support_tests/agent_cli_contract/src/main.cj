@@ -56,7 +56,8 @@ main(): Int64 {
         "exit",
         "quit"
     ]
-    let actual = availableSlashCommands()
+    let extras=todoCompletionFixture108()
+    let actual = availableSlashCommands(extraDefinitions:extras)
     expect(
         actual.size == expected.size,
         "slash registry exposes only implemented product commands"
@@ -67,12 +68,17 @@ main(): Int64 {
             contains(actual, name),
             "slash registry contains " + name
         )
+        if(name=="todo"){
+            expect(router.route("/todo").isError() && !isBuiltinSlashCommand("todo"),
+                "installed frontend metadata never registers a builtin execution route")
+            continue
+        }
         match (router.route("/" + name)) {
             case Result.Ok(RoutedInput.Command(_)) => ()
             case _ => throw IllegalStateException("slash command did not route locally: " + name)
         }
     }
-    let definitions = slashCommandDefinitions()
+    let definitions = presentedSlashCommandDefinitions(extras)
     for (definition in definitions) {
         expect(
             definition.group != "" && definition.description != "" && definition.usage.startsWith("/"),
@@ -93,7 +99,7 @@ main(): Int64 {
     expect(overflowSequence.isError() &&
         overflowSequence.error().getOrThrow().code == "cli.invalid_command_arguments",
         "decimal sequence overflow stays inside the Result boundary")
-    let surface = availableSlashSurfaceNames()
+    let surface = availableSlashSurfaceNames(extraDefinitions:extras)
     for (name in [
         "todo",
         "edit",
@@ -132,14 +138,12 @@ main(): Int64 {
             expect(name == "export" && arguments == ["dir/a b.html"], "quoted path routes as one argument")
         case _ => throw IllegalStateException("quoted path did not route")
     }
-    match (router.route("/todo append \"Build Phase\" write tests")) {
-        case Result.Ok(RoutedInput.Command(ClientCommand.Builtin(name, arguments))) =>
-            expect(
-                name == "todo" && arguments == ["append", "Build Phase", "write", "tests"],
-                "quoted todo phase remains one parsed argument"
-            )
-        case _ => throw IllegalStateException("quoted todo append did not route")
-    }
+    let todoTokens=parseCommandInput("/todo append \"Build Phase\" write tests").value().getOrThrow().tokens
+    expect(todoTokens.size==5 && todoTokens[0].value=="/todo" && todoTokens[1].value=="append" &&
+        todoTokens[2].value=="Build Phase" && todoTokens[3].value=="write" && todoTokens[4].value=="tests",
+        "quoted todo phase remains one parsed argument")
+    expect(router.route("/todo append \"Build Phase\" write tests").isError(),
+        "the generic parser preserves data while builtin execution remains retired")
     match (router.route("/reject operation-1 \"needs \\\"quotes\\\" and C:\\\\tmp\"")) {
         case Result.Ok(RoutedInput.Command(ClientCommand.RejectWithReason(operation, reason))) =>
             expect(
@@ -176,7 +180,7 @@ main(): Int64 {
             permissive.tokens[1].value == "dir/a b" && permissive.tokens[1].quoted,
         "completion parser preserves an open quoted token"
     )
-    completionEngineContract()
+    completionEngineContract(extras)
     for (definition in definitions where definition.name == "todo") {
         expect(
             definition.pathArgumentPrefixes == [["export"], ["import"]],
@@ -206,13 +210,13 @@ main(): Int64 {
         "install",
         "join",
         "models",
-        "mcp-server",
         "reviewer-dry-run",
         "plugin",
         "say",
         "setup",
         "shell",
         "read",
+        "tools",
         "ssh",
         "stats",
         "update",
@@ -236,7 +240,8 @@ main(): Int64 {
         case None => throw IllegalStateException("worktree alias is missing")
     }
     match (cli.resolve("q")) {
-        case Some(spec) => expect(spec.name == "search", "search alias resolves canonically")
+        case Some(spec) => expect(spec.name == "search" && spec.replacement != "",
+            "retired search alias reports its plugin migration instead of becoming a model prompt")
         case None => throw IllegalStateException("search alias is missing")
     }
     match (cli.resolve("join")) {
@@ -272,7 +277,7 @@ func expect(condition: Bool, message: String): Unit {
     }
 }
 
-func completionEngineContract(): Unit {
+func completionEngineContract(extras:Array<SlashCommandDefinition>): Unit {
     let slash = commandCompletionPlan("  /he", "  /he".size)
     expect(
         isSlashTarget(slash.target) && slash.activePrefix == "/he" && slash.replaceStart == 2,
@@ -283,12 +288,12 @@ func completionEngineContract(): Unit {
         isPathTarget(laterSlash.target),
         "a slash outside the first token remains ordinary path-like input"
     )
-    let subcommand = commandCompletionPlan("/todo do", "/todo do".size)
+    let subcommand = commandCompletionPlan("/todo do", "/todo do".size, extraDefinitions:extras)
     expect(
         isSubcommandTarget(subcommand.target) && subcommand.commandName == "todo",
         "subcommand position comes from slash registry metadata"
     )
-    let todoPath = commandCompletionPlan("/todo export ", "/todo export ".size)
+    let todoPath = commandCompletionPlan("/todo export ", "/todo export ".size, extraDefinitions:extras)
     expect(
         isPathTarget(todoPath.target) && todoPath.commandName == "todo",
         "path position comes from slash registry metadata"
@@ -374,8 +379,8 @@ func completionEngineContract(): Unit {
     )
 
     let noMatchSource = "/todo zz"
-    let noMatchPlan = commandCompletionPlan(noMatchSource, noMatchSource.size)
-    let noMatch = commandCompletionCandidates(noMatchPlan)
+    let noMatchPlan = commandCompletionPlan(noMatchSource, noMatchSource.size, extraDefinitions:extras)
+    let noMatch = commandCompletionCandidates(noMatchPlan,extraDefinitions:extras)
     expect(
         noMatch.isEmpty() && noMatchSource == "/todo zz",
         "no matching completion leaves the caller draft unchanged"
@@ -417,4 +422,12 @@ func isPathTarget(target: CommandCompletionTarget): Bool {
         case CommandCompletionTarget.Path => true
         case _ => false
     }
+}
+
+// Pure frontend metadata exercises the same generic extension point used by
+// Product's actual installed contribution. It grants no execution route.
+func todoCompletionFixture108():Array<SlashCommandDefinition>{
+    [SlashCommandDefinition("todo","Work modes","Manage selected Todo",usage:"/todo [subcommand]",
+        subcommands:["edit","copy","export","import","append","start","done","drop","rm","help","?"],
+        pathArgumentPrefixes:[["export"],["import"]])]
 }

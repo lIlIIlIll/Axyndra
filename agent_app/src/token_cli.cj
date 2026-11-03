@@ -6,16 +6,15 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
-import model_adapters.*
 import std.collection.*
 
 func runTokenCli(
     product: ProductRuntime,
     arguments: Array<String>
-): Int64 {
+, io!: CliIo180 = consoleCliIo180): Int64 {
     if (hasArgument(arguments, "--help") ||
         hasArgument(arguments, "-h")) {
-        println(
+        io.println(
             "axyndra token <provider-profile> [--raw] " +
             "[--force-refresh] [-a|--account <n>] [-l|--list]"
         )
@@ -23,7 +22,7 @@ func runTokenCli(
     }
     let positional = tokenPositionals(arguments)
     if (positional.size != 1) {
-        println(
+        io.println(
             "Usage: axyndra token <provider-profile> [--raw] " +
             "[--force-refresh] [-a|--account <n>] [-l|--list]"
         )
@@ -31,12 +30,12 @@ func runTokenCli(
     }
     let unknown = unknownTokenOption(arguments)
     if (unknown != "") {
-        println("Error: unknown token option: " + unknown)
+        io.println("Error: unknown token option: " + unknown)
         return 2
     }
     let missingValue = missingTokenOptionValue(arguments)
     if (missingValue != "") {
-        println("Error: " + missingValue + " requires an account value")
+        io.println("Error: " + missingValue + " requires an account value")
         return 2
     }
     let account = argumentValue(arguments, "--account")
@@ -44,7 +43,7 @@ func runTokenCli(
     if (hasArgument(arguments, "--list") ||
         hasArgument(arguments, "-l") ||
         account != "" || shortAccount != "") {
-        println(
+        io.println(
             "Error: no OAuth accounts found for provider profile \"" +
             positional[0] + "\". API-key profiles do not have " +
             "selectable accounts."
@@ -56,7 +55,7 @@ func runTokenCli(
     )) {
         case Result.Ok(value) => value
         case Result.Err(error) =>
-            println(error.code + ": " + error.message)
+            io.println(error.code + ": " + error.message)
             return 1
     }
     if (!hasArgument(arguments, "--raw")) {
@@ -66,7 +65,7 @@ func runTokenCli(
                     case Some(token) =>
                         if (token.unifiedKind == ValueKind.Text &&
                             token.text != "") {
-                            println(token.text)
+                            io.println(token.text)
                             return 0
                         }
                     case None => ()
@@ -74,7 +73,7 @@ func runTokenCli(
             case Result.Err(_) => ()
         }
     }
-    println(credential)
+    io.println(credential)
     0
 }
 

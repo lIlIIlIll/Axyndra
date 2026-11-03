@@ -1,5 +1,6 @@
 package agent_tui
 
+import agent_domain.Result
 import agent_cli.*
 import core.*
 import std.collection.*
@@ -41,9 +42,12 @@ class SetupDraft {
 
 class TuiMailbox {
     private let lock = Mutex()
-    private let events = ArrayList<TuiAgentEvent>()
+    private var events = ArrayList<TuiAgentEvent>()
     private let capacity: Int64
-    private let results = ArrayList<TuiTurnResult>()
+    private var results = ArrayList<TuiTurnResult>()
+    private var closing = false
+    private var failureRegistrations113: Int64 = 0
+    private var registryRegistrations167: Int64 = 0
     private let ready: () -> Unit
 
     init(capacity!: Int64 = 4096, ready!: () -> Unit = {=>}) {
@@ -65,6 +69,7 @@ class TuiMailbox {
             var needsReady = false
             lock.lock()
             try {
+                if (closing) { throw Exception("display.mailbox_references_closed") }
                 needsReady = events.isEmpty()
                 if (!events.isEmpty()) {
                     match (mergeTuiMailboxEvent(events[events.size - 1], event)) {
@@ -75,6 +80,10 @@ class TuiMailbox {
                     }
                 }
                 if (!accepted && events.size < capacity) {
+                    match (event) {
+                        case TuiAgentEvent.OwnedRegistryError167(display, _) =>
+                            fundRegistryMailbox167(display, 1)
+                        case _ => () }
                     events.add(event)
                     accepted = true
                 }
@@ -93,7 +102,11 @@ class TuiMailbox {
         var needsReady = false
         lock.lock()
         try {
+            if (closing) { throw Exception("display.mailbox_references_closed") }
             needsReady = events.isEmpty() && results.isEmpty()
+            match (value.ownedRegistryDisplay167) {
+                case Some(display) => fundRegistryMailbox167(display, 1)
+                case None => () }
             results.add(value)
         } finally {
             lock.unlock()
@@ -101,9 +114,57 @@ class TuiMailbox {
         if (needsReady) { ready() }
     }
 
+    private func fundRegistryMailbox167(display: OwnedTuiRegistryResponseDisplay167, extra: Int64): Unit {
+        // Invoked under the actual mailbox lock before its backing grows.
+        let count = ownedTuiInvoiceAdd(ownedTuiInvoiceAdd(registryRegistrations167, capacity),
+            ownedTuiInvoiceAdd(results.size, extra))
+        match (display.prepareQueueAndScreenCopies167(
+            ownedTuiInvoiceAdd(65536, ownedTuiInvoiceMultiply(count, 1024)))) {
+            case Result.Err(_) => throw Exception("display.registry_mailbox_payment_required")
+            case Result.Ok(_) => registryRegistrations167 = ownedTuiInvoiceAdd(registryRegistrations167, extra) }
+    }
+    func beginClosing(): Unit { lock.lock(); try { closing = true } finally { lock.unlock() } }
+    func pushOwned(display: OwnedTuiToolDisplay): Result<Unit> {
+        try { push(TuiAgentEvent.OwnedToolDisplay(display)); Result.Ok(()) }
+        catch (_: Exception) { ownedTuiDisplayError("display.mailbox_references_closed") }
+    }
+    func pushOwnedFailure113(display: OwnedTuiFailureDisplay113): Result<Unit> {
+        var needsReady = false
+        lock.lock()
+        try {
+            if (closing) { return ownedTuiDisplayError("display.mailbox_references_closed") }
+            if (events.size >= capacity) { return Result<Unit>.Err(TUI_FAILURE_MAILBOX_PENDING113) }
+            if (failureRegistrations113 >= (Int64.Max - 65536) / 512 - capacity) {
+                return ownedTuiDisplayError("display.invoice_overflow") }
+            // This actual locked counter changes only after enqueue. Fund
+            // all mailbox backing plus the complete cumulative Screen-array
+            // replacement before a new enum/node/backing is constructed.
+            match (display.prepareQueueAndScreenCopies113(
+                65536 + (failureRegistrations113 + 1 + capacity) * 512)) {
+                case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
+            needsReady = events.isEmpty()
+            events.add(TuiAgentEvent.OwnedFailureDisplay113(display))
+            failureRegistrations113++
+        } finally { lock.unlock() }
+        // UI polling can use this path without blocking its own mailbox
+        // consumer. A full queue retains the producer's real paid token.
+        if (needsReady) { ready() }
+        Result<Unit>.Ok(())
+    }
+    func clearAfterProducerRetirement(): Unit {
+        lock.lock()
+        try {
+            if (!closing) { throw Exception("display.mailbox_producer_not_closed") }
+            events = ArrayList<TuiAgentEvent>(); results = ArrayList<TuiTurnResult>()
+        } finally { lock.unlock() }
+    }
     func drain(): Array<TuiAgentEvent> {
         lock.lock()
         try {
+            for (event in events) {
+                match (event) {
+                    case TuiAgentEvent.OwnedRegistryError167(display, _) => fundRegistryMailbox167(display, 0)
+                    case _ => () } }
             let values = events.toArray()
             events.clear()
             values

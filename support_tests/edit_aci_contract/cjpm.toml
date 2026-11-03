@@ -10,3 +10,4 @@
 [dependencies]
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_product" = { path = "../../agent_product", output-type = "static" }
+  "workspace_legacy_oracle" = { path = "../workspace_legacy_oracle", output-type = "static" }

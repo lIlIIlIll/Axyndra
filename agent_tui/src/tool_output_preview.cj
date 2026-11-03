@@ -65,7 +65,10 @@ private func validUtf8Prefix(value: String, maximum: Int64): (String, Int64) {
     var end = min(maximum, bytes.size)
     while (end > 0) {
         try {
-            return (String.fromUtf8(bytes[..end]), end)
+            // The constructor sees only a genuinely new bounded prefix
+            // backing, even on an SDK that adopts rather than copies input.
+            let copied = Array<Byte>(end, {index => bytes[index]})
+            return (String.fromUtf8(copied), end)
         } catch (_: Exception) {
             end--
         }

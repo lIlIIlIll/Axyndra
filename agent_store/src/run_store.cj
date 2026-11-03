@@ -7,7 +7,6 @@ import yjson.*
 import std.convert.*
 import agent_domain.*
 import agent_runtime.*
-import agent_skills.*
 
 public class DurableRunSnapshot {
     public let id: RunId
@@ -17,7 +16,8 @@ public class DurableRunSnapshot {
     public let state: RunState
     public let transitionSequence: Int64
     public let lane: ?ModelLane
-    public let skills: ?SkillStackSnapshot
+    public let contextSnapshot: ?InvocationContextProjection
+    public let contextSnapshotIssue: ?String
     public let budget: AgentValue
     public let usage: AgentValue
     public let startedAtMillis: Int64
@@ -33,13 +33,14 @@ public class DurableRunSnapshot {
         state: RunState,
         transitionSequence: Int64,
         lane: ?ModelLane,
-        skills: ?SkillStackSnapshot,
+        contextSnapshot: ?InvocationContextProjection,
         budget: AgentValue,
         usage: AgentValue,
         startedAtMillis: Int64,
         finishedAtMillis: ?Int64,
         cancellationReason: ?String,
-        executionLaneId!: LaneId = LaneId("main")
+        executionLaneId!: LaneId = LaneId("main"),
+        contextSnapshotIssue!: ?String = None
     ) {
         this.id = id
         this.threadId = threadId
@@ -48,7 +49,8 @@ public class DurableRunSnapshot {
         this.state = state
         this.transitionSequence = transitionSequence
         this.lane = lane
-        this.skills = skills
+        this.contextSnapshot = contextSnapshot
+        this.contextSnapshotIssue = contextSnapshotIssue
         this.budget = budget
         this.usage = usage
         this.startedAtMillis = startedAtMillis
@@ -58,7 +60,7 @@ public class DurableRunSnapshot {
     }
 
     public func hasRecoverableLaunchSnapshot(): Bool {
-        lane.isSome() && skills.isSome()
+        lane.isSome() && contextSnapshot.isSome()
     }
 }
 
@@ -92,16 +94,20 @@ public class SqliteRunStore {
         if (rows.size != 1) { throw IllegalStateException("durable Run does not exist") }
         let row = rows[0]
         let laneValue = decodeStoredValue(row.required(4))
-        let skillValue = decodeStoredValue(row.required(5))
         let lane: ?ModelLane = if (emptyStoredObject(laneValue)) {
             None
         } else {
             Some(modelLaneFromSnapshotValue(laneValue))
         }
-        let skills: ?SkillStackSnapshot = if (emptyStoredObject(skillValue)) {
+        // Historical bytes remain in the existing column. An unsupported or
+        // malformed snapshot is inspectable but cannot resume model execution.
+        var contextSnapshotIssue: ?String = None
+        let contextSnapshot: ?InvocationContextProjection = try {
+            let contextValue = decodeStoredValue(row.required(5))
+            if (emptyStoredObject(contextValue)) { None } else { Some(contextSnapshotFromValue(contextValue)) }
+        } catch (_: Exception) {
+            contextSnapshotIssue = Some("context.snapshot_unsupported_or_invalid")
             None
-        } else {
-            Some(skillStackFromSnapshotValue(skillValue))
         }
         let journalRows = query(
             "SELECT COALESCE(MAX(sequence),0) FROM run_journal WHERE run_id=" +
@@ -112,10 +118,10 @@ public class SqliteRunStore {
             parseRunStoreInt(row.required(2), "Run epoch"),
             runStateFromName(row.required(3)),
             parseRunStoreInt(journalRows[0].required(0), "Run journal sequence"),
-            lane, skills, decodeStoredValue(row.required(6)), decodeStoredValue(row.required(7)),
+            lane, contextSnapshot, decodeStoredValue(row.required(6)), decodeStoredValue(row.required(7)),
             parseRunStoreInt(row.required(8), "Run start timestamp"),
             optionalRunStoreInt(row[9], "Run finish timestamp"), row[10],
-            executionLaneId: LaneId(row.required(11))
+            executionLaneId: LaneId(row.required(11)), contextSnapshotIssue: contextSnapshotIssue
         )
     }
 

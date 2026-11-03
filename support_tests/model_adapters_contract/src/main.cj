@@ -1,5 +1,7 @@
 package model_adapters_contract
 
+import agent_testkit.fixtureModelPort
+
 import yjson_support.*
 
 import yjson.*
@@ -63,8 +65,8 @@ main(): Int64 {
         domain.ValueField("count", domain.integerValue(2)),
         domain.ValueField("enabled", domain.boolValue(true))
     ])
-    let encoded = encodeAgentValue(value)
-    let decoded = decodeAgentValue(encoded)
+    let encoded = domain.encodeAgentValue(value)
+    let decoded = domain.decodeAgentValue(encoded)
     match (decoded) {
         case domain.Result.Ok(restored) =>
             expect(match (restored.unifiedKind) {

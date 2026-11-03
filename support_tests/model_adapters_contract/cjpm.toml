@@ -7,6 +7,7 @@
   link-option = "--whole-archive -L${AXYNDRA_CLANG_RUNTIME_PATH} -lclang_rt.profile-x86_64 --no-whole-archive"
 
 [dependencies]
+  "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }

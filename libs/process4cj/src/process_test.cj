@@ -11,6 +11,33 @@ import std.unittest.testmacro.*
 @Test
 class Process4CjTests {
     @TestCase
+    func liveStatusWaitsDoNotStarveOtherProcessesOrTheirInput(): Unit {
+        let children = ArrayList<ManagedProcess>()
+        try {
+            for (_ in 0..16) {
+                children.add(startProcess(ProcessCommand("/bin/cat", terminateProcessTree: true)))
+                // Let each real status waiter run while its child needs input.
+                sleep(Duration.millisecond * 10)
+            }
+            for (index in 0..children.size) {
+                let child = children[index]
+                @Expect(child.isAlive(), true)
+                child.writeStdin(("child-" + index.toString() + "\n").toArray())
+                @Expect(child.closeInput(), true)
+            }
+            for (index in 0..children.size) {
+                let child = children[index]
+                @Expect(decodeProcessOutput(readBounded(child.stdout, BoundedOutputBudget(64))),
+                    "child-" + index.toString() + "\n")
+                @Expect(child.wait().code, 0)
+                @Expect(child.close(), true)
+            }
+        } finally {
+            for (child in children) { let _ = child.close() }
+        }
+    }
+
+    @TestCase
     func deadlineIncludesInheritedPipesAfterLeaderExit() {
         let started = processTestMillis()
         let source = CancellationSource(deadlineMillis: started + 150)

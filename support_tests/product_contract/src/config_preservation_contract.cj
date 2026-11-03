@@ -1,6 +1,7 @@
 package product_contract
 
 import agent_product.*
+import workspace_legacy_oracle.*
 import agent_domain.*
 import std.fs.*
 
@@ -16,7 +17,7 @@ func runConfigPreservationContract(root: String): Unit {
     upsertProviderProfile(settings, originalProfile).value().getOrThrow()
     upsertModelCatalogEntry(settings, ModelCatalogEntry("model", providerProfile: "old")).value().getOrThrow()
     upsertModelCatalogEntry(settings, ModelCatalogEntry("reviewer", providerProfile: "old")).value().getOrThrow()
-    let product = openProduct(config: ProductConfig(settingsRoot: settings,
+    let product = openLegacyWorkspaceProduct(config: ProductConfig(settingsRoot: settings,
         stateRoot: root + "/state", workspaceRoot: root, startupMode: ProductStartupMode.LocalMaintenance)).value().getOrThrow()
     try {
         expect(product.saveTheme("light").isOk(), "theme mutation succeeds")

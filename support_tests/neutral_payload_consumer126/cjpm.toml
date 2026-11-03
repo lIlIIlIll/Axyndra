@@ -1,0 +1,12 @@
+[package]
+cjc-version = "1.1.0"
+name = "neutral_payload_consumer126"
+version = "1.0.0"
+output-type = "executable"
+
+[dependencies]
+"agent_domain" = { path = "../../agent_domain", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

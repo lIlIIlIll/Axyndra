@@ -8,8 +8,6 @@ import agent_runtime.*
 import agent_domain.*
 import agent_product.*
 import agent_store.*
-import agent_testkit.*
-import persistence_runtime.*
 import tool_runtime.*
 import std.collection.*
 import std.fs.*
@@ -19,6 +17,7 @@ main(): Int64 {
         Directory.create("target", recursive: true)
     }
     let root = Directory.createTemp("target").toString()
+    var opened: ?DebugInstalledContract = None
     try {
         File.writeTo(root + "/note.txt", "before\n".toArray())
         File.writeTo(root + "/debug-target", "target\n".toArray())
@@ -37,27 +36,10 @@ main(): Int64 {
                 "\"attachDefaults\":{}}}}"
             ).toArray()
         )
-        let workspace = LocalWorkspace(root)
-        let catalog = ToolCatalog()
-        let processes = LocalProcessPort(workspace)
-        expect(
-            installLocalTools(
-                catalog,
-                workspace,
-                processes,
-                allowUnsafeDirectLaunchForTests: true
-            ).isOk(),
-            "install debug tool"
-        )
-        expectDebugSchema(catalog)
-        let database = SqliteDatabase(root + "/state.db")
-        let pipeline = ToolPipeline(
-            catalog,
-            InMemoryOperationRuntimePort(),
-            SqliteAuditRepository(database),
-            ProductIds(),
-            policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
-        )
+        let pipeline = DebugInstalledContract(root, adapter)
+        opened = Some(pipeline)
+        expect(pipeline.installed(), "install debug tool")
+        expectDebugSchema(pipeline)
         let context = ToolInvocationContext(
             RunId("debug-contract"),
             SessionId("debug-contract"),
@@ -150,17 +132,16 @@ main(): Int64 {
             context,
             debugCall("attach-terminate", "terminate")
         )
-        processes.close()
-        database.close()
         println("debug contract passed")
         0
     } finally {
+        match (opened) { case Some(value) => value.close(); case None => () }
         let _ = removeIfExists(root, recursive: true)
     }
 }
 
 func verifyBreakpoints(
-    pipeline: ToolPipeline,
+    pipeline: DebugInstalledContract,
     context: ToolInvocationContext
 ): Unit {
     assertAction(pipeline, context, debugCall(
@@ -236,7 +217,7 @@ func verifyBreakpoints(
 }
 
 func verifyInspection(
-    pipeline: ToolPipeline,
+    pipeline: DebugInstalledContract,
     context: ToolInvocationContext
 ): Unit {
     assertAction(pipeline, context, debugCall("threads", "threads"))
@@ -314,7 +295,7 @@ func verifyInspection(
 }
 
 func verifyControl(
-    pipeline: ToolPipeline,
+    pipeline: DebugInstalledContract,
     context: ToolInvocationContext
 ): Unit {
     assertAction(pipeline, context, debugCall("continue", "continue"))
@@ -338,7 +319,7 @@ func debugCall(
 }
 
 func assertAction(
-    pipeline: ToolPipeline,
+    pipeline: DebugInstalledContract,
     context: ToolInvocationContext,
     call: ToolCall
 ): Unit {
@@ -352,11 +333,11 @@ func assertAction(
 }
 
 func run(
-    pipeline: ToolPipeline,
+    pipeline: DebugInstalledContract,
     context: ToolInvocationContext,
     call: ToolCall
 ): ToolResult {
-    match (executePipelineCall(pipeline, context, call)) {
+    match (pipeline.execute(context, call)) {
         case Result.Ok(ToolInvocationResult.Completed(value)) => value
         case Result.Ok(_) =>
             throw IllegalStateException(
@@ -373,7 +354,7 @@ func expect(condition: Bool, message: String): Unit {
     if (!condition) { throw IllegalStateException(message) }
 }
 
-func expectDebugSchema(catalog: ToolCatalog): Unit {
+func expectDebugSchema(fixture: DebugInstalledContract): Unit {
     let expected = [
         "action", "program", "args", "adapter", "cwd", "file",
         "line", "function", "name", "condition", "hit_condition",
@@ -385,8 +366,8 @@ func expectDebugSchema(catalog: ToolCatalog): Unit {
         "resolve_symbols", "allow_partial", "start_module",
         "module_count", "timeout"
     ]
-    for (definition in catalog.definitions()
-         where definition.name == "debug") {
+    for (definition in fixture.product.tools(threadId: Some(ThreadId("debug-contract")))
+         where definition.name == fixture.name()) {
         let properties = definition.inputSchema
             .field("properties").getOrThrow()
         let required = definition.inputSchema

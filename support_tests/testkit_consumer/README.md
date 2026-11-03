@@ -1,6 +1,3 @@
-# Frozen stable Testkit consumer
+# Frozen Native testkit 3 consumer
 
-This fixture models an external consumer of the stable `agent_sdk` and
-`axyndra_agent_testkit` surfaces. It intentionally uses no experimental intent or
-fault API. Do not update it for ordinary compatible changes; changing this
-source requires an explicit reviewed compatibility-baseline decision.
+This independent source consumer uses NativePluginContractHarness with a genuine NativePluginHandler and checks malformed input and complete output. It has no Host executor, Source, OperationIntent or approval. Its entire old consumer/oracle is retained in legacy_testkit_consumer and executed separately by the SDK gate. Ordinary compatible v3 changes require this actual consumer to remain unchanged.

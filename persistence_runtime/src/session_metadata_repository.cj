@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_store.*
-import model_adapters.*
 import std.convert.*
 
 public interface SessionMetadataRepository {
@@ -29,11 +28,10 @@ public interface SessionMetadataRepository {
     func setWorkMode(sessionId: SessionId, mode: String): Result<Unit>
     func draft(sessionId: SessionId): Result<String>
     func setDraft(sessionId: SessionId, value: String): Result<Unit>
-    func todoPhases(sessionId: SessionId): Result<AgentValue>
-    func setTodoPhases(sessionId: SessionId, phases: AgentValue): Result<Unit>
+    func legacyTodoBytes(sessionId: SessionId): Result<String>
     func goalState(sessionId: SessionId): Result<AgentValue>
-    func setGoalState(sessionId: SessionId, state: AgentValue): Result<Unit>
-    func clearGoalState(sessionId: SessionId): Result<Unit>
+    // Read-only exact cold history; an absent/empty row has no goal.
+    func legacyGoalBytes(sessionId: SessionId): Result<String>
     func copy(source: SessionId, target: SessionId): Result<Unit>
 }
 
@@ -168,35 +166,34 @@ public class SqliteSessionMetadataRepository <: SessionMetadataRepository {
         setTextField(sessionId, "draft", value)
     }
 
-    public func todoPhases(sessionId: SessionId): Result<AgentValue> {
-        valueField(sessionId, "todo_payload", listValue([]))
-    }
-
-    public func setTodoPhases(sessionId: SessionId, phases: AgentValue): Result<Unit> {
-        if (phases.unifiedKind != ValueKind.List) {
-            return metadataInvalid("persistence.todo_phases_not_list", "todo phases must be a list")
+    // Preserved cold legacy input only. Current Todo facts live exclusively
+    // in plugin_documents; production has no todo_payload mutation API.
+    public func legacyTodoBytes(sessionId: SessionId): Result<String> {
+        match(textField(sessionId,"todo_payload")){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(value)=>Result.Ok(if(value==""){ "[]" }else{value})
         }
-        setTextField(sessionId, "todo_payload", encodeAgentValue(phases))
     }
 
     public func goalState(sessionId: SessionId): Result<AgentValue> {
         valueField(sessionId, "goal_payload", nullValue())
     }
 
-    public func setGoalState(sessionId: SessionId, state: AgentValue): Result<Unit> {
-        if (state.unifiedKind != ValueKind.Object) {
-            return metadataInvalid("persistence.goal_state_not_object", "goal state must be an object")
+    public func legacyGoalBytes(sessionId: SessionId): Result<String> {
+        match(textField(sessionId,"goal_payload")){
+            case Result.Err(error)=>Result.Err(error)
+            case Result.Ok(value)=>Result.Ok(if(value==""){ "null" }else{value})
         }
-        setTextField(sessionId, "goal_payload", encodeAgentValue(state))
-    }
-
-    public func clearGoalState(sessionId: SessionId): Result<Unit> {
-        setTextField(sessionId, "goal_payload", encodeAgentValue(nullValue()))
     }
 
     public func copy(source: SessionId, target: SessionId): Result<Unit> {
         try {
             database.transaction<Unit>({ transaction =>
+                if (source.value == target.value) { throw IllegalArgumentException("fork source and target must differ") }
+                if (!transaction.query("SELECT 1 FROM plugin_documents WHERE thread_id=? LIMIT 1", [SqlParameter.Text(target.value)]).isEmpty()) {
+                    throw IllegalStateException("fork target already has plugin documents") }
+                transaction.execute("INSERT INTO plugin_documents(thread_id,lane_id,namespace,document_key,revision,payload) SELECT ?,lane_id,namespace,document_key,revision,payload FROM plugin_documents WHERE thread_id=?",
+                    [SqlParameter.Text(target.value), SqlParameter.Text(source.value)])
                 let rows = transaction.query(
                     "SELECT name,summary,updated_at_millis,model,workspace_root,cwd,fast_mode," +
                         "parent_thread_ref,work_mode,draft,todo_payload,goal_payload " +
@@ -282,7 +279,7 @@ func ensureMetadataRow(transaction: SqliteTransaction, sessionId: SessionId): Un
     transaction.execute(
         "INSERT OR IGNORE INTO thread_metadata(thread_id,name,summary,updated_at_millis,model," +
             "workspace_root,cwd,fast_mode,parent_thread_ref,work_mode,draft,todo_payload,goal_payload) VALUES(" +
-            sqliteText(sessionId.value) + ",'','',0,'','','',0,'','','','[]','null')"
+            sqliteText(sessionId.value) + ",'','',0,'','','',0,'','','','','')"
     )
 }
 

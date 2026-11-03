@@ -1,0 +1,18 @@
+{
+  "schema": "axyndra.policy-defaults/v1",
+  "bindings": {
+    "memory": {
+      "package": "plugins/memory",
+      "provider": "memory"
+    },
+    "compaction": {
+      "package": "plugins/compaction",
+      "provider": "summarize"
+    },
+    "workflow": {
+      "package": "plugins/workflow",
+      "provider": "propose",
+      "plan_tool": "plan_write"
+    }
+  }
+}

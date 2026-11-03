@@ -19,6 +19,7 @@ import base64
 from dataclasses import dataclass, field
 import hashlib
 import json
+import importlib.util
 import sqlite3
 import os
 from pathlib import Path
@@ -188,8 +189,8 @@ def matrix_errors(matrix: dict[str, Any]) -> list[str]:
         "copy-and-suspend",
         "tool-loop",
         "builtin-boundaries",
-        "mcp-stdio",
-        "mcp-http",
+        "service-inventory",
+        "service-missing",
         "blocked",
     }
     for scenario in scenario_values:
@@ -350,6 +351,8 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
         "XDG_STATE_HOME": str(home / "xdg-state"),
         "XDG_CACHE_HOME": str(home / "xdg-cache"),
         "TMPDIR": str(case_dir / "tmp"),
+        "TMP": str(case_dir / "tmp"),
+        "TEMP": str(case_dir / "tmp"),
         "TUI_PATH_COVERAGE_PROVIDER_PORT": str(port),
         # The value is intentionally fictional and only exists in this case.
         "AXYNDRA_TUI_COVERAGE_KEY": "tui-coverage-fake-key-2026",
@@ -359,6 +362,8 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
         "CANGJIE_SDK_ROOT",
         "CANGJIE_STDX_PATH",
         "CJ_SDK_LIBPATH",
+        "XDG_RUNTIME_DIR",
+        "AXYNDRA_NETWORK_BRIDGE",
         "LD_LIBRARY_PATH",
     ):
         value = os.environ.get(name)
@@ -380,6 +385,7 @@ def clean_environment(home: Path, workspace: Path, case_dir: Path, *, port: int 
     existing_ld = environment.get("LD_LIBRARY_PATH", "")
     environment["LD_LIBRARY_PATH"] = ":".join(item for item in (native, existing_ld or f"{stdx}:{runtime}:{tools}") if item)
     environment["AXYNDRA_NATIVE_ROOT"] = native
+    environment.setdefault("AXYNDRA_NETWORK_BRIDGE", str(ROOT / "libs" / "process4cj" / "native" / "sandbox-net-bridge"))
     for directory in (home, workspace, case_dir / "tmp", *(home / name for name in ("xdg-config", "xdg-data", "xdg-state", "xdg-cache"))):
         directory.mkdir(parents=True, exist_ok=True)
     # No DISPLAY/WAYLAND_DISPLAY/clipboard service is inherited.  This keeps
@@ -440,7 +446,7 @@ class CaseRun:
         self.tmp.mkdir(parents=True, exist_ok=True)
         self.environment = clean_environment(self.home, self.workspace, self.case_dir)
         self.tmux_environment = dict(self.environment)
-        self.tmux_environment["TMUX_TMPDIR"] = "/tmp/axyndra-tui-tmux"
+        self.tmux_environment["TMUX_TMPDIR"] = os.environ.get("AXYNDRA_TUI_TMUX_TMPDIR", str(self.case_dir.parent.parent / "tmux"))
         Path(self.tmux_environment["TMUX_TMPDIR"]).mkdir(parents=True, exist_ok=True)
         self.assertions = AssertionRecorder(self.case_dir / "assertions.json")
         self.input_path = self.case_dir / "input.jsonl"
@@ -451,7 +457,7 @@ class CaseRun:
         self.fixture_stderr_path = self.case_dir / "fixture-stderr.log"
         self.stderr_path = self.case_dir / "stderr.log"
         self.terminal_path = self.case_dir / "terminal.ansi"
-        self.socket_name = f"axyndra-tui-{os.getpid()}-{time.time_ns()}"
+        self.socket_name = f"ax-{os.getpid()}-{time.time_ns():x}"
         self.tmux_socket = self.socket_name
         self.session = f"tui-{os.getpid()}-{time.time_ns()}"
 
@@ -829,6 +835,8 @@ class CaseRun:
 
 
     def launch(self, *, initial_prompt: str = "", extra_args: list[str] | None = None) -> None:
+        from workflow_family_fixture196 import prepare_workflow196
+        prepare_workflow196(self)
         gate = self.case_dir / "release.exec"
         command = [str(self.candidate), "--cwd", str(self.workspace)]
         if extra_args:
@@ -855,6 +863,8 @@ class CaseRun:
         self.tmux(
             [
                 "new-session",
+                "-c",
+                str(self.workspace),
                 "-d",
                 "-x",
                 str(self.width),
@@ -1711,7 +1721,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
         return "responses", {
             "case_id": case["case_id"],
             "kind": "tool",
-            "tool_name": "task",
+            "tool_name": "plugin.axyndra:workflow.task",
             "tool_arguments": task_arguments,
             "event_delay": 0.15,
             "rules": [
@@ -1750,7 +1760,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
         return "responses", {
             "case_id": case["case_id"],
             "kind": "tool",
-            "tool_name": "task",
+            "tool_name": "plugin.axyndra:workflow.task",
             "tool_arguments": task_arguments,
             "event_delay": 0.05,
             "rules": [
@@ -1816,7 +1826,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
             "responses": [
                 {
                     "kind": "tool",
-                    "tool_name": "task",
+                    "tool_name": "plugin.axyndra:workflow.task",
                     "tool_arguments": {
                         "context": "task process boundary fixture",
                         "tasks": [],
@@ -1825,13 +1835,13 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["task-schema-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "yield",
+                    "tool_name": "plugin.axyndra:workflow.yield",
                     "tool_arguments": {"result": {"data": {"summary": "invalid-yield-data"}}},
                 },
                 {"kind": "text", "chunks": ["yield-schema-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process",
                     "tool_arguments": {
                         "op": "start",
                         "name": "boundary-daemon",
@@ -1843,13 +1853,13 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-start-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {"op": "ps"},
                 },
                 {"kind": "text", "chunks": ["process-ps-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {
                         "op": "logs",
                         "name": "boundary-daemon",
@@ -1859,7 +1869,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-logs-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process",
                     "tool_arguments": {
                         "op": "restart",
                         "name": "boundary-daemon",
@@ -1869,7 +1879,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-restart-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {
                         "op": "logs",
                         "name": "boundary-daemon",
@@ -1879,7 +1889,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-restarted-logs-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process",
                     "tool_arguments": {
                         "op": "send",
                         "name": "boundary-daemon",
@@ -1889,7 +1899,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-signal-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {
                         "op": "wait",
                         "name": "boundary-daemon",
@@ -1900,7 +1910,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-wait-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {
                         "op": "describe",
                         "name": "boundary-daemon",
@@ -1909,7 +1919,7 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
                 {"kind": "text", "chunks": ["process-describe-recovered"], "event_delay": 0.02},
                 {
                     "kind": "tool",
-                    "tool_name": "hub",
+                    "tool_name": "plugin.axyndra:workflow.hub_process_read",
                     "tool_arguments": {"op": "ps"},
                 },
                 {"kind": "text", "chunks": ["process-final-ps-recovered"], "event_delay": 0.02},
@@ -2310,23 +2320,9 @@ def response_behavior(case: dict[str, Any], case_dir: Path) -> tuple[str, dict[s
             "event_delay": 0.02,
         }, ["copy-resume"]
 
-    if execution in {"mcp-stdio", "mcp-http"}:
-        return "responses", {
-            "case_id": case["case_id"],
-            "responses": [
-                {
-                    "kind": "tool",
-                    "tool_name": (
-                        "mcp__fixture_http__environment"
-                        if execution == "mcp-http"
-                        else "mcp__fixture__environment"
-                    ),
-                    "tool_arguments": {},
-                    "event_delay": 0.02,
-                },
-                {"kind": "text", "chunks": ["mcp-final-response"], "event_delay": 0.02},
-            ],
-        }, ["mcp-coverage"]
+    if execution in {"service-inventory", "service-missing"}:
+        return "responses", {"case_id": case["case_id"], "kind": "text",
+                             "chunks": ["unexpected-provider-effect"]}, []
     raise MatrixError(f"no fixture behavior for execution {execution}")
 
 
@@ -3495,7 +3491,7 @@ def run_task_process_boundaries(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.assertions.check(
         "task_process_request_contract",
         len(requests) == 22
-        and all(needle in request_blob for needle in ('"task"', '"yield"', '"hub"'))
+        and all(needle in request_blob for needle in ('"plugin.axyndra:workflow.task"', '"plugin.axyndra:workflow.yield"', '"plugin.axyndra:workflow.hub_process"', '"plugin.axyndra:workflow.hub_process_read"'))
         and all(
             needle in evidence_text
             for needle in (
@@ -4397,7 +4393,7 @@ def run_overlay_routing(case_run: CaseRun, _: dict[str, Any]) -> None:
     wait_text_absent(case_run, "Select model", "model-closed")
 
     case_run.send("extensions-open", b"/extensions\r")
-    case_run.wait_screen(("Extensions",), "extensions-overlay")
+    case_run.wait_screen(("Plugins", "Plugins:"), "extensions-overlay")
     case_run.send("extensions-paste", bracketed_paste(marker.encode("utf-8")))
     case_run.send("extensions-mouse", b"\x1b[<64;5;5M")
     extensions_frame = case_run.capture("extensions-owned-input")
@@ -4407,7 +4403,7 @@ def run_overlay_routing(case_run: CaseRun, _: dict[str, Any]) -> None:
         "extensions overlay consumes paste without changing the draft",
     )
     case_run.send("extensions-close", b"\x1b")
-    wait_text_absent(case_run, "Extensions", "extensions-closed")
+    wait_text_absent(case_run, "Plugins", "extensions-closed")
 
     case_run.send("overlay-stream-request", b"overlay-stream\r")
     case_run.wait_screen(("overlay-stream-A",), "stream-before-release")
@@ -4603,6 +4599,62 @@ def run_sessions_branches(case_run: CaseRun, _: dict[str, Any]) -> None:
         "only submitted prompts reach Provider in order",
     )
     case_run.normal_exit()
+def uri_inventory_matches(frame: str, expected_schemes: tuple[str, ...]) -> bool:
+    """Match the exact Router inventory known by the fixture's setup.
+
+    The ordinary agent_app TUI path does not send set_host_uri_schemes.
+    Its fresh Product therefore has no registered handlers. A fixture which
+    explicitly registers handlers must supply that complete ordered inventory;
+    observing either heading alone is not evidence of the expected Router.
+    """
+    lines = [line.replace("│", "").strip() for line in frame.splitlines()]
+    observed = [
+        line for line in lines
+        if line == "No URI handlers are registered."
+        or line.startswith("Registered URI schemes:")
+    ]
+    expected = (
+        "Registered URI schemes: " + " ".join(expected_schemes)
+        if expected_schemes else "No URI handlers are registered."
+    )
+    return observed == [expected]
+
+
+def plugin_inventory_matches(
+    case_run: CaseRun, frame: str, expected_uri_schemes: tuple[str, ...] = ()
+) -> bool:
+    """Compare the rendered current Registry with this fresh packaged distribution.
+
+    Case homes are new; selected orchestration cases separately import the
+    exact observed Native Workflow package through the real maintenance CLI.
+    The actual executable owns bundled defaults through its neighboring
+    share/axyndra/distribution.json; a Minimal executable has no such defaults.
+    """
+    if "Plugins:" not in frame or not uri_inventory_matches(frame, expected_uri_schemes):
+        return False
+    manifest = case_run.candidate.resolve().parent.parent / "share" / "axyndra" / "distribution.json"
+    installed = getattr(case_run, "workflow_record196", None)
+    if not manifest.is_file():
+        if installed is None:
+            return "No plugins are imported." in frame and not re.search(r"\[(?:on|off)\]", frame)
+        expected = []
+    else:
+        value = json.loads(manifest.read_bytes())
+        if value.get("schema") != "axyndra.distribution/v1" or not isinstance(value.get("plugins"), list):
+            return False
+        expected = value["plugins"]
+    if installed is not None:
+        expected = [item for item in expected if item.get("namespace") != installed["namespace"]] + [installed]
+    return bool(expected) and all(
+        isinstance(item, dict)
+        and isinstance(item.get("namespace"), str)
+        and isinstance(item.get("version"), str)
+        and ("[on] " if item.get("enabled") else "[off] ")
+            + item["namespace"] + "@" + item["version"] in frame.replace("│", "")
+        for item in expected
+    ) and "No plugins are imported." not in frame
+
+
 def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     def local_document(
         name: str,
@@ -4640,11 +4692,10 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
         frame = strip_ansi(
             case_run.wait_screen(
                 (
-                    "Extensions",
-                    "axyndra.ast",
-                    "axyndra.web-search",
-                    "axyndra.workspace-search",
-                    "Enter confirm",
+                    "Plugins",
+                    "Plugins:",
+                    "No URI handlers are registered.",
+                    "Enter send",
                 ),
                 name,
                 timeout=12.0,
@@ -4652,7 +4703,7 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
         )
         case_run.send(f"{name}-close", b"\x1b")
         case_run.wait_screen_absent(
-            ("╭─ Extensions",),
+            ("╭─ Plugins",),
             f"{name}-closed",
             timeout=8.0,
         )
@@ -4682,9 +4733,6 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
         ("tools:",),
     )
     expected_tools = (
-        "ast_grep",
-        "ast_edit",
-        "web_search",
         "grep",
         "write",
         "ask",
@@ -4709,9 +4757,14 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
         "manage_skill",
         "read_skill_reference",
         "todo",
-        "task",
-        "hub",
-        "yield",
+        "plugin.axyndra:workflow.task",
+        "plugin.axyndra:workflow.hub_peers",
+        "plugin.axyndra:workflow.hub_messages",
+        "plugin.axyndra:workflow.hub_jobs",
+        "plugin.axyndra:workflow.hub_cancel",
+        "plugin.axyndra:workflow.hub_process",
+        "plugin.axyndra:workflow.hub_process_read",
+        "plugin.axyndra:workflow.yield",
     )
     case_run.assertions.check(
         "capability_tools_inventory",
@@ -4729,24 +4782,23 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     extensions = extension_selector("capability-extensions")
     case_run.assertions.check(
         "capability_extensions_inventory",
-        "axyndra.ast" in extensions
-        and "axyndra.web-search" in extensions
-        and "axyndra.workspace-search" in extensions
-        and "embedded:first-party" in extensions
-        and "external" not in extensions,
-        "extensions exposes only the registered first-party capabilities",
+        plugin_inventory_matches(case_run, extensions)
+        and "axyndra.workspace-search" not in extensions
+        and "axyndra.workspace-write" not in extensions
+        and "embedded:first-party" not in extensions,
+        "the alias lists the actual Native Registry and original URI handlers without the retired SDK facade",
     )
 
     mcp = local_document(
-        "capability-mcp",
-        "/mcp",
-        "MCP",
-        ("MCP servers:", "No MCP servers are configured."),
+        "capability-services",
+        "/plugins service list",
+        "Session services",
+        ("Session services:", "No retained service instances in this Thread."),
     )
     case_run.assertions.check(
-        "capability_mcp_inventory",
-        "MCP servers:" in mcp and "No MCP servers are configured." in mcp,
-        "MCP inventory reports the configured-empty state without a fake server",
+        "capability_service_inventory",
+        "Session services:" in mcp and "No retained service instances" in mcp,
+        "service inventory reports this Thread with no implicit server startup",
     )
 
     debug = local_document(
@@ -4769,7 +4821,7 @@ def run_capability_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     )
     invalid_mcp = local_error(
         "capability-mcp-invalid",
-        "/mcp extra",
+        "/plugins service list extra",
     )
     case_run.assertions.check(
         "capability_inventory_errors",
@@ -5040,8 +5092,8 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     close_overlay("settings-close", "Settings")
     command("theme-selector", "/theme", "Select theme", require_echo=False)
     close_overlay("theme-selector-close", "Select theme")
-    command("extensions", "/extensions", "Extensions", require_echo=False)
-    close_overlay("extensions-close", "Extensions")
+    command("extensions", "/extensions", "Plugins", require_echo=False)
+    close_overlay("extensions-close", "Plugins")
     command("agents", "/agents", "Agent Hub", require_echo=False)
     close_overlay("agents-close", "Agent Hub")
     command("branch-empty", "/branch", "Create branch from message", require_echo=False)
@@ -5106,7 +5158,7 @@ def run_slash_inventory(case_run: CaseRun, _: dict[str, Any]) -> None:
     close_document("changelog-close", "axyndra 1.0.0")
     command("changelog-full", "/changelog full", "axyndra 1.0.0", require_echo=False)
     close_document("changelog-full-close", "axyndra 1.0.0")
-    command("mcp", "/mcp", "MCP servers:", require_echo=False)
+    command("services", "/plugins service list", "Session services:", require_echo=False)
 
     case_run.normal_exit()
     relaunch_case(case_run, "slash-modes")
@@ -5458,13 +5510,14 @@ def run_selectors(case_run: CaseRun, _: dict[str, Any]) -> None:
     extensions = open_overlay(
         "extensions",
         "/extensions",
-        "Extensions",
-        ("embedded:first-party",),
+        "Plugins",
+        ("Plugins:", "No URI handlers are registered."),
     )
     case_run.assertions.check(
         "extensions_inventory",
-        "embedded:first-party" in extensions and "external" not in extensions,
-        "extensions selector reports only registered first-party capabilities",
+        plugin_inventory_matches(case_run, extensions)
+        and "embedded:first-party" not in extensions,
+        "the Native plugin document reports the real installed Registry and URI schemes",
     )
     case_run.send("selector-provider-request", b"selector-provider\r")
     completed = strip_ansi(
@@ -6304,6 +6357,16 @@ def run_renderer_boundaries(case_run: CaseRun, _: dict[str, Any]) -> None:
 
 
 def run_compaction_summary(case_run: CaseRun, _: dict[str, Any]) -> None:
+    # Install the real independently built policy before launching this TUI.
+    # No private fixture flag bypasses registry selection or model accounting.
+    fixture_module = Path(__file__).resolve().parents[2] / "scripts/install_policy_fixture.py"
+    spec = importlib.util.spec_from_file_location("axyndra_policy_fixture", fixture_module)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    installed = module.install_policy_fixture(case_run.candidate,
+        os.environ["AXYNDRA_COMPACTION_PLUGIN_PACKAGE"], case_run.home, case_run.workspace,
+        case_run.environment, key="compaction", provider="summarize")
+    case_run.record("compaction_policy_installed", namespace=installed["namespace"], package_digest=installed["content_digest"])
     case_run.home.joinpath("config.yml").write_text(
         case_run.home.joinpath("config.yml").read_text(encoding="utf-8") +
         "compaction:\n"
@@ -6406,61 +6469,20 @@ def run_compaction_summary(case_run: CaseRun, _: dict[str, Any]) -> None:
     case_run.normal_exit()
 
 
-def run_mcp_stdio(case_run: CaseRun, _: dict[str, Any]) -> None:
+def run_service_route(case_run: CaseRun, case: dict[str, Any]) -> None:
+    # Protocol-specific execution is covered by the actual installed-component
+    # Product/Application suite. This TUI case covers the shared persistent route.
     case_run.launch(extra_args=["--approval-mode", "trusted"])
     case_run.wait_screen(("Enter send",), "first-frame")
-    case_run.send("mcp-status", b"/mcp\r")
-    case_run.wait_screen(("fixture",), "mcp-status")
-    case_run.send("close-mcp-status", b"\x1b")
-    case_run.send("mcp-prompt", b"mcp-coverage\r")
-    case_run.wait_screen(("mcp-final-response",), "mcp-completed")
-    case_run.wait_screen(("Enter send",), "mcp-ready", timeout=8.0)
-    requests = case_run.wait_requests(2)
-    first = requests[0].get("request", {})
-    second = requests[1].get("request", {})
-    second_text = "\n".join(flatten_text(second))
-    case_run.assertions.check(
-        "mcp_tool_call_dispatched",
-        "mcp__fixture__environment" in "\n".join(flatten_text(first)),
-        "first Provider request advertised the discovered MCP tool call",
-    )
-    case_run.assertions.check(
-        "mcp_tool_result_returned",
-        "fixture MCP result" in second_text or "structuredContent" in second_text,
-        "second Provider request contains the real MCP tool result",
-    )
-    mcp_log = read_jsonl(case_run.mcp_path)
-    if mcp_log:
-        case_run.assertions.check("mcp_protocol_log", any(item.get("kind") == "mcp_tool_call" for item in mcp_log), str(mcp_log))
-    else:
-        # The product's stdio sandbox is read-only; direct log-file writes from
-        # the child are intentionally unavailable.  The Provider's second
-        # request is the authoritative observable proof of tools/call.
-        case_run.assertions.note("mcp_protocol_log", "child sandbox did not permit an out-of-workspace log; Provider tool-result echo is retained")
-    case_run.normal_exit()
-
-
-def run_mcp_http(case_run: CaseRun, _: dict[str, Any]) -> None:
-    case_run.launch(extra_args=["--approval-mode", "trusted"])
-    case_run.wait_screen(("Enter send",), "first-frame")
-    case_run.send("mcp-http-status", b"/mcp\r")
-    case_run.wait_screen(("fixture-http",), "mcp-http-status")
-    case_run.send("close-mcp-http-status", b"\x1b")
-    case_run.send("mcp-http-prompt", b"mcp-coverage\r")
-    case_run.wait_screen(("mcp-final-response",), "mcp-http-completed")
-    requests = case_run.wait_requests(2)
-    case_run.assertions.check(
-        "mcp_http_tool_result_returned",
-        "fixture MCP result" in "\n".join(flatten_text(requests[1].get("request", {}))),
-        "Provider receives the streamable HTTP MCP result",
-    )
-    mcp_log = read_jsonl(case_run.mcp_path)
-    methods = [item.get("method") for item in mcp_log if item.get("transport") == "http"]
-    case_run.assertions.check(
-        "mcp_http_method_order",
-        methods[:3] == ["server/discover", "tools/list", "tools/call"],
-        f"HTTP MCP methods={methods!r}",
-    )
+    if case["variant"]["execution"] == "service-missing":
+        case_run.send("missing-service", b"/plugins service start absent:fixture session session --approve\r")
+        case_run.wait_screen(("plugin is not installed",), "missing-service-error")
+        case_run.send("close-service-error", b"\x1b")
+    case_run.send("service-list", b"/plugins service list\r")
+    case_run.wait_screen(("Session services:", "No retained service instances"), "service-list")
+    case_run.assertions.check("service_route_no_provider_effect",
+        len(read_jsonl(case_run.requests_path)) == 0,
+        "local service inventory and missing package do not invoke the model")
     case_run.normal_exit()
 
 
@@ -6496,8 +6518,8 @@ RUNNERS = {
     "renderer-boundaries": run_renderer_boundaries,
     "copy-and-suspend": run_copy_and_suspend,
     "compaction-summary": run_compaction_summary,
-    "mcp-stdio": run_mcp_stdio,
-    "mcp-http": run_mcp_http,
+    "service-inventory": run_service_route,
+    "service-missing": run_service_route,
     "slash-inventory": run_slash_inventory,
 }
 
@@ -6563,11 +6585,10 @@ def run_case(case: dict[str, Any], candidate: Path, output: Path, repeat_index: 
     result: dict[str, Any] = {"case_id": case["case_id"], "status": "failed", "paths": case["paths"], "artifact": str(case_dir)}
     try:
         protocol, behavior, prompts = response_behavior(case, case_dir)
-        # T023 uses a real MCP child, all other runnable cases use only the
-        # provider.  The prompt list is retained in fixture.json as an audit
-        # hint; scenario functions own exact bytes and assertions.
-        mcp = execution == "mcp-stdio"
-        mcp_http = execution == "mcp-http"
+        # Protocol-specific installed-component cases live in Product contracts.
+        # TUI scenarios retain exact prompts and shared command-routing effects.
+        mcp = False
+        mcp_http = False
         port: int | None = None
         mcp_http_port: int | None = None
         if execution != "startup-invalid":

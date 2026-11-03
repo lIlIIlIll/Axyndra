@@ -15,10 +15,11 @@ public class SqliteThreadRuntimeRecovery {
     public func resume(
         threadId: ThreadId,
         projector: ContextProjector,
-        nowMillis: () -> Int64
+        nowMillis: () -> Int64,
+        continuationVerifier!: ?ContinuationRunTransactionVerifier = None
     ): Result<AgentThreadRuntime> {
         try {
-            let sink = SqliteThreadCommitSink(database)
+            let sink = SqliteThreadCommitSink(database, continuationVerifier: continuationVerifier)
             let thread = sink.loadThread(threadId)
             if (thread.thread.activeTurnId.isNone() || thread.activeRunId.isNone()) {
                 return Result.Err(AgentError(
@@ -40,15 +41,15 @@ public class SqliteThreadRuntimeRecovery {
             if (!run.hasRecoverableLaunchSnapshot()) {
                 return Result.Err(AgentError(
                     AgentErrorKind.RecoveryRequired,
-                    "run.launch_snapshot_missing",
-                    "active Run has no immutable ModelLane/Skill snapshot"
+                    match (run.contextSnapshotIssue) { case Some(code) => code; case None => "run.launch_snapshot_missing" },
+                    "active Run requires a supported immutable ModelLane/context snapshot; stored history is unchanged"
                 ))
             }
             Result.Ok(AgentThreadRuntime(
                 ThreadCoordinator(thread, sink), projector,
                 RecoveredRunSpec(
                     run.turnId, run.id, run.epoch, run.state, run.transitionSequence,
-                    run.lane.getOrThrow(), run.skills.getOrThrow(),
+                    run.lane.getOrThrow(), run.contextSnapshot.getOrThrow(),
                     executionLaneId: run.executionLaneId
                 ),
                 nowMillis,

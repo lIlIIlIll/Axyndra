@@ -110,7 +110,7 @@ main(): Int64 {
             hasCheckpointResult(after, "checkpoint-blocked"),
             "an oversized active branch fails explicitly without orphaning its checkpoint"
         )
-        product.closeMcp().value().getOrThrow()
+        product.close().value().getOrThrow()
         println("checkpoint compaction contract passed")
         0
     } finally {

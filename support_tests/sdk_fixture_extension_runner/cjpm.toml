@@ -7,4 +7,5 @@
   output-type = "executable"
 
 [dependencies]
+  "legacy_sdk_fixture_extension" = { path = "../legacy_sdk_fixture_extension", output-type = "static" }
   "sdk_fixture_extension" = { path = "../sdk_fixture_extension", output-type = "static" }

@@ -3,28 +3,22 @@ package agent_tui
 import agent_cli.*
 import std.deriving.*
 
-public enum TuiPlanReviewDisposition {
-    NotApplicable
-    | Retain
-    | Consumed
-}
-
 public class TuiTurnResult {
     public let text: String
     public let status: String
     public let action: TuiTurnAction
-    public let planReviewDisposition: TuiPlanReviewDisposition
+    public let ownedRegistryDisplay167: ?OwnedTuiRegistryResponseDisplay167
 
     public init(
         text: String,
         status: String,
         action!: TuiTurnAction = TuiTurnAction.NoAction,
-        planReviewDisposition!: TuiPlanReviewDisposition = TuiPlanReviewDisposition.NotApplicable
+        ownedRegistryDisplay167!: ?OwnedTuiRegistryResponseDisplay167 = None
     ) {
         this.text = text
         this.status = status
         this.action = action
-        this.planReviewDisposition = planReviewDisposition
+        this.ownedRegistryDisplay167 = ownedRegistryDisplay167
     }
 }
 
@@ -34,7 +28,9 @@ public enum TuiTurnAction {
     | OpenProviderSetup
     | OpenModelSelector
     | OpenBranchSelector
-    | OpenPlanReview(String)
+    | OpenPluginView(String)
+    | PluginViewLoaded(TuiPluginViewDocument)
+    | ConfirmPluginView(String)
     | OpenDocument(String, String)
     | ModelsLoaded(Array<String>)
     | ThemeSelected(String, Bool, Array<TuiThemeDefinition>)
@@ -43,12 +39,10 @@ public enum TuiTurnAction {
     | SessionTreeLoaded(Array<TuiSessionNode>)
     | SubagentsLoaded(Array<TuiSubagentInfo>)
     | ConversationFocused(TuiConversationView)
-    | ExtensionsLoaded(Array<TuiExtensionInfo>)
     | TodoLoaded(TuiTodoLoadResult)
     | ModelSelected(String, Bool, String)
     | SessionSelected(String, Bool, String, ?TuiConversationView)
     | BranchSelected(Bool, String)
-    | ExtensionToggled(String, Bool, Array<TuiExtensionInfo>)
     | ResetCompleted(String)
     | SetupConfigured(String)
     | TodoSaved(TuiTodoSaveResult)
@@ -57,7 +51,10 @@ public enum TuiTurnAction {
 }
 
 public enum TuiAgentEvent {
-    AttemptStarted(TuiAttemptScope)
+    OwnedToolDisplay(OwnedTuiToolDisplay)
+    | OwnedFailureDisplay113(OwnedTuiFailureDisplay113)
+    | OwnedRegistryError167(OwnedTuiRegistryResponseDisplay167, String)
+    | AttemptStarted(TuiAttemptScope)
     | AttemptTextDelta(TuiAttemptScope, String)
     | AttemptReasoningDelta(TuiAttemptScope, String)
     | AttemptToolStarted(TuiAttemptScope, String, String)
@@ -105,7 +102,7 @@ public enum TuiAgentEvent {
         String
     )
     | Ask(TuiAskRequest)
-    | PlanReviewConsumed(String)
+    | PluginViewClosed(String, String)
     | Usage(Int64, Int64)
     | Setup(String)
     | Plan(String, String)
@@ -195,66 +192,10 @@ public enum TuiApprovalDecision {
     AllowOnce | AllowSession | Reject(String)
 }
 
-@Derive[Equatable]
-public enum TuiPlanReviewDecision {
-    // Keep the original variants for source compatibility. The dedicated
-    // Plan Review surface uses the context-explicit variants below.
-    ApproveAndExecute
-    | ApproveFresh
-    | ApproveCompact
-    | ApproveKeep
-    | Refine
-    | UpdatePlan
-    | KeepPlanning
-    | Reject
-}
-
-@Derive[Equatable]
-enum PlanReviewFocus {
-    Toc | Body | Actions
-}
-
-class PlanReviewSection {
-    let title: String
-    let level: Int64
-    let sourceOffset: Int64
-    var renderedLine: Int64
-
-    init(title: String, level: Int64, sourceOffset: Int64) {
-        this.title = title
-        this.level = level
-        this.sourceOffset = sourceOffset
-        this.renderedLine = 0
-    }
-}
-
-class PlanReviewAnnotation {
-    let section: String
-    let line: String
-    let note: String
-    let removeSection: Bool
-
-    init(
-        section: String,
-        line: String,
-        note: String,
-        removeSection!: Bool = false
-    ) {
-        this.section = section
-        this.line = line
-        this.note = note
-        this.removeSection = removeSection
-    }
-}
-
 public enum TuiQueueWithdrawal {
     | Withdrawn(String, String)
     | AlreadyDelivered
     | Failed(String)
-}
-
-public func planContentHash(value: String): String {
-    planReviewHash(value)
 }
 
 public class TuiAskOption {
@@ -454,25 +395,6 @@ public class TuiSessionNode {
     }
 }
 
-public class TuiExtensionInfo {
-    public let id: String
-    public let source: String
-    public let enabled: Bool
-    public let tools: Array<String>
-
-    public init(
-        id: String,
-        source: String,
-        enabled: Bool,
-        tools: Array<String>
-    ) {
-        this.id = id
-        this.source = source
-        this.enabled = enabled
-        this.tools = tools
-    }
-}
-
 public class TuiSubagentInfo {
     public let id: String
     public let agent: String
@@ -603,12 +525,22 @@ public interface AgentTuiBackend {
         decision: TuiApprovalDecision,
         events: TuiAgentEventSink
     ): TuiTurnResult
-    func reviewPlan(
-        contentHash: String,
-        decision: TuiPlanReviewDecision,
-        feedback: String,
+    func loadPluginView(routeName: String): TuiTurnResult
+    func pluginViewAction(
+        viewId: String,
+        revision: String,
+        actionId: String,
+        fields: Array<TuiPluginViewField>,
         events: TuiAgentEventSink
     ): TuiTurnResult
+    func confirmPluginView(
+        viewId: String,
+        revision: String,
+        requestDigest: String,
+        confirmed: Bool,
+        events: TuiAgentEventSink
+    ): TuiTurnResult
+    func closePluginView(viewId: String): Bool
     func answerAsk(
         requestId: String,
         resolution: TuiAskResolution
@@ -642,9 +574,6 @@ public interface AgentTuiBackend {
     func focusSubagent(id: String): TuiConversationView
     func focusMain(): TuiConversationView
     func loadMainTranscriptPage(beforeOrdinal: Int64, limit: Int64): TuiTranscriptPage
-    func extensions(): Array<TuiExtensionInfo>
-    func mcpStatus(): TuiTurnResult
-    func setExtensionEnabled(id: String, enabled: Bool): Bool
     func draft(): String
     func saveDraft(value: String): Bool
     func branchMessages(): Array<String>
@@ -653,7 +582,9 @@ public interface AgentTuiBackend {
     func selectBranch(entryId: String): ?String
     func configureSetup(request: TuiSetupRequest): String
     func archiveAndReset(): String
+    func frontendSlashDefinitions():Array<SlashCommandDefinition> { [] }
     func todoMarkdown(): TuiTodoLoadResult
+    func loadTodoEditor(): TuiTodoLoadResult { todoMarkdown() }
     func saveTodoMarkdown(markdown: String): TuiTodoSaveResult
     func copyTodoMarkdown(): String
     func copyTextToClipboard(text: String): String

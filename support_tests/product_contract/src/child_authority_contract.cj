@@ -5,6 +5,7 @@ import yjson_support.*
 import agent_domain.*
 import agent_core.*
 import agent_product.*
+import workspace_legacy_oracle.*
 import agent_store.*
 import model_adapters.*
 import std.collection.*
@@ -16,11 +17,12 @@ import tool_runtime.*
 func runChildAuthorityContracts(root: String): Unit {
     let workspace = root + "/child-authority"
     Directory.create(workspace, recursive: true)
-    let product = openProduct(config: ProductConfig(
+    let product = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
         workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.Yolo,
         asyncEnabled: false, unsafeDirectLaunchForTests: true
     )).value().getOrThrow()
+    installWorkflowContractPolicy(product)
     let session = SessionId("child-authority-parent")
     let launched = product.invokeLocalTool(session, "task", childAuthorityTask("review-child", "reviewer", "review only"))
     expect(launched.isOk(), "reviewer delegation completes")
@@ -39,7 +41,7 @@ func runChildAuthorityContracts(root: String): Unit {
         product.fixtureProbe.getOrThrow().lastRequest.getOrThrow().requestId == beforeDenied,
         "repeat TUI wakeups exhaust the same finite parent pool before a provider call")
     // A real new Hub invocation has its own explicit parent ToolInvocationContext.
-    product.invokeLocalTool(session, "hub", objectValue([
+    product.invokeLocalTool(session, "plugin.axyndra:workflow.hub_messages", objectValue([
         ValueField("op", textValue("send")), ValueField("to", textValue("review-child")),
         ValueField("message", textValue("new parent authority"))
     ])).value().getOrThrow()
@@ -47,7 +49,7 @@ func runChildAuthorityContracts(root: String): Unit {
     expect(previous.status == "completed", "new Hub parent admits its own child execution")
     expectChildReadOnly(product, "new parent cannot widen the retained child role")
     product.close().value().getOrThrow()
-    let restored = openProduct(config: ProductConfig(
+    let restored = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
         workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.Yolo,
         asyncEnabled: false, unsafeDirectLaunchForTests: true
@@ -55,7 +57,7 @@ func runChildAuthorityContracts(root: String): Unit {
     let denied = restored.messageSubagent(session, "review-child", "no invented recovered budget")
     expect(denied.isError() && denied.error().getOrThrow().code == "child.redelegation_required",
         "restored terminal child requires a fresh delegation authority for TUI wakeup")
-    restored.invokeLocalTool(session, "hub", objectValue([
+    restored.invokeLocalTool(session, "plugin.axyndra:workflow.hub_messages", objectValue([
         ValueField("op", textValue("send")), ValueField("to", textValue("review-child")),
         ValueField("message", textValue("explicit restored parent"))
     ])).value().getOrThrow()
@@ -81,12 +83,12 @@ func runChildAuthorityContracts(root: String): Unit {
         sqliteText(encodeAgentValue(objectValue(rootFields.toArray()))) + " WHERE root_thread_id=" + sqliteText(session.value))
     database.close()
     for (_ in 0..2) {
-        let legacy = openProduct(config: ProductConfig(
+        let legacy = openLegacyWorkspaceProduct(config: ProductConfig(
             settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
             workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.Yolo,
             asyncEnabled: false, unsafeDirectLaunchForTests: true
         )).value().getOrThrow()
-        expect(legacy.invokeLocalTool(session, "hub", objectValue([
+        expect(legacy.invokeLocalTool(session, "plugin.axyndra:workflow.hub_messages", objectValue([
             ValueField("op", textValue("send")), ValueField("to", textValue("review-child")),
             ValueField("message", textValue("unknown old ceiling"))
         ])).isError() && legacy.fixtureProbe.getOrThrow().lastRequest.isNone(),
@@ -131,7 +133,7 @@ func expectChildReadOnly(product: ProductRuntime, message: String): Unit {
     var hasPeer = false
     for (tool in request.tools) {
         if (tool.name == "read") { hasRead = true }
-        if (tool.name == "hub") { hasPeer = true }
+        if (tool.name == "plugin.axyndra:workflow.hub_messages") { hasPeer = true }
         expect(tool.name != "write" && tool.name != "bash" && tool.name != "task", message + ": " + tool.name)
     }
     expect(hasRead && hasPeer, message + ": read and peer tools remain usable")
@@ -148,12 +150,13 @@ func runChildApprovalOutputContract(root: String): Unit {
     Directory.create(workspace + "/settings", recursive: true)
     File.writeTo(workspace + "/settings/config.yml",
         "schema_version: 1\napproval:\n  mode: ai\n  policy:\n    allow_workspace_writes: true\n".toArray())
-    let product = openProduct(config: ProductConfig(
+    let product = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
         workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.AlwaysAsk,
         approvalRoutingModeOverride: Some(ApprovalRoutingMode.Ai),
         asyncEnabled: false, unsafeDirectLaunchForTests: true
     )).value().getOrThrow()
+    installWorkflowContractPolicy(product)
     File.writeTo(workspace + "/child-approved.txt", "before approval\n".toArray())
     let parent = childAuthorityParent(product.request("fixture task write"))
     expect(product.client.start(parent, { _ => () }).isOk(), "parent delegates approval-controlled child")
@@ -170,11 +173,12 @@ func runChildApprovalOutputContract(root: String): Unit {
 func runChildFailureAndCancellationContract(root: String): Unit {
     let workspace = root + "/child-cancel"
     Directory.create(workspace, recursive: true)
-    let product = openProduct(config: ProductConfig(
+    let product = openLegacyWorkspaceProduct(config: ProductConfig(
         settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
         workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.Yolo,
         asyncEnabled: false, unsafeDirectLaunchForTests: true
     )).value().getOrThrow()
+    installWorkflowContractPolicy(product)
     let session = SessionId("child-cancel-parent")
     expect(product.invokeLocalTool(session, "task", childAuthorityTask("failed-child", "reviewer",
         "[plan-review approved fixture] FIXTURE-APPROVED-PLAN-EXECUTION-FAILURE")).isError(),
@@ -243,12 +247,13 @@ func runChildApprovalCancellationContracts(root: String): Unit {
         Directory.create(workspace + "/settings", recursive: true)
         File.writeTo(workspace + "/settings/config.yml",
             "schema_version: 1\napproval:\n  policy:\n    allow_workspace_writes: true\n".toArray())
-        let product = openProduct(config: ProductConfig(
+        let product = openLegacyWorkspaceProduct(config: ProductConfig(
             settingsRoot: workspace + "/settings", stateRoot: workspace + "/state",
             workspaceRoot: workspace, fixture: true, approvalMode: ApprovalMode.AlwaysAsk,
             approvalRoutingModeOverride: Some(if (automatic) { ApprovalRoutingMode.Ai } else { ApprovalRoutingMode.Manual }),
             asyncEnabled: false, unsafeDirectLaunchForTests: true
         )).value().getOrThrow()
+        installWorkflowContractPolicy(product)
         let entered = AtomicBool(false)
         let release = AtomicBool(false)
         let enabled = AtomicBool(true)

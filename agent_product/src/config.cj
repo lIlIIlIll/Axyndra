@@ -167,7 +167,7 @@ public class ProductCompactionSettings {
         oversizedToolResultTokens!: Int64 = 12000,
         summaryStrategy!: String = "structured",
         summaryModel!: String = "",
-        summaryTimeoutMillis!: Int64 = 5000,
+        summaryTimeoutMillis!: Int64 = 15000,
         summaryMaxOutputTokens!: Int64 = 800,
         summaryFailurePolicy!: String = "fallback_structured",
         modelOverrides!: Array<ProductModelCompactionSettings> = []
@@ -1371,7 +1371,7 @@ func parseCompactionSettings(source: String): ProductCompactionSettings {
     var oversizedToolResultTokens: Int64 = 12000
     var summaryStrategy = "structured"
     var summaryModel = ""
-    var summaryTimeoutMillis: Int64 = 5000
+    var summaryTimeoutMillis: Int64 = 15000
     var summaryMaxOutputTokens: Int64 = 800
     var summaryFailurePolicy = "fallback_structured"
     let modelOverrides = ArrayList<ProductModelCompactionSettings>()

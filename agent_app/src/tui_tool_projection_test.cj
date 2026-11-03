@@ -6,7 +6,6 @@ import yjson.*
 
 import agent_domain.*
 import agent_tui.*
-import model_adapters.*
 import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*

@@ -8,8 +8,8 @@ import agent_domain.*
 import agent_product.*
 import agent_tui.*
 import tool_runtime.*
-import model_adapters.*
 import std.collection.*
+import std.env.*
 import std.fs.*
 import std.unittest.*
 import std.unittest.testmacro.*
@@ -227,300 +227,157 @@ class JsonStreamRedactionTests {
 class ProductTuiBackendPlanReviewTests {
     @TestCase
     func consumedReviewClosesOverOriginalExecutionFailure(): Unit {
-        if (!exists(Path("target"))) {
-            Directory.create("target", recursive: true)
-        }
-        let root = Directory.createTemp("target").toString()
-        try {
-            let workspace = root + "/workspace"
-            Directory.create(workspace, recursive: true)
-            let product = openProduct(
-                config: ProductConfig(
-                    stateRoot: root + "/state",
-                    workspaceRoot: workspace,
-                    fixture: true,
-                    asyncEnabled: false
-                )
-            ).value().getOrThrow()
-            let backend = ProductTuiBackend(product)
+        appPlanReviewTest205({ _, _, backend =>
             let events = ArrayList<TuiAgentEvent>()
-            let sink: TuiAgentEventSink = {event => events.add(event)}
-            let opened = backend.submit("/plan fixture plan write", sink)
-            let openedBody = match (opened.action) {
-                case TuiTurnAction.OpenPlanReview(body) => body
-                case _ => ""
-            }
-            @Assert(openedBody != "")
-            let markerBody = "# Goal\n\nFIXTURE-APPROVED-PLAN-EXECUTION-FAILURE\n\n" +
+            let sink: TuiAgentEventSink = { event => events.add(event) }
+            let route = appPlanViewRoute205(backend.submit("/plan fixture plan write", sink))
+            let first = appPlanViewMetadata205(backend, route)
+            let firstId = first.field("view_id").getOrThrow().text
+            let source = "# Goal\n\nFIXTURE-APPROVED-PLAN-EXECUTION-FAILURE\n\n" +
                 "# Verification\n\nPreserve the first execution error."
-            let updated = backend.reviewPlan(
-                planContentHash(openedBody),
-                TuiPlanReviewDecision.UpdatePlan,
-                markerBody,
-                sink
-            )
-            let updatedBody = match (updated.action) {
-                case TuiTurnAction.OpenPlanReview(body) => body
-                case _ => ""
-            }
-            @Assert(updatedBody != "")
-            let refreshed = backend.reviewPlan(
-                planContentHash(openedBody),
-                TuiPlanReviewDecision.ApproveFresh,
-                "",
-                sink
-            )
-            @Expect(match ((refreshed.planReviewDisposition, refreshed.action)) {
-                case (TuiPlanReviewDisposition.Retain, TuiTurnAction.OpenPlanReview(body)) => body == updatedBody
-                case _ => false
-            })
+            let save = appPlanViewConfirmation205(backend.pluginViewAction(firstId, "1", "save",
+                [TuiPluginViewField("plan", source), TuiPluginViewField("feedback", "")], sink))
+            let saved = backend.confirmPluginView(firstId, "2", save.field("request_digest").getOrThrow().text, true, sink)
+            let updated = appPlanViewMetadata205(backend, appPlanViewRoute205(saved), expectedSource: Some(source))
+            let id = updated.field("view_id").getOrThrow().text
+            @Expect(id != firstId)
+            events.clear()
+            let _ = backend.pluginViewAction(firstId, "1", "approve_fresh",
+                [TuiPluginViewField("plan", source), TuiPluginViewField("feedback", "")], sink)
+            @Expect(events.any { event => match (event) {
+                case TuiAgentEvent.Error(value) => value.contains("view.stale_event")
+                case _ => false } })
             @Expect(backend.currentWorkMode(), "plan")
+            let confirmation = appPlanViewConfirmation205(backend.pluginViewAction(id, "1", "approve_fresh",
+                [TuiPluginViewField("plan", source), TuiPluginViewField("feedback", "")], sink))
             events.clear()
             let previousSession = backend.currentSession()
-            let failed = backend.reviewPlan(
-                planContentHash(updatedBody),
-                TuiPlanReviewDecision.ApproveFresh,
-                "",
-                sink
-            )
+            let failed = backend.confirmPluginView(id, "2", confirmation.field("request_digest").getOrThrow().text, true, sink)
             var errorCount: Int64 = 0
             var originalError = ""
-            var consumedIndex: Int64 = -1
+            var closedIndex: Int64 = -1
             var errorIndex: Int64 = -1
             for (index in 0..events.size) {
-                let event = events[index]
-                match (event) {
+                match (events[index]) {
                     case TuiAgentEvent.Error(value) =>
-                        errorCount += 1
-                        originalError = value
-                        errorIndex = index
-                    case TuiAgentEvent.PlanReviewConsumed(hash) =>
-                        if (hash == planContentHash(updatedBody)) {
-                            consumedIndex = index
-                        }
+                        errorCount++; originalError = value; errorIndex = index
+                    case TuiAgentEvent.PluginViewClosed(closedId, _) =>
+                        if (closedId == id) { closedIndex = index }
                     case _ => ()
                 }
             }
-            @Expect(match (failed.planReviewDisposition) {
-                case TuiPlanReviewDisposition.Consumed => true
-                case _ => false
-            })
-            @Expect(match (failed.action) {
-                case TuiTurnAction.NoAction => true
-                case _ => false
-            })
-            @Expect(failed.status, "error: fixture approved-plan execution failed")
+            @Expect(match (failed.action) { case TuiTurnAction.NoAction => true; case _ => false })
             @Expect(errorCount, 1)
-            @Expect(consumedIndex >= 0)
-            @Expect(errorIndex > consumedIndex)
+            @Expect(closedIndex >= 0)
+            @Expect(errorIndex > closedIndex)
             @Expect(originalError.contains("fixture.plan_execution_failed"))
-            @Expect(originalError.contains("fixture approved-plan execution failed"))
-            @Expect(!originalError.contains("Plan mode is not active"))
+            @Expect(!originalError.contains("application.plan_mode_inactive"))
             @Expect(backend.currentWorkMode(), "none")
             @Expect(backend.currentSession() != previousSession)
-            let staleReview = backend.reviewPlan(
-                planContentHash(updatedBody),
-                TuiPlanReviewDecision.ApproveFresh,
-                "",
-                sink
-            )
-            @Expect(match (staleReview.planReviewDisposition) {
-                case TuiPlanReviewDisposition.Consumed => true
-                case _ => false
-            })
-            @Expect(match (staleReview.action) {
-                case TuiTurnAction.NoAction => true
-                case _ => false
-            })
-            @Expect(staleReview.status, "plan review failed: Plan mode is not active.")
-        } finally {
-            let _ = removeIfExists(root, recursive: true)
-        }
+            let failedSession = backend.currentSession()
+            events.clear()
+            let _ = backend.confirmPluginView(id, "2", confirmation.field("request_digest").getOrThrow().text, true, sink)
+            @Expect(events.any { event => match (event) {
+                case TuiAgentEvent.Error(value) => value.contains("view.closed")
+                case _ => false } })
+            @Expect(backend.currentSession(), failedSession)
+            @Expect(backend.currentWorkMode(), "none")
+        })
     }
 
     @TestCase
     func consumedKeepFailureDoesNotDrainOrReplaceQueuedInput(): Unit {
-        if (!exists(Path("target"))) {
-            Directory.create("target", recursive: true)
-        }
-        let root = Directory.createTemp("target").toString()
-        try {
-            let workspace = root + "/workspace"
-            Directory.create(workspace, recursive: true)
-            let product = openProduct(
-                config: ProductConfig(
-                    stateRoot: root + "/state",
-                    workspaceRoot: workspace,
-                    fixture: true,
-                    asyncEnabled: false
-                )
-            ).value().getOrThrow()
-            let applicationSession = product.applicationSession()
-            let backend = ProductTuiBackend(product, applicationSession: applicationSession)
-            let sink: TuiAgentEventSink = {_ => ()}
-            let opened = backend.submit("/plan fixture plan write", sink)
-            let openedBody = match (opened.action) {
-                case TuiTurnAction.OpenPlanReview(body) => body
-                case _ => ""
-            }
-            @Assert(openedBody != "")
-            let updated = backend.reviewPlan(
-                planContentHash(openedBody),
-                TuiPlanReviewDecision.UpdatePlan,
-                "# Goal\n\nFIXTURE-APPROVED-PLAN-EXECUTION-FAILURE\n\n" +
-                    "# Verification\n\nDo not replace this error with queued work.",
-                sink
-            )
-            let updatedBody = match (updated.action) {
-                case TuiTurnAction.OpenPlanReview(body) => body
-                case _ => ""
-            }
-            @Assert(updatedBody != "")
-            @Assert(applicationSession.enqueue(
-                "plan-review-test",
-                "follow_up",
-                "queued input must remain pending"
-            ).isOk())
+        appPlanReviewTest205({ _, session, backend =>
+            let sink: TuiAgentEventSink = { _ => () }
+            let route = appPlanViewRoute205(backend.submit("/plan fixture plan write", sink))
+            let first = appPlanViewMetadata205(backend, route)
+            let firstId = first.field("view_id").getOrThrow().text
+            let source = "# Goal\n\nFIXTURE-APPROVED-PLAN-EXECUTION-FAILURE\n\n" +
+                "# Verification\n\nDo not replace this error with queued work."
+            let save = appPlanViewConfirmation205(backend.pluginViewAction(firstId, "1", "save",
+                [TuiPluginViewField("plan", source), TuiPluginViewField("feedback", "")], sink))
+            let saved = backend.confirmPluginView(firstId, "2", save.field("request_digest").getOrThrow().text, true, sink)
+            let updated = appPlanViewMetadata205(backend, appPlanViewRoute205(saved), expectedSource: Some(source))
+            let id = updated.field("view_id").getOrThrow().text
+            let confirmation = appPlanViewConfirmation205(backend.pluginViewAction(id, "1", "approve_keep",
+                [TuiPluginViewField("plan", source), TuiPluginViewField("feedback", "")], sink))
+            @Assert(session.enqueue("plan-review-test", "follow_up", "queued input must remain pending").isOk())
             let previousSession = backend.currentSession()
-
-            let failed = backend.reviewPlan(
-                planContentHash(updatedBody),
-                TuiPlanReviewDecision.ApproveKeep,
-                "",
-                sink
-            )
-
-            @Expect(match ((failed.planReviewDisposition, failed.action)) {
-                case (TuiPlanReviewDisposition.Consumed, TuiTurnAction.NoAction) => true
-                case _ => false
-            })
-            @Expect(failed.status, "error: fixture approved-plan execution failed")
+            let events = ArrayList<TuiAgentEvent>()
+            let failed = backend.confirmPluginView(id, "2", confirmation.field("request_digest").getOrThrow().text, true,
+                { event => events.add(event) })
+            @Expect(match (failed.action) { case TuiTurnAction.NoAction => true; case _ => false })
+            @Expect(events.any { event => match (event) {
+                case TuiAgentEvent.Error(value) => value.contains("fixture.plan_execution_failed")
+                case _ => false } })
             @Expect(backend.currentSession(), previousSession)
-            @Expect(applicationSession.queuedCount(), 1)
-        } finally {
-            let _ = removeIfExists(root, recursive: true)
-        }
-    }
-
-    @TestCase
-    func inactiveFailureInvalidatesRatherThanRetainsReview(): Unit {
-        @Expect(match (planReviewFailureDisposition(
-            AgentError(
-                AgentErrorKind.Conflict,
-                "application.plan_mode_inactive",
-                "Plan mode is not active."
-            )
-        )) {
-            case TuiPlanReviewDisposition.Consumed => true
-            case _ => false
-        })
-        @Expect(match (planReviewFailureDisposition(
-            AgentError(
-                AgentErrorKind.Conflict,
-                "application.plan_changed",
-                "plan changed"
-            )
-        )) {
-            case TuiPlanReviewDisposition.Retain => true
-            case _ => false
+            @Expect(session.queuedCount(), 1)
         })
     }
 }
 
-@Test
-class ProductTuiBackendMcpStatusTests {
-    @TestCase
-    func mcpStatusReflectsClosedServerAfterBackendConstruction(): Unit {
-        if (!exists(Path("target"))) {
-            Directory.create("target", recursive: true)
-        }
-        let root = Directory.createTemp("target").toString()
-        try {
-            let settings = root + "/settings"
-            let workspace = root + "/workspace"
-            Directory.create(settings, recursive: true)
-            Directory.create(workspace, recursive: true)
-            File.writeTo(
-                settings + "/config.yml",
-                "schema_version: 1\ndefault_model: local/product-contract\nasync:\n  enabled: false\n".toArray()
-            )
-            File.writeTo(
-                settings + "/models.yml",
-                ("models:\n" +
-                    "  - id: product-contract\n" +
-                    "    provider: local\n" +
-                    "    context_window: 200000\n" +
-                    "    max_output_tokens: 8192\n" +
-                    "    thinking:\n" +
-                    "      mode: none\n").toArray()
-            )
-            File.writeTo(
-                settings + "/providers.yml",
-                ("providers:\n" +
-                    "  - id: local\n" +
-                    "    provider: custom\n" +
-                    "    protocol: completions\n" +
-                    "    dialect: generic_chat\n" +
-                    "    base_url: http://127.0.0.1:11434\n" +
-                    "    api_key_env: MCP_PRODUCT_UNUSED_PROVIDER_KEY\n").toArray()
-            )
-            let fixtureScript = workspace + "/mcp_fixture.py"
-            File.writeTo(
-                fixtureScript,
-                ("import json\n" +
-                    "import sys\n" +
-                    "\n" +
-                    "for line in sys.stdin:\n" +
-                    "    request = json.loads(line)\n" +
-                    "    request_id = request.get(\"id\")\n" +
-                    "    if request_id is None:\n" +
-                    "        continue\n" +
-                    "    method = request.get(\"method\", \"\")\n" +
-                    "    if method == \"server/discover\":\n" +
-                    "        result = {\"supportedVersions\": [\"2026-07-28\"], \"capabilities\": {\"tools\": {\"listChanged\": False}}, \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
-                    "    elif method == \"tools/list\":\n" +
-                    "        result = {\"tools\": [], \"ttlMs\": 0, \"cacheScope\": \"private\"}\n" +
-                    "    else:\n" +
-                    "        result = {}\n" +
-                    "    result[\"resultType\"] = \"complete\"\n" +
-                    "    result[\"_meta\"] = {\"io.modelcontextprotocol/serverInfo\": {\"name\": \"status-fixture\", \"version\": \"1.0.0\"}}\n" +
-                    "    response = {\"jsonrpc\": \"2.0\", \"id\": request_id, \"result\": result}\n" +
-                    "    sys.stdout.write(json.dumps(response, separators=(\",\", \":\")) + \"\\n\")\n" +
-                    "    sys.stdout.flush()\n").toArray()
-            )
-            File.writeTo(
-                settings + "/mcp.yml",
-                ("version: 1\n" +
-                    "servers:\n" +
-                    "  - id: refresh\n" +
-                    "    enabled: true\n" +
-                    "    transport: stdio\n" +
-                    "    command: /usr/bin/python3\n" +
-                    "    args:\n" +
-                    "      - \"-B\"\n" +
-                    "      - \"-u\"\n" +
-                    "      - \"" + fixtureScript + "\"\n" +
-                    "    max_frame_bytes: 65536\n" +
-                    "    request_timeout_ms: 1000\n" +
-                    "    graceful_shutdown_ms: 1000\n").toArray()
-            )
-            let product = openProduct(config: ProductConfig(
-                settingsRoot: settings,
-                stateRoot: root + "/state",
-                workspaceRoot: workspace,
-                approvalMode: ApprovalMode.Yolo,
-                asyncEnabled: false
-            )).value().getOrThrow()
-            try {
-                let backend = ProductTuiBackend(product)
-                @Expect(backend.mcpStatus().text.contains("[ready] refresh"))
-                @Expect(product.closeMcp().isOk())
-                @Expect(backend.mcpStatus().text.contains("[stopped] refresh"))
-            } finally {
-                let _ = product.closeMcp()
-            }
-        } finally {
-            let _ = removeIfExists(root, recursive: true)
-        }
+func appPlanReviewTest205(run: (ProductRuntime, ApplicationSession, ProductTuiBackend) -> Unit): Unit {
+    if (!exists(Path("target"))) { Directory.create("target", recursive: true) }
+    let root = Directory.createTemp("target").toString()
+    let paid = LogicalJsonOwnerBudget(maximumCharged: 150994944).acquire(2097152)
+    // This test frontend's actual DATA root outlives the complete producer,
+    // decoded metadata, callbacks and helper. No public Raw export is refunded.
+    try { appPlanReviewWholeHelper205(root, paid, run) }
+    finally { paid.close(); let _ = removeIfExists(root, recursive: true) }
+}
+
+func appPlanReviewWholeHelper205(root: String, paid: LogicalJsonOwnerReservation,
+    run: (ProductRuntime, ApplicationSession, ProductTuiBackend) -> Unit): Unit {
+    let workspace = root + "/workspace"
+    Directory.create(workspace, recursive: true)
+    let product = openProduct(config: ProductConfig(stateRoot: root + "/state", settingsRoot: root + "/settings",
+        workspaceRoot: workspace, fixture: true, asyncEnabled: false)).value().getOrThrow()
+    try {
+        installAppPlanWorkflowFixture(product)
+        let session = product.applicationSession()
+        let backend = ProductTuiBackend(product, applicationSession: session,
+            ownerAllocation180: Some({ bytes =>
+                let source = paid.deriveRetainedLease(); source.ensureRetainedPeak(bytes); source }))
+        backend.initializeFrontend180()
+        run(product, session, backend)
+    } finally { product.close().value().getOrThrow() }
+}
+
+func appPlanViewRoute205(result: TuiTurnResult): String {
+    match (result.action) {
+        case TuiTurnAction.OpenPluginView(route) => route
+        case _ => throw IllegalStateException("actual plan completion did not open its declared View")
     }
+}
+
+func appPlanViewMetadata205(backend: ProductTuiBackend, route: String, expectedSource!: ?String = None): AgentValue {
+    let document = match (backend.loadPluginView(route).action) {
+        case TuiTurnAction.PluginViewLoaded(value) => value
+        case _ => throw IllegalStateException("actual installed View query failed")
+    }
+    try {
+        let copied = document.withPresentation<String>({ metadata, _, primary =>
+            match (expectedSource) { case Some(source) => @Expect(primary, source); case None => () }
+            String.fromUtf8(metadata.toArray())
+        })
+        decodeAgentValue(copied, maxBytes: 4096).value().getOrThrow()
+    } finally { document.close() }
+}
+
+func appPlanViewConfirmation205(result: TuiTurnResult): AgentValue {
+    let encoded = match (result.action) {
+        case TuiTurnAction.ConfirmPluginView(value) => String.fromUtf8(value.toArray())
+        case _ => throw IllegalStateException("actual declared action did not request Host confirmation")
+    }
+    decodeAgentValue(encoded, maxBytes: 4096).value().getOrThrow()
+}
+
+
+// Explicit test-only installation of the same actual operator-selected native
+// contribution. This helper creates no Source, grant, ModelDecision or Receipt.
+func installAppPlanWorkflowFixture(product: ProductRuntime): Unit {
+    let record=match(product.importLocalPlugin(getVariable("AXYNDRA_WORKFLOW_PLUGIN_PACKAGE").getOrThrow())){
+        case PluginRegistryResult.Ok(value)=>value;case PluginRegistryResult.Err(error)=>throw IllegalStateException(error.code)}
+    try { appInstallPlanWorkflowScoped205(product, record) }
+    finally { record.close() }
 }

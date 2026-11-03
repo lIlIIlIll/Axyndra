@@ -2,8 +2,8 @@
   cjc-version = "1.1.0"
   name = "axyndra_agent_testkit"
   organization = ""
-  description = "Public deterministic test support for cooperative omp-cj extensions"
-  version = "2.0.0"
+  description = "Public deterministic Native plugin data-handler test support"
+  version = "3.0.0"
   output-type = "static"
 
 [dependencies]

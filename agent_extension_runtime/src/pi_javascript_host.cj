@@ -546,7 +546,7 @@ async function runInvocation(message) {
       }
       const returned = await registered.handler(message.arguments.command_args, context);
       if (returned !== undefined) throw extensionError('extension.pi_command_result_unsupported', 'Pi command handlers must not return a value');
-      result = { content: [] };
+      result = { content: '' };
     } else {
       if (!isPlainObject(message.arguments) || !isPlainObject(message.arguments.event)) {
         throw extensionError('extension.pi_event_invalid', 'Pi event invocation must contain an event object');

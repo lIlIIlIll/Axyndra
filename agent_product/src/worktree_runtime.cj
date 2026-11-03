@@ -5,7 +5,6 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
@@ -470,4 +469,23 @@ func worktreeError<T>(code: String, message: String): Result<T> {
         code,
         message
     ))
+}
+
+func safeOperationPart(value: String): String {
+    let output = ArrayList<Byte>()
+    for (byte in unsafe { value.rawData() }) {
+        let allowed = (byte >= b'a' && byte <= b'z') ||
+            (byte >= b'A' && byte <= b'Z') ||
+            (byte >= b'0' && byte <= b'9') ||
+            byte == b'-' || byte == b'_'
+        output.add(if (allowed) { byte } else { b'_' })
+    }
+    if (output.isEmpty()) { "call" } else {
+        String.fromUtf8(output.toArray())
+    }
+}
+
+func resolveExecutable(paths: Array<String>, fallback: String): String {
+    for (path in paths where exists(Path(path))) { return path }
+    fallback
 }

@@ -133,6 +133,8 @@ class TodoController {
     private var editingTodos = false
     private var todoEditorArea = Rect(0, 0, 0, 0)
 
+    func editorVisible(hasApproval:Bool):Bool { editingTodos && !hasApproval }
+
     func isEditing(): Bool {
         editingTodos
     }

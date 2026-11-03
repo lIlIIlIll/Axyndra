@@ -33,7 +33,6 @@ memory_contract
 prompt_memory_v3_contract
 product_prompt_contract
 github_contract
-web_search_contract
 worktree_contract
 gc_contract
 stats_contract
@@ -44,9 +43,6 @@ acp_lifecycle_contract
 sandbox_contract
 direct_runtime_sandbox_contract
 mcp_contract
-mcp_extension_contract
-mcp_product_contract
-product_mcp_server_contract
 product_continuation_contract
 checkpoint_compaction_contract
 sdk_contract

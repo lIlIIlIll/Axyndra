@@ -26,6 +26,8 @@ public class McpClient {
     private let active = ArrayList<McpActiveRequest>()
     private let knownTools = ArrayList<McpTool>()
     private var sequence: Int64 = 0
+    private let preparedSeal = McpPreparedClientSeal()
+    private let dispatchedPreparedIds = HashSet<String>()
 
     public init(
         transport: McpTransport,
@@ -148,6 +150,72 @@ public class McpClient {
         }
         match (send(MCP_METHOD_TOOLS_CALL, jsonObject(fields.toArray()), owner: owner)) {
             case McpResult.Ok(value) => decodeMcpCallOutcome(value, knownTool(name))
+            case McpResult.Err(error) => McpResult.Err(error)
+        }
+    }
+
+    // Pure preparation: no I/O port callback, sequence allocation, reservation,
+    // cache refresh or dispatch. The caller supplies its stable host identity;
+    // transport.freezePrepared may add an immutable, pure wire projection.
+    public func prepareToolCall(
+        requestId: String, name: String, arguments: JsonNode,
+        continuation!: McpToolCallContinuation = McpToolCallContinuation(),
+        owner!: String = ""
+    ): McpResult<McpPreparedToolCall> {
+        if (state() != McpLifecycleState.Ready) {
+            return lifecycleFailure<McpPreparedToolCall>("mcp.client_not_ready", "MCP client is not ready")
+        }
+        if (!validMcpPreparedRequestId(requestId)) {
+            return invalidMcp<McpPreparedToolCall>("mcp.prepared_id_invalid", "prepared request requires a bounded printable string id")
+        }
+        if (name.trimAscii() == "" || arguments.unifiedKind != UnifiedJsonKind.Object) {
+            return invalidMcp<McpPreparedToolCall>("mcp.call_invalid", "MCP tool call requires a name and object arguments")
+        }
+        try {
+            let params = withMcpRequestMeta(mcpOperationParams([
+                JsonObjectEntry("name", jsonString(name)), JsonObjectEntry("arguments", arguments)
+            ], continuation), meta)
+            let wire = encodeJsonRpc(JsonRpcEnvelope.Request(JsonRpcRequest(
+                jsonRpcTextId(requestId), MCP_METHOD_TOOLS_CALL, params: params
+            )))
+            let descriptor = match (knownTool(name)) {
+                case Some(value) => stringifyUnifiedJson(value.toValue())
+                case None => ""
+            }
+            if (wire.toArray().size > MCP_PREPARED_REQUEST_MAX_BYTES ||
+                descriptor.toArray().size > MCP_PREPARED_REQUEST_MAX_BYTES) {
+                return invalidMcp<McpPreparedToolCall>("mcp.prepared_request_too_large", "prepared MCP request or descriptor exceeds its limit")
+            }
+            // Parse before exposing the immutable artifact, not after dispatch.
+            let result = McpPreparedToolCall(preparedSeal, requestId, wire, descriptor, owner)
+            let _ = result.request(); let _ = result.tool()
+            transport.freezePrepared(result)
+        } catch (_: Exception) {
+            invalidMcp<McpPreparedToolCall>("mcp.prepared_request_invalid", "MCP request could not be frozen")
+        }
+    }
+
+    public func dispatchPreparedToolCall(prepared: McpPreparedToolCall): McpResult<McpCallToolOutcome> {
+        if (!prepared.belongsTo(preparedSeal)) {
+            return invalidMcp<McpCallToolOutcome>("mcp.prepared_session_mismatch", "prepared request belongs to a different client session")
+        }
+        lock.lock()
+        try {
+            if (state() != McpLifecycleState.Ready) {
+                return lifecycleFailure<McpCallToolOutcome>("mcp.client_not_ready", "MCP client is not ready")
+            }
+            if (dispatchedPreparedIds.contains(prepared.requestId)) {
+                return invalidMcp<McpCallToolOutcome>("mcp.prepared_already_dispatched", "prepared request id was already dispatched")
+            }
+            if (dispatchedPreparedIds.size >= MCP_PREPARED_DISPATCH_LIMIT) {
+                return lifecycleFailure<McpCallToolOutcome>("mcp.prepared_dispatch_limit", "client session exhausted its prepared request ids")
+            }
+            // Keep failed/cancelled/unsupported ids too. No eviction or retry can
+            // turn a possibly handed-off request into a second backend effect.
+            dispatchedPreparedIds.add(prepared.requestId)
+        } finally { lock.unlock() }
+        match (sendRequest(prepared.request(), prepared.owner, prepared: Some(prepared))) {
+            case McpResult.Ok(value) => decodeMcpCallOutcome(value, prepared.tool())
             case McpResult.Err(error) => McpResult.Err(error)
         }
     }
@@ -461,16 +529,28 @@ public class McpClient {
         if (state() != McpLifecycleState.Ready) {
             return lifecycleFailure<JsonNode>("mcp.client_not_ready", "MCP client is not ready")
         }
-        let id = nextRequestId()
+        sendRequest(JsonRpcRequest(nextRequestId(), method,
+            params: withMcpRequestMeta(params, meta)), owner)
+    }
+
+    private func sendRequest(
+        request: JsonRpcRequest, owner: String, prepared!: ?McpPreparedToolCall = None
+    ): McpResult<JsonNode> {
+        let id = request.id
         match (correlation.reserve(id)) {
             case JsonRpcResult.Ok(_) => ()
             case JsonRpcResult.Err(error) => return invalidMcp<JsonNode>(error.code, error.message)
         }
         if (owner != "") { addActive(owner, id) }
-        let response = transport.requestWithNotifications(
-            JsonRpcRequest(id, method, params: withMcpRequestMeta(params, meta)),
-            notificationSink
-        )
+        let response: McpResult<JsonRpcResponse> = try {
+            match (prepared) {
+                case Some(value) => transport.requestPrepared(value, notificationSink)
+                case None => transport.requestWithNotifications(request, notificationSink)
+            }
+        } catch (_: Exception) {
+            McpResult.Err(McpError(McpErrorKind.Transport, "mcp.transport_callback_failed",
+                "MCP transport callback failed", retryable: false, retrySafe: false))
+        }
         if (owner != "") { removeActive(owner, id) }
         match (response) {
             case McpResult.Err(error) =>

@@ -4,141 +4,73 @@ import agent_sdk.*
 import yjson.*
 import yjson_support.*
 
-public func fixtureExtensionManifest(): String {
-    """
-    {
-      "schemaVersion": 1,
-      "id": "third-party.fixture",
-      "name": "Third Party Fixture",
-      "version": "1.0.0",
-      "description": "Independent compile-time extension consumer.",
-      "sdk": {"min": "2.0.0", "maxExclusive": "3.0.0"},
-      "tools": ["fixture_echo"],
-      "capabilities": ["workspace.read"],
-      "requirements": {"executables": []}
-    }
-    """
-}
-
-public func runFixtureContract(): Int64 {
-    let extension = ThirdPartyFixtureExtension()
-    let registry = ExtensionRegistry()
-    expect(match (registry.register(extension)) {
-        case SdkResult.Ok(_) => true
-        case SdkResult.Err(_) => false
-    }, "independent consumer registers through agent_sdk")
-    expect(registry.registeredExtensions().size == 1, "metadata is enumerable")
-    expect(registry.registeredToolNames() == ["fixture_echo"], "tool is enumerable")
-    expect(match (registry.register(extension)) {
-        case SdkResult.Err(error) => error.code == "sdk.extension_duplicate_id"
-        case SdkResult.Ok(_) => false
-    }, "duplicate id is rejected")
-
-    let tool = extension.tools()[0]
-    expect(match (tool.validate(jsonObject([]))) {
-        case SdkResult.Err(error) => error.kind == SdkErrorKind.Validation
-        case SdkResult.Ok(_) => false
-    }, "extension validation is typed")
-    let cancelled = ToolInvocation(
-        "fixture-cancelled",
-        jsonObject([JsonObjectEntry("text", jsonString("x"))]),
-        "/workspace",
-        "/workspace",
-        cancellation: CancelledFixture()
-    )
-    expect(match (tool.prepare(cancelled)) {
-        case SdkResult.Err(error) => error.kind == SdkErrorKind.Cancelled
-        case SdkResult.Ok(_) => false
-    }, "extension observes cancellation without parent-run authority")
-    let deadline = InvocationDeadline(expiresAtMillis: 100)
-    expect(deadline.isSet() && deadline.exceeded(100), "deadline surface is deterministic")
-    println("independent agent_sdk consumer contract passed")
-    0
-}
-
-public class ThirdPartyFixtureExtension <: Extension {
-    private let fixtureTools: Array<ExtensionTool> = [FixtureTool()]
+// An actual Native provider handler; the separate executable invokes it from
+// the existing complete native wire loop. It does not request Host services.
+public class ThirdPartyFixturePlugin <: NativePluginHandler {
     public init() {}
-    public func metadata(): ExtensionMetadata {
-        ExtensionMetadata(
-            "third-party.fixture",
-            "Third Party Fixture",
-            "1.0.0",
-            "Independent compile-time extension consumer."
-        )
+    public func definition(): NativePluginDefinition {
+        NativePluginDefinition("third-party.fixture", "1.0.0",
+            [PluginContributionDefinition("fixture_echo", PluginContributionKind.Provider)])
     }
-    public func tools(): Array<ExtensionTool> { fixtureTools }
-}
-
-class FixtureTool <: ExtensionTool {
-    public func definition(): ExtensionToolDefinition {
-        ExtensionToolDefinition(
-            "fixture_echo",
-            "Fixture read intent.",
-            jsonObject([
-                JsonObjectEntry("type", jsonString("object")),
-                JsonObjectEntry("properties", jsonObject([
-                    JsonObjectEntry("text", jsonObject([
-                        JsonObjectEntry("type", jsonString("string"))
-                    ]))
-                ])),
-                JsonObjectEntry("required", jsonArray([
-                    jsonString("text")
-                ]))
-            ]),
-            [workspaceRead()]
-        )
-    }
-
-    public func validate(input: JsonNode): SdkResult<JsonNode> {
+    public func validate(kind: PluginContributionKind, contribution: String, input: JsonNode): SdkResult<JsonNode> {
+        if (kind != PluginContributionKind.Provider || contribution != "fixture_echo") {
+            return SdkResult.Err(SdkError(SdkErrorKind.Unsupported,
+                "fixture.contribution_unknown", "unknown fixture contribution"))
+        }
         match (input.field("text")) {
             case Some(value) => if (value.unifiedKind == UnifiedJsonKind.Text) {
                 SdkResult.Ok(input)
-            } else {
-                invalid()
-            }
+            } else { invalid() }
             case None => invalid()
         }
     }
-
-    public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
+    public func invoke(invocation: NativePluginInvocation): SdkResult<JsonNode> {
         if (invocation.cancellation.isCancelled()) {
-            return SdkResult.Err(SdkError(
-                SdkErrorKind.Cancelled,
-                "fixture.cancelled",
-                invocation.cancellation.reason()
-            ))
+            return SdkResult.Err(SdkError(SdkErrorKind.Cancelled,
+                "fixture.cancelled", invocation.cancellation.reason()))
         }
-        match (validate(invocation.input)) {
-            case SdkResult.Err(error) => SdkResult.Err(error)
-            case SdkResult.Ok(value) => SdkResult.Ok(OperationIntent.WorkspaceSearch(
-                WorkspaceSearchIntent(value.field("text").getOrThrow().text)
-            ))
-        }
+        validate(invocation.contributionKind, invocation.contribution, invocation.input)
     }
-
-    public func decode(
-        _invocation: ToolInvocation,
-        result: ExecutionResult
-    ): SdkResult<ToolOutput> {
-        let _ = _invocation
-        SdkResult.Ok(ToolOutput(structured: result.value))
-    }
-
     private func invalid(): SdkResult<JsonNode> {
-        SdkResult.Err(SdkError(
-            SdkErrorKind.Validation,
-            "fixture.text_required",
-            "text is required"
-        ))
+        SdkResult.Err(SdkError(SdkErrorKind.Validation,
+            "fixture.text_required", "text is required"))
     }
 }
 
+public func runFixtureContract(): Int64 {
+    let handler = ThirdPartyFixturePlugin()
+    let definition = handler.definition()
+    expect(definition.id == "third-party.fixture" && definition.version == "1.0.0",
+        "independent Native consumer exposes package data")
+    expect(definition.contributions.size == 1 && definition.contributions[0].name == "fixture_echo",
+        "native contribution is enumerable")
+    expect(definition.capabilities.isEmpty(), "pure Native provider requests no Host capability")
+    var duplicateRejected = false
+    try { let _ = NativePluginDefinition("third-party.fixture", "1.0.0",
+        [definition.contributions[0], definition.contributions[0]]) }
+    catch (_: IllegalArgumentException) { duplicateRejected = true }
+    expect(duplicateRejected, "duplicate native contribution is rejected")
+    expect(match (handler.validate(PluginContributionKind.Provider, "fixture_echo", jsonObject([]))) {
+        case SdkResult.Err(error) => error.kind == SdkErrorKind.Validation
+        case SdkResult.Ok(_) => false }, "native input validation is typed")
+    let input = jsonObject([JsonObjectEntry("text", jsonString("\u{0000}中文 fixture"))])
+    let result = match (handler.invoke(NativePluginInvocation("fixture-call", "fixture_echo", input))) {
+        case SdkResult.Ok(value) => value
+        case SdkResult.Err(error) => throw IllegalStateException(error.code) }
+    expect(result.field("text").getOrThrow().text == "\u{0000}中文 fixture", "native result keeps full business data")
+    expect(match (handler.invoke(NativePluginInvocation("fixture-cancelled", "fixture_echo", input,
+        cancellation: CancelledFixture()))) {
+        case SdkResult.Err(error) => error.kind == SdkErrorKind.Cancelled
+        case SdkResult.Ok(_) => false }, "native handler observes cancellation without parent Run authority")
+    let deadline = InvocationDeadline(expiresAtMillis: 100)
+    expect(deadline.isSet() && deadline.exceeded(100), "deadline surface is deterministic")
+    println("independent native agent_sdk consumer contract passed")
+    0
+}
 class CancelledFixture <: InvocationCancellation {
     public func isCancelled(): Bool { true }
     public func reason(): String { "fixture cancellation" }
 }
-
-func expect(condition: Bool, message: String): Unit {
-    if (!condition) { throw IllegalStateException(message) }
+func expect(value: Bool, message: String): Unit {
+    if (!value) { throw IllegalStateException(message) }
 }

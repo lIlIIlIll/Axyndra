@@ -214,6 +214,56 @@ class CjTuiBoundaryExtremeTest {
     }
 
     @TestCase
+    func eventParserLargeUnicodePastePreservesSplitTerminatorFollowingControlAndNextPaste(): Unit {
+        let parser = EventParser()
+        let snow = unsafe { "雪".rawData() }
+        let body = Array<Byte>(3145728, { index => snow[index % 3] })
+        @Expect(parser.push(unsafe { "\u{1B}[200~".rawData() }).size, 0)
+        var offset: Int64 = 0
+        while (offset < body.size) {
+            let end = min(body.size, offset + 4093)
+            @Expect(parser.push(body[offset..end]).size, 0)
+            offset = end
+        }
+        @Expect(parser.push(unsafe { "\u{1B}[20".rawData() }).size, 0)
+        let events = parser.push(unsafe { "1~\u{1B}[200~second\u{1B}[201~\u{13}".rawData() })
+        @Expect(events.size, 3)
+        match (events[0]) {
+            case Event.Paste(text) => @Expect(text, String.fromUtf8(body))
+            case _ => @Expect(false)
+        }
+        match (events[1]) {
+            case Event.Paste(text) => @Expect(text, "second")
+            case _ => @Expect(false)
+        }
+        match (events[2]) {
+            case Event.KeyDown(key) => match (key.code) {
+                case KeyCode.Char(r's') => @Expect(key.modifiers.ctrl)
+                case _ => @Expect(false)
+            }
+            case _ => @Expect(false)
+        }
+    }
+
+    @TestCase
+    func textAreaLargePlainLineRendersItsViewportWithoutChangingTheCompleteEdit(): Unit {
+        let snow = unsafe { "雪".rawData() }
+        let source = String.fromUtf8(Array<Byte>(3145728, { index => snow[index % 3] }))
+        let editor = TextArea(value: "", cursor: 0, lineNumbers: false, markdownEditing: false)
+        editor.paste(source)
+        editor.clearHistory()
+        let buffer = Buffer(Rect(0, 0, 8, 2))
+        editor.render(buffer.area, buffer)
+        @Expect(buffer.getCell(0, 0).symbol, "雪")
+        @Expect(buffer.getCell(6, 0).symbol, "雪")
+        let caret = editor.cursorPosition(buffer.area)
+        @Expect(caret.y, 0)
+        @Expect(caret.x >= buffer.area.x && caret.x <= buffer.area.right)
+        @Expect(editor.value, source)
+        @Expect(editor.cursor, source.size)
+    }
+
+    @TestCase
     func textBufferEmptyNeedlesAreNoops(): Unit {
         let buffer = TextBuffer(text: "abc")
         match (buffer.find("")) {

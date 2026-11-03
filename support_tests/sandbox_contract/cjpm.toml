@@ -10,3 +10,8 @@
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
   "agent_product" = { path = "../../agent_product", output-type = "static" }
   "sandbox4cj" = { path = "../../libs/sandbox4cj", output-type = "static" }
+  "eval_native_contract" = { path = "../eval_native_contract", output-type = "static" }
+  "shell_native_contract" = { path = "../shell_native_contract", output-type = "static" }
+  "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

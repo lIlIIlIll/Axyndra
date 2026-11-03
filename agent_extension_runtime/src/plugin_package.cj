@@ -7,13 +7,18 @@ import std.convert.*
 import std.deriving.*
 import std.fs.*
 import agent_domain.*
+import agent_sdk.*
 import std.sort.*
+import stdx.crypto.digest.*
 
 @Derive[Equatable]
 public enum PluginManifestFamily { Pi | Codex | Axyndra }
 
 @Derive[Equatable]
 public enum PluginEcosystem { Pi | Codex | Axyndra }
+
+@Derive[Equatable]
+public enum PluginEntryKind { JavaScript | NativeExecutable | LegacyProcess }
 
 @Derive[Equatable]
 public enum PluginComponentKind { Skill | Mcp | Prompt | Extension | Hook | Command | Theme | HostedOnly }
@@ -137,8 +142,14 @@ public class PluginPackageDescriptor {
     public let components: Array<PluginComponent>
     public let hookDeclarations: Array<PluginHookDeclaration>
     public let dependencies: Array<PluginPackageDependency>
+    private let componentDependencyValues: Array<PluginContributionDependency>
+    public prop componentDependencies: Array<PluginContributionDependency> {
+        get() { componentDependencyValues.clone() }
+    }
     public let missingDependencies: Array<String>
     public let entrypoint: String
+    public let entryKind: PluginEntryKind
+    public let contributions: Array<PluginContributionDefinition>
     public let requestedCapabilities: Array<String>
     public let sdkRange: String
     public let protocolRange: String
@@ -159,6 +170,7 @@ public class PluginPackageDescriptor {
         components!: Array<PluginComponent> = [],
         hookDeclarations!: Array<PluginHookDeclaration> = [],
         dependencies!: Array<PluginPackageDependency> = [],
+        componentDependencies!: Array<PluginContributionDependency> = [],
         missingDependencies!: Array<String> = [],
         entrypoint!: String = "",
         requestedCapabilities!: Array<String> = [],
@@ -166,7 +178,9 @@ public class PluginPackageDescriptor {
         protocolRange!: String = "axyndra-extension-v1",
         contentDigest!: String = "",
         declaredContentDigest!: String = "",
-        signature!: String = ""
+        signature!: String = "",
+        entryKind!: PluginEntryKind = PluginEntryKind.LegacyProcess,
+        contributions!: Array<PluginContributionDefinition> = []
     ) {
         this.id = id.trimAscii()
         this.namespace = pluginPackageNamespace(ecosystem, this.id)
@@ -185,8 +199,13 @@ public class PluginPackageDescriptor {
         this.components = pluginNamespaceComponents(this.namespace, components)
         this.hookDeclarations = hookDeclarations
         this.dependencies = dependencies
+        if (componentDependencies.size > 32) { throw IllegalArgumentException("plugin component dependency limit exceeded") }
+        this.componentDependencyValues = componentDependencies.clone()
         this.missingDependencies = missingDependencies
         this.entrypoint = entrypoint.trimAscii()
+        this.entryKind = if (ecosystem == PluginEcosystem.Axyndra) { entryKind }
+            else { PluginEntryKind.JavaScript }
+        this.contributions = contributions.clone()
         this.requestedCapabilities = requestedCapabilities
         this.sdkRange = sdkRange.trimAscii()
         this.protocolRange = protocolRange.trimAscii()
@@ -195,6 +214,67 @@ public class PluginPackageDescriptor {
         this.signature = signature.trimAscii()
     }
 }
+public func pluginEntryKindName(kind: PluginEntryKind): String {
+    match (kind) {
+        case PluginEntryKind.JavaScript => "javascript"
+        case PluginEntryKind.NativeExecutable => "native-executable"
+        case PluginEntryKind.LegacyProcess => "legacy-process"
+    }
+}
+
+public func pluginContributionKindName(kind: PluginContributionKind): String {
+    match (kind) {
+        case PluginContributionKind.Tool => "tool"
+        case PluginContributionKind.Command => "command"
+        case PluginContributionKind.View => "view"
+        case PluginContributionKind.Skill => "skill"
+        case PluginContributionKind.Provider => "provider"
+        case PluginContributionKind.ModelProvider => "model_provider"
+        case PluginContributionKind.ContextProvider => "context_provider"
+        case PluginContributionKind.ResourceProvider => "resource_provider"
+        case PluginContributionKind.Event => "event"
+        case PluginContributionKind.Service => "service"
+    }
+}
+
+// Inspection is metadata only: this serializer never initializes the package
+// or exposes signature bytes. Runtime readiness remains an activation result.
+public func pluginPackageDiagnosticValue(descriptor: PluginPackageDescriptor): JsonNode {
+    let contributions = ArrayList<JsonNode>()
+    for (contribution in descriptor.contributions) {
+        let kind = pluginContributionKindName(contribution.kind)
+        contributions.add(jsonObject([
+            JsonObjectEntry("kind", jsonString(kind)),
+            JsonObjectEntry("name", jsonString(contribution.name)),
+            JsonObjectEntry("identity", jsonString(descriptor.namespace + "/" + kind + "/" + contribution.name))
+        ]))
+    }
+    let dependencies = ArrayList<JsonNode>()
+    for (dependency in descriptor.componentDependencies) {
+        dependencies.add(jsonObject([
+            JsonObjectEntry("namespace", jsonString(dependency.namespace)),
+            JsonObjectEntry("version_range", jsonString(dependency.versionRange)),
+            JsonObjectEntry("kind", jsonString(pluginContributionKindName(dependency.kind))),
+            JsonObjectEntry("name", jsonString(dependency.name))
+        ]))
+    }
+    jsonObject([
+        JsonObjectEntry("id", jsonString(descriptor.id)),
+        JsonObjectEntry("namespace", jsonString(descriptor.namespace)),
+        JsonObjectEntry("version", jsonString(descriptor.version)),
+        JsonObjectEntry("entry_kind", jsonString(pluginEntryKindName(descriptor.entryKind))),
+        JsonObjectEntry("entrypoint", jsonString(descriptor.entrypoint)),
+        JsonObjectEntry("compatibility_profile", jsonString(descriptor.compatibilityProfile)),
+        JsonObjectEntry("host_sdk_version", jsonString(AGENT_SDK_VERSION)),
+        JsonObjectEntry("sdk_range", jsonString(descriptor.sdkRange)),
+        JsonObjectEntry("protocol_range", jsonString(descriptor.protocolRange)),
+        JsonObjectEntry("requested_capabilities", jsonArray(descriptor.requestedCapabilities.map({ item => jsonString(item) }))),
+        JsonObjectEntry("contributions", jsonArray(contributions.toArray())),
+        JsonObjectEntry("component_dependencies", jsonArray(dependencies.toArray())),
+        JsonObjectEntry("signature_declared", jsonBool(descriptor.signature != ""))
+    ])
+}
+
 func pluginPackageNamespace(ecosystem: PluginEcosystem, id: String): String {
     let family = match (ecosystem) {
         case PluginEcosystem.Pi => "pi"
@@ -244,13 +324,57 @@ func pluginNamespaceComponents(
 }
 
 
+// Allocation observation only; cannot authorize a package or bypass any
+// digest/manifest validation. Registry supplies its actual shared owner.
+public interface PluginPackageMetadataAccounting {
+    func beforeDocument(source: String): Unit
+    func beforeTreePath(bytes: Int64): Unit
+    // Prepay additional work before allocation; retain custody until inspection
+    // returns, including all digest workers on every success and failure path.
+    func beforeDigestWork(bytes: Int64): Unit
+}
+
+func pluginInspectJson(document: String, accounting: ?PluginPackageMetadataAccounting): JsonNode {
+    match (accounting) { case Some(value) => value.beforeDocument(document); case None => () }
+    parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
+}
+
+// The accounted path prepays a fixed 4 MiB scratch before reaching this
+// reader. Do not let a replaced/grown manifest allocate an unbounded array.
+// Existing callers without accounting retain their original read path.
+func pluginReadBoundedInspectionManifest(path: Path): Array<Byte> {
+    let file = File(path, OpenMode.Read)
+    try {
+        let bytes = ArrayList<Byte>()
+        let buffer = Array<Byte>(65536, repeat: 0)
+        while (true) {
+            let count = file.read(buffer)
+            if (count == 0) { break }
+            if (count > 1048576 - bytes.size) {
+                // Preserve the existing precise manifest-too-large branch.
+                return Array<Byte>(1048577, repeat: 0)
+            }
+            bytes.add(all: buffer[..count])
+        }
+        bytes.toArray()
+    } finally { file.close() }
+}
+
 public func parsePluginPackageManifest(
     family: PluginManifestFamily,
     document: String,
-    source!: String = "embedded"
+    source!: String = "embedded",
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None
 ): PluginPackageResult<PluginPackageDescriptor> {
+    match (metadataAccounting) {
+        case Some(actual78) => match (actual78 as PluginPackagePrivateDocumentAccounting78) {
+            case Some(private78) => return pluginParsePrivateManifest78(family, document, source, private78)
+            case None => ()
+        }
+        case None => ()
+    }
     let value = try {
-        parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
+        pluginInspectJson(document, metadataAccounting)
     } catch (error: JsonException) {
         return pluginPackageError("plugin.manifest_parse", error.message, source: source)
     }
@@ -268,7 +392,8 @@ public func parsePluginPackageManifest(
     }
 }
 
-public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackageDescriptor> {
+public func inspectPluginPackage(root: String,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None): PluginPackageResult<PluginPackageDescriptor> {
     let authored = Path(root).normalize()
     if (!exists(authored)) {
         return pluginPackageError("plugin.root_missing", "plugin package root does not exist", source: root)
@@ -290,7 +415,7 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
     } catch (_: Exception) {
         authored.toString()
     }
-    let digest = match (pluginContentDigest(canonical)) {
+    let digest = match (pluginContentDigest(canonical, metadataAccounting: metadataAccounting)) {
         case PluginPackageResult.Ok(value) => value
         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
     }
@@ -298,12 +423,12 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
     let hasRootPlugin = exists(rootPluginPath)
     var useRootCodex = false
     if (hasRootPlugin) {
-        let rootManifest = match (pluginReadManifest(canonical, "plugin.json")) {
+        let rootManifest = match (pluginReadManifest(canonical, "plugin.json", metadataAccounting: metadataAccounting)) {
             case PluginPackageResult.Ok(value) => value
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
         }
         let rootValue = try {
-            parseUnifiedJson(rootManifest, maxBytes: 1048576, maxDepth: 32)
+            pluginInspectJson(rootManifest, metadataAccounting)
         } catch (error: JsonException) {
             return pluginPackageError("plugin.manifest_parse", error.message, source: canonical, field: "plugin.json")
         }
@@ -325,7 +450,7 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
     }
     let hasLegacyCodex = exists(Path(canonical).join(".codex-plugin/plugin.json"))
     let hasCodexManifest = useRootCodex || hasLegacyCodex
-    let hasPiDeclaration = pluginHasPiDeclaration(canonical)
+    let hasPiDeclaration = pluginHasPiDeclaration(canonical, metadataAccounting: metadataAccounting)
     let hasPiPackage = hasPiDeclaration || (
         exists(Path(canonical).join("package.json")) &&
             pluginHasPiConventionalResources(canonical)
@@ -367,22 +492,16 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
                 return pluginPackageError("plugin.manifest_invalid", "Codex compatibility manifest directory must be a non-symlink directory", source: canonical)
             }
         }
-        let manifest = match (pluginReadManifest(canonical, candidate[0])) {
+        let manifest = match (pluginReadManifest(canonical, candidate[0], metadataAccounting: metadataAccounting)) {
             case PluginPackageResult.Ok(document) => document
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
         }
-        match (parsePluginPackageManifest(candidate[1], manifest, source: "local:" + canonical)) {
+        match (parsePluginPackageManifest(candidate[1], manifest, source: "local:" + canonical, metadataAccounting: metadataAccounting)) {
             case PluginPackageResult.Ok(value) =>
-                if (candidate[0] == "mcp.json" || candidate[0] == ".mcp.json") {
-                    match (pluginValidateCodexMcp(manifest, candidate[0])) {
-                        case PluginPackageResult.Ok(_) => ()
-                        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
-                    }
-                }
                 var components = if (value.ecosystem == PluginEcosystem.Pi) {
-                    pluginPiConventionalComponents(canonical, value.components, manifest)
+                    pluginPiConventionalComponents(canonical, value.components, manifest, metadataAccounting: metadataAccounting)
                 } else if (candidate[0] == "mcp.json" || candidate[0] == ".mcp.json") {
-                    [PluginComponent(PluginComponentKind.Mcp, candidate[0])]
+                    [PluginComponent(PluginComponentKind.Mcp, candidate[0], status: PluginComponentStatus.Blocked)]
                 } else {
                     value.components
                 }
@@ -393,7 +512,7 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
                 }
                 var hookDeclarations = value.hookDeclarations
                 if (candidate[0] == "plugin.json") {
-                    match (pluginCodexPortableComponents(canonical, manifest, components)) {
+                    match (pluginCodexPortableComponents(canonical, manifest, components, metadataAccounting: metadataAccounting)) {
                         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                         case PluginPackageResult.Ok(layout) =>
                             components = layout.components
@@ -402,11 +521,7 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
                     }
                 }
                 if (candidate[0] == ".codex-plugin/plugin.json") {
-                    match (pluginCodexLegacyInlineMcpComponents(manifest, candidate[0], components)) {
-                        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
-                        case PluginPackageResult.Ok(value) => components = value
-                    }
-                    match (pluginCodexPortableComponents(canonical, manifest, components)) {
+                    match (pluginCodexPortableComponents(canonical, manifest, components, metadataAccounting: metadataAccounting)) {
                         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                         case PluginPackageResult.Ok(layout) =>
                             components = layout.components
@@ -422,8 +537,6 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
                     "codex-portable-mcp-v1"
                 } else if (candidate[0] == ".mcp.json") {
                     "codex-compat-mcp-v1"
-                } else if (candidate[0] == "axyndra.plugin.json") {
-                    "axyndra-plugin-v1"
                 } else {
                     value.compatibilityProfile
                 }
@@ -440,8 +553,11 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
                     components: components,
                     hookDeclarations: hookDeclarations,
                     dependencies: value.dependencies,
+                    componentDependencies: value.componentDependencies,
                     missingDependencies: pluginMissingDependencies(canonical, value.dependencies),
                     entrypoint: value.entrypoint,
+                    entryKind: value.entryKind,
+                    contributions: value.contributions,
                     requestedCapabilities: value.requestedCapabilities,
                     sdkRange: value.sdkRange,
                     protocolRange: value.protocolRange,
@@ -474,7 +590,8 @@ public func inspectPluginPackage(root: String): PluginPackageResult<PluginPackag
         source: canonical
     )
 }
-func pluginReadManifest(root: String, relativePath: String): PluginPackageResult<String> {
+func pluginReadManifest(root: String, relativePath: String,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None): PluginPackageResult<String> {
     let path = Path(root).join(relativePath)
     let info = try {
         FileInfo(path)
@@ -490,7 +607,10 @@ func pluginReadManifest(root: String, relativePath: String): PluginPackageResult
         )
     }
     try {
-        let bytes = File.readFrom(path)
+        let bytes = match (metadataAccounting) {
+            case Some(_) => pluginReadBoundedInspectionManifest(path)
+            case None => File.readFrom(path)
+        }
         if (bytes.size > 1048576) {
             return pluginPackageError(
                 "plugin.manifest_too_large",
@@ -505,11 +625,19 @@ func pluginReadManifest(root: String, relativePath: String): PluginPackageResult
     }
 }
 
-func pluginHasPiDeclaration(root: String): Bool {
-    match (pluginReadManifest(root, "package.json")) {
+func pluginHasPiDeclaration(root: String,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None): Bool {
+    match (metadataAccounting) {
+        case Some(actual78) => match (actual78 as PluginPackagePrivateDocumentAccounting78) {
+            case Some(private78) => return pluginHasPrivatePiDeclaration78(root, private78)
+            case None => ()
+        }
+        case None => ()
+    }
+    match (pluginReadManifest(root, "package.json", metadataAccounting: metadataAccounting)) {
         case PluginPackageResult.Err(_) => false
         case PluginPackageResult.Ok(document) =>
-            let value = try { parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32) } catch (_: Exception) {
+            let value = try { pluginInspectJson(document, metadataAccounting) } catch (_: Exception) {
                 return false
             }
             value.field("pi").isSome()
@@ -543,28 +671,29 @@ func pluginMissingDependencies(
 func pluginCodexPortableComponents(
     root: String,
     manifestDocument: String,
-    declared: Array<PluginComponent>
+    declared: Array<PluginComponent>,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None
 ): PluginPackageResult<PluginCodexLayout> {
     let manifest = try {
-        parseUnifiedJson(manifestDocument, maxBytes: 1048576, maxDepth: 32)
+        pluginInspectJson(manifestDocument, metadataAccounting)
     } catch (error: JsonException) {
         return pluginPackageError("plugin.manifest_parse", error.message, source: root)
     }
     var overlay = pluginCodexOpenAiOverlay(manifest)
     var overlayPath = if (overlay.isSome()) { "plugin.json#extensions.com.openai" } else { "" }
     if (overlay.isNone() && exists(Path(root).join(".codex-plugin/plugin.json"))) {
-        let fallbackDocument = match (pluginReadManifest(root, ".codex-plugin/plugin.json")) {
+        let fallbackDocument = match (pluginReadManifest(root, ".codex-plugin/plugin.json", metadataAccounting: metadataAccounting)) {
             case PluginPackageResult.Ok(text) => text
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
         }
         match (parsePluginPackageManifest(
-            PluginManifestFamily.Codex, fallbackDocument, source: "local:" + root
+            PluginManifestFamily.Codex, fallbackDocument, source: "local:" + root, metadataAccounting: metadataAccounting
         )) {
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
             case PluginPackageResult.Ok(_) => ()
         }
         let fallback = try {
-            parseUnifiedJson(fallbackDocument, maxBytes: 1048576, maxDepth: 32)
+            pluginInspectJson(fallbackDocument, metadataAccounting)
         } catch (error: JsonException) {
             return pluginPackageError("plugin.manifest_parse", error.message, source: root)
         }
@@ -609,22 +738,8 @@ func pluginCodexPortableComponents(
                 field: "mcp.json"
             )
         }
-        let document = match (pluginReadManifest(root, "mcp.json")) {
-            case PluginPackageResult.Ok(value) => value
-            case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
-        }
-        match (parsePluginPackageManifest(
-            PluginManifestFamily.Codex, document, source: "local:" + root + "/mcp.json"
-        )) {
-            case PluginPackageResult.Ok(_) => ()
-            case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
-        }
-        match (pluginValidateCodexMcp(document, "mcp.json")) {
-            case PluginPackageResult.Ok(_) => ()
-            case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
-        }
         if (!pluginHasComponentPath(components, PluginComponentKind.Mcp, "mcp.json")) {
-            components.add(PluginComponent(PluginComponentKind.Mcp, "mcp.json"))
+            components.add(PluginComponent(PluginComponentKind.Mcp, "mcp.json", status: PluginComponentStatus.Blocked))
         }
     }
     match (overlay) {
@@ -653,7 +768,7 @@ func pluginCodexPortableComponents(
     }
     match (hookConfig) {
         case Some(value) => match (pluginCodexHookConfiguration(
-            root, value, "plugin.json#hooks", components
+            root, value, "plugin.json#hooks", components, metadataAccounting: metadataAccounting
         )) {
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
             case PluginPackageResult.Ok(items) => hookDeclarations.add(all: items)
@@ -661,12 +776,12 @@ func pluginCodexPortableComponents(
         case None =>
             let defaultHooks = Path(root).join("hooks/hooks.json")
             if (exists(defaultHooks)) {
-                let document = match (pluginReadManifest(root, "hooks/hooks.json")) {
+                let document = match (pluginReadManifest(root, "hooks/hooks.json", metadataAccounting: metadataAccounting)) {
                     case PluginPackageResult.Ok(text) => text
                     case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                 }
                 let parsed = try {
-                    parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
+                    pluginInspectJson(document, metadataAccounting)
                 } catch (error: JsonException) {
                     return pluginPackageError(
                         "plugin.hook_config_parse", error.message,
@@ -708,7 +823,8 @@ func pluginCodexHookConfiguration(
     root: String,
     value: JsonNode,
     source: String,
-    components: ArrayList<PluginComponent>
+    components: ArrayList<PluginComponent>,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None
 ): PluginPackageResult<Array<PluginHookDeclaration>> {
     let output = ArrayList<PluginHookDeclaration>()
     if (value.unifiedKind == UnifiedJsonKind.Object) {
@@ -730,12 +846,12 @@ func pluginCodexHookConfiguration(
             case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
         }
         for (path in paths) {
-            let document = match (pluginReadManifest(root, path)) {
+            let document = match (pluginReadManifest(root, path, metadataAccounting: metadataAccounting)) {
                 case PluginPackageResult.Ok(text) => text
                 case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
             }
             let parsed = try {
-                parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
+                pluginInspectJson(document, metadataAccounting)
             } catch (error: JsonException) {
                 return pluginPackageError(
                     "plugin.hook_config_parse", error.message, source: root, field: path
@@ -914,90 +1030,6 @@ func pluginCodexHookMatcherSupported(value: String): Bool {
     }
     true
 }
-func pluginCodexLegacyInlineMcpComponents(
-    document: String,
-    manifestPath: String,
-    declared: Array<PluginComponent>
-): PluginPackageResult<Array<PluginComponent>> {
-    let manifest = try {
-        parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
-    } catch (error: JsonException) {
-        return pluginPackageError(
-            "plugin.manifest_parse", error.message, source: manifestPath, field: "mcpServers"
-        )
-    }
-    let hasInlineServers = match (manifest.field("mcpServers")) {
-        case Some(value) => value.unifiedKind == UnifiedJsonKind.Object
-        case None => false
-    }
-    if (!hasInlineServers) { return PluginPackageResult.Ok(declared) }
-
-    let components = ArrayList<PluginComponent>()
-    var replaced = false
-    for (component in declared) {
-        if (component.kind == PluginComponentKind.Mcp &&
-            component.relativePath == "mcpServers") {
-            components.add(PluginComponent(
-                PluginComponentKind.Mcp,
-                manifestPath,
-                status: component.status,
-                name: component.name,
-                identity: component.identity,
-                dependencies: component.dependencies
-            ))
-            replaced = true
-        } else {
-            components.add(component)
-        }
-    }
-    if (!replaced) {
-        components.add(PluginComponent(PluginComponentKind.Mcp, manifestPath))
-    }
-    PluginPackageResult.Ok(components.toArray())
-}
-func pluginValidateCodexMcp(document: String, source: String): PluginPackageResult<Unit> {
-    let value = try {
-        parseUnifiedJson(document, maxBytes: 1048576, maxDepth: 32)
-    } catch (error: JsonException) {
-        return pluginPackageError("plugin.manifest_parse", error.message, source: source)
-    }
-    if (value.unifiedKind != UnifiedJsonKind.Object) {
-        return pluginPackageError(
-            "plugin.codex_mcp_invalid",
-            "Codex MCP configuration must be an object",
-            source: source
-        )
-    }
-    let servers = match (value.field("mcpServers")) {
-        case Some(item) => item
-        case None => return pluginPackageError(
-            "plugin.codex_mcp_servers_required",
-            "Codex MCP configuration must declare mcpServers",
-            source: source,
-            field: "mcpServers"
-        )
-    }
-    if (servers.unifiedKind != UnifiedJsonKind.Object) {
-        return pluginPackageError(
-            "plugin.codex_mcp_servers_invalid",
-            "Codex MCP mcpServers field must be an object",
-            source: source,
-            field: "mcpServers"
-        )
-    }
-    for (server in servers.fields) {
-        if (server.name.trimAscii() == "" || server.value.unifiedKind != UnifiedJsonKind.Object) {
-            return pluginPackageError(
-                "plugin.codex_mcp_server_invalid",
-                "each Codex MCP server must have a name and object configuration",
-                source: source,
-                field: "mcpServers"
-            )
-        }
-    }
-    PluginPackageResult.Ok(())
-}
-
 func pluginHasComponentPath(
     components: ArrayList<PluginComponent>,
     kind: PluginComponentKind,
@@ -1013,6 +1045,8 @@ class PluginTreeDigestState {
     let paths: ArrayList<String> = ArrayList<String>()
     var fileCount: Int64 = 0
     var totalBytes: Int64 = 0
+    var largestPath: String = ""
+    var largestBytes: Int64 = 0
     var error: ?PluginPackageError = None
 }
 
@@ -1020,7 +1054,8 @@ func pluginCollectTreePaths(
     directory: Path,
     relativeDirectory: String,
     state: PluginTreeDigestState,
-    depth: Int64
+    depth: Int64,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None
 ): Unit {
     if (depth > 64 || state.error.isSome()) {
         state.error = Some(PluginPackageError(
@@ -1030,6 +1065,10 @@ func pluginCollectTreePaths(
         return
     }
     Directory.walk(directory, { info: FileInfo =>
+        match (metadataAccounting) {
+            case Some(value) => value.beforeTreePath(relativeDirectory.size + info.name.size + 1)
+            case None => ()
+        }
         let relativePath = if (relativeDirectory == "") {
             info.name
         } else {
@@ -1045,7 +1084,7 @@ func pluginCollectTreePaths(
             ))
             false
         } else if (info.isDirectory()) {
-            pluginCollectTreePaths(info.path, relativePath, state, depth + 1)
+            pluginCollectTreePaths(info.path, relativePath, state, depth + 1, metadataAccounting: metadataAccounting)
             state.error.isNone()
         } else if (info.isRegular()) {
             if (state.fileCount >= 10000 || state.totalBytes + info.size > 268435456) {
@@ -1058,6 +1097,9 @@ func pluginCollectTreePaths(
             } else {
                 state.fileCount += 1
                 state.totalBytes += info.size
+                if (info.size > state.largestBytes) {
+                    state.largestBytes = info.size; state.largestPath = relativePath
+                }
                 state.paths.add(relativePath)
                 true
             }
@@ -1072,10 +1114,11 @@ func pluginCollectTreePaths(
     })
 }
 
-func pluginContentDigest(root: String): PluginPackageResult<String> {
+func pluginContentDigest(root: String,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None): PluginPackageResult<String> {
     let state = PluginTreeDigestState()
     try {
-        pluginCollectTreePaths(Path(root), "", state, 0)
+        pluginCollectTreePaths(Path(root), "", state, 0, metadataAccounting: metadataAccounting)
     } catch (error: Exception) {
         return pluginPackageError("plugin.package_tree_unreadable", error.message, source: root)
     }
@@ -1084,8 +1127,16 @@ func pluginContentDigest(root: String): PluginPackageResult<String> {
         case None => ()
     }
     sort(state.paths)
+    if (state.largestBytes >= 1048576 && state.totalBytes - state.largestBytes >= 1048576) {
+        match (metadataAccounting) {
+            case Some(value) => return pluginParallelContentDigest(root, state.paths, state.largestPath, value)
+            case None => ()
+        }
+    }
     let payload = StringBuilder()
     payload.append("axyndra-package-tree-v2\n")
+    var verifiedBytes: Int64 = 0
+    let digestScratch = Array<Byte>(if (state.paths.isEmpty()) { 0 } else { 65536 }, repeat: 0)
     for (relativePath in state.paths) {
         let path = Path(root).join(relativePath)
         let info = try { FileInfo(path) } catch (error: Exception) {
@@ -1099,30 +1150,90 @@ func pluginContentDigest(root: String): PluginPackageResult<String> {
                 field: relativePath
             )
         }
-        let bytes = try { File.readFrom(path) } catch (error: Exception) {
-            return pluginPackageError("plugin.package_tree_unreadable", error.message, source: root, field: relativePath)
+        if (info.size < 0 || info.size > 268435456 - verifiedBytes) {
+            return pluginPackageError("plugin.package_tree_limit", "package contents exceed the 256 MiB digest limit", source: root, field: relativePath)
         }
-        payload.append(relativePath.size.toString())
-        payload.append(":")
-        payload.append(relativePath)
-        payload.append(":")
-        payload.append(info.canExecute().toString())
-        payload.append(":")
-        payload.append(bytes.size.toString())
-        payload.append(":")
-        payload.append(modelPolicySha256(bytes))
-        payload.append("\n")
+        verifiedBytes += info.size
+        // Preserve the exact v2 tree format, but do not allocate each native
+        // library or run the small canonical-value SHA implementation over it.
+        let fileDigest = try { pluginPackageFileDigest(path, info.size, root, digestScratch) } catch (_: Exception) {
+            return pluginPackageError("plugin.package_tree_changed",
+                "package file changed or could not be read within its recorded size", source: root, field: relativePath)
+        }
+        let after = try { FileInfo(path) } catch (_: Exception) {
+            return pluginPackageError("plugin.package_tree_changed", "package file disappeared during verification", source: root, field: relativePath)
+        }
+        if (!after.isRegular() || after.isSymbolicLink() || after.size != info.size || after.canExecute() != info.canExecute()) {
+            return pluginPackageError("plugin.package_tree_changed", "package file metadata changed during verification", source: root, field: relativePath)
+        }
+        pluginAppendTreeDigestEntry(payload, relativePath, info.canExecute(), info.size, fileDigest)
     }
     PluginPackageResult.Ok("sha256:" + modelPolicySha256Text(payload.toString()))
+}
+
+
+// The caller supplies the size from its bounded file inspection. Contents are
+// still re-read on every inspection; this is neither a cache nor an mtime trust
+// shortcut. The canonical tree digest and installed lock format stay v2.
+func pluginPackageFileDigest(path: Path, expectedSize: Int64, root: String, scratch: Array<Byte>): String {
+    if (expectedSize < 0 || expectedSize > 268435456) {
+        throw IllegalArgumentException("package file size exceeds digest bounds")
+    }
+    pluginPackageDigestPath(path, root)
+    let file = File(path, OpenMode.Read)
+    let hash = SHA256()
+    var count: Int64 = 0
+    try {
+        while (true) {
+            let read = file.read(scratch)
+            if (read == 0) { break }
+            if (read > expectedSize - count) { throw IllegalArgumentException("package file grew during verification") }
+            if (read == scratch.size) { hash.write(scratch) } else { hash.write(scratch[..read]) }
+            count += read
+        }
+    } finally { file.close() }
+    pluginPackageDigestPath(path, root)
+    if (count != expectedSize) {
+        throw IllegalArgumentException("package file size changed during verification")
+    }
+    let digits = "0123456789abcdef".toArray()
+    let result = ArrayList<Byte>()
+    for (byte in hash.finish()) { result.add(digits[Int64(byte / 16u8)]); result.add(digits[Int64(byte % 16u8)]) }
+    String.fromUtf8(result.toArray())
+}
+
+// Reject symlink traversal even when a directory changed after the tree walk.
+// These are path/metadata checks, not an atomic inode snapshot: every caller
+// must still compare the resulting digest with its mounted content binding.
+func pluginPackageDigestPath(path: Path, root: String): Unit {
+    let authored = path.normalize().toString()
+    if (root == "/" || canonicalize(Path(root)).toString() != root ||
+        FileInfo(root).isSymbolicLink() || !authored.startsWith(root + "/") ||
+        canonicalize(path).toString() != authored) {
+        throw IllegalArgumentException("package path changed or escaped its root")
+    }
+    var current = Path(root)
+    for (component in authored[root.size + 1..].split("/")) {
+        current = current.join(component)
+        if (FileInfo(current).isSymbolicLink()) { throw IllegalArgumentException("package path traverses a symbolic link") }
+    }
 }
 
 func pluginPiConventionalComponents(
     root: String,
     declared: Array<PluginComponent>,
-    manifestDocument: String
+    manifestDocument: String,
+    metadataAccounting!: ?PluginPackageMetadataAccounting = None
 ): Array<PluginComponent> {
+    match (metadataAccounting) {
+        case Some(actual78) => match (actual78 as PluginPackagePrivateDocumentAccounting78) {
+            case Some(private78) => return pluginPrivatePiConventionalComponents78(root, declared, manifestDocument, private78)
+            case None => ()
+        }
+        case None => ()
+    }
     let document = try {
-        parseUnifiedJson(manifestDocument, maxBytes: 1048576, maxDepth: 32)
+        pluginInspectJson(manifestDocument, metadataAccounting)
     } catch (_: Exception) {
         return declared
     }
@@ -1249,7 +1360,7 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
         ""
     }
     let dependencies = ArrayList<PluginPackageDependency>()
-    let requestedCapabilities = ArrayList<String>()
+    var requestedCapabilities: Array<String> = []
     if (hasPiManifest) {
         match (pi.field("axyndra")) {
             case Some(overlay) =>
@@ -1261,40 +1372,10 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
                         field: "pi.axyndra"
                     )
                 }
-                match (overlay.field("capabilities")) {
-                    case Some(capabilities) =>
-                        if (capabilities.unifiedKind != UnifiedJsonKind.List ||
-                            capabilities.items.size > 16) {
-                            return pluginPackageError(
-                                "plugin.capability_list_invalid",
-                                "Pi Axyndra capabilities must be a list of at most 16 items",
-                                source: source,
-                                field: "pi.axyndra.capabilities"
-                            )
-                        }
-                        for (item in capabilities.items) {
-                            if (item.unifiedKind != UnifiedJsonKind.Text) {
-                                return pluginPackageError(
-                                    "plugin.capability_list_invalid",
-                                    "Pi Axyndra capabilities must contain strings",
-                                    source: source,
-                                    field: "pi.axyndra.capabilities"
-                                )
-                            }
-                            let capability = item.text.trimAscii()
-                            if (capability != "workspace.read" && capability != "workspace.write") {
-                                return pluginPackageError(
-                                    "plugin.capability_unsupported",
-                                    "Pi JavaScript plugins may request only workspace.read and workspace.write",
-                                    source: source,
-                                    field: "pi.axyndra.capabilities"
-                                )
-                            }
-                            if (!requestedCapabilities.contains(capability)) {
-                                requestedCapabilities.add(capability)
-                            }
-                        }
-                    case None => ()
+                requestedCapabilities = match (pluginCapabilityList(overlay, "capabilities", source,
+                    portableWorkspaceOnly: true, capabilityField: "pi.axyndra.capabilities")) {
+                    case PluginPackageResult.Ok(items) => items
+                    case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
                 }
             case None => ()
         }
@@ -1325,7 +1406,7 @@ func parsePiPackage(value: JsonNode, source: String): PluginPackageResult<Plugin
             "pi-package-conventions-v1"
         },
         entrypoint: entrypoint,
-        requestedCapabilities: requestedCapabilities.toArray(),
+        requestedCapabilities: requestedCapabilities,
     ))
 }
 
@@ -1392,6 +1473,7 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
             field: "$schema"
         )
     }
+    var requestedCapabilities: Array<String> = []
     match (value.field("extensions")) {
         case Some(extensions) =>
             if (extensions.unifiedKind != UnifiedJsonKind.Object) {
@@ -1414,6 +1496,25 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
                     }
                 case None => ()
             }
+            match (extensions.field("axyndra")) {
+                case Some(overlay) =>
+                    if (overlay.unifiedKind != UnifiedJsonKind.Object) {
+                        return pluginPackageError("plugin.codex_overlay_invalid",
+                            "Codex Axyndra requested-capability overlay must be an object",
+                            source: source, field: "extensions.axyndra")
+                    }
+                    for (field in overlay.fields where field.name != "capabilities") {
+                        return pluginPackageError("plugin.codex_overlay_invalid",
+                            "Codex Axyndra requested-capability overlay supports only capabilities",
+                            source: source, field: "extensions.axyndra." + field.name)
+                    }
+                    requestedCapabilities = match (pluginCapabilityList(overlay, "capabilities", source,
+                        portableWorkspaceOnly: true, capabilityField: "extensions.axyndra.capabilities")) {
+                        case PluginPackageResult.Ok(items) => items
+                        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
+                    }
+                case None => ()
+            }
         case None => ()
     }
     let id = match (pluginOptionalText(value, "name", "codex-plugin")) {
@@ -1429,9 +1530,6 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
         ("app", PluginComponentKind.HostedOnly),
         ("apps", PluginComponentKind.HostedOnly),
         ("skills", PluginComponentKind.Skill),
-        ("mcp", PluginComponentKind.Mcp),
-        ("mcpServers", PluginComponentKind.Mcp),
-        ("servers", PluginComponentKind.Mcp),
         ("hooks", PluginComponentKind.Hook),
         ("commands", PluginComponentKind.Command)
     ]) {
@@ -1453,11 +1551,25 @@ func parseCodexPackage(value: JsonNode, source: String): PluginPackageResult<Plu
         PluginManifestFamily.Codex,
         source,
         components: components.toArray(),
+        requestedCapabilities: requestedCapabilities,
         compatibilityProfile: "codex-manifest-v1"
     ))
 }
 
 func parseAxyndraPackage(value: JsonNode, source: String): PluginPackageResult<PluginPackageDescriptor> {
+    let authoredEntryKind = match (pluginOptionalText(value, "entry_kind", "")) {
+        case PluginPackageResult.Ok(text) => text
+        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
+    }
+    let entryKind = if (authoredEntryKind == "native-executable") {
+        PluginEntryKind.NativeExecutable
+    } else if (authoredEntryKind == "" || authoredEntryKind == "legacy-process") {
+        PluginEntryKind.LegacyProcess
+    } else {
+        return pluginPackageError("plugin.entry_kind_unsupported",
+            "Axyndra executable packages must declare entry_kind native-executable",
+            source: source, field: "entry_kind")
+    }
     let id = match (pluginRequiredText(value, "id", source)) {
         case PluginPackageResult.Ok(text) => text
         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
@@ -1479,7 +1591,7 @@ func parseAxyndraPackage(value: JsonNode, source: String): PluginPackageResult<P
             field: "entrypoint"
         )
     }
-    let capabilities = match (pluginStringList(value, "capabilities", source)) {
+    let capabilities = match (pluginCapabilityList(value, "capabilities", source)) {
         case PluginPackageResult.Ok(items) => items
         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
     }
@@ -1501,6 +1613,20 @@ func parseAxyndraPackage(value: JsonNode, source: String): PluginPackageResult<P
         case PluginPackageResult.Ok(text) => text
         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
     }
+    let contributions = if (entryKind == PluginEntryKind.NativeExecutable) {
+        match (validateNativePluginCompatibility(value, sdkRange, protocolRange, capabilities, source)) {
+            case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
+            case PluginPackageResult.Ok(_) => ()
+        }
+        match (parseNativePluginContributions(value, source)) {
+            case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
+            case PluginPackageResult.Ok(items) => items
+        }
+    } else { Array<PluginContributionDefinition>() }
+    let componentDependencies = match (parsePluginContributionDependencies(value, entryKind, source)) {
+        case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
+        case PluginPackageResult.Ok(items) => items
+    }
     let contentDigest = match (pluginOptionalText(value, "content_digest", "")) {
         case PluginPackageResult.Ok(text) => text
         case PluginPackageResult.Err(error) => return PluginPackageResult.Err(error)
@@ -1515,14 +1641,162 @@ func parseAxyndraPackage(value: JsonNode, source: String): PluginPackageResult<P
         PluginEcosystem.Axyndra,
         PluginManifestFamily.Axyndra,
         source,
+        compatibilityProfile: if (entryKind == PluginEntryKind.NativeExecutable) {
+            "axyndra-native-v2"
+        } else { "axyndra-plugin-v1" },
         components: [PluginComponent(PluginComponentKind.Extension, entrypoint, name: id)],
         entrypoint: entrypoint,
+        entryKind: entryKind,
+        contributions: contributions,
+        componentDependencies: componentDependencies,
         requestedCapabilities: capabilities,
         sdkRange: sdkRange,
         protocolRange: protocolRange,
         declaredContentDigest: contentDigest,
         signature: signature
     ))
+}
+
+func validateNativePluginCompatibility(
+    value: JsonNode,
+    sdkRange: String,
+    protocolRange: String,
+    capabilities: Array<String>,
+    source: String
+): PluginPackageResult<Unit> {
+    if (protocolRange != JAVASCRIPT_EXTENSION_PROTOCOL) {
+        return pluginPackageError("plugin.protocol_unsupported",
+            "native executable requires protocol_range " + JAVASCRIPT_EXTENSION_PROTOCOL,
+            source: source, field: "protocol_range")
+    }
+    let range = sdkRange.trimAscii()
+    if (!range.startsWith("[") || !range.endsWith(")")) {
+        return pluginPackageError("plugin.sdk_range_malformed",
+            "sdk_range must be a bounded [MAJOR.MINOR.PATCH,MAJOR.MINOR.PATCH) interval",
+            source: source, field: "sdk_range")
+    }
+    let bounds = range[1..range.size - 1].split(",")
+    if (bounds.size != 2) {
+        return pluginPackageError("plugin.sdk_range_malformed", "sdk_range requires two version bounds",
+            source: source, field: "sdk_range")
+    }
+    let minimum = match (requiredVersion(jsonObject([JsonObjectEntry("min", jsonString(bounds[0].trimAscii()))]), "min", "", source)) {
+        case ExtensionRuntimeResult.Ok(version) => version
+        case ExtensionRuntimeResult.Err(_) => return pluginPackageError("plugin.sdk_range_malformed",
+            "sdk_range minimum must use canonical MAJOR.MINOR.PATCH syntax", source: source, field: "sdk_range")
+    }
+    let maximum = match (requiredVersion(jsonObject([JsonObjectEntry("max", jsonString(bounds[1].trimAscii()))]), "max", "", source)) {
+        case ExtensionRuntimeResult.Ok(version) => version
+        case ExtensionRuntimeResult.Err(_) => return pluginPackageError("plugin.sdk_range_malformed",
+            "sdk_range maximum must use canonical MAJOR.MINOR.PATCH syntax", source: source, field: "sdk_range")
+    }
+    if (!minimum.lessThan(maximum)) {
+        return pluginPackageError("plugin.sdk_range_malformed", "sdk_range must be nonempty",
+            source: source, field: "sdk_range")
+    }
+    if (!SdkCompatibility(minimum, maximum).includes(parseVersionUnchecked(AGENT_SDK_VERSION))) {
+        return pluginPackageError("plugin.sdk_incompatible", "plugin SDK range excludes host SDK " + AGENT_SDK_VERSION,
+            source: source, field: "sdk_range")
+    }
+    match (requiredVersion(value, "version", "", source)) {
+        case ExtensionRuntimeResult.Err(_) => return pluginPackageError("plugin.version_malformed",
+            "plugin version must use canonical MAJOR.MINOR.PATCH syntax", source: source, field: "version")
+        case ExtensionRuntimeResult.Ok(_) => ()
+    }
+    let seen = ArrayList<String>()
+    for (capability in capabilities) {
+        if ((capability != "workspace.read" && capability != "workspace.write" && capability != "network.http" && capability != "process.channel" && capability != "process.readview" && capability != "tool.readonly" && capability != "document.store") || seen.contains(capability)) {
+            return pluginPackageError("plugin.capability_unsupported",
+                "native broker supports unique workspace.read, workspace.write, network.http, process.channel, process.readview, tool.readonly, and document.store requests only",
+                source: source, field: "capabilities")
+        }
+        seen.add(capability)
+    }
+    PluginPackageResult.Ok(())
+}
+
+func parseNativePluginContributions(value: JsonNode, source: String): PluginPackageResult<Array<PluginContributionDefinition>> {
+    let declared = match (value.field("contributions")) {
+        case Some(items) => items
+        case None => return pluginPackageError("plugin.contributions_missing",
+            "native executable must declare its typed contributions", source: source, field: "contributions")
+    }
+    if (declared.unifiedKind != UnifiedJsonKind.List || declared.items.isEmpty() || declared.items.size > 128) {
+        return pluginPackageError("plugin.contributions_invalid", "contributions must contain 1 to 128 entries",
+            source: source, field: "contributions")
+    }
+    let output = ArrayList<PluginContributionDefinition>()
+    for (original in declared.items) {
+        if (nativeInputAttachmentFieldCount(original) > 1) { return pluginPackageError("plugin.contribution_invalid", "duplicate input attachment metadata", source: source, field: "contributions") }
+        let attachment = match (original.field("input_attachment")) {
+            case Some(value) => match (nativeToolInputAttachmentMetadata(value)) {
+                case Some(pair) => pair
+                case None => return pluginPackageError("plugin.contribution_invalid", "input attachment metadata has an invalid exact field/limit", source: source, field: "contributions") }
+            case None => ("", 0i64)
+        }
+        let item = if (original.field("input_attachment").isSome()) { nativeContributionWithoutInputAttachment(original) } else { original }
+        if (item.unifiedKind != UnifiedJsonKind.Object || (item.fields.size != 2 && item.fields.size != 3)) {
+            return pluginPackageError("plugin.contribution_invalid", "contribution requires kind/name and optional kind-specific metadata",
+                source: source, field: "contributions")
+        }
+        let kindText = textField(item, "kind")
+        let name = textField(item, "name")
+        let kind = if (kindText == "tool") { PluginContributionKind.Tool }
+            else if (kindText == "command") { PluginContributionKind.Command }
+            else if (kindText == "view") { PluginContributionKind.View }
+            else if (kindText == "service") { PluginContributionKind.Service }
+            else if (kindText == "model_provider") { PluginContributionKind.ModelProvider }
+            else if (kindText == "provider") { PluginContributionKind.Provider }
+            else if (kindText == "context_provider") { PluginContributionKind.ContextProvider }
+            else if (kindText == "resource_provider") { PluginContributionKind.ResourceProvider }
+            else {
+                return pluginPackageError("plugin.contribution_unsupported",
+                    "native host does not implement contribution kind: " + kindText,
+                    source: source, field: "contributions.kind")
+            }
+        let validName = if (kind == PluginContributionKind.Tool) { validToolName(name) }
+            else { validCommandName(name) }
+        if (!validName) {
+            return pluginPackageError("plugin.contribution_name_invalid", "contribution name is invalid for its kind",
+                source: source, field: "contributions.name")
+        }
+        for (existing in output where existing.kind == kind && existing.name == name) {
+            return pluginPackageError("plugin.contribution_duplicate", "duplicate contribution identity: " + kindText + ":" + name,
+                source: source, field: "contributions")
+        }
+        var profile = PluginToolExecutionProfile.Brokered
+        var supportsReference = false
+        var controls: Array<String> = []
+        if (item.fields.size == 3 && item.field("execution_profile").isSome()) {
+            let declaredProfile = item.field("execution_profile").getOrThrow()
+            if (kind != PluginContributionKind.Tool || declaredProfile.unifiedKind != UnifiedJsonKind.Text ||
+                declaredProfile.text != "data_only") {
+                return pluginPackageError("plugin.contribution_invalid", "only a Tool may declare the supported data_only execution profile", source: source, field: "contributions") }
+            profile = PluginToolExecutionProfile.DataOnly
+        } else if (item.fields.size == 3) {
+            match (item.field("supports_preparation_reference")) {
+                case Some(flag) =>
+                    if (kind != PluginContributionKind.Service || flag.unifiedKind != UnifiedJsonKind.Boolean) {
+                        return pluginPackageError("plugin.contribution_invalid", "preparation reference support is Service-only boolean metadata", source: source, field: "contributions") }
+                    supportsReference = flag.boolValue
+                case None =>
+                    let declaredControls = match (item.field("allowed_user_controls")) {
+                        case Some(value) => value
+                        case None => return pluginPackageError("plugin.contribution_invalid", "unknown contribution field", source: source, field: "contributions") }
+                    if (kind != PluginContributionKind.Command || declaredControls.unifiedKind != UnifiedJsonKind.List ||
+                        declaredControls.items.size != 1 || declaredControls.items[0].unifiedKind != UnifiedJsonKind.Text ||
+                        !["continuation", "plan_review"].contains(declaredControls.items[0].text)) {
+                        return pluginPackageError("plugin.contribution_invalid", "allowed_user_controls is Command-only and contains exactly one supported control", source: source, field: "contributions") }
+                    controls = [declaredControls.items[0].text]
+            }
+        }
+        if (attachment[0] != "" && (kind != PluginContributionKind.Tool || profile != PluginToolExecutionProfile.Brokered)) {
+            return pluginPackageError("plugin.contribution_invalid", "input attachments belong only to a brokered native Tool", source: source, field: "contributions")
+        }
+        output.add(PluginContributionDefinition(name, kind, supportsPreparationReference: supportsReference,
+            allowedUserControls: controls, executionProfile: profile, inputAttachmentField: attachment[0], inputAttachmentMaxBytes: attachment[1]))
+    }
+    PluginPackageResult.Ok(output.toArray())
 }
 
 func appendPathComponents(
@@ -1627,11 +1901,49 @@ func pluginOptionalText(value: JsonNode, field: String, fallback: String): Plugi
     }
 }
 
-func pluginStringList(value: JsonNode, field: String, source: String): PluginPackageResult<Array<String>> {
-    match (value.field(field)) {
-        case None => PluginPackageResult.Ok([])
-        case Some(item) => pluginPathValues(item, field, source)
+// Capability resources are opaque policy metadata, not filesystem paths.
+// Legacy network.access:host:port values must remain inspectable during
+// migration even though native activation rejects that unsupported capability.
+func pluginCapabilityList(value: JsonNode, field: String, source: String,
+    portableWorkspaceOnly!: Bool = false, capabilityField!: String = ""): PluginPackageResult<Array<String>> {
+    let diagnosticField = if (capabilityField == "") { field } else { capabilityField }
+    let declared = match (value.field(field)) {
+        case None => return PluginPackageResult.Ok([])
+        case Some(item) => item
     }
+    let limit = if (portableWorkspaceOnly) { 16 } else { 128 }
+    let items = if (declared.unifiedKind == UnifiedJsonKind.Text && !portableWorkspaceOnly) {
+        [declared]
+    } else if (declared.unifiedKind == UnifiedJsonKind.List && declared.items.size <= limit) {
+        declared.items
+    } else {
+        return pluginPackageError("plugin.capability_list_invalid",
+            if (portableWorkspaceOnly) { "portable capability requests must be an array of at most 16 strings" }
+                else { "capabilities must be bounded text or an array of at most 128 strings" },
+            source: source, field: diagnosticField)
+    }
+    let count = if (declared.unifiedKind == UnifiedJsonKind.Text) { 1 } else { declared.items.size }
+    if (count == 0) { return PluginPackageResult.Ok([]) }
+    let output = ArrayList<String>(count)
+    for (item in items) {
+        if (item.unifiedKind != UnifiedJsonKind.Text) {
+            return pluginPackageError("plugin.capability_list_invalid",
+                "capability must be bounded nonempty text", source: source, field: diagnosticField)
+        }
+        let text = item.text
+        let capability = text.trimAscii()
+        if (capability == "" || text.size > 4096 || text.contains("\u{0000}")) {
+            return pluginPackageError("plugin.capability_list_invalid",
+                "capability must be bounded nonempty text", source: source, field: diagnosticField)
+        }
+        if (portableWorkspaceOnly && capability != "workspace.read" && capability != "workspace.write") {
+            return pluginPackageError("plugin.capability_unsupported",
+                "portable plugins may request only workspace.read and workspace.write",
+                source: source, field: diagnosticField)
+        }
+        if (!portableWorkspaceOnly || !output.contains(capability)) { output.add(capability) }
+    }
+    PluginPackageResult.Ok(output.toArray())
 }
 
 func pluginPackageError<T>(code: String, message: String, source!: String = "", field!: String = ""): PluginPackageResult<T> {
@@ -1640,7 +1952,7 @@ func pluginPackageError<T>(code: String, message: String, source!: String = "", 
 
 func pluginNormalizeRelativePath(value: String): String {
     let path = value.trimAscii()
-    if (path == "" || path.startsWith("/") || path.contains("\\") || path.contains("\u{0000}")) {
+    if (path == "" || path.startsWith("/") || path.contains("\\") || path.contains(":") || path.contains("\u{0000}")) {
         return ""
     }
     var normalized = ""

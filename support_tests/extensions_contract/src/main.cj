@@ -2,16 +2,15 @@ package extensions_contract
 
 import agent_domain.*
 import agent_runtime.*
-import agent_extensions.*
+import legacy_extension_host.*
 import agent_sdk.*
+import legacy_extension_sdk.*
 import agent_testkit.*
 import yjson.*
 import yjson_support.*
 import tool_runtime.*
 import workspace_search_extension.*
 import workspace_write_extension.*
-import ast_extension.*
-import web_search_extension.*
 
 main(): Int64 {
     let host = RecordingHost()
@@ -177,6 +176,7 @@ main(): Int64 {
         "deactivated extension re-enables without replacing durable registration")
     expect(audit.events().size > 0, "SDK tools retain ToolPipeline audit events")
     migratedAuthorityContracts()
+    atomicInstallerRetryContract()
     println("agent SDK extension authority contract passed")
     0
 }
@@ -185,8 +185,7 @@ func migratedAuthorityContracts(): Unit {
     let host = RecordingHost()
     let catalog = ToolCatalog()
     let installer = ExtensionInstaller(host)
-    expect(installer.install(AstExtension(), catalog).isOk(), "AST extension installs through SDK adapter")
-    expect(installer.install(WebSearchExtension(), catalog).isOk(), "web extension installs through SDK adapter")
+    expect(installer.install(NetworkContractExtension(), catalog).isOk(), "generic network fixture installs through SDK adapter")
     expect(installer.install(TamperExtension(), catalog).isOk(), "binding fixtures install through the same SDK adapter")
 
     let operations = InMemoryOperationRuntimePort()
@@ -196,7 +195,7 @@ func migratedAuthorityContracts(): Unit {
     )
     let denied = ToolInvocationContext(RunId("network-denied"), SessionId("network-denied"), CapabilitySet())
     expect(match (executePipelineCall(pipeline, denied, ToolCall(
-        "web-denied", "web_search", objectValue([ValueField("query", textValue("cangjie"))])
+        "network-denied", "network_probe", objectValue([ValueField("value", textValue("fixture"))])
     ))) {
         case Result.Ok(ToolInvocationResult.Denied(_)) => true
         case _ => false
@@ -209,7 +208,7 @@ func migratedAuthorityContracts(): Unit {
         CapabilitySet(values: [Capability(CapabilityKind.NetworkAccess)])
     )
     expect(match (executePipelineCall(pipeline, allowed, ToolCall(
-        "web-allowed", "web_search", objectValue([ValueField("query", textValue("cangjie"))])
+        "network-allowed", "network_probe", objectValue([ValueField("value", textValue("fixture"))])
     ))) {
         case Result.Ok(ToolInvocationResult.Completed(result)) => !result.isError && result.receiptId != ""
         case _ => false
@@ -232,6 +231,27 @@ func migratedAuthorityContracts(): Unit {
     }
     expect(host.hostOperationExecutions == 1,
         "operation-name and canonical-payload binding reject approve-A/execute-B before host")
+}
+
+class NetworkContractExtension <: Extension {
+    public func metadata(): ExtensionMetadata {
+        ExtensionMetadata("contract.network", "Network contract", "1.0.0", "Generic network fixture.")
+    }
+    public func tools(): Array<ExtensionTool> { [NetworkContractTool()] }
+}
+
+class NetworkContractTool <: ExtensionTool {
+    public func definition(): ExtensionToolDefinition {
+        ExtensionToolDefinition("network_probe", "Generic network fixture.", objectValue([]),
+            [networkHttp(resource: "network_probe")])
+    }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
+    public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
+        SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("network_probe", invocation.input)))
+    }
+    public func decode(_invocation: ToolInvocation, result: ExecutionResult): SdkResult<ToolOutput> {
+        SdkResult.Ok(ToolOutput(structured: result.value))
+    }
 }
 
 class TamperExtension <: Extension {

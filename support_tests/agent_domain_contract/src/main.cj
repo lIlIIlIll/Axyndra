@@ -270,6 +270,8 @@ main(): Int64 {
         "budget-model", budgetSnapshot.thinking, 16384,
         endpointMaxOutputTokens: Some(12000), capabilityFingerprint: "corrupt"
     ) }), "snapshot fingerprint validates only its persisted normalized payload")
+    assertModelPolicySha256Vectors()
+    assertContinuationObservationJsonContract()
     println("agent_domain contract passed")
     0
 }
@@ -301,4 +303,84 @@ func rejects(action: () -> Unit): Bool {
     } catch (_: IllegalArgumentException) {
         true
     }
+}
+
+
+// Descriptive observation data only. This public DTO grants no Run, claim,
+// document read, Provider request or Store admission.
+func contractContinuationObservationFixture(): AgentValue {
+    let digest = String.fromUtf8(Array<Byte>(64, repeat: b'a'))
+    let fields = ArrayList<ValueField>([
+        ValueField("schema", textValue("axyndra.continuation-document-observation/v1")),
+        ValueField("package_digest", textValue("sha256:" + digest)), ValueField("provider_generation", textValue("1")),
+        ValueField("anchor_run_id", textValue("")), ValueField("anchor_claim_sha256", textValue("")),
+        ValueField("observed_at_millis", integerValue(0)), ValueField("total_tokens", integerValue(0))])
+    for (name in ["owner_digest", "original_document_sha256", "document_sha256", "selector_sha256", "query_sha256",
+        "reply_sha256", "configuration_digest", "anchor_document_sha256"]) { fields.add(ValueField(name, textValue(digest))) }
+    for (name in ["original_operation_id", "document_operation_id", "anchor_operation_id"]) { fields.add(ValueField(name, textValue("actual-operation"))) }
+    for (name in ["original_receipt_id", "document_receipt_id"]) { fields.add(ValueField(name, textValue("actual-receipt"))) }
+    for (name in ["original_run_id", "document_run_id"]) { fields.add(ValueField(name, textValue("actual-run"))) }
+    fields.add(ValueField("provider", textValue("propose"))); fields.add(ValueField("parent_tool", textValue("plugin.axyndra:workflow.goal")))
+    for (name in ["original_epoch", "original_revision", "document_epoch", "document_revision", "anchor_revision"]) {
+        fields.add(ValueField(name, integerValue(1))) }
+    let mutation = objectValue([ValueField("operation_id", textValue("actual-operation")), ValueField("receipt_id", textValue("actual-receipt")),
+        ValueField("run_id", textValue("actual-run")), ValueField("epoch", integerValue(1)), ValueField("revision", integerValue(1)),
+        ValueField("expected_sha256", textValue(digest)), ValueField("document_sha256", textValue(digest)),
+        ValueField("plan_sha256", textValue(digest)), ValueField("result_sha256", textValue(digest))])
+    fields.add(ValueField("chain", listValue([objectValue([ValueField("mutation", mutation),
+        ValueField("query_sha256", textValue(digest)), ValueField("reply_sha256", textValue(digest))])])))
+    objectValue(fields.toArray())
+}
+
+func contractContinuationObservationRejected(value: AgentValue): Bool {
+    try { let _ = ContinuationDocumentObservation(value); false } catch (_: Exception) { true }
+}
+
+func assertContinuationObservationJsonContract(): Unit {
+    let source = contractContinuationObservationFixture()
+    source.put("provider", textValue("propose\"quoted\n雪"))
+    let expected = canonicalAgentValue(source)
+    // The old canonical-framing-as-JSON implementation fails this first
+    // construction, before any of its observation guards can be assessed.
+    let frozen = ContinuationDocumentObservation(source)
+    expect(canonicalAgentValue(frozen.value()) == expected,
+        "continuation observation JSON round trip preserves escaped and nested identity")
+    source.field("chain").getOrThrow().items[0].field("mutation").getOrThrow().put("revision", integerValue(8))
+    expect(canonicalAgentValue(frozen.value()) == expected,
+        "continuation observation retains a defensive copy of nested mutation data")
+    let returned = frozen.value(); returned.put("owner_digest", textValue("changed"))
+    expect(canonicalAgentValue(frozen.value()) == expected,
+        "continuation observation returned data cannot mutate its frozen identity")
+    let digest = String.fromUtf8(Array<Byte>(64, repeat: b'a'))
+    let old = ContinuationRunOrigin("thread", "main", "axyndra:workflow", "goal", "allowance", digest, digest,
+        "prior", "next", "turn-next", "continuation-next", digest, digest, 1, 1, 0, 2)
+    let oldValue = continuationRunOriginValue(old)
+    expect(httpIntentText(oldValue, "schema") == "axyndra.continuation-run/v1" &&
+        oldValue.field("document_observation").isNone() && sameContinuationRunOrigin(old, continuationRunOriginFromValue(oldValue)),
+        "legacy continuation origin retains its exact v1 descriptor round trip")
+    let newer = ContinuationRunOrigin("thread", "main", "axyndra:workflow", "goal", "allowance", digest, digest,
+        "prior", "next", "turn-next", "continuation-next", digest, digest, 1, 1, 0, 2,
+        documentObservation: Some(frozen))
+    let newerValue = continuationRunOriginValue(newer)
+    expect(httpIntentText(newerValue, "schema") == "axyndra.continuation-run/v2" &&
+        sameContinuationRunOrigin(newer, continuationRunOriginFromValue(newerValue)) && !sameContinuationRunOrigin(old, newer),
+        "observed continuation origin round trips the bounded JSON descriptor without changing canonical equality")
+    for (mode in ["gap", "duplicate", "anchor", "type", "future", "unknown", "digest", "oversize"]) {
+        let value = contractContinuationObservationFixture()
+        if (mode == "gap") { value.put("document_revision", integerValue(2)) }
+        else if (mode == "duplicate") { let item = value.field("chain").getOrThrow().items[0]; value.put("chain", listValue([item, item])) }
+        else if (mode == "anchor") { value.put("anchor_operation_id", textValue("another-operation")) }
+        else if (mode == "type") { value.field("chain").getOrThrow().items[0].field("mutation").getOrThrow().put("revision", textValue("1")) }
+        else if (mode == "future") { value.put("schema", textValue("axyndra.continuation-document-observation/future")) }
+        else if (mode == "unknown") { value.put("authority", boolValue(true)) }
+        else if (mode == "digest") { value.put("owner_digest", textValue("malformed")) }
+        else { value.put("provider", textValue(String.fromUtf8(Array<Byte>(524289, repeat: b'x')))) }
+        expect(contractContinuationObservationRejected(value), "continuation observation retains original " + mode + " rejection")
+    }
+    let priorAnchor = contractContinuationObservationFixture()
+    priorAnchor.put("anchor_run_id", textValue("completed-prior-continuation"))
+    expect(contractContinuationObservationRejected(priorAnchor), "a prior continuation descriptor requires an exact anchor digest")
+    priorAnchor.put("anchor_claim_sha256", priorAnchor.field("owner_digest").getOrThrow())
+    expect(!contractContinuationObservationRejected(priorAnchor),
+        "a complete prior anchor remains descriptive data whose actual claim must still be checked by Store")
 }

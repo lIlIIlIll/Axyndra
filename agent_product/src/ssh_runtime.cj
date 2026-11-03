@@ -5,7 +5,6 @@ import yjson_support.*
 import yjson.*
 
 import agent_domain.*
-import model_adapters.*
 import std.collection.*
 import std.convert.*
 import std.fs.*

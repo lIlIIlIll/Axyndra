@@ -9,8 +9,9 @@
   target-dir = "target"
 
 [dependencies]
+  "legacy_extension_sdk" = { path = "../legacy_extension_sdk", output-type = "static" }
   "agent_domain" = { path = "../../agent_domain", output-type = "static" }
-  "agent_extensions" = { path = "../../agent_extensions", output-type = "static" }
+  "legacy_extension_host" = { path = "../legacy_extension_host", output-type = "static" }
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
   "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
@@ -18,7 +19,5 @@
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
-  "workspace_search_extension" = { path = "../../extensions/workspace_search_extension", output-type = "static" }
-  "workspace_write_extension" = { path = "../../extensions/workspace_write_extension", output-type = "static" }
-  "ast_extension" = { path = "../../extensions/ast_extension", output-type = "static" }
-  "web_search_extension" = { path = "../../extensions/web_search_extension", output-type = "static" }
+  "workspace_search_extension" = { path = "../workspace_search_legacy_oracle", output-type = "static" }
+  "workspace_write_extension" = { path = "../workspace_write_legacy_oracle", output-type = "static" }

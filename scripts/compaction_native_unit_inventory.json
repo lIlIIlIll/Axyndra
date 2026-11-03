@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "cases": [
+    "CompactionCheckpointPolicy113Tests.checkpointPreservesOriginalGoalTimestampAndUnknownArgumentCompatibility",
+    "CompactionCheckpointPolicy113Tests.originalMissingTypeEmptyAndAsciiTrimErrorsKeepTheirFields",
+    "CompactionCheckpointPolicy113Tests.nestedMissingAndCompletedStatesPreserveOriginalBusinessErrors",
+    "CompactionCheckpointPolicy113Tests.rewindKeepsOriginalReportOutputAndFrozenClock",
+    "CompactionCheckpointPolicy113Tests.resultIdentityUsesOriginalMatchingCallAndFailedResultsStayInactive",
+    "CompactionCheckpointPolicy113Tests.originalCanonicalRetentionHandlesMalformedAndFailedRewindPairs",
+    "CompactionCheckpointPolicy113Tests.providerProjectionRetentionKeepsItsOriginalRewindReportRule",
+    "CompactionCheckpointPolicy113Tests.projectionPreviewRequiresOriginalResultCorrelationAndKeepsOriginalSummaryFields",
+    "CompactionCheckpointPolicy113Tests.latestNewCheckpointStartsASeparateOriginalExplorationBranch",
+    "CompactionCheckpointPolicy113Tests.logicalMegabyteBusinessValuesDoNotGainAnOrdinaryFrameCeiling",
+    "CompactionCheckpointProtocol113Tests.FragmentedUtf8AsciiTrimMatchesOriginalWithoutAggregateArgumentCeiling",
+    "CompactionCheckpointProtocol113Tests.OriginalSixInvalidArgumentsKeepCompleteErrorFields",
+    "CompactionCheckpointProtocol113Tests.TwoPassHistoryBeyondBatchSizeKeepsOriginalLatestAndFirstCallCorrelation",
+    "CompactionCheckpointProtocol113Tests.OriginalFinalOutputsAndStateErrorsMatchWholeTypedOracle",
+    "CompactionCheckpointProtocol113Tests.PostCanonicalSaveRecipePreservesOriginalUnicodeNulLargeReportAndProvenance",
+    "CompactionCheckpointProtocol113Tests.PostCanonicalSaveErrorsKeepOriginalOrderKindMessageAndCompleteFields",
+    "CompactionCheckpointProtocol113Tests.PostCanonicalSaveCannotAcceptPartialEventCoverage",
+    "CompactionMountedCanonical173Tests.MountedDefinitionsAndPreparationFreezeOriginalSchemaAndRecipe",
+    "CompactionMountedCanonical173Tests.NamespacedHistoryPreservesFirstCallAndWholeOriginalOutput",
+    "CompactionMountedCanonical173Tests.CanonicalRetentionMatchesOriginalActiveCompletedAndMalformedPairs",
+    "CompactionMountedCanonical173Tests.ModelRetentionKeepsOriginalFailedFirstResultBackwardCallAndReportRules",
+    "CompactionMountedCanonical173Tests.MissingActualCapturedBindingReturnsCompleteEightFieldClosedData",
+    "CompactionMountedCanonical173Tests.ActiveRetentionRefusalPreservesWholeOriginalConflictContract",
+    "CompactionReferenceEventTests.inlineAndBoundaryTextMatchBothOriginalAlgorithmsByteForByte",
+    "CompactionReferenceEventTests.deferredHugeWhitespaceLateMarkerAndHashlinePathsKeepTheirObservationBoundaries",
+    "CompactionReferenceEventTests.pureEventCountsProveMessageAndInlineReductionAvoidOnlyLocalRoundTrips",
+    "CompactionReferenceEventTests.malformedInlineWitnessIsRejectedAndOldSplitUtf8FailureIsPreserved",
+    "StructuredPageParityTests.actualPageAlgebraMatchesOriginalWholeHistoryAcrossBoundaries",
+    "StructuredReferenceParityTests.oversizedSingleBlocksArgumentsGoalAndTodoMatchWholeHistory",
+    "StructuredReferenceParityTests.markerWhitespaceAndUniqueHashlinePathsKeepOldOrderingAcrossFragments",
+    "StructuredReferenceParityTests.overviewRuneTrimAndLateUnsupportedBlocksMatchWholeReply"
+  ],
+  "original_cases": [
+    "CompactionReferenceEventTests.inlineAndBoundaryTextMatchBothOriginalAlgorithmsByteForByte",
+    "CompactionReferenceEventTests.deferredHugeWhitespaceLateMarkerAndHashlinePathsKeepTheirObservationBoundaries",
+    "CompactionReferenceEventTests.pureEventCountsProveMessageAndInlineReductionAvoidOnlyLocalRoundTrips",
+    "CompactionReferenceEventTests.malformedInlineWitnessIsRejectedAndOldSplitUtf8FailureIsPreserved",
+    "StructuredPageParityTests.actualPageAlgebraMatchesOriginalWholeHistoryAcrossBoundaries",
+    "StructuredReferenceParityTests.oversizedSingleBlocksArgumentsGoalAndTodoMatchWholeHistory",
+    "StructuredReferenceParityTests.markerWhitespaceAndUniqueHashlinePathsKeepOldOrderingAcrossFragments",
+    "StructuredReferenceParityTests.overviewRuneTrimAndLateUnsupportedBlocksMatchWholeReply"
+  ],
+  "files": {
+    "plugins/compaction/src/checkpoint_policy_test.cj": "9666f01bf2b83a534c74d099de8de971c7b1f6768807d4133854adda966ea2f6",
+    "plugins/compaction/src/checkpoint_protocol_test.cj": "67c5ae2e6670f166613da3c11cf0f8bb26f399e5f97852b4980f53126ba43b09",
+    "plugins/compaction/src/reference_event_test.cj": "0076e068d3d40e90dfdef4f9c8ba3979ca53db3a271a5c10482a087a1fe9244d",
+    "plugins/compaction/src/structured_pages_test.cj": "4df666d64e5a06f751f26e0127831097eef61b02c85d8395316e66075eb4db3a",
+    "plugins/compaction/src/structured_references_test.cj": "f648016e194c9d40df592e5f35420e518ad3a5e1257f9d58ac583e15cdb785a5"
+  }
+}

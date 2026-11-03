@@ -6,14 +6,11 @@ import yjson.*
 
 import agent_domain.*
 import agent_product.*
-import agent_ports.*
-import agent_runtime.*
-import agent_testkit.*
 import agent_store.*
 import persistence_runtime.*
 import std.collection.*
 import std.fs.*
-import tool_runtime.*
+import std.sync.*
 
 main(): Int64 {
     if (!exists(Path("target"))) {
@@ -31,48 +28,35 @@ main(): Int64 {
 }
 
 func verifyRegisteredSchema(root: String): Unit {
-    let product = openProduct(config: ProductConfig(
-        settingsRoot: root + "/settings",
-        stateRoot: root + "/product-state",
-        workspaceRoot: root,
-        fixture: true,
-        approvalMode: ApprovalMode.Yolo,
-        asyncEnabled: false
-    )).value().getOrThrow()
+    let product = openGoalContractProduct(root + "/registered")
+    let namespace = installGoalContractWorkflow(product)
+    try {
     var found = false
-    for (definition in product.tools() where definition.name == "goal") {
+    for (definition in product.tools() where definition.name == "plugin." + namespace + ".goal") {
         found = true
         let schema = definition.inputSchema
         expect(
             schema.field("type").getOrThrow().text == "object" &&
             sameStringSet(propertyNames(schema),
-                ["op", "objective", "token_budget"]) &&
-            sameStringSet(requiredNames(schema), ["op"]) &&
+                ["command_args", "op", "legacy_document", "legacy_sha256",
+                    "objective", "token_budget", "method"]) &&
+            schema.field("required").isNone() &&
             sameStringSet(enumNames(
                 schema.field("properties").getOrThrow()
                     .field("op").getOrThrow()
-            ), ["create", "get", "complete", "resume", "drop"]),
+            ), ["create", "get", "complete", "resume", "drop", "migrate_legacy"]),
             "goal exposes the reviewed operation schema"
         )
     }
     expect(found, "goal is registered as a real product tool")
     let application = product.applicationSession()
-    let empty = application.handle("/goal show").value().getOrThrow()
-    let created = application.handle(
-        "/goal set Ship through the local command"
-    ).value().getOrThrow()
-    let budgeted = application.handle(
-        "/goal budget 25"
-    ).value().getOrThrow()
-    let paused = application.handle(
-        "/goal pause"
-    ).value().getOrThrow()
-    let resumed = application.handle(
-        "/goal resume"
-    ).value().getOrThrow()
-    let dropped = application.handle(
-        "/goal drop"
-    ).value().getOrThrow()
+    let empty = requireGoalContractResult(application.handle("/goal show"))
+    let created = requireGoalContractResult(application.handle(
+        "/goal set Ship through the local command"))
+    let budgeted = requireGoalContractResult(application.handle("/goal budget 25"))
+    let paused = requireGoalContractResult(application.handle("/goal pause"))
+    let resumed = requireGoalContractResult(application.handle("/goal resume"))
+    let dropped = requireGoalContractResult(application.handle("/goal drop"))
     expect(
         !empty.agentInvoked && empty.text == "No goal set." &&
         !created.agentInvoked &&
@@ -84,387 +68,235 @@ func verifyRegisteredSchema(root: String): Unit {
         dropped.text.contains("Goal dropped."),
         "/goal set/show/pause/resume/drop/budget stay local"
     )
-    let autonomous = application.handle(
-        "/goal set Finish autonomously"
-    ).value().getOrThrow()
+    let autonomous = requireGoalContractResult(application.handle(
+        "/goal set Finish autonomously"))
     let request = product.request(
         "visible user request",
         sessionId: Some(application.id())
     )
+    match (product.client.start(request, { _ => () })) {
+        case Result.Ok(_) => ()
+        case Result.Err(error) => throw IllegalStateException(error.describe())
+    }
+    let observed = product.fixtureProbe.getOrThrow().lastRequest.getOrThrow()
     expect(
         autonomous.text.contains("Goal mode enabled.") &&
         request.prompt == "visible user request" &&
-        request.system.contains("Finish autonomously") &&
+        observed.system.contains("Finish autonomously") &&
         !request.prompt.contains("<goal-mode>"),
         "active goal context is injected as system context, not user text"
     )
-    let finished = application.submit("begin autonomous work")
-        .value().getOrThrow()
+    // Complete only in the continuation Run, not the first model reply.
+    let queuedCompletion = AtomicBool(false)
+    application.subscribe({ event =>
+        if (event.kind == AgentEventKind.Completed && !queuedCompletion.load()) {
+            queuedCompletion.store(true)
+            product.fixtureProbe.getOrThrow().enqueueToolCallReply(
+                "autonomous-complete", "plugin." + namespace + ".goal",
+                objectValue([ValueField("op", textValue("complete"))]))
+        }
+    })
+    let finished = requireGoalContractResult(application.submit("begin autonomous work"))
     let finalGoal = product.goalState(application.id())
         .value().getOrThrow().getOrThrow()
     expect(
-        finished.agentInvoked &&
+        finished.agentInvoked && queuedCompletion.load() &&
         finalGoal.status == "complete" &&
         finalGoal.tokensUsed > 0,
         "an active goal schedules continuation until the goal tool completes"
     )
+    } finally { let _ = product.close() }
 }
 
 func verifyDurableLifecycle(root: String): Unit {
-    let stateRoot = root + "/goal-state"
-    let database = SqliteDatabase(stateRoot + "/state.db")
+    let durableRoot = root + "/durable"
+    var product = openGoalContractProduct(durableRoot)
+    let namespace = installGoalContractWorkflow(product)
+    let database = SqliteDatabase(product.stateRoot + "/state.db")
     let repository = SqliteSessionMetadataRepository(database)
     let runs = SqliteRunRepository(database)
-    let runtime = ProductGoalRuntime(repository, runs)
     let session = SessionId("goal-contract")
-    let context = ToolInvocationContext(
-        RunId("goal-tool-run"),
-        session,
-        CapabilitySet(values: [
-            Capability(CapabilityKind.WorkspaceRead)
-        ])
-    )
+    let results = ArrayList<ToolResult>()
+    try {
+        let empty = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "empty", "get"))
+        results.add(empty)
+        expect(
+            empty.output.field("goal").getOrThrow().unifiedKind == ValueKind.Null &&
+            empty.output.field("content").getOrThrow().text == "No active goal.",
+            "get reports an actually empty goal state"
+        )
 
-    let empty = invoke(runtime, context, call("empty", "get"))
-    expect(
-        empty.output.field("goal").getOrThrow().unifiedKind ==
-            ValueKind.Null &&
-        empty.output.field("content").getOrThrow().text ==
-            "No active goal.",
-        "get reports an actually empty goal state"
-    )
-
-    let created = invoke(
-        runtime,
-        context,
-        call(
-            "create",
-            "create",
-            fields: [
-                ValueField(
-                    "objective",
-                    textValue("Ship the compatible product")
-                ),
+        let created = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "create", "create", fields: [
+                ValueField("objective", textValue("Ship the compatible product")),
                 ValueField("token_budget", integerValue(10))
-            ]
+            ]))
+        results.add(created)
+        let createdGoal = created.output.field("goal").getOrThrow()
+        expect(
+            createdGoal.field("status").getOrThrow().text == "active" &&
+            createdGoal.field("tokensUsed").getOrThrow().asNumberText() == "0" &&
+            created.output.field("remainingTokens").getOrThrow().asNumberText() == "10" &&
+            product.goalState(session).value().getOrThrow().getOrThrow().objective ==
+                "Ship the compatible product",
+            "create persists an active budgeted goal"
         )
-    )
-    let createdGoal = created.output.field("goal").getOrThrow()
-    expect(
-        createdGoal.field("status").getOrThrow().text == "active" &&
-        createdGoal.field("tokensUsed").getOrThrow().asNumberText() == "0" &&
-        created.output.field("remainingTokens")
-            .getOrThrow().asNumberText() == "10",
-        "create persists an active budgeted goal"
-    )
-    expect(
-        runtime.activePrompt(session).value().getOrThrow()
-            .contains("Ship the compatible product"),
-        "active goals contribute a continuation prompt"
-    )
-    expect(
-        executeGoal(
-            runtime,
-            context,
-            call(
-                "duplicate",
-                "create",
-                fields: [
+        let prompt = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "prompt", "get",
+                fields: [ValueField("method", textValue("prompt"))]))
+        results.add(prompt)
+        expect(
+            prompt.output.text.contains("Ship the compatible product"),
+            "active goals contribute a continuation prompt"
+        )
+        expect(
+            rejectedGoalOperation(product, namespace, session,
+                goalContractToolCall(namespace, "duplicate", "create", fields: [
                     ValueField("objective", textValue("replace silently"))
-                ]
-            )
-        ).isError(),
-        "create refuses to replace an unfinished goal"
-    )
-    database.execute(
-        "INSERT INTO threads VALUES ('goal-contract',0,'workspace','open',1,NULL)"
-    )
-    database.execute(
-        "INSERT INTO turns VALUES ('goal-turn','goal-contract',1,'completed','goal-user',NULL)"
-    )
-    database.execute(
-        "INSERT INTO runs(id,thread_id,turn_id,epoch,state,lane_snapshot,skill_snapshot,budget,usage," +
-            "started_at_millis,finished_at_millis,cancellation_reason) VALUES(" +
-            "'accounted-run','goal-contract','goal-turn',1,'completed','{}','{}','{}','{}',0,1,NULL)"
-    )
-    expect(
-        runs.save(RunSnapshot(
-            RunId("accounted-run"),
-            session,
-            RunState.Completed,
-            inputTokens: 7,
-            outputTokens: 5
-        )).isOk(),
-        "run usage fixture is durable"
-    )
-    let budgetLimited = invoke(
-        runtime,
-        context,
-        call("budget", "get")
-    )
-    expect(
-        budgetLimited.output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "budget-limited" &&
-        budgetLimited.output.field("goal").getOrThrow()
-            .field("tokensUsed").getOrThrow().asNumberText() == "12" &&
-        budgetLimited.output.field("remainingTokens")
-            .getOrThrow().asNumberText() == "0",
-        "real run usage transitions the goal to budget-limited"
-    )
-
-    let completed = invoke(
-        runtime,
-        context,
-        call("complete", "complete")
-    )
-    expect(
-        completed.output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "complete" &&
-        completed.output.field("completionBudgetReport")
-            .getOrThrow().text.contains("tokens used: 12 of 10"),
-        "complete returns the final budget report"
-    )
-    let restarted = ProductGoalRuntime(
-        SqliteSessionMetadataRepository(database),
-        SqliteRunRepository(database)
-    )
-    expect(
-        invoke(restarted, context, call("restored", "get"))
-            .output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "complete",
-        "completed goal state survives a runtime restart"
-    )
-
-    let replacement = invoke(
-        restarted,
-        context,
-        call(
-            "replacement",
-            "create",
-            fields: [
-                ValueField(
-                    "objective",
-                    textValue("Validate pause and resume")
-                )
-            ]
+                ])) &&
+            product.goalState(session).value().getOrThrow().getOrThrow().objective ==
+                "Ship the compatible product",
+            "create refuses to replace an unfinished goal"
         )
-    )
-    expect(
-        replacement.output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "active",
-        "a completed goal may be replaced explicitly"
-    )
-    expect(
-        restarted.pause(session).isOk() &&
-        invoke(restarted, context, call("paused", "get"))
-            .output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "paused",
-        "interrupt pause is durable"
-    )
-    expect(
-        invoke(restarted, context, call("resume", "resume"))
-            .output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "active",
-        "resume reactivates the same goal"
-    )
-    expect(
-        restarted.pauseRestoredActive(session).isOk() &&
-        invoke(restarted, context, call("restored-pause", "get"))
-            .output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "paused",
-        "restoring an active thread pauses it rather than pretending it runs"
-    )
 
-    let target = SessionId("goal-copy")
-    expect(
-        repository.copy(session, target).isOk() &&
-        invoke(
-            ProductGoalRuntime(repository, runs),
-            ToolInvocationContext(
-                RunId("copy-run"),
-                target,
-                CapabilitySet(values: [
-                    Capability(CapabilityKind.WorkspaceRead)
-                ])
-            ),
-            call("copy", "get")
-        ).output.field("goal").getOrThrow()
-            .field("objective").getOrThrow().text ==
+        // Canonical calls already created the Thread/Turn/Run. Populate the
+        // same durable usage repository without fabricating another Turn.
+        let usageRun = RunId(database.query(
+            "SELECT id FROM runs WHERE thread_id=? AND state='completed' " +
+                "ORDER BY started_at_millis DESC,id DESC LIMIT 1",
+            [SqlParameter.Text(session.value)]
+        )[0].required(0))
+        expect(
+            runs.save(RunSnapshot(
+                usageRun, session, RunState.Completed,
+                inputTokens: 7, outputTokens: 5
+            )).isOk(),
+            "run usage fixture is durable"
+        )
+        let budgetLimited = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "budget", "get"))
+        results.add(budgetLimited)
+        expect(
+            budgetLimited.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "budget-limited" &&
+            budgetLimited.output.field("goal").getOrThrow()
+                .field("tokensUsed").getOrThrow().asNumberText() == "12" &&
+            budgetLimited.output.field("remainingTokens").getOrThrow().asNumberText() == "0",
+            "real run usage transitions the goal to budget-limited"
+        )
+        let completed = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "complete", "complete"))
+        results.add(completed)
+        expect(
+            completed.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "complete" &&
+            completed.output.field("completionBudgetReport").getOrThrow()
+                .text.contains("tokens used: 12 of 10"),
+            "complete returns the final budget report"
+        )
+
+        let _ = product.close()
+        product = openGoalContractProduct(durableRoot)
+        let restored = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "restored", "get"))
+        results.add(restored)
+        expect(
+            restored.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "complete" &&
+            product.goalState(session).value().getOrThrow().getOrThrow().status == "complete",
+            "completed goal state survives a runtime restart"
+        )
+        let replacement = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "replacement", "create", fields: [
+                ValueField("objective", textValue("Validate pause and resume"))
+            ]))
+        results.add(replacement)
+        expect(
+            replacement.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "active",
+            "a completed goal may be replaced explicitly"
+        )
+        let paused = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "pause", "get",
+                fields: [ValueField("method", textValue("pause"))]))
+        results.add(paused)
+        let pausedGoal = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "paused", "get"))
+        results.add(pausedGoal)
+        expect(
+            pausedGoal.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "paused" &&
+            !product.goalState(session).value().getOrThrow().getOrThrow().enabled,
+            "interrupt pause is durable"
+        )
+        let resumed = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "resume", "resume"))
+        results.add(resumed)
+        expect(
+            resumed.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "active" &&
+            resumed.output.field("goal").getOrThrow().field("id").getOrThrow().text ==
+                replacement.output.field("goal").getOrThrow().field("id").getOrThrow().text,
+            "resume reactivates the same goal"
+        )
+
+        let _ = product.close()
+        product = openGoalContractProduct(durableRoot)
+        // The former pauseRestoredActive call was explicit too. The selected
+        // tool's restore method runs that same policy after a real restart.
+        let restoredPause = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "restore", "get",
+                fields: [ValueField("method", textValue("restore"))]))
+        results.add(restoredPause)
+        let afterRestore = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "restored-pause", "get"))
+        results.add(afterRestore)
+        expect(
+            afterRestore.output.field("goal").getOrThrow()
+                .field("status").getOrThrow().text == "paused" &&
+            !product.goalState(session).value().getOrThrow().getOrThrow().enabled,
+            "restoring an active thread pauses it rather than pretending it runs"
+        )
+
+        let target = SessionId("goal-copy")
+        let copied = repository.copy(session, target)
+        let copy = completedGoalOperation(product, namespace, target,
+            goalContractToolCall(namespace, "copy", "get"))
+        results.add(copy)
+        expect(
+            copied.isOk() &&
+            copy.output.field("goal").getOrThrow().field("objective").getOrThrow().text ==
                 "Validate pause and resume",
-        "session forks copy durable goal metadata"
-    )
-
-    let dropped = invoke(
-        restarted,
-        context,
-        call("drop", "drop")
-    )
-    expect(
-        dropped.output.field("goal").getOrThrow()
-            .field("status").getOrThrow().text == "dropped" &&
-        invoke(restarted, context, call("after-drop", "get"))
-            .output.field("goal").getOrThrow().unifiedKind == ValueKind.Null,
-        "drop returns the terminal goal and clears active persistence"
-    )
-
-    expect(
-        executeGoal(
-            runtime,
-            context,
-            call(
-                "bad-budget",
-                "create",
-                fields: [
+            "session forks copy durable goal metadata"
+        )
+        let dropped = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "drop", "drop"))
+        results.add(dropped)
+        let afterDrop = completedGoalOperation(product, namespace, session,
+            goalContractToolCall(namespace, "after-drop", "get"))
+        results.add(afterDrop)
+        expect(
+            dropped.output.field("goal").getOrThrow().field("status").getOrThrow().text == "dropped" &&
+            afterDrop.output.field("goal").getOrThrow().unifiedKind == ValueKind.Null &&
+            product.goalState(session).value().getOrThrow().isNone(),
+            "drop returns the terminal goal and clears active persistence"
+        )
+        expect(
+            rejectedGoalOperation(product, namespace, session,
+                goalContractToolCall(namespace, "bad-budget", "create", fields: [
                     ValueField("objective", textValue("invalid")),
                     ValueField("token_budget", integerValue(0))
-                ]
-            )
-        ).isError() &&
-        executeGoal(
-            runtime,
-            context,
-            call("bad-op", "pause")
-        ).isError(),
-        "goal rejects invalid budgets and unknown operations"
-    )
-    database.close()
-}
-
-func invoke(
-    runtime: ProductGoalRuntime,
-    context: ToolInvocationContext,
-    value: ToolCall
-): ToolResult {
-    match (executeGoal(runtime, context, value)) {
-        case Result.Ok(result) => result
-        case Result.Err(error) =>
-            throw IllegalStateException(
-                error.code + ": " + error.message
-            )
+                ])) &&
+            rejectedGoalOperation(product, namespace, session,
+                goalContractToolCall(namespace, "bad-op", "pause")),
+            "goal rejects invalid budgets and unknown operations"
+        )
+    } finally {
+        for (result in results) { result.releasePayload() }
+        let _ = product.close()
+        database.close()
     }
-}
-
-func executeGoal(
-    runtime: ProductGoalRuntime,
-    context: ToolInvocationContext,
-    value: ToolCall
-): Result<ToolResult> {
-    let catalog = ToolCatalog()
-    let registration = catalog.register(
-        ToolDescriptor(
-            ModelToolDefinition(
-                "goal",
-                "Create, inspect, complete, resume, or drop a durable goal.",
-                goalContractSchema()
-            ),
-            Capability(CapabilityKind.WorkspaceRead)
-        ),
-        GoalContractExecutor(runtime)
-    )
-    match (registration) {
-        case Result.Err(error) => return Result.Err(error)
-        case Result.Ok(_) => ()
-    }
-    let pipeline = ToolPipeline(
-        catalog,
-        InMemoryOperationRuntimePort(),
-        GoalContractAudit(),
-        GoalContractIds(),
-        policy: DefaultCapabilityPolicy(mode: ApprovalMode.Yolo)
-    )
-    match (executePipelineCall(pipeline, context, value)) {
-        case Result.Err(error) => Result.Err(error)
-        case Result.Ok(ToolInvocationResult.Completed(result)) =>
-            if (result.isError) {
-                Result.Err(AgentError(
-                    AgentErrorKind.InvalidInput,
-                    "goal.contract_tool_error",
-                    "goal operation returned an error result"
-                ))
-            } else {
-                Result.Ok(result)
-            }
-        case Result.Ok(ToolInvocationResult.NeedsApproval(_)) =>
-            Result.Err(AgentError(
-                AgentErrorKind.PermissionDenied,
-                "goal.contract_approval_required",
-                "goal contract fixture unexpectedly requires approval"
-            ))
-        case Result.Ok(ToolInvocationResult.Denied(_)) =>
-            Result.Err(AgentError(
-                AgentErrorKind.PermissionDenied,
-                "goal.contract_denied",
-                "goal contract fixture unexpectedly denied the operation"
-            ))
-    }
-}
-
-class GoalContractExecutor <: ToolExecutor {
-    private let runtime: ProductGoalRuntime
-
-    init(runtime: ProductGoalRuntime) {
-        this.runtime = runtime
-    }
-
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        runtime.execute(context, prepared)
-    }
-}
-
-class GoalContractAudit <: AuditPort {
-    public func append(event: AgentEvent): Result<Unit> {
-        let _ = event
-        Result.Ok(())
-    }
-}
-
-class GoalContractIds <: IdGenerator {
-    private var operation: Int64 = 0
-
-    public func nextRunId(): RunId { RunId("goal-contract-run") }
-    public func nextSessionId(): SessionId { SessionId("goal-contract-session") }
-    public func nextOperationId(): OperationId {
-        operation += 1
-        OperationId("goal-contract-operation-" + operation.toString())
-    }
-}
-
-func goalContractSchema(): AgentValue {
-    let operations = ArrayList<AgentValue>()
-    for (operation in ["create", "get", "complete", "resume", "drop"]) {
-        operations.add(textValue(operation))
-    }
-    objectValue([
-        ValueField("type", textValue("object")),
-        ValueField("properties", objectValue([
-            ValueField("op", objectValue([
-                ValueField("type", textValue("string")),
-                ValueField("enum", listValue(operations.toArray()))
-            ])),
-            ValueField("objective", objectValue([
-                ValueField("type", textValue("string"))
-            ])),
-            ValueField("token_budget", objectValue([
-                ValueField("type", textValue("integer"))
-            ]))
-        ])),
-        ValueField("required", listValue([textValue("op")])),
-        ValueField("additionalProperties", boolValue(false))
-    ])
-}
-
-func call(
-    id: String,
-    op: String,
-    fields!: Array<ValueField> = []
-): ToolCall {
-    let values = ArrayList<ValueField>()
-    values.add(ValueField("op", textValue(op)))
-    for (field in fields) { values.add(field) }
-    ToolCall(id, "goal", objectValue(values.toArray()))
 }
 
 func propertyNames(schema: AgentValue): Array<String> {
@@ -474,13 +306,6 @@ func propertyNames(schema: AgentValue): Array<String> {
     result.toArray()
 }
 
-func requiredNames(schema: AgentValue): Array<String> {
-    let result = ArrayList<String>()
-    for (value in schema.field("required").getOrThrow().items) {
-        result.add(value.text)
-    }
-    result.toArray()
-}
 
 func enumNames(schema: AgentValue): Array<String> {
     let result = ArrayList<String>()

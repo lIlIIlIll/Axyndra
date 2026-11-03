@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -18,6 +20,17 @@ def main() -> None:
         root = Path(root_text)
         relocated = root / "relocated"
         shutil.copytree(SOURCE.parent.parent, relocated)
+        provenance = json.loads((relocated / "package-provenance.json").read_bytes())
+        for member, expected in provenance["host_files"].items():
+            path = relocated / member
+            assert path.is_file() and not path.is_symlink(), member
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == expected, member
+        native = provenance.get("native_input")
+        if native is not None:
+            assert native["source_binary_sha256"] == provenance["source_binary_sha256"]
+            assert native["before_sha256"] == native["copied_sha256"] == native["after_sha256"]
+            actual = hashlib.sha256((relocated / "lib/libprocess4cj_native.so").read_bytes()).hexdigest()
+            assert actual == native["packaged_sha256"]
         home = root / "home"
         work = root / "work"
         for directory in (
@@ -42,15 +55,23 @@ def main() -> None:
             "AXYNDRA_HOME": str(home / ".axyndra"),
             "LANG": "C.UTF-8",
         }
-        completed = subprocess.run(
-            [str(relocated / "bin" / "axyndra"), "--fixture", "--print", "/help"],
-            cwd=work,
-            env=environment,
-            text=True,
-            capture_output=True,
-            timeout=20,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [str(relocated / "bin" / "axyndra"), "--fixture", "--print", "/help"],
+                cwd=work,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            # Retain actual terminal feedback in the caller's evidence log while
+            # preserving the original deadline and failure.
+            for output in [error.stdout, error.stderr]:
+                if output:
+                    print(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output, flush=True)
+            raise
         evidence = completed.stdout + completed.stderr
         assert completed.returncode == 0, evidence
         assert shutil.which("node", path=environment["PATH"]) is None
@@ -59,6 +80,8 @@ def main() -> None:
         assert "/help" in completed.stdout, evidence
         forbidden = ("learn_agent_cj", "cangjie_sdk", "CANGJIE_HOME", "LD_LIBRARY_PATH")
         assert not any(value in evidence for value in forbidden), evidence
+        for member, expected in provenance["host_files"].items():
+            assert hashlib.sha256((relocated / member).read_bytes()).hexdigest() == expected, member
     print("package candidate clean-environment contract passed")
 
 

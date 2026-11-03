@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.1.0"
+  name = "workspace_search_extension"
+  organization = ""
+  description = "Read-only workspace search extension dogfooding agent_sdk"
+  version = "1.0.0"
+  output-type = "static"
+
+[dependencies]
+  "legacy_extension_sdk" = { path = "../legacy_extension_sdk", output-type = "static" }
+  "agent_sdk" = { path = "../../agent_sdk", output-type = "static" }
+  "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+  "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }

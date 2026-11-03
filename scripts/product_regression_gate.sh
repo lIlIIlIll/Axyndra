@@ -3,15 +3,30 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 python3 scripts/product_unit_gate_test.py
+python3 scripts/rpc_unit_isolation_test.py
 python3 scripts/ci_evidence_test.py
 bash scripts/check_atomic_workspace.sh
 # Keep this gate self-contained. Earlier CI stages and focused contracts may use
 # separate target trees or clean/rebuild workspace artifacts.
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 python3 support_tests/frontend_regressions/check.py all
+if [[ -z "${AXYNDRA_WORKFLOW_PLUGIN_PACKAGE:-}" ]]; then
+  AXYNDRA_WORKFLOW_PLUGIN_PACKAGE=$(python3 scripts/prepare_workflow_plugin.py)
+  export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
+fi
 python3 support_tests/process_broker_blackbox/check.py --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"
-(
-  cd support_tests/web_search_contract
-  "$root/scripts/pinned_cangjie" cjpm build
-  "$root/scripts/pinned_cangjie" python3 local_fixture.py --candidate target/release/bin/main
-)
+# Keep public View/Command events and another live frontend on the same owner.
+python3 support_tests/tui_path_coverage/view_lifecycle.py \
+  --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}" \
+  --output "${AXYNDRA_EVIDENCE_DIR:-target/gate-evidence}/view-lifecycle"
+# Malformed authenticated View input must reject, recover and retire its real owner.
+python3 support_tests/tui_path_coverage/view_protocol_faults.py \
+  --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}" \
+  --output "${AXYNDRA_EVIDENCE_DIR:-target/gate-evidence}/view-protocol-faults"
+# Build real base/update packages and exercise no-model maintenance, invocation,
+# durable HTTP authority and the complete local plugin lifecycle.
+bash support_tests/plugin_cli_blackbox/run.sh --candidate "${AXYNDRA_BINARY:-$root/target/release/bin/agent_app}"
+# Build the independent web package and exercise the real Product HTTP broker,
+# operator grants, credentials, approval, bounded transport and cancellation.
+python3 scripts/product_unit_gate.py --package agent_product --case-prefix PluginHttp \
+  --output-dir "${AXYNDRA_EVIDENCE_DIR:-target/gate-evidence}/http-regression"

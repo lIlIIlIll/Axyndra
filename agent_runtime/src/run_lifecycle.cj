@@ -192,20 +192,26 @@ public func effectiveRunTerminal(
     }
 }
 
+public type RunTaskJoin = () -> Result<Unit>
+
 class OwnedRunTask {
     let name: String
+    let blocksModelBoundary: Bool
     private let future: Future<Unit>
     private let lock = Mutex()
     private var settled = false
     private var failure: ?String = None
+    private var observer113: ?Future<Unit> = None<Future<Unit>>
+    private var observerReturned113 = false
 
-    init(name: String, future: Future<Unit>) {
+    init(name: String, future: Future<Unit>, blocksModelBoundary: Bool) {
         this.name = name
         this.future = future
+        this.blocksModelBoundary = blocksModelBoundary
     }
 
     func observe(): Unit {
-        let _ = spawn {
+        let actual = spawn {
             try {
                 future.get()
                 recordSettlement(None)
@@ -213,11 +219,39 @@ class OwnedRunTask {
                 recordSettlement(Some(error.message))
             }
         }
+        lock.lock(); try { observer113 = Some(actual) } finally { lock.unlock() }
+    }
+
+    // Settlement proves target.get returned, then exact observer.get proves
+    // its metadata/catch helper also returned. No Future.tryGet is called on
+    // foreign-blocked work. Unknown observer remains paid/unreturned.
+    func completeReturnWitness113(): Bool {
+        lock.lock()
+        let selected = try {
+            if (observerReturned113) { return true }
+            if (!settled) { return false }
+            observer113
+        } finally { lock.unlock() }
+        let actual = match (selected) { case Some(value) => value; case None => return false }
+        try { actual.get() } catch (_: Exception) { return false }
+        // Exact get helper returns before callers release the scope alias.
+        lock.lock(); try { observer113 = None<Future<Unit>>; observerReturned113 = true } finally { lock.unlock() }
+        true
     }
 
     func snapshot(): (Bool, ?String) {
         lock.lock()
         try { (settled, failure) } finally { lock.unlock() }
+    }
+
+    // Called only by the host-held join handle, outside the Run/task locks.
+    // Both this and the existing observer record the same Future completion.
+    func join(): Result<Unit> {
+        try { future.get(); recordSettlement(None); Result.Ok(()) }
+        catch (error: Exception) {
+            recordSettlement(Some(error.message))
+            Result.Err(AgentError(AgentErrorKind.Internal, "run.owned_task_failed", "owned task failed while joining"))
+        }
     }
 
     private func recordSettlement(value: ?String): Unit {
@@ -231,7 +265,13 @@ class OwnedRunTask {
 
 // A RunScope owns every asynchronous child. Terminal Run state is only
 // published after join() has classified each child as joined or quarantined.
-public class RunScope {
+// DATA-only return witness over the SAME already-owned task list.
+// It creates no Run, Source, Future, task registry, error copy or new pool.
+public interface OwnedTaskReturnWitness113 {
+    func allOwnedProducersReturned113(): Bool
+}
+
+public class RunScope <: OwnedTaskReturnWitness113 {
     private let lock = Mutex()
     private let source: CancellationSource
     private let tasks = ArrayList<OwnedRunTask>()
@@ -259,7 +299,17 @@ public class RunScope {
         }
     }
 
-    public func own(name: String, future: Future<Unit>): Result<Unit> {
+    public func own(name: String, future: Future<Unit>, blocksModelBoundary!: Bool = false): Result<Unit> {
+        match (ownWithJoin(name, future, blocksModelBoundary: blocksModelBoundary)) {
+            case Result.Ok(_) => Result.Ok(())
+            case Result.Err(error) => Result.Err(error)
+        }
+    }
+
+    // Same admission and same task list; the returned host-only closure can
+    // synchronously observe this exact Future after resource cleanup ACK.
+    public func ownWithJoin(name: String, future: Future<Unit>,
+        blocksModelBoundary!: Bool = false): Result<RunTaskJoin> {
         if (name.trimAscii() == "") {
             return Result.Err(AgentError(
                 AgentErrorKind.InvalidInput,
@@ -283,14 +333,15 @@ public class RunScope {
                     "run scope already owns a task with this name"
                 ))
             }
-            let task = OwnedRunTask(name.trimAscii(), future)
+            let task = OwnedRunTask(name.trimAscii(), future, blocksModelBoundary)
             tasks.add(task)
             // Future.tryGet() is not a safe liveness probe for work blocked in
             // a foreign/native call: some runtime implementations wait on the
-            // Future's internal completion lock.  A separate observer owns the
-            // only blocking get(), while join() reads this independent marker.
+            // Future's internal completion lock. A separate observer performs
+            // get(), while bounded Run join reads this independent marker.
+            // The optional host join handle is used only after resource ACK.
             task.observe()
-            Result.Ok(())
+            Result.Ok({ => task.join() })
         } finally {
             lock.unlock()
         }
@@ -298,6 +349,49 @@ public class RunScope {
 
     public func cancel(reason!: ?CancellationReason = None): Bool {
         source.cancel(reason: reason)
+    }
+
+    // This is metadata on the same owned task list, not another debt registry.
+    // Ordinary background tasks keep their existing safe-cut behavior.
+    public func hasPendingModelBoundaryTask(): Bool {
+        lock.lock()
+        try {
+            for (task in tasks where task.blocksModelBoundary) {
+                let (settled, _) = task.snapshot()
+                if (!settled) { return true }
+            }
+            false
+        } finally { lock.unlock() }
+    }
+
+    func withSettledDataProjection(action: () -> Result<Unit>): Result<Unit> {
+        lock.lock()
+        try {
+            if (joining || joined || source.token.isCancelled()) {
+                return directPostCanonicalProjectionFailure("runtime.projection_scope_not_current") }
+            for (task in tasks) {
+                let (settled, failure) = task.snapshot()
+                if (!settled || failure.isSome()) {
+                    return directPostCanonicalProjectionFailure("runtime.projection_physical_ack_pending") }
+            }
+            // ownWithJoin needs this same lock, so no new physical task can
+            // race the final SQL current check and disposable INSERT.
+            action()
+        } finally { lock.unlock() }
+    }
+
+    // A target's settlement is recorded only AFTER exact Future.get returns.
+    // Cancellation, finally/completed flags and a quarantined report are not
+    // return witnesses. No tryGet/native completion lock is queried here.
+    public func allOwnedProducersReturned113(): Bool {
+        lock.lock()
+        try {
+            if (!joined || joining) { return false }
+            for (task in tasks) {
+                if (!task.completeReturnWitness113()) { return false }
+            }
+            true
+        } finally { lock.unlock() }
     }
 
     public func join(timeoutMillis: Int64): RunJoinReport {

@@ -107,9 +107,19 @@ public class InternalUriRouter {
         }
     }
 
-    public func schemes(): Array<String> {
+    public func schemes(custody!: ?OwnedApplicationRegistryResponse161 = None): Array<String> {
         lock.lock()
         try {
+            match (custody) {
+                case Some(scope) =>
+                    var bytes: Int64 = 0
+                    for (registration in registrations) {
+                        if (registration.scheme.size > 134217728 - bytes) { throw LogicalJsonPayloadError("registry response cannot fit the original shared capacity") }
+                        bytes += registration.scheme.size
+                    }
+                    scope.prepayCollection161(registrations.size, copiedBytes: bytes)
+                case None => ()
+            }
             let values = ArrayList<String>()
             for (registration in registrations) {
                 values.add(registration.scheme)

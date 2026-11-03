@@ -1,17 +1,24 @@
 package agent_product
 
+import agent_host_runtime
+
+import agent_host_runtime.*
+
 import yjson.*
 import yjson_support.*
 import agent_domain.*
-import model_adapters.*
+import agent_runtime.*
 import tool_runtime.*
 import std.collection.*
 import std.convert.*
 import std.fs.*
-let PRODUCT_FILE_APPLICATION_PROPOSAL_SCHEMA = "axyndra.file-change-proposal/v1"
+let PRODUCT_FILE_APPLICATION_PROPOSAL_SCHEMA = agent_host_runtime.HOST_FILE_APPLICATION_PROPOSAL_SCHEMA
 let PRODUCT_FILE_APPLICATION_PLAN_SCHEMA = "axyndra.file-application-plan/v1"
+let PRODUCT_PLUGIN_FILE_APPLICATION_PLAN_SCHEMA = "axyndra.file-application-plan/v2"
+let PRODUCT_FILE_APPLICATION_IMPLEMENTATION = "product-file-plan-application-v2"
+let PRODUCT_FILE_RECOVERY_IMPLEMENTATION = "product-file-plan-recovery-v2"
 let PRODUCT_FILE_PATCH_SCHEMA = "axyndra.file-patch/v1"
-let PRODUCT_FILE_APPLICATION_MAX_OPERATIONS: Int64 = 32
+let PRODUCT_FILE_APPLICATION_MAX_OPERATIONS: Int64 = agent_host_runtime.HOST_FILE_APPLICATION_MAX_OPERATIONS
 let PRODUCT_FILE_APPLICATION_MAX_BYTES: Int64 = 1048576
 let PRODUCT_FILE_APPLICATION_MAX_PATH_BYTES: Int64 = 4096
 let PRODUCT_FILE_APPLICATION_PREVIEW_BYTES: Int64 = 8192
@@ -106,104 +113,11 @@ class ProductFileApplicationPreviewBuilder {
     public func truncated(): Bool { didTruncate }
 }
 
-class ProductPlanGeneratingRunProgramExecutor <: ToolExecutor {
-    private let delegate: ProductRunProgramExecutor
-    private let workspace: LocalWorkspace
-    private let artifacts: ProductArtifactStore
-
-    init(
-        delegate: ProductRunProgramExecutor,
-        workspace: LocalWorkspace,
-        artifacts: ProductArtifactStore
-    ) {
-        this.delegate = delegate
-        this.workspace = workspace
-        this.artifacts = artifacts
-    }
-
-    public func execute(
-        context: ToolInvocationContext,
-        prepared: PreparedToolInvocation
-    ): Result<ToolResult> {
-        let executed = match (delegate.execute(context, prepared)) {
-            case Result.Ok(value) => value
-            case Result.Err(error) => return Result.Err(error)
-        }
-        if (executed.isError) { return Result.Ok(executed) }
-        match (materializeProductApplicationPlan(
-            executed.output, prepared, workspace, artifacts
-        )) {
-            case Result.Ok(None) => Result.Ok(executed)
-            case Result.Ok(Some(programValue)) => Result.Ok(
-                productToolResultWithProgramValue(executed, programValue)
-            )
-            case Result.Err(error) => Result.Ok(
-                productApplicationPlanFailure(executed, error)
-            )
-        }
-    }
-
-    public func cancel(runId: RunId): Result<Unit> {
-        delegate.cancel(runId)
-    }
-}
-
-func materializeProductApplicationPlan(
-    toolOutput: AgentValue,
-    prepared: PreparedToolInvocation,
-    workspace: LocalWorkspace,
-    artifacts: ProductArtifactStore
-): Result<?AgentValue> {
-    let value = match (toolOutput.field("value")) {
-        case Some(item) => item
-        case None => return applicationPlanError<?AgentValue>(
-            AgentErrorKind.Protocol,
-            "application_plan.program_result_missing",
-            "completed Program result omitted its value"
-        )
-    }
-    if (value.unifiedKind != ValueKind.Object) { return Result.Ok(None) }
-    var proposalCount: Int64 = 0
-    for (field in value.fields where field.name == "application_plan") {
-        proposalCount += 1
-    }
-    if (proposalCount == 0) { return Result.Ok(None) }
-    if (proposalCount != 1) {
-        return applicationPlanError<?AgentValue>(
-            AgentErrorKind.InvalidInput,
-            "application_plan.structure_invalid",
-            "Program result must contain exactly one application_plan proposal"
-        )
-    }
-    let proposal = match (value.field("application_plan")) {
-        case Some(item) => item
-        case None => return applicationPlanError<?AgentValue>(
-            AgentErrorKind.InvalidInput,
-            "application_plan.structure_invalid",
-            "Program application_plan proposal is invalid"
-        )
-    }
-    let summary = match (generateProductApplicationPlan(
-        proposal, toolOutput, prepared, workspace, artifacts
-    )) {
-        case Result.Ok(item) => item
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let sanitizedFields = ArrayList<ValueField>()
-    for (field in value.fields) {
-        if (field.name == "application_plan") {
-            sanitizedFields.add(ValueField("application_plan", summary))
-        } else {
-            sanitizedFields.add(field)
-        }
-    }
-    Result.Ok(Some(objectValue(sanitizedFields.toArray())))
-}
-
-func generateProductApplicationPlan(
+// The origin is produced by a trusted host executor from its admitted
+// Operation. Neither Program results nor plugin IPC may supply this value.
+func generateProductApplicationPlanFromOrigin(
     proposal: AgentValue,
-    toolOutput: AgentValue,
-    prepared: PreparedToolInvocation,
+    source: AgentValue,
     workspace: LocalWorkspace,
     artifacts: ProductArtifactStore
 ): Result<AgentValue> {
@@ -252,15 +166,10 @@ func generateProductApplicationPlan(
             "application_plan must contain between one and 32 operations"
         )
     }
-    let source = match (productApplicationPlanSource(toolOutput, prepared, workspace)) {
-        case Result.Ok(item) => item
-        case Result.Err(error) => return Result.Err(error)
+    for(operation in operationsValue.items where operation.field("expected_sha256").isSome()){
+        if(operationsValue.items.size!=1){return applicationPlanError<AgentValue>(AgentErrorKind.InvalidInput,
+            "application_plan.limit_exceeded","Digest precondition is restricted to a single file proposal")}
     }
-    match (validateProductApplicationSourceClaim(proposal, source)) {
-        case Result.Ok(_) => ()
-        case Result.Err(error) => return Result.Err(error)
-    }
-
     let operations = ArrayList<ProductFileApplicationOperation>()
     var totalContentBytes: Int64 = 0
     for (index in 0..operationsValue.items.size) {
@@ -371,105 +280,6 @@ func persistProductApplicationPlan(
     Result.Ok(objectValue(summaryFields.toArray()))
 }
 
-func productApplicationPlanSource(
-    toolOutput: AgentValue,
-    prepared: PreparedToolInvocation,
-    workspace: LocalWorkspace
-): Result<AgentValue> {
-    let sourceValue = match (prepared.operationPlan.canonicalArguments.field("source")) {
-        case Some(item) => item
-        case None => return applicationPlanError<AgentValue>(
-            AgentErrorKind.Conflict,
-            "application_plan.source_mismatch",
-            "application plan source is not bound to the prepared Program"
-        )
-    }
-    if (sourceValue.unifiedKind != ValueKind.Text) {
-        return applicationPlanError<AgentValue>(
-            AgentErrorKind.Conflict,
-            "application_plan.source_mismatch",
-            "application plan source is not bound to the prepared Program"
-        )
-    }
-    let digest = artifactSha256(sourceValue.text.toArray())
-    let reference = PRODUCT_ARTIFACT_PREFIX + digest
-    let resultReference = match (applicationPlanRequiredText(toolOutput, "program_artifact")) {
-        case Result.Ok(item) => item
-        case Result.Err(_) => return applicationPlanError<AgentValue>(
-            AgentErrorKind.Conflict,
-            "application_plan.source_mismatch",
-            "Program result source identity is missing"
-        )
-    }
-    let resultDigest = match (applicationPlanRequiredText(toolOutput, "program_sha256")) {
-        case Result.Ok(item) => item
-        case Result.Err(_) => return applicationPlanError<AgentValue>(
-            AgentErrorKind.Conflict,
-            "application_plan.source_mismatch",
-            "Program result source identity is missing"
-        )
-    }
-    if (resultReference != reference || resultDigest != digest) {
-        return applicationPlanError<AgentValue>(
-            AgentErrorKind.Conflict,
-            "application_plan.source_mismatch",
-            "Program result source identity does not match the prepared Program"
-        )
-    }
-    Result.Ok(objectValue([
-        ValueField("root_operation_id", textValue(prepared.operationId.value)),
-        ValueField("program_id", textValue(reference)),
-        ValueField("program_digest", textValue(digest)),
-        ValueField(
-            "workspace_id",
-            textValue("workspace:sha256:" + artifactSha256(workspace.rootPath().toArray()))
-        )
-    ]))
-}
-
-func validateProductApplicationSourceClaim(
-    proposal: AgentValue,
-    expectedSource: AgentValue
-): Result<Unit> {
-    let sourceClaim = match (proposal.field("source")) {
-        case Some(item) => item
-        case None => return Result.Ok(())
-    }
-    if (!applicationPlanObjectShape(
-        sourceClaim,
-        ["root_operation_id", "program_id", "program_digest", "workspace_id"],
-        []
-    )) {
-        return applicationPlanError<Unit>(
-            AgentErrorKind.InvalidInput,
-            "application_plan.source_invalid",
-            "application_plan source claim has an invalid structure"
-        )
-    }
-    for (name in ["root_operation_id", "program_id", "program_digest", "workspace_id"]) {
-        let claimed = match (applicationPlanOptionalText(sourceClaim, name)) {
-            case Result.Ok(item) => item
-            case Result.Err(error) => return Result.Err(error)
-        }
-        match (claimed) {
-            case Some(value) =>
-                let expected = match (expectedSource.field(name)) {
-                    case Some(item) => item.text
-                    case None => ""
-                }
-                if (value != expected) {
-                    return applicationPlanError<Unit>(
-                        AgentErrorKind.Conflict,
-                        "application_plan.source_mismatch",
-                        "application_plan source claim does not match this Program execution"
-                    )
-                }
-            case None => ()
-        }
-    }
-    Result.Ok(())
-}
-
 func parseProductApplicationOperation(
     value: AgentValue,
     ordinal: Int64,
@@ -487,8 +297,11 @@ func parseProductApplicationOperation(
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    let digestPrecondition=kind=="replace" && value.field("expected_sha256").isSome()
     let allowedFields = if (kind == "create") {
         ["kind", "path", "content"]
+    } else if (kind == "replace" && digestPrecondition) {
+        ["kind", "path", "expected_sha256", "expected_bytes", "content"]
     } else if (kind == "replace") {
         ["kind", "path", "expected_content", "content"]
     } else {
@@ -536,7 +349,7 @@ func parseProductApplicationOperation(
             "application_plan replacement content exceeds the one MiB limit"
         )
     }
-    let expectedContent = if (kind == "replace") {
+    var expectedContent = if (kind == "replace" && !digestPrecondition) {
         match (applicationPlanRequiredText(value, "expected_content")) {
             case Result.Ok(item) => item
             case Result.Err(error) => return Result.Err(error)
@@ -551,7 +364,18 @@ func parseProductApplicationOperation(
             "replacement precondition must be UTF-8 text without NUL bytes"
         )
     }
-    let expectedBytes = expectedContent.toArray()
+    var expectedBytes = expectedContent.toArray()
+    var expectedDigest="";var expectedByteCount:Int64=0
+    if(digestPrecondition){
+        let digest=value.field("expected_sha256").getOrThrow();let size=value.field("expected_bytes").getOrThrow()
+        if(digest.unifiedKind!=ValueKind.Text || !httpIntentDigest(digest.text) || size.unifiedKind!=ValueKind.Number){
+            return applicationPlanError<ProductFileApplicationOperation>(AgentErrorKind.InvalidInput,
+                "application_plan.precondition_invalid","Digest precondition requires its exact SHA256 and byte count")}
+        expectedDigest=digest.text;expectedByteCount=try{Int64.parse(size.asNumberText())}catch(_:Exception){-1}
+        if(expectedByteCount<0 || expectedByteCount>65536 || contentBytes.size>32768){
+            return applicationPlanError<ProductFileApplicationOperation>(AgentErrorKind.InvalidInput,
+                "application_plan.limit_exceeded","Digest precondition exceeds its single-file transport bounds")}
+    }
     if (expectedBytes.size > PRODUCT_FILE_APPLICATION_MAX_BYTES) {
         return applicationPlanError<ProductFileApplicationOperation>(
             AgentErrorKind.InvalidInput,
@@ -657,6 +481,14 @@ func parseProductApplicationOperation(
             )
         }
         let currentBytes = current.toArray()
+        if(digestPrecondition){
+            if(currentBytes.size!=expectedByteCount || artifactSha256(currentBytes)!=expectedDigest){
+                return applicationPlanError<ProductFileApplicationOperation>(AgentErrorKind.Conflict,
+                    "application_plan.precondition_conflict","Replace target differs from the exact frozen read-view digest")}
+            // Restore the original full-text durable representation. Review,
+            // restart, apply and rollback still use their original exact CAS.
+            expectedContent=current;expectedBytes=currentBytes
+        }
         if (current != expectedContent || currentBytes.size != target.beforeBytes ||
             currentBytes.size != expectedBytes.size) {
             return applicationPlanError<ProductFileApplicationOperation>(
@@ -720,14 +552,16 @@ func productFileApplicationPlanValue(
             ]))
         ]))
     }
+    let persistedSource = ArrayList<ValueField>()
+    for (field in source.fields where field.name != "workspace_id") {
+        persistedSource.add(field)
+    }
     objectValue([
-        ValueField("schema", textValue(PRODUCT_FILE_APPLICATION_PLAN_SCHEMA)),
+        ValueField("schema", textValue(if (source.field("kind").isSome()) {
+            PRODUCT_PLUGIN_FILE_APPLICATION_PLAN_SCHEMA
+        } else { PRODUCT_FILE_APPLICATION_PLAN_SCHEMA })),
         ValueField("workspace_id", source.field("workspace_id").getOrThrow()),
-        ValueField("source", objectValue([
-            ValueField("root_operation_id", source.field("root_operation_id").getOrThrow()),
-            ValueField("program_id", source.field("program_id").getOrThrow()),
-            ValueField("program_digest", source.field("program_digest").getOrThrow())
-        ])),
+        ValueField("source", objectValue(persistedSource.toArray())),
         ValueField("patch_artifact", objectValue([
             ValueField("ref", textValue(patchArtifact.reference)),
             ValueField("sha256", textValue(patchArtifact.sha256)),
@@ -857,16 +691,7 @@ func applicationPlanObjectShape(
     allowed: Array<String>,
     required: Array<String>
 ): Bool {
-    if (value.unifiedKind != ValueKind.Object) { return false }
-    let seen = ArrayList<String>()
-    for (field in value.fields) {
-        if (!allowed.contains(field.name) || seen.contains(field.name)) { return false }
-        seen.add(field.name)
-    }
-    for (name in required) {
-        if (!seen.contains(name)) { return false }
-    }
-    true
+    agent_host_runtime.hostApplicationPlanObjectShape(value, allowed, required)
 }
 
 func applicationPlanRequiredText(value: AgentValue, name: String): Result<String> {
@@ -891,7 +716,7 @@ func applicationPlanRequiredText(value: AgentValue, name: String): Result<String
 func applicationPlanOptionalText(value: AgentValue, name: String): Result<?String> {
     let field = match (value.field(name)) {
         case Some(item) => item
-        case None => return Result.Ok(None)
+        case None => return Result.Ok(Option<String>.None)
     }
     if (field.unifiedKind != ValueKind.Text) {
         return applicationPlanError<?String>(
@@ -908,14 +733,15 @@ func applicationPlanError<T>(
     code: String,
     message: String
 ): Result<T> {
-    Result.Err(AgentError(kind, code, message))
+    agent_host_runtime.hostApplicationPlanError<T>(kind, code, message)
 }
 
 func canonicalizeProductFileApplicationPlan(
     context: ToolInvocationContext,
     call: ToolCall,
     workspace: LocalWorkspace,
-    artifacts: ProductArtifactStore
+    artifacts: ProductArtifactStore,
+    operationRuntime!: ?OperationRuntimePort = None
 ): Result<AgentValue> {
     let _ = context
     let rawArgumentShape = applicationPlanObjectShape(
@@ -942,6 +768,10 @@ func canonicalizeProductFileApplicationPlan(
     )) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
+    }
+    match (validatePluginApplicationPlanEvidence(stored, operationRuntime)) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
     }
     let operations = ArrayList<ProductFileApplicationOperation>()
     var totalContentBytes: Int64 = 0
@@ -1061,7 +891,8 @@ func loadProductStoredFileApplicationPlan(
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
     }
-    if (schema != PRODUCT_FILE_APPLICATION_PLAN_SCHEMA ||
+    if ((schema != PRODUCT_FILE_APPLICATION_PLAN_SCHEMA &&
+            schema != PRODUCT_PLUGIN_FILE_APPLICATION_PLAN_SCHEMA) ||
         planRef != PRODUCT_ARTIFACT_PREFIX + planDigest) {
         return applicationPlanError<ProductStoredFileApplicationPlan>(
             AgentErrorKind.Conflict,
@@ -1088,34 +919,9 @@ func loadProductStoredFileApplicationPlan(
             "the application plan source is missing"
         )
     }
-    if (!applicationPlanObjectShape(
-        source,
-        ["root_operation_id", "program_id", "program_digest"],
-        ["root_operation_id", "program_id", "program_digest"]
-    )) {
-        return applicationPlanError<ProductStoredFileApplicationPlan>(
-            AgentErrorKind.Conflict, "application_plan.source_invalid",
-            "the application plan source has an invalid structure"
-        )
-    }
-    let rootOperationId = match (applicationPlanRequiredText(source, "root_operation_id")) {
-        case Result.Ok(value) => value
+    match (validateStoredApplicationPlanSource(source, schema)) {
+        case Result.Ok(_) => ()
         case Result.Err(error) => return Result.Err(error)
-    }
-    let programRef = match (applicationPlanRequiredText(source, "program_id")) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    let programDigest = match (applicationPlanRequiredText(source, "program_digest")) {
-        case Result.Ok(value) => value
-        case Result.Err(error) => return Result.Err(error)
-    }
-    if (rootOperationId == "" || programDigest == "" ||
-        programRef != PRODUCT_ARTIFACT_PREFIX + programDigest) {
-        return applicationPlanError<ProductStoredFileApplicationPlan>(
-            AgentErrorKind.Conflict, "application_plan.source_invalid",
-            "the application plan source identity is incomplete or inconsistent"
-        )
     }
     let patchArtifact = match (plan.field("patch_artifact")) {
         case Some(value) => value
@@ -1247,7 +1053,8 @@ func canonicalizeProductFileRecoveryPlan(
     context: ToolInvocationContext,
     call: ToolCall,
     workspace: LocalWorkspace,
-    artifacts: ProductArtifactStore
+    artifacts: ProductArtifactStore,
+    operationRuntime!: ?OperationRuntimePort = None
 ): Result<AgentValue> {
     let _ = context
     let rawFields = ["plan_ref", "plan_digest"]
@@ -1271,6 +1078,10 @@ func canonicalizeProductFileRecoveryPlan(
     )) {
         case Result.Ok(value) => value
         case Result.Err(error) => return Result.Err(error)
+    }
+    match (validatePluginApplicationPlanEvidence(stored, operationRuntime)) {
+        case Result.Err(error) => return Result.Err(error)
+        case Result.Ok(_) => ()
     }
     let fields = ArrayList<ValueField>()
     for (field in stored.plan.fields) { fields.add(field) }
@@ -1825,10 +1636,12 @@ func productApplicationRiskRank(value: ApprovalRiskLevel): Int64 {
 class ProductFilePlanApplicationExecutor <: ToolExecutor {
     private let workspace: LocalWorkspace
     private let artifacts: ProductArtifactStore
+    private let operationRuntime: ?OperationRuntimePort
 
-    init(workspace: LocalWorkspace, artifacts: ProductArtifactStore) {
+    init(workspace: LocalWorkspace, artifacts: ProductArtifactStore, operationRuntime!: ?OperationRuntimePort = None) {
         this.workspace = workspace
         this.artifacts = artifacts
+        this.operationRuntime = operationRuntime
     }
 
     public func execute(
@@ -1836,6 +1649,14 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor {
         prepared: PreparedToolInvocation
     ): Result<ToolResult> {
         let arguments = prepared.operationPlan.canonicalArguments
+        let stored = match (loadProductStoredFileApplicationPlan(arguments, workspace, artifacts)) {
+            case Result.Ok(value) => value
+            case Result.Err(error) => return Result.Err(error)
+        }
+        match (validatePluginApplicationPlanEvidence(stored, operationRuntime)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
+        }
         let planRef = match (applicationPlanRequiredText(arguments, "plan_ref")) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
@@ -2031,10 +1852,12 @@ class ProductFilePlanApplicationExecutor <: ToolExecutor {
 class ProductFilePlanRecoveryExecutor <: ToolExecutor {
     private let workspace: LocalWorkspace
     private let artifacts: ProductArtifactStore
+    private let operationRuntime: ?OperationRuntimePort
 
-    init(workspace: LocalWorkspace, artifacts: ProductArtifactStore) {
+    init(workspace: LocalWorkspace, artifacts: ProductArtifactStore, operationRuntime!: ?OperationRuntimePort = None) {
         this.workspace = workspace
         this.artifacts = artifacts
+        this.operationRuntime = operationRuntime
     }
 
     public func execute(
@@ -2046,6 +1869,10 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
         )) {
             case Result.Ok(value) => value
             case Result.Err(error) => return Result.Err(error)
+        }
+        match (validatePluginApplicationPlanEvidence(stored, operationRuntime)) {
+            case Result.Err(error) => return Result.Err(error)
+            case Result.Ok(_) => ()
         }
         let results = ArrayList<AgentValue>()
         let pending = ArrayList<ProductFileApplicationOperation>()
@@ -2060,7 +1887,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
                 return Result.Ok(ToolResult(
                     prepared.call.callId,
                     productApplicationRecoveryOutput(
-                        "cancellation", stored, results.toArray(), None
+                        "cancellation", stored, results.toArray(), Option<AgentValue>.None
                     ),
                     isError: true
                 ))
@@ -2095,7 +1922,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
                         value.contentBytes
                     ))
                     results.add(productApplicationRecoveryItem(
-                        immutable, "not_started", None
+                        immutable, "not_started", Option<AgentError>.None
                     ))
                 case Result.Err(error) =>
                     match (productApplicationCurrentContent(
@@ -2104,7 +1931,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
                         case Result.Ok(current) =>
                             if (current == immutable.content) {
                                 results.add(productApplicationRecoveryItem(
-                                    immutable, "applied", None
+                                    immutable, "applied", Option<AgentError>.None
                                 ))
                             } else {
                                 conflicts += 1
@@ -2131,7 +1958,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
             return Result.Ok(ToolResult(
                 prepared.call.callId,
                 productApplicationRecoveryOutput(
-                    "unknown", stored, results.toArray(), None
+                    "unknown", stored, results.toArray(), Option<AgentValue>.None
                 ),
                 isError: true
             ))
@@ -2140,7 +1967,7 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
             return Result.Ok(ToolResult(
                 prepared.call.callId,
                 productApplicationRecoveryOutput(
-                    "conflict", stored, results.toArray(), None
+                    "conflict", stored, results.toArray(), Option<AgentValue>.None
                 ),
                 isError: true
             ))
@@ -2149,12 +1976,8 @@ class ProductFilePlanRecoveryExecutor <: ToolExecutor {
             None
         } else {
             let originalSource = stored.plan.field("source").getOrThrow()
-            let source = objectValue([
-                ValueField("root_operation_id", textValue(prepared.operationId.value)),
-                ValueField("program_id", originalSource.field("program_id").getOrThrow()),
-                ValueField("program_digest", originalSource.field("program_digest").getOrThrow()),
-                ValueField("workspace_id", stored.plan.field("workspace_id").getOrThrow())
-            ])
+            let source = productApplicationRecoverySource(originalSource,
+                stored.plan.field("workspace_id").getOrThrow(), prepared.operationId, context.runId)
             match (persistProductApplicationPlan(
                 source, pending.toArray(), artifacts
             )) {
@@ -2448,62 +2271,3 @@ func productApplicationUnknownOutcome(
     )
 }
 
-func productToolResultWithProgramValue(
-    original: ToolResult,
-    programValue: AgentValue
-): ToolResult {
-    let fields = ArrayList<ValueField>()
-    for (field in original.output.fields) {
-        if (field.name == "value") {
-            fields.add(ValueField("value", programValue))
-        } else {
-            fields.add(field)
-        }
-    }
-    ToolResult(
-        original.callId,
-        objectValue(fields.toArray()),
-        isError: original.isError,
-        receiptId: original.receiptId
-    )
-}
-
-func productApplicationPlanFailure(
-    original: ToolResult,
-    error: AgentError
-): ToolResult {
-    let fields = ArrayList<ValueField>()
-    var hasStatus = false
-    var hasValue = false
-    var hasCode = false
-    var hasMessage = false
-    if (original.output.unifiedKind == ValueKind.Object) {
-        for (field in original.output.fields) {
-            match (field.name) {
-                case "status" =>
-                    fields.add(ValueField("status", textValue("failed")))
-                    hasStatus = true
-                case "value" =>
-                    fields.add(ValueField("value", nullValue()))
-                    hasValue = true
-                case "error_code" =>
-                    fields.add(ValueField("error_code", textValue(error.code)))
-                    hasCode = true
-                case "error_message" =>
-                    fields.add(ValueField("error_message", textValue(error.message)))
-                    hasMessage = true
-                case _ => fields.add(field)
-            }
-        }
-    }
-    if (!hasStatus) { fields.add(ValueField("status", textValue("failed"))) }
-    if (!hasValue) { fields.add(ValueField("value", nullValue())) }
-    if (!hasCode) { fields.add(ValueField("error_code", textValue(error.code))) }
-    if (!hasMessage) { fields.add(ValueField("error_message", textValue(error.message))) }
-    ToolResult(
-        original.callId,
-        objectValue(fields.toArray()),
-        isError: true,
-        receiptId: original.receiptId
-    )
-}

@@ -1,5 +1,11 @@
 # 三模式网络隔离、统一执行与恢复语义
 
+> 历史实施计划：其中 Web Search 的宿主路径与旧 `web_search_contract` 已由
+> issue #45 的独立 `plugins/web_search` 和通用 HTTP 服务替代。当前配置、授权与
+> 验证范围见 [plugin-http-services](docs/plugin-http-services.md) 和
+> [逐项迁移记录](docs/plugin-first-migration.md)。当前定向门禁为
+> `python3 scripts/product_unit_gate.py --package agent_product --case-prefix PluginHttp`。
+
 ## Context
 
 合并本轮 Shell 网络计划与仓库中的 `网络隔离_PLAN.md`。用户已明确选择：**本次完整实现 restricted、proxy、trusted-host 三种模式**。这替代了较早的“本阶段不引入 proxy”，也替代了旧计划“移除所有宿主联网能力”。旧计划的 canonical 操作账本、域名网关、HTTPS read、恢复/对账、native 包装均在本次范围内。

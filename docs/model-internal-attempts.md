@@ -1,0 +1,15 @@
+# Internal model Attempts
+
+Status: implemented candidate, uncompiled and unexecuted. This change is part of issue #45 A6; it does not remove the old model adapter dependencies or complete A6.
+
+Approval review and context compaction use typed `InternalModelPurpose`. They enter the same `AgentCore`, Run budget, `model_attempts` table, installed-provider dispatch gate and resource owner as conversation model calls. They are not Tools and create no synthetic Operation, model Decision, or approval grant.
+
+Approval review requires the actual waiting-approval Run. Its neutral model input and exact parent Thread, Run, epoch, phase, context/lane hashes and sealed continuation digest/revision are captured in the existing audit stream. Attempt preparation, claiming and settlement verify this binding. The original continuation and pending Tool debt are never replaced by a running-model checkpoint. The decision transaction rejects an unsettled reviewer before it can consume the approval. A separately reopened repository therefore cannot race a live review into granting its Tool.
+
+Compaction admits a real zero-Tool maintenance Run with a host-origin SystemNote. It uses the normal active-Thread exclusion, Run budget, cancellation and settlement path; an active foreground Turn cannot be bypassed to create maintenance authority. The Run persists its own claimed Attempt and joins its real execution task and provider cleanup tasks. Missing OS cleanup acknowledgement remains recovery debt.
+
+Each charged internal request receives a distinct durable request identity. Dispatch can be claimed once. Persisted neutral input alone does not grant execution: the installed provider also requires the current Runtime owner, exact transcript and provider grant. Parent changes reject late results. Observed usage is retained in the existing Run usage facts and budget/error accounting even when the reply is rejected. Retrying requires a new charged Attempt and the existing bounded retry policy; partial, cancelled, or ambiguous replies do not gain automatic replay permission.
+
+A crash can leave an internal Attempt inspectable while its original approval remains byte-exact. This candidate does not implement automatic recovery or replay of that auxiliary request. An unsettled auxiliary Attempt blocks approval consumption and new model admission; cancellation/explicit recovery remains necessary. The existing untyped library-only `ControlledModelPort` helper remains for source compatibility, but cannot authorize an installed provider without a real claimed Attempt.
+
+Authored validation comprises 2 Domain cases and 12 Product/SQLite cases, including actual offline native-provider processes: maintenance and approval success, budget continuity, duplicate dispatch, wrong claim/request/epoch, changed parent before and after I/O, concurrent approval, cancelled/partial replies, and missing owner. All require actual execution before being reported as passing. No public provider, credential service, or internet endpoint is used by these fixtures.

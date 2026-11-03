@@ -302,26 +302,16 @@ class ProductGcRuntime {
             if (!options.apply) {
                 continue
             }
-            var candidateFailed = false
-            for (path in candidate.paths) {
-                try {
-                    if (removeIfExists(path)) {
-                        deleted++
-                    }
-                } catch (error: Exception) {
-                    candidateFailed = true
-                    errors.add(path + ": " + error.message)
-                }
-            }
-            if (!candidateFailed) {
-                try {
-                    database.execute(
-                        "DELETE FROM artifacts WHERE hash=" + sqliteText(candidate.hash)
-                    )
-                } catch (error: Exception) {
-                    errors.add(candidate.hash + ": " + error.message)
-                }
-            }
+            try {
+                // The preparation witness is committed through this same DB.
+                // Its last reference check and physical deletion must share
+                // an IMMEDIATE transaction; a second earlier scan plus mtime
+                // grace is insufficient when old content is reused by hash.
+                let result = database.transaction { transaction => deleteUnreferencedGcBlob(transaction, candidate) }
+                if (result.retained) { wouldDelete -= candidate.paths.size; bytes -= candidate.bytes }
+                deleted += result.deleted
+                errors.add(all: result.errors)
+            } catch (error: Exception) { errors.add(candidate.hash + ": " + error.message) }
         }
         Result.Ok(ProductBlobGcResult(
             referenced.size,
@@ -571,6 +561,12 @@ func collectGcThreads(
 }
 
 func collectRequiredBlobReferences(database: SqliteDatabase): GcBlobReferenceScan {
+    collectRequiredBlobReferencesWithQuery({ sql => database.query(sql) })
+}
+func collectRequiredBlobReferences(transaction: SqliteTransaction): GcBlobReferenceScan {
+    collectRequiredBlobReferencesWithQuery({ sql => transaction.query(sql) })
+}
+func collectRequiredBlobReferencesWithQuery(query: (String) -> Array<SqliteRow>): GcBlobReferenceScan {
     let references = ArrayList<String>()
     let generations = ArrayList<String>()
     let errors = ArrayList<String>()
@@ -596,7 +592,7 @@ func collectRequiredBlobReferences(database: SqliteDatabase): GcBlobReferenceSca
     ]
     try {
         for (sql in sources) {
-            for (row in database.query(sql)) {
+            for (row in query(sql)) {
                 let source = match (row[0]) { case Some(value) => value case None => "" }
                 extractBlobHashes(source, references)
             }
@@ -854,4 +850,23 @@ func gcReferenceScanError(
         "artifact deletion stopped because a required reference root could not be scanned: " + first,
         agentDir
     )
+}
+
+class GcBlobDeletion {
+    let retained: Bool
+    let deleted: Int64
+    let errors: Array<String>
+    init(retained: Bool, deleted: Int64, errors: Array<String>) { this.retained = retained; this.deleted = deleted; this.errors = errors }
+}
+func deleteUnreferencedGcBlob(transaction: SqliteTransaction, candidate: GcBlobCandidate): GcBlobDeletion {
+    let current = collectRequiredBlobReferences(transaction)
+    if (!current.errors.isEmpty()) { throw IllegalStateException("artifact references cannot be checked before deletion") }
+    if (containsGcString(current.references, candidate.hash)) { return GcBlobDeletion(true, 0, []) }
+    let errors = ArrayList<String>(); var deleted: Int64 = 0
+    for (path in candidate.paths) {
+        try { if (removeIfExists(path)) { deleted += 1 } }
+        catch (error: Exception) { errors.add(path + ": " + error.message) }
+    }
+    if (errors.isEmpty()) { transaction.execute("DELETE FROM artifacts WHERE hash=" + sqliteText(candidate.hash)) }
+    GcBlobDeletion(false, deleted, errors.toArray())
 }

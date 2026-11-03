@@ -7,7 +7,6 @@ import yjson.*
 import agent_domain.*
 import agent_core.*
 import agent_ports.*
-import model_adapters.*
 import tool_runtime.*
 import std.collection.*
 import std.sync.*
@@ -152,6 +151,7 @@ public class ApprovalReviewer {
             match (modelControl.executeInternal(
                 modelRequest,
                 InternalModelCallOptions(
+                        purpose: if (standaloneAccounting) { Option<InternalModelPurpose>.None } else { Some(InternalModelPurpose.ApprovalReview) },
                     timeoutMillis: settings.timeoutMillis,
                     maxAttempts: if (runRequest.autoRetry) { 2 } else { 1 },
                     parent: Some(runRequest),

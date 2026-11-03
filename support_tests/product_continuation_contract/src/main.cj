@@ -198,12 +198,12 @@ main(): Int64 {
                 " WHERE run_id='product-restart-run'"
         )
         database.close()
-        product.closeMcp().value().getOrThrow()
+        product.close().value().getOrThrow()
 
         let rebuilt = openProduct(config: config).value().getOrThrow()
         let continuation = rebuilt.pendingContinuation(sessionId)
             .value().getOrThrow().getOrThrow()
-        let restored = rebuilt.continuationRequest(continuation, None)
+        let restored = rebuilt.continuationRequest(continuation, None).value().getOrThrow()
         expect(
             restored.runId.value == runId.value &&
                 restored.sessionId.value == sessionId.value &&
@@ -220,7 +220,29 @@ main(): Int64 {
                 restored.toolContext.workspaceRoot == root + "/workspace",
             "product restart restores image, structured output, cache, parallel calls, and fresh ToolContext"
         )
-        rebuilt.closeMcp().value().getOrThrow()
+        let oldSchema = continuation.contextSnapshotPayload.field("schema").getOrThrow().text
+        continuation.contextSnapshotPayload.put("schema", textValue("axyndra.run-context/unsupported"))
+        let invalid = rebuilt.continuationRequest(continuation, None)
+        expect(invalid.isError() && invalid.error().getOrThrow().code == "context.snapshot_unsupported_or_invalid",
+            "public Product continuation decoder returns a typed unsupported context error")
+        let corrupted = SqliteDatabase(root + "/state/state.db")
+        let stored = SqliteRunRepository(corrupted)
+        stored.saveContinuation(continuation).value().getOrThrow()
+        let preserved = corrupted.query("SELECT payload FROM run_continuations WHERE run_id='product-restart-run'")[0].required(0)
+        let approvalCount = corrupted.scalarInt("SELECT COUNT(*) FROM approvals")
+        let application = rebuilt.applicationSession(sessionId: Some(sessionId))
+        let refused = application.submit("must not replace unsupported continuation")
+        expect(refused.isError() && refused.error().getOrThrow().code == "context.snapshot_unsupported_or_invalid" &&
+            rebuilt.fixtureProbe.getOrThrow().lastRequest.isNone(),
+            "Application construction survives invalid stored context and refuses startup without provider IO")
+        expect(application.resumeStartup().isError() &&
+            corrupted.scalarInt("SELECT COUNT(*) FROM approvals") == approvalCount &&
+            corrupted.query("SELECT payload FROM run_continuations WHERE run_id='product-restart-run'")[0].required(0) == preserved,
+            "repeated startup preserves pending approval and exact historical bytes")
+        continuation.contextSnapshotPayload.put("schema", textValue(oldSchema))
+        stored.saveContinuation(continuation).value().getOrThrow()
+        corrupted.close()
+        rebuilt.close().value().getOrThrow()
         startupRecoveryNeverFallsBackToStartContract(root)
         println("product continuation contract passed")
         0
@@ -239,7 +261,7 @@ func startupRecoveryNeverFallsBackToStartContract(root: String): Unit {
         asyncEnabled: false
     )
     let initialized = openProduct(config: config).value().getOrThrow()
-    initialized.closeMcp().value().getOrThrow()
+    initialized.close().value().getOrThrow()
 
     let runId = RunId("startup-recovery-run")
     let sessionId = SessionId("startup-recovery-session")
@@ -317,7 +339,7 @@ func startupRecoveryNeverFallsBackToStartContract(root: String): Unit {
         case Result.Ok(_) => false
     } && recovered.fixtureProbe.getOrThrow().lastRequest.isNone(),
         "failed startup recovery remains fail-closed without a later start fallback")
-    recovered.closeMcp().value().getOrThrow()
+    recovered.close().value().getOrThrow()
 }
 
 func expect(condition: Bool, message: String): Unit {

@@ -218,6 +218,13 @@ public class MemoryRunRepository <: RunRepository {
     ): Result<Unit> {
         lock.lock()
         try {
+            if (continuation.kind != RunContinuationKind.RunningModel) {
+                return memoryConflict<Unit>("model attempt continuation is not running")
+            }
+            let nextCheckpoint = match (continuation.runningModel) {
+                case Some(value) => value
+                case None => return memoryConflict<Unit>("model attempt continuation has no checkpoint")
+            }
             let value = match (record(attempt.runId.value)) {
                 case Some(item) => item
                 case None => return missingMemoryValue<Unit>("run", attempt.runId.value)
@@ -229,33 +236,69 @@ public class MemoryRunRepository <: RunRepository {
                 }
                 attemptExists = true
             }
-            if (value.continuationValue.isSome() &&
-                !sameContinuationBinding(value.continuationValue.getOrThrow(), continuation)) {
-                let previous = value.continuationValue.getOrThrow()
-                let approvedTransition = previous.kind == RunContinuationKind.WaitingApproval &&
-                    continuation.kind == RunContinuationKind.RunningModel &&
-                    sameContinuationRequestBinding(previous, continuation) && match (decisionRecord(
-                        previous.approval.operationId.value
-                    )) {
-                        case Some(receipt) =>
-                            continuationAcceptsDecision(previous, receipt)
-                        case None => false
-                    }
-                if (!approvedTransition) {
-                    let previousCheckpoint = match (previous.runningModel) {
-                        case Some(item) => item
-                        case None => return memoryConflict<Unit>("model continuation changed concurrently")
-                    }
-                    if (match (attempt.parentAttemptId) {
-                        case Some(parent) => parent.value != previousCheckpoint.activeAttemptId.value
-                        case None => true
-                    } || previousCheckpoint.semanticRequestId.value !=
-                        continuation.runningModel.getOrThrow().semanticRequestId.value ||
-                        previousCheckpoint.semanticRequestDigest !=
-                        continuation.runningModel.getOrThrow().semanticRequestDigest) {
-                        return memoryConflict<Unit>("model continuation changed concurrently")
+            match (value.continuationValue) {
+                case Some(previous) => if (!sameContinuationBinding(previous, continuation)) {
+                    let approvedTransition = previous.kind == RunContinuationKind.WaitingApproval &&
+                        continuation.kind == RunContinuationKind.RunningModel &&
+                        sameContinuationRequestBinding(previous, continuation) && match (decisionRecord(
+                            previous.approval.operationId.value
+                        )) {
+                            case Some(receipt) =>
+                                continuationAcceptsDecision(previous, receipt)
+                            case None => false
+                        }
+                    if (!approvedTransition) {
+                        let previousCheckpoint = match (previous.runningModel) {
+                            case Some(item) => item
+                            case None => return memoryConflict<Unit>(
+                                "model continuation changed concurrently"
+                            )
+                        }
+                        let parentIdMatches = match (attempt.parentAttemptId) {
+                            case Some(parent) => parent.value == previousCheckpoint.activeAttemptId.value
+                            case None => false
+                        }
+                        if (!parentIdMatches ||
+                            previousCheckpoint.semanticRequestId.value !=
+                                nextCheckpoint.semanticRequestId.value) {
+                            return memoryConflict<Unit>("model continuation changed concurrently")
+                        }
+                        if (previousCheckpoint.semanticRequestDigest !=
+                            nextCheckpoint.semanticRequestDigest ||
+                            previousCheckpoint.wirePolicyDigest != nextCheckpoint.wirePolicyDigest) {
+                            if (!sameContinuationRecoveryRequestBinding(previous, continuation) ||
+                                !memoryAttemptCheckpointAligned(
+                                    attempt, continuation.runId, nextCheckpoint
+                                )) {
+                                return memoryConflict<Unit>(
+                                    "output-limit recovery request binding changed"
+                                )
+                            }
+                            var storedParent: ?DurableModelAttempt = None
+                            for (existing in value.attempts where
+                                existing.id.value == previousCheckpoint.activeAttemptId.value) {
+                                storedParent = Some(existing)
+                            }
+                            let parent = match (storedParent) {
+                                case Some(item) => item
+                                case None => return memoryRecoveryRequired<Unit>(
+                                    previousCheckpoint.activeAttemptId.value,
+                                    "output-limit recovery parent Attempt is missing"
+                                )
+                            }
+                            match (exactOutputLimitRecoveryBoundary(
+                                previous, continuation, attempt, parent
+                            )) {
+                                case Result.Ok(true) => ()
+                                case Result.Ok(false) => return memoryConflict<Unit>(
+                                    "model continuation changed concurrently"
+                                )
+                                case Result.Err(error) => return Result.Err(error)
+                            }
+                        }
                     }
                 }
+                case None => ()
             }
             if (!value.eventValues.isEmpty() &&
                 event.sequence != value.eventValues[value.eventValues.size - 1].sequence + 1) {
@@ -585,6 +628,19 @@ func agentValuesEqual(left: AgentValue, right: AgentValue): Bool {
             true
     }
 }
+func memoryAttemptCheckpointAligned(
+    attempt: DurableModelAttempt,
+    runId: RunId,
+    checkpoint: RunningModelCheckpoint
+): Bool {
+    attempt.runId.value == runId.value &&
+        attempt.id.value == checkpoint.activeAttemptId.value &&
+        attempt.semanticRequestId.value == checkpoint.semanticRequestId.value &&
+        attempt.semanticRequestDigest == checkpoint.semanticRequestDigest &&
+        attempt.wirePolicyDigest == checkpoint.wirePolicyDigest &&
+        attempt.providerRequestId == checkpoint.stableRequestId
+}
+
 
 func sameContinuationBinding(left: RunContinuation, right: RunContinuation): Bool {
     left.kind == right.kind && sameContinuationRequestBinding(left, right) &&
@@ -607,13 +663,38 @@ func sameContinuationRequestBinding(left: RunContinuation, right: RunContinuatio
         left.resolverVersion == right.resolverVersion &&
         left.contextWindow == right.contextWindow &&
         left.providerSafetyMargin == right.providerSafetyMargin &&
-        agentValuesEqual(left.skillStackPayload, right.skillStackPayload) &&
+        agentValuesEqual(left.contextSnapshotPayload, right.contextSnapshotPayload) &&
         agentValuesEqual(left.toolContextPayload, right.toolContextPayload) &&
         sameRequestedPolicy(left.requestedPolicy, right.requestedPolicy) &&
         sameCapabilitiesSnapshot(
             left.modelCapabilitiesSnapshot, right.modelCapabilitiesSnapshot
         )
 }
+func sameContinuationRecoveryRequestBinding(
+    left: RunContinuation,
+    right: RunContinuation
+): Bool {
+    sameContinuationRequestBinding(left, right) &&
+        left.executionLaneId.value == right.executionLaneId.value &&
+        sameContinuationImageInputs(left.imageInputs, right.imageInputs)
+}
+
+func sameContinuationImageInputs(
+    left: Array<ModelImage>,
+    right: Array<ModelImage>
+): Bool {
+    if (left.size != right.size) { return false }
+    for (index in 0..left.size) {
+        let a = left[index]
+        let b = right[index]
+        if (a.sourceKind != b.sourceKind || a.data != b.data ||
+            a.mediaType != b.mediaType || a.detail != b.detail) {
+            return false
+        }
+    }
+    true
+}
+
 
 func approvedContinuationTransition(
     previous: RunContinuation,

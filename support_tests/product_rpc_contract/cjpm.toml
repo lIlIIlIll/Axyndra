@@ -8,6 +8,7 @@
   link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_store" = { path = "../../agent_store", output-type = "static" }
   "yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_cli" = { path = "../../agent_cli", output-type = "static" }

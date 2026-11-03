@@ -16,10 +16,12 @@
   "agent_product" = { path = "../../agent_product", output-type = "static" }
   "agent_ports" = { path = "../../agent_ports", output-type = "static" }
   "agent_extension_runtime" = { path = "../../agent_extension_runtime", output-type = "static" }
-  "agent_skills" = { path = "../../agent_skills", output-type = "static" }
   "agent_store" = { path = "../../agent_store", output-type = "static" }
   "agent_runtime" = { path = "../../agent_runtime", output-type = "static" }
   "model_adapters" = { path = "../../model_adapters", output-type = "static" }
   "process4cj" = { path = "../../libs/process4cj", output-type = "static" }
   "tool_runtime" = { path = "../../tool_runtime", output-type = "static" }
   "agent_testkit" = { path = "../../agent_testkit", output-type = "static" }
+  "workspace_legacy_oracle" = { path = "../workspace_legacy_oracle", output-type = "static" }
+  "program_native_contract" = { path = "../program_native_contract", output-type = "static" }
+  "shell_readonly_native_contract" = { path = "../shell_readonly_native_contract", output-type = "static" }

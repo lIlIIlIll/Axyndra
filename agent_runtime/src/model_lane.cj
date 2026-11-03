@@ -7,6 +7,7 @@ import yjson.*
 import std.deriving.*
 import std.collection.*
 import std.convert.*
+import std.sync.*
 import agent_domain.*
 
 @Derive[Equatable]
@@ -127,13 +128,15 @@ public class ToolHookHandlerSnapshot {
 
 public class ToolSetSnapshot {
     public let id: String
+    public let threadId: ?ThreadId
     public let entries: Array<ToolSnapshotEntry>
     public let hookHandlers: Array<ToolHookHandlerSnapshot>
 
     public init(
         id: String,
         entries: Array<ToolSnapshotEntry>,
-        hookHandlers!: Array<ToolHookHandlerSnapshot> = []
+        hookHandlers!: Array<ToolHookHandlerSnapshot> = [],
+        threadId!: ?ThreadId = None
     ) {
         if (id.trimAscii() == "") {
             throw IllegalArgumentException("tool-set snapshot id must not be empty")
@@ -153,24 +156,93 @@ public class ToolSetSnapshot {
             throw IllegalArgumentException("tool-set snapshot exceeds the per-event hook limit")
         }
         this.id = id.trimAscii()
+        this.threadId = threadId
         this.entries = entries
         this.hookHandlers = hookHandlers
     }
 }
 public class ModelLane {
     public let role: ModelLaneRole
-    public let providerId: String
-    public let modelId: String
-    public let protocol: String
-    public let capabilities: ModelLaneCapabilitiesSnapshot
+    private var providerIdData159: String
+    public prop providerId: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); providerIdData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private var modelIdData159: String
+    public prop modelId: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); modelIdData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private var protocolData159: String
+    public prop protocol: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); protocolData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private var capabilitiesData159: ?ModelLaneCapabilitiesSnapshot
+    public prop capabilities: ModelLaneCapabilitiesSnapshot {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); capabilitiesData159.getOrThrow() }
+            finally { metadataLock159.unlock() }
+        }
+    }
     public let contextWindow: Int64
     public let outputReserve: Int64
     public let providerSafetyMargin: Int64
-    public let estimatorId: String
-    public let retryPolicyId: String
-    public let cachePolicyId: String
-    public let toolSet: ToolSetSnapshot
-    public let systemInstructionVersion: String
+    private var estimatorIdData159: String
+    public prop estimatorId: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); estimatorIdData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private var retryPolicyIdData159: String
+    public prop retryPolicyId: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); retryPolicyIdData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private var cachePolicyIdData159: String
+    public prop cachePolicyId: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); cachePolicyIdData159 } finally { metadataLock159.unlock() }
+        }
+    }
+    private let toolDataLock159 = Mutex()
+    private let metadataLock159 = Mutex()
+    private var rawToolSet159: ?ToolSetSnapshot
+    private var modelLaneFrameReturned159 = false
+    private let historicalLaneEscaped159 = AtomicBool(false)
+    private var ownedToolSet159: ?SharedToolSetSnapshot159
+    private var metadataCustody159: ?ModelLaneMetadataCustody159 = None<ModelLaneMetadataCustody159>
+    // Compatibility export is explicit Held. Production closed consumers below
+    // do not use this getter; remaining raw serializers are still being migrated.
+    public prop toolSet: ToolSetSnapshot {
+        get() {
+            toolDataLock159.lock()
+            try {
+                match (rawToolSet159) {
+                    case Some(value) => value
+                    case None => ownedToolSet159.getOrThrow().exportHistoricalSnapshot159()
+                }
+            } finally { toolDataLock159.unlock() }
+        }
+    }
+    private var systemInstructionVersionData159: String
+    public prop systemInstructionVersion: String {
+        get() {
+            metadataLock159.lock()
+            try { requireModelLaneFrame159(); systemInstructionVersionData159 } finally { metadataLock159.unlock() }
+        }
+    }
 
     public init(
         role: ModelLaneRole,
@@ -203,20 +275,254 @@ public class ModelLane {
             }
         }
         this.role = role
-        this.providerId = providerId.trimAscii()
-        this.modelId = modelId.trimAscii()
-        this.protocol = protocol.trimAscii()
-        this.capabilities = capabilities
+        this.providerIdData159 = providerId.trimAscii()
+        this.modelIdData159 = modelId.trimAscii()
+        this.protocolData159 = protocol.trimAscii()
+        this.capabilitiesData159 = Some(capabilities)
         this.contextWindow = contextWindow
         this.outputReserve = outputReserve
         this.providerSafetyMargin = providerSafetyMargin
-        this.estimatorId = estimatorId.trimAscii()
-        this.retryPolicyId = retryPolicyId.trimAscii()
-        this.cachePolicyId = cachePolicyId.trimAscii()
-        this.toolSet = toolSet
-        this.systemInstructionVersion = systemInstructionVersion.trimAscii()
+        this.estimatorIdData159 = estimatorId.trimAscii()
+        this.retryPolicyIdData159 = retryPolicyId.trimAscii()
+        this.cachePolicyIdData159 = cachePolicyId.trimAscii()
+        this.rawToolSet159 = Some(toolSet)
+        this.ownedToolSet159 = None<SharedToolSetSnapshot159>
+        this.systemInstructionVersionData159 = systemInstructionVersion.trimAscii()
     }
 
+    init(
+        role: ModelLaneRole,
+        providerId: String,
+        modelId: String,
+        protocol: String,
+        capabilities: ModelLaneCapabilitiesSnapshot,
+        contextWindow: Int64,
+        outputReserve: Int64,
+        providerSafetyMargin: Int64,
+        estimatorId: String,
+        retryPolicyId: String,
+        cachePolicyId: String,
+        toolSet: SharedToolSetSnapshot159,
+        systemInstructionVersion: String,
+        metadataCustody159: ModelLaneMetadataCustody159
+    ) {
+        for (value in [
+            providerId, modelId, protocol, estimatorId, retryPolicyId,
+            cachePolicyId, systemInstructionVersion
+        ] where value.trimAscii() == "") {
+            throw IllegalArgumentException("model lane identity fields must not be empty")
+        }
+        if (contextWindow < 1 || outputReserve < 1 || providerSafetyMargin < 0 ||
+            outputReserve + providerSafetyMargin >= contextWindow) {
+            throw IllegalArgumentException("model lane token budget is invalid")
+        }
+        if (!capabilities.tools) {
+            if (toolSet.hasAvailableTools159()) {
+                throw IllegalArgumentException("tool-free model lane cannot expose tools")
+            }
+        }
+        this.role = role
+        this.providerIdData159 = String.fromUtf8(providerId.trimAscii().toArray())
+        this.modelIdData159 = String.fromUtf8(modelId.trimAscii().toArray())
+        this.protocolData159 = String.fromUtf8(protocol.trimAscii().toArray())
+        this.capabilitiesData159 = Some(ModelLaneCapabilitiesSnapshot(
+            streaming: capabilities.streaming, tools: capabilities.tools, reasoning: capabilities.reasoning,
+            structuredOutput: capabilities.structuredOutput, imageInput: capabilities.imageInput,
+            promptCache: capabilities.promptCache, providerOpaqueState: capabilities.providerOpaqueState))
+        this.contextWindow = contextWindow
+        this.outputReserve = outputReserve
+        this.providerSafetyMargin = providerSafetyMargin
+        this.estimatorIdData159 = String.fromUtf8(estimatorId.trimAscii().toArray())
+        this.retryPolicyIdData159 = String.fromUtf8(retryPolicyId.trimAscii().toArray())
+        this.cachePolicyIdData159 = String.fromUtf8(cachePolicyId.trimAscii().toArray())
+        this.rawToolSet159 = None<ToolSetSnapshot>
+        this.ownedToolSet159 = Some(toolSet)
+        this.metadataCustody159 = Some(metadataCustody159)
+        this.systemInstructionVersionData159 = String.fromUtf8(systemInstructionVersion.trimAscii().toArray())
+    }
+
+    private func requireModelLaneFrame159(): Unit {
+        if (modelLaneFrameReturned159) { throw IllegalStateException("owned ModelLane frame has returned") }
+    }
+    // A typed SDK/Runtime consumer gets independent prepaid metadata copies
+    // and its own snapshot share. The legacy unowned fixture returns None.
+    func hasOwnedLaneFrame159(): Bool {
+        toolDataLock159.lock()
+        try { ownedToolSet159.isSome() && metadataCustody159.isSome() }
+        finally { toolDataLock159.unlock() }
+    }
+    public func forkOwnedLaneFrame159(): ?ModelLane {
+        toolDataLock159.lock()
+        try {
+            requireModelLaneFrame159()
+            match (ownedToolSet159) {
+                case Some(value) => Some(modelLaneWithSharedToolSet159(role, providerIdData159,
+                    modelIdData159, protocolData159, capabilitiesData159.getOrThrow(), contextWindow,
+                    outputReserve, providerSafetyMargin, estimatorIdData159, retryPolicyIdData159,
+                    cachePolicyIdData159, value, systemInstructionVersionData159))
+                case None => None<ModelLane>
+            }
+        } finally { toolDataLock159.unlock() }
+    }
+    // Explicit DATA frame return, never called by Runtime.finish or a generic
+    // callback. All actual consumers must first clear their raw field aliases.
+    // Historical DOM serializers may retain provider/policy Strings as well
+    // as the tool graph. Their metadata payment is not an implicit frame ACK.
+    func markHistoricalLaneExport159(): Unit { historicalLaneEscaped159.store(true) }
+    public func returnOwnedLaneFrame159(): Unit {
+        let returned = clearOwnedLaneFrame159()
+        match (returned[0]) { case Some(value) => value.close159(); case None => () }
+        match (returned[1]) { case Some(value) => value.returnMetadataFrame159(); case None => () }
+    }
+    private func clearOwnedLaneFrame159(): (?SharedToolSetSnapshot159, ?ModelLaneMetadataCustody159) {
+        toolDataLock159.lock()
+        try {
+            if (modelLaneFrameReturned159 || ownedToolSet159.isNone()) {
+                return (None<SharedToolSetSnapshot159>, None<ModelLaneMetadataCustody159>) }
+            let returned = ownedToolSet159
+            ownedToolSet159 = None<SharedToolSetSnapshot159>
+            rawToolSet159 = None<ToolSetSnapshot>
+            var metadata: ?ModelLaneMetadataCustody159 = None<ModelLaneMetadataCustody159>
+            metadataLock159.lock()
+            try {
+                if (!historicalLaneEscaped159.load()) {
+                    providerIdData159 = ""; modelIdData159 = ""; protocolData159 = ""
+                    estimatorIdData159 = ""; retryPolicyIdData159 = ""; cachePolicyIdData159 = ""
+                    systemInstructionVersionData159 = ""; capabilitiesData159 = None<ModelLaneCapabilitiesSnapshot>
+                    metadata = metadataCustody159; metadataCustody159 = None<ModelLaneMetadataCustody159>
+                }
+                // Unknown raw String aliases keep their separately paid
+                // metadata owner, but cannot retain the unrelated tool graph.
+                modelLaneFrameReturned159 = true
+            } finally { metadataLock159.unlock() }
+            (returned, metadata)
+        } finally { toolDataLock159.unlock() }
+    }
+    public func snapshotEqualsLane159(expected: ModelLane): Bool {
+        let first = ownedSnapshotValue159()
+        match (first) {
+            case Some(actual) =>
+                let second = expected.ownedSnapshotValue159()
+                match (second) {
+                    case Some(other) =>
+                        let answer = modelLaneEqualClosedFrame159(actual, other)
+                        actual.recordClosedComparisonReturned159(); other.recordClosedComparisonReturned159()
+                        modelLaneReturnedPayments159(other.detachReturnedFrame159())
+                        modelLaneReturnedPayments159(actual.detachReturnedFrame159())
+                        answer
+                    case None =>
+                        // The historical public lane remains an explicitly
+                        // unowned fixture path; do not mint a replacement bank.
+                        let answer = modelLaneEqualLegacyFrame159(actual, expected)
+                        actual.recordClosedComparisonReturned159()
+                        modelLaneReturnedPayments159(actual.detachReturnedFrame159())
+                        answer
+                }
+            case None => canonicalAgentValue(modelLaneSnapshotValue(this)) == canonicalAgentValue(modelLaneSnapshotValue(expected))
+        }
+    }
+    public func continuationLaunchDigestEquals159(context: AgentValue, budget: AgentValue, expected: String): Bool {
+        match (ownedSnapshotValue159()) {
+            case Some(input) =>
+                let result = modelLaneContinuationDigestFrame159(input, context, budget, expected)
+                input.recordClosedComparisonReturned159()
+                modelLaneReturnedPayments159(input.detachReturnedFrame159())
+                result
+            case None => continuationRunLaunchDigest(modelLaneSnapshotValue(this), context, budget) == expected
+        }
+    }
+    public func snapshotDigestEquals159(expected: String): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) {
+                case Some(value) => value.laneDigestEquals159(this, expected)
+                case None => modelPolicySha256Text(canonicalAgentValue(modelLaneSnapshotFrame159(this, rawToolSet159.getOrThrow()))) == expected
+            }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func legacyToolSetSnapshot159(): ?ToolSetSnapshot {
+        toolDataLock159.lock()
+        try { rawToolSet159 } finally { toolDataLock159.unlock() }
+    }
+    public func forkOwnedToolSetSnapshot159(): ?SharedToolSetSnapshot159 {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.fork159())
+                case None => None<SharedToolSetSnapshot159> }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func hasAvailableTools159(): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => return value.hasAvailableTools159(); case None => () }
+            for (entry in rawToolSet159.getOrThrow().entries where entry.availableAtSnapshot) { return true }
+            false
+        } finally { toolDataLock159.unlock() }
+    }
+    public func hasNoToolEntriesOrHooks159(): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => value.hasNoEntriesOrHooks159()
+                case None => rawToolSet159.getOrThrow().entries.isEmpty() && rawToolSet159.getOrThrow().hookHandlers.isEmpty() }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func permitsToolThread159(thread: ThreadId): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => return value.permitsThread159(thread); case None => () }
+            match (rawToolSet159.getOrThrow().threadId) { case Some(value) => value.value == thread.value; case None => true }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func hasCompleteToolIdentities159(): Bool {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => return value.hasCompleteIdentities159(); case None => () }
+            for (entry in rawToolSet159.getOrThrow().entries where !entry.hasCompleteIdentity()) { return false }
+            true
+        } finally { toolDataLock159.unlock() }
+    }
+    public func estimateSystemInstructions159(estimator: ThreadTokenEstimator): Int64 {
+        match (estimator) { case _: ConservativeThreadTokenEstimator => ()
+            case _ => markHistoricalLaneExport159() }
+        estimator.estimateSystemInstructions(systemInstructionVersion)
+    }
+    public func estimateToolSet159(estimator: ThreadTokenEstimator): Int64 {
+        // Unknown estimators can reenter the lane as well as retain its input.
+        // Export under the lock, then release it before invoking arbitrary code.
+        let historical: ToolSetSnapshot
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) {
+                case Some(value) => match (estimator) {
+                    case _: ConservativeThreadTokenEstimator => return value.estimateConservativeTokens159()
+                    case _ => historical = value.exportHistoricalSnapshot159()
+                }
+                case None => historical = rawToolSet159.getOrThrow()
+            }
+        } finally { toolDataLock159.unlock() }
+        estimator.estimateToolSet(historical)
+    }
+    public func ownedModelTools159(): ?OwnedModelTools159 {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.copyOwnedModelTools159())
+                case None => None<OwnedModelTools159> }
+        } finally { toolDataLock159.unlock() }
+    }
+    public func ownedManifestCatalog159(): ?OwnedToolCatalogValue159 {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.manifestCatalog159())
+                case None => None<OwnedToolCatalogValue159> }
+        } finally { toolDataLock159.unlock() }
+    }
+    func ownedSnapshotValue159(): ?OwnedModelLaneSnapshot159 {
+        toolDataLock159.lock()
+        try {
+            match (ownedToolSet159) { case Some(value) => Some(value.modelLaneSnapshot159(this))
+                case None => None<OwnedModelLaneSnapshot159> }
+        } finally { toolDataLock159.unlock() }
+    }
     public func maxEstimatedInput(): Int64 {
         contextWindow - outputReserve - providerSafetyMargin
     }
@@ -263,8 +569,15 @@ public class RunModelUsageSample {
 // Provider DTOs are deliberately excluded. This is the immutable semantic
 // snapshot needed to explain and recover a Run after configuration changes.
 public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
+    // Existing raw API explicitly retains historical aliases. The installed
+    // TurnStarted path uses its own paid, non-exported snapshot loan instead.
+    lane.markHistoricalLaneExport159()
+    modelLaneSnapshotFrame159(lane, lane.toolSet)
+}
+
+func modelLaneSnapshotFrame159(lane: ModelLane, snapshot: ToolSetSnapshot): AgentValue {
     let tools = ArrayList<AgentValue>()
-    for (entry in lane.toolSet.entries) {
+    for (entry in snapshot.entries) {
         let capabilities = ArrayList<AgentValue>()
         for (capability in entry.requiredCapabilities) {
             capabilities.add(objectValue([
@@ -284,7 +597,7 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
         ]))
     }
     let hooks = ArrayList<AgentValue>()
-    for (handler in lane.toolSet.hookHandlers) {
+    for (handler in snapshot.hookHandlers) {
         hooks.add(objectValue([
             ValueField("event", textValue(handler.event)),
             ValueField("plugin_id", textValue(handler.pluginId)),
@@ -296,7 +609,7 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
             ValueField("timeout_millis", integerValue(handler.timeoutMillis))
         ]))
     }
-    objectValue([
+    let fields = ArrayList<ValueField>([
         ValueField("role", textValue(modelLaneRoleName(lane.role))),
         ValueField("provider_id", textValue(lane.providerId)),
         ValueField("model_id", textValue(lane.modelId)),
@@ -316,11 +629,16 @@ public func modelLaneSnapshotValue(lane: ModelLane): AgentValue {
         ValueField("estimator_id", textValue(lane.estimatorId)),
         ValueField("retry_policy_id", textValue(lane.retryPolicyId)),
         ValueField("cache_policy_id", textValue(lane.cachePolicyId)),
-        ValueField("tool_set_id", textValue(lane.toolSet.id)),
+        ValueField("tool_set_id", textValue(snapshot.id)),
         ValueField("tools", listValue(tools.toArray())),
         ValueField("hooks", listValue(hooks.toArray())),
         ValueField("system_instruction_version", textValue(lane.systemInstructionVersion))
     ])
+    match (snapshot.threadId) {
+        case Some(value) => fields.add(ValueField("tool_set_thread_id", textValue(value.value)))
+        case None => ()
+    }
+    objectValue(fields.toArray())
 }
 
 public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
@@ -390,7 +708,12 @@ public func modelLaneFromSnapshotValue(value: AgentValue): ModelLane {
         laneTextField(value, "cache_policy_id"),
         ToolSetSnapshot(
             laneTextField(value, "tool_set_id"), tools.toArray(),
-            hookHandlers: hooks.toArray()
+            hookHandlers: hooks.toArray(),
+            threadId: match (value.field("tool_set_thread_id")) {
+                case Some(field) => if (field.unifiedKind == ValueKind.Text) { Some(ThreadId(field.text)) }
+                    else { throw IllegalStateException("tool snapshot Thread must be a nonempty identifier") }
+                case None => None
+            }
         ),
         laneTextField(value, "system_instruction_version")
     )
@@ -506,4 +829,68 @@ func laneIntField(value: AgentValue, name: String): Int64 {
     try { Int64.parse(item.asNumberText()) } catch (_: Exception) {
         throw IllegalStateException("ModelLane snapshot field is not an integer: " + name)
     }
+}
+
+private func modelLaneMetadataText159(total: Int64, value: String): Int64 {
+    if (value.size > (Int64.Max - total - 1024) / 32) {
+        throw IllegalStateException("model lane metadata invoice overflow")
+    }
+    total + 1024 + value.size * 32
+}
+public func modelLaneWithSharedToolSet159(role: ModelLaneRole, providerId: String,
+    modelId: String, protocol: String, capabilities: ModelLaneCapabilitiesSnapshot,
+    contextWindow: Int64, outputReserve: Int64, providerSafetyMargin: Int64,
+    estimatorId: String, retryPolicyId: String, cachePolicyId: String,
+    toolSet: SharedToolSetSnapshot159, systemInstructionVersion: String): ModelLane {
+    var invoice: Int64 = 16384
+    invoice = modelLaneMetadataText159(invoice, providerId)
+    invoice = modelLaneMetadataText159(invoice, modelId)
+    invoice = modelLaneMetadataText159(invoice, protocol)
+    invoice = modelLaneMetadataText159(invoice, estimatorId)
+    invoice = modelLaneMetadataText159(invoice, retryPolicyId)
+    invoice = modelLaneMetadataText159(invoice, cachePolicyId)
+    invoice = modelLaneMetadataText159(invoice, systemInstructionVersion)
+    let metadata = ModelLaneMetadataCustody159(toolSet.deriveLaneMetadata159(invoice))
+    let owned = toolSet.fork159()
+    // Both payments precede their carriers/copies. Failure remains reachable
+    // in the registered metadata owner, never an automatic refund.
+    let value = ModelLane(role, providerId, modelId, protocol, capabilities, contextWindow,
+        outputReserve, providerSafetyMargin, estimatorId, retryPolicyId,
+        cachePolicyId, owned, systemInstructionVersion, metadata)
+    metadata.bind159(value)
+    value
+}
+
+private func modelLaneEqualClosedFrame159(first: OwnedModelLaneSnapshot159, second: OwnedModelLaneSnapshot159): Bool {
+    first.reserveCopy159(); second.reserveCopy159()
+    canonicalAgentValue(first.value159()) == canonicalAgentValue(second.value159())
+}
+private func modelLaneEqualLegacyFrame159(first: OwnedModelLaneSnapshot159, second: ModelLane): Bool {
+    first.reserveCopy159()
+    canonicalAgentValue(first.value159()) == canonicalAgentValue(modelLaneSnapshotValue(second))
+}
+public func modelLaneReplacingSharedToolSet159(lane: ModelLane, snapshot: SharedToolSetSnapshot159): ModelLane {
+    // The temporary capabilities carrier is funded before construction. The
+    // returned lane owns independent metadata copies and a separate share.
+    let phase = snapshot.deriveLaneMetadata159(4096)
+    let result = modelLaneReplacingSharedToolSetFrame159(lane, snapshot)
+    phase.close()
+    result
+}
+private func modelLaneReplacingSharedToolSetFrame159(lane: ModelLane, snapshot: SharedToolSetSnapshot159): ModelLane {
+    let caps = lane.capabilities
+    modelLaneWithSharedToolSet159(lane.role, lane.providerId, lane.modelId, lane.protocol,
+        ModelLaneCapabilitiesSnapshot(streaming: caps.streaming, tools: snapshot.hasAvailableTools159(),
+            reasoning: caps.reasoning, structuredOutput: caps.structuredOutput,
+            imageInput: caps.imageInput, promptCache: caps.promptCache, providerOpaqueState: caps.providerOpaqueState),
+        lane.contextWindow, lane.outputReserve, lane.providerSafetyMargin, lane.estimatorId,
+        lane.retryPolicyId, lane.cachePolicyId, snapshot, lane.systemInstructionVersion)
+}
+
+private func modelLaneContinuationDigestFrame159(input: OwnedModelLaneSnapshot159, context: AgentValue, budget: AgentValue, expected: String): Bool {
+    // The original complete lane/context/budget grammar and hash are unchanged.
+    // All canonical copies are funded before the closed producer call; only
+    // its Bool can escape and the entire helper returns before loan retirement.
+    input.reserveCopy159(); input.reserveClosedValue159(context); input.reserveClosedValue159(budget)
+    continuationRunLaunchDigest(input.value159(), context, budget) == expected
 }

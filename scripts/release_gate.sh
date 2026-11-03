@@ -52,10 +52,36 @@ export AXYNDRA_SDK_ROOT="$sdk_root"
 export CANGJIE_SDK_ROOT="$sdk_root"
 export CANGJIE_STDX_PATH="$stdx_root"
 export LD_LIBRARY_PATH="$root/libs/process4cj/native:$stdx_root:$sdk_root/runtime/lib/linux_x86_64_cjnative:$sdk_root/tools/lib"
+# The unit gate compiles and checks these independent process plugins. Keep
+# their paths available for the standalone release contracts that follow it.
+export AXYNDRA_NATIVE_PLUGIN_FIXTURE="$root/support_tests/native_plugin_fixture/target/native-plugin"
+export AXYNDRA_NATIVE_TOOL_PLUGIN_FIXTURE="$root/support_tests/native_plugin_fixture/target/tool/native-plugin-tool"
+export AXYNDRA_NATIVE_SERVICE_PLUGIN_FIXTURE="$root/support_tests/native_plugin_fixture/target/service/native-plugin-service"
+AXYNDRA_AST_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_ast_plugin.py")
+export AXYNDRA_AST_PLUGIN_PACKAGE
+AXYNDRA_SKILLS_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_skills_plugin.py")
+export AXYNDRA_SKILLS_PLUGIN_PACKAGE
+AXYNDRA_CODING_DISTRIBUTION=$(python3 "$root/scripts/prepare_coding_distribution_fixture.py" --package "$AXYNDRA_SKILLS_PLUGIN_PACKAGE")
+export AXYNDRA_CODING_DISTRIBUTION
+AXYNDRA_COMPACTION_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_compaction_plugin.py")
+export AXYNDRA_COMPACTION_PLUGIN_PACKAGE
+AXYNDRA_WORKFLOW_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_workflow_plugin.py")
+export AXYNDRA_WORKFLOW_PLUGIN_PACKAGE
+# Standalone contracts execute after the unit-gate Python process exits;
+# child-process environment changes cannot supply their package locations.
+AXYNDRA_MEMORY_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_memory_plugin.py")
+export AXYNDRA_MEMORY_PLUGIN_PACKAGE
+# The latest-journal application cases require their own freshly built
+# latest-context package; no other helper supplies this variable.
+AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE=$(python3 "$root/scripts/prepare_memory_latest_context_plugin.py")
+export AXYNDRA_MEMORY_LATEST_CONTEXT_PLUGIN_PACKAGE
+AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE=$(bash "$root/scripts/prepare_model_provider_plugin.sh")
+export AXYNDRA_MODEL_PROVIDER_PLUGIN_PACKAGE
 python3 scripts/product_unit_gate.py
 "$root/scripts/pinned_cangjie" cjpm build -m agent_app -o agent_app
 package_root=$(mktemp -d -t axyndra-candidate.XXXXXX)
 candidate=$(
+  AXYNDRA_DISTRIBUTION="${AXYNDRA_DISTRIBUTION:-coding}" \
   AXYNDRA_SDK_ROOT="$sdk_root" \
   AXYNDRA_PACKAGE_ROOT="$package_root" \
     "$root/scripts/package_candidate.sh"

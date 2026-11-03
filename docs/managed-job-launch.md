@@ -1,0 +1,17 @@
+# Managed job launch foundation
+
+Status: authored, uncompiled, not enabled by Product. This increment does not complete Shell async or A4-02.
+
+The launch parent and the eventual command have different lifetimes. The existing Bash executor returns a running job before its process finishes; Core then completes that parent Operation. A plugin must not reuse that completed Operation, its Prepared object, or its Thread token as a new execution authority.
+
+The host-frozen `host_plan.managed_job` declaration contains a job ID, separate child Thread and Run IDs, an absolute deadline and a bounded child tool-call allowance. It is part of the original normalized plan before approval and requires `Delegate` for `managed-job`. Inline and artifact channel intent bytes retain their original exact binding. The complete Store codec hash binds capabilities, paths, network, implementation, metadata and inputs, not merely the supplied binding digest.
+
+`AgentThreadRuntime.reserveManagedJob` requires its own current Running parent, a real Direct User or Committed source, the exact executing parent plan and actual handoff. Store also revalidates the completed startup Receipt/service binding, and refuses a parent which has already admitted a command write. Existing audit facts reserve job/child identities. No extra task state database or retry ledger is introduced.
+
+The returned private-constructed reservation is retained by the Task owner. It can emit only the bounded launch result. `claim()` remains powerless until the same parent has one Completed Receipt and its matching nonerror ToolResult containing the exact job identity and launch digest. Claim is single use across process restarts; rejected, Unknown, expired or altered launches do not qualify. Restoring a journal or decoding descriptive bindings cannot mint the Runtime handle. Recovered Runtime owners cannot reserve again.
+
+Foreground completion does not cancel a successful delegation. Explicit parent cancellation before completion, explicit job cancellation and the original bounded deadline continue to invalidate the admission. The Task owner must retain the cancellation handle after foreground completion and may detach its parent subscription only after actual child cleanup acknowledgment.
+
+This foundation deliberately exposes no background executor. `ManagedJobAdmission` is not an `OperationRootSource`, approval token, Prepared invocation or service lease. The next increment must create a real Task-source child Run and Operation, reserve from the existing TaskRuntime child-budget pool, reprepare only the exact approved plan under verified Task proof, and validate cross-Thread access against the original endpoint/lease/permission domain. It must never change `context.sessionId` to impersonate the parent Thread. Child cancellation, unknown effects, actual cleanup debt and Task journal recovery must remain owned until acknowledgment. Until that integration is complete, the public plugin path stays synchronous and the old Bash implementation remains.
+
+The authored Store contract contains 28 Direct/Committed scenarios using real Runtime, approval, canonical Items and SQLite Receipt transactions. It checks pending/absent handoff, approval, partly admitted intent batches, exact completion, unknown/wrong output, plan drift, epoch drift, replay, recovered-owner refusal, mutable inputs and both job/parent cancellation. It starts no subprocess and is not a Product async proof. No Cangjie tests have been run for this increment.

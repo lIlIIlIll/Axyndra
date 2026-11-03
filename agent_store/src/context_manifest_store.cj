@@ -262,7 +262,7 @@ public class SqliteContextManifestStore {
                 }
                 let stepOrdinal = manifestRowInt(row.required(8), "Step ordinal")
                 let run = transaction.query(
-                    "SELECT runs.thread_id,runs.turn_id,binding.snapshot_id FROM runs " +
+                    "SELECT runs.thread_id,runs.turn_id,binding.snapshot_id,runs.lane_snapshot,runs.skill_snapshot FROM runs " +
                     "JOIN run_composition_bindings binding ON binding.run_id=runs.id " +
                         "WHERE runs.id=?",
                     [SqlParameter.Text(runId.value)]
@@ -270,6 +270,24 @@ public class SqliteContextManifestStore {
                 if (run.size != 1 || run[0].required(0) != manifest.threadId.value ||
                     run[0].required(1) != manifest.turnId.value) {
                     throw IllegalStateException("Context Manifest Run enclosure changed")
+                }
+                let current = currentModelLaneContinuation(transaction, runId)
+                if (current.compositionSnapshotId.value != run[0].required(2)) {
+                    throw IllegalStateException("Context Manifest composition changed")
+                }
+                let actualLane = modelLaneFromSnapshotValue(decodeStoredValue(run[0].required(3)))
+                if (canonicalAgentValue(manifest.toolCatalogSnapshot) !=
+                    canonicalAgentValue(toolCatalogSnapshotValue(actualLane.toolSet))) {
+                    throw IllegalStateException("Context Manifest tool snapshot is stale or inconsistent")
+                }
+                let contextWitness = manifest.namedFactVersions.field("context_snapshot_digest")
+                let hasContextCut = !transaction.query("SELECT id FROM audit_events WHERE run_id=? AND kind='context_snapshot_safe_cut' LIMIT 1",
+                    [SqlParameter.Text(runId.value)]).isEmpty()
+                if (contextWitness.isSome() || hasContextCut) {
+                    let expected = contextReadProjectionDigest(contextSnapshotFromValue(decodeStoredValue(run[0].required(4))))
+                    if (contextWitness.isNone() || contextWitness.getOrThrow().unifiedKind != ValueKind.Text ||
+                        contextWitness.getOrThrow().text != expected) {
+                        throw IllegalStateException("Context Manifest prompt-data snapshot is stale or inconsistent") }
                 }
                 let continuation = preserveRunContinuationProjection(
                     transaction,
@@ -283,8 +301,19 @@ public class SqliteContextManifestStore {
                         ValueField("context_manifest_digest", textValue(manifest.digest))
                     ]))),
                     CompositionSnapshotId(run[0].required(2)),
-                    ModelLaneSnapshotId("model-lane-" + runId.value),
-                    contextManifestId: Some(manifest.id)
+                    current.modelLaneSnapshotId,
+                    contextManifestId: Some(manifest.id),
+                    semanticRequestId: current.semanticRequestId,
+                    attemptId: current.attemptId,
+                    reservedDecisionId: current.reservedDecisionId,
+                    reservedUsageId: current.reservedUsageId,
+                    reservedItemIds: current.reservedItemIds,
+                    toolBatch: current.toolBatch,
+                    pendingOperationId: current.pendingOperationId,
+                    pendingApprovalId: current.pendingApprovalId,
+                    waitingExternal: current.waitingExternal,
+                    workDebt: current.workDebt,
+                    recoveryPolicyVersion: current.recoveryPolicyVersion
                 )))
                 let revision = contextManifestInt(transaction.query(
                     "SELECT COALESCE(MAX(revision),0) FROM run_continuation_facts WHERE run_id=?",

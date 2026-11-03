@@ -28,7 +28,7 @@ public class DurableModelDecisionSnapshot {
 // Durable owner for Model Attempt and Model Decision state. Streaming deltas
 // never enter these tables. A validated decision and all of its stable blocks
 // are inserted in one SQLite transaction.
-public class SqliteModelDecisionStore <: ModelDecisionRuntimePort {
+public class SqliteModelDecisionStore <: ModelDecisionRuntimePort & ReturningModelDecisionRuntime159 {
     private let database: SqliteDatabase
 
     public init(database: SqliteDatabase) { this.database = database }
@@ -58,6 +58,14 @@ public class SqliteModelDecisionStore <: ModelDecisionRuntimePort {
                 fields: [ErrorField("run_id", runId.value)]
             ))
         }
+    }
+
+    public func createAttemptReturning159(attempt: DurableModelAttempt, loan: ModelInputToolsBorrow159): Result<Unit> {
+        let result = createAttempt(attempt)
+        // createAttempt's entire transaction/codec frame has returned; this
+        // actual adapter retains only its database, never the Attempt object.
+        match (result) { case Result.Ok(_) => loan.returnModelToolsFrame159(); case Result.Err(_) => () }
+        result
     }
 
     public func createAttempt(attempt: DurableModelAttempt): Result<Unit> {

@@ -1,0 +1,25 @@
+# Native Memory unique retained data peak: source diagnosis
+
+This source-only companion adds two real default-pool controls to the immutable producer/helper114 graph. It changes no production algorithm, allocator, transport limit, timeout, authority gate or historical business oracle. All116 authored cases and the original40 protocol cases remain unexecuted here.
+
+The existing large producer case constructs4096 nodes pointing to the same immutable16380-byte String. Its encoded output exceeds63MiB and exercises eight references. It does not retain63MiB of unique body strings. The new producer control constructs4096 independent byte arrays and independent Strings, with unique eight-digit prefixes, retaining67092480 distinct scalar bytes. Its explicit caller reservation prepays the sum of actual backing bytes, all DOM cells, and bounded construction/transport scratch before creating the graph. The original second writer holds that graph through its real Future join. A separately generated ASCII byte oracle checks the entire original output hash without retaining a second whole output copy.
+
+The second control generates the original v3 framing and original JSON record writer one record at a time. It counts and hashes the complete wire in one pass, then uploads the same independently generated bodies in another pass. No aggregate journal String or fake pool is constructed. It demonstrates the current collector's real capacity rejection and cleanup before business computation. That diagnostic negative is not successful63MiB business acceptance; it leaves that acceptance explicitly open.
+
+The current source has these simultaneous ownership stages:
+
+| Stage | Actual retained data and payment | Unresolved obligation |
+| --- | --- | --- |
+| Parameters | Base computation owner retains the full parameter DOM under8x input bytes plus lexical nodes and scratch. | Retain the same paid input until the last business/output user closes. |
+| Base decode | Independent decoder and per-body validation owners retain their own current raw/syntax data. | They overlap the history collector until actual v3 EOF and decoder close. |
+| History/current collection | MemoryLiveHistory adds8x every decoded content/context/source byte and then2x each original body plus8192 per record. |67092480 distinct scalar bytes alone request536739840 bytes. This necessarily fails the unchanged134217728 aggregate. |
+| Original replay | compute adds8192 per retained history/current record.4096 records add33554432 before a separate replay owner opens. NativeMemoryJournal creates detached cells and arrays while sharing immutable body Strings. | New cells, original input Strings and all replay outputs remain simultaneously live. Cell payment is not a replacement for the body-owner sum. |
+| Search validation | memoryV3SnapshotDigest constructs a full record DOM, canonicalAgentValue String, then the hash input byte array. search hashes both current and snapshot in the original validation branch. | Whole canonical/body copies overlap unique retained history. The cells-only ReplayTurn payment does not describe that physical peak. |
+| Output | MemoryLiveWriterPayment prepays the maximum current scalar's writer temporary plus node/slot metadata. The original writer runs twice and keeps the result DOM through real producer join. | This covers writer scratch only. Every distinct output String must have an actual input/history/replay owner for its full simultaneous lifetime. |
+| Receipt continuation | Full current proposal bytes, parsed proposal DOM, typed error and old downloaded result overlap until original settlement validation and close. | Include these actual overlaps; never turn maxScalar into a substitute for their sum. |
+
+The budget remains the original128MiB aggregate,32 logical transfers and16MiB minimum per logical owner. The output slot/input bounds and original64KiB publication/ACK/join path remain unchanged. No semantic aggregate history/output cap has been added. No test changes the original114 names, original21 business oracles, original40 protocol cases, independent-current semantics, full-hash/EOF checks, frozen replay clock, full errors or Host-owned authority.
+
+A production solution must retain actual prefix data with owned fragments or an equivalent lifetime-safe representation, feed original algorithms in their original order, stream byte-equivalent whole canonical hashing, and charge all concurrent cells/String/backing/writer/receipt stages to their real owners. Simply reducing History8x to1x or reusing the largest-scalar bound cannot establish that result. NativeMemoryJournal's detached records share body Strings; that particular function does not make another full body copy. Any future replacement must preserve this property and original algorithms instead of inventing placeholders or truncation.
+
+This companion supplies precise source diagnosis and genuinely unique controls. It does not resolve the whole-history business peak and makes no compilation, capacity, Host effect, platform or whole-Issue PASS claim.

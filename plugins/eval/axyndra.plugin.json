@@ -1,0 +1,17 @@
+{
+  "id": "eval",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/eval-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [
+    "process.channel"
+  ],
+  "contributions": [
+    {
+      "kind": "service",
+      "name": "session"
+    }
+  ]
+}

@@ -1,28 +1,40 @@
 package extension_runtime_contract
 
 import agent_sdk.*
+import legacy_extension_sdk.*
 import agent_extension_runtime.*
+import legacy_extension_runtime.*
 import yjson.*
 import yjson_support.*
-import sdk_fixture_extension.*
+import legacy_sdk_fixture_extension.*
 import std.collection.*
 import workspace_search_extension.*
 import workspace_write_extension.*
-import ast_extension.*
-import web_search_extension.*
 
   import process4cj.*
   import std.fs.*
   import std.sync.*
+  import std.env.*
 main(): Int64 {
+    if (getCommandLine().contains("--native-service-contract")) {
+        nativeServiceContracts()
+        return 0
+    }
+    if (getCommandLine().contains("--native-prepare-contract")) {
+        nativePrepareContracts()
+        println("native prepare protocol contract passed")
+        return 0
+    }
     versionContracts()
     manifestContracts()
     pluginPackageContracts()
     runtimeContracts()
     safeLifecycleContracts()
-    migratedFirstPartyContracts()
+    genericNetworkLifecycleContract()
     fixtureContract()
   javascriptHostContracts()
+    nativePrepareContracts()
+    nativeServiceContracts()
     piJavascriptApiContracts()
     piNoUiDependencyContracts()
     piSupportedEventContracts()
@@ -232,43 +244,26 @@ func versionContracts(): Unit {
         "SDK range is min-inclusive and max-exclusive")
 }
 
-func migratedFirstPartyContracts(): Unit {
-    let astManifest = mustManifest(astExtensionManifest())
-    let webManifest = mustManifest(webSearchExtensionManifest())
-    expect(astManifest.tools == ["ast_grep", "ast_edit"] &&
-        astManifest.capabilities == ["workspace.read", "workspace.write"] &&
-        astManifest.requirements.executables == ["ast-grep"] &&
-        astManifest.sdk.minimum == SemanticVersion(2, 0, 0) &&
-        astManifest.sdk.maximumExclusive == SemanticVersion(3, 0, 0),
-        "AST manifest declares static tools, authority requirements, and executable")
-    expect(webManifest.tools == ["web_search"] && webManifest.capabilities == ["network.http"] &&
-        webManifest.requirements.executables == ["curl"] &&
-        webManifest.sdk.minimum == SemanticVersion(2, 0, 0) &&
-        webManifest.sdk.maximumExclusive == SemanticVersion(3, 0, 0),
-        "web manifest declares network without granting it")
-
+func genericNetworkLifecycleContract(): Unit {
+    let declared = mustManifest(networkContractManifest())
+    expect(declared.tools == ["network_probe"] && declared.capabilities == ["network.http"] &&
+        declared.requirements.executables == ["contract-network-client"] &&
+        declared.sdk.minimum == SemanticVersion(2, 0, 0) &&
+        declared.sdk.maximumExclusive == SemanticVersion(3, 0, 0),
+        "generic fixture declares its network requirement without granting authority")
     let probe = FakeProbe()
-    probe.available.add("ast-grep")
-    probe.available.add("curl")
+    probe.available.add("contract-network-client")
     let host = RecordingLifecycleHost()
     let runtime = ExtensionRuntime(host, probe: probe)
-    expect(runtime.start(
-        [webProvider(), astProvider()],
-        [ConfiguredExtension("axyndra.web-search"), ConfiguredExtension("axyndra.ast")]
-    ).isOk(), "migrated first-party extensions activate through the canonical runtime")
-    expect(host.activationOrder.toArray() == ["axyndra.ast", "axyndra.web-search"],
-        "migrated first-party activation order is deterministic")
-    expect(host.activeTools.contains("ast_grep") && host.activeTools.contains("ast_edit") &&
-        host.activeTools.contains("web_search"), "migrated tools are registered by lifecycle host")
-
+    expect(runtime.start([networkContractProvider()], [ConfiguredExtension("contract.network")]).isOk(),
+        "SDK fixture activates through the canonical extension lifecycle")
+    expect(host.activeTools.toArray() == ["network_probe"],
+        "activation registers only the fixture's declared contribution")
     let unavailable = ExtensionRuntime(RecordingLifecycleHost(), probe: FakeProbe())
-    expect(unavailable.start(
-        [astProvider(), webProvider()],
-        [ConfiguredExtension("axyndra.ast"), ConfiguredExtension("axyndra.web-search")]
-    ).isOk(), "missing requirements on optional extensions do not fail product startup")
-    expect(unavailable.diagnostics()[0].state == ExtensionLifecycleState.Failed &&
-        unavailable.diagnostics()[1].state == ExtensionLifecycleState.Failed,
-        "optional requirement failures remain explicit diagnostics")
+    expect(unavailable.start([networkContractProvider()], [ConfiguredExtension("contract.network")]).isOk(),
+        "missing optional requirements do not fail product startup")
+    expect(unavailable.diagnostics()[0].state == ExtensionLifecycleState.Failed,
+        "optional requirement failure remains an explicit diagnostic")
 }
 
 func manifestContracts(): Unit {
@@ -364,11 +359,11 @@ func pluginPackageContracts(): Unit {
         portable.compatibilityProfile == "codex-portable-v1" &&
         portable.overlayPath == "plugin.json#extensions.com.openai" &&
         hasPackageComponent(portable, PluginComponentKind.Skill, "skills") &&
-        hasPackageComponent(portable, PluginComponentKind.Mcp, "mcp.json") &&
+        hasPackageComponent(portable, PluginComponentKind.Mcp, "mcp.json", status: PluginComponentStatus.Blocked) &&
         hasPackageComponent(portable, PluginComponentKind.HostedOnly, ".app.json", status: PluginComponentStatus.Blocked) &&
         !hasPackageKind(portable, PluginComponentKind.Hook) &&
         portable.requestedCapabilities.isEmpty(),
-        "portable Codex package uses root skills and MCP with a non-merging OpenAI overlay")
+        "portable Codex package keeps blocked historical connection data and independent skills")
     let fallback = inspectedPluginPackage("fixtures/codex-fallback")
     expect(fallback.manifestPath == "plugin.json" &&
         fallback.overlayPath == ".codex-plugin/plugin.json" &&
@@ -380,14 +375,12 @@ func pluginPackageContracts(): Unit {
         case PluginPackageResult.Err(error) => error.code == "plugin.schema_unsupported"
         case PluginPackageResult.Ok(_) => false
     }, "unsupported Codex schema is rejected instead of guessed")
-    expect(match (inspectPluginPackage("fixtures/codex-invalid-mcp")) {
-        case PluginPackageResult.Err(error) => error.code == "plugin.schema_unsupported"
-        case PluginPackageResult.Ok(_) => false
-    }, "portable Codex MCP schema is validated before discovery")
-    expect(match (inspectPluginPackage("fixtures/codex-invalid-mcp-config")) {
-        case PluginPackageResult.Err(error) => error.code == "plugin.codex_mcp_servers_required"
-        case PluginPackageResult.Ok(_) => false
-    }, "portable Codex MCP requires an object-valued mcpServers map")
+    for (path in ["fixtures/codex-invalid-mcp", "fixtures/codex-invalid-mcp-config"]) {
+        let historical = inspectedPluginPackage(path)
+        expect(hasPackageComponent(historical, PluginComponentKind.Mcp, "mcp.json", status: PluginComponentStatus.Blocked),
+            "historical connection content is inspectable but not parsed or executable")
+    }
+
 }
 
 func inspectedPluginPackage(root: String): PluginPackageDescriptor {
@@ -1382,8 +1375,7 @@ class RecordingLifecycleHost <: ExtensionLifecycleHost {
         }
         if (extensionId == "axyndra.workspace-search") { remove(activeTools, "grep") }
         else if (extensionId == "axyndra.workspace-write") { remove(activeTools, "write") }
-        else if (extensionId == "axyndra.ast") { remove(activeTools, "ast_grep"); remove(activeTools, "ast_edit") }
-        else if (extensionId == "axyndra.web-search") { remove(activeTools, "web_search") }
+        else if (extensionId == "contract.network") { remove(activeTools, "network_probe") }
         else if (extensionId == "third-party.fixture") { remove(activeTools, "fixture_echo") }
         HostLifecycleResult.Ok
     }
@@ -1426,12 +1418,35 @@ func writeProvider(): CompiledExtensionProvider {
     CompiledExtensionProvider("axyndra.workspace-write", "embedded:write", workspaceWriteExtensionManifest(), { => WorkspaceWriteExtension() })
 }
 
-func astProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("axyndra.ast", "embedded:ast", astExtensionManifest(), { => AstExtension() })
+
+func networkContractProvider(): CompiledExtensionProvider {
+    CompiledExtensionProvider("contract.network", "fixture:network", networkContractManifest(), { =>
+        StaticExtension("contract.network", "Network contract", "1.0.0", "Generic network fixture.",
+            [NetworkContractTool()])
+    })
 }
 
-func webProvider(): CompiledExtensionProvider {
-    CompiledExtensionProvider("axyndra.web-search", "embedded:web-search", webSearchExtensionManifest(), { => WebSearchExtension() })
+func networkContractManifest(): String {
+    """
+    {"schemaVersion":1,"id":"contract.network","name":"Network contract","version":"1.0.0",
+     "description":"Generic network fixture.","sdk":{"min":"2.0.0","maxExclusive":"3.0.0"},
+     "tools":["network_probe"],"capabilities":["network.http"],
+     "requirements":{"executables":["contract-network-client"]}}
+    """
+}
+
+class NetworkContractTool <: ExtensionTool {
+    public func definition(): ExtensionToolDefinition {
+        ExtensionToolDefinition("network_probe", "Generic network fixture.", jsonObject([]),
+            [networkHttp(resource: "network_probe")])
+    }
+    public func validate(input: JsonNode): SdkResult<JsonNode> { SdkResult.Ok(input) }
+    public func prepare(invocation: ToolInvocation): SdkResult<OperationIntent> {
+        SdkResult.Ok(OperationIntent.HostOperation(HostOperationIntent("network_probe", invocation.input)))
+    }
+    public func decode(_invocation: ToolInvocation, result: ExecutionResult): SdkResult<ToolOutput> {
+        SdkResult.Ok(ToolOutput(structured: result.value))
+    }
 }
 
 func manifest(id: String, name: String, description: String, tools: Array<String>): String {

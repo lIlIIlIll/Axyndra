@@ -1,0 +1,79 @@
+{
+  "schema": "axyndra.distribution-recipes/v1",
+  "profiles": {
+    "minimal": {
+      "host_package": "agent_minimal",
+      "bundled": [],
+      "default_enabled": [],
+      "core_required": []
+    },
+    "coding": {
+      "host_package": "agent_app",
+      "bundled": [
+        "axyndra:compaction",
+        "axyndra:memory",
+        "axyndra:model-providers",
+        "axyndra:program",
+        "axyndra:shell",
+        "axyndra:shell-readonly",
+        "axyndra:skills",
+        "axyndra:workflow",
+        "axyndra:workspace"
+      ],
+      "default_enabled": [
+        "axyndra:compaction",
+        "axyndra:memory",
+        "axyndra:model-providers",
+        "axyndra:program",
+        "axyndra:shell",
+        "axyndra:shell-readonly",
+        "axyndra:skills",
+        "axyndra:workflow",
+        "axyndra:workspace"
+      ],
+      "core_required": []
+    },
+    "full": {
+      "host_package": "agent_app",
+      "bundled": [
+        "axyndra:ast",
+        "axyndra:compaction",
+        "axyndra:dap",
+        "axyndra:eval",
+        "axyndra:github",
+        "axyndra:lsp",
+        "axyndra:mcp-client",
+        "axyndra:mcp-server",
+        "axyndra:memory",
+        "axyndra:model-providers",
+        "axyndra:program",
+        "axyndra:shell",
+        "axyndra:shell-readonly",
+        "axyndra:skills",
+        "axyndra:web-search",
+        "axyndra:workflow",
+        "axyndra:workspace"
+      ],
+      "default_enabled": [
+        "axyndra:ast",
+        "axyndra:compaction",
+        "axyndra:dap",
+        "axyndra:eval",
+        "axyndra:github",
+        "axyndra:lsp",
+        "axyndra:mcp-client",
+        "axyndra:mcp-server",
+        "axyndra:memory",
+        "axyndra:model-providers",
+        "axyndra:program",
+        "axyndra:shell",
+        "axyndra:shell-readonly",
+        "axyndra:skills",
+        "axyndra:web-search",
+        "axyndra:workflow",
+        "axyndra:workspace"
+      ],
+      "core_required": []
+    }
+  }
+}

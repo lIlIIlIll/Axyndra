@@ -1,5 +1,7 @@
 package agent_domain
 
+import logical_json_payload as payload
+
 import yjson.*
 import yjson_support.*
 import std.deriving.*
@@ -72,6 +74,7 @@ public class AgentError {
     // public error code. Recovery policy must never parse provider messages or
     // error-code strings to decide whether another model attempt is safe.
     public let attemptFailure: ?AttemptFailure
+    public let observation: ?OperationObservation
 
     public init(
         kind: AgentErrorKind,
@@ -80,7 +83,8 @@ public class AgentError {
         retryable!: Bool = false,
         fallbackAllowed!: Bool = false,
         fields!: Array<ErrorField> = [],
-        attemptFailure!: ?AttemptFailure = None
+        attemptFailure!: ?AttemptFailure = None,
+        observation!: ?OperationObservation = None
     ) {
         if (code.trimAscii() == "") {
             throw IllegalArgumentException("agent error code must not be empty")
@@ -95,6 +99,7 @@ public class AgentError {
         this.fallbackAllowed = fallbackAllowed
         this.fields = fields
         this.attemptFailure = attemptFailure
+        this.observation = observation
     }
 
     public func field(name: String): ?String {
@@ -135,34 +140,31 @@ public type ValueField = JsonObjectEntry
 public type AgentValue = JsonNode
 
 public func nullValue(): AgentValue {
-    jsonNull()
+    payload.nullValue()
 }
 
 public func boolValue(value: Bool): AgentValue {
-    jsonBool(value)
+    payload.boolValue(value)
 }
 
 public func integerValue(value: Int64): AgentValue {
-    numberValue(value.toString())
+    payload.integerValue(value)
 }
 
 public func numberValue(value: String): AgentValue {
-    if (value.trimAscii() == "") {
-        throw IllegalArgumentException("number value must not be empty")
-    }
-    jsonNumber(value)
+    payload.numberValue(value)
 }
 
 public func textValue(value: String): AgentValue {
-    jsonString(value)
+    payload.textValue(value)
 }
 
 public func listValue(values: Array<AgentValue>): AgentValue {
-    jsonArray(values)
+    payload.listValue(values)
 }
 
 public func objectValue(fields: Array<ValueField>): AgentValue {
-    jsonObject(fields)
+    payload.objectValue(fields)
 }
 
 public class RunId {
@@ -425,43 +427,6 @@ public enum ThinkingLevel {
 }
 
 @Derive[Equatable]
-public enum TodoStatus {
-    Pending | InProgress | Completed | Abandoned | Blocked
-}
-
-public class TodoItem {
-    public let content: String
-    public let status: TodoStatus
-    public let blocker: String
-
-    public init(
-        content: String,
-        status!: TodoStatus = TodoStatus.Pending,
-        blocker!: String = ""
-    ) {
-        if (content.trimAscii() == "") {
-            throw IllegalArgumentException("todo item content must not be empty")
-        }
-        this.content = content
-        this.status = status
-        this.blocker = blocker
-    }
-}
-
-public class TodoPhase {
-    public let name: String
-    public let tasks: Array<TodoItem>
-
-    public init(name: String, tasks: Array<TodoItem>) {
-        if (name.trimAscii() == "") {
-            throw IllegalArgumentException("todo phase name must not be empty")
-        }
-        this.name = name
-        this.tasks = tasks
-    }
-}
-
-@Derive[Equatable]
 public enum ModelCachePolicy {
     Default | StablePrefix
 }
@@ -471,6 +436,8 @@ public enum ModelToolChoice {
 }
 
 public class ModelRequest {
+    // Process-local DATA custody; deliberately excluded from wire/canonical codecs.
+    public let inputToolsLifetime159: ?ModelInputToolsLifetime159
     public let model: String
     public let system: String
     public let messages: Array<ModelMessage>
@@ -514,7 +481,8 @@ public class ModelRequest {
         toolChoice!: ModelToolChoice = ModelToolChoice.Auto,
         structuredOutput!: ?StructuredOutputSpec = None,
         cacheKey!: String = "",
-        transportHardTimeoutMillis!: Int64 = 0
+        transportHardTimeoutMillis!: Int64 = 0,
+        inputToolsLifetime159!: ?ModelInputToolsLifetime159 = None
     ) {
         if (model.trimAscii() == "") {
             throw IllegalArgumentException("model must not be empty")
@@ -546,6 +514,7 @@ public class ModelRequest {
         this.structuredOutput = structuredOutput
         this.cacheKey = cacheKey.trimAscii()
         this.transportHardTimeoutMillis = transportHardTimeoutMillis
+        this.inputToolsLifetime159 = inputToolsLifetime159
     }
 }
 
@@ -974,18 +943,22 @@ public class ToolResult {
     public let output: AgentValue
     public let isError: Bool
     public let receiptId: String
+    public let payloadLease: ?ToolResultPayloadLease
 
     public init(
         callId: String,
         output: AgentValue,
         isError!: Bool = false,
-        receiptId!: String = ""
+        receiptId!: String = "",
+        payloadLease!: ?ToolResultPayloadLease = None
     ) {
         this.callId = callId
         this.output = output
         this.isError = isError
         this.receiptId = receiptId
+        this.payloadLease = payloadLease
     }
+    public func releasePayload(): Unit { match (payloadLease) { case Some(value) => value.close(); case None => () } }
 }
 
 @Derive[Equatable]
@@ -1328,7 +1301,7 @@ public class RunContinuation {
     public let requestedPolicy: ?RequestedModelPolicy
     public let modelCapabilitiesSnapshot: ?ModelExecutionCapabilitiesSnapshot
     public let resolverVersion: UInt32
-    public let skillStackPayload: AgentValue
+    public let contextSnapshotPayload: AgentValue
     public let contextWindow: Int64
     public let providerSafetyMargin: Int64
     public let toolContextPayload: AgentValue
@@ -1357,7 +1330,7 @@ public class RunContinuation {
         requestedPolicy!: ?RequestedModelPolicy = None,
         modelCapabilitiesSnapshot!: ?ModelExecutionCapabilitiesSnapshot = None,
         resolverVersion!: UInt32 = MODEL_POLICY_RESOLUTION_VERSION,
-        skillStackPayload!: AgentValue = objectValue([]),
+        contextSnapshotPayload!: AgentValue = objectValue([]),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
         toolContextPayload!: AgentValue = objectValue([]),
@@ -1388,7 +1361,7 @@ public class RunContinuation {
         this.requestedPolicy = requestedPolicy
         this.modelCapabilitiesSnapshot = modelCapabilitiesSnapshot
         this.resolverVersion = resolverVersion
-        this.skillStackPayload = skillStackPayload
+        this.contextSnapshotPayload = contextSnapshotPayload
         this.contextWindow = contextWindow
         this.providerSafetyMargin = providerSafetyMargin
         this.toolContextPayload = toolContextPayload
@@ -1419,7 +1392,7 @@ public class RunContinuation {
         cacheKey!: String = "",
         parallelToolCalls!: Bool = false,
         resolverVersion!: UInt32 = MODEL_POLICY_RESOLUTION_VERSION,
-        skillStackPayload!: AgentValue = objectValue([]),
+        contextSnapshotPayload!: AgentValue = objectValue([]),
         contextWindow!: Int64 = 0,
         providerSafetyMargin!: Int64 = 1024,
         toolContextPayload!: AgentValue = objectValue([]),
@@ -1458,7 +1431,7 @@ public class RunContinuation {
         this.requestedPolicy = Some(requestedPolicy)
         this.modelCapabilitiesSnapshot = Some(modelCapabilitiesSnapshot)
         this.resolverVersion = resolverVersion
-        this.skillStackPayload = skillStackPayload
+        this.contextSnapshotPayload = contextSnapshotPayload
         this.contextWindow = contextWindow
         this.providerSafetyMargin = providerSafetyMargin
         this.toolContextPayload = toolContextPayload
@@ -1886,7 +1859,10 @@ public enum ProcessSandboxMode {
 }
 
 public class ProcessRequest {
-    public let operationId: OperationId
+    public let resourceOwner: ProcessResourceOwner
+    // Compatibility for operation-only consumers. This cannot manufacture an
+    // Operation ID for a ModelAttempt resource.
+    public prop operationId: OperationId { get() { resourceOwner.requireOperation() } }
     public let executable: String
     public let arguments: Array<String>
     public let workingDirectory: String
@@ -1917,6 +1893,7 @@ public class ProcessRequest {
     public init(
         executable: String,
         operationId!: OperationId = OperationId("process"),
+        resourceOwner!: ?ProcessResourceOwner = None,
         arguments!: Array<String> = [],
         workingDirectory!: String = "",
         timeoutMillis!: Int64 = 60000,
@@ -1933,8 +1910,15 @@ public class ProcessRequest {
         if (executable.trimAscii() == "") {
             throw IllegalArgumentException("process executable must not be empty")
         }
-        if (timeoutMillis < 1) {
-            throw IllegalArgumentException("process timeout must be positive")
+        // A typed ModelAttempt may describe its inherited Attempt lifetime.
+        // This DTO grants no launch authority: public raw entries still reject
+        // ModelAttempt owners, and the private factory verifies the real claim.
+        let modelLifetime = match (resourceOwner) {
+            case Some(value) => value.operation.isNone()
+            case None => false
+        }
+        if (timeoutMillis < 0 || (timeoutMillis == 0 && !modelLifetime)) {
+            throw IllegalArgumentException("process timeout must be positive unless owned by a ModelAttempt")
         }
         if (sandboxMode == ProcessSandboxMode.IsolatedReadOnly &&
             filesystemRoot.trimAscii() == "") {
@@ -1947,7 +1931,12 @@ public class ProcessRequest {
         if (sandboxMode == ProcessSandboxMode.Host && !readOnlyMounts.isEmpty()) {
             throw IllegalArgumentException("host process cannot declare sandbox mounts")
         }
-        this.operationId = operationId
+        if (resourceOwner.isSome() && operationId.value != "process") {
+            throw IllegalArgumentException("process resource and legacy operation cannot both be supplied")
+        }
+        let actualOwner = resourceOwner ?? ProcessResourceOwner.Operation(operationId)
+        actualOwner.validate()
+        this.resourceOwner = actualOwner
         this.executable = executable
         this.arguments = arguments
         this.workingDirectory = workingDirectory

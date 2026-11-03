@@ -5,11 +5,19 @@
   description = "Repository implementations and explicit schema lifecycle"
   version = "1.0.0"
   output-type = "static"
+  link-option = "-lsqlite3"
 
 [dependencies]
+  "agent_runtime" = { path = "../agent_runtime", output-type = "static" }
   "yjson_support" = { path = "../libs/yjson_support", output-type = "static" }
   "yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
   "agent_domain" = { path = "../agent_domain", output-type = "static" }
   "agent_ports" = { path = "../agent_ports", output-type = "static" }
   "agent_store" = { path = "../agent_store", output-type = "static" }
-  "model_adapters" = { path = "../model_adapters", output-type = "static" }
+
+[ffi.c]
+  process4cj_native = { path = "../libs/process4cj/native" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["../libs/process4cj/native", "${CANGJIE_STDX_PATH}"]

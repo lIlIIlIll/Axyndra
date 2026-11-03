@@ -1,0 +1,19 @@
+{
+  "id": "skills",
+  "version": "1.0.0",
+  "entry_kind": "native-executable",
+  "entrypoint": "bin/skills-plugin",
+  "sdk_range": "[2.0.0,3.0.0)",
+  "protocol_range": "axyndra-js-host-v2",
+  "capabilities": [],
+  "contributions": [
+    {
+      "kind": "context_provider",
+      "name": "skills"
+    },
+    {
+      "kind": "resource_provider",
+      "name": "reference"
+    }
+  ]
+}

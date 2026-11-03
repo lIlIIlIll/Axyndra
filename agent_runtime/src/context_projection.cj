@@ -148,8 +148,8 @@ public class ContextProjector {
         }
         let recent = ArrayList<ThreadItem>()
         for (item in thread.items where item.ordinal > covered) { recent.add(item) }
-        var estimated = estimator.estimateSystemInstructions(lane.systemInstructionVersion) +
-            estimator.estimateToolSet(lane.toolSet) +
+        var estimated = lane.estimateSystemInstructions159(estimator) +
+            lane.estimateToolSet159(estimator) +
             estimator.estimateDynamicState(dynamicState)
         match (compatibleCheckpoint) {
             case Some(value) => estimated += estimator.estimateCheckpoint(value)
@@ -171,6 +171,11 @@ public class ContextProjector {
             estimated + lane.outputReserve + lane.providerSafetyMargin > lane.contextWindow
         ))
     }
+    public func projectOwned(thread: ThreadRecord, readback: OwnedCanonicalThreadReadback,
+        lane: ModelLane, checkpoint: ?ContextCheckpoint, dynamicState: AgentValue,
+        allocate: (Int64) -> LogicalJsonOwnerReservation, guard: () -> Result<Unit>): Result<OwnedModelContextProjection> {
+        projectOwnedContext(version, estimator, thread, readback, lane, checkpoint, dynamicState, allocate, guard)
+    }
 }
 
 // The digest is not a permission primitive. It is a stable corruption/staleness
@@ -191,6 +196,18 @@ public func contextSourceDigest(thread: AgentThreadSnapshot, cover: Int64): Stri
                 case Some(value) => value.value
                 case None => ""
             }) + contextFrame(item.createdAtMillis.toString())
+        // Continuation prompt/image/schema bytes live in the consumed request;
+        // bind their digest into checkpoints without changing ordinary history.
+        match (item.provenance.continuationOrigin) {
+            case Some(origin) => source += contextFrame(canonicalAgentValue(continuationRunOriginValue(origin)))
+            case None => ()
+        }
+        match (item.provenance.continuationHistory) {
+            case Some(history) => source += contextFrame(canonicalAgentValue(continuationHistorySourceValue(history)))
+            case None => ()
+        }
+        match(item.provenance.completedInitiatorHistory173e){
+            case Some(history)=>source += contextFrame(canonicalAgentValue(completedInitiatorHistoryValue173e(history)));case None=>()}
         seen += 1
     }
     if (seen != cover) {

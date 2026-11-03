@@ -26,12 +26,20 @@ public func writeRunContinuationSnapshotProjection(
     let phasePayload = canonicalRunRequestPhaseState(requestSnapshot)
     let pendingApproval = ApprovalId("legacy-approval-" + value.approval.operationId.value)
     let previousRows = transaction.query(
-        "SELECT payload FROM run_continuations WHERE run_id=?",
+        "SELECT payload,digest FROM run_continuations WHERE run_id=?",
         [SqlParameter.Text(value.runId.value)]
     )
+    if (previousRows.size > 1) { throw IllegalStateException("Run has ambiguous durable continuation") }
     let previous: ?DurableRunContinuationV1 = if (previousRows.size == 1) {
-        try { Some(decodeDurableRunContinuation(previousRows[0].required(0))) }
-        catch (_: Exception) { None }
+        // A broken existing checkpoint is recovery debt, not an absent row.
+        // Never reset its lane or obligations by falling back to legacy defaults.
+        let current = decodeDurableRunContinuation(previousRows[0].required(0))
+        if (current.digest != previousRows[0].required(1) || current.runId.value != value.runId.value ||
+            current.turnId.value != runRows[0].required(1)) {
+            throw IllegalStateException("Run continuation projection is inconsistent")
+        }
+        requireContinuationForegroundSettled(transaction, current, value, pendingApproval)
+        Some(current)
     } else { None }
     let laneId = match (previous) {
         case Some(item) => item.laneId
@@ -53,6 +61,10 @@ public func writeRunContinuationSnapshotProjection(
         case Some(item) => item.contextManifestId
         case None => Option<ContextManifestId>.None
     }
+    // Canonical settlement must discharge pending tool/approval work first.
+    // Model retry checkpoints still replace their own Attempt projection;
+    // independent background obligations survive either phase change.
+    let background = match (previous) { case Some(item) => item.workDebt; case None => WorkDebtSnapshot() }
     let continuation = match (value.kind) {
         case RunContinuationKind.WaitingApproval => DurableRunContinuationV1(
             value.runId, laneId, SemanticTurnId(runRows[0].required(1)), stepOrdinal,
@@ -62,9 +74,14 @@ public func writeRunContinuationSnapshotProjection(
             contextManifestId: contextManifestId,
             pendingOperationId: Some(value.approval.operationId),
             pendingApprovalId: Some(pendingApproval),
+            // The same approval may be checkpointed again, but it cannot
+            // invent completion or drop the retained canonical batch cursor.
+            toolBatch: match (previous) { case Some(item) => item.toolBatch; case None => None },
             workDebt: WorkDebtSnapshot(
                 unsettledOperations: [value.approval.operationId],
-                pendingApprovals: [pendingApproval]
+                pendingApprovals: [pendingApproval], unclaimedInputs: background.unclaimedInputs,
+                activeChildRuns: background.activeChildRuns, ownedTasks: background.ownedTasks,
+                deferredContexts: background.deferredContexts
             )
         )
         case RunContinuationKind.RunningModel =>
@@ -83,7 +100,9 @@ public func writeRunContinuationSnapshotProjection(
                 reservedUsageId: Some(UsageRecordId(
                     "legacy-usage-" + checkpoint.activeAttemptId.value
                 )),
-                workDebt: WorkDebtSnapshot(activeAttempts: [checkpoint.activeAttemptId])
+                workDebt: WorkDebtSnapshot(activeAttempts: [checkpoint.activeAttemptId],
+                    unclaimedInputs: background.unclaimedInputs, activeChildRuns: background.activeChildRuns,
+                    ownedTasks: background.ownedTasks, deferredContexts: background.deferredContexts)
             )
     }
     putRunContinuation(
@@ -92,6 +111,65 @@ public func writeRunContinuationSnapshotProjection(
         withRunRequestSnapshotProjection(continuation, requestSnapshot),
         continuationObservedAtMillis(value)
     )
+}
+
+// Saving the next model checkpoint cannot stand in for committing a ToolResult
+// and Receipt. This fence also applies when no dynamic-context cut is queued.
+// It does not attempt to reconstruct missing facts or clear unknown work.
+func requireContinuationForegroundSettled(transaction: SqliteTransaction, current: DurableRunContinuationV1, value: RunContinuation,
+    approval: ApprovalId): Unit {
+    let debt = current.workDebt
+    if (current.waitingExternal.isSome() || !debt.waitingExternal.isEmpty()) {
+        throw IllegalStateException("Run continuation cannot discard pending external work")
+    }
+    match (value.kind) {
+        case RunContinuationKind.RunningModel =>
+            // Typed foreground phases are obligations even if another writer
+            // omitted their reference/debt fields. Actual settlement produces
+            // Checkpoint; ordinary ModelEffectPending retries are unchanged.
+            match (current.phase) {
+                case RunExecutionPhase.WaitingApproval(_) | RunExecutionPhase.WaitingExternal(_) |
+                    RunExecutionPhase.ToolEffectPending(_) | RunExecutionPhase.ToolSettling(_) |
+                    RunExecutionPhase.Terminalizing(_) =>
+                    throw IllegalStateException("model checkpoint cannot bypass foreground settlement")
+                case _ => ()
+            }
+            if (current.pendingOperationId.isSome() || current.pendingApprovalId.isSome() ||
+                !debt.unsettledOperations.isEmpty() || !debt.pendingApprovals.isEmpty()) {
+                throw IllegalStateException("model checkpoint cannot discard unsettled operation or approval debt")
+            }
+            match (current.toolBatch) {
+                case Some(batch) =>
+                    if (batch.nextOperationOrdinal != batch.operationIds.size) {
+                        throw IllegalStateException("model checkpoint cannot discard an unfinished tool batch")
+                    }
+                    for (operation in batch.operationIds) {
+                        if (!approvalBatchOperationKnown(transaction, value.runId, ThreadId(value.sessionId.value),
+                            current.turnId, operation)) {
+                            throw IllegalStateException("model checkpoint requires every batch operation's canonical result and Receipt")
+                        }
+                    }
+                case None => ()
+            }
+        case RunContinuationKind.WaitingApproval =>
+            // A missing debt-list entry does not make retained model/Decision
+            // identities disappear. Their actual settlement clears them first.
+            if (current.semanticRequestId.isSome() || current.attemptId.isSome() ||
+                current.reservedDecisionId.isSome() || current.reservedUsageId.isSome() || !current.reservedItemIds.isEmpty()) {
+                throw IllegalStateException("approval checkpoint cannot discard retained model references")
+            }
+            if ((current.pendingOperationId.isSome() && current.pendingOperationId.getOrThrow().value != value.approval.operationId.value) ||
+                (current.pendingApprovalId.isSome() && current.pendingApprovalId.getOrThrow().value != approval.value) ||
+                !debt.activeAttempts.isEmpty() || !debt.uncommittedDecisions.isEmpty()) {
+                throw IllegalStateException("approval checkpoint cannot replace another foreground owner")
+            }
+            for (operation in debt.unsettledOperations where operation.value != value.approval.operationId.value) {
+                throw IllegalStateException("approval checkpoint cannot discard another operation")
+            }
+            for (pending in debt.pendingApprovals where pending.value != approval.value) {
+                throw IllegalStateException("approval checkpoint cannot discard another approval")
+            }
+    }
 }
 
 public func consumeLegacyRunContinuationSource(
@@ -145,7 +223,11 @@ public func consumeLegacyRunContinuationSource(
     )
 }
 
-public func preserveRunContinuationProjection(
+public func preserveRunContinuationProjection(transaction: SqliteTransaction, value: DurableRunContinuationV1): DurableRunContinuationV1 {
+    preserveContextBoundaryProjection(transaction, preserveLegacyRunContinuationProjection(transaction, value))
+}
+
+func preserveLegacyRunContinuationProjection(
     transaction: SqliteTransaction,
     value: DurableRunContinuationV1
 ): DurableRunContinuationV1 {

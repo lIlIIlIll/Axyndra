@@ -1,12 +1,14 @@
 package agent_domain
 
+import logical_json_payload as payload
+
 import yjson.*
 
 import yjson_support.*
 
 import std.collection.*
 import std.deriving.*
-import std.overflow.*
+import stdx.crypto.digest.SHA256
 
 public let MODEL_POLICY_RESOLUTION_VERSION: UInt32 = 1u32
 public let MODEL_CAPABILITY_SNAPSHOT_VERSION: UInt32 = 1u32
@@ -206,6 +208,8 @@ public class ModelExecutionCapabilitiesSnapshot {
     public let modelMaxOutputTokens: Int64
     public let endpointMaxOutputTokens: ?Int64
     public let capabilityFingerprint: String
+    // Optional provider-neutral configuration binding. Empty preserves historic snapshots.
+    public let configurationDigest: String
 
     public init(
         modelId: String,
@@ -213,6 +217,7 @@ public class ModelExecutionCapabilitiesSnapshot {
         modelMaxOutputTokens: Int64,
         endpointMaxOutputTokens!: ?Int64 = None,
         capabilityFingerprint!: String = "",
+        configurationDigest!: String = "",
         snapshotSchemaVersion!: UInt32 = MODEL_CAPABILITY_SNAPSHOT_VERSION
     ) {
         if (modelId.trimAscii() == "" || modelMaxOutputTokens < 1 ||
@@ -222,6 +227,10 @@ public class ModelExecutionCapabilitiesSnapshot {
             }) {
             throw IllegalArgumentException("model execution capability snapshot is invalid")
         }
+        if (configurationDigest != "" && !httpIntentDigest(configurationDigest)) {
+            throw IllegalArgumentException("model configuration digest is invalid")
+        }
+        this.configurationDigest = configurationDigest
         this.snapshotSchemaVersion = snapshotSchemaVersion
         this.modelId = modelId
         this.thinking = thinking
@@ -232,7 +241,8 @@ public class ModelExecutionCapabilitiesSnapshot {
             modelId,
             thinking,
             modelMaxOutputTokens,
-            endpointMaxOutputTokens
+            endpointMaxOutputTokens,
+            configurationDigest: configurationDigest
         )
         if (capabilityFingerprint != "" && capabilityFingerprint != normalizedFingerprint) {
             throw IllegalArgumentException("model capability snapshot fingerprint mismatch")
@@ -389,7 +399,8 @@ public func resolveModelAttemptPolicy(
             input.capabilities.modelId,
             input.capabilities.thinking,
             input.capabilities.modelMaxOutputTokens,
-            input.capabilities.endpointMaxOutputTokens
+            input.capabilities.endpointMaxOutputTokens,
+            configurationDigest: input.capabilities.configurationDigest
         ),
         minVisibleResponseTokens: input.requestedPolicy.requestOutputBudget.minVisibleResponseTokens,
         thinkingSource: input.requestedPolicy.thinkingSource,
@@ -594,7 +605,8 @@ public func canonicalModelCapabilitySnapshotPayload(
     modelId: String,
     thinking: ThinkingCapabilities,
     modelMaxOutputTokens: Int64,
-    endpointMaxOutputTokens: ?Int64
+    endpointMaxOutputTokens: ?Int64,
+    configurationDigest!: String = ""
 ): String {
     var result = "snapshot_schema_version=" + snapshotSchemaVersion.toString() + "\n"
     result += "model_id=" + modelId.size.toString() + ":" + modelId + "\n"
@@ -612,6 +624,7 @@ public func canonicalModelCapabilitySnapshotPayload(
         case Some(value) => value.toString()
         case None => "-"
     } + "\n"
+    if (configurationDigest != "") { result += "configuration_digest=" + configurationDigest + "\n" }
     result
 }
 
@@ -684,14 +697,16 @@ public func modelCapabilitySnapshotFingerprint(
     modelId: String,
     thinking: ThinkingCapabilities,
     modelMaxOutputTokens: Int64,
-    endpointMaxOutputTokens: ?Int64
+    endpointMaxOutputTokens: ?Int64,
+    configurationDigest!: String = ""
 ): String {
     modelPolicySha256(canonicalModelCapabilitySnapshotPayload(
         snapshotSchemaVersion,
         modelId,
         thinking,
         modelMaxOutputTokens,
-        endpointMaxOutputTokens
+        endpointMaxOutputTokens,
+        configurationDigest: configurationDigest
     ).toArray())
 }
 
@@ -718,106 +733,19 @@ func thinkingLevelCanonicalName(value: ThinkingLevel): String {
 }
 
 public func modelPolicySha256(bytes: Array<Byte>): String {
-    let constants: Array<UInt32> = [
-        0x428a2f98u32,0x71374491u32,0xb5c0fbcfu32,0xe9b5dba5u32,0x3956c25bu32,0x59f111f1u32,0x923f82a4u32,0xab1c5ed5u32,
-        0xd807aa98u32,0x12835b01u32,0x243185beu32,0x550c7dc3u32,0x72be5d74u32,0x80deb1feu32,0x9bdc06a7u32,0xc19bf174u32,
-        0xe49b69c1u32,0xefbe4786u32,0x0fc19dc6u32,0x240ca1ccu32,0x2de92c6fu32,0x4a7484aau32,0x5cb0a9dcu32,0x76f988dau32,
-        0x983e5152u32,0xa831c66du32,0xb00327c8u32,0xbf597fc7u32,0xc6e00bf3u32,0xd5a79147u32,0x06ca6351u32,0x14292967u32,
-        0x27b70a85u32,0x2e1b2138u32,0x4d2c6dfcu32,0x53380d13u32,0x650a7354u32,0x766a0abbu32,0x81c2c92eu32,0x92722c85u32,
-        0xa2bfe8a1u32,0xa81a664bu32,0xc24b8b70u32,0xc76c51a3u32,0xd192e819u32,0xd6990624u32,0xf40e3585u32,0x106aa070u32,
-        0x19a4c116u32,0x1e376c08u32,0x2748774cu32,0x34b0bcb5u32,0x391c0cb3u32,0x4ed8aa4au32,0x5b9cca4fu32,0x682e6ff3u32,
-        0x748f82eeu32,0x78a5636fu32,0x84c87814u32,0x8cc70208u32,0x90befffau32,0xa4506cebu32,0xbef9a3f7u32,0xc67178f2u32
-    ]
-    var state = [0x6a09e667u32,0xbb67ae85u32,0x3c6ef372u32,0xa54ff53au32,
-        0x510e527fu32,0x9b05688cu32,0x1f83d9abu32,0x5be0cd19u32]
-    let remainder = bytes.size % 64
-    let zeros = if (remainder <= 55) { 55 - remainder } else { 119 - remainder }
-    let paddedSize = bytes.size + 1 + zeros + 8
-    let bitLength = UInt64(bytes.size).wrappingMul(8u64)
-    var block: Int64 = 0
-    while (block < paddedSize) {
-        let words = Array<UInt32>(64, repeat: 0u32)
-        for (index in 0..16) {
-            let start = block + index * 4
-            words[index] = (UInt32(modelPolicyShaPaddedByte(bytes,start,paddedSize,bitLength)) << 24) |
-                (UInt32(modelPolicyShaPaddedByte(bytes,start+1,paddedSize,bitLength)) << 16) |
-                (UInt32(modelPolicyShaPaddedByte(bytes,start+2,paddedSize,bitLength)) << 8) |
-                UInt32(modelPolicyShaPaddedByte(bytes,start+3,paddedSize,bitLength))
-        }
-        for (index in 16..64) {
-            let s0 = modelPolicyRotateRight(words[index-15],7u32) ^ modelPolicyRotateRight(words[index-15],18u32) ^ (words[index-15] >> 3)
-            let s1 = modelPolicyRotateRight(words[index-2],17u32) ^ modelPolicyRotateRight(words[index-2],19u32) ^ (words[index-2] >> 10)
-            words[index] = words[index-16].wrappingAdd(s0).wrappingAdd(words[index-7]).wrappingAdd(s1)
-        }
-        var a=state[0]; var b=state[1]; var c=state[2]; var d=state[3]
-        var e=state[4]; var f=state[5]; var g=state[6]; var h=state[7]
-        for (index in 0..64) {
-            let big1=modelPolicyRotateRight(e,6u32)^modelPolicyRotateRight(e,11u32)^modelPolicyRotateRight(e,25u32)
-            let t1=h.wrappingAdd(big1).wrappingAdd((e&f)^((!e)&g)).wrappingAdd(constants[index]).wrappingAdd(words[index])
-            let big0=modelPolicyRotateRight(a,2u32)^modelPolicyRotateRight(a,13u32)^modelPolicyRotateRight(a,22u32)
-            let t2=big0.wrappingAdd((a&b)^(a&c)^(b&c))
-            h=g; g=f; f=e; e=d.wrappingAdd(t1); d=c; c=b; b=a; a=t1.wrappingAdd(t2)
-        }
-        state[0]=state[0].wrappingAdd(a); state[1]=state[1].wrappingAdd(b)
-        state[2]=state[2].wrappingAdd(c); state[3]=state[3].wrappingAdd(d)
-        state[4]=state[4].wrappingAdd(e); state[5]=state[5].wrappingAdd(f)
-        state[6]=state[6].wrappingAdd(g); state[7]=state[7].wrappingAdd(h)
-        block += 64
-    }
-    let hex=["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"]
-    var result=""
-    for (word in state) { for (shift in [24u32,16u32,8u32,0u32]) {
-        let value=Int64((word>>shift)&0xffu32); result += hex[value/16]+hex[value%16]
-    }}
-    result
+    payload.modelPolicySha256(bytes)
 }
 
 public func canonicalAgentValue(value: AgentValue): String {
-    match (value.unifiedKind) {
-        case ValueKind.Null => "null"
-        case ValueKind.Boolean => if (value.asBool()) { "true" } else { "false" }
-        case ValueKind.Number => "n" + agentValueFrame(value.asNumberText())
-        case ValueKind.Text => "s" + agentValueFrame(value.text)
-        case ValueKind.List =>
-            var output = "["
-            for (item in value.items) { output += agentValueFrame(canonicalAgentValue(item)) }
-            output + "]"
-        case ValueKind.Object =>
-            var output = "{"
-            let used = Array<Bool>(value.fields.size, repeat: false)
-            for (_ in 0..value.fields.size) {
-                var selected: Int64 = -1
-                for (index in 0..value.fields.size where !used[index]) {
-                    if (selected < 0 || value.fields[index].name < value.fields[selected].name) {
-                        selected = index
-                    }
-                }
-                used[selected] = true
-                output += agentValueFrame(value.fields[selected].name) +
-                    agentValueFrame(canonicalAgentValue(value.fields[selected].value))
-            }
-            output + "}"
-    }
+    payload.canonicalAgentValue(value)
 }
 
-func agentValueFrame(value: String): String {
-    value.size.toString() + ":" + value
-}
+
 
 public func modelPolicySha256Text(value: String): String {
-    modelPolicySha256(value.toArray())
+    payload.modelPolicySha256Text(value)
 }
 
-func modelPolicyShaPaddedByte(bytes:Array<Byte>,index:Int64,paddedSize:Int64,bitLength:UInt64):Byte {
-    if (index < bytes.size) { return bytes[index] }
-    if (index == bytes.size) { return 0x80u8 }
-    if (index >= paddedSize-8) { return UInt8((bitLength >> UInt64((paddedSize-1-index)*8)) & 0xffu64) }
-    0u8
-}
-
-func modelPolicyRotateRight(value:UInt32,distance:UInt32):UInt32 {
-    (value>>distance)|(value<<(32u32-distance))
-}
 
 func defaultThinkingBudgetTiers(
     levels: Array<ThinkingLevel>

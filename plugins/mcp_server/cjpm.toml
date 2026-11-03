@@ -1,0 +1,17 @@
+[package]
+cjc-version = "1.1.0"
+name = "mcp_server_plugin"
+version = "1.0.0"
+description = "Independent powerless MCP server decoder for generic host stdio ingress"
+output-type = "executable"
+
+[dependencies]
+"process4cj" = { path = "../../libs/process4cj", output-type = "static" }
+"jsonrpc4cj" = { path = "../../libs/jsonrpc4cj", output-type = "static" }
+"mcp4cj" = { path = "../../libs/mcp4cj", output-type = "static" }
+"yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+"yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

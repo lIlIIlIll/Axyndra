@@ -1,0 +1,15 @@
+[package]
+cjc-version = "1.1.0"
+name = "github_plugin"
+version = "1.0.0"
+description = "Independent GitHub capability through authorized process channels"
+output-type = "executable"
+
+[dependencies]
+"process4cj" = { path = "../../libs/process4cj", output-type = "static" }
+"yjson" = { git = "https://github.com/lIlIIlIll/yjson.git", tag = "0.1.0", output-type = "static" }
+"yjson_support" = { path = "../../libs/yjson_support", output-type = "static" }
+
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["${CANGJIE_STDX_PATH}"]

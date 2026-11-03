@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "source_revision": "4d88fa6072f7176a6d236a1cb39b33529d5b609d",
+  "allowed_violations": [
+    "import:agent_product/src/lsp_runtime.cj:lsp4cj",
+    "import:agent_product/src/program_runtime.cj:program_language",
+    "import:agent_product/src/program_worker.cj:program_language",
+    "import:agent_product/src/tools.cj:workspace_search_extension",
+    "import:agent_product/src/tools.cj:workspace_write_extension",
+    "manifest:agent_product:lsp4cj",
+    "manifest:agent_product:program_language",
+    "manifest:agent_product:workspace_search_extension",
+    "manifest:agent_product:workspace_write_extension",
+    "reachable:agent_app:lsp4cj",
+    "reachable:agent_app:program_language",
+    "reachable:agent_app:workspace_search_extension",
+    "reachable:agent_app:workspace_write_extension",
+    "reachable:agent_product:lsp4cj",
+    "reachable:agent_product:program_language",
+    "reachable:agent_product:workspace_search_extension",
+    "reachable:agent_product:workspace_write_extension",
+    "reachable:agent_rpc:lsp4cj",
+    "reachable:agent_rpc:program_language",
+    "reachable:agent_rpc:workspace_search_extension",
+    "reachable:agent_rpc:workspace_write_extension"
+  ],
+  "reviewed_adjustments": [
+    "Include existing aliased LSP/DAP source imports in the baseline scanner.",
+    "Move the existing MCP adapter dependency from agent_extensions to the dedicated mcp_extension package; agent_product still links it until A2.",
+    "Remove direct tool_runtime Skill imports and dependency after generic immutable context projection migration.",
+    "Remove five static AST capability edges after deleting ast_extension and Product AST business dispatch; independent ast_plugin remains optional and outside the host graph.",
+    "Remove five static web_search_extension capability edges and the retired search_cli model_adapters import after independent web_search_plugin migration; retain the retired package name in optional policy to reject restoration of the old host dependency.",
+    "Remove concrete Skill imports and dependencies from Core, Runtime, Store and Embed after provider-neutral versioned Run context snapshots; preserve historical bytes and refuse unsupported resume. Generic reachability is rechecked by the boundary gate.",
+    "Move protocol-neutral AgentValue JSON codecs from model_adapters to agent_domain without changing serialization, byte ceilings or error evidence. Remove frontend and persistence direct adapter dependencies and the persistence transitive model/llm closure. Actual legacy Product model assembly remains pending installed-provider parity and removal.",
+    "Move the existing Program language compiler/interpreter out of tool_runtime into the explicitly optional program_language package. Product still statically imports it until its installed Program migration is verified. These newly visible edges disclose that pre-existing business coupling; they do not certify A4-03 or Minimal. The language port no longer receives ToolInvocationContext, and the old interpreter implementation/export is deleted.",
+    "Remove Product legacy Skills discovery/routing/fallback; Coding uses the installed independent provider through canonical context reads. Host dependency closure excludes agent_skills and skill_runtime; standalone historical codec tests remain optional.",
+    "Remove the embedded MCP source, package and reachable dependency allowances in this candidate. Preserve all later Skills/model/Program ratchets. Deletion is eligible only after original supported behavior, actual MCP-free App build, and fixed-binary independently installed Client/Server gates; strict Minimal shared execution is a separate required gate.",
+    "Delete Product built-in DAP runtime/executor and its default catalog/dependency edge. The complete existing debug support fixture now independently installs the DAP artifact and calls the same public canonical entry. This ratchet adds no exemption and does not certify pending current binary or lifecycle parity tests."
+  ]
+}

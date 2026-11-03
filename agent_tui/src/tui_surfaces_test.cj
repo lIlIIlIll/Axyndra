@@ -12,7 +12,7 @@ func surfaceOwnerName(owner: SurfaceOwner): String {
         case SurfaceOwner.Ask => "ask"
         case SurfaceOwner.Approval => "approval"
         case SurfaceOwner.Todo => "todo"
-        case SurfaceOwner.PlanReview => "plan"
+        case SurfaceOwner.PluginView => "view"
         case SurfaceOwner.AgentHub => "hub"
         case SurfaceOwner.Completion => "completion"
     }
