@@ -2559,6 +2559,21 @@ func requiredModelRequestAttempt(
     }
 }
 
+func optionalExecutionUsageSplit(value: AgentValue, name: String): Result<Int64> {
+    match (value.field(name)) {
+        case Some(item) =>
+            if (item.unifiedKind != ValueKind.Number) {
+                return codecError("field is not an integer: " + name)
+            }
+            try {
+                Result.Ok(Int64.parse(item.asNumberText()))
+            } catch (_: Exception) {
+                codecError("field is not an integer: " + name)
+            }
+        case None => Result.Ok(0)
+    }
+}
+
 func requiredExecutionUsage(value: AgentValue): Result<ExecutionUsage> {
     let turns = match (requiredInteger(value, "turns")) {
         case Result.Ok(item) => item
@@ -2584,9 +2599,22 @@ func requiredExecutionUsage(value: AgentValue): Result<ExecutionUsage> {
         case Result.Ok(item) => item
         case Result.Err(error) => return Result.Err(error)
     }
+    // Older stored events predate the work/drain split, so an absent field
+    // reads as zero instead of failing the whole decode. A present field must
+    // still be an integer.
+    let modelRequests = match (optionalExecutionUsageSplit(value, "model_requests")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
+    let drainModelRequests = match (optionalExecutionUsageSplit(value, "drain_model_requests")) {
+        case Result.Ok(item) => item
+        case Result.Err(error) => return Result.Err(error)
+    }
     try {
         Result.Ok(ExecutionUsage(
             turns: turns,
+            modelRequests: modelRequests,
+            drainModelRequests: drainModelRequests,
             toolCalls: toolCalls,
             activeTools: activeTools,
             inputTokens: input,
