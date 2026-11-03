@@ -4941,17 +4941,19 @@ public class ToolPipeline {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let plan = match (operations.loadPlan(operationId, context.runId)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
+        let readFacts = plan.contextReadFacts
         let call = match (operations.loadCall(operationId, context.runId)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
-        if (plan.contextReadFacts.isEmpty() || context.trustedControl ||
+        if (readFacts.isEmpty() || context.trustedControl ||
             operationId.value != "operation-" + committed.decisionId.value + "-" + committed.scopedToolCallId.value ||
             call.callId != committed.block.callId || call.name != committed.block.name || plan.toolName != call.name) {
             return Result.Err(AgentError(AgentErrorKind.PermissionDenied,
                 "tool.approval_read_source_mismatch", "read-backed review requires its original canonical parent")) }
-        match (validateContextReadInputProjection(call.arguments, plan.contextReadFacts)) {
+        match (validateContextReadInputProjection(call.arguments, readFacts)) {
             case Result.Err(error) => return Result.Err(error); case Result.Ok(_) => () }
         let request = read.request()
-        for (link in plan.contextReadFacts) {
+        for (index in 0..readFacts.size) {
+            let link = readFacts[index]
             let fact = match (operations.loadContextReadFact(link.operationId, context.runId)) {
                 case Result.Err(error) => return Result.Err(error); case Result.Ok(value) => value }
             let readPlan = match (operations.loadPlan(link.operationId, context.runId)) {
@@ -4963,7 +4965,8 @@ public class ToolPipeline {
                 fact.origin.ownerNamespace != read.ownerNamespace || fact.origin.packageDigest != read.packageDigest ||
                 fact.origin.configurationDigest != read.configurationDigest ||
                 fact.origin.projectionDigest != contextReadProjectionDigest(context.contextProjection) ||
-                !isContextReadPlan(readPlan) || canonicalAgentValue(readPlan.canonicalArguments) != canonicalAgentValue(request)) {
+                !isContextReadPlan(readPlan) || (index == readFacts.size - 1 &&
+                    canonicalAgentValue(readPlan.canonicalArguments) != canonicalAgentValue(request))) {
                 return Result.Err(AgentError(AgentErrorKind.Conflict,
                     "tool.approval_read_changed", "review read differs from the retained original source and completed fact")) }
         }
@@ -4977,7 +4980,7 @@ public class ToolPipeline {
         let frozenCall = ToolCall(call.callId, call.name, plan.canonicalArguments)
         let current = registration.descriptor.resolved(frozenCall)
         if (!sameNormalizedOperationPlan(plan, normalizedToolOperationPlan(context,
-            frozenCall, current, contextReadFacts: plan.contextReadFacts))) {
+            frozenCall, current, contextReadFacts: readFacts))) {
             return Result.Err(AgentError(AgentErrorKind.Conflict,
                 "tool.approval_context_changed", "normalized Operation policy changed while approval was pending")) }
         validateDecisionPolicy(context, call, plan, decision)

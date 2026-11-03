@@ -70,7 +70,7 @@ class ToolReadSequenceCoreProbe <: ToolExecutor{
     }
 }
 func coreToolReadSequenceContract():Unit{
-    for(mode in ["approve","cancel_second","budget","owner_changed","fact_changed","stage_limit"]){
+    for(mode in ["approve","cancel_second","budget","owner_changed","fact_changed","fact_changed_pending","stage_limit"]){
         let root=Directory.createTemp("/tmp").toString();let database=SqliteDatabase(root+"/sequence.db")
         try{
             File.writeTo(root+"/input-1.txt","actual first file".toArray());File.writeTo(root+"/input-2.txt","actual second file".toArray())
@@ -112,9 +112,23 @@ func coreToolReadSequenceContract():Unit{
                         "cancel between stages never reads the second file or dispatches the parent")
                 }else{
                     let two=core.decide(request,second,ApprovalDecision.Approve)
-                    if(mode=="approve"){
+                    if(mode=="approve" || mode=="fact_changed_pending"){
                         let parent=contextReadAwaiting(two,"plugin.context.pending")
                         expect(probe.reads==2 && probe.parents==0 && probe.advances==2,"read approvals grant no later parent write")
+                        if(mode=="fact_changed_pending"){
+                            database.execute("DELETE FROM audit_events WHERE operation_id=? AND kind='context_read_admitted'",
+                                [SqlParameter.Text(first.operationId.value)])
+                            let denied=core.decide(request,parent,ApprovalDecision.Approve)
+                            expect(match(denied){case Result.Err(error)=>error.code=="context.read_fact_uncommitted";case _=>false},
+                                "pending parent approval reloads the withdrawn earlier admission")
+                            expect(probe.reads==2 && probe.parents==0 && probe.advances==2 &&
+                                model.requests.size==1 &&
+                                database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_execution_handoff'")==2 &&
+                                database.scalarInt("SELECT COUNT(*) FROM operation_receipts")==2 &&
+                                database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'")==2,
+                                "failed approval preflight adds no read, parent execution, receipt or handoff")
+                            core.cancel(request.runId).value().getOrThrow()
+                        }else{
                         let _=completedSnapshotOrThrow(core.decide(request,parent,ApprovalDecision.Approve),"two facts consumed by actual parent")
                         expect(probe.parents==1 && probe.ledger.getOrThrow().snapshot().toolCalls==3 &&
                             database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'")==3,
@@ -122,9 +136,32 @@ func coreToolReadSequenceContract():Unit{
                         for(link in probe.finalPlan.getOrThrow().contextReadFacts){
                             let actual=operations.loadContextReadFact(link.operationId,request.runId).value().getOrThrow()
                             expect(canonicalAgentValue(actual.reference())==canonicalAgentValue(link.toValue()),"all persisted links remain canonical after completion")}
+                        }
                     }else if(mode=="fact_changed"){
-                        expect(two.isError() && probe.reads==2 && probe.parents==0,
-                            "rereading a changed earlier real fact prevents final parent preparation")
+                        let _=completedSnapshotOrThrow(two,"changed earlier fact settles the original parent rejection")
+                        expect(probe.reads==2 && probe.parents==0 &&
+                            database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='completed'")==2 &&
+                            database.scalarInt("SELECT COUNT(*) FROM operation_receipts WHERE outcome='rejected'")==1 &&
+                            database.scalarInt("SELECT COUNT(*) FROM operation_receipts")==3 &&
+                            database.scalarInt("SELECT COUNT(*) FROM approvals")==2 &&
+                            database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='operation_execution_handoff'")==2,
+                            "withdrawn earlier fact rejects the parent without parent approval or execution")
+                        var rejectedParents:Int64=0
+                        for(row in database.query("SELECT payload FROM items WHERE kind='tool_result'")){
+                            match(decodeStoredThreadContent(row.required(0))){
+                                case ThreadItemContent.ToolResult(id,op,receiptId,output,isError)=>if(id.value=="context-parent"){
+                                    rejectedParents++
+                                    expect(isError && httpIntentText(output,"code")=="tool.hook_denied" &&
+                                        httpIntentText(output,"message").contains("context.read_fact_uncommitted") &&
+                                        operations.loadCall(op,request.runId).value().getOrThrow().callId==id.value &&
+                                        database.query("SELECT id FROM operation_receipts WHERE id=? AND operation_id=? AND outcome='rejected'",
+                                            [SqlParameter.Text(receiptId),SqlParameter.Text(op.value)]).size==1,
+                                        "original parent error retains the fact rejection and its exact rejected receipt")
+                                }
+                                case _=>()
+                            }
+                        }
+                        expect(rejectedParents==1,"original parent has exactly one durable rejected ToolResult")
                     }else{
                         let _=completedSnapshotOrThrow(two,"stage overflow rejects unexecuted canonical parent")
                         expect(probe.reads==2 && probe.parents==0 && database.scalarInt("SELECT COUNT(*) FROM audit_events WHERE kind='context_read_admitted'")==2,
@@ -139,7 +176,8 @@ func coreToolReadSequenceContract():Unit{
                 "every real stage and original parent settles its own canonical debt")
             expect(database.scalarInt("SELECT COUNT(*) FROM runs")==1 && database.scalarInt("SELECT COUNT(*) FROM items WHERE kind='user_message'")==1,
                 "sequence adds no fake Run, user input or model Decision")
+            println("Core actual bounded tool read sequence scenario passed: "+mode)
         }finally{database.close();remove(root,recursive:true)}
     }
-    println("Core actual bounded tool read sequence contract passed: 6 scenarios")
+    println("Core actual bounded tool read sequence contract passed: 7 scenarios")
 }

@@ -22,6 +22,10 @@ func preparedToolCall(prepared: PreparedToolInvocation): ToolCall {
 }
 
 main(): Int64 {
+    if (getCommandLine().contains("--controlled-internal-model-contract")) {
+        controlledInternalModelCallContract()
+        return 0
+    }
     if(getCommandLine().contains("--tool-read-sequence-contract")){
         coreToolReadSequenceContract();return 0
     }
@@ -1703,47 +1707,87 @@ func controlledInternalModelCallContract(): Unit {
             maxTotalInputTokens: 100, maxTotalOutputTokens: 100
         )
     )
-    let lateResult = lateControl.executeInternal(
-        ModelRequest(
-            "fixture", [], tools: [], parallelToolCalls: false,
-            requestId: "internal-late-settlement",
-            toolChoice: ModelToolChoice.NoTools
-        ),
-        InternalModelCallOptions(timeoutMillis: 20, parent: Some(lateParent))
-    )
-    var settlementWaited: Int64 = 0
-    while ((lateRuns.find(lateRunId).value().getOrThrow().inputTokens < 40 ||
-        lateRuns.eventLog.size < 3) && settlementWaited < 2000) {
-        sleep(Duration.millisecond * 10)
-        settlementWaited += 10
-    }
-    let lateSnapshot = lateRuns.find(lateRunId).value().getOrThrow()
-    let lateDeltaRecorded = lateRuns.eventLog.size == 3 &&
-        match (lateRuns.eventLog[2].payload) {
-            case AgentEventPayload.ModelUsageUpdated(usage) =>
-                usage.inputTokens == 30 && usage.outputTokens == 6 &&
-                    usage.reasoningTokens == 3 &&
-                    usage.cacheReadTokens == 4 &&
-                    usage.cacheWriteTokens == 5
-            case _ => false
+    try {
+        let lateResult = lateControl.executeInternal(
+            ModelRequest(
+                "fixture", [], tools: [], parallelToolCalls: false,
+                requestId: "internal-late-settlement",
+                toolChoice: ModelToolChoice.NoTools
+            ),
+            InternalModelCallOptions(timeoutMillis: 20, parent: Some(lateParent))
+        )
+        let partial = lateRuns.find(lateRunId).value().getOrThrow()
+        let partialEvents = lateRuns.events(lateRunId, 0).value().getOrThrow().events
+        expect(
+            lateResult.isError() && lateResult.error().getOrThrow().code ==
+                "model.internal_timeout" && lateProvider.wasCancelled() &&
+                !lateProvider.hasCompleted(),
+            "timeout returns before the gated provider completes"
+        )
+        expect(
+            partial.inputTokens == 10 && partial.outputTokens == 2 &&
+                partial.reasoningTokens == 0 && partial.cacheReadTokens == 0 &&
+                partial.cacheWriteTokens == 0 && partialEvents.size == 2,
+            "timeout settles only the initial usage before completion is released"
+        )
+        expect(
+            match (partialEvents[0].payload) {
+                case AgentEventPayload.ModelUsageUpdated(usage) =>
+                    usage.inputTokens == 10 && usage.outputTokens == 2 &&
+                        usage.reasoningTokens == 0 && usage.cacheReadTokens == 0 &&
+                        usage.cacheWriteTokens == 0
+                case _ => false
+            } && match (partialEvents[1].payload) {
+                case AgentEventPayload.ModelRequestAttemptCompleted(value) =>
+                    value.outcome == ModelRequestOutcome.Failed &&
+                        value.errorCode == "model.internal_timeout" &&
+                        match (value.usage) {
+                            case Some(usage) => usage.inputTokens == 10 &&
+                                usage.outputTokens == 2 && usage.reasoningTokens == 0 &&
+                                usage.cacheReadTokens == 0 && usage.cacheWriteTokens == 0
+                            case None => false
+                        }
+                case _ => false
+            },
+            "initial usage and timeout attempt are durable before terminal completion"
+        )
+        println("Late settlement before release: usage=10/2/0/0/0 events=2 timeout=model.internal_timeout")
+        lateProvider.releaseCompletion()
+        let deadline = MonoTime.now() + Duration.millisecond * 2000
+        while ((lateRuns.find(lateRunId).value().getOrThrow().inputTokens < 40 ||
+            lateRuns.events(lateRunId, 0).value().getOrThrow().events.size < 3) &&
+            MonoTime.now() < deadline) {
+            sleep(Duration.millisecond * 10)
         }
-    expect(
-        lateResult.isError() && lateResult.error().getOrThrow().code ==
-            "model.internal_timeout" && lateProvider.wasCancelled() &&
-            lateProvider.hasCompleted(),
-        "late provider completion does not replace the caller-visible timeout"
-    )
-    expect(
-        lateSnapshot.inputTokens == 40 && lateSnapshot.outputTokens == 8 &&
-            lateSnapshot.reasoningTokens == 3 &&
-            lateSnapshot.cacheReadTokens == 4 &&
-            lateSnapshot.cacheWriteTokens == 5,
-        "late provider completion settles full terminal usage into the Run ledger"
-    )
-    expect(
-        lateDeltaRecorded,
-        "late provider completion records only the previously uncharged usage delta"
-    )
+        let lateSnapshot = lateRuns.find(lateRunId).value().getOrThrow()
+        let lateEvents = lateRuns.events(lateRunId, 0).value().getOrThrow().events
+        let lateDeltaRecorded = lateEvents.size == 3 &&
+            lateEvents[0].sequence == 1 && lateEvents[1].sequence == 2 &&
+            lateEvents[2].sequence == 3 && match (lateEvents[2].payload) {
+                case AgentEventPayload.ModelUsageUpdated(usage) =>
+                    usage.inputTokens == 30 && usage.outputTokens == 6 &&
+                        usage.reasoningTokens == 3 && usage.cacheReadTokens == 4 &&
+                        usage.cacheWriteTokens == 5
+                case _ => false
+            }
+        expect(
+            lateResult.isError() && lateResult.error().getOrThrow().code ==
+                "model.internal_timeout" && lateProvider.wasCancelled() &&
+                lateProvider.hasCompleted(),
+            "late provider completion does not replace the caller-visible timeout"
+        )
+        expect(
+            lateSnapshot.inputTokens == 40 && lateSnapshot.outputTokens == 8 &&
+                lateSnapshot.reasoningTokens == 3 && lateSnapshot.cacheReadTokens == 4 &&
+                lateSnapshot.cacheWriteTokens == 5,
+            "late provider completion settles full terminal usage into the Run ledger"
+        )
+        expect(lateDeltaRecorded,
+            "late provider completion records only the previously uncharged usage delta")
+        println("Late settlement after release: usage=40/8/3/4/5 events=3 delta=30/6/3/4/5 timeout=model.internal_timeout")
+    } finally {
+        lateProvider.releaseCompletion()
+    }
 
     let cancelledRuns = MemoryRuns()
     let cancelledRunId = RunId("internal-model-cancelled")
@@ -6992,6 +7036,8 @@ class LateSettlementModel <: ModelPort {
     private let lock = Mutex()
     private var cancelled = false
     private var completed = false
+    private var initialUsagePublished = false
+    private var completionReleased = false
 
     public func execute(
         request: ModelRequest,
@@ -6999,7 +7045,16 @@ class LateSettlementModel <: ModelPort {
     ): Result<ModelReply> {
         let _ = request
         events(ModelEvent.UsageUpdated(10, 2))
+        lock.lock()
+        try { initialUsagePublished = true } finally { lock.unlock() }
         sleep(Duration.millisecond * 500)
+        while (true) {
+            lock.lock()
+            let released = completionReleased
+            lock.unlock()
+            if (released) { break }
+            sleep(Duration.millisecond)
+        }
         events(ModelEvent.UsageUpdated(40, 8))
         lock.lock()
         try { completed = true } finally { lock.unlock() }
@@ -7021,7 +7076,23 @@ class LateSettlementModel <: ModelPort {
         let _ = requestId
         lock.lock()
         try { cancelled = true } finally { lock.unlock() }
+        let deadline = MonoTime.now() + Duration.millisecond * 2000
+        while (true) {
+            lock.lock()
+            let published = initialUsagePublished
+            lock.unlock()
+            if (published) { break }
+            if (MonoTime.now() >= deadline) {
+                throw IllegalStateException("late fixture did not publish initial usage")
+            }
+            sleep(Duration.millisecond)
+        }
         Result.Ok(())
+    }
+
+    func releaseCompletion(): Unit {
+        lock.lock()
+        try { completionReleased = true } finally { lock.unlock() }
     }
 
     func wasCancelled(): Bool {
@@ -7078,6 +7149,7 @@ class MemoryRuns <: RunRepository {
     var savedDecision: ?ApprovalDecisionReceipt = None
     let savedDecisions = ArrayList<ApprovalDecisionReceipt>()
     private let initialSaveLock = Mutex()
+    private let snapshotEventLock = Mutex()
     private let blockInitialSave: Bool
     private var initialSaveEntered: Bool = false
     private var initialSaveReleased: Bool = false
@@ -7107,8 +7179,11 @@ class MemoryRuns <: RunRepository {
                 sleep(Duration.millisecond)
             }
         }
-        snapshots.add(snapshot)
-        Result.Ok(())
+        snapshotEventLock.lock()
+        try {
+            snapshots.add(snapshot)
+            Result.Ok(())
+        } finally { snapshotEventLock.unlock() }
     }
 
     public func initialSaveStarted(): Bool {
@@ -7122,18 +7197,26 @@ class MemoryRuns <: RunRepository {
     }
 
     public func find(runId: RunId): Result<RunSnapshot> {
-        if (snapshots.isEmpty()) {
-            Result.Err(missing("run"))
-        } else {
-            Result.Ok(snapshots[snapshots.size - 1])
-        }
+        snapshotEventLock.lock()
+        try {
+            if (snapshots.isEmpty()) {
+                Result.Err(missing("run"))
+            } else {
+                Result.Ok(snapshots[snapshots.size - 1])
+            }
+        } finally { snapshotEventLock.unlock() }
     }
 
     public func events(runId: RunId, after: Int64): Result<EventPage> {
-        Result.Ok(EventPage(eventLog.toArray(), eventLog.size + 1))
+        snapshotEventLock.lock()
+        try {
+            Result.Ok(EventPage(eventLog.toArray(), eventLog.size + 1))
+        } finally { snapshotEventLock.unlock() }
     }
 
     public func append(event: AgentEvent): Result<Unit> {
+        snapshotEventLock.lock()
+        try {
         if (failStreamTelemetry && event.meta.attemptId.isSome() && match (event.payload) {
             case AgentEventPayload.TextDelta(_) | AgentEventPayload.ReasoningDelta(_) => true
             case AgentEventPayload.Extension(_, detail) => match (detail.field("code")) {
@@ -7162,6 +7245,7 @@ class MemoryRuns <: RunRepository {
         }
         eventLog.add(event)
         Result.Ok(())
+        } finally { snapshotEventLock.unlock() }
     }
 
     public func saveContinuation(value: RunContinuation): Result<Unit> {

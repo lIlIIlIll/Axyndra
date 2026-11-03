@@ -1658,3 +1658,63 @@ directories are created; no Native path guard or installed SDK is changed (E68).
 
 No checklist is marked complete by this record. Use `Refs #45`, not a closing
 reference, while applicable requirements remain unaccepted.
+
+## PR #49 named blockers A and B: scoped acceptance
+
+The two named blockers pass on the working-tree sources based on `48df4a06`.
+This result supersedes the earlier late-settlement and multi-stage approval
+failures only. It does not establish PR readiness or close Issue #45.
+
+| Requirement | Required observable result | Implementation and verification | Status and remaining gap |
+| --- | --- | --- | --- |
+| A / T001 / P001 | Timeout returns with usage `10/2/0/0/0` and exactly two events. Releasing terminal completion produces total `40/8/3/4/5` and only one additional `30/6/3/4/5` usage event. The caller still sees `model.internal_timeout`. | `LateSettlementModel` gates terminal completion and waits for initial usage publication before returning from cancel. `MemoryRuns.find`, `events`, snapshot publication, and event append share a mutex. The existing `controlledInternalModelCallContract()` asserts both sides of the gate and consecutive event sequences. Six independent focused processes pass locally and six pass on Server. | Acceptance passed. No gap for A. |
+| B / T002 / P002 | Two actual file reads require separate approvals. The original parent then requires its own approval and executes once, with three Completed receipts and ordered file content. | `validateReadBackedApprovalDecision` loads and verifies every fact but compares live read arguments only with the last read plan. The `approve` sequence scenario passes in three independent processes on each host. | Acceptance passed. No gap for the approved parent path. |
+| B / T003 / P003 | Withdrawing the first admission in the second continuation prevents parent approval and execution. The normal Completed Run contains one error ToolResult with `tool.hook_denied`, a message containing `context.read_fact_uncommitted`, and its exact Rejected parent receipt. | `fact_changed` checks two Completed read receipts, one Rejected parent receipt, two handoffs, no parent approval, and the original parent operation binding. Shared tail checks verify zero active slots, paired calls and results, committed operations, and one Run and user message. | Acceptance passed locally and on Server. |
+| B / T004 / P004 | Withdrawing the first admission after parent AwaitingApproval makes Approve fail with `context.read_fact_uncommitted`, without another read, parent execution, receipt, or handoff. Cancel then settles the pending parent. | `fact_changed_pending` uses the original parent approval, checks unchanged read, continuation, model, receipt, and handoff counts, then cancels through `AgentCore.cancel`. The shared debt checks pass. | Acceptance passed locally and on Server. |
+
+### Executed gates and source identity
+
+Both hosts use installed STS 1.1.3. No SDK or C source was changed. Commands
+inherit the environment, with `LD_LIBRARY_PATH`, `ASAN_OPTIONS`, and
+`LSAN_OPTIONS` unset. SDK roots point to `$HOME/cangjie_sdk/sts1.1.3`.
+`TMPDIR`, `TMP`, `TEMP`, and the SDK check cache point to a private disk-backed
+task directory. Existing fixtures still create some files under `/tmp`;
+filesystem capacity was checked before execution.
+
+Server receives tracked working-tree bytes, including the three uncommitted
+source edits, without local targets. The following SHA-256 values match on
+both hosts before building:
+
+| File | SHA-256 |
+| --- | --- |
+| `tool_runtime/src/tools.cj` | `dabff08dcbcc031ed0e82063da2b3f495c2b0f9b19b47e9432b041ad4ac7b5df` |
+| `support_tests/agent_core_contract/src/main.cj` | `02ee199c6c0d342e776356949148041c663d7154597b4e0d73d3877c83a7d1c2` |
+| `support_tests/agent_core_contract/src/tool_read_sequence.cj` | `3547eafe77e5b81ccc120661337776fde56c57b7f73fd5b7fc7b269c96c16ba0` |
+| `support_tests/agent_core_contract/cjpm.toml` | `6d8e54b9d2735ea9c32683fdd7276f6e1f1890454b42db7a6aa30804452c8b60` |
+
+In the command table, `pinned_cangjie` denotes `<repo>/scripts/pinned_cangjie`.
+Contract commands run from `support_tests/agent_core_contract`. Workspace
+commands run from the repository root. Each invocation retains complete
+stdout and stderr, return code, duration, and these source hashes.
+
+| Command | Local result | Server result |
+| --- | --- | --- |
+| `timeout 1500 pinned_cangjie cjpm update` | Not required by this scoped local run | rc=0 |
+| `timeout 1500 pinned_cangjie cjpm build` | rc=0 | rc=0 |
+| `timeout 900 pinned_cangjie target/release/bin/main --controlled-internal-model-contract` | 6 of 6 rc=0, before and after usage evidence in each log | 6 of 6 rc=0, same evidence |
+| `timeout 900 pinned_cangjie target/release/bin/main --tool-read-sequence-contract` | 3 of 3 rc=0, all 7 scenarios | 3 of 3 rc=0, all 7 scenarios |
+| `timeout 900 pinned_cangjie target/release/bin/main --context-read-continuation-contract` | rc=0, original 9 scenarios and 2 cancellation publication faults | rc=0, same scenarios |
+| `timeout 1500 pinned_cangjie cjpm test -m tool_runtime` | rc=0, 56 passed, 0 failed or skipped | Not required by the approved Server matrix |
+| `timeout 900 pinned_cangjie target/release/bin/main` | rc=0, `agent_core contract passed` | rc=0, `agent_core contract passed` |
+
+Local evidence is retained at `$HOME/.cache/agent-tmp/pr49-blockers.FN9q44`,
+including copies of Server logs under `server-evidence`. Server evidence and
+its isolated source root remain at
+`$HOME/.cache/agent-tmp/pr49-blockers.KPN0Tr`.
+
+No public signature, error code, database schema, SDK timeout, token value,
+fact revalidation, or resource-budget policy changes. No data migration is
+required. Reverting these source changes restores the previous comparison
+and fixture behavior without changing stored data.
+SIGSEGV diagnosis, release timing, other PR gates, Ready, merge, and Issue
+closure remain outside this task. Use `Refs #45`.
